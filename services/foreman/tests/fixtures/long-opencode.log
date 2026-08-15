@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":"2025-01-01T00:02:00Z"}
+{"type":"text","part":{"text":"This is a deliberately long assistant summary used to verify hard truncation at exactly two hundred characters. It should be clipped cleanly without throwing errors or returning fallback mode unexpectedly during parsing."},"timestamp":"2025-01-01T00:02:01Z"}
+{"type":"step_finish","reason":"stop","timestamp":"2025-01-01T00:02:02Z"}

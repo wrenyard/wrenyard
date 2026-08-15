@@ -1,0 +1,61 @@
+{
+  "usd_to_cny": 7.2,
+  "default_quota_total": 7000,
+  "context_windows": {
+    "1m": 1000000,
+    "default": 200000
+  },
+  "models": {
+    "opus-4.7": {
+      "input": 5,
+      "cache_write_5m": 6.25,
+      "cache_write_1h": 10,
+      "cache_read": 0.5,
+      "output": 25
+    },
+    "opus-4.6": {
+      "input": 5,
+      "cache_write_5m": 6.25,
+      "cache_write_1h": 10,
+      "cache_read": 0.5,
+      "output": 25
+    },
+    "opus": {
+      "input": 15,
+      "cache_write_5m": 18.75,
+      "cache_write_1h": 30,
+      "cache_read": 1.5,
+      "output": 75
+    },
+    "sonnet": {
+      "input": 3,
+      "cache_write_5m": 3.75,
+      "cache_write_1h": 6,
+      "cache_read": 0.3,
+      "output": 15
+    },
+    "haiku": {
+      "input": 0.8,
+      "cache_write_5m": 1,
+      "cache_write_1h": 1.6,
+      "cache_read": 0.08,
+      "output": 4
+    }
+  },
+  "model_display_names": {
+    "gpt-5.6-sol": "GPT 5.6 Sol",
+    "gpt-5.6-terra": "GPT 5.6 Terra",
+    "gpt-5.6-luna": "GPT 5.6 Luna",
+    "gpt-5.3-codex-spark": "GPT 5.3 Codex Spark",
+    "codebuddy-opus-4-8": "Opus 4.8",
+    "codebuddy-opus-4-6": "Opus 4.6",
+    "codebuddy-sonnet-4-6": "Sonnet 4.6",
+    "codebuddy-haiku-4-5": "Haiku 4.5",
+    "claude-opus-4.8": "Opus 4.8",
+    "claude-opus-4-8": "Opus 4.8",
+    "claude-opus-4.6": "Opus 4.6",
+    "claude-opus-4-6": "Opus 4.6",
+    "claude-sonnet-4-6": "Sonnet 4.6",
+    "claude-haiku-4-5": "Haiku 4.5"
+  }
+}

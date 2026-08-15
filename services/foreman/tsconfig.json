@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["node"]
+  },
+  "include": ["bin/**/*.mts", "lib/**/*.mts", "tests/**/*.mts"]
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/shared.schema.json",
+  "title": "Shared Workspace Schema Primitives",
+  "description": "Small shared primitives reused by workspace task and workflow schemas. Keep this file limited to foundational project, evidence, and context records.",
+  "$ref": "#/definitions/ProjectRef",
+  "definitions": {
+    "ProjectRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]*(/[a-z][a-z0-9._-]*)*$"
+    },
+    "EvidenceKind": {
+      "type": "string",
+      "enum": [
+        "user",
+        "doc",
+        "code",
+        "commit",
+        "research",
+        "runtime",
+        "decision"
+      ]
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "required": [
+        "kind",
+        "ref",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/EvidenceKind"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextEntry": {
+      "type": "object",
+      "required": [
+        "ref",
+        "summary"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

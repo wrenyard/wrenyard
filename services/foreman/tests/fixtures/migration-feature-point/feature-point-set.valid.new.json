@@ -1,0 +1,61 @@
+{
+  "schema_version": "feature-point/v1",
+  "topic": "Add dark mode",
+  "project": { "kind": "project", "value": "ure/service" },
+  "status": "confirmed",
+  "design_decision": {
+    "id": "dec-1",
+    "choice": "Adopt a CSS-variables theming approach",
+    "rationale": "Simplest path and fully themeable",
+    "status": "selected",
+    "selected_option_refs": ["DO-001"],
+    "constraints": ["Must keep text contrast >= 4.5:1"],
+    "rejected_options": [
+      { "ref": "DO-002", "reason": "Requires runtime flag plumbing" }
+    ]
+  },
+  "points": [
+    {
+      "ref": "FP-001",
+      "title": "Theme tokens",
+      "status": "selected",
+      "intent": "Provide design tokens for dark mode",
+      "user_value": "Consistent theming across the app",
+      "design_basis": "Follows the selected CSS-variables decision",
+      "boundaries": ["Only first-party app chrome"],
+      "non_goals": ["Do not theme third-party widgets"],
+      "rough_acceptance_signals": ["Tokens compile", "Toggle works end to end"],
+      "design_contracts": [
+        {
+          "kind": "config",
+          "name": "theme.tokens",
+          "contract_shape": {},
+          "fixed_decisions": ["Use HSL channels"]
+        }
+      ],
+      "evidence": [
+        {
+          "id": "ev-1",
+          "source": { "kind": "doc", "value": "ev-1" },
+          "observation": "Design spec section 3"
+        }
+      ],
+      "decision_refs": ["dec-a"],
+      "priority": "must",
+      "trace": {
+        "source_request": ["req-1"],
+        "design_option_refs": ["DO-001"]
+      }
+    }
+  ],
+  "context_summary": {
+    "decisions": ["Theme tokens chosen"],
+    "exploration_findings": ["Existing palette is HSL"],
+    "open_questions": [
+      { "id": "q-001", "ask": "What is the default theme?", "blocking": false }
+    ]
+  },
+  "open_items": [
+    { "id": "q-002", "ask": "Naming convention for tokens?", "blocking": false }
+  ]
+}

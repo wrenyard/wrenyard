@@ -1,0 +1,820 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/functional-unit.schema.json",
+  "title": "Functional Unit Protocol",
+  "description": "Workflow-local protocol for design-complete functional contract units produced by breakdown and consumed by architect, implement, and spec review.",
+  "$ref": "#/definitions/FunctionalUnitSet",
+  "definitions": {
+    "FunctionalUnitSet": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "topic",
+        "project",
+        "status",
+        "units",
+        "context_summary"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "functional-unit/v1"
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "needs_clarification",
+            "confirmed",
+            "blocked"
+          ]
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FunctionalUnit"
+          },
+          "minItems": 1
+        },
+        "context_summary": {
+          "type": "object",
+          "required": [
+            "decisions",
+            "exploration_findings",
+            "open_questions"
+          ],
+          "properties": {
+            "decisions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ContextEntry"
+              }
+            },
+            "exploration_findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ContextEntry"
+              }
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/OpenQuestion"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "review": {
+          "$ref": "#/definitions/FunctionalUnitReviewResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FunctionalUnit": {
+      "type": "object",
+      "required": [
+        "ref",
+        "title",
+        "status",
+        "intent",
+        "scope",
+        "contract",
+        "acceptance",
+        "dependencies",
+        "evidence",
+        "questions",
+        "constraints",
+        "risk",
+        "decomposition_check",
+        "trace"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/FunctionalUnitRef",
+          "description": "Workflow-local stable reference. Not a persistent global id."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "needs_clarification",
+            "confirmed",
+            "rejected",
+            "deferred"
+          ]
+        },
+        "intent": {
+          "type": "object",
+          "required": [
+            "actor",
+            "user_goal",
+            "problem",
+            "target_behavior"
+          ],
+          "properties": {
+            "actor": {
+              "type": "string",
+              "minLength": 1
+            },
+            "user_goal": {
+              "type": "string",
+              "minLength": 1
+            },
+            "problem": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target_behavior": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "object",
+          "required": [
+            "project",
+            "capability",
+            "surfaces",
+            "code_anchors",
+            "non_goals"
+          ],
+          "properties": {
+            "project": {
+              "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+            },
+            "capability": {
+              "type": "string",
+              "minLength": 1
+            },
+            "surfaces": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "ui",
+                  "api",
+                  "cli",
+                  "workflow",
+                  "data",
+                  "config",
+                  "infra",
+                  "docs",
+                  "test"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "code_anchors": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/CodeAnchor"
+              }
+            },
+            "non_goals": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "contract": {
+          "$ref": "#/definitions/FunctionalContract"
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AcceptanceCriterion"
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "required": [
+            "depends_on",
+            "blocks",
+            "conflicts_with",
+            "related"
+          ],
+          "properties": {
+            "depends_on": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FunctionalUnitRef"
+              },
+              "uniqueItems": true
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FunctionalUnitRef"
+              },
+              "uniqueItems": true
+            },
+            "conflicts_with": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FunctionalUnitRef"
+              },
+              "uniqueItems": true
+            },
+            "related": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FunctionalUnitRef"
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceRef"
+          }
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OpenQuestion"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "risk": {
+          "$ref": "#/definitions/RiskAssessment"
+        },
+        "decomposition_check": {
+          "type": "object",
+          "required": [
+            "is_atomic",
+            "can_be_accepted_independently",
+            "has_clear_code_anchor",
+            "has_clear_non_goals",
+            "contract_complete",
+            "ready_for_architect_implement",
+            "unresolved_blockers"
+          ],
+          "properties": {
+            "is_atomic": {
+              "type": "boolean"
+            },
+            "can_be_accepted_independently": {
+              "type": "boolean"
+            },
+            "has_clear_code_anchor": {
+              "type": "boolean"
+            },
+            "has_clear_non_goals": {
+              "type": "boolean"
+            },
+            "contract_complete": {
+              "type": "boolean",
+              "description": "True when user-visible/cross-module/API/data/protocol/config decisions are fixed in this FunctionalUnit."
+            },
+            "ready_for_architect_implement": {
+              "type": "boolean",
+              "description": "True when architect and implement can proceed without external product/protocol/design decisions."
+            },
+            "unresolved_blockers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "source_request",
+            "decisions"
+          ],
+          "properties": {
+            "source_request": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "decisions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "supersedes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FunctionalUnitRef"
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "checkpoint": {
+          "type": "object",
+          "required": [
+            "status",
+            "confirmed_by",
+            "confirmed_at",
+            "notes"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "confirmed",
+                "rejected",
+                "deferred"
+              ]
+            },
+            "confirmed_by": {
+              "type": "string",
+              "minLength": 1
+            },
+            "confirmed_at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+            },
+            "notes": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "status": {
+            "const": "confirmed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "checkpoint"
+        ],
+        "properties": {
+          "scope": {
+            "properties": {
+              "code_anchors": {
+                "minItems": 1
+              }
+            }
+          },
+          "acceptance": {
+            "minItems": 1
+          },
+          "contract": {
+            "properties": {
+              "fixed_decisions": {
+                "minItems": 1
+              },
+              "architect_boundary": {
+                "properties": {
+                  "must_not_decide": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          },
+          "decomposition_check": {
+            "properties": {
+              "is_atomic": {
+                "const": true
+              },
+              "can_be_accepted_independently": {
+                "const": true
+              },
+              "has_clear_code_anchor": {
+                "const": true
+              },
+              "has_clear_non_goals": {
+                "const": true
+              },
+              "contract_complete": {
+                "const": true
+              },
+              "ready_for_architect_implement": {
+                "const": true
+              },
+              "unresolved_blockers": {
+                "maxItems": 0
+              }
+            }
+          },
+          "questions": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "blocking"
+                ],
+                "properties": {
+                  "blocking": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "checkpoint": {
+            "properties": {
+              "status": {
+                "const": "confirmed"
+              }
+            }
+          }
+        }
+      }
+    },
+    "FunctionalUnitRef": {
+      "type": "string",
+      "pattern": "^FU-[0-9]{3,}$"
+    },
+    "FunctionalContract": {
+      "type": "object",
+      "required": [
+        "kind",
+        "name",
+        "contract_shape",
+        "fixed_decisions",
+        "architect_boundary"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "data_model",
+            "index",
+            "event_stream",
+            "job",
+            "api",
+            "rest_route",
+            "mcp_tool",
+            "result_schema",
+            "config",
+            "ops",
+            "observability",
+            "workflow",
+            "capability"
+          ],
+          "description": "Externally meaningful functional contract type. Internal class/module organization belongs to architect, not here."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fixed contract name, such as a tool name, route path, stream key, collection name, job name, config key family, or capability name."
+        },
+        "contract_shape": {
+          "type": "object",
+          "description": "Concrete contract details fixed before architecture: fields, parameters, states, defaults, error semantics, filters, events, or observability signals.",
+          "additionalProperties": true
+        },
+        "fixed_decisions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Design decisions architect and implement must preserve."
+        },
+        "architect_boundary": {
+          "type": "object",
+          "required": [
+            "may_decide",
+            "must_not_decide"
+          ],
+          "properties": {
+            "may_decide": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Internal implementation choices left to architect."
+            },
+            "must_not_decide": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Product/protocol/data/tool decisions already fixed upstream and not left to architect."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "CodeAnchor": {
+      "type": "object",
+      "required": [
+        "kind",
+        "project",
+        "description",
+        "confidence"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "symbol",
+            "route",
+            "task",
+            "workflow",
+            "module",
+            "unknown"
+          ]
+        },
+        "project": {
+          "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AcceptanceCriterion": {
+      "type": "object",
+      "required": [
+        "ref",
+        "description",
+        "verification",
+        "expected_result"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "https://agent-workspace.local/schemas/feature-point.schema.json#/definitions/AcceptanceCriterionRef"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification": {
+          "type": "string",
+          "enum": [
+            "automated_test",
+            "manual_check",
+            "review",
+            "runtime_observation"
+          ]
+        },
+        "expected_result": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceRef": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/EvidenceRef"
+    },
+    "OpenQuestion": {
+      "type": "object",
+      "required": [
+        "ref",
+        "question",
+        "blocking"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "https://agent-workspace.local/schemas/inquiry.schema.json#/definitions/QuestionRef"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RiskAssessment": {
+      "type": "object",
+      "required": [
+        "level",
+        "tags",
+        "notes"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "cross_cutting",
+              "security",
+              "migration",
+              "compatibility",
+              "performance",
+              "concurrency",
+              "deployment",
+              "ux",
+              "external_api"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextEntry": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ContextEntry"
+    },
+    "FunctionalUnitReviewResult": {
+      "type": "object",
+      "required": [
+        "kind",
+        "status",
+        "issues",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "fu"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "changes_required",
+            "blocked"
+          ]
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "target_ref",
+              "check_id",
+              "problem",
+              "required_change"
+            ],
+            "properties": {
+              "target_ref": {
+                "type": "string",
+                "pattern": "^(FP|FU)-[0-9]{3,}$"
+              },
+              "check_id": {
+                "type": "string",
+                "enum": [
+                  "selected_fp_uncovered",
+                  "fp_contract_uncovered",
+                  "fu_contract_shape_incomplete",
+                  "fu_acceptance_missing",
+                  "implementation_anchor_missing",
+                  "architect_decision_leak",
+                  "blocking_open_question",
+                  "dependency_conflict",
+                  "unconfirmed_scope_added",
+                  "fu_not_independent_batch"
+                ]
+              },
+              "problem": {
+                "type": "string",
+                "minLength": 1
+              },
+              "required_change": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "approved",
+                  "blocked"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "issues": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "changes_required"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "issues": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

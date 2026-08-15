@@ -1,0 +1,18 @@
+{
+  "schema_version": "inquiry-step/v1",
+  "action": "ask_question",
+  "question": "What is the maximum retry count?",
+  "open_questions": [
+    {
+      "id": "q-1",
+      "ask": "What is the maximum retry count?",
+      "blocking": true,
+      "owner": "user",
+      "resolution_hint": "Check SLO budget."
+    }
+  ],
+  "assumptions": ["Network failures are transient."],
+  "decisions": [
+    { "id": "d-1", "choice": "Use exponential backoff.", "rationale": "Simplest robust option." }
+  ]
+}

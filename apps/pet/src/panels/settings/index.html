@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; frame-src 'none';" />
+  <link rel="stylesheet" href="./panel.css" />
+  <title>Workshop Settings</title>
+</head>
+<body>
+  <div class="title-bar">
+    <span class="title">Workshop Settings</span>
+    <button id="close-btn" class="close-btn">&times;</button>
+  </div>
+  <div class="content">
+
+    <div class="section">
+      <h3>Appearance</h3>
+      <div class="settings-field">
+        <label for="house-skin">House skin</label>
+        <select id="house-skin">
+          <option value="classic">Classic Lodge</option>
+          <option value="mushroom">Mushroom Hut</option>
+        </select>
+      </div>
+      <p class="note">Classic keeps crates; Mushroom grows mini mushrooms</p>
+      <div class="settings-field">
+        <label for="scale">Scale (1-6)</label>
+        <input type="number" id="scale" min="1" max="6" step="1" />
+      </div>
+      <div class="settings-field">
+        <label for="bottom-offset">Bottom offset (0-512)</label>
+        <input type="number" id="bottom-offset" min="0" max="512" step="1" />
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Companions</h3>
+      <div class="settings-field">
+        <label>Show house</label>
+        <input type="checkbox" id="show-house" />
+      </div>
+      <div class="settings-field">
+        <label>Show workers</label>
+        <input type="checkbox" id="show-workers" />
+      </div>
+      <div class="settings-field">
+        <label for="bubble-seconds">Bubble (1-60s)</label>
+        <input type="number" id="bubble-seconds" min="1" max="60" step="1" />
+      </div>
+      <p id="drag-note" class="note">House position: drag the house window</p>
+    </div>
+
+    <div class="section">
+      <h3>Quota Providers</h3>
+      <div id="quota-providers"></div>
+    </div>
+
+    <div class="save-bar">
+      <button id="save-btn" disabled>Save</button>
+      <button id="save-restart-btn" disabled>Save &amp; Restart</button>
+    </div>
+  </div>
+  <script src="./settings.js"></script>
+</body>
+</html>

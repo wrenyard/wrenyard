@@ -1,0 +1,38 @@
+{
+  "browser-use": {
+    "description": "Unattended browser automation via Playwright MCP",
+    "mcp_servers": {
+      "browser-use": {
+        "command": "npx",
+        "args": ["-y", "@playwright/mcp@latest"],
+        "startup_timeout_sec": 120
+      }
+    }
+  },
+  "computer-use": {
+    "description": "Host computer automation via Cua Driver MCP",
+    "mcp_servers": {
+      "computer-use": {
+        "command": "cua-driver",
+        "args": ["mcp"],
+        "startup_timeout_sec": 120
+      }
+    }
+  },
+  "notesmd": {
+    "description": "Read and manage notes through notesmd-cli",
+    "bash": {
+      "cap": ["notesmd-cli *"]
+    }
+  },
+  "git-history": {
+    "description": "Inspect git commit history without mutating the repository",
+    "bash": {
+      "cap": [
+        "git --no-optional-locks log --oneline *",
+        "git --no-optional-locks show --name-only *",
+        "git --no-optional-locks show --stat *"
+      ]
+    }
+  }
+}

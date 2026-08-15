@@ -1,0 +1,495 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/feature-point.schema.json",
+  "title": "Feature Point Protocol",
+  "description": "Workflow-local protocol for design-complete product feature points produced by brainstorm and consumed by breakdown.",
+  "$ref": "#/definitions/FeaturePointSet",
+  "definitions": {
+    "FeaturePointSet": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "topic",
+        "project",
+        "status",
+        "design_decision",
+        "points",
+        "context_summary"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "feature-point/v1"
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "$ref": "#/definitions/ProjectRef"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "confirmed",
+            "partial",
+            "blocked"
+          ]
+        },
+        "design_decision": {
+          "$ref": "#/definitions/DesignDecision"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeaturePoint"
+          },
+          "minItems": 1
+        },
+        "context_summary": {
+          "type": "object",
+          "required": [
+            "decisions",
+            "exploration_findings",
+            "open_questions"
+          ],
+          "properties": {
+            "decisions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ContextEntry"
+              }
+            },
+            "exploration_findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ContextEntry"
+              }
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/OpenItem"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "open_items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OpenItem"
+          },
+          "description": "Remaining known open items. Confirmed sets must not contain blocking open items."
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "status": {
+            "const": "confirmed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "design_decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "selected",
+                  "combined",
+                  "adjusted"
+                ]
+              },
+              "selected_option_refs": {
+                "minItems": 1
+              }
+            }
+          },
+          "context_summary": {
+            "properties": {
+              "open_questions": {
+                "not": {
+                  "contains": {
+                    "type": "object",
+                    "required": [
+                      "blocking"
+                    ],
+                    "properties": {
+                      "blocking": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "open_items": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": [
+                  "blocking"
+                ],
+                "properties": {
+                  "blocking": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "FeaturePoint": {
+      "type": "object",
+      "required": [
+        "ref",
+        "title",
+        "status",
+        "intent",
+        "user_value",
+        "design_basis",
+        "boundaries",
+        "non_goals",
+        "rough_acceptance_signals",
+        "design_contracts",
+        "evidence",
+        "decision_refs",
+        "priority",
+        "trace"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/FeaturePointRef"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "selected",
+            "deferred",
+            "rejected"
+          ]
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Product/design intent captured during brainstorm. This is not an implementation instruction."
+        },
+        "user_value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "design_basis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How this feature point follows from the selected design decision."
+        },
+        "boundaries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rough_acceptance_signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Observable product/design signals used by breakdown to derive FunctionalUnit acceptance criteria."
+        },
+        "capability_hints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Optional capability or module hints. Do not require file-level code anchors here."
+        },
+        "design_contracts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DesignContract"
+          },
+          "description": "Concrete user-visible or cross-module contracts fixed during brainstorm. Breakdown may split these into FunctionalUnits but must not invent missing contract decisions."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceRef"
+          }
+        },
+        "decision_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DecisionRef"
+          }
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "must",
+            "should",
+            "could"
+          ]
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "source_request",
+            "design_option_refs"
+          ],
+          "properties": {
+            "source_request": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "design_option_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/DesignOptionRef"
+              },
+              "uniqueItems": true
+            },
+            "supersedes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FeaturePointRef"
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "status": {
+            "const": "selected"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "boundaries": {
+            "minItems": 1
+          },
+          "non_goals": {
+            "minItems": 1
+          },
+          "rough_acceptance_signals": {
+            "minItems": 1
+          },
+          "design_contracts": {
+            "minItems": 1
+          },
+          "evidence": {
+            "minItems": 1
+          },
+          "decision_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "DesignDecision": {
+      "type": "object",
+      "required": [
+        "status",
+        "selected_option_refs",
+        "decision_summary",
+        "rationale",
+        "constraints",
+        "rejected_options"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "selected",
+            "combined",
+            "adjusted",
+            "needs_more_exploration"
+          ]
+        },
+        "selected_option_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DesignOptionRef"
+          },
+          "uniqueItems": true
+        },
+        "decision_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adjustments": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejected_options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "reason"
+            ],
+            "properties": {
+              "ref": {
+                "$ref": "#/definitions/DesignOptionRef"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DesignContract": {
+      "type": "object",
+      "required": [
+        "kind",
+        "name",
+        "contract_shape",
+        "fixed_decisions"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "data_model",
+            "index",
+            "event_stream",
+            "job",
+            "api",
+            "rest_route",
+            "mcp_tool",
+            "result_schema",
+            "config",
+            "ops",
+            "observability",
+            "workflow",
+            "capability"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fixed functional contract name such as a tool name, route path, stream key, collection name, job name, config family, or capability name."
+        },
+        "contract_shape": {
+          "type": "object",
+          "description": "Concrete design details already decided in brainstorm. Use this for fields, parameters, states, defaults, errors, filters, events, or validation signals.",
+          "additionalProperties": true
+        },
+        "fixed_decisions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeaturePointRef": {
+      "type": "string",
+      "pattern": "^FP-[0-9]{3,}$"
+    },
+    "AcceptanceCriterionRef": {
+      "type": "string",
+      "pattern": "^AC-[0-9]{3,}$"
+    },
+    "DesignOptionRef": {
+      "type": "string",
+      "pattern": "^DO-[0-9]{3,}$"
+    },
+    "DecisionRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ProjectRef": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+    },
+    "EvidenceRef": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/EvidenceRef"
+    },
+    "ContextEntry": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ContextEntry"
+    },
+    "OpenItem": {
+      "type": "object",
+      "required": [
+        "ref",
+        "question",
+        "blocking"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "https://agent-workspace.local/schemas/inquiry.schema.json#/definitions/QuestionRef"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "resolution_hint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "changes_to_commit": {
+    "src/lib/agent.ts": "all",
+    "docs/guide.md": "update the setup section"
+  },
+  "atomic_commit": true
+}

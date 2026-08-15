@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "foreman-pet-cleanup/v1",
+  "defaultRoots": [
+    "src",
+    "scripts",
+    "test",
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.main.json",
+    "tsconfig.renderer.json"
+  ],
+  "excludedPaths": [
+    "test/visual/reference",
+    "artifacts",
+    "dist",
+    "release",
+    "node_modules",
+    ".git",
+    "test/renderer-cleanup-scan.test.ts"
+  ],
+  "pixiImportAllowlist": "src/render/pixi",
+  "exactTokens": [
+    "CanvasRenderingContext2D",
+    "canvasRenderer",
+    "legacyRenderer",
+    "rendererMode",
+    "useCanvas",
+    "renderBackend",
+    "CHAR_MAP",
+    "WALK_FRAMES",
+    "WORK_FRAMES",
+    "CELEBRATE_FRAMES",
+    "DEJECTED_FRAMES",
+    "DOZE_FRAMES",
+    "WAITING_FRAMES",
+    "parseFrame",
+    "renderFrameToContext",
+    "drawMascotCelebrate",
+    "drawMascotDejected",
+    "drawMascotWalkFrame",
+    "drawMascotTyping",
+    "drawMascotDoze",
+    "drawMascotAccessory",
+    "mascotColors",
+    "drawSpawnDust",
+    "drawReturnDust",
+    "drawPreviewMascot",
+    "drawPreviewCodeBuddy",
+    "drawPreviewCodex",
+    "drawPreviewClaude",
+    "drawPreviewVoxelMiner",
+    "drawPreviewRedJumper",
+    "drawPreviewGreenQuest",
+    "drawPreviewBlueDash",
+    "drawPreviewBlockMiner",
+    "drawPreviewSpaceBounty",
+    "drawPreviewArcadeGhost",
+    "drawPreviewRuneMage",
+    "drawPreviewShadowNinja",
+    "drawPreviewSlimeKing",
+    "drawHumanoidPreviewBase",
+    "drawPreviewHouseBase",
+    "drawWrenchFlash",
+    "drawToolCountBadge",
+    "drawToolCountFlash",
+    "drawToolCountPopup",
+    "formatToolFlashText",
+    "drawVectorShadow",
+    "drawVectorEyes",
+    "drawVectorMouth",
+    "drawVectorZzz",
+    "drawSign",
+    "SIGN_DATA",
+    "SIGN_CHAR_MAP",
+    "SIGN_SPRITE",
+    "drawBadge",
+    "WorkPhase",
+    "phaseAt",
+    "TYPING_BURST_MS",
+    "IDLE_BASE_MS",
+    "IDLE_RANGE_MS",
+    "SWAY_PERIOD_MS",
+    "SWAY_AMPLITUDE"
+  ],
+  "patterns": [
+    {
+      "token": "getContext('2d')",
+      "source": "\\bgetContext\\s*(?:\\?\\.)?\\s*\\(\\s*\\\\?(['\"`])\\s*2d\\s*\\\\?\\1"
+    },
+    {
+      "token": "src/renderer",
+      "source": "src[\\\\/]+renderer"
+    }
+  ],
+  "pixiImportPatterns": [
+    {
+      "token": "pixi.js import",
+      "source": "\\bimport(?:\\s+|(?=[{*]))(?:type(?:\\s+|(?=[{*])))?[\\s\\S]{0,500}?\\bfrom\\s*['\"]pixi\\.js(?:/[^'\"]*)?['\"]"
+    },
+    {
+      "token": "pixi.js import",
+      "source": "\\bimport\\s*['\"]pixi\\.js(?:/[^'\"]*)?['\"]"
+    },
+    {
+      "token": "pixi.js import",
+      "source": "\\bimport\\s*\\(\\s*['\"]pixi\\.js(?:/[^'\"]*)?['\"]\\s*\\)"
+    },
+    {
+      "token": "pixi.js import",
+      "source": "\\brequire\\s*\\(\\s*['\"]pixi\\.js(?:/[^'\"]*)?['\"]\\s*\\)"
+    },
+    {
+      "token": "pixi.js import",
+      "source": "\\bexport(?:\\s+|(?=[{*]))(?:type(?:\\s+|(?=[{*])))?[\\s\\S]{0,500}?\\bfrom\\s*['\"]pixi\\.js(?:/[^'\"]*)?['\"]"
+    }
+  ]
+}

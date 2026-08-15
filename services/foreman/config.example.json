@@ -1,0 +1,68 @@
+{
+  "workspace": {
+    "root": "/path/to/wrenyard-suite"
+  },
+  "pet": {
+    "enabled": true,
+    "cwd": "/path/to/wrenyard-suite/apps/pet"
+  },
+  "fwa": {
+    "workspace_root": "/path/to/wrenyard-suite",
+    "llm": {
+      "model": "kimi-coding/k3",
+      "turn_timeout_ms": 900000,
+      "http_timeout_ms": 120000,
+      "max_retries": 2,
+      "retry_backoff_ms": 500
+    }
+  },
+  "work": {
+    "workspace_root": "/path/to/wrenyard-suite",
+    "max_concurrent_turns": 3,
+    "llm": {
+      "model": "zhipu-coding/glm-5.2",
+      "models": ["zhipu-coding/glm-5.2", "zhipu-coding/glm-5.1"],
+      "turn_timeout_ms": 900000,
+      "http_timeout_ms": 120000,
+      "max_retries": 2,
+      "retry_backoff_ms": 500
+    }
+  },
+  "message": {
+    "enabled": true,
+    "principals": {
+      "codex": {
+        "kind": "agent",
+        "can_send": true,
+        "can_receive": false,
+        "grants": [{ "name": "message.send" }, { "name": "work.read" }]
+      },
+      "operator": {
+        "kind": "human",
+        "can_send": true,
+        "can_receive": true,
+        "delivery_route": "operator.telegram",
+        "grants": [{ "name": "message.send" }, { "name": "work.read" }]
+      }
+    },
+    "routes": {
+      "operator.telegram": {
+        "transport": "telegram",
+        "address": {
+          "chat_id": "telegram-chat-id",
+          "token_env": "WRENYARD_TELEGRAM_BOT_TOKEN"
+        },
+        "format": "telegram-html"
+      }
+    },
+    "delivery": {
+      "enabled": true,
+      "default": ["local.system"],
+      "methods": {
+        "local.system": {
+          "backend": "system"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "check_id": "transport-retry-1",
+  "problem": "Retry count is unbounded.",
+  "required_change": "Cap retries at a configured maximum."
+}

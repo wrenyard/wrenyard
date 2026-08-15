@@ -1,0 +1,29 @@
+packages:
+  - "apps/*"
+  - "services/*"
+  - "packages/*"
+
+# Deployable workspace packages are injected as real package snapshots instead
+# of symlinks. This keeps `pnpm deploy` isolated and reproducible for release
+# staging without mutating the development node_modules tree.
+injectWorkspacePackages: true
+
+# Pinned workspace dependencies whose install scripts are required for
+# native SQLite, Electron Pet and TS/Vite tooling.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
+  better-sqlite3: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  koffi: true
+  node-pty: true
+  node: true
+  protobufjs: true
+
+exclude:
+  - "**/dist"
+  - "**/build"
+  - "**/coverage"
+  - "**/.artifacts"

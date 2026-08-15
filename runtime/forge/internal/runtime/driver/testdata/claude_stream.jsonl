@@ -1,0 +1,6 @@
+{"type":"rendered_prompt","timestamp":"2026-06-01T00:00:00Z","profile":"cb-ds","clientFamily":"claude","prompt":"hello"}
+API Error: 502 Upstream 500
+{"type":"system","subtype":"init","session_id":"native-1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I’ll inspect the workspace."},{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"pwd && ls"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"C:\\Users\\dluckdu\\Documents\\GitHub\\forge"}],"is_error":false}]}}
+{"type":"result","duration_ms":1234,"usage":{"input_tokens":10,"output_tokens":20},"num_turns":1}

@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/edit.schema.json",
+  "title": "Edit Protocol",
+  "description": "Shared protocol for file-level edit instructions and edit task change reports.",
+  "$ref": "#/definitions/EditInstructionSet",
+  "definitions": {
+    "EditInstructionSet": {
+      "type": "object",
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "edit/v1"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/EditFileInstruction"
+          },
+          "description": "Exact file edit instructions. The edit agent must only operate on these paths and must not infer unrelated work."
+        }
+      },
+      "additionalProperties": false
+    },
+    "EditFileInstruction": {
+      "type": "object",
+      "required": [
+        "path",
+        "action",
+        "instruction"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative file path from the repository/worktree root."
+        },
+        "action": {
+          "$ref": "#/definitions/EditAction"
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Precise edit instruction for this file, such as methods to add, parameters/return behavior, config keys to change, or functions to remove."
+        },
+        "implementation_unit_ref": {
+          "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnitRef",
+          "description": "Optional workflow-local ImplementationUnit ref that produced this edit instruction."
+        },
+        "functional_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+          },
+          "uniqueItems": true,
+          "description": "Optional workflow-local FunctionalUnit refs this edit supports."
+        }
+      },
+      "additionalProperties": false
+    },
+    "EditAction": {
+      "type": "string",
+      "enum": [
+        "create",
+        "update",
+        "remove"
+      ],
+      "description": "create = create a new file; update = modify an existing file; remove = remove described code or a file only when explicitly instructed."
+    },
+    "EditChangeReport": {
+      "type": "object",
+      "required": [
+        "status",
+        "changes",
+        "errors",
+        "change_summary"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "edit-change-report/v1"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EditChange"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "change_summary": {
+          "type": "string",
+          "description": "Concise summary of the actual edits made."
+        }
+      },
+      "additionalProperties": false
+    },
+    "EditChange": {
+      "type": "object",
+      "required": [
+        "file",
+        "lines",
+        "description"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lines": {
+          "type": "string",
+          "description": "Start-end line numbers, new/deleted, or another concise location descriptor."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementation_unit_ref": {
+          "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnitRef"
+        },
+        "functional_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

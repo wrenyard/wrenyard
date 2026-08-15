@@ -1,0 +1,252 @@
+name: Release
+
+# Public dev prerelease pipeline. Runs the same shared monorepo scripts as CI
+# on every supported OS, uploads uniquely named (target-qualified) assets,
+# aggregates a global SHA256SUMS plus an external artifact index, and creates
+# or updates the v1.0.0-dev.* GitHub prerelease. Nothing is ever published to
+# any package registry.
+on:
+  push:
+    tags:
+      - 'v1.0.0-dev.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: windows-latest
+            target: win32-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: runtime/forge/go.sum
+      - name: Validate tag matches the root package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "tag $GITHUB_REF_NAME does not match root package version $expected" >&2
+            exit 1
+          fi
+      - name: Verify build target matches matrix target
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(node --input-type=module -e "import { entryFor } from './tools/release/platform.mjs'; console.log(entryFor(process.platform, process.arch).triplet)")"
+          if [ "$actual" != "${{ matrix.target }}" ]; then
+            echo "expected matrix target ${{ matrix.target }}, got $actual" >&2
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm version:check
+      - run: pnpm check:identifiers
+      - run: pnpm check:secrets
+      - run: pnpm release:legal
+      - run: pnpm build
+      - run: pnpm release:local
+      - name: Verify target-qualified manifests and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/release/verify-manifest.mjs
+          index="$(find .artifacts/release -maxdepth 1 -type f -name 'artifact-manifest-*.json' -print)"
+          index_count="$(printf '%s\n' "$index" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$index_count" -ne 1 ]; then
+            echo "expected exactly one artifact-manifest, found $index_count:" >&2
+            printf '%s\n' "$index" >&2
+            exit 1
+          fi
+          for f in .artifacts/release/*.sha256; do
+            expected="$(awk '{print $1}' "$f")"
+            file=".artifacts/release/$(basename "$f" .sha256)"
+            actual="$(node -e 'const crypto = require("crypto"); const fs = require("fs"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$file")"
+            if [ "$expected" != "$actual" ]; then
+              echo "checksum mismatch for $file" >&2
+              exit 1
+            fi
+          done
+      - run: pnpm release:e2e
+      - name: Label signing status honestly
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            printf 'ad-hoc-preview\n' > .artifacts/release/signing-status.txt
+          else
+            printf 'unsigned-preview\n' > .artifacts/release/signing-status.txt
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wrenyard-release-${{ matrix.target }}
+          path: .artifacts/release/**
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Verify sidecars, aggregate a flat asset set, SHA256SUMS and index
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # Every target's per-artifact sidecar must match its asset. With the
+          # default (non-merged) download each target lives in its own subdir.
+          while IFS= read -r f; do
+            expected="$(awk '{print $1}' "$f")"
+            file="$(dirname "$f")/$(basename "$f" .sha256)"
+            actual="$(node -e 'const crypto = require("crypto"); const fs = require("fs"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$file")"
+            if [ "$expected" != "$actual" ]; then
+              echo "checksum mismatch for $file" >&2
+              exit 1
+            fi
+          done < <(find . -type f -name '*.sha256' | sort)
+          export WRENYARD_SUITE_VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
+          # Collapse every target dir into one flat, collision-free staging set.
+          node -e '
+            const fs = require("fs");
+            const crypto = require("crypto");
+            const path = require("path");
+            const readdir = (d) => fs.readdirSync(d, { withFileTypes: true });
+            const targets = readdir(".").filter((e) => e.isDirectory()).map((e) => e.name).sort();
+            const out = "../release-assets";
+            fs.mkdirSync(out, { recursive: true });
+            const SHARED = ["install.sh", "install.ps1"];
+            const isShared = (base) =>
+              SHARED.includes(base) ||
+              base.startsWith("release-manifest") ||
+              /^(license|licence|notice|copying|third_party|third-party)/i.test(base);
+            const seen = new Set();
+            const put = (dest, src) => {
+              const rel = path.relative(out, dest);
+              if (seen.has(rel)) {
+                console.error("duplicate flat name: " + rel);
+                process.exit(1);
+              }
+              seen.add(rel);
+              fs.copyFileSync(src, dest);
+            };
+            const sharedBy = new Map();
+            for (const target of targets) {
+              const files = readdir(target).filter((e) => e.isFile()).map((e) => e.name).sort();
+              for (const f of files) {
+                const base = path.basename(f);
+                const src = path.join(target, f);
+                if (base === "signing-status.txt") {
+                  put(path.join(out, "signing-status-" + target + ".txt"), src);
+                  continue;
+                }
+                if (base === "SHA256SUMS") {
+                  put(path.join(out, "SHA256SUMS-" + target), src);
+                  continue;
+                }
+                if (base.endsWith(".sha256")) {
+                  // Recreate sidecars after the flat asset set is complete.
+                  // Target-qualified assets already have collision-free names,
+                  // while shared assets may be deduplicated below.
+                  continue;
+                }
+                if (isShared(base)) {
+                  const hash = crypto.createHash("sha256").update(fs.readFileSync(src)).digest("hex");
+                  if (!sharedBy.has(base)) sharedBy.set(base, []);
+                  sharedBy.get(base).push({ hash: hash, src: src, target: target });
+                  continue;
+                }
+                put(path.join(out, f), src);
+              }
+            }
+            // Shared files appear once when byte-identical, else stay qualified.
+            for (const [base, copies] of sharedBy) {
+              const hashes = new Set(copies.map((c) => c.hash));
+              if (hashes.size === 1) {
+                put(path.join(out, base), copies[0].src);
+              } else {
+                for (let i = 0; i < copies.length; i++) {
+                  put(path.join(out, base + "." + copies[i].target), copies[i].src);
+                }
+              }
+            }
+            // Exactly one global SHA256SUMS and release-index.json over the flat set.
+            const names = readdir(out).filter((e) => e.isFile()).map((e) => e.name)
+              .filter((f) => f !== "SHA256SUMS" && f !== "release-index.json" && !f.endsWith(".sha256") && !f.startsWith("signing-status-"))
+              .sort((a, b) => a.localeCompare(b));
+            const artifacts = names.map((f) => ({
+              path: f,
+              size: fs.statSync(path.join(out, f)).size,
+              sha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(out, f))).digest("hex"),
+            }));
+            const statuses = readdir(out).filter((e) => e.isFile()).map((e) => e.name)
+              .filter((f) => f.startsWith("signing-status-")).sort()
+              .map((f) => fs.readFileSync(path.join(out, f), "utf8").trim());
+            const signingStatus = statuses.length > 0 ? [...new Set(statuses)].join("; ") : "unknown";
+            fs.writeFileSync(path.join(out, "SHA256SUMS"), artifacts.map((a) => a.sha256 + "  " + a.path).join("\n") + "\n");
+            for (const artifact of artifacts) {
+              fs.writeFileSync(path.join(out, artifact.path + ".sha256"), artifact.sha256 + "  " + artifact.path + "\n");
+            }
+            fs.writeFileSync(path.join(out, "release-index.json"), JSON.stringify({
+              schema: "wrenyard.release-index.v1",
+              suite_version: process.env.WRENYARD_SUITE_VERSION,
+              prerelease: true,
+              signing_status: signingStatus,
+              artifacts: artifacts,
+            }, null, 2));
+          '
+      - name: Create or update GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
+          TAG="v$VERSION"
+          SIGNING="$(find release-assets -maxdepth 1 -type f -name 'signing-status-*.txt' | sort | head -n 1 | xargs cat)"
+          NOTES="Public Wrenyard $VERSION development prerelease.
+          Built from commit $GITHUB_SHA.
+          Signing status: $SIGNING (preview-grade when ad-hoc/unsigned)."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes
+          fi
+          gh release create "$TAG" \
+            --title "Wrenyard $VERSION" \
+            --notes "$NOTES" \
+            --prerelease
+          while IFS= read -r f; do
+            gh release upload "$TAG" "$f"
+          done < <(find release-assets -maxdepth 1 -type f | sort)

@@ -1,0 +1,305 @@
+{
+  "schema_version": "implementation-plan/v1",
+  "status": "approved",
+  "topic": "Implement the paginated list endpoint",
+  "project": {
+    "kind": "project",
+    "value": "ure/service"
+  },
+  "source": {
+    "spec_path": "specs/list-pagination.md",
+    "feature_point_ref": "FP-001",
+    "functional_unit_set_ref": "artifacts/fu-set.json"
+  },
+  "feature_point": {
+    "ref": "FP-001",
+    "title": "Theme tokens",
+    "status": "selected",
+    "intent": "Provide design tokens for dark mode",
+    "user_value": "Consistent theming across the app",
+    "design_basis": "Follows the selected CSS-variables decision",
+    "boundaries": [
+      "Only first-party app chrome"
+    ],
+    "non_goals": [
+      "Do not theme third-party widgets"
+    ],
+    "rough_acceptance_signals": [
+      "Tokens compile",
+      "Toggle works end to end"
+    ],
+    "design_contracts": [
+      {
+        "kind": "config",
+        "name": "theme.tokens",
+        "contract_shape": {},
+        "fixed_decisions": [
+          "Use HSL channels"
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "id": "ev-1",
+        "source": {
+          "kind": "doc",
+          "value": "ev-1"
+        },
+        "observation": "Design spec section 3"
+      }
+    ],
+    "decision_refs": [
+      "dec-a"
+    ],
+    "priority": "must",
+    "trace": {
+      "source_request": [
+        "req-1"
+      ],
+      "design_option_refs": [
+        "DO-001"
+      ]
+    }
+  },
+  "functional_units": [
+    {
+      "functional_unit": {
+        "ref": "FU-001",
+        "title": "Expose a paginated list endpoint",
+        "status": "confirmed",
+        "intent": {
+          "actor": "api consumer",
+          "user_goal": "browse large collections without timeout",
+          "problem": "unbounded queries time out",
+          "target_behavior": "returns a cursor page under 200ms"
+        },
+        "scope": {
+          "project": {
+            "kind": "project",
+            "value": "ure/service"
+          },
+          "capability": "list_paginated",
+          "surfaces": [
+            "api",
+            "data"
+          ],
+          "code_anchors": [
+            {
+              "kind": "file",
+              "value": "src/handlers/list.ts",
+              "project": {
+                "kind": "project",
+                "value": "ure/service"
+              },
+              "description": "entrypoint for the list handler",
+              "confidence": "high"
+            }
+          ],
+          "non_goals": [
+            "caching",
+            "authz"
+          ]
+        },
+        "contract": {
+          "kind": "api",
+          "name": "list_paginated",
+          "contract_shape": {
+            "method": "GET",
+            "query": {
+              "page": "number",
+              "size": "number"
+            }
+          },
+          "fixed_decisions": [
+            "page is 1-based",
+            "default size is 25"
+          ],
+          "architect_boundary": {
+            "may_decide": [
+              "error format"
+            ],
+            "must_not_decide": [
+              "storage engine",
+              "auth model"
+            ]
+          }
+        },
+        "acceptance": [
+          {
+            "id": "AC-001",
+            "given": "first page returns exactly the requested size",
+            "when": "automated_test",
+            "then": "25 rows when size=25 and 100 rows exist"
+          }
+        ],
+        "dependencies": {
+          "depends_on": [
+            "FU-002"
+          ],
+          "blocks": [
+            "FU-003"
+          ],
+          "conflicts_with": [],
+          "related": []
+        },
+        "evidence": [
+          {
+            "id": "E1",
+            "source": {
+              "kind": "file",
+              "value": "src/handlers/list.ts"
+            },
+            "observation": "profiler showed full-table scan"
+          }
+        ],
+        "questions": [
+          {
+            "id": "Q-001",
+            "ask": "what is the max page size?",
+            "blocking": false,
+            "options": [
+              "50",
+              "100"
+            ]
+          }
+        ],
+        "constraints": [
+          "must stay under 200ms p95"
+        ],
+        "risk": {
+          "level": "low",
+          "tags": [
+            "performance"
+          ],
+          "notes": [
+            "depends on index coverage"
+          ]
+        },
+        "decomposition_check": {
+          "is_atomic": true,
+          "can_be_accepted_independently": true,
+          "has_clear_code_anchor": true,
+          "has_clear_non_goals": true,
+          "contract_complete": true,
+          "ready_for_architect_implement": true,
+          "unresolved_blockers": []
+        },
+        "trace": {
+          "source_request": [
+            "req-001"
+          ],
+          "decisions": [
+            "dec-001"
+          ]
+        },
+        "checkpoint": {
+          "status": "confirmed",
+          "confirmed_by": "product-owner",
+          "confirmed_at": "2026-07-12T10:30:00",
+          "notes": "approved in design sync"
+        }
+      },
+      "implementation_units": [
+        {
+          "implementation_unit": {
+            "ref": "IU-001",
+            "title": "Cache the paginated list endpoint",
+            "purpose": "Cut p95 latency by serving repeated pages from cache",
+            "status": "ready",
+            "functional_unit_refs": [
+              "FU-001"
+            ],
+            "scopes": [
+              {
+                "project": {
+                  "kind": "project",
+                  "value": "ure/service"
+                },
+                "path": "src/handlers/list.ts",
+                "symbols": [
+                  {
+                    "kind": "symbol",
+                    "value": "ListHandler",
+                    "symbol_kind": "class"
+                  },
+                  {
+                    "kind": "symbol",
+                    "value": "renderPage",
+                    "symbol_kind": "function"
+                  }
+                ],
+                "role": "edit",
+                "intent": "Introduce a per-page cache in the list handler",
+                "constraints": [
+                  "must not change the public response shape"
+                ],
+                "related_files": [
+                  "src/cache/store.ts"
+                ]
+              }
+            ],
+            "constraints": [
+              "stay under 200ms p95"
+            ],
+            "evidence": [
+              {
+                "id": "E1",
+                "source": {
+                  "kind": "file",
+                  "value": "src/handlers/list.ts"
+                },
+                "observation": "profiler showed repeated full scans"
+              }
+            ],
+            "risks": [
+              {
+                "summary": "cache invalidation edge cases",
+                "level": "medium",
+                "mitigation": "ttl + explicit purge"
+              }
+            ],
+            "decomposition_check": {
+              "can_decompose_independently": true,
+              "has_bounded_scope": true,
+              "has_test_strategy": true,
+              "preserves_functional_unit_trace": true,
+              "unresolved_blockers": []
+            }
+          },
+          "edit": [
+            {
+              "target": {
+                "kind": "file",
+                "value": "src/handlers/list.ts"
+              },
+              "action": "update",
+              "instruction": "Add cursor pagination to the list handler",
+              "expected": "list handler serves a 1-based cursor page under 200ms"
+            }
+          ],
+          "depends_on": []
+        }
+      ],
+      "verification": [
+        {
+          "id": "V-001",
+          "when": "first page is requested with size=25",
+          "then": "returns exactly 25 rows"
+        }
+      ],
+      "review_focus": [
+        "pagination edge cases"
+      ]
+    }
+  ],
+  "commit_strategy": {
+    "mode": "commit_per_functional_unit",
+    "message_hint": "feat: add paginated list endpoint"
+  },
+  "execution_policy": {
+    "repair_rounds": 1
+  },
+  "notes": [
+    "keep under 200ms p95"
+  ]
+}

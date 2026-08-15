@@ -1,0 +1,41 @@
+{
+  "schema_version": "request-intake/v1",
+  "phase": "bogus_phase",
+  "understanding": "The task is to add a retry policy to the transport layer.",
+  "candidate_scopes": [
+    {
+      "ref": "SC-001",
+      "title": "Transport retry policy",
+      "project": "ure/service",
+      "summary": "Add retry with backoff to the HTTP transport.",
+      "independence": "single",
+      "reason": "Self-contained and does not touch other layers.",
+      "requirements": ["Define backoff schedule"],
+      "likely_surfaces": ["src/transport/http.ts"]
+    }
+  ],
+  "scope_assessment": {
+    "readiness": "preliminary",
+    "needs_split": false,
+    "reason": "Only one cohesive scope identified.",
+    "confidence": "high",
+    "independent_scope_count": 1,
+    "suggested_sub_topics": ["backoff algorithm"],
+    "recommended_action": "run_exploration"
+  },
+  "exploration_plan": {
+    "strategy": "Probe existing transport code and history.",
+    "coverage": {
+      "doc_baseline": true,
+      "code_baseline": true,
+      "history_baseline": true,
+      "surface_probe": true,
+      "external_research": false
+    },
+    "requests": []
+  },
+  "open_questions": [],
+  "assumptions": ["Network failures are transient."],
+  "decisions": ["Use exponential backoff."],
+  "next_action": "run_exploration"
+}

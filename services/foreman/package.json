@@ -1,0 +1,40 @@
+{
+  "name": "@wrenyard/foreman",
+  "version": "1.0.0-dev.0",
+  "description": "Wrenyard — AI task and TaskGraph orchestration CLI",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@11.19.0",
+  "type": "module",
+  "bin": {
+    "foreman": "./bin/foreman.mts"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "config.example.json"
+  ],
+  "scripts": {
+    "start": "tsx bin/foreman.mts",
+    "build": "pnpm run typecheck",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts",
+    "typecheck": "tsc --noEmit",
+    "e2e:fwa-native": "tsx scripts/fwa-native-e2e.mts"
+  },
+  "engines": {
+    "node": ">=18.3.0"
+  },
+  "dependencies": {
+    "@langchain/core": "1.2.5",
+    "ajv": "^8.20.0",
+    "better-sqlite3": "11.10.0",
+    "tsx": "^4.22.4",
+    "yaml": "^2.7.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

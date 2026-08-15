@@ -1,0 +1,30 @@
+{
+  "name": "@wrenyard/dsh-shell",
+  "version": "1.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "Wrenyard DSH native bundle package: Foreman MCP/IPC tools bridge for DeepSeek Harness (DSH) Code Mode",
+  "license": "MIT",
+  "files": [
+    "src/foreman-tools.mjs",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/foreman-tools.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
+  }
+}

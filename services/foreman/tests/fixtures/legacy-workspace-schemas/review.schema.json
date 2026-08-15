@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/review.schema.json",
+  "title": "Review Protocol",
+  "description": "Small shared review vocabulary for code, conformance, plan, spec, FU, and FP review tasks.",
+  "$ref": "#/definitions/ReviewChecklistIssueBase",
+  "definitions": {
+    "ReviewKind": {
+      "type": "string",
+      "enum": [
+        "code",
+        "conform",
+        "plan",
+        "spec",
+        "fu",
+        "fp"
+      ]
+    },
+    "ReviewStatus": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "changes_required",
+        "blocked",
+        "failed"
+      ]
+    },
+    "ReviewChecklistIssueBase": {
+      "type": "object",
+      "required": [
+        "check_id",
+        "problem",
+        "required_change"
+      ],
+      "properties": {
+        "check_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "problem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

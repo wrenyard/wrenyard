@@ -1,0 +1,35 @@
+appId: dev.wrenyard.pet
+productName: "Wrenyard Pet"
+copyright: "Copyright © 2026 Dluckxx"
+
+files:
+  - dist/**/*
+  - package.json
+
+directories:
+  output: release
+
+# Pet has no native runtime dependency of its own. Rebuilding from the hoisted
+# monorepo would mutate better-sqlite3 for Electron and break the control-plane
+# Node runtime after a release build.
+npmRebuild: false
+
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  extendInfo:
+    LSUIElement: true
+  icon: null
+
+win:
+  target: nsis
+
+linux:
+  executableName: wrenyard-pet
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+# Skip code signing for dev builds
+forceCodeSigning: false

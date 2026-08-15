@@ -1,0 +1,17 @@
+{
+  "name": "@wrenyard/runtime-win32-x64",
+  "version": "1.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "optional": true,
+  "description": "CI-built precompiled Forge runtime package for win32-x64.",
+  "files": [
+    "bin",
+    "runtime-manifest.json"
+  ],
+  "wrenyard": {
+    "platform": "win32",
+    "arch": "x64",
+    "component": "forge"
+  }
+}

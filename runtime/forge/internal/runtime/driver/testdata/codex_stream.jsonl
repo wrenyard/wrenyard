@@ -1,0 +1,8 @@
+{"type":"rendered_prompt","timestamp":"2026-06-01T00:00:00Z","profile":"codex","clientFamily":"codex","prompt":"hello"}
+Reading additional input from stdin...
+{"type":"thread.started","thread_id":"019e8213-52d9-7e03-bfce-2d6d144757c2"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"powershell -NoProfile -Command \"Get-ChildItem\""}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","status":"completed","exit_code":0,"aggregated_output":"Directory listing\nfile.txt\n"}}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Understood. I have the workspace context and I’m ready to proceed."}}
+{"type":"turn.completed","usage":{"input_tokens":13406,"cached_input_tokens":3584,"output_tokens":234,"reasoning_output_tokens":173}}

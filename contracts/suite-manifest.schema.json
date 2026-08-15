@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wrenyard suite release manifest schema (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite_version",
+    "protocol_version",
+    "release_status",
+    "components",
+    "platform_artifacts",
+    "publishable"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wrenyard.release-manifest.v1"
+    },
+    "suite_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "protocol_version": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "release_status": {
+      "enum": ["development", "preview", "stable"]
+    },
+    "publishable": {
+      "type": "boolean"
+    },
+    "platform_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-zA-Z0-9._-]+$": {
+          "$ref": "#/$defs/platformArtifact"
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forge", "foreman", "pet", "cli", "desktop", "dsh_shell"],
+      "properties": {
+        "forge": { "$ref": "#/$defs/component" },
+        "foreman": { "$ref": "#/$defs/component" },
+        "pet": { "$ref": "#/$defs/component" },
+        "cli": { "$ref": "#/$defs/component" },
+        "desktop": { "$ref": "#/$defs/component" },
+        "dsh_shell": { "$ref": "#/$defs/component" }
+      }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "version", "source_sha"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "source_sha": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          ]
+        }
+      }
+    },
+    "platformArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "path", "sha256"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

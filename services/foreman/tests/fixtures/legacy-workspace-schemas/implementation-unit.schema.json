@@ -1,0 +1,379 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/implementation-unit.schema.json",
+  "title": "Implementation Unit Protocol",
+  "description": "Workflow-local architecture implementation units produced by architect and consumed by implementation plans, edit tasks, and verification tasks.",
+  "$ref": "#/definitions/ImplementationUnitSet",
+  "definitions": {
+    "ImplementationUnitSet": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "topic",
+        "project",
+        "status",
+        "summary",
+        "units",
+        "verification"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "implementation-unit/v1"
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "needs_more_evidence",
+            "blocked"
+          ]
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "objective",
+            "recommended_approach",
+            "confidence"
+          ],
+          "properties": {
+            "objective": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recommended_approach": {
+              "type": "string",
+              "minLength": 1
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImplementationUnit"
+          },
+          "minItems": 1
+        },
+        "verification": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VerificationItem"
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RiskItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImplementationUnit": {
+      "type": "object",
+      "required": [
+        "ref",
+        "title",
+        "purpose",
+        "status",
+        "functional_unit_refs",
+        "scopes",
+        "constraints",
+        "evidence",
+        "decomposition_check"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/ImplementationUnitRef",
+          "description": "Workflow-local stable reference. Not a persistent global id."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "needs_more_evidence",
+            "blocked"
+          ]
+        },
+        "functional_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Functional units this implementation unit exists to satisfy."
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImplementationScope"
+          },
+          "minItems": 1
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceRef"
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RiskItem"
+          }
+        },
+        "decomposition_check": {
+          "type": "object",
+          "description": "Legacy name kept for compatibility. It now means the ImplementationUnit can stand alone as an executable implementation batch with bounded edit instructions and verification.",
+          "required": [
+            "can_decompose_independently",
+            "has_bounded_scope",
+            "has_test_strategy",
+            "preserves_functional_unit_trace",
+            "unresolved_blockers"
+          ],
+          "properties": {
+            "can_decompose_independently": {
+              "type": "boolean",
+              "description": "True when the unit can be executed independently as a bounded edit package without another planning task."
+            },
+            "has_bounded_scope": {
+              "type": "boolean"
+            },
+            "has_test_strategy": {
+              "type": "boolean"
+            },
+            "preserves_functional_unit_trace": {
+              "type": "boolean"
+            },
+            "unresolved_blockers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decomposition_check": {
+            "properties": {
+              "can_decompose_independently": {
+                "const": true
+              },
+              "has_bounded_scope": {
+                "const": true
+              },
+              "has_test_strategy": {
+                "const": true
+              },
+              "preserves_functional_unit_trace": {
+                "const": true
+              },
+              "unresolved_blockers": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "ImplementationUnitRef": {
+      "type": "string",
+      "pattern": "^IU-[0-9]{3,}$"
+    },
+    "ImplementationScope": {
+      "type": "object",
+      "required": [
+        "project",
+        "path",
+        "symbols",
+        "role",
+        "intent",
+        "constraints",
+        "related_files"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SymbolRef"
+          }
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Architecture-level intent, not line-level edit instructions."
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "related_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SymbolRef": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "class",
+            "function",
+            "method",
+            "type",
+            "constant",
+            "route",
+            "task",
+            "workflow",
+            "unknown"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerificationItem": {
+      "type": "object",
+      "required": [
+        "brief",
+        "expected"
+      ],
+      "properties": {
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "functional_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "RiskItem": {
+      "type": "object",
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "mitigation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "required": [
+        "source",
+        "summary"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

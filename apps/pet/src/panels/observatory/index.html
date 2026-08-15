@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:transparent;user-select:none;font-family:system-ui,sans-serif;font-size:13px;color:#2E2018}
+#drag-edge{position:absolute;top:0;left:0;right:0;height:24px;-webkit-app-region:drag;background:rgba(245,235,212,0.95);border-bottom:1px solid #D4C9A8;z-index:10;display:flex;align-items:center;padding:0 8px;padding-right:26px;font-size:11px;font-weight:600;gap:6px}
+#close-btn{position:absolute;top:4px;right:4px;width:16px;height:16px;border:0;background:transparent;color:#8B7D6B;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-app-region:no-drag;z-index:11;padding:0}
+#close-btn:hover{color:#2E2018}
+#drag-edge .graph-slip-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#drag-edge .state-mark{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-right:6px;border:1px solid rgba(46,32,24,0.35)}
+.state-mark.running{background:#4CAF50}
+.state-mark.paused{background:#FF9800}
+.state-mark.created,.state-mark.done,.state-mark.cancelled,.state-mark.stale{background:#8B7D6B}
+#content{position:absolute;top:24px;left:0;right:0;bottom:0;background:#F7EFD8;overflow:auto}
+#dag-canvas{display:block}
+#loading-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(247,239,216,0.7);z-index:5;font-size:13px;color:#666}
+#error-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(247,239,216,0.7);z-index:5;font-size:12px;color:#9E3A2C}
+#terminal-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(247,239,216,0.7);z-index:5;font-size:12px;color:#8B7D6B}
+.hidden{display:none!important}
+/* Paper-tag nodes in the Lamplight Workshop paper/ink palette. Node state
+   lives in the tag fill and border, and only running nodes get a
+   marching-outline pulse. */
+.dag-tag{transition:fill .15s ease,stroke .15s ease}
+.dag-icon-tile{fill:#EFE6CC}
+.dag-control-tile{fill:#EFE6CC}
+.dag-icon{color:#2E2018}
+/* 10px tag font. JS measures actual SVG text advance and fits it into the
+   full label region, preserving more Latin text than a fixed char cap. */
+.dag-node-name{font-size:10px;fill:#2E2018;font-family:system-ui,sans-serif}
+.dag-running-hint{fill:none;stroke:#6B9A62;stroke-width:2;stroke-dasharray:5 4;animation:dag-run-pulse 1.1s linear infinite}
+@keyframes dag-run-pulse{from{stroke-dashoffset:0}to{stroke-dashoffset:-18}}
+/* Orthogonal edge routes: flat ink on paper, no diagonals, arrow on the
+   final target segment only (marker applied in JS). */
+.dag-edge{fill:none;stroke:#8B7D6B;stroke-width:1.5}
+/* 3px ink solder dots at collapsed join/fanout split/merge junctions. */
+.dag-solder{fill:#2E2018}
+/* Lightweight bounded paper tip (<=240px, built with textContent only). */
+.dag-tip-title{font-weight:600;margin-bottom:2px;white-space:normal;word-break:break-word}
+.dag-tip-row{display:flex;gap:8px;line-height:1.5}
+.dag-tip-label{color:#8B7D6B;flex-shrink:0}
+.dag-tip-value{color:#2E2018;white-space:normal;word-break:break-word}
+/* Full-width bordered done-summary region inside the tip: explicitly
+   width:100% with border-box so it always spans the tooltip inner width
+   (padding included), and at most eight lines with ellipsis, overflow
+   hidden on both axes, never a scrollbar. */
+.dag-tip-summary{
+  width:100%;box-sizing:border-box;margin-top:4px;padding:4px 6px;
+  border:1px solid #D4C9A8;border-radius:3px;
+  background:rgba(212,201,168,0.12);color:#2E2018;
+  display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;
+  overflow:hidden;line-height:1.5;word-break:break-word
+}
+</style>
+</head>
+<body>
+<div id="drag-edge">
+  <span class="state-mark" id="state-mark"></span>
+  <span class="graph-slip-title" id="graph-id-display"></span>
+  <button id="close-btn">×</button>
+</div>
+<div id="content">
+  <svg id="dag-canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="loading-overlay" class="hidden">Loading…</div>
+  <div id="error-overlay" class="hidden"></div>
+  <div id="terminal-overlay" class="hidden"></div>
+</div>
+<script src="graph-slip.js"></script>
+</body>
+</html>

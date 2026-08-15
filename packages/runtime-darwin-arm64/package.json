@@ -1,0 +1,17 @@
+{
+  "name": "@wrenyard/runtime-darwin-arm64",
+  "version": "1.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "optional": true,
+  "description": "CI-built precompiled Forge runtime package for darwin-arm64.",
+  "files": [
+    "bin",
+    "runtime-manifest.json"
+  ],
+  "wrenyard": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "component": "forge"
+  }
+}
