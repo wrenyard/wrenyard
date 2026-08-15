@@ -1,0 +1,3 @@
+{"type":"step_start","part":{"type":"step-start"}}
+{"type":"text","part":{"type":"text","text":"OC_GPT_OK"}}
+{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":10,"input":8,"output":2,"reasoning":1}}}

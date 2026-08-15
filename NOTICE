@@ -1,0 +1,22 @@
+Wrenyard
+========
+
+This distribution contains first-party Wrenyard source code and third-party
+software components.
+
+First-party
+-----------
+- Wrenyard source code is licensed under the MIT License; see LICENSE.
+- Copyright (c) 2026 Dluckxx.
+
+Third-party
+-----------
+- Third-party components remain under their own licenses, copyright notices
+  and attribution requirements; see THIRD_PARTY_NOTICES.md.
+- Wrenyard does not claim ownership of DeepSeek, Node.js, Electron, PixiJS or
+  any other upstream dependency.
+
+Release artifacts
+-----------------
+Generated release artifacts must carry LICENSE, NOTICE and
+THIRD_PARTY_NOTICES.md.

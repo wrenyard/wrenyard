@@ -1,0 +1,21 @@
+# ===== Python =====
+__pycache__/
+skills/**/__pycache__/
+.DS_Store
+# ===== Secrets =====
+data/secrets.json
+
+# ===== Build outputs =====
+bin/
+!tools/foreman/bin/
+!tools/foreman/bin/**
+node_modules/
+internal/forge/.local/
+forge.exe
+
+# ===== Literal-pollution guards (mis-expanded env vars on Windows) =====
+%SystemDrive%/
+%PATH%
+.forge-setup.log
+.forge-setup2.log
+.forge-update.log

@@ -1,0 +1,17 @@
+{
+  "name": "@wrenyard/runtime-darwin-x64",
+  "version": "1.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "optional": true,
+  "description": "CI-built precompiled Forge runtime package for darwin-x64.",
+  "files": [
+    "bin",
+    "runtime-manifest.json"
+  ],
+  "wrenyard": {
+    "platform": "darwin",
+    "arch": "x64",
+    "component": "forge"
+  }
+}

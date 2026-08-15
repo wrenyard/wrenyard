@@ -1,0 +1,59 @@
+{
+  "graph": {
+    "nodes": {
+      "start": {
+        "id": "start",
+        "name": "Start TaskGraph FWA E2E",
+        "action": { "type": "start", "params": {} },
+        "deps": [],
+        "input": [],
+        "input_schema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "output_schema": { "type": "object", "properties": {}, "additionalProperties": false }
+      },
+      "verify": {
+        "id": "verify",
+        "name": "Verify hello TaskGraph FWA E2E",
+        "action": {
+          "type": "task",
+          "params": {
+            "name": "test",
+            "project": "foreman",
+            "input": [
+              {
+                "id": "hello-taskgraph-fwa-e2e",
+                "given": "The Foreman checkout contains tests/fixtures/hello-taskgraph-fwa-e2e.mts.",
+                "when": "Run npx tsx --test --test-concurrency=1 tests/taskgraph-fwa-e2e.test.mts from the Foreman checkout.",
+                "then": "The command exits successfully and the test confirms the fixed TaskGraph FWA E2E greeting."
+              }
+            ]
+          }
+        },
+        "deps": ["start"],
+        "input": [],
+        "input_schema": {
+          "type": "object",
+          "properties": { "criteria": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "evidences": { "type": "array", "items": { "type": "object" } },
+            "assessments": { "type": "array", "items": { "type": "object" } }
+          },
+          "required": ["evidences", "assessments"],
+          "additionalProperties": false
+        }
+      },
+      "end": {
+        "id": "end",
+        "name": "Finish TaskGraph FWA E2E",
+        "action": { "type": "end", "params": {} },
+        "deps": ["verify"],
+        "input": [],
+        "input_schema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "output_schema": { "type": "object", "properties": {}, "additionalProperties": false }
+      }
+    }
+  }
+}

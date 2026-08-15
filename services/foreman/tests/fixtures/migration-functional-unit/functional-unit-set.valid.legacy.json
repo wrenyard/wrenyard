@@ -1,0 +1,103 @@
+{
+  "schema_version": "functional-unit/v1",
+  "topic": "Workflow-local design-complete units",
+  "project": "ure/service",
+  "status": "confirmed",
+  "units": [
+    {
+      "ref": "FU-001",
+      "title": "Expose a paginated list endpoint",
+      "status": "confirmed",
+      "intent": {
+        "actor": "api consumer",
+        "user_goal": "browse large collections without timeout",
+        "problem": "unbounded queries time out",
+        "target_behavior": "returns a cursor page under 200ms"
+      },
+      "scope": {
+        "project": "ure/service",
+        "capability": "list_paginated",
+        "surfaces": ["api", "data"],
+        "code_anchors": [
+          {
+            "kind": "file",
+            "path": "src/handlers/list.ts",
+            "project": "ure/service",
+            "description": "entrypoint for the list handler",
+            "confidence": "high"
+          }
+        ],
+        "non_goals": ["caching", "authz"]
+      },
+      "contract": {
+        "kind": "api",
+        "name": "list_paginated",
+        "contract_shape": {
+          "method": "GET",
+          "query": { "page": "number", "size": "number" }
+        },
+        "fixed_decisions": ["page is 1-based", "default size is 25"],
+        "architect_boundary": {
+          "may_decide": ["error format"],
+          "must_not_decide": ["storage engine", "auth model"]
+        }
+      },
+      "acceptance": [
+        {
+          "ref": "AC-001",
+          "description": "first page returns exactly the requested size",
+          "verification": "automated_test",
+          "expected_result": "25 rows when size=25 and 100 rows exist"
+        }
+      ],
+      "dependencies": {
+        "depends_on": ["FU-002"],
+        "blocks": ["FU-003"],
+        "conflicts_with": [],
+        "related": []
+      },
+      "evidence": [
+        { "kind": "code", "ref": "E1", "summary": "profiler showed full-table scan" }
+      ],
+      "questions": [
+        { "ref": "Q-001", "question": "what is the max page size?", "blocking": false, "options": ["50", "100"] }
+      ],
+      "constraints": ["must stay under 200ms p95"],
+      "risk": {
+        "level": "low",
+        "tags": ["performance"],
+        "notes": ["depends on index coverage"]
+      },
+      "decomposition_check": {
+        "is_atomic": true,
+        "can_be_accepted_independently": true,
+        "has_clear_code_anchor": true,
+        "has_clear_non_goals": true,
+        "contract_complete": true,
+        "ready_for_architect_implement": true,
+        "unresolved_blockers": []
+      },
+      "trace": {
+        "source_request": ["req-001"],
+        "decisions": ["dec-001"]
+      },
+      "checkpoint": {
+        "status": "confirmed",
+        "confirmed_by": "product-owner",
+        "confirmed_at": "2026-07-12T10:30:00",
+        "notes": "approved in design sync"
+      }
+    }
+  ],
+  "context_summary": {
+    "decisions": [
+      { "ref": "dec-001", "summary": "use cursor pagination" }
+    ],
+    "exploration_findings": [
+      { "ref": "find-001", "summary": "existing list has no paging" }
+    ],
+    "open_questions": [
+      { "ref": "Q-002", "question": "keep offset fallback?", "blocking": false }
+    ]
+  }
+}

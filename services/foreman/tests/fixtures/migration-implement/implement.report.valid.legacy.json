@@ -1,0 +1,57 @@
+{
+  "report": {
+    "status": "completed",
+    "feature_point_ref": "FP-001",
+    "functional_units": [
+      {
+        "ref": "FU-001",
+        "title": "Build the paginated list endpoint",
+        "status": "completed",
+        "implementation_units": [
+          {
+            "ref": "IU-001",
+            "title": "Add the list controller",
+            "status": "completed"
+          }
+        ],
+        "verification_results": [
+          {
+            "brief": "list endpoint returns paginated items",
+            "expected": "page 1 returns 20 items and a next cursor",
+            "status": "passed",
+            "summary": "curl returned 20 rows and a cursor token",
+            "evidence": ["ev-commit-abc1234", "ev-log-run1"]
+          }
+        ],
+        "review": [
+          {
+            "issues": [],
+            "status": "approved"
+          }
+        ],
+        "commits": [
+          {
+            "hash": "abc1234",
+            "message": "feat: paginated list endpoint",
+            "stats": {
+              "files_changed": 3,
+              "added_lines": 142,
+              "deleted_lines": 4,
+              "edited_lines": 12,
+              "raw_shortstat": " 3 files changed, 142 insertions(+), 4 deletions(-)",
+              "raw_numstat": [
+                {
+                  "file": "src/list.ts",
+                  "added": 120,
+                  "deleted": 4,
+                  "raw": "120\t4\tsrc/list.ts"
+                }
+              ]
+            }
+          }
+        ],
+        "change_summary": "Implemented the paginated list endpoint with cursor paging."
+      }
+    ]
+  }
+}

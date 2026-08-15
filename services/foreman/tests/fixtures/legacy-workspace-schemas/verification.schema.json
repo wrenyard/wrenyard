@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/verification.schema.json",
+  "title": "Verification Protocol",
+  "description": "Shared verification brief and result protocol consumed by workspace test-style tasks and implementation plans.",
+  "$ref": "#/definitions/VerificationItem",
+  "definitions": {
+    "VerificationItem": {
+      "type": "object",
+      "required": [
+        "brief",
+        "expected"
+      ],
+      "properties": {
+        "brief": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Verification brief: the behavior, scenario, command family, or quality gate to verify."
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Clear pass criteria. This is not necessarily a fixed shell command."
+        },
+        "functional_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+          },
+          "uniqueItems": true,
+          "description": "Optional FunctionalUnit refs this verification proves."
+        },
+        "implementation_unit_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnitRef"
+          },
+          "uniqueItems": true,
+          "description": "Optional ImplementationUnit refs this verification exercises."
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerificationResult": {
+      "type": "object",
+      "required": [
+        "brief",
+        "expected",
+        "status",
+        "summary"
+      ],
+      "properties": {
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "blocked",
+            "not_supported"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Observed result, including why the expected criteria did or did not pass."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Commands, logs, screenshots, files, or observations supporting the result."
+        },
+        "attempted_actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Concrete verification actions attempted."
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerificationReport": {
+      "type": "object",
+      "required": [
+        "status",
+        "results"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "blocked"
+          ],
+          "description": "passed if every verification passed; failed for implementation/test failures; blocked for environment/tooling limits."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VerificationResult"
+          },
+          "description": "Per-item verification results."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

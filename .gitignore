@@ -1,0 +1,26 @@
+# Dependencies, build output, and generated artifacts (root and nested).
+node_modules/
+dist/
+build/
+coverage/
+.artifacts/
+apps/desktop/release/
+
+# Generated runtime payload binaries.
+bin/daemon/
+bin/foreman-task.*
+
+# Local environment, logs, configuration, and state.
+.env*
+logs/
+config.yaml
+.state/
+.wrenyard/
+
+# Managed worktrees.
+worktrees/
+
+# Track the canonical Zod source-of-truth schemas (not generated/legacy dirs).
+schemas/
+!services/foreman/lib/core/task/schemas/
+!services/foreman/lib/core/task/schemas/*.mts

@@ -1,0 +1,54 @@
+{
+  "schema_version": "implementation-unit/v1",
+  "topic": "Workflow-local architecture implementation units",
+  "project": "ure/service",
+  "status": "ready",
+  "summary": {
+    "objective": "Add a cached list endpoint",
+    "recommended_approach": "Wrap the existing handler with an in-memory cache",
+    "confidence": "high"
+  },
+  "units": [
+    {
+      "ref": "IU-001",
+      "title": "Cache the paginated list endpoint",
+      "purpose": "Cut p95 latency by serving repeated pages from cache",
+      "status": "ready",
+      "functional_unit_refs": ["FU-001"],
+      "scopes": [
+        {
+          "project": "ure/service",
+          "path": "src/handlers/list.ts",
+          "symbols": [
+            { "name": "ListHandler", "kind": "class" },
+            { "name": "renderPage", "kind": "function" }
+          ],
+          "role": "edit",
+          "intent": "Introduce a per-page cache in the list handler",
+          "constraints": ["must not change the public response shape"],
+          "related_files": ["src/cache/store.ts"]
+        }
+      ],
+      "constraints": ["stay under 200ms p95"],
+      "evidence": [
+        { "source": "file://src/handlers/list.ts", "summary": "profiler showed repeated full scans" }
+      ],
+      "risks": [
+        { "summary": "cache invalidation edge cases", "level": "medium", "mitigation": "ttl + explicit purge" }
+      ],
+      "decomposition_check": {
+        "can_decompose_independently": true,
+        "has_bounded_scope": true,
+        "has_test_strategy": true,
+        "preserves_functional_unit_trace": true,
+        "unresolved_blockers": []
+      }
+    }
+  ],
+  "verification": [
+    { "brief": "first page is served from cache on repeat", "expected": "second call hits cache and returns identical rows", "functional_unit_refs": ["FU-001"] }
+  ],
+  "risks": [
+    { "summary": "memory pressure under high cardinality", "level": "low" }
+  ]
+}

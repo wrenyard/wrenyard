@@ -1,0 +1,223 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/implementation-plan.schema.json",
+  "title": "Implementation Plan Protocol",
+  "description": "A self-contained implementation plan for implementing one FeaturePoint. It wraps one FeaturePoint snapshot and FunctionalUnit execution nodes; each FunctionalUnit owns directly executable ImplementationUnits, FU-level local verification, and FU-level commit/review boundaries.",
+  "$ref": "#/definitions/ImplementationPlan",
+  "definitions": {
+    "ImplementationPlan": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "status",
+        "topic",
+        "project",
+        "source",
+        "feature_point",
+        "functional_units",
+        "commit_strategy"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "implementation-plan/v1"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "reviewed",
+            "approved"
+          ],
+          "description": "draft is authored but unchecked; reviewed has passed plan-review; approved is ready for implement workflow execution."
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "$ref": "#/definitions/ProjectName"
+        },
+        "source": {
+          "$ref": "#/definitions/PlanSource"
+        },
+        "feature_point": {
+          "$ref": "https://agent-workspace.local/schemas/feature-point.schema.json#/definitions/FeaturePoint",
+          "description": "The single FeaturePoint this plan implements. A plan must not implement multiple FeaturePoints."
+        },
+        "functional_units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FunctionalUnitExecutionNode"
+          },
+          "minItems": 1,
+          "description": "FunctionalUnit execution nodes covered by this FeaturePoint plan. Each node owns its executable ImplementationUnits, FU-level verification, and review focus."
+        },
+        "commit_strategy": {
+          "$ref": "#/definitions/CommitStrategy"
+        },
+        "execution_policy": {
+          "$ref": "#/definitions/ExecutionPolicy"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Optional orchestration notes. Must not introduce scope outside this plan's FP/FU/IU contracts. End-to-end acceptance, deployment, and user validation belong outside implement."
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanSource": {
+      "type": "object",
+      "required": [
+        "spec_path",
+        "feature_point_ref",
+        "functional_unit_set_ref"
+      ],
+      "properties": {
+        "spec_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace/project-relative path to the approved spec."
+        },
+        "feature_point_ref": {
+          "$ref": "#/definitions/FeaturePointRef"
+        },
+        "feature_point_set_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional path, workflow artifact id, or task output id for the confirmed FeaturePointSet."
+        },
+        "functional_unit_set_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path, workflow artifact id, or task output id for the confirmed FunctionalUnitSet."
+        },
+        "architect_run_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Optional task output ids or artifact refs for per-FunctionalUnit architect runs that produced executable IU nodes."
+        }
+      },
+      "additionalProperties": false
+    },
+    "FunctionalUnitExecutionNode": {
+      "type": "object",
+      "required": [
+        "functional_unit",
+        "implementation_units",
+        "verification"
+      ],
+      "properties": {
+        "functional_unit": {
+          "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnit",
+          "description": "The FunctionalUnit snapshot this execution node implements."
+        },
+        "implementation_units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExecutableImplementationUnit"
+          },
+          "minItems": 1,
+          "description": "Ordered executable ImplementationUnits for this FunctionalUnit. Each unit carries an ImplementationUnit snapshot and exact edit-task input."
+        },
+        "verification": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/verification.schema.json#/definitions/VerificationItem"
+          },
+          "minItems": 1,
+          "description": "FunctionalUnit-level local checks to run after this node's ImplementationUnits complete. This is where simple unit tests, focused local checks, lint, or type checks belong."
+        },
+        "review_focus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Optional FU-level code review focus areas after the node is implemented."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutableImplementationUnit": {
+      "type": "object",
+      "required": [
+        "implementation_unit",
+        "edit",
+        "depends_on"
+      ],
+      "properties": {
+        "implementation_unit": {
+          "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnit",
+          "description": "The architect-produced ImplementationUnit snapshot."
+        },
+        "edit": {
+          "$ref": "https://agent-workspace.local/schemas/edit.schema.json#/definitions/EditInstructionSet",
+          "description": "Exact edit-task input for this ImplementationUnit."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImplementationUnitRef"
+          },
+          "uniqueItems": true,
+          "description": "ImplementationUnit refs in the same FunctionalUnit node that must complete before this unit starts."
+        }
+      },
+      "additionalProperties": false
+    },
+    "CommitStrategy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "message_hint"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "commit_per_functional_unit"
+          ],
+          "description": "implement creates one local commit per completed FunctionalUnit. Deployment, push, and external acceptance are outside this workflow."
+        },
+        "message_hint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionPolicy": {
+      "type": "object",
+      "properties": {
+        "repair_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1,
+          "description": "Maximum local repair rounds per FunctionalUnit verification or code-review failure."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProjectName": {
+      "$ref": "https://agent-workspace.local/schemas/shared.schema.json#/definitions/ProjectRef"
+    },
+    "FeaturePointRef": {
+      "$ref": "https://agent-workspace.local/schemas/feature-point.schema.json#/definitions/FeaturePointRef"
+    },
+    "FunctionalUnitRef": {
+      "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+    },
+    "ImplementationUnitRef": {
+      "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnitRef"
+    }
+  }
+}

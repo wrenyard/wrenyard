@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-workspace.local/schemas/implement.schema.json",
+  "title": "Implement Protocol",
+  "description": "Implementation workflow report for one FeaturePoint. The workflow performs code edits, FU-level local checks, FU-level code review, and FU-level local commits. External acceptance, deployment, push, and E2E validation are outside implement.",
+  "$ref": "#/definitions/ImplementOutput",
+  "definitions": {
+    "ImplementOutput": {
+      "type": "object",
+      "required": [
+        "report"
+      ],
+      "properties": {
+        "report": {
+          "$ref": "#/definitions/ImplementReport"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImplementReport": {
+      "type": "object",
+      "required": [
+        "status",
+        "feature_point_ref",
+        "functional_units"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "feature_point_ref": {
+          "$ref": "https://agent-workspace.local/schemas/feature-point.schema.json#/definitions/FeaturePointRef"
+        },
+        "functional_units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FunctionalUnitReport"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FunctionalUnitReport": {
+      "type": "object",
+      "required": [
+        "ref",
+        "title",
+        "status",
+        "implementation_units",
+        "verification_results",
+        "review",
+        "commits",
+        "change_summary"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "https://agent-workspace.local/schemas/functional-unit.schema.json#/definitions/FunctionalUnitRef"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "implementation_units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImplementationUnitReport"
+          }
+        },
+        "verification_results": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/verification.schema.json#/definitions/VerificationResult"
+          }
+        },
+        "review": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImplementReviewAttempt"
+          }
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agent-workspace.local/schemas/commit.schema.json#/definitions/CommitInfo"
+          }
+        },
+        "change_summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImplementationUnitReport": {
+      "type": "object",
+      "required": [
+        "ref",
+        "title",
+        "status"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "https://agent-workspace.local/schemas/implementation-unit.schema.json#/definitions/ImplementationUnitRef"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImplementReviewAttempt": {
+      "type": "object",
+      "required": [
+        "issues",
+        "status"
+      ],
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "failed"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

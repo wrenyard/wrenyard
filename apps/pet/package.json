@@ -1,0 +1,34 @@
+{
+  "name": "@wrenyard/pet",
+  "version": "1.0.0-dev.0",
+  "packageManager": "pnpm@11.19.0",
+  "description": "Wrenyard desktop task visualizer/observer pixel construction-site pet",
+  "private": true,
+  "license": "MIT",
+  "main": "dist/main/main/index.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.main.json && esbuild src/preloads/entity-preload.ts --bundle --outfile=dist/main/main/entity-preload.js --format=cjs --target=es2022 --platform=node --external:electron && esbuild src/preloads/graph-slip-preload.ts --bundle --outfile=dist/main/main/graph-slip-preload.js --format=cjs --target=es2022 --platform=node --external:electron && esbuild src/preloads/transcript-preload.ts --bundle --outfile=dist/main/main/transcript-preload.js --format=cjs --target=es2022 --platform=node --external:electron",
+    "build:renderer": "esbuild src/overlay/house/index.ts --bundle --outfile=dist/renderer/house.js --format=iife --target=es2022 && esbuild src/overlay/worker/index.ts --bundle --outfile=dist/renderer/worker.js --format=iife --target=es2022 && esbuild src/overlay/taskgraph-entity/index.ts --bundle --outfile=dist/renderer/entity.js --format=iife --target=es2022 && esbuild src/panels/stats/index.ts --bundle --outfile=dist/renderer/stats.js --format=iife --target=es2022 && esbuild src/panels/settings/index.ts --bundle --outfile=dist/renderer/settings.js --format=iife --target=es2022 && esbuild src/panels/transcript/index.ts --bundle --outfile=dist/renderer/transcript.js --format=iife --target=es2022 && esbuild src/panels/observatory/index.ts --bundle --outfile=dist/renderer/graph-slip.js --format=iife --target=es2022 && node tools/copy-renderer-assets.mjs",
+
+    "build": "pnpm run build:main && pnpm run build:renderer",
+    "dev": "pnpm run build && electron .",
+    "start": "node scripts/run-foreground.mjs",
+    "test": "pnpm run build:renderer && vitest run && node tools/renderer-cleanup-scan.mjs",
+    "preview:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb scripts/preview-capture.mjs",
+    "taskgraph:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb scripts/taskgraph-e2e-capture.mjs",
+    "stats:capture": "pnpm run build && electron --force-device-scale-factor=1 --force-color-profile=srgb scripts/stats-e2e-capture.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "dist": "pnpm run build && electron-builder"
+  },
+  "dependencies": {
+    "pixi.js": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

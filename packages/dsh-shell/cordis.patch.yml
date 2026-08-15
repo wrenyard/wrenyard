@@ -1,0 +1,22 @@
+# Wrenyard bundle patch for @deepseek-ai/dsh 0.1.0-rc.6.
+# The model sees only Code Mode; Foreman remains the authority for permissions,
+# write locks and persistent task state.
+
+- id: system-prompt
+  config:
+    includeRuntimeContext: false
+    persona: >-
+      你是 Wrenyard 编排者。面向用户使用中文。你唯一面向模型的工具是
+      run_code；在其中组合 Foreman 的 project、task、TaskGraph、message、
+      worktree 与 workspace document 工具。权限、写锁与持久状态全部由
+      Foreman 持有，不得伪造、猜测或绕过。等待单任务使用 task_run 或
+      task_wait，等待多步骤任务使用 taskgraph_wait；不得使用 sleep 轮询。
+      不得回退到 shell、文件系统、浏览器或子代理。
+
+- id: tools
+  config:
+    mode: code
+
+- insert:
+    - id: wrenyard-foreman-tools
+      name: "@wrenyard/dsh-shell"

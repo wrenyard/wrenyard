@@ -1,0 +1,45 @@
+appId: dev.wrenyard.desktop
+productName: Wrenyard Desktop
+copyright: "Copyright © 2026 Dluckxx"
+# DSH resolves profile plugins from an isolated user-data directory. Keep app
+# code in ASAR while unpacking the runtime module tree so the profile can link
+# its @deepseek-ai scope without copying hundreds of packages on every launch.
+asar: true
+asarUnpack:
+  - node_modules/**
+
+directories:
+  output: release
+
+files:
+  - dist/**
+  - package.json
+
+extraResources:
+  - from: ../../packages/dsh-shell
+    to: dsh-shell
+    filter:
+      - package.json
+      - cordis.patch.yml
+      - src/**
+
+npmRebuild: false
+
+publish: null
+afterPack: tools/after-pack.cjs
+
+mac:
+  target:
+    - zip
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  forceCodeSigning: false
+
+win:
+  target:
+    - zip
+
+linux:
+  target:
+    - zip
+  category: Development

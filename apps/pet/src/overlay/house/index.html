@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Foreman Pet House</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      cursor: grab;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: transparent;
+    }
+    #hit-targets {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      -webkit-app-region: no-drag;
+    }
+    .sticky-hit {
+      position: absolute;
+      display: none;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: transparent;
+      opacity: 0;
+      pointer-events: auto;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+    .action-btn {
+      position: absolute;
+      display: none;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: transparent;
+      opacity: 0;
+      pointer-events: auto;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="hit-targets">
+    <button id="broadcast-close" class="sticky-hit" type="button" aria-label="Dismiss notification"></button>
+    <button id="settings-btn" class="action-btn" type="button" data-action="settings" aria-label="Open settings"></button>
+    <button id="stats-btn" class="action-btn" type="button" data-action="stats" aria-label="Open stats"></button>
+  </div>
+  <script src="house.js"></script>
+</body>
+</html>

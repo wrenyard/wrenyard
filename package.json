@@ -1,0 +1,63 @@
+{
+  "name": "wrenyard",
+  "version": "1.0.0-dev.0",
+  "description": "Wrenyard — source-development preview suite for task orchestration, runtime, and desktop visualization",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wrenyard/wrenyard.git"
+  },
+  "homepage": "https://github.com/wrenyard/wrenyard#readme",
+  "bugs": {
+    "url": "https://github.com/wrenyard/wrenyard/issues"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "wrenyard": "./bin/wrenyard.mjs"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build && pnpm run forge:build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test:tools": "node --test tools/*.test.mjs tools/**/*.test.mjs",
+    "test:workspace": "pnpm --filter @wrenyard/pet run build && pnpm run test:tools && pnpm -r --if-present run test",
+    "test:forge": "go -C runtime/forge test ./...",
+    "test": "pnpm run test:workspace && pnpm run test:forge",
+    "forge:build": "go -C runtime/forge build -o bin/forge ./cmd/forge",
+    "forge:test": "pnpm run test:forge",
+    "forge:vet": "go -C runtime/forge vet ./...",
+    "product": "node ./bin/wrenyard.mjs",
+    "cli": "pnpm run product",
+    "version:sync": "node tools/version-sync.mjs --write",
+    "version:check": "node tools/version-sync.mjs --check",
+    "desktop:dev": "pnpm --filter @wrenyard/desktop run dev",
+    "desktop:install": "node tools/desktop/install-dev.mjs",
+    "desktop:install-dev": "node tools/desktop/install-dev.mjs",
+    "desktop:release": "pnpm --filter @wrenyard/desktop run dist:zip",
+    "check:packages": "pnpm -r --if-present run check",
+    "check:workspace": "pnpm run typecheck && pnpm run test:workspace && pnpm run check:packages && pnpm run build",
+    "check:identifiers": "node tools/check-public-identifiers.mjs",
+    "check:secrets": "node tools/check-secrets.mjs",
+    "release:legal": "node tools/release/verify-legal.mjs",
+    "release:licenses": "node tools/release/generate-license-report.mjs",
+    "release:runtime": "node tools/release/build-runtime-package.mjs",
+    "release:sea": "node tools/release/build-sea.mjs",
+    "release:local": "node tools/release/build-local-release.mjs",
+    "release:e2e": "node --test tests/install/packed-install.test.mjs",
+    "release:check": "node tools/release/verify-manifest.mjs && node tools/release/verify-legal.mjs",
+    "desktop:smoke": "pnpm --filter @wrenyard/desktop run smoke",
+    "check": "pnpm run check:identifiers && pnpm run check:secrets && pnpm run release:check && pnpm run check:workspace && pnpm run forge:vet && pnpm run forge:test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "archiver": "^7.0.1",
+    "node": "22.19.0",
+    "pnpm": "11.19.0",
+    "postject": "^1.0.0-alpha.6",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  }
+}

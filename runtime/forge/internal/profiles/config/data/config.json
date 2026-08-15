@@ -1,0 +1,16 @@
+{
+  "clients": {
+    "claude": { "enabled": true },
+    "codebuddy": { "enabled": true },
+    "opencode": { "enabled": true },
+    "codex": { "enabled": true },
+    "grok": { "enabled": true }
+  },
+  "quota": {
+    "statusline_ttl_sec": 120,
+    "usage_ttl_min": 10,
+    "snapshot_stale_min": 15,
+    "statusline_render_ms": 250,
+    "statusline_fetch_sec": 2
+  }
+}

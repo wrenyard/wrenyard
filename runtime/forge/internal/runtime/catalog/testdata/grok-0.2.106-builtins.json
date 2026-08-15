@@ -1,0 +1,20 @@
+{
+  "package": "@xai-official/grok",
+  "version": "0.2.106",
+  "build": "bde89716f6",
+  "sources": [
+    "docs/user-guide/01-getting-started.md",
+    "docs/user-guide/10-hooks.md",
+    "docs/user-guide/14-headless-mode.md"
+  ],
+  "forge_encodable_builtin_ids": [
+    "read_file",
+    "list_dir",
+    "grep",
+    "run_terminal_cmd",
+    "search_replace",
+    "web_search",
+    "web_fetch",
+    "spawn_subagent"
+  ]
+}
