@@ -3,10 +3,12 @@
     wrenyard installer/updater (Windows)
 
 .DESCRIPTION
-    Downloads a checksum-verified suite zip, validates that the suite contains
-    the wrenyard executable and the release manifest, installs the suite
-    under <Prefix>\versions\<version>, and safely updates the `current` link and
-    the single public wrenyard launcher shim. Old versions are retained.
+    Downloads checksum-verified suite and Pet zips, validates that the suite
+    contains the wrenyard executable and the release manifest and that the Pet
+    archive contains its packaged executable, and installs both under
+    <Prefix>\versions\<version> (Pet at apps\pet) before safely updating the
+    `current` link and the single public wrenyard launcher shim. Old versions
+    are retained.
 
     This script only moves prebuilt artifacts into place. It never invokes
     go/npm/pnpm, never changes execution policy, and never writes secrets to
@@ -21,7 +23,11 @@
 .PARAMETER Url
     Suite zip URL (default: derived from the GitHub release).
 .PARAMETER ChecksumUrl
-    .sha256 sidecar URL (default: <Url>.sha256).
+    Suite .sha256 sidecar URL (default: <Url>.sha256).
+.PARAMETER PetUrl
+    Pet zip URL (default: derived from the GitHub release).
+.PARAMETER PetChecksumUrl
+    Pet .sha256 sidecar URL (default: <PetUrl>.sha256).
 .PARAMETER Update
     Install the newest non-draft release (prereleases included).
 
@@ -35,6 +41,8 @@ param(
     [string]$BinDir = '',
     [string]$Url = '',
     [string]$ChecksumUrl = '',
+    [string]$PetUrl = '',
+    [string]$PetChecksumUrl = '',
     [switch]$Update
 )
 
@@ -84,6 +92,10 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITECTURE -ne
 }
 if (-not $Url) { $Url = "https://github.com/$Repo/releases/download/$Tag/wrenyard-$DirVersion-win32-x64-suite.zip" }
 if (-not $ChecksumUrl) { $ChecksumUrl = "$Url.sha256" }
+# Packaged Pet is a separate release asset derived from the same repo/tag and
+# installed into the same version tree under apps\pet.
+if (-not $PetUrl) { $PetUrl = "https://github.com/$Repo/releases/download/$Tag/wrenyard-pet-$DirVersion-win32-x64.zip" }
+if (-not $PetChecksumUrl) { $PetChecksumUrl = "$PetUrl.sha256" }
 
 $VersionsDir = Join-Path $Prefix 'versions'
 $VersionDir = Join-Path $VersionsDir $DirVersion
@@ -201,6 +213,19 @@ try {
     if ($actual -ne $expected) { Die "checksum mismatch for $Url (expected $expected, got $actual)" }
     Write-Log "checksum verified ($actual)"
 
+    $petZipPath = Join-Path $tmp 'pet.zip'
+    $petShaPath = Join-Path $tmp 'pet.zip.sha256'
+    Write-Log "downloading pet: $PetUrl"
+    Invoke-WebRequest -Uri $PetUrl -OutFile $petZipPath -UseBasicParsing -Headers $headers
+    Write-Log "downloading pet checksum sidecar: $PetChecksumUrl"
+    Invoke-WebRequest -Uri $PetChecksumUrl -OutFile $petShaPath -UseBasicParsing -Headers $headers
+
+    $petExpected = ((Get-Content $petShaPath | Select-Object -First 1).Split(' ')[0]).Trim().ToLowerInvariant()
+    if (-not $petExpected) { Die "pet checksum sidecar is empty: $PetChecksumUrl" }
+    $petActual = Get-Sha256 -Path $petZipPath
+    if ($petActual -ne $petExpected) { Die "checksum mismatch for $PetUrl (expected $petExpected, got $petActual)" }
+    Write-Log "pet checksum verified ($petActual)"
+
     $extract = Join-Path $tmp 'extract'
     Expand-Archive -Path $zipPath -DestinationPath $extract -Force
 
@@ -210,12 +235,21 @@ try {
     if (-not $wrenyard) { Die 'suite zip does not contain a wrenyard executable' }
     if (-not $manifest) { Die 'suite zip does not contain a release manifest' }
 
+    # Expand the Pet archive into its own temp tree and validate the packaged
+    # executable before anything is staged into the prefix.
+    $petExtract = Join-Path $tmp 'pet-extract'
+    Expand-Archive -Path $petZipPath -DestinationPath $petExtract -Force
+
+    $petExe = Find-Artifact -Root $petExtract -Name 'Wrenyard Pet'
+    if (-not $petExe) { Die 'pet zip does not contain the Wrenyard Pet.exe packaged executable' }
+    if ((Get-Item $petExe.FullName).Length -le 0) { Die 'Wrenyard Pet.exe is empty' }
+
     # --- Install (an existing version directory is never reused) -------------
-    # The checksum-verified archive must always win, so a same-version
-    # reinstall replaces any locally tampered content. The extracted suite is
-    # staged beside the version directory, validated there, and swapped in
-    # with backup-and-restore semantics before `current` or any shim is
-    # touched.
+    # The checksum-verified archives must always win, so a same-version
+    # reinstall replaces any locally tampered content. The extracted suite and
+    # Pet trees are staged beside the version directory, validated there, and
+    # swapped in with backup-and-restore semantics before `current` or any shim
+    # is touched.
     New-Item -ItemType Directory -Path $VersionsDir -Force | Out-Null
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
@@ -224,8 +258,18 @@ try {
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
     Copy-Item -Path (Join-Path $extract '*') -Destination $stagingDir -Recurse -Force
 
+    # Pet shares the version tree with the suite so both activate in one
+    # backup/swap: the archive contents are staged under apps\pet.
+    $petStagingDir = Join-Path $stagingDir 'apps\pet'
+    New-Item -ItemType Directory -Path $petStagingDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $petExtract '*') -Destination $petStagingDir -Recurse -Force
+
     $wrenyardInstalled = Find-Artifact -Root $stagingDir -Name 'wrenyard'
     if (-not $wrenyardInstalled) { Die 'installed suite is missing the wrenyard executable' }
+
+    $petInstalled = Find-Artifact -Root $petStagingDir -Name 'Wrenyard Pet'
+    if (-not $petInstalled) { Die 'installed pet is missing the Wrenyard Pet.exe packaged executable' }
+    if ((Get-Item $petInstalled.FullName).Length -le 0) { Die 'installed Wrenyard Pet.exe is empty' }
 
     # Validate the executable and manifest before wiring anything up.
     if ((Get-Item $wrenyardInstalled.FullName).Length -le 0) { Die 'wrenyard executable is empty' }
@@ -266,9 +310,10 @@ try {
     Write-Shim -Name 'wrenyard' -Target $target
 
     Write-Log "installed wrenyard $DirVersion at $VersionDir"
-    Write-Host "wrenyard $DirVersion installed"
+    Write-Host "wrenyard $DirVersion installed (suite + pet)"
     Write-Host "  current:   $CurrentLink -> $VersionDir"
     Write-Host "  launcher:  $(Join-Path $BinDir 'wrenyard.cmd')"
+    Write-Host "  pet:       $(Join-Path $VersionDir 'apps\pet')"
     if ($oldVersion -and $oldVersion -ne $DirVersion) {
         Write-Log "previous version retained: $oldVersion"
         Write-Log "rollback: re-run with -Version $oldVersion -Prefix $Prefix"
