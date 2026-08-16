@@ -68,9 +68,10 @@ export function createDefaultForemanConfigData(
       root: env.WRENYARD_WORKSPACE ?? env.FOREMAN_WORKSPACE,
     },
     pet: {
+      // command/args are intentionally chosen later by normalizePetConfig so a
+      // release with a packaged Pet is not overwritten; source checkouts still
+      // default to npm start and explicit user command/args still win.
       enabled: false,
-      command: 'npm',
-      args: ['start'],
       startup_timeout_ms: 10_000,
       stop_timeout_ms: 5_000,
       restart_on_exit: true,
