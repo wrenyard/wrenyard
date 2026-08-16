@@ -11,12 +11,19 @@ import (
 	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
 )
 
-const sourceBlockStart = "# >>> forge shell shortcuts >>>"
-const sourceBlockEnd = "# <<< forge shell shortcuts <<<"
-const sourceLine = `source "$HOME/.config/wrenyard/runtime/shell/forge.zsh"`
-const powershellSourceBlockStart = "# >>> forge managed >>>"
-const powershellSourceBlockEnd = "# <<< forge managed <<<"
-const powershellSourceLine = `. "$HOME\.config\wrenyard\runtime\shell\forge.ps1"`
+const sourceBlockStart = "# >>> wrenyard shell shortcuts >>>"
+const sourceBlockEnd = "# <<< wrenyard shell shortcuts <<<"
+const sourceLine = `source "$HOME/.config/wrenyard/runtime/shell/wrenyard.zsh"`
+const powershellSourceBlockStart = "# >>> wrenyard managed >>>"
+const powershellSourceBlockEnd = "# <<< wrenyard managed <<<"
+const powershellSourceLine = `. "$HOME\.config\wrenyard\runtime\shell\wrenyard.ps1"`
+
+// Legacy prerelease Forge markers, used by fixtures that simulate profiles
+// created before the Wrenyard rename.
+const legacySourceBlockStart = "# >>> forge shell shortcuts >>>"
+const legacySourceBlockEnd = "# <<< forge shell shortcuts <<<"
+const legacyPowershellSourceBlockStart = "# >>> forge managed >>>"
+const legacyPowershellSourceBlockEnd = "# <<< forge managed <<<"
 const redactionPlaceholder = auth.RedactionPlaceholder
 const openCodeProviderNotFound = sl.OpenCodeProviderNotFound
 

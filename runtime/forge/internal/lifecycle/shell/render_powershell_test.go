@@ -19,10 +19,16 @@ func TestRenderManagedPowerShellUsesWrenyardClaudeShellRoot(t *testing.T) {
 	rendered := RenderManagedPowerShell(
 		profiles,
 		[]string{"cc-test"},
-		"/usr/local/bin/forge",
+		"wrenyard",
 		func(provider string) (string, bool) { return "test-token", true },
 		func(provider string) bool { return true },
 	)
+	if !strings.Contains(rendered, "# wrenyard.ps1 - Managed by wrenyard runtime setup") {
+		t.Fatalf("generated PowerShell should carry the Wrenyard managed header:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `& 'wrenyard' 'runtime' 'shell' 'exec' 'cc-test'`) {
+		t.Fatalf("generated PowerShell should invoke the public wrenyard launcher:\n%s", rendered)
+	}
 	if !strings.Contains(rendered, `'wrenyard\runtime\claude\shell-cc'`) {
 		t.Fatalf("generated PowerShell should use wrenyard/runtime/claude/shell-cc:\n%s", rendered)
 	}

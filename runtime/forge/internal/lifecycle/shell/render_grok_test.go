@@ -13,7 +13,7 @@ func TestRenderGrokZsh(t *testing.T) {
 	got := RenderGrokZsh()
 	for _, want := range []string{
 		"fgrok() {",
-		`command forge shell grok exec -- "$@"`,
+		`command wrenyard runtime shell grok exec -- "$@"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("zsh fgrok should contain %q in:\n%s", want, got)
@@ -31,10 +31,10 @@ func TestRenderGrokZsh(t *testing.T) {
 }
 
 func TestRenderGrokPowerShell(t *testing.T) {
-	got := RenderGrokPowerShell("forge")
+	got := RenderGrokPowerShell("wrenyard")
 	for _, want := range []string{
 		"function fgrok {",
-		`& 'forge' 'shell' 'grok' 'exec' '--' @args`,
+		`& 'wrenyard' 'runtime' 'shell' 'grok' 'exec' '--' @args`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("powershell fgrok should contain %q in:\n%s", want, got)
@@ -51,7 +51,7 @@ func TestBuildInstallPlanIncludesFgrok(t *testing.T) {
 		LoadManifest:            func() (manifest.Manifest, error) { return manifest.Manifest{}, nil },
 		ProfileInstallsShortcut: func(manifest.Profile) bool { return true },
 		ResolveSecret:           func(*string) (*string, error) { return nil, nil },
-		CurrentForgePath:        func() (string, error) { return "forge", nil },
+		CurrentForgePath:        func() (string, error) { return "wrenyard", nil },
 		ResolveCredential:       func(string) (string, bool) { return "", false },
 		IsManagedProvider:       func(string) bool { return false },
 	}
@@ -86,7 +86,7 @@ func TestBuildInstallPlanDetectsFgrokFunctionConflict(t *testing.T) {
 		LoadManifest:            func() (manifest.Manifest, error) { return manifest.Manifest{}, nil },
 		ProfileInstallsShortcut: func(manifest.Profile) bool { return true },
 		ResolveSecret:           func(*string) (*string, error) { return nil, nil },
-		CurrentForgePath:        func() (string, error) { return "forge", nil },
+		CurrentForgePath:        func() (string, error) { return "wrenyard", nil },
 		ResolveCredential:       func(string) (string, bool) { return "", false },
 		IsManagedProvider:       func(string) bool { return false },
 	}
@@ -130,7 +130,7 @@ func TestBuildInstallPlanDetectsFgrokAliasConflict(t *testing.T) {
 		LoadManifest:            func() (manifest.Manifest, error) { return manifest.Manifest{}, nil },
 		ProfileInstallsShortcut: func(manifest.Profile) bool { return true },
 		ResolveSecret:           func(*string) (*string, error) { return nil, nil },
-		CurrentForgePath:        func() (string, error) { return "forge", nil },
+		CurrentForgePath:        func() (string, error) { return "wrenyard", nil },
 		ResolveCredential:       func(string) (string, bool) { return "", false },
 		IsManagedProvider:       func(string) bool { return false },
 	}
@@ -176,7 +176,7 @@ func TestBuildInstallPlanDetectsPowerShellFgrokFunctionConflict(t *testing.T) {
 		LoadManifest:            func() (manifest.Manifest, error) { return manifest.Manifest{}, nil },
 		ProfileInstallsShortcut: func(manifest.Profile) bool { return true },
 		ResolveSecret:           func(*string) (*string, error) { return nil, nil },
-		CurrentForgePath:        func() (string, error) { return "forge", nil },
+		CurrentForgePath:        func() (string, error) { return "wrenyard", nil },
 		ResolveCredential:       func(string) (string, bool) { return "", false },
 		IsManagedProvider:       func(string) bool { return false },
 	}
@@ -222,7 +222,7 @@ func TestBuildInstallPlanDetectsPowerShellFgrokAliasConflict(t *testing.T) {
 		LoadManifest:            func() (manifest.Manifest, error) { return manifest.Manifest{}, nil },
 		ProfileInstallsShortcut: func(manifest.Profile) bool { return true },
 		ResolveSecret:           func(*string) (*string, error) { return nil, nil },
-		CurrentForgePath:        func() (string, error) { return "forge", nil },
+		CurrentForgePath:        func() (string, error) { return "wrenyard", nil },
 		ResolveCredential:       func(string) (string, bool) { return "", false },
 		IsManagedProvider:       func(string) bool { return false },
 	}

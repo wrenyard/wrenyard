@@ -100,7 +100,7 @@ func TestCCKimiShellCCSettingsJSONUsesForgeAuthAndManagedSettings(t *testing.T) 
 	}
 	for _, want := range []string{
 		`cc-kimi() {`,
-		`command forge shell exec 'cc-kimi' -- 'claude' 'agents' '--permission-mode' 'bypassPermissions'`,
+		`command wrenyard runtime shell exec 'cc-kimi' -- 'claude' 'agents' '--permission-mode' 'bypassPermissions'`,
 		`env -u ANTHROPIC_AUTH_TOKEN \`,
 		`-u ANTHROPIC_API_KEY \`,
 		`"ANTHROPIC_BASE_URL":"https://api.kimi.com/coding/"`,
@@ -110,11 +110,14 @@ func TestCCKimiShellCCSettingsJSONUsesForgeAuthAndManagedSettings(t *testing.T) 
 		`"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"1048576"`,
 		`"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1048576"`,
 		`"claude-opus-4-8":"k3[1m]"`,
-		`"statusLine":{"type":"command","command":"forge statusline --claude-code"}`,
+		`"statusLine":{"type":"command","command":"wrenyard runtime statusline --claude-code"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cc-kimi shell should contain %q in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "command forge ") {
+		t.Fatalf("cc-kimi shell must not invoke the forge command:\n%s", got)
 	}
 	for _, forbidden := range []string{
 		`token-kimi`,
@@ -231,7 +234,7 @@ func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(configDir, "shell", "forge.zsh"); zshPlan.ManagedFile != want {
+	if want := filepath.Join(configDir, "shell", "wrenyard.zsh"); zshPlan.ManagedFile != want {
 		t.Fatalf("zsh managed file = %q, want %q", zshPlan.ManagedFile, want)
 	}
 	zshProfile, ok := findWrite(zshPlan.ChangePlan.Actions, zshPlan.Zshrc)
@@ -244,6 +247,9 @@ func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
 	if strings.Contains(zshProfile, "$HOME/.config") || strings.Contains(zshProfile, filepath.Join(home, ".config")) {
 		t.Fatalf("zsh source block must not reference $HOME/.config:\n%s", zshProfile)
 	}
+	if strings.Count(zshProfile, sourceBlockStart) != 1 {
+		t.Fatalf("zsh source block marker must occur exactly once:\n%s", zshProfile)
+	}
 
 	// PowerShell: the same path agreement must hold for the managed file and
 	// the generated source block, with no legacy Forge config references.
@@ -251,7 +257,7 @@ func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(configDir, "shell", "forge.ps1"); psPlan.ManagedFile != want {
+	if want := filepath.Join(configDir, "shell", "wrenyard.ps1"); psPlan.ManagedFile != want {
 		t.Fatalf("powershell managed file = %q, want %q", psPlan.ManagedFile, want)
 	}
 	psProfile, ok := findWrite(psPlan.ChangePlan.Actions, psPlan.ProfilePath)
@@ -261,9 +267,83 @@ func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
 	if !strings.Contains(psProfile, psPlan.ManagedFile) {
 		t.Fatalf("powershell source block must reference the resolved managed file %q:\n%s", psPlan.ManagedFile, psProfile)
 	}
+	if strings.Count(psProfile, powershellSourceBlockStart) != 1 {
+		t.Fatalf("powershell source block marker must occur exactly once:\n%s", psProfile)
+	}
 	for _, legacy := range []string{`$HOME\.config`, `forge\shell\forge.ps1`} {
 		if strings.Contains(psProfile, legacy) {
 			t.Fatalf("powershell source block must not reference legacy %q:\n%s", legacy, psProfile)
 		}
 	}
+}
+
+func TestPlanReplacesPrereleaseForgeDelimitedBlocks(t *testing.T) {
+	home := t.TempDir()
+
+	zshrc := filepath.Join(home, ".zshrc")
+	legacyZsh := "# preamble\n" +
+		legacySourceBlockStart + "\n" +
+		"source \"$HOME/.config/forge/shell/forge.zsh\"\n" +
+		legacySourceBlockEnd + "\n" +
+		"# postamble\n"
+	if err := os.WriteFile(zshrc, []byte(legacyZsh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zshPlan, err := shell.PlanZsh(home, "managed-content", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zshProfile := fileWriteContent(zshPlan.ChangePlan.Actions, zshrc)
+	if zshProfile == "" {
+		t.Fatal("expected a zshrc file_write action after removing the prerelease Forge block")
+	}
+	if strings.Contains(zshProfile, "forge shell shortcuts") || strings.Contains(zshProfile, "config/forge") {
+		t.Fatalf("prerelease Forge-delimited zsh block must be removed:\n%s", zshProfile)
+	}
+	if strings.Count(zshProfile, sourceBlockStart) != 1 || !strings.Contains(zshProfile, sourceLine) {
+		t.Fatalf("zsh profile must contain exactly one canonical Wrenyard source block:\n%s", zshProfile)
+	}
+	if !strings.Contains(zshProfile, "preamble") || !strings.Contains(zshProfile, "postamble") {
+		t.Fatalf("unmanaged zshrc content must be preserved:\n%s", zshProfile)
+	}
+
+	profileDir := filepath.Join(home, "Documents", "PowerShell")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileDir, "Microsoft.PowerShell_profile.ps1")
+	legacyPS := "# preamble\n" +
+		legacyPowershellSourceBlockStart + "\n" +
+		`. "$HOME\.config\forge\shell\forge.ps1"` + "\n" +
+		legacyPowershellSourceBlockEnd + "\n" +
+		"# postamble\n"
+	if err := os.WriteFile(profilePath, []byte(legacyPS), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	psPlan, err := shell.PlanPowerShell(home, "managed-content", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	psProfile := fileWriteContent(psPlan.ChangePlan.Actions, profilePath)
+	if psProfile == "" {
+		t.Fatal("expected a PowerShell profile file_write action after removing the prerelease Forge block")
+	}
+	if strings.Contains(psProfile, "forge managed") || strings.Contains(psProfile, `config\forge`) {
+		t.Fatalf("prerelease Forge-delimited PowerShell block must be removed:\n%s", psProfile)
+	}
+	if strings.Count(psProfile, powershellSourceBlockStart) != 1 || !strings.Contains(psProfile, powershellSourceLine) {
+		t.Fatalf("PowerShell profile must contain exactly one canonical Wrenyard source block:\n%s", psProfile)
+	}
+	if !strings.Contains(psProfile, "preamble") || !strings.Contains(psProfile, "postamble") {
+		t.Fatalf("unmanaged PowerShell profile content must be preserved:\n%s", psProfile)
+	}
+}
+
+func fileWriteContent(actions []change.Action, path string) string {
+	for _, action := range actions {
+		if action.Type == "file_write" && action.File != nil && action.File.Path == path {
+			return action.File.Content
+		}
+	}
+	return ""
 }

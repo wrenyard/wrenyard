@@ -13,22 +13,33 @@ import (
 // --- source-block constants (shell-domain, live in the shell package) ---
 
 const (
-	blockStartZsh        = "# >>> forge shell shortcuts >>>"
-	blockEndZsh          = "# <<< forge shell shortcuts <<<"
-	blockLineZsh         = `source "$HOME/.config/wrenyard/runtime/shell/forge.zsh"`
-	blockStartPowerShell = "# >>> forge managed >>>"
-	blockEndPowerShell   = "# <<< forge managed <<<"
-	blockLinePowerShell  = `. "$HOME\.config\wrenyard\runtime\shell\forge.ps1"`
+	blockStartZsh        = "# >>> wrenyard shell shortcuts >>>"
+	blockEndZsh          = "# <<< wrenyard shell shortcuts <<<"
+	blockLineZsh         = `source "$HOME/.config/wrenyard/runtime/shell/wrenyard.zsh"`
+	blockStartPowerShell = "# >>> wrenyard managed >>>"
+	blockEndPowerShell   = "# <<< wrenyard managed <<<"
+	blockLinePowerShell  = `. "$HOME\.config\wrenyard\runtime\shell\wrenyard.ps1"`
+)
+
+// Prerelease Forge markers. These delimited Forge-branded source blocks
+// shipped before the Wrenyard rename; they are migration input only and are
+// removed before the Wrenyard block is appended.
+const (
+	legacyBlockStartZsh        = "# >>> forge shell shortcuts >>>"
+	legacyBlockEndZsh          = "# <<< forge shell shortcuts <<<"
+	legacyBlockStartPowerShell = "# >>> forge managed >>>"
+	legacyBlockEndPowerShell   = "# <<< forge managed <<<"
 )
 
 // --- plan construction ---
 
 // PlanZsh builds an install plan for Zsh shell integration.
 func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan, error) {
-	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "forge.zsh")
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "wrenyard.zsh")
 	zshrc := filepath.Join(home, ".zshrc")
 	existing := readTextIfExists(zshrc)
 	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartZsh, blockEndZsh)
+	cleaned, prereleaseForgeFound := removeSourceBlocks(cleaned, legacyBlockStartZsh, legacyBlockEndZsh)
 	migrated, legacyBlockFound := removeLegacyShortcuts(cleaned)
 	conflicts := findUnmanagedConflicts(migrated, funcNames)
 	actions := []change.Action{}
@@ -41,7 +52,7 @@ func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan,
 		nextZshrc := appendZshSourceBlock(migrated, managedFile)
 		if nextZshrc != existing {
 			actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: zshrc, Content: nextZshrc, Encoding: "utf-8"}})
-			if legacyBlockFound {
+			if prereleaseForgeFound || legacyBlockFound {
 				labels = append(labels, "replace legacy shortcuts with managed source block")
 			} else {
 				labels = append(labels, "add managed source block")
@@ -49,7 +60,7 @@ func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan,
 		}
 	}
 	return InstallPlan{
-		ChangePlan:         change.Plan{Name: "forge-install-shell", Actions: actions},
+		ChangePlan:         change.Plan{Name: "wrenyard-install-shell", Actions: actions},
 		Shell:              "zsh",
 		ManagedFile:        managedFile,
 		ProfilePath:        zshrc,
@@ -63,10 +74,11 @@ func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan,
 
 // PlanPowerShell builds an install plan for PowerShell shell integration.
 func PlanPowerShell(home string, managedShell string, funcNames []string) (InstallPlan, error) {
-	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "forge.ps1")
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "wrenyard.ps1")
 	profilePath := PowerShellProfilePathForHome(home)
 	existing := readTextIfExists(profilePath)
 	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartPowerShell, blockEndPowerShell)
+	cleaned, prereleaseForgeFound := removeSourceBlocks(cleaned, legacyBlockStartPowerShell, legacyBlockEndPowerShell)
 	cleaned, legacyBlockFound := RemovePowerShellLegacySourceBlocks(cleaned)
 	conflicts := findUnmanagedConflicts(cleaned, funcNames)
 	actions := []change.Action{}
@@ -79,7 +91,7 @@ func PlanPowerShell(home string, managedShell string, funcNames []string) (Insta
 		nextProfile := appendPowerShellSourceBlock(cleaned, managedFile)
 		if nextProfile != existing {
 			actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: profilePath, Content: nextProfile, Encoding: "utf-8"}})
-			if legacyBlockFound {
+			if prereleaseForgeFound || legacyBlockFound {
 				labels = append(labels, "replace legacy PowerShell source block with managed source block")
 			} else {
 				labels = append(labels, "add managed PowerShell source block")
@@ -87,7 +99,7 @@ func PlanPowerShell(home string, managedShell string, funcNames []string) (Insta
 		}
 	}
 	return InstallPlan{
-		ChangePlan:         change.Plan{Name: "forge-install-shell", Actions: actions},
+		ChangePlan:         change.Plan{Name: "wrenyard-install-shell", Actions: actions},
 		Shell:              "powershell",
 		ManagedFile:        managedFile,
 		ProfilePath:        profilePath,
@@ -107,7 +119,7 @@ func removeSourceBlocks(content, start, end string) (string, bool) {
 	return strings.Trim(updated, "\n") + newlineIfNotBlank(content), found
 }
 
-// RemovePowerShellSourceBlocks removes the Forge-managed source block from
+// RemovePowerShellSourceBlocks removes the Wrenyard-managed source block from
 // PowerShell profile content. Exported for the root facade.
 func RemovePowerShellSourceBlocks(content string) (string, bool) {
 	return removeSourceBlocks(content, blockStartPowerShell, blockEndPowerShell)
@@ -120,7 +132,7 @@ func removeLegacyShortcuts(content string) (string, bool) {
 	return strings.Trim(updated, "\n") + newlineIfNotBlank(updated), found
 }
 
-// RemovePowerShellLegacySourceBlocks removes legacy Forge-managed PowerShell
+// RemovePowerShellLegacySourceBlocks removes legacy pre-Wrenyard Forge-managed PowerShell
 // source blocks. Exported for the root facade.
 func RemovePowerShellLegacySourceBlocks(content string) (string, bool) {
 	re := regexp.MustCompile(`(?m)^\s*(?:#.*Forge-managed shell shortcuts.*\n)?\s*\.\s*"\$HOME\\\.config\\forge\\shell\\forge\.ps1"\s*\n?`)
@@ -133,14 +145,14 @@ func appendZshSourceBlock(content, managedFile string) string {
 	return appendManagedBlock(content, zshSourceBlock(managedFile))
 }
 
-// AppendPowerShellSourceBlock appends the Forge-managed PowerShell source
+// AppendPowerShellSourceBlock appends the Wrenyard-managed PowerShell source
 // block to the given profile content. Exported for the root facade.
 func AppendPowerShellSourceBlock(content string) string {
-	block := blockStartPowerShell + "\nif (Test-Path \"$HOME\\.config\\wrenyard\\runtime\\shell\\forge.ps1\") {\n    " + blockLinePowerShell + "\n}\n" + blockEndPowerShell + "\n"
+	block := blockStartPowerShell + "\nif (Test-Path \"$HOME\\.config\\wrenyard\\runtime\\shell\\wrenyard.ps1\") {\n    " + blockLinePowerShell + "\n}\n" + blockEndPowerShell + "\n"
 	return appendManagedBlock(content, block)
 }
 
-// appendPowerShellSourceBlock appends a Forge-managed PowerShell source block
+// appendPowerShellSourceBlock appends a Wrenyard-managed PowerShell source block
 // that sources the given resolved managed file path.
 func appendPowerShellSourceBlock(content, managedFile string) string {
 	return appendManagedBlock(content, powershellSourceBlock(managedFile))

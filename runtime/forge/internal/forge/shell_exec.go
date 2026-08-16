@@ -18,7 +18,7 @@ func shellCommand(args []string) int {
 		return shellDSHCommand(args[1:])
 	}
 	if len(args) < 4 || args[0] != "exec" || args[2] != "--" {
-		fmt.Fprintln(os.Stderr, "forge shell: internal command; run forge setup to install shell shortcuts")
+		fmt.Fprintln(os.Stderr, "forge shell: internal command; run wrenyard runtime setup to install shell shortcuts")
 		return 2
 	}
 	profileName := args[1]
@@ -48,7 +48,7 @@ func shellCommand(args []string) int {
 	}
 	credential, ok := ResolveCredential(p.Provider)
 	if !ok || strings.TrimSpace(credential) == "" {
-		fmt.Fprintf(os.Stderr, "forge shell exec: no credential for provider %s; run forge providers auth login %s\n", p.Provider, p.Provider)
+		fmt.Fprintf(os.Stderr, "forge shell exec: no credential for provider %s; run wrenyard providers auth login %s\n", p.Provider, p.Provider)
 		return 1
 	}
 
