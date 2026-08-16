@@ -11,17 +11,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 // Paths holds the resolved filesystem locations for the shell-Grok wrapper.
 // All paths are derived from XDG environment variables with the same
 // precedence Forge uses elsewhere.
 type Paths struct {
-	// GrokHome is the isolated GROK_HOME (${XDG_DATA_HOME:-~/.local/share}/forge/grok/shell-grok).
+	// GrokHome is the isolated GROK_HOME (${XDG_DATA_HOME:-~/.local/share}/wrenyard/runtime/grok/shell-grok).
 	GrokHome string
 	// ConfigPath is the materialized Grok config (GROK_HOME/config.toml).
 	ConfigPath string
-	// OverlayPath is the optional human-maintained overlay (${XDG_CONFIG_HOME:-~/.config}/forge/grok/overlay.toml).
+	// OverlayPath is the optional human-maintained overlay (${XDG_CONFIG_HOME:-~/.config}/wrenyard/runtime/grok/overlay.toml).
 	OverlayPath string
 }
 
@@ -29,13 +31,12 @@ type Paths struct {
 // It honors XDG_DATA_HOME / XDG_CONFIG_HOME precedence and is safe to call in
 // tests that t.Setenv those variables.
 func ResolvePaths() Paths {
-	dataHome := xdgDataHome(userHome())
-	configHome := xdgConfigHome(userHome())
-	grokHome := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	paths := layout.NewPaths(userHome())
+	grokHome := filepath.Join(paths.DataDir(), "grok", "shell-grok")
 	return Paths{
 		GrokHome:    grokHome,
 		ConfigPath:  filepath.Join(grokHome, "config.toml"),
-		OverlayPath: filepath.Join(configHome, "forge", "grok", "overlay.toml"),
+		OverlayPath: filepath.Join(paths.ConfigDir(), "grok", "overlay.toml"),
 	}
 }
 

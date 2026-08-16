@@ -156,7 +156,7 @@ func TestShellGrokExecInjectsEnvAndPassesArgv(t *testing.T) {
 	}
 
 	// Config must have been materialized (not containing keys).
-	cfg := filepath.Join(dataHome, "forge", "grok", "shell-grok", "config.toml")
+	cfg := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok", "config.toml")
 	if _, err := os.Stat(cfg); err != nil {
 		t.Fatalf("config.toml not materialized: %v", err)
 	}
