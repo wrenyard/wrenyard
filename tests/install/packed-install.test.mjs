@@ -31,7 +31,7 @@ const ROOT = path.resolve(HERE, '../..');
 // Windows receives a larger budget for its slower archive, npm, and install
 // checks: prebuilt CI consumes the release built once by the preceding
 // release step, so the E2E no longer rebuilds the release a second time.
-const E2E_TIMEOUT_MS = process.platform === 'win32' ? 1_200_000 : 600_000;
+const E2E_TIMEOUT_MS = process.platform === 'win32' ? 1_800_000 : 600_000;
 
 // Host triplet embedded in the platform-qualified suite artifact name.
 const TRIPLET = {
