@@ -24,6 +24,14 @@ func TestReadOrCreateStateGeneratesAndPersistsKey(t *testing.T) {
 	if !strings.HasPrefix(state.GatewayAPIKey, "forge_") {
 		t.Fatalf("expected generated state key with forge_ prefix, got %q", state.GatewayAPIKey)
 	}
+	// Gateway state resolves beneath wrenyard/runtime and never leaks the key.
+	wantPath := filepath.Join(home, "xdg-state", "wrenyard", "runtime", stateFileName)
+	if path != wantPath {
+		t.Fatalf("state path = %q, want %q", path, wantPath)
+	}
+	if strings.Contains(path, state.GatewayAPIKey) {
+		t.Fatal("state path must not leak the generated gateway key")
+	}
 	// ReadOrCreateState generates the key in memory and returns the intended
 	// path but does NOT persist the file itself.
 	if exists(path) {
@@ -61,6 +69,23 @@ func TestNewGatewayKeyIs32ByteHexPrefixed(t *testing.T) {
 	raw := strings.TrimPrefix(key, "forge_")
 	if len(raw) != 48 {
 		t.Fatalf("expected 24-byte hex (48 chars), got %d chars in %q", len(raw), raw)
+	}
+}
+
+func TestStatePathDefaultUnderWrenyardRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("LOCALAPPDATA", "")
+
+	path, err := statePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".local", "state", "wrenyard", "runtime", stateFileName)
+	if path != want {
+		t.Fatalf("statePath() = %q, want %q", path, want)
 	}
 }
 

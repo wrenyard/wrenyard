@@ -350,3 +350,19 @@ func buildClaudeAppTestConfig(profileName string, port int) (claudeapp.Config, e
 	}
 	return claudeapp.BuildConfig(profileName, port, deps)
 }
+
+func TestClaudeAppGatewayStateUnderWrenyardRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("LOCALAPPDATA", "")
+
+	_, path, err := claudeapp.ReadOrCreateState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(path, filepath.Join("state", "wrenyard", "runtime")) {
+		t.Fatalf("claude-app gateway state should live under wrenyard/runtime, got %s", path)
+	}
+}

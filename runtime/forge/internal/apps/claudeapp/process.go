@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 // Serve runs the proxy HTTP server on the configured port (foreground, used by
@@ -156,15 +158,7 @@ func StartProcess(cfg Config) error {
 }
 
 func logDir() string {
-	if isWindows() {
-		if base := os.Getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "Forge")
-		}
-	}
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, "forge")
-	}
-	return filepath.Join(userHome(), ".local", "state", "forge")
+	return layout.NewPaths(userHome()).StateDir()
 }
 
 // currentForgePath and repoDir are package-level resolvers defaulting to minimal
