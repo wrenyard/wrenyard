@@ -300,7 +300,7 @@ func TestPlanReplacesPrereleaseForgeDelimitedBlocks(t *testing.T) {
 	if strings.Contains(zshProfile, "forge shell shortcuts") || strings.Contains(zshProfile, "config/forge") {
 		t.Fatalf("prerelease Forge-delimited zsh block must be removed:\n%s", zshProfile)
 	}
-	if strings.Count(zshProfile, sourceBlockStart) != 1 || !strings.Contains(zshProfile, sourceLine) {
+	if strings.Count(zshProfile, sourceBlockStart) != 1 || !strings.Contains(zshProfile, zshPlan.ManagedFile) {
 		t.Fatalf("zsh profile must contain exactly one canonical Wrenyard source block:\n%s", zshProfile)
 	}
 	if !strings.Contains(zshProfile, "preamble") || !strings.Contains(zshProfile, "postamble") {
@@ -331,7 +331,7 @@ func TestPlanReplacesPrereleaseForgeDelimitedBlocks(t *testing.T) {
 	if strings.Contains(psProfile, "forge managed") || strings.Contains(psProfile, `config\forge`) {
 		t.Fatalf("prerelease Forge-delimited PowerShell block must be removed:\n%s", psProfile)
 	}
-	if strings.Count(psProfile, powershellSourceBlockStart) != 1 || !strings.Contains(psProfile, powershellSourceLine) {
+	if strings.Count(psProfile, powershellSourceBlockStart) != 1 || !strings.Contains(psProfile, psPlan.ManagedFile) {
 		t.Fatalf("PowerShell profile must contain exactly one canonical Wrenyard source block:\n%s", psProfile)
 	}
 	if !strings.Contains(psProfile, "preamble") || !strings.Contains(psProfile, "postamble") {
