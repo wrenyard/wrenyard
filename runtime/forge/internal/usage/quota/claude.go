@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 type ClaudeProvider struct {
@@ -316,7 +318,7 @@ func (p ClaudeProvider) tryLazyKeychain(ctx context.Context, credCachePath strin
 func (p ClaudeProvider) credentialCachePath() string {
 	dir := p.CredentialCacheDir
 	if dir == "" {
-		dir = filepath.Join(homeOr(p.Home), ".local", "share", "forge", "quota")
+		dir = filepath.Join(layout.NewPaths(homeOr(p.Home)).DataDir(), "quota")
 	}
 	return filepath.Join(dir, "claude-credential.json")
 }

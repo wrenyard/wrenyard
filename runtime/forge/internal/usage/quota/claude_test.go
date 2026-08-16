@@ -901,3 +901,31 @@ func TestKeychainCooldownDefault(t *testing.T) {
 		t.Fatal("expected default cooldown (30m) to block attempt at 1m")
 	}
 }
+
+func TestCredentialCacheDefaultUnderWrenyardRuntimeHonorsXDGDataHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
+
+	p := ClaudeProvider{Home: home}
+	want := filepath.Join(home, "xdg-data", "wrenyard", "runtime", "quota", "claude-credential.json")
+	if got := p.credentialCachePath(); got != want {
+		t.Fatalf("credentialCachePath() = %q, want XDG_DATA_HOME-resolved %q", got, want)
+	}
+
+	// Default fallback (no XDG_DATA_HOME) resolves beneath ~/.local/share.
+	t.Setenv("XDG_DATA_HOME", "")
+	p = ClaudeProvider{Home: home}
+	want = filepath.Join(home, ".local", "share", "wrenyard", "runtime", "quota", "claude-credential.json")
+	if got := p.credentialCachePath(); got != want {
+		t.Fatalf("credentialCachePath() = %q, want default %q", got, want)
+	}
+
+	// Path resolution must not read any real credential.
+	_, err := p.readCredentials(context.Background())
+	if err == nil {
+		t.Fatal("expected an error without a real credential source")
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 const (
@@ -74,15 +76,19 @@ func NewCircuitStore(root string, clock Clock) *CircuitStore {
 func DefaultCircuitRoot() string { return defaultCircuitRoot() }
 
 func defaultCircuitRoot() string {
-	base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || strings.TrimSpace(home) == "" {
-			home = "."
+	return filepath.Join(layout.NewPaths(resolvedHome()).StateDir(), "circuits")
+}
+
+// resolvedHome returns the user home directory, honoring HOME/USERPROFILE
+// precedence before falling back to the OS home directory.
+func resolvedHome() string {
+	for _, key := range []string{"HOME", "USERPROFILE"} {
+		if home := strings.TrimSpace(os.Getenv(key)); home != "" {
+			return home
 		}
-		base = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(base, "forge", "circuits")
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 // Path returns the state path for an exact profile id.
