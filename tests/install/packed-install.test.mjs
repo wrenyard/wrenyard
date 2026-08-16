@@ -2,12 +2,18 @@
 // machine. Set WRENYARD_SKIP_PACKED_INSTALL_E2E=1 only for a deliberately
 // reduced local loop; CI and `pnpm release:e2e` run it by default.
 //
-// It builds the local release (desktop skipped) into a temp dir, installs the
-// actual CLI tarball into a throwaway consumer project, runs the standalone
-// executable directly, then serves the suite zip + checksum sidecar over local
-// HTTP and runs scripts/install.sh into a temp prefix. A fake `go` is placed
-// early on PATH for every consumer install/run step and the test fails if it
-// is ever invoked.
+// Build mode (WRENYARD_E2E_RELEASE_DIR unset) builds the local release
+// (desktop skipped) into a temp dir, installs the actual CLI tarball into a
+// throwaway consumer project, runs the standalone executable directly, then
+// serves the suite zip + checksum sidecar over local HTTP and runs
+// scripts/install.sh into a temp prefix. A fake `go` is placed early on PATH
+// for every consumer install/run step and the test fails if it is ever
+// invoked.
+//
+// Prebuilt mode (WRENYARD_E2E_RELEASE_DIR set) resolves the variable against
+// the repository root and consumes that existing release directory as-is: the
+// release:local step has already produced it in CI, so no second release is
+// built. The directory must exist and be non-empty, and it is never deleted.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -419,7 +425,14 @@ test('packed-install E2E: no consumer-side Go compilation', {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-packed-install-'));
   const fakeBin = path.join(tmp, 'fake-bin');
   const goLog = path.join(fakeBin, 'go.log');
-  const releaseDir = path.join(tmp, 'release');
+  // Prebuilt mode: CI sets WRENYARD_E2E_RELEASE_DIR to the release produced by
+  // its preceding release:local step; the E2E consumes those exact artifacts
+  // and never deletes that directory. Without the variable, build mode creates
+  // a fresh release inside tmp.
+  const prebuiltReleaseDir = process.env.WRENYARD_E2E_RELEASE_DIR?.trim();
+  const releaseDir = prebuiltReleaseDir
+    ? path.resolve(ROOT, prebuiltReleaseDir)
+    : path.join(tmp, 'release');
   const consumer = path.join(tmp, 'consumer');
   const prefix = path.join(tmp, 'prefix');
 
@@ -438,22 +451,36 @@ test('packed-install E2E: no consumer-side Go compilation', {
   const consumerEnv = { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` };
 
   try {
-    // 1. Build the local release with desktop artifacts skipped. The source
+    // 1. Release artifacts. Build mode (WRENYARD_E2E_RELEASE_DIR unset) builds
+    //    the local release with desktop artifacts skipped into tmp; the source
     //    workspace install must come out byte-identical with the desktop
-    //    runtime and every root dev dependency still available, and
-    //    install.ps1 must keep replacing `current` through link-only removal.
+    //    runtime and every root dev dependency still available, and install.ps1
+    //    must keep replacing `current` through link-only removal. Prebuilt mode
+    //    consumes the existing release directory resolved from
+    //    WRENYARD_E2E_RELEASE_DIR and fails when it is missing or empty.
     assertInstallPs1LinkOnlyRemoval(ROOT);
-    const script = path.join(ROOT, 'tools', 'release', 'build-local-release.mjs');
-    assert.ok(fs.existsSync(script), `release builder missing at ${script}`);
-    const installSentinels = snapshotInstallSentinels(ROOT);
-    run(process.execPath, [script, '--skip-desktop', '--output-dir', releaseDir], { cwd: ROOT });
-    assert.ok(fs.readdirSync(releaseDir).length > 0, `release produced no output in ${releaseDir}`);
-    assertInstallSentinelsUnchanged(ROOT, installSentinels);
-    assert.ok(
-      fs.existsSync(path.join(ROOT, 'apps', 'desktop', 'node_modules', 'electron')),
-      'release build removed the desktop electron dependency',
-    );
-    assertRootDevDepsAvailable(ROOT);
+    if (prebuiltReleaseDir) {
+      assert.ok(
+        fs.existsSync(releaseDir),
+        `WRENYARD_E2E_RELEASE_DIR release directory missing: ${releaseDir}`,
+      );
+      assert.ok(
+        fs.readdirSync(releaseDir).length > 0,
+        `WRENYARD_E2E_RELEASE_DIR release directory is empty: ${releaseDir}`,
+      );
+    } else {
+      const script = path.join(ROOT, 'tools', 'release', 'build-local-release.mjs');
+      assert.ok(fs.existsSync(script), `release builder missing at ${script}`);
+      const installSentinels = snapshotInstallSentinels(ROOT);
+      run(process.execPath, [script, '--skip-desktop', '--output-dir', releaseDir], { cwd: ROOT });
+      assert.ok(fs.readdirSync(releaseDir).length > 0, `release produced no output in ${releaseDir}`);
+      assertInstallSentinelsUnchanged(ROOT, installSentinels);
+      assert.ok(
+        fs.existsSync(path.join(ROOT, 'apps', 'desktop', 'node_modules', 'electron')),
+        'release build removed the desktop electron dependency',
+      );
+      assertRootDevDepsAvailable(ROOT);
+    }
 
     // 2. Discover and verify the release artifacts.
     const zipPath = findFile(releaseDir, /-suite\.zip$/);
@@ -978,6 +1005,9 @@ esac
 
     console.log(`packed-install E2E ok: version=${version} zip=${path.basename(zipPath)} tgz=${path.basename(tgz)} sea=${path.basename(sea)} prefix=${prefix}`);
   } finally {
+    // Remove only the scratch fixtures this test created. The external release
+    // directory used in prebuilt mode lives outside tmp (resolved against the
+    // repository root) and is deliberately never deleted.
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
