@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/dsh-shell",
-  "version": "1.0.0-dev.3",
+  "version": "1.0.0-dev.4",
   "private": true,
   "type": "module",
   "description": "Wrenyard DSH native bundle package: Foreman MCP/IPC tools bridge for DeepSeek Harness (DSH) Code Mode",
