@@ -21,6 +21,7 @@ import {
   isIpcReachable,
   localForemanServiceOriginForConfig,
   sleep,
+  suiteDir,
   waitForIpcReachable,
   waitForIpcUnreachable,
 } from './shared.mts'
@@ -45,6 +46,10 @@ export interface DaemonState {
   args: string[]
   cwd: string
   logPaths: DaemonLogPaths
+  /** Authoritative installed suite root that launched this daemon. */
+  suiteRoot?: string
+  /** Package version of the installed suite that launched this daemon. */
+  suiteVersion?: string
 }
 
 export interface DaemonSupervisorPaths {
@@ -166,6 +171,7 @@ export async function startDaemonProcess(options: DaemonLifecycleOptions): Promi
     closeSync(stderrFd)
   }
 
+  const identity = suiteIdentity()
   const state: DaemonState = {
     version: STATE_VERSION,
     pid: childPid,
@@ -177,6 +183,8 @@ export async function startDaemonProcess(options: DaemonLifecycleOptions): Promi
     args: invocation.args,
     cwd: foremanDir,
     logPaths: paths.logPaths,
+    suiteRoot: identity.suiteRoot,
+    suiteVersion: identity.suiteVersion,
   }
   writeDaemonState(paths, state)
 
@@ -326,6 +334,24 @@ function appendStringOverride(args: string[], flag: string, value: unknown): voi
   if (typeof value === 'string' && value.trim()) {
     args.push(flag, value)
   }
+}
+
+function suiteIdentity(): { suiteRoot: string; suiteVersion: string } {
+  let suiteVersion = '0.0.0'
+  const suiteVersionPath = join(suiteDir, 'SUITE_VERSION')
+  if (existsSync(suiteVersionPath)) {
+    suiteVersion = readFileSync(suiteVersionPath, 'utf-8').trim() || suiteVersion
+  } else {
+    try {
+      const pkg = JSON.parse(readFileSync(join(suiteDir, 'package.json'), 'utf-8')) as { version?: unknown }
+      if (typeof pkg.version === 'string' && pkg.version.trim()) suiteVersion = pkg.version
+    } catch {
+      // Source checkouts carry package.json while installed suites carry
+      // SUITE_VERSION. The suite root remains authoritative if a malformed
+      // legacy layout has neither usable identity source.
+    }
+  }
+  return { suiteRoot: suiteDir, suiteVersion }
 }
 
 function readDaemonPid(paths = resolveDaemonSupervisorPaths()): number | undefined {

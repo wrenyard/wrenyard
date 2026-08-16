@@ -45,6 +45,8 @@ export interface ForemanStatus {
     pidAlive?: boolean
     statePath?: string
     pidPath?: string
+    suiteRoot?: string
+    suiteVersion?: string
     logPaths?: {
       stdout: string
       stderr: string
