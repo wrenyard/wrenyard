@@ -70,7 +70,7 @@ export async function prepareProfile(
 
   const manifest = {
     name: '@wrenyard/dsh-profile',
-    version: '1.0.0-dev.1',
+    version: '1.0.0-dev.2',
     private: true,
     type: 'module',
     dsh: {
