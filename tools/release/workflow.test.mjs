@@ -93,6 +93,25 @@ test('release.yml verifies the build target via ESM platform.mjs', () => {
   assert.ok(workflow.includes('.triplet'));
 });
 
+test('release.yml points release:e2e at the prebuilt release artifacts', () => {
+  // The packed-install E2E must consume the single release:local build output
+  // via WRENYARD_E2E_RELEASE_DIR instead of rebuilding all artifacts inside
+  // the test. Exactly one release:local build step must precede release:e2e.
+  assert.ok(workflow.includes('WRENYARD_E2E_RELEASE_DIR: .artifacts/release'));
+  assert.ok(workflow.includes('run: pnpm release:e2e'));
+  const buildStep = 'pnpm release:local';
+  const e2eStep = 'pnpm release:e2e';
+  assert.equal(
+    workflow.split(buildStep).length - 1,
+    1,
+    'release.yml must contain exactly one pnpm release:local build step',
+  );
+  const localIndex = workflow.indexOf(buildStep);
+  const e2eIndex = workflow.indexOf(e2eStep);
+  assert.ok(localIndex !== -1 && e2eIndex !== -1, 'release.yml must run release:local and release:e2e');
+  assert.ok(localIndex < e2eIndex, 'release:local must run before release:e2e');
+});
+
 test('release.yml runs pre-release gates before release creation', () => {
   // identifiers, secrets, legal, build, and packed-install E2E must all run
   // before the prerelease is created.

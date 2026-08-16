@@ -92,7 +92,10 @@ jobs:
               exit 1
             fi
           done
-      - run: pnpm release:e2e
+      - name: Run packed-install E2E against the release artifacts
+        env:
+          WRENYARD_E2E_RELEASE_DIR: .artifacts/release
+        run: pnpm release:e2e
       - name: Label signing status honestly
         shell: bash
         run: |
