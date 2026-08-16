@@ -1001,6 +1001,58 @@ esac
         '--bin-dir', path.join(updatePrefix, 'bin'),
       ], { env: updateEnv });
 
+      // The installed SEA is the authority for its own suite root. Stale
+      // variables inherited from a previous release must not pin the daemon
+      // to that release (the dev.2 self-update regression). Start an isolated
+      // daemon with deliberately invalid pins and require its reported
+      // identity to resolve to the freshly installed current suite.
+      const updateLauncher = path.join(updatePrefix, 'bin', 'wrenyard');
+      const identityConfigDir = path.join(tmp, 'update-identity-config');
+      const identityStateDir = path.join(tmp, 'update-identity-state');
+      const identityConfig = path.join(identityConfigDir, 'config.json');
+      const identitySocket = path.join(tmp, 'update-identity.sock');
+      fs.mkdirSync(identityConfigDir, { recursive: true });
+      const portProbe = http.createServer();
+      await new Promise((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+      const identityPort = portProbe.address().port;
+      await new Promise((resolve) => portProbe.close(resolve));
+      fs.writeFileSync(identityConfig, JSON.stringify({
+        service: { bind: `127.0.0.1:${identityPort}`, ipc: { path: identitySocket } },
+        workspace: { root: tmp },
+        pet: { enabled: false },
+        message: { enabled: false },
+        messageDelivery: { enabled: false },
+      }), 'utf8');
+      const staleSuiteEnv = {
+        ...updateEnv,
+        WRENYARD_CONFIG_HOME: identityConfigDir,
+        WRENYARD_STATE_HOME: identityStateDir,
+        FOREMAN_DB_PATH: path.join(identityStateDir, 'identity.sqlite'),
+        WRENYARD_ROOT: path.join(tmp, 'retired-suite'),
+        WRENYARD_NODE_BIN: path.join(tmp, 'retired-suite', 'runtime', 'node'),
+      };
+      try {
+        run(updateLauncher, ['daemon', 'start', '--config', identityConfig], { env: staleSuiteEnv });
+        const identityStatus = run(
+          updateLauncher,
+          ['daemon', 'status', '--config', identityConfig, '--json'],
+          { env: staleSuiteEnv },
+        );
+        const identity = JSON.parse(identityStatus.stdout);
+        assert.equal(identity.ok, true, 'installed daemon must be healthy');
+        assert.equal(
+          fs.realpathSync(identity.daemon?.suiteRoot),
+          fs.realpathSync(path.join(updatePrefix, 'current')),
+          'installed daemon must report the current suite despite stale suite environment variables',
+        );
+        assert.equal(identity.daemon?.suiteVersion, version);
+      } finally {
+        spawnSync(updateLauncher, ['daemon', 'stop', '--config', identityConfig], {
+          env: staleSuiteEnv,
+          encoding: 'utf8',
+        });
+      }
+
       // Step B: --update with a private-release token. The releases-list must
       // select the newest non-draft entry (v9.9.9-rc.9), skipping the draft
       // that was published later, and the token must authenticate via the
@@ -1053,7 +1105,6 @@ esac
         fs.existsSync(path.join(updatePrefix, 'versions', version)),
         'previous version must be retained for rollback after --update',
       );
-      const updateLauncher = path.join(updatePrefix, 'bin', 'wrenyard');
       assert.ok(fs.existsSync(updateLauncher), '--update installed launcher not found');
       run(updateLauncher, ['version'], { env: updateEnv });
       run(updateLauncher, ['help'], { env: updateEnv });
