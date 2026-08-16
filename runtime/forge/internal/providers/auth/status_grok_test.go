@@ -8,7 +8,7 @@ import (
 
 func TestGrokOAuthAuthStatusUsesShellThenOfficialDefault(t *testing.T) {
 	root := t.TempDir()
-	dataDir := filepath.Join(root, "data", "forge")
+	dataDir := filepath.Join(root, "data", "wrenyard", "runtime")
 	home := filepath.Join(root, "home")
 	shellAuth := filepath.Join(dataDir, "grok", "shell-grok", "auth.json")
 	defaultAuth := filepath.Join(home, ".grok", "auth.json")

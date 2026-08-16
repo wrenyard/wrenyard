@@ -79,7 +79,7 @@ func TestGrokDoctorCheckInvalidOverlayErrors(t *testing.T) {
 	cfgHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgHome)
 	// Write an invalid overlay containing api_key.
-	overlayDir := filepathJoin(cfgHome, "forge", "grok")
+	overlayDir := filepathJoin(cfgHome, "wrenyard", "runtime", "grok")
 	mkdirAll(t, overlayDir)
 	writeFile(t, filepathJoin(overlayDir, "overlay.toml"), "api_key = \"leaked\"\n")
 
@@ -98,7 +98,7 @@ func TestGrokDoctorCheckGrokHomeIsFile(t *testing.T) {
 	// Replace GROK_HOME with a regular file (not a directory).
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	grokHome := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	grokHome := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok")
 	mkdirAll(t, filepath.Dir(grokHome))
 	writeFile(t, grokHome, "this is a file, not a directory\n")
 
@@ -119,7 +119,7 @@ func TestGrokDoctorCheckMalformedConfig(t *testing.T) {
 
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	configDir := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	configDir := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok")
 	mkdirAll(t, configDir)
 	writeFile(t, filepath.Join(configDir, "config.toml"), "this is = = not valid toml\n")
 
@@ -159,7 +159,7 @@ func TestGrokDoctorCheckConfigApiKeyRejectedAndNotModified(t *testing.T) {
 
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	configDir := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	configDir := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok")
 	mkdirAll(t, configDir)
 	cfgPath := filepath.Join(configDir, "config.toml")
 	writeFile(t, cfgPath, "[auth]\napi_key = \"secret\"\n[models]\ndefault = \"x\"\n")
@@ -193,7 +193,7 @@ func TestGrokDoctorCheckDoesNotCreatePaths(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", dataHome)
 
 	// The expected GROK_HOME directory does not exist yet.
-	grokHome := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	grokHome := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok")
 	check := GrokDoctorCheck(grokTestDeps(true, func(string) (string, bool) { return "", false }))
 	// Doctor must not have created the directory.
 	if _, err := os.Stat(grokHome); err == nil {
@@ -215,9 +215,10 @@ func TestGrokDoctorCheckGrokHomeInaccessible(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", dataHome)
 
 	// Block GROK_HOME traversal by replacing a parent component with a regular
-	// file. GROK_HOME resolves to dataHome/forge/grok/shell-grok; making
-	// dataHome/forge/grok a file causes os.Stat to fail with ENOTDIR.
-	grokDir := filepath.Join(dataHome, "forge", "grok")
+	// file. GROK_HOME resolves to dataHome/wrenyard/runtime/grok/shell-grok;
+	// making dataHome/wrenyard/runtime/grok a file causes os.Stat to fail with
+	// ENOTDIR.
+	grokDir := filepath.Join(dataHome, "wrenyard", "runtime", "grok")
 	mkdirAll(t, filepath.Dir(grokDir))
 	if err := os.WriteFile(grokDir, []byte("i block the directory"), 0o644); err != nil {
 		t.Fatal(err)
@@ -247,7 +248,7 @@ func TestGrokDoctorCheckConfigInaccessible(t *testing.T) {
 
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
-	configDir := filepath.Join(dataHome, "forge", "grok", "shell-grok")
+	configDir := filepath.Join(dataHome, "wrenyard", "runtime", "grok", "shell-grok")
 	mkdirAll(t, configDir)
 	writeFile(t, filepath.Join(configDir, "config.toml"), "key = \"val\"\n")
 

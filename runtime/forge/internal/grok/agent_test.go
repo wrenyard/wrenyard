@@ -35,7 +35,7 @@ func TestAgentConfigFullyMaterializesEligibleProjectionsWithoutSecrets(t *testin
 
 func TestOAuthSourcePrecedenceAndByteCopyInput(t *testing.T) {
 	root := t.TempDir()
-	forgeData := filepath.Join(root, "data", "forge")
+	forgeData := filepath.Join(root, "data", "wrenyard", "runtime")
 	home := filepath.Join(root, "home")
 	shellAuth := filepath.Join(forgeData, "grok", "shell-grok", "auth.json")
 	defaultAuth := filepath.Join(home, ".grok", "auth.json")
