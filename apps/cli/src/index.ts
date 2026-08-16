@@ -32,6 +32,9 @@ export type Route =
 export interface SpawnResult {
   status: number | null;
   error?: Error;
+  /** Captured child output; present only when the spawn did not inherit stdio. */
+  stdout?: string | Buffer;
+  stderr?: string | Buffer;
 }
 
 /** Injected process runner; defaults to `spawnSync` in production. */
@@ -316,7 +319,12 @@ function runUpdateCommand(args: string[], ctx: MainContext): number {
     // Adapt the main runner (which surfaces spawn errors) to the updater.
     runner: (command, commandArgs, options) => {
       const result = ctx.runner(command, commandArgs, options);
-      return { status: result.status, error: result.error, stdout: '', stderr: '' };
+      return {
+        status: result.status,
+        error: result.error,
+        stdout: result.stdout === undefined || result.stdout === null ? '' : String(result.stdout),
+        stderr: result.stderr === undefined || result.stderr === null ? '' : String(result.stderr),
+      };
     },
   });
   if (!outcome.ok) {

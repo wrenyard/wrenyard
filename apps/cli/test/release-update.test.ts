@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -67,7 +68,19 @@ function baseOptions(fake: FakeRunner, envRoot: string): UpdateOptions {
 test('POSIX: selects the bundled install.sh and passes --update plus --version', (t) => {
   const env = makeEnv();
   t.after(() => rmSync(env.root, { recursive: true, force: true }));
-  const fake = makeFakeRunner([{ status: 0 }]);
+  const fake = makeFakeRunner([
+    {
+      status: 0,
+      stdout: JSON.stringify({
+        ok: true,
+        daemon: {
+          running: true,
+          status: 'running',
+          suiteRoot: realpathSync(join(env.root, 'current')),
+        },
+      }),
+    },
+  ]);
   const outcome = runUpdate({ ...baseOptions(fake, env.root), version: '2.0.0' });
   assert.equal(outcome.ok, true);
   const installer = fake.calls.find((call) => call.command === 'bash');
@@ -157,11 +170,19 @@ test('installation failure rolls back the previous current target and redacts to
 test('successful update restarts and health-checks a running service', (t) => {
   const env = makeEnv();
   t.after(() => rmSync(env.root, { recursive: true, force: true }));
+  const statusJson = JSON.stringify({
+    ok: true,
+    daemon: {
+      running: true,
+      status: 'running',
+      suiteRoot: realpathSync(join(env.root, 'current')),
+    },
+  });
   const fake = makeFakeRunner([
-    { status: 0 }, // service status -> running
+    { status: 0, stdout: statusJson }, // service status -> running
     { status: 0 }, // installer
     { status: 0 }, // service restart
-    { status: 0 }, // service status -> healthy
+    { status: 0, stdout: statusJson }, // service status -> healthy
   ]);
   const outcome = runUpdate({ ...baseOptions(fake, env.root), version: '2.0.0' });
   assert.equal(outcome.ok, true);
@@ -210,6 +231,112 @@ test('health-check failure after install restores the previous current and resta
     (call, i) => i > lnIndex && call.args.join(' ').includes('service restart'),
   );
   assert.ok(restartIndex > lnIndex, 'previous version must be restored before restarting the service');
+});
+
+test('post-install launcher calls drop stale suite-pinned env and a wrong-identity healthy daemon rolls back', (t) => {
+  const env = makeEnv();
+  t.after(() => rmSync(env.root, { recursive: true, force: true }));
+  // A packaged SEA running the old release inherits these suite-pinned values;
+  // after the installer switches `current` to the new version they are stale.
+  const staleRoot = join(env.root, 'versions', '1.0.0');
+  const staleNodeBin = join(staleRoot, 'runtime', 'node');
+  const updateEnv = {
+    ...process.env,
+    WRENYARD_ROOT: staleRoot,
+    WRENYARD_NODE_BIN: staleNodeBin,
+  };
+
+  const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+  const runner: UpdateRunner = (command, args, options) => {
+    calls.push({ command, args, env: options?.env });
+    // The installer atomically switches current to the new version.
+    if (args[0]?.endsWith('install.sh')) {
+      rmSync(join(env.root, 'current'), { force: true });
+      symlinkSync('versions/2.0.0', join(env.root, 'current'));
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    // Emulate the production ln restore by physically replacing current.
+    if (command === 'ln') {
+      rmSync(join(env.root, 'current'), { force: true });
+      symlinkSync(args[1], join(env.root, 'current'));
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    // The daemon reports a healthy exit status, but its suite root is still the
+    // stale previous release: reusing WRENYARD_ROOT/WRENYARD_NODE_BIN pinned the
+    // restarted daemon to the old runtime. Exit status alone must not count.
+    if (args.join(' ').includes('service status')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify(
+          { ok: true, daemon: { running: true, status: 'running', suiteRoot: staleRoot } },
+          null,
+          2,
+        ),
+        stderr: '',
+      };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+
+  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: updateEnv });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.rolledBack, true);
+  assert.ok(outcome.healthError, 'wrong-identity healthy daemon must be rejected as a health failure');
+  assert.equal(readlinkSync(join(env.root, 'current')), env.previous);
+
+  const installerIndex = calls.findIndex((call) => call.args[0]?.endsWith('install.sh'));
+  assert.ok(installerIndex !== -1, 'installer must be invoked');
+  for (const call of calls.slice(installerIndex + 1).filter((call) => call.args.join(' ').includes('service'))) {
+    const callEnv = call.env ?? {};
+    assert.equal(
+      callEnv.WRENYARD_ROOT,
+      undefined,
+      'post-install launcher call must not reuse stale WRENYARD_ROOT',
+    );
+    assert.equal(
+      callEnv.WRENYARD_NODE_BIN,
+      undefined,
+      'post-install launcher call must not reuse stale WRENYARD_NODE_BIN',
+    );
+  }
+});
+
+test('a healthy daemon that omits its suite root is rejected as missing identity and rolls back', (t) => {
+  const env = makeEnv();
+  t.after(() => rmSync(env.root, { recursive: true, force: true }));
+  const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+  const runner: UpdateRunner = (command, args, options) => {
+    calls.push({ command, args, env: options?.env });
+    // The installer atomically switches current to the new version.
+    if (args[0]?.endsWith('install.sh')) {
+      rmSync(join(env.root, 'current'), { force: true });
+      symlinkSync('versions/2.0.0', join(env.root, 'current'));
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    // Emulate the production ln restore by physically replacing current.
+    if (command === 'ln') {
+      rmSync(join(env.root, 'current'), { force: true });
+      symlinkSync(args[1], join(env.root, 'current'));
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    // The daemon reports a healthy exit status but its identity
+    // (daemon.suiteRoot) is absent from the status payload entirely:
+    // absence must fail closed, not count as a match.
+    if (args.join(' ').includes('service status')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ ok: true, daemon: { running: true, status: 'running' } }, null, 2),
+        stderr: '',
+      };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+
+  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: process.env });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.rolledBack, true);
+  assert.match(outcome.healthError ?? '', /identity mismatch/);
+  assert.equal(readlinkSync(join(env.root, 'current')), env.previous);
 });
 
 test('Windows rollback resolves a relative previous target to an absolute junction target', (t) => {
@@ -273,11 +400,19 @@ test('Windows rollback resolves a relative previous target to an absolute juncti
 test('update never invokes git/pnpm/go and only ever runs the installer and control', (t) => {
   const env = makeEnv();
   t.after(() => rmSync(env.root, { recursive: true, force: true }));
+  const statusJson = JSON.stringify({
+    ok: true,
+    daemon: {
+      running: true,
+      status: 'running',
+      suiteRoot: realpathSync(join(env.root, 'current')),
+    },
+  });
   const fake = makeFakeRunner([
-    { status: 0 }, // service status
+    { status: 0, stdout: statusJson }, // service status
     { status: 0 }, // installer
     { status: 0 }, // service restart
-    { status: 0 }, // service status
+    { status: 0, stdout: statusJson }, // service status
   ]);
   const outcome = runUpdate({ ...baseOptions(fake, env.root) });
   assert.equal(outcome.ok, true);

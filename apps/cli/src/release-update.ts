@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions } from 'node:child_process';
-import { existsSync, readlinkSync } from 'node:fs';
+import { existsSync, readlinkSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,22 +132,84 @@ function succeeded(result: UpdateSpawnResult): boolean {
   return result.error === undefined && result.status === 0;
 }
 
+/** Env for launcher spawns: strip stale suite-pinned root and node binary so a
+ * launcher at prefix/current re-derives its own identity from the real target. */
+function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const stripped = { ...env };
+  delete stripped.WRENYARD_ROOT;
+  delete stripped.WRENYARD_NODE_BIN;
+  return stripped;
+}
+
+/** Real path of a symlink/junction target, or null when it cannot be resolved. */
+function realTarget(target: string): string | null {
+  try {
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+/** Compare resolved suite targets portably: exact on POSIX, case-insensitive on
+ * Windows where drives and junctions are case-insensitive by default. */
+function sameRealTarget(a: string, b: string, platform: NodeJS.Platform): boolean {
+  if (isWinFor(platform)) return a.toLowerCase() === b.toLowerCase();
+  return a === b;
+}
+
+/** Daemon suite root from a `service status --json` payload, or null when absent. */
+function daemonSuiteRoot(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const daemon = (payload as { daemon?: unknown }).daemon;
+  if (daemon === null || typeof daemon !== 'object' || Array.isArray(daemon)) return null;
+  const suiteRoot = (daemon as { suiteRoot?: unknown }).suiteRoot;
+  return typeof suiteRoot === 'string' && suiteRoot.length > 0 ? suiteRoot : null;
+}
+
 function serviceRunning(
   launcher: string,
   runner: UpdateRunner,
   env: NodeJS.ProcessEnv,
 ): boolean {
   if (!existsSync(launcher)) return false;
-  return succeeded(runner(launcher, ['service', 'status'], { env }));
+  return succeeded(runner(launcher, ['service', 'status'], { env: launcherEnv(env) }));
+}
+
+interface RestartHealthResult {
+  ok: boolean;
+  /** True when the restarted daemon runs but its identity is missing or does not
+   * resolve to the installed prefix/current target. */
+  mismatch: boolean;
 }
 
 function restartAndHealthCheck(
   launcher: string,
   runner: UpdateRunner,
   env: NodeJS.ProcessEnv,
-): boolean {
-  if (!succeeded(runner(launcher, ['service', 'restart'], { env }))) return false;
-  return succeeded(runner(launcher, ['service', 'status'], { env }));
+  current: string,
+  platform: NodeJS.Platform,
+): RestartHealthResult {
+  if (!succeeded(runner(launcher, ['service', 'restart'], { env: launcherEnv(env) }))) {
+    return { ok: false, mismatch: false };
+  }
+  const status = runner(launcher, ['service', 'status', '--json'], { env: launcherEnv(env) });
+  if (!succeeded(status)) return { ok: false, mismatch: false };
+  let payload: unknown;
+  try {
+    payload = JSON.parse(status.stdout) as unknown;
+  } catch {
+    return { ok: false, mismatch: false };
+  }
+  const suiteRoot = daemonSuiteRoot(payload);
+  const installedTarget = realTarget(current);
+  if (suiteRoot === null || installedTarget === null) {
+    return { ok: false, mismatch: true };
+  }
+  const resolvedSuiteRoot = realTarget(suiteRoot);
+  if (resolvedSuiteRoot === null || !sameRealTarget(resolvedSuiteRoot, installedTarget, platform)) {
+    return { ok: false, mismatch: true };
+  }
+  return { ok: true, mismatch: false };
 }
 
 function restoreCurrent(
@@ -212,19 +274,21 @@ export function runUpdate(options: UpdateOptions = {}): UpdateOutcome {
       `wrenyard update failed (installer exited ${result.status ?? result.error?.message ?? 'unknown'}): ${detail || 'no installer output'}`;
     const rolledBack =
       previous !== null && restoreCurrent(previous, prefix, runner, env, platform);
-    if (rolledBack && wasRunning) restartAndHealthCheck(launcher, runner, env);
+    if (rolledBack && wasRunning) restartAndHealthCheck(launcher, runner, env, current, platform);
     return { ok: false, previous: previous ?? undefined, rolledBack, installError };
   }
 
   if (wasRunning) {
-    if (!restartAndHealthCheck(launcher, runner, env)) {
-      let healthError =
-        'wrenyard update installed but the restarted service failed its health check';
+    const health = restartAndHealthCheck(launcher, runner, env, current, platform);
+    if (!health.ok) {
+      let healthError = health.mismatch
+        ? 'wrenyard update installed but the restarted daemon does not match the installed suite (identity mismatch)'
+        : 'wrenyard update installed but the restarted service failed its health check';
       const rolledBack =
         previous !== null && restoreCurrent(previous, prefix, runner, env, platform);
       if (rolledBack) {
         healthError += `; restored previous version ${previous}`;
-        restartAndHealthCheck(launcher, runner, env);
+        restartAndHealthCheck(launcher, runner, env, current, platform);
       }
       return { ok: false, previous: previous ?? undefined, rolledBack, healthError };
     }
