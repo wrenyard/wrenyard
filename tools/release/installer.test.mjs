@@ -41,3 +41,18 @@ test('README keeps private-mirror authentication optional', () => {
 test('install.ps1 defaults to the public wrenyard/wrenyard repository', () => {
   assert.ok(ps1.includes("'wrenyard/wrenyard'"));
 });
+
+test('install.ps1 verifies SHA-256 without PowerShell Get-FileHash', () => {
+  // The checksum must not depend on Microsoft.PowerShell.Utility module
+  // auto-loading: Get-FileHash lives in that module, which may be unavailable
+  // in constrained PowerShell hosts.
+  assert.ok(!ps1.includes('Get-FileHash'));
+  // The installer computes the digest with a self-contained .NET SHA256
+  // implementation instead of a module-backed cmdlet.
+  assert.ok(ps1.includes('[System.Security.Cryptography.SHA256]::Create()'));
+  assert.ok(ps1.includes('ComputeHash'));
+  assert.ok(ps1.includes('[System.BitConverter]::ToString'));
+  // Native/stream resources are released via finally-scoped Dispose calls.
+  assert.ok(ps1.includes('Dispose()'));
+  assert.ok(ps1.includes('finally {'));
+});
