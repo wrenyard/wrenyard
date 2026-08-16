@@ -13,10 +13,10 @@ import (
 
 const sourceBlockStart = "# >>> forge shell shortcuts >>>"
 const sourceBlockEnd = "# <<< forge shell shortcuts <<<"
-const sourceLine = `source "$HOME/.config/forge/shell/forge.zsh"`
+const sourceLine = `source "$HOME/.config/wrenyard/runtime/shell/forge.zsh"`
 const powershellSourceBlockStart = "# >>> forge managed >>>"
 const powershellSourceBlockEnd = "# <<< forge managed <<<"
-const powershellSourceLine = `. "$HOME\.config\forge\shell\forge.ps1"`
+const powershellSourceLine = `. "$HOME\.config\wrenyard\runtime\shell\forge.ps1"`
 const redactionPlaceholder = auth.RedactionPlaceholder
 const openCodeProviderNotFound = sl.OpenCodeProviderNotFound
 

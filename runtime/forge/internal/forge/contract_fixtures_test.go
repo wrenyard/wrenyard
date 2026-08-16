@@ -182,7 +182,7 @@ func containsOrdered(args []string, first, second string) bool {
 func writeForgeConfig(t *testing.T, home, content string) {
 	t.Helper()
 	t.Setenv("HOME", home)
-	configDir := filepath.Join(home, ".config", "forge")
+	configDir := filepath.Join(home, ".config", "wrenyard", "runtime")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

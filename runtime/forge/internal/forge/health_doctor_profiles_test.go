@@ -112,7 +112,7 @@ func TestProvidersDoctorChecksOKWhenCredentialResolves(t *testing.T) {
 	saveTempConfig(t, home, ForgeConfig{
 		Clients: map[string]ClientConfig{},
 	})
-	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "forge"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "wrenyard", "runtime"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	setTestAuth(t, "zhipu-coding", "test-key")

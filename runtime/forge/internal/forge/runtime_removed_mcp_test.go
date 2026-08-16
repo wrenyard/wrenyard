@@ -47,7 +47,7 @@ func TestMCPIsUnknownCommandAndNoArtifactsRemain(t *testing.T) {
 			}
 		})
 	}
-	capPath := filepath.Join(home, ".config", "forge", "capabilities.json")
+	capPath := filepath.Join(home, ".config", "wrenyard", "runtime", "capabilities.json")
 	if exists(capPath) {
 		t.Fatalf("mcp as unknown should not materialize removed capability registry at %s", capPath)
 	}
