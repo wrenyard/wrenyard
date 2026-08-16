@@ -1,3 +1,3 @@
 package forge
 
-const version = "1.0.0-dev.2"
+const version = "1.0.0-dev.3"

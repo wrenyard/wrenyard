@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/pet",
-  "version": "1.0.0-dev.2",
+  "version": "1.0.0-dev.3",
   "packageManager": "pnpm@11.19.0",
   "description": "Wrenyard desktop task visualizer/observer pixel construction-site pet",
   "private": true,
@@ -9,7 +9,6 @@
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json && esbuild src/preloads/entity-preload.ts --bundle --outfile=dist/main/main/entity-preload.js --format=cjs --target=es2022 --platform=node --external:electron && esbuild src/preloads/graph-slip-preload.ts --bundle --outfile=dist/main/main/graph-slip-preload.js --format=cjs --target=es2022 --platform=node --external:electron && esbuild src/preloads/transcript-preload.ts --bundle --outfile=dist/main/main/transcript-preload.js --format=cjs --target=es2022 --platform=node --external:electron",
     "build:renderer": "esbuild src/overlay/house/index.ts --bundle --outfile=dist/renderer/house.js --format=iife --target=es2022 && esbuild src/overlay/worker/index.ts --bundle --outfile=dist/renderer/worker.js --format=iife --target=es2022 && esbuild src/overlay/taskgraph-entity/index.ts --bundle --outfile=dist/renderer/entity.js --format=iife --target=es2022 && esbuild src/panels/stats/index.ts --bundle --outfile=dist/renderer/stats.js --format=iife --target=es2022 && esbuild src/panels/settings/index.ts --bundle --outfile=dist/renderer/settings.js --format=iife --target=es2022 && esbuild src/panels/transcript/index.ts --bundle --outfile=dist/renderer/transcript.js --format=iife --target=es2022 && esbuild src/panels/observatory/index.ts --bundle --outfile=dist/renderer/graph-slip.js --format=iife --target=es2022 && node tools/copy-renderer-assets.mjs",
-
     "build": "pnpm run build:main && pnpm run build:renderer",
     "dev": "pnpm run build && electron .",
     "start": "node scripts/run-foreground.mjs",
