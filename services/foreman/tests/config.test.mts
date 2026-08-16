@@ -244,6 +244,32 @@ describe('Foreman config', () => {
     assert.equal(config.pet.cwd, petDir)
   })
 
+  it('a user config that only enables packaged Pet resolves the canonical packaged executable', () => {
+    const root = suite()
+    const petDir = join(realpathSync(root), 'apps', 'pet')
+    rmSync(join(petDir, 'package.json'))
+    const exe = packagedPetExecutablePath(petDir, process.platform)
+    mkdirSync(dirname(exe), { recursive: true })
+    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
+
+    const configHome = mkdtempSync(join(tmpdir(), 'foreman-config-user-'))
+    roots.push(configHome)
+    mkdirSync(join(configHome, 'wrenyard'), { recursive: true })
+    writeFileSync(
+      join(configHome, 'wrenyard', 'config.json'),
+      JSON.stringify({ pet: { enabled: true } }),
+      'utf-8',
+    )
+
+    const manager = new ForemanConfigManager({ env: { XDG_CONFIG_HOME: configHome, WRENYARD_ROOT: root } })
+    const { config } = manager.loadServiceConfig()
+    assert.ok(config.pet)
+    assert.equal(config.pet.command, exe)
+    assert.deepEqual(config.pet.args, [])
+    assert.equal(config.pet.cwd, petDir)
+    assert.equal(existsSync(join(petDir, 'package.json')), false)
+  })
+
   it('keeps the npm start source defaults for a development pet checkout', () => {
     const root = suite()
     const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_ROOT: root } })
