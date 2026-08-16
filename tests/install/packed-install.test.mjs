@@ -28,11 +28,9 @@ import { fileURLToPath } from 'node:url';
 const ENABLED = process.env.WRENYARD_SKIP_PACKED_INSTALL_E2E !== '1';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
-// Windows builds the complete release twice in the package job (once before
-// this test and once inside the isolated consumer fixture). Hosted Windows
-// runners routinely need more than ten minutes for the second build alone;
-// keep the tighter budget elsewhere while allowing the same assertions to
-// reach their installed-command and updater checks on Windows.
+// Windows receives a larger budget for its slower archive, npm, and install
+// checks: prebuilt CI consumes the release built once by the preceding
+// release step, so the E2E no longer rebuilds the release a second time.
 const E2E_TIMEOUT_MS = process.platform === 'win32' ? 1_200_000 : 600_000;
 
 // Host triplet embedded in the platform-qualified suite artifact name.
@@ -269,8 +267,10 @@ function stripPsComments(source) {
 // Static regression guard for the Windows installer: Switch-Link must never
 // recursively delete the existing `current` link. Replacing `current` goes
 // through a link-only removal helper that requires a reparse point (symbolic
-// link or junction) and refuses a plain directory, so the swap can never
-// follow a symlink/junction into its version target and delete it.
+// link or junction), refuses a plain directory, and deletes the link itself
+// with System.IO.Directory.Delete / File.Delete rather than PowerShell
+// Remove-Item, so the swap can never follow a symlink/junction into its
+// version target and delete it.
 function assertInstallPs1LinkOnlyRemoval(root) {
   const lines = fs.readFileSync(path.join(root, 'scripts', 'install.ps1'), 'utf8').split(/\r?\n/);
   const bodyOf = (functionName) => {
@@ -308,10 +308,26 @@ function assertInstallPs1LinkOnlyRemoval(root) {
     'Remove-LinkOnly must never recurse into a link target',
   );
   assert.ok(
+    !/Remove-Item/.test(helperBody),
+    'Remove-LinkOnly must not call PowerShell Remove-Item',
+  );
+  assert.ok(
+    /Directory]::Delete/.test(helperBody),
+    'Remove-LinkOnly must delete a directory link with System.IO.Directory.Delete',
+  );
+  assert.ok(
+    /File]::Delete/.test(helperBody),
+    'Remove-LinkOnly must delete a non-container reparse point with System.IO.File.Delete',
+  );
+  assert.ok(
     /Die/.test(helperBody),
     'Remove-LinkOnly must refuse to delete a non-reparse directory',
   );
 }
+
+test('Windows installer removes current through link-only System.IO APIs', () => {
+  assertInstallPs1LinkOnlyRemoval(ROOT);
+});
 
 function readVersion(manifest, zipPath) {
   if (manifest) {

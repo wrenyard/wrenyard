@@ -114,16 +114,22 @@ function Remove-LinkOnly {
     # point (symbolic link or junction); a plain directory is refused rather
     # than recursively deleted, so a misconfigured link can never take the
     # versions tree down with it.
+    #
+    # Windows-safe removal: PowerShell 7's Remove-Item throws a
+    # NullReferenceException when deleting a directory symbolic link on
+    # windows-latest during a second same-version install, so the link is
+    # deleted with System.IO instead. Directory.Delete removes the link itself
+    # for directory containers (symbolic links and junctions) without
+    # recursing into or following the target; File.Delete covers the
+    # non-container reparse-point case.
     $item = Get-Item -LiteralPath $Path -Force
     if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
         Die "'$Path' is not a link; refusing to delete it recursively"
     }
-    if ($item.LinkType -eq 'SymbolicLink') {
-        # Symbolic link: Remove-Item without -Recurse deletes only the link.
-        Remove-Item -LiteralPath $Path -Force
-    } else {
-        # Junction (or other directory reparse point): delete the link only.
+    if ($item.PSIsContainer) {
         [System.IO.Directory]::Delete($Path)
+    } else {
+        [System.IO.File]::Delete($Path)
     }
 }
 
