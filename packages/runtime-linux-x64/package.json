@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/runtime-linux-x64",
-  "version": "1.0.0-dev.1",
+  "version": "1.0.0-dev.2",
   "private": true,
   "license": "MIT",
   "optional": true,
