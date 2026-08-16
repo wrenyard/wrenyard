@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/runtime-darwin-arm64",
-  "version": "1.0.0-dev.2",
+  "version": "1.0.0-dev.3",
   "private": true,
   "license": "MIT",
   "optional": true,
