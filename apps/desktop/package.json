@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/desktop",
-  "version": "1.0.0-dev.4",
+  "version": "1.0.0-dev.5",
   "private": true,
   "description": "Hardened Electron desktop shell for the Wrenyard DSH (development artifact; not yet released).",
   "license": "MIT",
