@@ -115,10 +115,14 @@ export function run(argv, cwd = process.cwd()) {
     }
   };
   syncText(EMBED_PATH, /const version = "[^"]*"/, `const version = "${version}"`);
+  // The Forge version test may be checked out with CRLF line endings on
+  // Windows. Capture the actual EOL and indentation and rebuild the assertion
+  // with a replacement callback so --write never mixes LF into a CRLF file.
   syncText(
     FORGE_VERSION_TEST_PATH,
-    /if version != "[^"]*" \{\n\s*t\.Fatalf\("version = %q, want [^"]*", version\)/,
-    `if version != "${version}" {\n\t\tt.Fatalf("version = %q, want ${version}", version)`,
+    /if version != "[^"]*" \{(\r?\n)([ \t]*)t\.Fatalf\("version = %q, want [^"]*", version\)/,
+    (_match, eol, indent) =>
+      `if version != "${version}" {${eol}${indent}t.Fatalf("version = %q, want ${version}", version)`,
   );
   syncText(PROFILE_PATH, /version: '[^']*'/, `version: '${version}'`);
 

@@ -195,3 +195,39 @@ test('version-sync --check reports protocol/upstream drift as a guard failure', 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('version-sync accepts and preserves a CRLF shell_grok_test.go (Windows checkout)', async () => {
+  const dir = await buildFixture();
+  const testPath = join(dir, 'runtime/forge/internal/forge/shell_grok_test.go');
+  const crlfTest = (v) =>
+    [
+      'package forge',
+      '',
+      'func TestVersionIsCurrent(t *testing.T) {',
+      `\tif version != "${v}" {`,
+      `\t\tt.Fatalf("version = %q, want ${v}", version)`,
+      '\t}',
+      '}',
+      '',
+    ].join('\r\n');
+  try {
+    // A CRLF checkout at the current fixture version must be recognized.
+    await writeFile(testPath, crlfTest(ROOT_VERSION), 'utf8');
+    const checkOut = runTool(dir, '--check');
+    assert.match(checkOut, new RegExp(`all first-party files in sync at ${ROOT_VERSION}`));
+
+    // A drifted version inside the CRLF file is repaired by --write.
+    await writeFile(testPath, crlfTest('0.7.18'), 'utf8');
+    const writeOut = runTool(dir, '--write');
+    assert.match(writeOut, /shell_grok_test\.go/);
+
+    // The version is restored and the file is still pure CRLF (no mixed endings).
+    const repaired = await readFile(testPath, 'utf8');
+    assert.match(repaired, new RegExp(`want ${ROOT_VERSION}`));
+    const withoutCrlf = repaired.replace(/\r\n/g, '');
+    assert.ok(!withoutCrlf.includes('\n'), 'repaired file must not contain bare LF');
+    assert.ok(!withoutCrlf.includes('\r'), 'repaired file must not contain bare CR');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
