@@ -30,26 +30,36 @@ func SetupCommand(ctx SetupCommandContext) int {
 	steps := []struct {
 		name string
 		fn   func() bool
-	}{
-		{"self-install binary", func() bool { return stepSelfInstall(ctx, selfInstall) }},
-		{"install shell integration", func() bool { return stepShellIntegration(ctx) }},
+	}{}
+	// Suite-managed runs (WRENYARD_ROOT set) skip the automatic internal
+	// self-install step unless --self-install was explicitly requested;
+	// shell integration and doctor still run.
+	if os.Getenv("WRENYARD_ROOT") == "" || selfInstall {
+		steps = append(steps, struct {
+			name string
+			fn   func() bool
+		}{"self-install binary", func() bool { return stepSelfInstall(ctx, selfInstall) }})
 	}
+	steps = append(steps, struct {
+		name string
+		fn   func() bool
+	}{"install shell integration", func() bool { return stepShellIntegration(ctx) }})
 
 	for _, step := range steps {
-		fmt.Printf("forge setup: %s...\n", step.name)
+		fmt.Printf("wrenyard setup: %s...\n", step.name)
 		if !step.fn() {
 			ok = false
 		}
 	}
 
-	fmt.Println("forge setup: run doctor...")
+	fmt.Println("wrenyard setup: run doctor...")
 	doctorOK := stepDoctor(ctx)
 	if !doctorOK {
 		ok = false
 	}
 
 	if ok {
-		fmt.Println("Forge setup complete.")
+		fmt.Println("Wrenyard setup complete.")
 		return 0
 	}
 	return 1
@@ -186,7 +196,7 @@ func InstallShellWrappers(ctx SetupCommandContext, args []string, asJSON bool) i
 	shell, err := parseInstallShellTarget(args)
 	if err != nil {
 		if asJSON {
-			printJSON(map[string]interface{}{"name": "forge-install-shell", "succeeded": false, "error": err.Error()})
+			printJSON(map[string]interface{}{"name": "wrenyard-install-shell", "succeeded": false, "error": err.Error()})
 		} else {
 			fmt.Fprintln(os.Stderr, err)
 		}
@@ -202,7 +212,7 @@ func InstallShellWrappers(ctx SetupCommandContext, args []string, asJSON bool) i
 		if asJSON {
 			printJSON(payload)
 		} else {
-			fmt.Fprintln(os.Stderr, "forge setup: unmanaged shell conflicts detected")
+			fmt.Fprintln(os.Stderr, "wrenyard setup: unmanaged shell conflicts detected")
 			for _, conflict := range plan.Conflicts {
 				fmt.Fprintf(os.Stderr, "  %s:%d: %s %s\n", plan.ProfilePath, conflict.Line, conflict.Kind, conflict.Name)
 			}
@@ -287,7 +297,7 @@ func parseInstallShellTarget(args []string) (string, error) {
 	usePowerShell := hasFlag(args, "--powershell")
 	useZsh := hasFlag(args, "--zsh")
 	if usePowerShell && useZsh {
-		return "", fmt.Errorf("forge setup: specify only one of --powershell or --zsh")
+		return "", fmt.Errorf("wrenyard setup: specify only one of --powershell or --zsh")
 	}
 	if usePowerShell {
 		return "powershell", nil

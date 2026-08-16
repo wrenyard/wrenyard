@@ -23,9 +23,12 @@ func BuildInstallPlan(home, targetShell string, deps InstallDeps) (InstallPlan, 
 	copy(conflictNames, funcNames)
 	conflictNames = append(conflictNames, grokFunctionName)
 	if targetShell == "powershell" {
-		forgeBin, _ := deps.CurrentForgePath()
-		managed := RenderManagedPowerShell(profiles, funcNames, forgeBin, deps.ResolveCredential, deps.IsManagedProvider)
-		managed += "\n" + RenderGrokPowerShell(forgeBin)
+		// PowerShell and Grok output are built with the public Wrenyard
+		// launcher name; the retired stable Forge launcher path is never
+		// resolved or embedded.
+		launcher := "wrenyard"
+		managed := RenderManagedPowerShell(profiles, funcNames, launcher, deps.ResolveCredential, deps.IsManagedProvider)
+		managed += "\n" + RenderGrokPowerShell(launcher)
 		return PlanPowerShell(home, managed, conflictNames)
 	}
 	managed, err := RenderManagedZsh(profiles, funcNames, deps.ResolveCredential, deps.IsManagedProvider)

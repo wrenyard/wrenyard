@@ -25,16 +25,16 @@ func powerShellArray(values []string) string {
 
 // --- PowerShell rendering ---
 
-// RenderManagedPowerShell renders the forge.ps1 managed shell file.
+// RenderManagedPowerShell renders the wrenyard.ps1 managed shell file.
 func RenderManagedPowerShell(
 	profiles map[string]Profile,
 	funcNames []string,
-	forgeBin string,
+	launcher string,
 	credResolver func(string) (string, bool),
 	managedProvider func(string) bool,
 ) string {
 	var b strings.Builder
-	b.WriteString("# forge.ps1 - Managed by forge setup. Do not edit manually.\n")
+	b.WriteString("# wrenyard.ps1 - Managed by wrenyard runtime setup. Do not edit manually.\n")
 	b.WriteString("# Source this file from your PowerShell profile.\n\n")
 	for _, name := range funcNames {
 		p, ok := profiles[name]
@@ -46,7 +46,7 @@ func RenderManagedPowerShell(
 			continue
 		}
 		if providerSupportsCCShortcut(p.Provider) {
-			if rendered, err := renderPowerShellDirectClaudeProfile(name, p, forgeBin, credResolver, managedProvider); err == nil {
+			if rendered, err := renderPowerShellDirectClaudeProfile(name, p, launcher, credResolver, managedProvider); err == nil {
 				b.WriteString(rendered)
 			}
 			continue
@@ -82,7 +82,7 @@ func renderPowerShellRawClaudeAliasProfile(name string, p Profile) string {
 func renderPowerShellDirectClaudeProfile(
 	name string,
 	p Profile,
-	forgeBin string,
+	launcher string,
 	credResolver func(string) (string, bool),
 	managedProvider func(string) bool,
 ) (string, error) {
@@ -96,7 +96,7 @@ func renderPowerShellDirectClaudeProfile(
 		cred, ok := credResolver(p.Provider)
 		if !ok || cred == "" {
 			if managedProvider(p.Provider) {
-				return "", fmt.Errorf("no credential for provider %q; run forge auth login %s", p.Provider, p.Provider)
+				return "", fmt.Errorf("no credential for provider %q; run wrenyard providers auth login %s", p.Provider, p.Provider)
 			}
 		} else {
 			apiKey = cred
@@ -176,8 +176,8 @@ func renderPowerShellDirectClaudeProfile(
 	b.WriteString("    }\n")
 	b.WriteString("    try {\n")
 	b.WriteString("        & ")
-	b.WriteString(powerShellQuote(forgeBin))
-	b.WriteString(" 'shell' 'exec' ")
+	b.WriteString(powerShellQuote(launcher))
+	b.WriteString(" 'runtime' 'shell' 'exec' ")
 	b.WriteString(powerShellQuote(p.Name))
 	b.WriteString(" '--' ")
 	b.WriteString(powerShellQuote(command[0]))

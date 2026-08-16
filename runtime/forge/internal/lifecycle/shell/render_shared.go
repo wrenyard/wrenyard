@@ -185,10 +185,10 @@ func claudeSettingsJSON(p Profile, env map[string]string) string {
 		IncludeCoAuthoredBy:               false,
 	}
 	settings.StatusLine.Type = "command"
-	settings.StatusLine.Command = "forge statusline --claude-code"
+	settings.StatusLine.Command = "wrenyard runtime statusline --claude-code"
 	content, err := json.Marshal(settings)
 	if err != nil {
-		return `{"env":{},"model":"opus","statusLine":{"type":"command","command":"forge statusline --claude-code"}}`
+		return `{"env":{},"model":"opus","statusLine":{"type":"command","command":"wrenyard runtime statusline --claude-code"}}`
 	}
 	return string(content)
 }

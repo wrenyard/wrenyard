@@ -714,3 +714,36 @@ func TestStepSelfInstallCreatesStableFDSHLauncher(t *testing.T) {
 		t.Fatal("setup should also keep the stable forge launcher")
 	}
 }
+
+func TestSetupWithWrenyardRootSkipsStableLaunchers(t *testing.T) {
+	home := t.TempDir()
+	dataHome := filepath.Join(home, "xdg-data")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("WRENYARD_ROOT", t.TempDir())
+
+	ctx := testInstallCtx()
+	ctx.Home = home
+
+	// Suite-managed setup must succeed while skipping the automatic internal
+	// self-install step, so the retired public forge/fdsh launchers are not
+	// recreated; shell integration must still be written.
+	if install.SetupCommand(ctx) != 0 {
+		t.Fatal("setup with WRENYARD_ROOT should succeed")
+	}
+	if exists(stableForgeLauncherPath()) {
+		t.Fatal("setup with WRENYARD_ROOT must not create the stable forge launcher")
+	}
+	if exists(layout.NewPaths(home).StableFDSHLauncherPath()) {
+		t.Fatal("setup with WRENYARD_ROOT must not create the stable fdsh launcher")
+	}
+	configDir := layout.NewPaths(home).ConfigDir()
+	managed := filepath.Join(configDir, "shell", "wrenyard.zsh")
+	if runtime.GOOS == "windows" {
+		managed = filepath.Join(configDir, "shell", "wrenyard.ps1")
+	}
+	if !exists(managed) {
+		t.Fatalf("setup with WRENYARD_ROOT should write Wrenyard shell integration at %s", managed)
+	}
+}
