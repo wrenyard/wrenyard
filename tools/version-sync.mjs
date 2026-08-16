@@ -7,6 +7,7 @@
 //   - release-manifest.json (suite_version + each component version)
 //   - contracts/versions.json (first-party desktop and dsh_shell entries)
 //   - the embedded Forge version constant (runtime/forge/internal/forge/embed.go)
+//   - the Forge version contract test
 //   - the Desktop profile manifest version (apps/desktop/src/profile.ts)
 //
 // Protocol and upstream (DSH) versions are never altered; any drift in those
@@ -42,6 +43,7 @@ const FIRST_PARTY_MANIFESTS = [
 const RELEASE_MANIFEST = 'release-manifest.json';
 const CONTRACTS = 'contracts/versions.json';
 const EMBED_PATH = 'runtime/forge/internal/forge/embed.go';
+const FORGE_VERSION_TEST_PATH = 'runtime/forge/internal/forge/shell_grok_test.go';
 const PROFILE_PATH = 'apps/desktop/src/profile.ts';
 
 // Protocol and upstream versions that must be preserved untouched.
@@ -113,6 +115,11 @@ export function run(argv, cwd = process.cwd()) {
     }
   };
   syncText(EMBED_PATH, /const version = "[^"]*"/, `const version = "${version}"`);
+  syncText(
+    FORGE_VERSION_TEST_PATH,
+    /if version != "[^"]*" \{\n\s*t\.Fatalf\("version = %q, want [^"]*", version\)/,
+    `if version != "${version}" {\n\t\tt.Fatalf("version = %q, want ${version}", version)`,
+  );
   syncText(PROFILE_PATH, /version: '[^']*'/, `version: '${version}'`);
 
   // Guard rails: protocol/upstream versions must never be altered. Drift is

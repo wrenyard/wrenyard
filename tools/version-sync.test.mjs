@@ -65,6 +65,11 @@ async function buildFixture() {
     dsh: '0.1.0-rc.6',
   });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', `package forge\n\nconst version = "${ROOT_VERSION}"\n`);
+  await writeText(
+    dir,
+    'runtime/forge/internal/forge/shell_grok_test.go',
+    `package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "${ROOT_VERSION}" {\n\t\tt.Fatalf("version = %q, want ${ROOT_VERSION}", version)\n\t}\n}\n`,
+  );
   await writeText(dir, 'apps/desktop/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
   return dir;
 }
@@ -90,6 +95,11 @@ test('version-sync --check reports drift without modifying any file', async () =
   const dir = await buildFixture();
   await writeJson(dir, 'apps/pet/package.json', { name: '@wrenyard/pet', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
+  await writeText(
+    dir,
+    'runtime/forge/internal/forge/shell_grok_test.go',
+    'package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "0.7.18" {\n\t\tt.Fatalf("version = %q, want 0.7.18", version)\n\t}\n}\n',
+  );
   try {
     let threw = false;
     try {
@@ -99,6 +109,7 @@ test('version-sync --check reports drift without modifying any file', async () =
       const out = String(error.stdout) + String(error.stderr);
       assert.match(out, /apps\/pet\/package\.json/);
       assert.match(out, /embed\.go/);
+      assert.match(out, /shell_grok_test\.go/);
     }
     assert.equal(threw, true, '--check must exit non-zero on drift');
     // No file was mutated by --check.
@@ -115,18 +126,26 @@ test('version-sync --write repairs drifted files and becomes stable', async () =
   const dir = await buildFixture();
   await writeJson(dir, 'apps/pet/package.json', { name: '@wrenyard/pet', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
+  await writeText(
+    dir,
+    'runtime/forge/internal/forge/shell_grok_test.go',
+    'package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "0.7.18" {\n\t\tt.Fatalf("version = %q, want 0.7.18", version)\n\t}\n}\n',
+  );
   await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
   try {
     const out = runTool(dir, '--write');
-    assert.match(out, /updated 3 file\(s\)/);
+    assert.match(out, /updated 4 file\(s\)/);
     assert.match(out, /apps\/pet\/package\.json/);
     assert.match(out, /embed\.go/);
+    assert.match(out, /shell_grok_test\.go/);
     assert.match(out, /profile\.ts/);
 
     const pet = JSON.parse(await readFile(join(dir, 'apps/pet/package.json'), 'utf8'));
     assert.equal(pet.version, ROOT_VERSION);
     const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
     assert.match(embed, new RegExp(`const version = "${ROOT_VERSION}"`));
+    const forgeVersionTest = await readFile(join(dir, 'runtime/forge/internal/forge/shell_grok_test.go'), 'utf8');
+    assert.match(forgeVersionTest, new RegExp(`want ${ROOT_VERSION}`));
     const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
     assert.match(profile, new RegExp(`version: '${ROOT_VERSION}'`));
 
