@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, test } from 'node:test'
 import type { AddressInfo } from 'node:net'
@@ -987,6 +987,8 @@ test('foreman daemon start/status/restart/stop controls the local daemon lifecyc
 }, async () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
   const binary = join(repoRoot, 'bin', 'foreman.mts')
+  const suiteRoot = resolve(repoRoot, '..', '..')
+  const rootVersion = (JSON.parse(readFileSync(join(suiteRoot, 'package.json'), 'utf-8')) as { version: string }).version
   const workDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-work-'))
   const configDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-config-'))
   const stateDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-state-'))
@@ -1022,7 +1024,7 @@ test('foreman daemon start/status/restart/stop controls the local daemon lifecyc
     assert.equal(status.status, 0, status.stderr)
     const statusPayload = JSON.parse(status.stdout) as {
       ok?: boolean
-      daemon?: { running?: boolean; pid?: number; status?: string; process?: string; pidAlive?: boolean; statePath?: string; logPaths?: { stderr?: string } }
+      daemon?: { running?: boolean; pid?: number; status?: string; process?: string; pidAlive?: boolean; statePath?: string; logPaths?: { stderr?: string }; suiteRoot?: string; suiteVersion?: string }
       ipc?: { ok?: boolean }
       http?: { ok?: boolean }
       mcp?: { ok?: boolean }
@@ -1034,6 +1036,8 @@ test('foreman daemon start/status/restart/stop controls the local daemon lifecyc
     assert.equal(statusPayload.daemon?.process, 'wrenyard-daemon')
     assert.equal(statusPayload.daemon?.status, 'running')
     assert.equal(statusPayload.daemon?.pidAlive, true)
+    assert.equal(statusPayload.daemon?.suiteRoot, suiteRoot)
+    assert.equal(statusPayload.daemon?.suiteVersion, rootVersion)
     assert.equal(statusPayload.daemon?.statePath, join(stateDir, 'wrenyard', 'wrenyard-daemon.json'))
     assert.equal(statusPayload.daemon?.logPaths?.stderr, join(stateDir, 'wrenyard', 'logs', 'wrenyard-error.log'))
     assert.equal(statusPayload.ipc?.ok, true)

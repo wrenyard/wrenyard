@@ -79,6 +79,8 @@ export async function collectForemanStatus(configPathValue: unknown): Promise<Fo
       pidAlive: supervisor.pidAlive,
       statePath: supervisor.statePath,
       pidPath: supervisor.pidPath,
+      ...(supervisor.state?.suiteRoot ? { suiteRoot: supervisor.state.suiteRoot } : {}),
+      ...(supervisor.state?.suiteVersion ? { suiteVersion: supervisor.state.suiteVersion } : {}),
       logPaths: supervisor.logPaths,
     },
     ipc,
