@@ -2,10 +2,10 @@
 
 Hardened Electron desktop shell for the Wrenyard DSH.
 
-> **Status: development artifact.** This package is not yet part of any
-> clean-copy/final release review. Treat every artifact produced here (zip /
-> installers) as a pre-release build for review only; it remains non-publishable
-> until the clean-copy/final release decision.
+> **Status: public development preview.** Target-qualified Desktop archives
+> ship with Wrenyard development prereleases. They are suitable for testing,
+> but remain preview artifacts: macOS builds are ad-hoc signed and Windows
+> builds are unsigned until trusted platform signing is configured.
 
 ## Architecture
 
