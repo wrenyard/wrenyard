@@ -329,6 +329,42 @@ test('Windows installer removes current through link-only System.IO APIs', () =>
   assertInstallPs1LinkOnlyRemoval(ROOT);
 });
 
+// Static regression guard for the Pet installer contract on both platforms:
+// the installer must derive a target-qualified Pet asset, expose explicit
+// URL/sidecar overrides, checksum-verify the Pet archive before any prefix
+// mutation, validate the packaged executable, and stage Pet into the same
+// version tree under apps/pet (apps\pet on Windows).
+function assertInstallersPetContract(root) {
+  const sh = fs.readFileSync(path.join(root, 'scripts', 'install.sh'), 'utf8');
+  const ps1 = fs.readFileSync(path.join(root, 'scripts', 'install.ps1'), 'utf8');
+
+  for (const flag of ['--pet-url', '--pet-checksum-url']) {
+    assert.ok(sh.includes(flag), `install.sh must expose ${flag}`);
+  }
+  assert.ok(
+    sh.includes('wrenyard-pet-$DIR_VERSION-$TARGET.zip'),
+    'install.sh must derive the target-qualified pet asset name',
+  );
+  assert.ok(/sha256_of "\$TMP_DIR\/pet\.zip"/.test(sh), 'install.sh must verify the pet checksum');
+  assert.ok(/apps\/pet/.test(sh), 'install.sh must stage pet archive contents under apps/pet in the version tree');
+  assert.ok(sh.includes('PET_EXE_BASENAME'), 'install.sh must resolve the platform pet executable basename');
+
+  for (const parameter of ['[string]$PetUrl', '[string]$PetChecksumUrl']) {
+    assert.ok(ps1.includes(parameter), `install.ps1 must declare ${parameter}`);
+  }
+  assert.ok(
+    ps1.includes('wrenyard-pet-$DirVersion-win32-x64.zip'),
+    'install.ps1 must derive the target-qualified pet asset name',
+  );
+  assert.ok(/pet\.zip\.sha256/.test(ps1), 'install.ps1 must verify the pet checksum');
+  assert.ok(ps1.includes('apps\\pet'), 'install.ps1 must stage pet archive contents under apps\\pet in the version tree');
+  assert.ok(ps1.includes('Wrenyard Pet'), 'install.ps1 must validate the packaged Wrenyard Pet.exe');
+}
+
+test('installers stage a verified Pet archive into the same version tree', () => {
+  assertInstallersPetContract(ROOT);
+});
+
 function readVersion(manifest, zipPath) {
   if (manifest) {
     try {
@@ -523,6 +559,9 @@ test('packed-install E2E: no consumer-side Go compilation', {
     );
     const petZip = findFile(releaseDir, /wrenyard-pet-.*\.zip$/);
     assert.ok(petZip, 'separately emitted Pet Electron zip not found in release output');
+    const petShaPath = `${petZip}.sha256`;
+    assert.ok(fs.existsSync(petShaPath), `pet checksum sidecar not found: ${petShaPath}`);
+    assert.equal(sha256File(petZip), readChecksum(petShaPath), 'pet zip checksum mismatch');
     const petListing = run('unzip', ['-Z1', petZip]).stdout;
     const petAppRoot =
       process.platform === 'darwin'
@@ -710,11 +749,15 @@ test('packed-install E2E: no consumer-side Go compilation', {
     run(sea, ['version'], { env: consumerEnv });
     run(sea, ['help'], { env: consumerEnv });
 
-    // 5. Serve the suite zip + sidecar over local HTTP and run scripts/install.sh
-    //    into a temp prefix, then run the installed binary through the launcher.
+    // 5. Serve the suite zip + sidecar and the Pet zip + sidecar over local
+    //    HTTP and run scripts/install.sh into a temp prefix, then run the
+    //    installed binary through the launcher.
     const server = http.createServer((req, res) => {
       const name = path.basename(req.url ?? '/');
-      const file = name.endsWith('.sha256') ? shaPath : zipPath;
+      const isPet = name.startsWith('wrenyard-pet-');
+      const file = name.endsWith('.sha256')
+        ? (isPet ? petShaPath : shaPath)
+        : (isPet ? petZip : zipPath);
       const body = fs.readFileSync(file);
       res.writeHead(200, { 'Content-Length': body.length });
       res.end(body);
@@ -723,12 +766,15 @@ test('packed-install E2E: no consumer-side Go compilation', {
     try {
       const port = server.address().port;
       const zipUrl = `http://127.0.0.1:${port}/${path.basename(zipPath)}`;
+      const petZipUrl = `http://127.0.0.1:${port}/${path.basename(petZip)}`;
       if (process.platform === 'win32') {
         await runAsync('powershell.exe', [
           '-NoProfile', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
+          '-PetUrl', petZipUrl,
+          '-PetChecksumUrl', `${petZipUrl}.sha256`,
           '-Prefix', prefix,
           '-BinDir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -738,6 +784,8 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '--version', version,
           '--url', zipUrl,
           '--checksum-url', `${zipUrl}.sha256`,
+          '--pet-url', petZipUrl,
+          '--pet-checksum-url', `${petZipUrl}.sha256`,
           '--prefix', prefix,
           '--bin-dir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -762,23 +810,43 @@ test('packed-install E2E: no consumer-side Go compilation', {
         run(launcher, ['help'], { env: bareEnv });
       }
 
-      // 5a. Reinstall integrity: rerunning the same checksummed install must
-      // replace tampered content inside an existing version directory from the
-      // verified archive (the installer never reuses a version dir) and leave
-      // the commands runnable afterwards.
+      // 5a. The installed version tree must contain the packaged Pet at
+      // apps/pet with a non-empty target executable.
       const installedVersionDir = path.join(prefix, 'versions', version);
       assert.ok(fs.existsSync(installedVersionDir), 'installed version directory not found');
+      const installedPetRoot = path.join(installedVersionDir, 'apps', 'pet');
+      assert.ok(fs.existsSync(installedPetRoot), 'installed version contains no apps/pet directory');
+      const installedPetExe =
+        process.platform === 'darwin'
+          ? findFile(installedPetRoot, /Wrenyard Pet$/)
+          : process.platform === 'win32'
+            ? findFile(installedPetRoot, /Wrenyard Pet\.exe$/)
+            : findFile(installedPetRoot, /wrenyard-pet$/);
+      assert.ok(installedPetExe, `installed apps/pet is missing the packaged executable for ${process.platform}-${process.arch}`);
+      assert.ok(
+        fs.statSync(installedPetExe).size > 0,
+        `installed apps/pet executable is empty: ${installedPetExe}`,
+      );
+
+      // Reinstall integrity: rerunning the same checksummed install must
+      // replace tampered content (the wrenyard executable and a Pet file) from
+      // the verified archives — the installer never reuses a version dir — and
+      // leave the commands runnable afterwards.
       const tamperTarget = findFile(installedVersionDir, /(^|\/|\\)wrenyard(\.exe)?$/);
       assert.ok(tamperTarget, 'installed version contains no wrenyard executable to tamper');
       const pristineBytes = fs.readFileSync(tamperTarget);
+      const petPristineBytes = fs.readFileSync(installedPetExe);
       const tamperMarker = 'TAMPERED-BY-REINSTALL-INTEGRITY-TEST';
       fs.writeFileSync(tamperTarget, tamperMarker);
+      fs.writeFileSync(installedPetExe, tamperMarker);
       if (process.platform === 'win32') {
         await runAsync('powershell.exe', [
           '-NoProfile', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
+          '-PetUrl', petZipUrl,
+          '-PetChecksumUrl', `${petZipUrl}.sha256`,
           '-Prefix', prefix,
           '-BinDir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -788,6 +856,8 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '--version', version,
           '--url', zipUrl,
           '--checksum-url', `${zipUrl}.sha256`,
+          '--pet-url', petZipUrl,
+          '--pet-checksum-url', `${petZipUrl}.sha256`,
           '--prefix', prefix,
           '--bin-dir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -801,6 +871,16 @@ test('packed-install E2E: no consumer-side Go compilation', {
         fs.readFileSync(tamperTarget),
         pristineBytes,
         'reinstall did not replace tampered content from the verified archive',
+      );
+      assert.notDeepEqual(
+        fs.readFileSync(installedPetExe),
+        Buffer.from(tamperMarker),
+        'reinstall reused tampered pet content from the existing version directory',
+      );
+      assert.deepEqual(
+        fs.readFileSync(installedPetExe),
+        petPristineBytes,
+        'reinstall did not replace tampered pet content from the verified archive',
       );
       run(launcher, ['version'], { env: consumerEnv });
       run(launcher, ['help'], { env: consumerEnv });
@@ -845,9 +925,29 @@ case "$url" in
   *releases?per_page=*|*releases\\?per_page=*)
     if [ -n "$out" ]; then cat "$FAKE_CURL_RELEASES" > "$out"; else cat "$FAKE_CURL_RELEASES"; fi ;;
   *.sha256)
-    if [ -n "$out" ]; then cat "$FAKE_CURL_SHA" > "$out"; else cat "$FAKE_CURL_SHA"; fi ;;
+    if [ -n "$out" ]; then
+      case "$url" in
+        *wrenyard-pet-*) cat "$FAKE_CURL_PET_SHA" > "$out" ;;
+        *) cat "$FAKE_CURL_SHA" > "$out" ;;
+      esac
+    else
+      case "$url" in
+        *wrenyard-pet-*) cat "$FAKE_CURL_PET_SHA" ;;
+        *) cat "$FAKE_CURL_SHA" ;;
+      esac
+    fi ;;
   *)
-    if [ -n "$out" ]; then cat "$FAKE_CURL_ZIP" > "$out"; else cat "$FAKE_CURL_ZIP"; fi ;;
+    if [ -n "$out" ]; then
+      case "$url" in
+        *wrenyard-pet-*) cat "$FAKE_CURL_PET_ZIP" > "$out" ;;
+        *) cat "$FAKE_CURL_ZIP" > "$out" ;;
+      esac
+    else
+      case "$url" in
+        *wrenyard-pet-*) cat "$FAKE_CURL_PET_ZIP" ;;
+        *) cat "$FAKE_CURL_ZIP" ;;
+      esac
+    fi ;;
 esac
 `, 'utf8');
       fs.chmodSync(fakeCurl, 0o755);
@@ -888,6 +988,8 @@ esac
         FAKE_CURL_RELEASES: releasesPath,
         FAKE_CURL_ZIP: zipPath,
         FAKE_CURL_SHA: shaPath,
+        FAKE_CURL_PET_ZIP: petZip,
+        FAKE_CURL_PET_SHA: petShaPath,
       };
 
       // Step A: explicit --version install of the built release. The fake curl
@@ -929,6 +1031,12 @@ esac
         !asset.includes('9.9.9-draft'),
         `--update must never select a draft release: ${asset}`,
       );
+      const petAsset = requested.find((line) => line.includes('wrenyard-pet-'));
+      assert.ok(petAsset, 'fake curl recorded no pet zip request during --update');
+      assert.ok(
+        petAsset.includes(`-9.9.9-rc.9-${TRIPLET}.zip`),
+        `--update must derive the default ${TRIPLET} pet asset: ${petAsset}`,
+      );
       const combinedOutput = `${updateResult.stdout}\n${updateResult.stderr}`;
       assert.ok(
         !combinedOutput.includes(token),
@@ -957,6 +1065,10 @@ esac
         !fs.existsSync(path.join(updatePrefix, 'bin', 'forge')),
         'forge must not be a public launcher; only wrenyard is public',
       );
+      assert.ok(
+        fs.existsSync(path.join(updatePrefix, 'versions', '9.9.9-rc.9', 'apps', 'pet')),
+        '--update install must stage apps/pet in the version tree',
+      );
 
       // Step C: rollback by reinstalling the retained previous version; the
       // atomic current switch must return to it and the launcher must work.
@@ -975,14 +1087,17 @@ esac
       run(updateLauncher, ['help'], { env: updateEnv });
     }
 
-    // 5c. A checksum mismatch must reject the install atomically: nothing is
-    // written into the prefix and no launcher is wired.
+    // 5c. A suite checksum mismatch must reject the install atomically:
+    // nothing is written into the prefix and no launcher is wired.
     if (process.platform !== 'win32') {
       const badShaPath = path.join(tmp, 'bad-sha.txt');
       fs.writeFileSync(badShaPath, `${'0'.repeat(64)}  suite.zip\n`);
       const badServer = http.createServer((req, res) => {
         const name = path.basename(req.url ?? '/');
-        const file = name.endsWith('.sha256') ? badShaPath : zipPath;
+        const isPet = name.startsWith('wrenyard-pet-');
+        const file = name.endsWith('.sha256')
+          ? (isPet ? petShaPath : badShaPath)
+          : (isPet ? petZip : zipPath);
         const body = fs.readFileSync(file);
         res.writeHead(200, { 'Content-Length': body.length });
         res.end(body);
@@ -991,6 +1106,7 @@ esac
       try {
         const port = badServer.address().port;
         const url = `http://127.0.0.1:${port}/${path.basename(zipPath)}`;
+        const petUrl = `http://127.0.0.1:${port}/${path.basename(petZip)}`;
         const badPrefix = path.join(tmp, 'bad-sha-prefix');
         await assert.rejects(
           runAsync('bash', [
@@ -998,6 +1114,8 @@ esac
             '--version', version,
             '--url', url,
             '--checksum-url', `${url}.sha256`,
+            '--pet-url', petUrl,
+            '--pet-checksum-url', `${petUrl}.sha256`,
             '--prefix', badPrefix,
             '--bin-dir', path.join(badPrefix, 'bin'),
           ], { env: consumerEnv }),
@@ -1013,6 +1131,57 @@ esac
         );
       } finally {
         await new Promise((resolve) => badServer.close(resolve));
+      }
+    }
+
+    // 5d. A Pet checksum mismatch must likewise reject the install before any
+    // prefix mutation: no current link, no launcher, no version tree.
+    if (process.platform !== 'win32') {
+      const badPetShaPath = path.join(tmp, 'bad-pet-sha.txt');
+      fs.writeFileSync(badPetShaPath, `${'0'.repeat(64)}  wrenyard-pet.zip\n`);
+      const badPetServer = http.createServer((req, res) => {
+        const name = path.basename(req.url ?? '/');
+        const isPet = name.startsWith('wrenyard-pet-');
+        const file = name.endsWith('.sha256')
+          ? (isPet ? badPetShaPath : shaPath)
+          : (isPet ? petZip : zipPath);
+        const body = fs.readFileSync(file);
+        res.writeHead(200, { 'Content-Length': body.length });
+        res.end(body);
+      });
+      await new Promise((resolve) => badPetServer.listen(0, '127.0.0.1', resolve));
+      try {
+        const port = badPetServer.address().port;
+        const url = `http://127.0.0.1:${port}/${path.basename(zipPath)}`;
+        const petUrl = `http://127.0.0.1:${port}/${path.basename(petZip)}`;
+        const badPetPrefix = path.join(tmp, 'bad-pet-sha-prefix');
+        await assert.rejects(
+          runAsync('bash', [
+            path.join(ROOT, 'scripts', 'install.sh'),
+            '--version', version,
+            '--url', url,
+            '--checksum-url', `${url}.sha256`,
+            '--pet-url', petUrl,
+            '--pet-checksum-url', `${petUrl}.sha256`,
+            '--prefix', badPetPrefix,
+            '--bin-dir', path.join(badPetPrefix, 'bin'),
+          ], { env: consumerEnv }),
+          /checksum mismatch/,
+        );
+        assert.ok(
+          !fs.existsSync(path.join(badPetPrefix, 'current')),
+          'pet-checksum-rejected install must not create a current link',
+        );
+        assert.ok(
+          !fs.existsSync(path.join(badPetPrefix, 'bin', 'wrenyard')),
+          'pet-checksum-rejected install must not wire a launcher',
+        );
+        assert.ok(
+          !fs.existsSync(path.join(badPetPrefix, 'versions')),
+          'pet-checksum-rejected install must not create a version tree',
+        );
+      } finally {
+        await new Promise((resolve) => badPetServer.close(resolve));
       }
     }
 

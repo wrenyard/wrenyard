@@ -2,11 +2,12 @@
 #
 # wrenyard installer/updater
 #
-# POSIX bash (set -euo pipefail). Downloads a checksum-verified suite zip from
-# a GitHub release (or a direct URL), validates that the suite contains the
-# required wrenyard executable and the release manifest, installs the suite
-# under <prefix>/versions/<version>, and atomically switches the `current`
-# symlink plus the single public wrenyard launcher symlink.
+# POSIX bash (set -euo pipefail). Downloads checksum-verified suite and Pet
+# zips from a GitHub release (or direct URLs), validates that the suite
+# contains the required wrenyard executable and release manifest and that the
+# Pet archive contains its packaged executable, and installs both under
+# <prefix>/versions/<version> (Pet at apps/pet) before atomically switching the
+# `current` symlink plus the single public wrenyard launcher symlink.
 #
 # This script only ever moves prebuilt artifacts into place. It never invokes
 # go, npm, or pnpm, and it never builds anything on the consumer machine.
@@ -21,7 +22,9 @@ Options:
   --prefix <dir>        Install root (default: ~/.local/share/wrenyard)
   --bin-dir <dir>       Launcher symlink directory (default: <prefix>/bin)
   --url <url>           Suite zip URL (default: derived from the GitHub release)
-  --checksum-url <url>  .sha256 sidecar URL (default: <zip-url>.sha256)
+  --checksum-url <url>  Suite .sha256 sidecar URL (default: <zip-url>.sha256)
+  --pet-url <url>       Pet zip URL (default: derived from the GitHub release)
+  --pet-checksum-url <url>  Pet .sha256 sidecar URL (default: <pet-url>.sha256)
   --update              Install the newest non-draft release (prereleases included)
   -h, --help            Show this help
 
@@ -41,6 +44,8 @@ PREFIX="${WRENYARD_PREFIX:-$HOME/.local/share/wrenyard}"
 BIN_DIR=""
 URL=""
 CHECKSUM_URL=""
+PET_URL=""
+PET_CHECKSUM_URL=""
 UPDATE=0
 
 while [ "$#" -gt 0 ]; do
@@ -60,6 +65,12 @@ while [ "$#" -gt 0 ]; do
     --checksum-url)
       [ "$#" -ge 2 ] || die "--checksum-url requires a value"
       CHECKSUM_URL="$2"; shift 2 ;;
+    --pet-url)
+      [ "$#" -ge 2 ] || die "--pet-url requires a value"
+      PET_URL="$2"; shift 2 ;;
+    --pet-checksum-url)
+      [ "$#" -ge 2 ] || die "--pet-checksum-url requires a value"
+      PET_CHECKSUM_URL="$2"; shift 2 ;;
     --update)
       UPDATE=1; shift ;;
     -h|--help)
@@ -188,6 +199,13 @@ case "$(uname -s)" in
     die "unsupported host platform: $(uname -s) (supported: Darwin arm64/x86_64, Linux x86_64)" ;;
 esac
 
+# Packaged Pet executable basename inside the Pet archive: on macOS the binary
+# lives at Wrenyard Pet.app/Contents/MacOS/Wrenyard Pet.
+case "$(uname -s)" in
+  Darwin) PET_EXE_BASENAME="Wrenyard Pet" ;;
+  *)      PET_EXE_BASENAME="wrenyard-pet" ;;
+esac
+
 # Normalized suite zip: <repo>/releases/download/<tag>/wrenyard-<version>-<target>-suite.zip
 case "$VERSION" in
   v*) TAG="$VERSION"; DIR_VERSION="${VERSION#v}" ;;
@@ -196,6 +214,12 @@ esac
 DEFAULT_URL="https://github.com/$REPO/releases/download/$TAG/wrenyard-$DIR_VERSION-$TARGET-suite.zip"
 URL="${URL:-$DEFAULT_URL}"
 CHECKSUM_URL="${CHECKSUM_URL:-$URL.sha256}"
+
+# Packaged Pet is a separate release asset derived from the same repo/tag and
+# installed into the same version tree under apps/pet.
+DEFAULT_PET_URL="https://github.com/$REPO/releases/download/$TAG/wrenyard-pet-$DIR_VERSION-$TARGET.zip"
+PET_URL="${PET_URL:-$DEFAULT_PET_URL}"
+PET_CHECKSUM_URL="${PET_CHECKSUM_URL:-$PET_URL.sha256}"
 
 VERSIONS_DIR="$PREFIX/versions"
 VERSION_DIR="$VERSIONS_DIR/$DIR_VERSION"
@@ -225,6 +249,17 @@ ACTUAL="$(sha256_of "$TMP_DIR/suite.zip")"
 [ "$ACTUAL" = "$EXPECTED" ] || die "checksum mismatch for $URL (expected $EXPECTED, got $ACTUAL)"
 log "checksum verified ($ACTUAL)"
 
+log "downloading pet: $PET_URL"
+fetch "$TMP_DIR/pet.zip" "$PET_URL"
+log "downloading pet checksum sidecar: $PET_CHECKSUM_URL"
+fetch "$TMP_DIR/pet.zip.sha256" "$PET_CHECKSUM_URL"
+
+PET_EXPECTED="$(awk '{print $1}' "$TMP_DIR/pet.zip.sha256" | tr '[:upper:]' '[:lower:]')"
+[ -n "$PET_EXPECTED" ] || die "pet checksum sidecar is empty: $PET_CHECKSUM_URL"
+PET_ACTUAL="$(sha256_of "$TMP_DIR/pet.zip")"
+[ "$PET_ACTUAL" = "$PET_EXPECTED" ] || die "checksum mismatch for $PET_URL (expected $PET_EXPECTED, got $PET_ACTUAL)"
+log "pet checksum verified ($PET_ACTUAL)"
+
 mkdir -p "$TMP_DIR/extract"
 if command -v unzip >/dev/null 2>&1; then
   unzip -q "$TMP_DIR/suite.zip" -d "$TMP_DIR/extract"
@@ -242,12 +277,28 @@ fi
 [ -n "$WRENYARD_SRC" ] || die "suite zip does not contain a wrenyard executable"
 [ -n "$MANIFEST_SRC" ] || die "suite zip does not contain a release manifest"
 
+# Extract the Pet archive separately and validate its packaged executable
+# before anything is staged into the prefix.
+mkdir -p "$TMP_DIR/pet-extract"
+if command -v unzip >/dev/null 2>&1; then
+  unzip -q "$TMP_DIR/pet.zip" -d "$TMP_DIR/pet-extract"
+elif command -v tar >/dev/null 2>&1; then
+  tar -xf "$TMP_DIR/pet.zip" -C "$TMP_DIR/pet-extract"
+else
+  die "need unzip (or a tar that can read zip archives) on PATH"
+fi
+
+PET_EXE_SRC="$(find_artifact "$TMP_DIR/pet-extract" "$PET_EXE_BASENAME")"
+[ -n "$PET_EXE_SRC" ] || die "pet zip does not contain the packaged executable ($PET_EXE_BASENAME)"
+[ -f "$PET_EXE_SRC" ] && [ -s "$PET_EXE_SRC" ] || die "packaged pet executable is not a non-empty regular file: $PET_EXE_SRC"
+
 # ---------------------------------------------------------------------------
 # Install into a fresh version directory. An existing version directory is
-# never reused: the checksum-verified archive must always win, so a same-
-# version reinstall replaces any locally tampered content. The new suite is
-# staged beside the version directory, validated there, and swapped in with
-# backup-and-restore semantics before `current` or any launcher is touched.
+# never reused: the checksum-verified archives must always win, so a same-
+# version reinstall replaces any locally tampered content. The new suite and
+# Pet trees are staged beside the version directory, validated there, and
+# swapped in with backup-and-restore semantics before `current` or any launcher
+# is touched.
 # ---------------------------------------------------------------------------
 mkdir -p "$PREFIX" "$BIN_DIR" "$VERSIONS_DIR"
 
@@ -257,10 +308,19 @@ rm -rf "$STAGING_DIR" "$BACKUP_DIR"
 mkdir -p "$STAGING_DIR"
 cp -R "$TMP_DIR/extract"/. "$STAGING_DIR"/
 
-find "$STAGING_DIR" -type f \( -name 'wrenyard' -o -name 'forge' -o -name 'foreman' -o -name 'foreman.mjs' -o -name 'node' \) -exec chmod +x {} +
+# Pet shares the version tree with the suite so both activate in one atomic
+# swap: the archive contents are staged under apps/pet.
+mkdir -p "$STAGING_DIR/apps/pet"
+cp -R "$TMP_DIR/pet-extract"/. "$STAGING_DIR/apps/pet"/
+
+find "$STAGING_DIR" -type f \( -name 'wrenyard' -o -name 'forge' -o -name 'foreman' -o -name 'foreman.mjs' -o -name 'node' -o -name 'wrenyard-pet' -o -name 'Wrenyard Pet' \) -exec chmod +x {} +
 
 INSTALLED_WRENYARD="$(find_artifact "$STAGING_DIR" 'wrenyard')"
 [ -n "$INSTALLED_WRENYARD" ] || die "installed suite is missing the wrenyard executable"
+
+INSTALLED_PET_EXE="$(find_artifact "$STAGING_DIR/apps/pet" "$PET_EXE_BASENAME")"
+[ -n "$INSTALLED_PET_EXE" ] || die "installed pet is missing the packaged executable ($PET_EXE_BASENAME)"
+[ -f "$INSTALLED_PET_EXE" ] && [ -s "$INSTALLED_PET_EXE" ] || die "installed pet executable is not a non-empty regular file: $INSTALLED_PET_EXE"
 
 # Swap the validated staging copy into VERSION_DIR with backup-and-restore
 # semantics: keep any previous version intact, restore it if the swap fails,
@@ -319,9 +379,10 @@ switch_link "$(current_target "$INSTALLED_WRENYARD")" "$BIN_DIR/wrenyard"
 # Report
 # ---------------------------------------------------------------------------
 log "installed wrenyard $DIR_VERSION at $VERSION_DIR"
-printf '%s\n' "wrenyard $DIR_VERSION installed"
+printf '%s\n' "wrenyard $DIR_VERSION installed (suite + pet)"
 printf '%s\n' "  current:   $CURRENT_LINK -> $VERSION_DIR"
 printf '%s\n' "  launcher:  $BIN_DIR/wrenyard"
+printf '%s\n' "  pet:       $VERSION_DIR/apps/pet"
 if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$DIR_VERSION" ]; then
   log "previous version retained: $OLD_VERSION"
   log "rollback: $CURRENT_LINK -> $VERSIONS_DIR/$OLD_VERSION (re-run with --version $OLD_VERSION)"
