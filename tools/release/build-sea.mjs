@@ -80,25 +80,24 @@ try {
 
   // The SEA must discover its suite root and the suite's bundled runtime/node
   // on its own so status/update never need a PATH node. Prepend a small
-  // prologue to the bundled CLI entry that seeds WRENYARD_ROOT and
+  // prologue to the bundled CLI entry that sets WRENYARD_ROOT and
   // WRENYARD_NODE_BIN from the SEA's own location (dirname(process.execPath))
   // before the entry module evaluates; the entry reads those env vars at module
-  // load time. Explicitly set env vars still win, so an installer can override.
+  // load time. A packaged SEA is authoritative for its own identity: source-mode
+  // overrides are never honored once the SEA is assembled.
   const cliSource = await readFile(cliEntry, "utf8");
   const wrappedEntry = path.join(tmpDir, "sea-main.cjs");
   await writeFile(
     wrappedEntry,
     `'use strict';
 const { dirname, join } = require('node:path');
-// Seed the suite root and bundled node binary without declaring identifiers
-// that could collide with top-level names in the appended bundle. Explicitly
-// set env vars always win, so an installer can override.
-if (typeof process.env.WRENYARD_ROOT !== 'string' || process.env.WRENYARD_ROOT.length === 0) {
-  process.env.WRENYARD_ROOT = dirname(process.execPath);
-}
-if (typeof process.env.WRENYARD_NODE_BIN !== 'string' || process.env.WRENYARD_NODE_BIN.length === 0) {
-  process.env.WRENYARD_NODE_BIN = join(process.env.WRENYARD_ROOT, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-}
+// The packaged SEA is authoritative for its own identity: the suite root is
+// always the directory containing this executable, and the bundled node binary
+// always lives at runtime/node under that root. Values are set unconditionally
+// so stale suite-pinned environment variables cannot redirect a new SEA at its
+// installed location.
+process.env.WRENYARD_ROOT = dirname(process.execPath);
+process.env.WRENYARD_NODE_BIN = join(process.env.WRENYARD_ROOT, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
 ${cliSource}
 `,
     "utf8"
