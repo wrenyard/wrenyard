@@ -84,9 +84,9 @@ func TestApplyPlanBacksUpExistingFile(t *testing.T) {
 	if got := readTextIfExists(backupPath); got != "original\n" {
 		t.Fatalf("backup content = %q, want original", got)
 	}
-	// Backup lives under the Forge backup root for the run.
-	if !strings.Contains(backupPath, filepath.Join(".local", "state", "forge", "backups")) {
-		t.Fatalf("backup should live under forge backups dir, got %s", backupPath)
+	// Backup lives under the Wrenyard runtime backup root for the run.
+	if !strings.Contains(backupPath, filepath.Join(".local", "state", "wrenyard", "runtime", "backups")) {
+		t.Fatalf("backup should live under Wrenyard runtime backups dir, got %s", backupPath)
 	}
 }
 
@@ -238,5 +238,38 @@ func TestApplyPlanCommandActionReportsReturnCode(t *testing.T) {
 	}
 	if statusInfo["type"] != "command" {
 		t.Fatalf("entry action type = %#v, want command", statusInfo["type"])
+	}
+}
+
+func TestApplyPlanJournalsBackupsHonorXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	stateHome := filepath.Join(home, "custom-state")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	target := filepath.Join(home, "project", "rc", "dotfile")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := changePlan{
+		Name: "xdg-state-plan",
+		Actions: []planAction{
+			{Type: "file_write", File: &fileWrite{Path: target, Content: "replaced\n"}},
+		},
+	}
+	result := applyPlan(plan, false)
+	if !result.Succeeded {
+		t.Fatalf("expected success, entries: %#v", result.Entries)
+	}
+	if result.JournalPath == nil || !strings.Contains(*result.JournalPath, filepath.Join(stateHome, "wrenyard", "runtime", "journals")) {
+		t.Fatalf("journal should honor XDG_STATE_HOME, got %#v", result.JournalPath)
+	}
+	backupPath, ok := result.Entries[0]["backup_path"].(string)
+	if !ok || !strings.Contains(backupPath, filepath.Join(stateHome, "wrenyard", "runtime", "backups")) {
+		t.Fatalf("backup should honor XDG_STATE_HOME, got %#v", result.Entries[0])
 	}
 }

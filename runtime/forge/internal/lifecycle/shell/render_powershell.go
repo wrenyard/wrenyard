@@ -113,7 +113,7 @@ func renderPowerShellDirectClaudeProfile(
 	b.WriteString(" {\n")
 	b.WriteString("    $forgeDataHome = [Environment]::GetEnvironmentVariable('XDG_DATA_HOME', 'Process')\n")
 	b.WriteString("    if (-not $forgeDataHome) { $forgeDataHome = Join-Path $HOME '.local\\share' }\n")
-	b.WriteString("    $forgeClaudeRoot = Join-Path $forgeDataHome 'forge\\claude\\shell-cc'\n")
+	b.WriteString("    $forgeClaudeRoot = Join-Path $forgeDataHome 'wrenyard\\runtime\\claude\\shell-cc'\n")
 	b.WriteString("    $forgeClaudeConfigDir = Join-Path $forgeClaudeRoot 'config'\n")
 	b.WriteString("    $forgeClaudeJobDir = Join-Path $forgeClaudeRoot 'jobs'\n")
 	b.WriteString("    New-Item -ItemType Directory -Force -Path $forgeClaudeConfigDir, $forgeClaudeJobDir | Out-Null\n")

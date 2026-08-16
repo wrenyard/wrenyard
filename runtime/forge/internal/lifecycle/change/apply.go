@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 // Dependencies holds the small, explicit seams the apply behavior needs so the
@@ -190,7 +192,7 @@ func entry(action Action, index int, status string, extra map[string]interface{}
 }
 
 func writeJournal(plan Plan, entries []map[string]interface{}, runID string, succeeded bool, deps Dependencies) string {
-	root := filepath.Join(deps.Home, ".local", "state", "forge", "journals")
+	root := filepath.Join(layout.NewPaths(deps.Home).StateDir(), "journals")
 	_ = os.MkdirAll(root, 0o755)
 	path := filepath.Join(root, runID+".json")
 	payload := deps.Redact(map[string]interface{}{"run_id": runID, "plan": planJournal(plan), "succeeded": succeeded, "entries": entries})
@@ -202,7 +204,7 @@ func writeJournal(plan Plan, entries []map[string]interface{}, runID string, suc
 func backupFile(path, runID string, deps Dependencies) (string, error) {
 	abs, _ := filepath.Abs(path)
 	rel := backupRelativePath(abs)
-	backup := filepath.Join(deps.Home, ".local", "state", "forge", "backups", runID, rel)
+	backup := filepath.Join(layout.NewPaths(deps.Home).StateDir(), "backups", runID, rel)
 	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
 		return "", err
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/change"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 // --- source-block constants (shell-domain, live in the shell package) ---
@@ -14,17 +15,17 @@ import (
 const (
 	blockStartZsh        = "# >>> forge shell shortcuts >>>"
 	blockEndZsh          = "# <<< forge shell shortcuts <<<"
-	blockLineZsh         = `source "$HOME/.config/forge/shell/forge.zsh"`
+	blockLineZsh         = `source "$HOME/.config/wrenyard/runtime/shell/forge.zsh"`
 	blockStartPowerShell = "# >>> forge managed >>>"
 	blockEndPowerShell   = "# <<< forge managed <<<"
-	blockLinePowerShell  = `. "$HOME\.config\forge\shell\forge.ps1"`
+	blockLinePowerShell  = `. "$HOME\.config\wrenyard\runtime\shell\forge.ps1"`
 )
 
 // --- plan construction ---
 
 // PlanZsh builds an install plan for Zsh shell integration.
 func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan, error) {
-	managedFile := filepath.Join(home, ".config", "forge", "shell", "forge.zsh")
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "forge.zsh")
 	zshrc := filepath.Join(home, ".zshrc")
 	existing := readTextIfExists(zshrc)
 	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartZsh, blockEndZsh)
@@ -37,7 +38,7 @@ func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan,
 		labels = append(labels, "write managed shell file")
 	}
 	if len(conflicts) == 0 {
-		nextZshrc := appendZshSourceBlock(migrated)
+		nextZshrc := appendZshSourceBlock(migrated, managedFile)
 		if nextZshrc != existing {
 			actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: zshrc, Content: nextZshrc, Encoding: "utf-8"}})
 			if legacyBlockFound {
@@ -62,7 +63,7 @@ func PlanZsh(home string, managedShell string, funcNames []string) (InstallPlan,
 
 // PlanPowerShell builds an install plan for PowerShell shell integration.
 func PlanPowerShell(home string, managedShell string, funcNames []string) (InstallPlan, error) {
-	managedFile := filepath.Join(home, ".config", "forge", "shell", "forge.ps1")
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "forge.ps1")
 	profilePath := PowerShellProfilePathForHome(home)
 	existing := readTextIfExists(profilePath)
 	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartPowerShell, blockEndPowerShell)
@@ -75,7 +76,7 @@ func PlanPowerShell(home string, managedShell string, funcNames []string) (Insta
 		labels = append(labels, "write managed PowerShell file")
 	}
 	if len(conflicts) == 0 {
-		nextProfile := AppendPowerShellSourceBlock(cleaned)
+		nextProfile := appendPowerShellSourceBlock(cleaned, managedFile)
 		if nextProfile != existing {
 			actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: profilePath, Content: nextProfile, Encoding: "utf-8"}})
 			if legacyBlockFound {
@@ -128,16 +129,46 @@ func RemovePowerShellLegacySourceBlocks(content string) (string, bool) {
 	return strings.Trim(updated, "\n") + newlineIfNotBlank(updated), found
 }
 
-func appendZshSourceBlock(content string) string {
-	block := blockStartZsh + "\nif [ -r \"$HOME/.config/forge/shell/forge.zsh\" ]; then\n  " + blockLineZsh + "\nfi\n" + blockEndZsh + "\n"
-	return appendManagedBlock(content, block)
+func appendZshSourceBlock(content, managedFile string) string {
+	return appendManagedBlock(content, zshSourceBlock(managedFile))
 }
 
 // AppendPowerShellSourceBlock appends the Forge-managed PowerShell source
 // block to the given profile content. Exported for the root facade.
 func AppendPowerShellSourceBlock(content string) string {
-	block := blockStartPowerShell + "\nif (Test-Path \"$HOME\\.config\\forge\\shell\\forge.ps1\") {\n    " + blockLinePowerShell + "\n}\n" + blockEndPowerShell + "\n"
+	block := blockStartPowerShell + "\nif (Test-Path \"$HOME\\.config\\wrenyard\\runtime\\shell\\forge.ps1\") {\n    " + blockLinePowerShell + "\n}\n" + blockEndPowerShell + "\n"
 	return appendManagedBlock(content, block)
+}
+
+// appendPowerShellSourceBlock appends a Forge-managed PowerShell source block
+// that sources the given resolved managed file path.
+func appendPowerShellSourceBlock(content, managedFile string) string {
+	return appendManagedBlock(content, powershellSourceBlock(managedFile))
+}
+
+func zshSourceBlock(managedFile string) string {
+	quoted := zshQuotePath(managedFile)
+	return blockStartZsh + "\nif [ -r " + quoted + " ]; then\n  source " + quoted + "\nfi\n" + blockEndZsh + "\n"
+}
+
+func powershellSourceBlock(managedFile string) string {
+	quoted := powershellQuotePath(managedFile)
+	return blockStartPowerShell + "\nif (Test-Path " + quoted + ") {\n    . " + quoted + "\n}\n" + blockEndPowerShell + "\n"
+}
+
+func zshQuotePath(path string) string {
+	escaped := strings.ReplaceAll(path, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "`", "\\`")
+	escaped = strings.ReplaceAll(escaped, `$`, `\$`)
+	return `"` + escaped + `"`
+}
+
+func powershellQuotePath(path string) string {
+	escaped := strings.ReplaceAll(path, "`", "``")
+	escaped = strings.ReplaceAll(escaped, `"`, "`\"")
+	escaped = strings.ReplaceAll(escaped, `$`, "`$")
+	return `"` + escaped + `"`
 }
 
 func appendManagedBlock(content, block string) string {
