@@ -245,3 +245,19 @@ func TestCircuitStoreHardProfileLimitRecordValidation(t *testing.T) {
 		t.Fatalf("rejected invalid writes corrupted the record: %+v", check)
 	}
 }
+
+func TestDefaultCircuitRootUnderWrenyardRuntimeHonorsXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "xdg-state"))
+
+	if got := DefaultCircuitRoot(); got != filepath.Join(home, "xdg-state", "wrenyard", "runtime", "circuits") {
+		t.Fatalf("DefaultCircuitRoot() = %q, want XDG_STATE_HOME-resolved root", got)
+	}
+
+	t.Setenv("XDG_STATE_HOME", "")
+	if got := DefaultCircuitRoot(); got != filepath.Join(home, ".local", "state", "wrenyard", "runtime", "circuits") {
+		t.Fatalf("DefaultCircuitRoot() = %q, want default state root", got)
+	}
+}

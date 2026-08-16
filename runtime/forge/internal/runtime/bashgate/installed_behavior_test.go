@@ -232,7 +232,7 @@ func installedVersionsDir() string {
 		}
 		dataHome = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(dataHome, "forge", "versions")
+	return filepath.Join(dataHome, "wrenyard", "runtime", "versions")
 }
 
 func installedProbeEnv(t *testing.T, policy, hookExecutable string) []string {
