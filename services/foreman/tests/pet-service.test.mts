@@ -3,10 +3,11 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import type { ForemanPetConfig } from '../lib/config/index.mts'
 import { resolveRuntimeBin } from '../lib/layout/runtime-bin.mts'
+import { packagedPetExecutablePath, resolvePackagedPetExecutable } from '../lib/pet/packaged-pet.mts'
 import { ForemanPetService, petRuntimePaths, resolvePetSpawnCommand, type PetSpawn } from '../lib/pet/pet-service.mts'
 
 describe('ForemanPetService', () => {
@@ -321,6 +322,125 @@ describe('ForemanPetService', () => {
     assert.ok(paths.pidPath.endsWith(join('wrenyard', 'pet', 'pet.pid')))
     assert.ok(paths.statePath.endsWith(join('wrenyard', 'pet', 'pet.json')))
   })
+
+  it('starts a packaged pet executable without a top-level package.json', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-packaged-start-'))
+    const exe = packagedPetExecutablePath(dir, process.platform)
+    mkdirSync(dirname(exe), { recursive: true })
+    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
+    const fakeSpawn = createFakePetSpawn()
+    const service = new ForemanPetService({
+      config: petConfig({ command: exe, args: [], cwd: dir }),
+      foremanIpcPath: '/tmp/foreman-test.sock',
+      spawnProcess: fakeSpawn.spawn,
+    })
+
+    try {
+      await service.start({ persist: false })
+
+      assert.equal(service.status().state, 'running')
+      assert.equal(existsSync(join(dir, 'package.json')), false)
+      assert.equal(fakeSpawn.calls.length, 1)
+      assert.equal(fakeSpawn.calls[0].command, exe)
+      assert.deepEqual(fakeSpawn.calls[0].args, [])
+      assert.equal(fakeSpawn.calls[0].options.cwd, dir)
+    } finally {
+      await service.stop({ persist: false }).catch(() => {})
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a missing packaged pet executable before spawn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-packaged-missing-'))
+    const fakeSpawn = createFakePetSpawn()
+    const service = new ForemanPetService({
+      config: petConfig({
+        command: packagedPetExecutablePath(dir, process.platform),
+        args: [],
+        cwd: dir,
+      }),
+      foremanIpcPath: '/tmp/foreman-test.sock',
+      spawnProcess: fakeSpawn.spawn,
+    })
+
+    try {
+      await assert.rejects(service.start({ persist: false }))
+      assert.equal(service.status().state, 'failed')
+      assert.equal(fakeSpawn.calls.length, 0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an empty packaged pet executable before spawn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-packaged-empty-'))
+    const exe = packagedPetExecutablePath(dir, process.platform)
+    mkdirSync(dirname(exe), { recursive: true })
+    writeFileSync(exe, '', 'utf-8')
+    const fakeSpawn = createFakePetSpawn()
+    const service = new ForemanPetService({
+      config: petConfig({ command: exe, args: [], cwd: dir }),
+      foremanIpcPath: '/tmp/foreman-test.sock',
+      spawnProcess: fakeSpawn.spawn,
+    })
+
+    try {
+      await assert.rejects(service.start({ persist: false }))
+      assert.equal(service.status().state, 'failed')
+      assert.equal(fakeSpawn.calls.length, 0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a wrong packaged pet executable that is not the canonical layout', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-packaged-wrong-'))
+    writeFileSync(join(dir, 'not-the-host-executable'), '#!/bin/sh\n', 'utf-8')
+    const fakeSpawn = createFakePetSpawn()
+    const service = new ForemanPetService({
+      config: petConfig({
+        command: join(dir, 'not-the-host-executable'),
+        args: [],
+        cwd: dir,
+      }),
+      foremanIpcPath: '/tmp/foreman-test.sock',
+      spawnProcess: fakeSpawn.spawn,
+    })
+
+    try {
+      await assert.rejects(service.start({ persist: false }))
+      assert.equal(service.status().state, 'failed')
+      assert.equal(fakeSpawn.calls.length, 0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('restarts a packaged pet without building via npm', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-packaged-restart-'))
+    const exe = packagedPetExecutablePath(dir, process.platform)
+    mkdirSync(dirname(exe), { recursive: true })
+    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
+    const fakeSpawn = createFakePetSpawn()
+    const buildCalls: string[] = []
+    const service = new ForemanPetService({
+      config: petConfig({ command: exe, args: [], cwd: dir }),
+      foremanIpcPath: '/tmp/foreman-test.sock',
+      spawnProcess: fakeSpawn.spawn,
+      buildPet: async (cwd) => { buildCalls.push(cwd) },
+    })
+
+    try {
+      await service.restart({ persist: false })
+
+      assert.equal(service.status().state, 'running')
+      assert.deepEqual(buildCalls, [])
+      assert.equal(fakeSpawn.calls.length, 1)
+    } finally {
+      await service.stop({ persist: false }).catch(() => {})
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('resolvePetSpawnCommand', () => {
@@ -406,6 +526,62 @@ describe('resolvePetSpawnCommand', () => {
       '""C:\\Program Files\\nodejs\\npm.cmd" start"',
     ])
     assert.equal(result.windowsVerbatimArguments, true)
+  })
+})
+
+describe('packaged pet layout resolver', () => {
+  it('resolves direct macOS, Windows, and Linux packaged executable layouts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-layout-'))
+    try {
+      assert.equal(
+        packagedPetExecutablePath(dir, 'darwin'),
+        join(dir, 'Wrenyard Pet.app', 'Contents', 'MacOS', 'Wrenyard Pet'),
+      )
+      assert.equal(packagedPetExecutablePath(dir, 'win32'), join(dir, 'Wrenyard Pet.exe'))
+      assert.equal(packagedPetExecutablePath(dir, 'linux'), join(dir, 'wrenyard-pet'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts only an existing non-empty regular packaged executable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-layout-accept-'))
+    try {
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), undefined)
+
+      writeFileSync(join(dir, 'wrenyard-pet'), '', 'utf-8')
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), undefined)
+
+      writeFileSync(join(dir, 'wrenyard-pet'), '#!/bin/sh\n', 'utf-8')
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), join(dir, 'wrenyard-pet'))
+
+      rmSync(join(dir, 'wrenyard-pet'))
+      mkdirSync(join(dir, 'wrenyard-pet'))
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), undefined)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves each platform layout only when its artifact exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-pet-layout-platforms-'))
+    try {
+      const macExe = packagedPetExecutablePath(dir, 'darwin')
+      mkdirSync(dirname(macExe), { recursive: true })
+      writeFileSync(macExe, '#!/bin/sh\n', 'utf-8')
+      assert.equal(resolvePackagedPetExecutable(dir, 'darwin'), macExe)
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), undefined)
+
+      const winExe = packagedPetExecutablePath(dir, 'win32')
+      writeFileSync(winExe, 'MZ\x00\x00', 'utf-8')
+      assert.equal(resolvePackagedPetExecutable(dir, 'win32'), winExe)
+
+      const linuxExe = packagedPetExecutablePath(dir, 'linux')
+      writeFileSync(linuxExe, '#!/bin/sh\n', 'utf-8')
+      assert.equal(resolvePackagedPetExecutable(dir, 'linux'), linuxExe)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

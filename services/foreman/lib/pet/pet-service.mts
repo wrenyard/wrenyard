@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { extname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { resolveRuntimeBin } from '../layout/runtime-bin.mts'
+import { resolvePackagedPetExecutable } from './packaged-pet.mts'
 import { killProcessTree } from '../adapters/shell/process.mts'
 import type { ForemanPetConfig } from '../config/index.mts'
 import { writeForemanPetEnabled } from '../config/index.mts'
@@ -226,9 +227,13 @@ export class ForemanPetService {
   }
 
   async restart(options: PetRestartOptions = {}): Promise<void> {
-    // Build while the current pet is still running. A failed build must not
-    // replace a healthy process with stale or incomplete artifacts.
-    await this.buildPet(this.config.cwd)
+    // Packaged releases ship a built executable, so there is nothing to build.
+    // Source checkouts still build while the current pet is running: a failed
+    // build must not replace a healthy process with stale or incomplete
+    // artifacts.
+    if (!this.isPackagedMode()) {
+      await this.buildPet(this.config.cwd)
+    }
     await this.stop({ persist: false })
     await this.start({ persist: options.persist !== false })
   }
@@ -258,6 +263,11 @@ export class ForemanPetService {
     writeForemanPetEnabled(this.configPath, enabled)
   }
 
+  private isPackagedMode(): boolean {
+    const packaged = resolvePackagedPetExecutable(this.config.cwd, process.platform)
+    return packaged !== undefined && this.config.command === packaged
+  }
+
   private assertLaunchConfig(): void {
     if (!this.config.command.trim()) {
       throw new Error('pet.command is required')
@@ -265,9 +275,19 @@ export class ForemanPetService {
     if (!existsSync(this.config.cwd)) {
       throw new Error(`pet.cwd does not exist: ${this.config.cwd}`)
     }
-    const packageJsonPath = join(this.config.cwd, 'package.json')
-    if (!existsSync(packageJsonPath) || !statSync(packageJsonPath).isFile()) {
-      throw new Error(`pet.cwd must contain a package.json file: ${packageJsonPath}`)
+    if (this.isPackagedMode()) {
+      // Packaged releases ship a built executable; the shared resolver has
+      // already verified the canonical candidate exists as a non-empty
+      // regular file. Re-check for fail-closed safety before spawning.
+      const packaged = resolvePackagedPetExecutable(this.config.cwd, process.platform)
+      if (!packaged || packaged !== this.config.command) {
+        throw new Error(`packaged pet executable is not a non-empty regular file: ${this.config.command}`)
+      }
+    } else {
+      const packageJsonPath = join(this.config.cwd, 'package.json')
+      if (!existsSync(packageJsonPath) || !statSync(packageJsonPath).isFile()) {
+        throw new Error(`pet.cwd must contain a package.json file: ${packageJsonPath}`)
+      }
     }
     if (!this.foremanIpcPath) {
       throw new Error('wrenyard IPC path is not available for pet')

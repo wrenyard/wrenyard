@@ -6,6 +6,7 @@ import type { ConfigRecord, ForemanPetConfig, ForemanServiceConfig } from './typ
 import type { MessagePrincipal, PrincipalRegistry, PrincipalGrant } from '../message/principal.mts'
 import { CANONICAL_PRINCIPALS } from '../message/principal.mts'
 import { resolveWrenyardSuiteRoot } from '../layout/suite-root.mts'
+import { resolvePackagedPetExecutable } from '../pet/packaged-pet.mts'
 export interface NormalizeForemanConfigOptions {
   configDir: string
   env?: NodeJS.ProcessEnv
@@ -299,20 +300,38 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number, key: stri
 }
 
 function normalizePetConfig(raw: ConfigRecord, configDir: string, env?: NodeJS.ProcessEnv): ForemanPetConfig {
-  const args = Array.isArray(raw.args)
-    ? raw.args.map(String)
-    : ['start']
   const configuredCwd = typeof raw.cwd === 'string' && raw.cwd.trim()
     ? raw.cwd.trim()
     : ''
+  const cwd = configuredCwd
+    ? resolveConfigRelativePath(configuredCwd, configDir)
+    : resolveDefaultPetCwd(env)
+
+  // Explicit command/args always win. With no explicit command, an installed
+  // release's packaged executable is selected when it exists at the resolved
+  // cwd; otherwise the source defaults (npm start) are preserved.
+  const explicitCommand = stringValue(raw.command, '')
+  const explicitArgs = Array.isArray(raw.args)
+    ? raw.args.map(String)
+    : undefined
+  let command = 'npm'
+  let args = ['start']
+  if (explicitCommand) {
+    command = explicitCommand
+  } else {
+    const packaged = resolvePackagedPetExecutable(cwd)
+    if (packaged) {
+      command = packaged
+      args = []
+    }
+  }
+  if (explicitArgs) args = explicitArgs
 
   return {
     enabled: booleanValue(raw.enabled, false),
-    command: stringValue(raw.command, 'npm'),
+    command,
     args,
-    cwd: configuredCwd
-      ? resolveConfigRelativePath(configuredCwd, configDir)
-      : resolveDefaultPetCwd(env),
+    cwd,
     startupTimeoutMs: numberValue(raw.startup_timeout_ms, 10_000),
     stopTimeoutMs: numberValue(raw.stop_timeout_ms, 5_000),
     restartOnExit: booleanValue(raw.restart_on_exit, true),
