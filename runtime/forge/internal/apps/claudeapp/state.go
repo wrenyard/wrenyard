@@ -11,22 +11,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 func statePath() (string, error) {
-	if isWindows() {
-		if base := os.Getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "Forge", stateFileName), nil
-		}
-	}
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, "forge", stateFileName), nil
-	}
 	home := userHome()
 	if home == "" {
 		return "", errors.New("forge app: cannot locate home directory for local state")
 	}
-	return filepath.Join(home, ".local", "state", "forge", stateFileName), nil
+	return filepath.Join(layout.NewPaths(home).StateDir(), stateFileName), nil
 }
 
 // ReadOrCreateState returns the current state and the path it should be written
