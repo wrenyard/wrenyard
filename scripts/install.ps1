@@ -159,6 +159,25 @@ function Write-NodeShim {
     Set-Content -Path $shim -Value "@echo off`r`n`"$Node`" `"$Script`" %*`r`n" -Encoding ASCII
 }
 
+function Get-Sha256 {
+    param([string]$Path)
+    # SHA-256 without a module-backed hashing cmdlet: the checksum must not
+    # depend on Microsoft.PowerShell.Utility, which may be unavailable in
+    # constrained PowerShell hosts. Uses only .NET APIs and
+    # disposes the native stream and hash resources in a finally block.
+    $stream = $null
+    $sha = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $hash = $sha.ComputeHash($stream)
+        return [System.BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+    } finally {
+        if ($sha) { $sha.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 # --- Download + checksum verification --------------------------------------
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wrenyard-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -172,7 +191,7 @@ try {
 
     $expected = ((Get-Content $shaPath | Select-Object -First 1).Split(' ')[0]).Trim().ToLowerInvariant()
     if (-not $expected) { Die "checksum sidecar is empty: $ChecksumUrl" }
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
+    $actual = Get-Sha256 -Path $zipPath
     if ($actual -ne $expected) { Die "checksum mismatch for $Url (expected $expected, got $actual)" }
     Write-Log "checksum verified ($actual)"
 
