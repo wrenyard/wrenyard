@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
 )
 
 // --- path helpers ---
@@ -24,7 +26,7 @@ func DataHomeForHome(home string) string {
 
 // CCRootForHome returns the shell-CC root for a given home directory.
 func CCRootForHome(home string) string {
-	return filepath.Join(DataHomeForHome(home), "forge", "claude", "shell-cc")
+	return filepath.Join(layout.NewPaths(home).DataDir(), "claude", "shell-cc")
 }
 
 // CCConfigDirForHome returns the shell-CC config directory.

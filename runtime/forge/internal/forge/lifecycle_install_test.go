@@ -90,6 +90,12 @@ func TestInstallBuiltForgeBinaryUsesVersionedCurrentAndStableLauncher(t *testing
 		if !strings.Contains(script, `exec "$target" "$@"`) || !strings.Contains(script, "XDG_DATA_HOME") {
 			t.Fatalf("POSIX stable launcher should exec the current version, got:\n%s", script)
 		}
+		if !strings.Contains(script, "wrenyard/runtime/current") {
+			t.Fatalf("POSIX stable launcher should read wrenyard/runtime/current, got:\n%s", script)
+		}
+		if strings.Contains(script, "forge/current") {
+			t.Fatalf("POSIX stable launcher must not reference forge/current, got:\n%s", script)
+		}
 		info, err := os.Stat(result.StableLauncherPath)
 		if err != nil {
 			t.Fatal(err)
@@ -648,6 +654,12 @@ func TestInstallCreatesStableFDSHLauncher(t *testing.T) {
 		script := readTextIfExists(result.StableFDSHLauncherPath)
 		if !strings.Contains(script, `exec "$target" "$@"`) || !strings.Contains(script, "FORGE_FDSH_MARKER=1") {
 			t.Fatalf("POSIX fdsh launcher should exec current forge with the hidden marker, got:\n%s", script)
+		}
+		if !strings.Contains(script, "wrenyard/runtime/current") {
+			t.Fatalf("POSIX fdsh launcher should read wrenyard/runtime/current, got:\n%s", script)
+		}
+		if strings.Contains(script, "forge/current") {
+			t.Fatalf("POSIX fdsh launcher must not reference forge/current, got:\n%s", script)
 		}
 		info, err := os.Stat(result.StableFDSHLauncherPath)
 		if err != nil {

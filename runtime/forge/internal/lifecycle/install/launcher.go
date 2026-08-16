@@ -48,7 +48,7 @@ func PosixStableForgeLauncherScript() string {
 	return `#!/bin/sh
 set -eu
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-current_file="$data_home/forge/current"
+current_file="$data_home/wrenyard/runtime/current"
 target="$(cat "$current_file")"
 exec "$target" "$@"
 `
@@ -96,7 +96,7 @@ func PosixStableFDSHLauncherScript() string {
 	return `#!/bin/sh
 set -eu
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-current_file="$data_home/forge/current"
+current_file="$data_home/wrenyard/runtime/current"
 target="$(cat "$current_file")"
 export FORGE_FDSH_MARKER=1
 exec "$target" "$@"

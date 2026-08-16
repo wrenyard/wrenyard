@@ -6,6 +6,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/change"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/shell"
 )
 
 func TestClientEmitsAliasShortcutCapabilities(t *testing.T) {
@@ -137,7 +141,7 @@ func TestCCKimiShellCCSettingsJSONUsesForgeAuthAndManagedSettings(t *testing.T) 
 func TestPowerShellManagedBlockReplacesExistingBlock(t *testing.T) {
 	existing := "Write-Host before\n\n" +
 		powershellSourceBlockStart + "\n" +
-		". \"$HOME\\.config\\forge\\shell\\old.ps1\"\n" +
+		". \"$HOME\\.config\\wrenyard\\runtime\\shell\\old.ps1\"\n" +
 		powershellSourceBlockEnd + "\n\n" +
 		"Write-Host after\n"
 
@@ -204,5 +208,62 @@ func TestBackupRelativePathSanitizesWindowsVolume(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, `C\Users\test`) {
 		t.Fatalf("backup path should preserve the drive as a safe path segment, got %q", got)
+	}
+}
+
+func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdgConfig := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	configDir := layout.NewPaths(home).ConfigDir()
+	findWrite := func(actions []change.Action, path string) (string, bool) {
+		for _, action := range actions {
+			if action.Type == "file_write" && action.File != nil && action.File.Path == path {
+				return action.File.Content, true
+			}
+		}
+		return "", false
+	}
+
+	// Zsh: the managed file and the generated source block must agree on the
+	// resolved path and must not fall back to $HOME/.config.
+	zshPlan, err := shell.PlanZsh(home, "managed-content", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(configDir, "shell", "forge.zsh"); zshPlan.ManagedFile != want {
+		t.Fatalf("zsh managed file = %q, want %q", zshPlan.ManagedFile, want)
+	}
+	zshProfile, ok := findWrite(zshPlan.ChangePlan.Actions, zshPlan.Zshrc)
+	if !ok {
+		t.Fatalf("expected a zshrc file_write action for %q", zshPlan.Zshrc)
+	}
+	if !strings.Contains(zshProfile, zshPlan.ManagedFile) {
+		t.Fatalf("zsh source block must reference the resolved managed file %q:\n%s", zshPlan.ManagedFile, zshProfile)
+	}
+	if strings.Contains(zshProfile, "$HOME/.config") || strings.Contains(zshProfile, filepath.Join(home, ".config")) {
+		t.Fatalf("zsh source block must not reference $HOME/.config:\n%s", zshProfile)
+	}
+
+	// PowerShell: the same path agreement must hold for the managed file and
+	// the generated source block, with no legacy Forge config references.
+	psPlan, err := shell.PlanPowerShell(home, "managed-content", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(configDir, "shell", "forge.ps1"); psPlan.ManagedFile != want {
+		t.Fatalf("powershell managed file = %q, want %q", psPlan.ManagedFile, want)
+	}
+	psProfile, ok := findWrite(psPlan.ChangePlan.Actions, psPlan.ProfilePath)
+	if !ok {
+		t.Fatalf("expected a PowerShell profile file_write action for %q", psPlan.ProfilePath)
+	}
+	if !strings.Contains(psProfile, psPlan.ManagedFile) {
+		t.Fatalf("powershell source block must reference the resolved managed file %q:\n%s", psPlan.ManagedFile, psProfile)
+	}
+	for _, legacy := range []string{`$HOME\.config`, `forge\shell\forge.ps1`} {
+		if strings.Contains(psProfile, legacy) {
+			t.Fatalf("powershell source block must not reference legacy %q:\n%s", legacy, psProfile)
+		}
 	}
 }
