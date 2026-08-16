@@ -459,8 +459,8 @@ func setupForgedHome(t *testing.T, home string) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("FORGE_REPO_DIR", t.TempDir())
-	_ = os.MkdirAll(filepath.Join(home, ".local", "share", "forge"), 0o755)
-	_ = os.MkdirAll(filepath.Join(home, ".config", "forge"), 0o755)
+	_ = os.MkdirAll(filepath.Join(home, ".local", "share", "wrenyard", "runtime"), 0o755)
+	_ = os.MkdirAll(filepath.Join(home, ".config", "wrenyard", "runtime"), 0o755)
 }
 
 func saveTempConfig(t *testing.T, home string, cfg ForgeConfig) {

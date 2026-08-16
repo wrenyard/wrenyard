@@ -270,10 +270,11 @@ func WindowsConfigRootsCheck(deps Dependencies) map[string]interface{} {
 			roots = append(roots, appDataForge)
 		}
 	}
+	canonical := filepath.Join(deps.UserHome(), ".config", "wrenyard", "runtime")
 	if len(roots) > 1 {
 		return Check("windows", "warning",
-			fmt.Sprintf("Multiple forge config roots detected: %s. Forge uses %%USERPROFILE%%/.config/forge by default.", strings.Join(roots, ", ")),
+			fmt.Sprintf("Multiple legacy forge config roots detected: %s. Wrenyard runtime config at %s is canonical; legacy roots are read-only for migration.", strings.Join(roots, ", "), canonical),
 			nil, map[string]interface{}{"config_roots": roots})
 	}
-	return Check("windows", "ok", "Single forge config root detected.", nil, nil)
+	return Check("windows", "ok", "No duplicate legacy forge config roots detected; Wrenyard runtime config is canonical.", nil, nil)
 }
