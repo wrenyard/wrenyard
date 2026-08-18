@@ -36,6 +36,13 @@ export interface DshWebOptions {
   command?: readonly string[];
   /** Explicit Wrenyard connection env to propagate; overrides process.env. */
   wrenyardEnv?: NodeJS.ProcessEnv;
+  /** Secret-free DSH loader overlay passed as the last `--patch` layer. */
+  patchPath?: string;
+  /**
+   * Extra child env (credential values for injected llm-pi-ai routes).
+   * Merged last and never logged.
+   */
+  extraEnv?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -58,6 +65,7 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     const timeoutMs = options.timeoutMs ?? 30_000;
     const runAsElectron = options.runAsElectron ?? Boolean(process.versions.electron);
     const args = ['--profile', 'web', '--host', host, '--port', String(port)];
+    if (options.patchPath) args.push('--patch', options.patchPath);
 
     const injected = options.command && options.command.length > 0 ? options.command : null;
     const program = injected ? injected[0] : process.execPath;
@@ -67,7 +75,7 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     if (runAsElectron) env.ELECTRON_RUN_AS_NODE = '1';
     // Propagate the Wrenyard connection context to the child without logging
     // values; explicit overrides win (LaunchServices supplies no shell env).
-    Object.assign(env, resolveWrenyardConnectionEnv(), options.wrenyardEnv);
+    Object.assign(env, resolveWrenyardConnectionEnv(), options.wrenyardEnv, options.extraEnv);
 
     const child = spawn(program, programArgs, {
       cwd: options.workspace,

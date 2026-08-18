@@ -32,6 +32,8 @@ server.listen(0, '127.0.0.1', () => {
     WRENYARD_IPC_PATH: process.env.WRENYARD_IPC_PATH || null,
     WRENYARD_MCP_URL: process.env.WRENYARD_MCP_URL || null,
     WRENYARD_MCP_SENDER: process.env.WRENYARD_MCP_SENDER || null,
+    FORGE_DSH_KIMI_CODING_API_KEY: process.env.FORGE_DSH_KIMI_CODING_API_KEY || null,
+    argv: process.argv.slice(2),
   }));
 });
 const shutdown = () => server.close(() => process.exit(0));
@@ -256,5 +258,23 @@ test('startDshWeb explicit wrenyardEnv overrides values derived from process.env
     const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
     assert.equal(childEnv.WRENYARD_IPC_PATH, '/run/explicit.sock');
     assert.equal(childEnv.WRENYARD_MCP_URL, 'http://explicit/mcp');
+  });
+});
+
+test('startDshWeb appends --patch last and injects extraEnv without dropping it', async () => {
+  await withTemp(async (dir) => {
+    const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
+    const patchPath = join(dir, 'forge-model-patch.yaml');
+    await writeFile(patchPath, '- id: llm-pi-ai\n');
+    const handle = await startDshWeb({
+      ...baseOptions(dir, bin),
+      patchPath,
+      extraEnv: { FORGE_DSH_KIMI_CODING_API_KEY: 'sk-test-not-for-logs' },
+    });
+    await handle.stop();
+
+    const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
+    assert.deepEqual(childEnv.argv.slice(-2), ['--patch', patchPath]);
+    assert.equal(childEnv.FORGE_DSH_KIMI_CODING_API_KEY, 'sk-test-not-for-logs');
   });
 });
