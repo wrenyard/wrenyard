@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control-client';
 import { startDshWeb, type DshWebHandle } from './dsh-process.js';
+import { defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
@@ -192,13 +193,17 @@ async function bootstrap(): Promise<void> {
     : join(app.getAppPath(), 'node_modules');
   const profile = await prepareProfile(dshHome, shellSource, runtimeModules);
   const workspace = process.env.WRENYARD_DESKTOP_WORKSPACE ?? homedir();
+  const patchPath = await writeModelPatch(profile.dshHome);
+  const extraEnv = await resolveModelCredentialEnv();
 
   // Connection context for the DSH child. Explicit Wrenyard values are always
   // propagated (LaunchServices supplies no shell env, so the resolved IPC path
-  // cannot be assumed to reach the child via inheritance).
-  const wrenyardEnv: NodeJS.ProcessEnv = { WRENYARD_IPC_PATH: resolveWrenyardIpcPath() };
-  const mcpUrl = process.env.WRENYARD_MCP_URL ?? process.env.FOREMAN_MCP_URL;
-  if (mcpUrl) wrenyardEnv.WRENYARD_MCP_URL = mcpUrl;
+  // cannot be assumed to reach the child via inheritance). MCP defaults to the
+  // same loopback endpoint the dsh-shell Foreman bridge uses.
+  const wrenyardEnv: NodeJS.ProcessEnv = {
+    WRENYARD_IPC_PATH: resolveWrenyardIpcPath(),
+    WRENYARD_MCP_URL: defaultMcpUrl(),
+  };
   const sender = process.env.WRENYARD_MCP_SENDER ?? process.env.FOREMAN_MCP_SENDER;
   if (sender) wrenyardEnv.WRENYARD_MCP_SENDER = sender;
 
@@ -208,6 +213,8 @@ async function bootstrap(): Promise<void> {
     workspace,
     runAsElectron: true,
     wrenyardEnv,
+    patchPath,
+    extraEnv,
   });
 
   dsh.child.on('exit', (code, signal) => {
