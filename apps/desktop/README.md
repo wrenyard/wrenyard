@@ -17,6 +17,7 @@ Electron main (dist/main.js)
   └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
+            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (public kimi-coding / zhipu-coding)
             └─ talks to Wrenyard through the public MCP/IPC contract
                  (@wrenyard/control-client — never Wrenyard internals)
 ```
@@ -32,8 +33,14 @@ Electron main (dist/main.js)
   a visible diagnostic. LaunchServices provides no shell environment, so the
   CLI is located explicitly and the resolved connection context is passed to
   the DSH child directly. Wrenyard remains the sole state/permission owner.
-- **DSH web child** — started with `--profile web --host 127.0.0.1 --port 0`,
-  `DSH_HOME` pointing at an isolated profile, cwd at the requested workspace.
+- **DSH web child** — started with `--profile web --host 127.0.0.1 --port 0`
+  and a last `--patch` overlay that injects the public Forge llm-pi-ai catalog
+  (`kimi-coding` / `zhipu-coding`) without replacing native `deepseek-official`
+  routes. Credential values are read from Wrenyard runtime `auth.json` and
+  passed only as child env (`FORGE_DSH_*_API_KEY`); the patch file is
+  secret-free. `DSH_HOME` points at an isolated profile, cwd at the requested
+  workspace. MCP defaults to `http://127.0.0.1:8787/mcp` so the Foreman
+  tools bridge can reach the daemon under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and
   `GET /` returns 2xx. Desktop owns the DSH child process tree and drains it
   synchronously on smoke completion, startup failure and application quit:
@@ -54,6 +61,7 @@ data directory (`app.getPath('userData')`):
 
 ```
 <userData>/dsh/
+  forge-model-patch.yaml              # secret-free public llm-pi-ai overlay
   profiles/web/
     node_modules/@wrenyard/dsh-shell/   # managed copy, replaced atomically each launch
     node_modules/@deepseek-ai -> ...    # link to packaged DSH runtime modules
