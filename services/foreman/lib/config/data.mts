@@ -46,6 +46,15 @@ export type FwaConfigData = ConfigRecord & {
 
 export type WorkConfigData = FwaConfigData
 
+export type TaskAgentRuntimeOverrides = Record<string, string>
+
+export type TasksConfigData = ConfigRecord & {
+  /** Local per-task agentRuntime overlay. Packaged task definitions keep their
+   *  declared policy/profile; this map replaces the effective selector at
+   *  list/describe/run time. Do not ship Codex-specific pins in the suite. */
+  agentRuntime?: TaskAgentRuntimeOverrides
+}
+
 export type ForemanConfigData = {
   service?: ServiceConfigData
   workspace?: WorkspaceConfigData
@@ -53,6 +62,7 @@ export type ForemanConfigData = {
   work?: WorkConfigData
   pet?: PetConfigData
   message?: MessageConfigData
+  tasks?: TasksConfigData
 }
 
 export function createDefaultForemanConfigData(
