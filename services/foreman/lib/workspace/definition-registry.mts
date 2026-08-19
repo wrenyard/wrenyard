@@ -22,6 +22,10 @@ import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
 import { parseAgentRuntime, AgentRuntimeParseError, synthesizeAgentRuntime } from '../core/agent-runtime.mts'
 import {
+  applyTaskAgentRuntimeOverride,
+  readTaskAgentRuntimeOverrides,
+} from '../config/task-runtime-override.mts'
+import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
 } from '../standard/index.mts'
@@ -148,12 +152,11 @@ function timeoutMetadata(config: TaskConfig): Pick<ListedDefinition, 'timeoutMs'
   }
 }
 
-function resolveTaskAgentRuntime(config: TaskConfig): string {
-  if (config.agentRuntime) {
-    parseAgentRuntime(config.agentRuntime)
-    return config.agentRuntime
-  }
-  return synthesizeAgentRuntime(config.profile ?? '').toString()
+function resolveTaskAgentRuntime(config: TaskConfig, taskName: string, overrides?: Record<string, string>): string {
+  const declared = config.agentRuntime
+    ? parseAgentRuntime(config.agentRuntime).toString()
+    : synthesizeAgentRuntime(config.profile ?? '').toString()
+  return applyTaskAgentRuntimeOverride(taskName, declared, overrides)
 }
 
 function validateAgentRuntimeSelector(config: TaskConfig, sourcePath: string): void {
@@ -429,9 +432,10 @@ export function describeTask(name: string, workspaceRoot: string, currentProject
 
 export function listTasks(workspaceRoot: string, currentProject?: string): ListedDefinition[] {
   const registry = registryFor(workspaceRoot)
+  const overrides = readTaskAgentRuntimeOverrides()
   return effectiveEntries(registry.tasks, currentProject)
     .filter((entry) => entry.definition.config.scheduling !== 'legacy')
-    .map((entry) => taskToListed(entry))
+    .map((entry) => taskToListed(entry, overrides))
 }
 
 export function listTaskDefinitions(workspaceRoot: string, currentProject?: string): Array<{
@@ -670,7 +674,7 @@ function recordDuplicateErrorsForEntries(
   }
 }
 
-function taskToListed(entry: RegisteredTask): ListedDefinition {
+function taskToListed(entry: RegisteredTask, overrides?: Record<string, string>): ListedDefinition {
   const normalizedInput = taskInputSchemaWithContext(normalizeSchema(entry.definition.config.input as any))
   const category = resolveTaskCategory(entry.definition.config, entry.sourcePath)
   return {
@@ -680,7 +684,7 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
     path: entry.sourcePath,
     ...(entry.definition.config.description ? { description: entry.definition.config.description } : {}),
     ...(category ? { category } : {}),
-    agentRuntime: resolveTaskAgentRuntime(entry.definition.config),
+    agentRuntime: resolveTaskAgentRuntime(entry.definition.config, entry.name, overrides),
     input_schema: normalizedInput,
     output_schema: normalizeSchema(entry.definition.config.output as any),
     structured: true,

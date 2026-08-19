@@ -516,6 +516,35 @@ describe('workspace definition registry', () => {
     assert.ok(errors.some((error) => error.load_error.includes('both agentRuntime')), errors.map((e) => e.load_error).join('; '))
   })
 
+  it('applies local tasks.agentRuntime overlays to list and describe without changing definitions', async () => {
+    const configDir = makeTempDir('foreman-task-runtime-overlay-')
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      tasks: {
+        agentRuntime: {
+          commit: 'forge/codex-spark',
+          'explore-commit': 'forge/codex-spark',
+        },
+      },
+    }), 'utf-8')
+    const previous = process.env.WRENYARD_CONFIG_HOME
+    process.env.WRENYARD_CONFIG_HOME = configDir
+    try {
+      const workspace = makeTempDir('foreman-v2-loader-overlay-')
+      await discoverTasks(workspace)
+      assert.equal(describeTask('commit', workspace)?.agentRuntime, 'forge/codex-spark')
+      assert.equal(describeTask('explore-commit', workspace)?.agentRuntime, 'forge/codex-spark')
+      assert.equal(describeTask('edit', workspace)?.agentRuntime, 'forge/fast')
+      const listed = listTasks(workspace)
+      assert.equal(listed.find((task) => task.name === 'commit')?.agentRuntime, 'forge/codex-spark')
+      const target = resolveTaskTarget('commit', workspace)
+      assertTaskTarget(target)
+      assert.equal(target.definition.config.agentRuntime, 'forge/fast')
+    } finally {
+      if (previous === undefined) delete process.env.WRENYARD_CONFIG_HOME
+      else process.env.WRENYARD_CONFIG_HOME = previous
+    }
+  })
+
   it('exposes source and omits project on public task definitions', async () => {
     const workspace = makeTempDir('foreman-v2-loader-source-')
     const projectDir = join(workspace, 'projects', 'app')

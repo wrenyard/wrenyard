@@ -20,7 +20,15 @@ export {
   type WorkspaceConfigData,
   type PetConfigData,
   type MessageConfigData,
+  type TasksConfigData,
+  type TaskAgentRuntimeOverrides,
 } from './data.mts'
+
+export {
+  applyTaskAgentRuntimeOverride,
+  normalizeTaskAgentRuntimeOverrides,
+  readTaskAgentRuntimeOverrides,
+} from './task-runtime-override.mts'
 
 export {
   FOREMAN_CONFIG_FILE_NAME,

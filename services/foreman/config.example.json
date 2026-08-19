@@ -28,6 +28,9 @@
       "retry_backoff_ms": 500
     }
   },
+  "tasks": {
+    "agentRuntime": {}
+  },
   "message": {
     "enabled": true,
     "principals": {

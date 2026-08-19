@@ -26,6 +26,7 @@ import {
   resolveTaskTarget,
 } from '../../workspace/task-loader.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
+import { applyTaskAgentRuntimeOverride } from '../../config/task-runtime-override.mts'
 import { installRuntimeGlobals } from './runtime-globals.mts'
 import {
   compileSchema,
@@ -345,9 +346,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     const definition = target.definition as TaskDefinition
     config = definition.config
     const taskProfile = config.profile
-    const requestedAgentRuntime = config.agentRuntime
+    const declaredAgentRuntime = config.agentRuntime
       ? parseAgentRuntime(config.agentRuntime).toString()
       : `forge/${taskProfile}`
+    const requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
     parseAgentRuntime(requestedAgentRuntime)
     const executionOptions = options
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)

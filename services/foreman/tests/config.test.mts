@@ -16,6 +16,11 @@ import { createDefaultForemanConfigData } from '../lib/config/data.mts'
 import { ForemanConfigManager } from '../lib/config/manager.mts'
 import { normalizeForemanServiceConfig } from '../lib/config/normalize.mts'
 import { resolveDefaultForemanConfigPath, resolveForemanConfigDir } from '../lib/config/path.mts'
+import {
+  applyTaskAgentRuntimeOverride,
+  normalizeTaskAgentRuntimeOverrides,
+  readTaskAgentRuntimeOverrides,
+} from '../lib/config/task-runtime-override.mts'
 import { packagedPetExecutablePath } from '../lib/pet/packaged-pet.mts'
 
 const roots: string[] = []
@@ -292,5 +297,63 @@ describe('Foreman config', () => {
     assert.equal(config.pet.command, 'custom-pet')
     assert.deepEqual(config.pet.args, ['--flag'])
     assert.equal(config.pet.cwd, join(root, 'pet-local'))
+  })
+})
+
+describe('tasks.agentRuntime overlay', () => {
+  it('treats a missing or empty map as a no-op', () => {
+    assert.deepEqual(normalizeTaskAgentRuntimeOverrides(undefined), {})
+    assert.deepEqual(normalizeTaskAgentRuntimeOverrides({}), {})
+    assert.equal(applyTaskAgentRuntimeOverride('commit', 'forge/fast', {}), 'forge/fast')
+  })
+
+  it('replaces declared runtimes for named tasks only', () => {
+    const overrides = normalizeTaskAgentRuntimeOverrides({
+      commit: 'forge/codex-spark',
+      'explore-commit': ' forge/codex-spark ',
+    })
+    assert.equal(overrides.commit, 'forge/codex-spark')
+    assert.equal(overrides['explore-commit'], 'forge/codex-spark')
+    assert.equal(applyTaskAgentRuntimeOverride('commit', 'forge/fast', overrides), 'forge/codex-spark')
+    assert.equal(applyTaskAgentRuntimeOverride('edit', 'forge/fast', overrides), 'forge/fast')
+  })
+
+  it('rejects invalid agentRuntime values', () => {
+    assert.throws(
+      () => normalizeTaskAgentRuntimeOverrides({ commit: 'codex-spark' }),
+      /tasks\.agentRuntime\.commit/,
+    )
+    assert.throws(
+      () => normalizeTaskAgentRuntimeOverrides({ commit: 'claude/sonnet' }),
+      /Unsupported runtime/,
+    )
+    assert.throws(
+      () => normalizeTaskAgentRuntimeOverrides('forge/codex-spark'),
+      /must be an object/,
+    )
+  })
+
+  it('reads overrides from the live Wrenyard config file', () => {
+    const configHome = mkdtempSync(join(tmpdir(), 'foreman-task-runtime-config-'))
+    roots.push(configHome)
+    mkdirSync(join(configHome, 'wrenyard'), { recursive: true })
+    writeFileSync(
+      join(configHome, 'wrenyard', 'config.json'),
+      JSON.stringify({
+        tasks: {
+          agentRuntime: {
+            commit: 'forge/codex-spark',
+            'explore-commit': 'forge/codex-spark',
+          },
+        },
+      }),
+      'utf-8',
+    )
+    const env = { XDG_CONFIG_HOME: configHome }
+    const overrides = readTaskAgentRuntimeOverrides(env)
+    assert.equal(overrides.commit, 'forge/codex-spark')
+    assert.equal(overrides['explore-commit'], 'forge/codex-spark')
+    assert.equal(applyTaskAgentRuntimeOverride('commit', 'forge/fast', undefined, env), 'forge/codex-spark')
+    assert.equal(applyTaskAgentRuntimeOverride('edit', 'forge/fast', undefined, env), 'forge/fast')
   })
 })
