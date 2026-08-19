@@ -281,7 +281,7 @@ describe('QuotaService runForgeQuotaJson timeout', () => {
 
 describe('sanitizeQuotaChildEnv', () => {
   it('drops npm node_modules/.bin entries and prefers user/homebrew bins', () => {
-    const home = '/Users/tester';
+    const home = '/tmp/tester-home';
     const env = sanitizeQuotaChildEnv({
       HOME: home,
       PATH: [

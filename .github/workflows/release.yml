@@ -87,10 +87,10 @@ jobs:
             file=".artifacts/release/$(basename "$f" .sha256)"
             actual="$(node -e 'const crypto = require("crypto"); const fs = require("fs"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$file")"
             if [ "$expected" != "$actual" ]; then
-            echo "checksum mismatch for $file" >&2
-            exit 1
-          fi
-        done
+              echo "checksum mismatch for $file" >&2
+              exit 1
+            fi
+          done
       - name: Label signing status honestly
         shell: bash
         run: |
