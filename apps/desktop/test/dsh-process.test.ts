@@ -261,7 +261,7 @@ test('startDshWeb explicit wrenyardEnv overrides values derived from process.env
   });
 });
 
-test('startDshWeb appends --patch last and injects extraEnv without dropping it', async () => {
+test('startDshWeb puts --patch before web flags and injects extraEnv without dropping it', async () => {
   await withTemp(async (dir) => {
     const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
     const patchPath = join(dir, 'forge-model-patch.yaml');
@@ -274,7 +274,12 @@ test('startDshWeb appends --patch last and injects extraEnv without dropping it'
     await handle.stop();
 
     const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
-    assert.deepEqual(childEnv.argv.slice(-2), ['--patch', patchPath]);
+    const argv = childEnv.argv as string[];
+    const patchAt = argv.indexOf('--patch');
+    assert.ok(patchAt >= 0, 'expected --patch on the DSH argv');
+    assert.equal(argv[patchAt + 1], patchPath);
+    assert.ok(patchAt < argv.indexOf('--host'), '--patch must precede --host');
+    assert.ok(patchAt < argv.indexOf('--port'), '--patch must precede --port');
     assert.equal(childEnv.FORGE_DSH_KIMI_CODING_API_KEY, 'sk-test-not-for-logs');
   });
 });

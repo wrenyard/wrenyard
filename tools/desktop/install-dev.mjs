@@ -8,7 +8,9 @@
  * 3. Stages the bundle on the home volume and verifies its code signature.
  * 4. Atomically replaces `~/Applications/Wrenyard Desktop.app`, keeping the
  *    previous bundle for rollback if the swap fails.
- * 5. Registers the app with LaunchServices and reports version/path.
+ * 5. Registers the installed app with LaunchServices, unregisters the
+ *    unpacked build leftover, and deletes it so Spotlight only lists
+ *    `~/Applications/Wrenyard Desktop.app`.
  *
  * The installer is explicit that unsupported platforms must use the official
  * build artifacts instead.
@@ -23,9 +25,10 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const APP_NAME = 'Wrenyard Desktop.app';
 const SOURCE_DIR = resolve(import.meta.dirname, '..', '..', 'apps', 'desktop');
@@ -80,6 +83,25 @@ function parseArgs(argv) {
     }
   }
   return options;
+}
+
+function hideFromSpotlight(dir) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.metadata_never_index'), '');
+}
+
+/** Drop LaunchServices + the unpacked .app so Spotlight does not list a second Desktop. */
+function unregisterAndRemoveReleaseApp(appPath) {
+  const resolved = resolve(appPath);
+  const releaseRoot = resolve(RELEASE_DIR);
+  if (resolved === resolve(DEST_APP) || !resolved.startsWith(`${releaseRoot}/`)) return;
+  if (existsSync(LSREGISTER)) {
+    spawnSync(LSREGISTER, ['-u', resolved], { stdio: 'ignore' });
+  }
+  log(`removing Spotlight-visible build leftover ${resolved}…`);
+  rmSync(resolved, { recursive: true, force: true });
+  hideFromSpotlight(dirname(resolved));
+  hideFromSpotlight(releaseRoot);
 }
 
 function run(command, args, options = {}) {
@@ -211,6 +233,8 @@ try {
   } else {
     log('lsregister not found; skipping LaunchServices registration');
   }
+
+  unregisterAndRemoveReleaseApp(builtApp);
 
   const version = readBundleVersion(DEST_APP);
   const result = { path: DEST_APP, version, previous: hadPrevious };

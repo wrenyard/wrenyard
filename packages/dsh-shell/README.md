@@ -13,7 +13,11 @@ surfaces.
   vendored** and no internal/private provider is bundled.
 - **Desktop profile composition**: the bundled desktop shell composes this
   plugin with DSH via `cordis.patch.yml` (Wrenyard 编排者 persona, `tools mode
-  code`, `includeRuntimeContext: false`).
+  code`, `includeRuntimeContext: false`) and installs the `wrenyard` agent
+  preset into `$DSH_HOME/.agent-presets/wrenyard` so it appears in the Web
+  模式 dropdown. DSH overwrites `agent-presets.roots` with its shipped
+  standard/PTC/minimal/cordis directory, so a bundle cannot add a system
+  roster root.
 - **Public boundaries only**: everything goes through Wrenyard's public MCP
   (HTTP/SSE JSON-RPC) and owner-only NDJSON IPC. No Forge or Wrenyard
   implementation code is imported, and no credentials or raw environment values

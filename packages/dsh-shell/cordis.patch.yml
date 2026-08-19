@@ -17,6 +17,12 @@
   config:
     mode: code
 
+# DSH composeProfile then replaces agent-presets.roots with its shipped
+# standard/code/minimal/cordis directory. `default` survives that overlay.
+- id: agent-presets
+  config:
+    default: wrenyard
+
 - insert:
     - id: wrenyard-foreman-tools
       name: "@wrenyard/dsh-shell"

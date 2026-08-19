@@ -1,4 +1,5 @@
 const { execFileSync } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 /**
@@ -18,4 +19,9 @@ exports.default = async function afterPack(context) {
   execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--verbose', appPath], {
     stdio: 'inherit',
   });
+  // Documents/Github is Spotlight-indexed. An unpacked .app under
+  // apps/desktop/release/ otherwise appears beside ~/Applications.
+  for (const dir of [context.appOutDir, path.dirname(context.appOutDir)]) {
+    writeFileSync(path.join(dir, '.metadata_never_index'), '');
+  }
 };

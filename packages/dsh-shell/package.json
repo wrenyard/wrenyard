@@ -8,6 +8,8 @@
   "files": [
     "src/foreman-tools.mjs",
     "cordis.patch.yml",
+    "presets/wrenyard/agent.cordis.yml",
+    "presets/wrenyard/preset.yml",
     "README.md"
   ],
   "exports": {

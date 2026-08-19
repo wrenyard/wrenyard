@@ -68,6 +68,24 @@ export async function prepareProfile(
     throw error;
   }
 
+  const presetSource = join(shellSourceDir, 'presets', 'wrenyard');
+  const presetDest = join(dshHome, '.agent-presets', 'wrenyard');
+  try {
+    await fs.access(join(presetSource, 'agent.cordis.yml'));
+  } catch {
+    throw new Error('Wrenyard agent preset missing from dsh-shell (expected presets/wrenyard/agent.cordis.yml).');
+  }
+  await fs.rm(presetDest, { recursive: true, force: true });
+  await fs.mkdir(join(dshHome, '.agent-presets'), { recursive: true });
+  const tmpPreset = join(dshHome, '.agent-presets', `.wrenyard.tmp-${randomBytes(6).toString('hex')}`);
+  try {
+    await fs.cp(presetSource, tmpPreset, { recursive: true });
+    await fs.rename(tmpPreset, presetDest);
+  } catch (error) {
+    await fs.rm(tmpPreset, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+
   const manifest = {
     name: '@wrenyard/dsh-profile',
     version: '1.0.0-dev.7',
