@@ -1,6 +1,7 @@
 // End-to-end test proving that packed installs never compile on the consumer
-// machine. Set WRENYARD_SKIP_PACKED_INSTALL_E2E=1 only for a deliberately
-// reduced local loop; CI and `pnpm release:e2e` run it by default.
+// machine. Optional: set WRENYARD_SKIP_PACKED_INSTALL_E2E=1 to skip the live
+// install/update cases, or run `pnpm release:e2e` locally when you want them.
+// Release CI does not run this file; publishing only packs and checksums.
 //
 // Build mode (WRENYARD_E2E_RELEASE_DIR unset) builds the local release
 // (desktop skipped) into a temp dir, installs the actual CLI tarball into a
@@ -29,8 +30,8 @@ const ENABLED = process.env.WRENYARD_SKIP_PACKED_INSTALL_E2E !== '1';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
 // Windows receives a larger budget for its slower archive, npm, and install
-// checks: prebuilt CI consumes the release built once by the preceding
-// release step, so the E2E no longer rebuilds the release a second time.
+// checks. Prebuilt mode (WRENYARD_E2E_RELEASE_DIR) consumes an already-built
+// release directory instead of assembling a second copy.
 const E2E_TIMEOUT_MS = process.platform === 'win32' ? 1_800_000 : 600_000;
 
 // Host triplet embedded in the platform-qualified suite artifact name.
@@ -477,10 +478,10 @@ test('packed-install E2E: no consumer-side Go compilation', {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-packed-install-'));
   const fakeBin = path.join(tmp, 'fake-bin');
   const goLog = path.join(fakeBin, 'go.log');
-  // Prebuilt mode: CI sets WRENYARD_E2E_RELEASE_DIR to the release produced by
-  // its preceding release:local step; the E2E consumes those exact artifacts
-  // and never deletes that directory. Without the variable, build mode creates
-  // a fresh release inside tmp.
+  // Prebuilt mode: WRENYARD_E2E_RELEASE_DIR points at an already-built
+  // release:local tree; the E2E consumes those exact artifacts and never
+  // deletes that directory. Without the variable, build mode creates a
+  // fresh release inside tmp.
   const prebuiltReleaseDir = process.env.WRENYARD_E2E_RELEASE_DIR?.trim();
   const releaseDir = prebuiltReleaseDir
     ? path.resolve(ROOT, prebuiltReleaseDir)

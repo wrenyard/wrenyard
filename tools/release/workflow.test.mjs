@@ -93,32 +93,29 @@ test('release.yml verifies the build target via ESM platform.mjs', () => {
   assert.ok(workflow.includes('.triplet'));
 });
 
-test('release.yml points release:e2e at the prebuilt release artifacts', () => {
-  // The packed-install E2E must consume the single release:local build output
-  // via WRENYARD_E2E_RELEASE_DIR instead of rebuilding all artifacts inside
-  // the test. Exactly one release:local build step must precede release:e2e.
-  assert.ok(workflow.includes('WRENYARD_E2E_RELEASE_DIR: .artifacts/release'));
-  assert.ok(workflow.includes('run: pnpm release:e2e'));
-  const buildStep = 'pnpm release:local';
-  const e2eStep = 'pnpm release:e2e';
+test('release.yml packs and checksums artifacts without packed-install E2E', () => {
+  // Publish must assemble one release:local tree and verify its manifests
+  // and checksums. Real installer/update E2E is optional local work
+  // (`pnpm release:e2e`) and must not block a prerelease.
+  assert.ok(workflow.includes('run: pnpm release:local'));
+  assert.ok(workflow.includes('node tools/release/verify-manifest.mjs'));
   assert.equal(
-    workflow.split(buildStep).length - 1,
+    workflow.split('pnpm release:local').length - 1,
     1,
     'release.yml must contain exactly one pnpm release:local build step',
   );
-  const localIndex = workflow.indexOf(buildStep);
-  const e2eIndex = workflow.indexOf(e2eStep);
-  assert.ok(localIndex !== -1 && e2eIndex !== -1, 'release.yml must run release:local and release:e2e');
-  assert.ok(localIndex < e2eIndex, 'release:local must run before release:e2e');
+  assert.ok(!workflow.includes('run: pnpm release:e2e'));
+  assert.ok(!/^\s+WRENYARD_E2E_RELEASE_DIR:/m.test(workflow));
 });
 
-test('release.yml runs pre-release gates before release creation', () => {
-  // identifiers, secrets, legal, build, and packed-install E2E must all run
+test('release.yml runs packaging gates before release creation', () => {
+  // identifiers, secrets, legal, build, and release:local must all run
   // before the prerelease is created.
   assert.ok(workflow.includes('check:identifiers'));
   assert.ok(workflow.includes('check:secrets'));
   assert.ok(workflow.includes('release:legal'));
-  assert.ok(workflow.includes('release:e2e'));
+  assert.ok(workflow.includes('pnpm build'));
+  assert.ok(workflow.includes('pnpm release:local'));
 });
 
 test('artifact checksum verification uses the cross-platform Node runtime', () => {
@@ -142,7 +139,7 @@ test('routine CI uses one bounded Linux quality job', () => {
 
 test('routine CI never builds or uploads release packages', () => {
   assert.ok(!ciWorkflow.includes('release:local'));
-  assert.ok(!ciWorkflow.includes('release:e2e'));
+  assert.ok(!ciWorkflow.includes('run: pnpm release:e2e'));
   assert.ok(!ciWorkflow.includes('actions/upload-artifact'));
   assert.ok(!ciWorkflow.includes('.artifacts/release'));
 });
