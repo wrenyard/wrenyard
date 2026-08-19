@@ -1,6 +1,6 @@
 {
   "name": "wrenyard",
-  "version": "1.0.0-dev.7",
+  "version": "1.0.0-dev.8",
   "description": "Wrenyard — source-development preview suite for task orchestration, runtime, and desktop visualization",
   "private": true,
   "license": "MIT",

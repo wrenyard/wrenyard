@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/foreman",
-  "version": "1.0.0-dev.7",
+  "version": "1.0.0-dev.8",
   "description": "Wrenyard — AI task and TaskGraph orchestration CLI",
   "private": true,
   "license": "MIT",
