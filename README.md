@@ -111,7 +111,7 @@ Local release assembly:
 
 ```sh
 pnpm release:local      # assemble the full local release into .artifacts/release
-pnpm release:e2e        # packed-install end-to-end test against the packed release
+pnpm release:e2e        # optional packed-install E2E; not a publish gate
 pnpm desktop:smoke      # smoke-launch the desktop surface
 pnpm release:legal      # verify license/asset provenance metadata
 pnpm release:licenses   # verify third-party license notices
@@ -119,8 +119,9 @@ pnpm release:check      # manifest + legal verification (also part of pnpm check
 ```
 
 `pnpm check` covers workspace checks, identifier/secret scans, manifest and
-legal verification, and Go vet/test/build; it does not run the expensive
-packed-install E2E.
+legal verification, and Go vet/test/build; it does not run packed-install E2E.
+The tag Release workflow also skips that E2E: it packs each target, verifies
+manifests and checksums, and publishes the prerelease.
 
 ## Signing (honest)
 
