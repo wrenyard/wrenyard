@@ -3,6 +3,12 @@ packages:
   - "services/*"
   - "packages/*"
 
+# Build-tool tar 6.x still appears via node-gyp/cacache; force the patched 7.5 line.
+# Vitest 3.2 still resolves Vite 5; the open advisories are fixed in 6.4.3.
+overrides:
+  tar@<7.5.21: 7.5.22
+  vite@<6.4.3: 6.4.3
+
 # Deployable workspace packages are injected as real package snapshots instead
 # of symlinks. This keeps `pnpm deploy` isolated and reproducible for release
 # staging without mutating the development node_modules tree.
