@@ -1,6 +1,6 @@
 {
   "schema_version": "wrenyard.release-manifest.v1",
-  "suite_version": "1.0.0-dev.10",
+  "suite_version": "1.0.0-dev.11",
   "protocol_version": "1",
   "release_status": "development",
   "publishable": false,
@@ -8,32 +8,32 @@
   "components": {
     "forge": {
       "source": "runtime/forge",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": "15d9c3f71edac4866e23fd8441cdef1edec3b4e9"
     },
     "foreman": {
       "source": "services/foreman",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": "787d91b244cdb01c4a130887ca39c9ffe476275b"
     },
     "pet": {
       "source": "apps/pet",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": "06112cfdeaa824409086051db2cea6c122728f92"
     },
     "cli": {
       "source": "apps/cli",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": null
     },
     "desktop": {
       "source": "apps/desktop",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": null
     },
     "dsh_shell": {
       "source": "packages/dsh-shell",
-      "version": "1.0.0-dev.10",
+      "version": "1.0.0-dev.11",
       "source_sha": null
     }
   }
