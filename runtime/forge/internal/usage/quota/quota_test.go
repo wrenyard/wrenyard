@@ -3741,7 +3741,7 @@ func TestQuotaWindowJSONDSTFallbackPreservesLegacyPaceAndClampsMarker(t *testing
 	}
 
 	line := DisplayLine(Quota{Windows: []Window{window}})
-	if want := "7d 51% " + FormatPaceDisplay(wantDelta); !strings.Contains(line, want) {
+	if want := "7d 49% remain " + FormatPaceDisplay(wantDelta); !strings.Contains(line, want) {
 		t.Fatalf("display_line = %q, want legacy pace %q", line, want)
 	}
 

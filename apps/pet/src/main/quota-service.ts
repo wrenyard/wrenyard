@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import type { DiagnosticLogger } from './diagnostic-logger';
 import type { QuotaProviderState, QuotaWindowRow } from '../shared/entities';
 
@@ -72,6 +74,37 @@ export function resolveQuotaRuntimeCommand(
   return 'forge'
 }
 
+/**
+ * npm start / Electron inherit parent `node_modules/.bin` entries. Forge's
+ * `LookPath("codex")` then hits a stale home-directory Codex wrapper before
+ * Homebrew / `~/.local/bin`, which surfaces as app-server initialize EOF.
+ */
+export function sanitizeQuotaChildEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const delimiter = path.delimiter;
+  const home = env.HOME || os.homedir();
+  const preferred = [
+    path.join(home, '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  const rest = (env.PATH ?? '')
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .filter((entry) => !isNpmNodeModulesBin(entry) && !preferred.includes(entry));
+  return {
+    ...env,
+    PATH: [...preferred, ...rest].join(delimiter),
+  };
+}
+
+function isNpmNodeModulesBin(entry: string): boolean {
+  const normalized = entry.replaceAll('\\', '/');
+  return normalized === '/node_modules/.bin' || normalized.endsWith('/node_modules/.bin');
+}
+
 function runForgeQuotaJson(): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(resolveQuotaRuntimeCommand(), ['quota', '--json'], {
@@ -79,6 +112,7 @@ function runForgeQuotaJson(): Promise<string> {
       shell: false,
       windowsHide: true,
       timeout: FORGE_QUOTA_TIMEOUT_MS,
+      env: sanitizeQuotaChildEnv(),
     });
 
     let stdout = '';

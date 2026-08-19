@@ -230,7 +230,7 @@ func TestWindowDisplayLineDualWindowWithReset(t *testing.T) {
 		{Name: "7d", Pct: 11, ResetsAt: &reset7d, WindowMinutes: 10080},
 	}
 	line := WindowDisplayLine(windows)
-	expected := "5h 11% · 7d 11% (-2%) · 4h 20m reset"
+	expected := "5h 89% remain · 7d 89% remain (-2%) · 4h 20m reset"
 	if line != expected {
 		t.Fatalf("WindowDisplayLine = %q, want %q", line, expected)
 	}
@@ -292,8 +292,8 @@ func TestWindowDisplayLineSingleWindow(t *testing.T) {
 	if line == "" {
 		t.Fatal("expected non-empty display line for single window")
 	}
-	if !strings.Contains(line, "7d") || !strings.Contains(line, "50%") {
-		t.Fatalf("display line should contain window name and pct: %q", line)
+	if !strings.Contains(line, "7d") || !strings.Contains(line, "50% remain") {
+		t.Fatalf("display line should contain window name and remaining pct: %q", line)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestWindowDisplayLineDuplicateNames(t *testing.T) {
 	if strings.Count(line, "(") != 1 {
 		t.Fatalf("expected exactly 1 pace marker for duplicate names, got %q", line)
 	}
-	if !strings.Contains(line, "5h 50% (-20%)") {
+	if !strings.Contains(line, "5h 50% remain (-20%)") {
 		t.Fatalf("expected pace on last window, got %q", line)
 	}
 }
@@ -334,7 +334,7 @@ func TestWindowDisplayLineUnreliableNon7d(t *testing.T) {
 	if strings.Contains(line, "(") || strings.Contains(line, ")") {
 		t.Fatalf("expected no pace for unreliable non-7d window, got %q", line)
 	}
-	if !strings.Contains(line, "5h 42%") {
+	if !strings.Contains(line, "5h 58% remain") {
 		t.Fatalf("expected window display, got %q", line)
 	}
 }
@@ -412,7 +412,7 @@ func TestDisplayLineWindowedPreference(t *testing.T) {
 	if !strings.HasPrefix(line, "codex ") {
 		t.Fatalf("expected label prefix 'codex ' in display line: %q", line)
 	}
-	if !strings.Contains(line, "7d") || !strings.Contains(line, "42%") {
+	if !strings.Contains(line, "7d") || !strings.Contains(line, "58% remain") {
 		t.Fatalf("expected window-based display line: %q", line)
 	}
 }

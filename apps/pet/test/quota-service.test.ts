@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { FORGE_QUOTA_TIMEOUT_MS, parseQuotaJson, QuotaService } from '../src/main/quota-service';
+import path from 'node:path';
+import { FORGE_QUOTA_TIMEOUT_MS, parseQuotaJson, QuotaService, sanitizeQuotaChildEnv } from '../src/main/quota-service';
 
 vi.mock('node:child_process', () => {
   const { EventEmitter } = require('node:events');
@@ -243,6 +244,12 @@ describe('QuotaService runForgeQuotaJson timeout', () => {
     expect(opts.timeout).toBe(FORGE_QUOTA_TIMEOUT_MS);
     expect(opts.windowsHide).toBe(true);
     expect(opts.shell).toBe(false);
+    expect(opts.env?.PATH).toEqual(expect.any(String));
+    expect(
+      String(opts.env.PATH)
+        .split(path.delimiter)
+        .every((entry: string) => !entry.replaceAll('\\', '/').endsWith('/node_modules/.bin')),
+    ).toBe(true);
 
     // Cleanup: let the mock promise resolve
     await promise;
@@ -269,5 +276,27 @@ describe('QuotaService runForgeQuotaJson timeout', () => {
       if (prev === undefined) delete process.env.WRENYARD_RUNTIME_BIN;
       else process.env.WRENYARD_RUNTIME_BIN = prev;
     }
+  });
+});
+
+describe('sanitizeQuotaChildEnv', () => {
+  it('drops npm node_modules/.bin entries and prefers user/homebrew bins', () => {
+    const home = '/Users/tester';
+    const env = sanitizeQuotaChildEnv({
+      HOME: home,
+      PATH: [
+        `${home}/Documents/Github/wrenyard/apps/pet/node_modules/.bin`,
+        `${home}/node_modules/.bin`,
+        '/node_modules/.bin',
+        '/opt/homebrew/bin',
+        '/usr/bin',
+      ].join(path.delimiter),
+    });
+    expect(env.PATH?.split(path.delimiter)).toEqual([
+      path.join(home, '.local', 'bin'),
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    ]);
   });
 });
