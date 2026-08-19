@@ -41,11 +41,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.x
-          cache-dependency-path: runtime/forge/go.sum
+          cache: false
       - name: Validate tag matches the root package version
         shell: bash
         run: |
@@ -105,16 +104,21 @@ jobs:
           else
             printf 'unsigned-preview\n' > .artifacts/release/signing-status.txt
           fi
+      # Hop only: the durable product lives on the GitHub Release. Keep the
+      # Actions copy for one day so a failed aggregate can still be diagnosed,
+      # then delete it after publish so Free-org 500 MB artifact quota is not
+      # filled by four ~500 MB platform packs per tag.
       - uses: actions/upload-artifact@v4
         with:
           name: wrenyard-release-${{ matrix.target }}
           path: .artifacts/release/**
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   aggregate:
     needs: build
     permissions:
+      actions: write
       contents: write
     runs-on: ubuntu-latest
     steps:
@@ -253,3 +257,18 @@ jobs:
           while IFS= read -r f; do
             gh release upload "$TAG" "$f"
           done < <(find release-assets -maxdepth 1 -type f | sort)
+      - name: Drop hop artifacts after the GitHub Release is published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts[].id')"
+          if [ -z "$ids" ]; then
+            echo "no hop artifacts to delete"
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
+            echo "deleted artifact $id"
+          done
