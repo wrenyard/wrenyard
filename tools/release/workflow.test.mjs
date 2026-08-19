@@ -146,3 +146,21 @@ test('routine CI never builds or uploads release packages', () => {
   assert.ok(!ciWorkflow.includes('actions/upload-artifact'));
   assert.ok(!ciWorkflow.includes('.artifacts/release'));
 });
+
+test('release hop artifacts are short-lived and deleted after publish', () => {
+  // Actions artifacts are only a job-to-job hop. Durable product is the
+  // GitHub Release. Free-org included artifact storage is 500 MB and is
+  // shared with Packages; four ~500 MB platform packs must not linger.
+  assert.ok(workflow.includes('retention-days: 1'));
+  assert.ok(!workflow.includes('retention-days: 7'));
+  assert.ok(workflow.includes('actions: write'));
+  assert.ok(workflow.includes(`actions/runs/\${GITHUB_RUN_ID}/artifacts`));
+  assert.ok(workflow.includes('actions/artifacts/${id}'));
+});
+
+test('release.yml does not write tag-scoped dependency caches', () => {
+  // setup-node/setup-go caches are stored per ref. Each v1.0.0-dev.* tag
+  // otherwise leaves ~1.5 GB that is never reused by a later tag.
+  assert.ok(!workflow.includes('cache: pnpm'));
+  assert.ok(workflow.includes('cache: false'));
+});
