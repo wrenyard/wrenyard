@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuotaTips } from '../src/main/panel-view-model';
+import { buildQuotaTips, formatQuotaBarMenuRows } from '../src/main/panel-view-model';
 import type { QuotaProviderState } from '../src/shared/entities';
 
 describe('quota panel view model', () => {
@@ -50,6 +50,7 @@ describe('quota panel view model', () => {
     expect(tips[0].bars![0].provider.windows).toHaveLength(2);
     expect(tips[0].bars![0].provider.windows[0].remainingPct).toBe(60);
     expect(tips[0].bars![0].provider.windows[0].expectedRemainingPct).toBe(45);
+    expect(tips[0].text).toBe('codex 5h 60% remain · 7d 40% remain');
 
     // OpenAI (error) included with structured bar and errorRow
     expect(tips[1].bars).toBeDefined();
@@ -128,16 +129,19 @@ describe('quota panel view model', () => {
     // Single window
     expect(tips[0].bars![0].provider.windows).toHaveLength(1);
     expect(tips[0].bars![0].provider.windows[0].remainingPct).toBe(25);
+    expect(tips[0].text).toBe('codex 7d 25% remain');
 
     // Double window
     expect(tips[1].bars![0].provider.windows).toHaveLength(2);
     expect(tips[1].bars![0].provider.windows[1].name).toBe('7d');
     expect(tips[1].bars![0].provider.windows[1].remainingPct).toBe(40);
+    expect(tips[1].text).toBe('openai 5h 60% remain · 7d 40% remain');
 
     // Kimi three-pool quota remains one grouped provider in the tips card.
     expect(tips[2].bars).toHaveLength(1);
     expect(tips[2].bars![0].label).toBe('kimi-coding');
     expect(tips[2].bars![0].provider.windows.map((window) => window.name)).toEqual(['5h', '7d', '1mo']);
+    expect(tips[2].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain · 1mo 28% remain');
   });
 
   it('propagates provider-agnostic Forge pending message for status rows', () => {
@@ -225,7 +229,7 @@ describe('quota panel view model', () => {
     expect(tips[0].bars).toBeDefined();
     expect(tips[0].bars![0].label).toBe('codex-spark');
     // Healthy tip text normalises family-label prefix to provider id
-    expect(tips[0].text).toBe('codex-spark 7d 25%');
+    expect(tips[0].text).toBe('codex-spark 7d 25% remain');
   });
 
   it('uses provider id (not label) for errorRow label to avoid collapsing kimi-coding→kimi', () => {
@@ -279,5 +283,83 @@ describe('quota panel view model', () => {
     expect(bar.provider.windows[0].name).toBe('quota');
     expect(bar.provider.windows[0].remainingPct).toBe(55);
     expect(bar.provider.windows[0].expectedRemainingPct).toBe(30);
+    expect(tips[0].text).toBe('codex quota 55% remain');
+  });
+
+  it('copies Forge pace and reset onto remaining window percents', () => {
+    const provider: QuotaProviderState = {
+      id: 'kimi-coding',
+      label: 'kimi',
+      displayLine: 'kimi 5h 20% · 7d 40% (+8%) · 4h 21m reset',
+      error: null,
+      status: 'ok',
+      stale: false,
+      bars: {
+        remainingPct: 60,
+        expectedRemainingPct: 52,
+        windows: [
+          { name: '5h', usedPct: 20, remainingPct: 80, expectedRemainingPct: 90 },
+          { name: '7d', usedPct: 40, remainingPct: 60, expectedRemainingPct: 52 },
+        ],
+      },
+    };
+
+    const tips = buildQuotaTips([provider], ['kimi-coding']);
+    expect(tips[0].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain (+8%) · 4h 21m reset');
+  });
+
+  it('formats remaining bar rows for the tray submenu', () => {
+    const tips = buildQuotaTips([
+      {
+        id: 'kimi-coding',
+        label: 'kimi',
+        displayLine: 'kimi 5h 20% · 7d 40%',
+        error: null,
+        status: 'ok',
+        stale: false,
+        bars: {
+          remainingPct: 60,
+          expectedRemainingPct: 52,
+          windows: [
+            { name: '5h', usedPct: 0, remainingPct: 100, expectedRemainingPct: null },
+            { name: '7d', usedPct: 3, remainingPct: 97, expectedRemainingPct: 52 },
+          ],
+        },
+      },
+      {
+        id: 'codex',
+        label: 'Codex',
+        displayLine: null,
+        error: 'initialize failed',
+        status: 'error',
+        stale: false,
+      },
+    ], ['kimi-coding', 'codex']);
+
+    const rows = formatQuotaBarMenuRows(tips);
+    expect(rows).toEqual([
+      {
+        provider: 'kimi-coding',
+        window: '5h',
+        remainingPct: 100,
+        expectedRemainingPct: null,
+        label: 'kimi-coding 5h 100% remain',
+      },
+      {
+        provider: '',
+        window: '7d',
+        remainingPct: 97,
+        expectedRemainingPct: 52,
+        label: 'kimi-coding 7d 97% remain',
+      },
+      {
+        provider: 'codex',
+        window: '',
+        remainingPct: null,
+        expectedRemainingPct: null,
+        error: 'error — initialize failed',
+        label: 'codex  error — initialize failed',
+      },
+    ]);
   });
 });

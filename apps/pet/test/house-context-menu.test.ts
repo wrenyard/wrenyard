@@ -41,7 +41,7 @@ describe('attachHouseContextMenu', () => {
       click?: () => void;
     })[];
     expect(template).toHaveLength(3);
-    expect(template[0].label).toBe('设置…');
+    expect(template[0].label).toBe('设置');
     expect(template[1].type).toBe('separator');
     expect(template[2].label).toBe('重启');
 

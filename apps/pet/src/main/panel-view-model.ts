@@ -1,4 +1,4 @@
-import type { QuotaProviderState, QuotaTipLine, QuotaBarRow } from '../shared/entities';
+import type { QuotaProviderState, QuotaTipLine, QuotaBarRow, QuotaWindowRow } from '../shared/entities';
 
 export interface StatsSummaryLine {
   text: string;
@@ -71,18 +71,10 @@ export function buildQuotaTips(providers: QuotaProviderState[], order: string[])
       errorRow = { label: p.id, message };
       displayText = `${p.id} ${message}`;
     } else {
-      if (p.displayLine !== null && p.displayLine !== undefined) {
-        // Normalize displayText prefix from family label to provider id
-        if (p.displayLine.startsWith(p.id)) {
-          displayText = p.displayLine;
-        } else if (p.displayLine.startsWith(p.label + ' ')) {
-          displayText = p.id + p.displayLine.slice(p.label.length);
-        } else {
-          displayText = p.id + ' ' + p.displayLine;
-        }
-      } else {
-        displayText = p.error ? `${p.id}: error — ${truncateMessage(p.error, 80)}` : `${p.id}: unavailable`;
-      }
+      const remainWindows = bar?.provider.windows ?? [];
+      displayText = remainWindows.length > 0
+        ? formatRemainQuotaLine(p.id, remainWindows, p.displayLine)
+        : normalizeDisplayLine(p);
     }
 
     const entry: QuotaTipLine = { text: displayText };
@@ -92,6 +84,108 @@ export function buildQuotaTips(providers: QuotaProviderState[], order: string[])
   }
 
   return tips;
+}
+
+function roundRemainPct(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(Math.min(100, Math.max(0, n)));
+}
+
+export interface QuotaMenuRow {
+  provider: string;
+  window: string;
+  remainingPct: number | null;
+  expectedRemainingPct: number | null;
+  error?: string;
+  label: string;
+}
+
+/**
+ * Tray 额度 submenu rows: same four columns as house tips
+ * (`provider | window | remaining bar | integer % remain`).
+ * Provider id only on the first window of a group. Error rows skip the bar.
+ */
+export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
+  const rows: QuotaMenuRow[] = [];
+  for (const tip of tips) {
+    if (tip.errorRow) {
+      rows.push({
+        provider: tip.errorRow.label,
+        window: '',
+        remainingPct: null,
+        expectedRemainingPct: null,
+        error: tip.errorRow.message,
+        label: `${tip.errorRow.label}  ${tip.errorRow.message}`,
+      });
+      continue;
+    }
+    const bar = tip.bars?.[0];
+    const windows = bar?.provider.windows ?? [];
+    if (!bar || windows.length === 0) {
+      if (tip.text.trim()) {
+        rows.push({
+          provider: bar?.label ?? '',
+          window: '',
+          remainingPct: null,
+          expectedRemainingPct: null,
+          error: tip.text,
+          label: tip.text,
+        });
+      }
+      continue;
+    }
+    windows.forEach((window, index) => {
+      const remain = roundRemainPct(window.remainingPct);
+      const provider = index === 0 ? bar.label : '';
+      rows.push({
+        provider,
+        window: window.name,
+        remainingPct: remain,
+        expectedRemainingPct: window.expectedRemainingPct,
+        label: `${provider || bar.label} ${window.name} ${remain}% remain`,
+      });
+    });
+  }
+  return rows;
+}
+
+/**
+ * House tips / tray lines show remaining quota. Pace and reset stay
+ * Forge-owned and are copied from display_line when present.
+ */
+export function formatRemainQuotaLine(
+  id: string,
+  windows: QuotaWindowRow[],
+  displayLine: string | null,
+): string {
+  const src = displayLine ?? '';
+  const pace = src.match(/\(([+-]\d+%)\)/)?.[0];
+  const reset = src.match(/·\s*([^·]*\breset)\s*$/)?.[1]?.trim();
+  const has7d = windows.some((window) => window.name.toLowerCase() === '7d');
+  const parts = windows.map((window, index) => {
+    let part = `${window.name} ${roundRemainPct(window.remainingPct)}% remain`;
+    const isAnchor = has7d ? window.name.toLowerCase() === '7d' : index === windows.length - 1;
+    if (isAnchor && pace) part += ` ${pace}`;
+    return part;
+  });
+  if (reset) parts.push(reset);
+  return `${id} ${parts.join(' · ')}`;
+}
+
+function normalizeDisplayLine(p: QuotaProviderState): string {
+  if (p.displayLine == null || p.displayLine === undefined) {
+    return p.error ? `${p.id}: error — ${truncateMessage(p.error, 80)}` : `${p.id}: unavailable`;
+  }
+  let line: string;
+  if (p.displayLine.startsWith(p.id)) {
+    line = p.displayLine;
+  } else if (p.displayLine.startsWith(p.label + ' ')) {
+    line = p.id + p.displayLine.slice(p.label.length);
+  } else {
+    line = p.id + ' ' + p.displayLine;
+  }
+  if (/\bremain\b/.test(line) || /\bused\b/.test(line)) return line;
+  return line.replace(/(\d+(?:\.\d+)?)%/g, '$1% remain');
 }
 
 /**

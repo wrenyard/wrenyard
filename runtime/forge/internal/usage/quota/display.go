@@ -77,9 +77,11 @@ func FormatResetCompact(t time.Time) string {
 }
 
 // WindowDisplayLine produces a compact display string for quota with windows.
+// Each window shows remaining percentage plus the literal "remain".
 // Pace is shown on the anchor window (7d preferred, last as fallback),
-// wrapped as (+N%) or (-N%). The nearest future reset is appended as a
-// separate final segment ending with the literal word "reset".
+// wrapped as (+N%) or (-N%) in used-vs-expected space. The nearest future
+// reset is appended as a separate final segment ending with the literal
+// word "reset".
 func WindowDisplayLine(windows []Window) string {
 	if len(windows) == 0 {
 		return ""
@@ -87,8 +89,7 @@ func WindowDisplayLine(windows []Window) string {
 	parts := make([]string, 0, len(windows)+1)
 	anchorIdx := SelectPaceAnchorIndex(windows)
 	for i, w := range windows {
-		pct := fmt.Sprintf("%.0f%%", w.Pct)
-		part := w.Name + " " + pct
+		part := fmt.Sprintf("%s %.0f%% remain", w.Name, clampPct(100-w.Pct))
 		if anchorIdx >= 0 && i == anchorIdx {
 			delta := WindowPaceDeltaAt(w, timeNow())
 			part += " " + FormatPaceDisplay(delta)

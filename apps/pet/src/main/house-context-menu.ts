@@ -16,7 +16,7 @@ export function attachHouseContextMenu(win: BrowserWindow, options: HouseContext
 
     const template: MenuItemConstructorOptions[] = [
       {
-        label: '设置…',
+        label: '设置',
         click: () => {
           options.onOpenSettings();
         },

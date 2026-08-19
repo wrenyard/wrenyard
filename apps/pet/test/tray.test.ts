@@ -7,6 +7,7 @@ interface MockMenuItem {
   type?: 'normal' | 'separator' | 'checkbox' | 'radio';
   checked?: boolean;
   enabled?: boolean;
+  icon?: unknown;
 }
 
 function findMenuItem(items: MockMenuItem[], label: string): MockMenuItem | undefined {
@@ -56,6 +57,7 @@ vi.mock('electron', () => {
 
   class MockTray {
     setContextMenu = vi.fn();
+    setImage = vi.fn();
     setToolTip = vi.fn();
     setTitle = vi.fn();
     destroy = vi.fn();
@@ -76,6 +78,7 @@ vi.mock('electron', () => {
     createFromBuffer: vi.fn(() => ({
       isEmpty: vi.fn(() => false),
       resize: vi.fn(() => ({})),
+      setTemplateImage: vi.fn(),
     })),
   };
 
@@ -97,7 +100,7 @@ describe('tray', () => {
     const onSettings = vi.fn();
     const { createTray } = await import('../src/main/tray');
     createTray({ onSettings, onStats: vi.fn() });
-    const settings = findMenuItem(menuItems, 'Setting…');
+    const settings = findMenuItem(menuItems, '设置');
     expect(settings).toBeDefined();
     settings!.click!();
     expect(onSettings).toHaveBeenCalledTimes(1);
@@ -107,10 +110,74 @@ describe('tray', () => {
     const onStats = vi.fn();
     const { createTray } = await import('../src/main/tray');
     createTray({ onStats, onSettings: vi.fn() });
-    const stats = findMenuItem(menuItems, 'Stats…');
+    const stats = findMenuItem(menuItems, '统计');
     expect(stats).toBeDefined();
     stats!.click!();
     expect(onStats).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes quota submenu with remaining bar icons', async () => {
+    const { createTray } = await import('../src/main/tray');
+    createTray({
+      onSettings: vi.fn(),
+      onStats: vi.fn(),
+      getQuotaRows: () => [
+        {
+          provider: 'kimi-coding',
+          window: '5h',
+          remainingPct: 100,
+          expectedRemainingPct: null,
+          label: 'kimi-coding 5h 100% remain',
+        },
+        {
+          provider: '',
+          window: '7d',
+          remainingPct: 97,
+          expectedRemainingPct: 52,
+          label: 'kimi-coding 7d 97% remain',
+        },
+      ],
+    });
+    const quota = menuItems.find((item) => item.label === '额度');
+    expect(quota).toBeDefined();
+    expect(quota!.submenu).toHaveLength(2);
+    expect(quota!.submenu?.every((item) => item.enabled === false)).toBe(true);
+    expect(quota!.submenu?.every((item) => item.icon !== undefined)).toBe(true);
+  });
+
+  it('shows a placeholder when quota rows are empty', async () => {
+    const { createTray } = await import('../src/main/tray');
+    createTray({ onSettings: vi.fn(), onStats: vi.fn(), getQuotaRows: () => [] });
+    const quota = menuItems.find((item) => item.label === '额度');
+    expect(quota?.submenu).toEqual([{ label: '暂无额度', enabled: false }]);
+  });
+
+  it('rebuilds quota submenu when quota rows change', async () => {
+    const { createTray } = await import('../src/main/tray');
+    let rows = [{
+      provider: 'codex',
+      window: '7d',
+      remainingPct: 0,
+      expectedRemainingPct: 8,
+      label: 'codex 7d 0% remain',
+    }];
+    const { tray, rebuildMenu } = createTray({
+      onSettings: vi.fn(),
+      onStats: vi.fn(),
+      getQuotaRows: () => rows,
+    });
+    rows = [{
+      provider: 'codex-spark',
+      window: '7d',
+      remainingPct: 100,
+      expectedRemainingPct: 0,
+      label: 'codex-spark 7d 100% remain',
+    }];
+    rebuildMenu();
+    const quota = menuItems.find((item) => item.label === '额度');
+    expect(quota!.submenu).toHaveLength(1);
+    expect(quota!.submenu![0].icon).toBeDefined();
+    expect(tray.setImage).not.toHaveBeenCalled();
   });
 
   it('does not include a Demo entry', async () => {
@@ -138,6 +205,13 @@ describe('tray', () => {
     expect(display!.submenu).toBeDefined();
     expect(display!.submenu!.length).toBeGreaterThan(0);
     expect(display!.submenu!.every((item) => item.type === 'radio')).toBe(true);
+  });
+
+  it('places Settings immediately before Quit', async () => {
+    const { createTray } = await import('../src/main/tray');
+    createTray({ onSettings: vi.fn(), onStats: vi.fn() });
+    const labels = menuItems.map((item) => item.label ?? item.type);
+    expect(labels).toEqual(['实体', '统计', '额度', '显示器', 'separator', '设置', '退出']);
   });
 
   it('includes a Quit entry that calls app.quit', async () => {

@@ -12,7 +12,7 @@ import { createDiagnosticLogger } from './diagnostic-logger';
 import { attachHouseContextMenu } from './house-context-menu';
 import { requestForemanPetRestart } from './foreman-pet-control';
 import { PanelOwner } from './panel-windows';
-import { buildQuotaTips } from './panel-view-model';
+import { buildQuotaTips, formatQuotaBarMenuRows, type QuotaMenuRow } from './panel-view-model';
 import type { SummaryStatsPayload } from './foreman-stats-poller';
 import type { DailyStatsSnapshot } from '../shared/snapshot';
 import type { QuotaProviderState } from '../shared/entities';
@@ -32,6 +32,7 @@ let quotaService: QuotaService | null = null;
 let panelOwner: PanelOwner | null = null;
 let lastSummary: SummaryStatsPayload | null = null;
 let lastDailyStats: DailyStatsSnapshot | null = null;
+let lastQuotaMenuRows: QuotaMenuRow[] = [];
 let quotaRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let taskGraphWindowOwner: TaskGraphWindowOwner | null = null;
 
@@ -57,7 +58,9 @@ function applyProvidersToHouseTips(providers: QuotaProviderState[]): void {
   const savedConfig = loadConfig();
   const order = savedConfig.quota.providers.filter((p) => p.enabled).map((p) => p.id);
   const tips = buildQuotaTips(providers, order);
+  lastQuotaMenuRows = formatQuotaBarMenuRows(tips);
   entityManager.setQuotaTips(tips);
+  tray?.rebuildMenu();
 }
 
 /**
@@ -342,6 +345,7 @@ app.whenReady().then(() => {
     onStats: () => {
       panelOwner?.openStats();
     },
+    getQuotaRows: () => lastQuotaMenuRows,
   });
 
   console.log('Foreman Pet started');
