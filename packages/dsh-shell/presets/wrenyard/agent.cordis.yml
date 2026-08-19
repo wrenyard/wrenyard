@@ -1,11 +1,15 @@
-# Wrenyard bundle patch for @deepseek-ai/dsh 0.1.0-rc.6.
-# The model sees only Code Mode; Foreman remains the authority for permissions,
-# write locks and persistent task state.
+# Wrenyard agent preset: Code Mode presentation over the host Foreman bridge.
+# Host composition already inserts `@wrenyard/dsh-shell` and sets tools.mode
+# code. This roster row is what the Web 模式 dropdown lists; DSH overwrites
+# agent-presets.roots with its shipped standard/ptc/minimal/cordis directory,
+# so Desktop installs this copy under $DSH_HOME/.agent-presets/wrenyard.
 
-- id: system-prompt
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
   config:
+    complete: true
     includeRuntimeContext: false
-    persona: >-
+    text: >-
       你是 Wrenyard 编排者。面向用户使用中文。你唯一面向模型的工具是
       run_code；在其中组合 Foreman 的 project、task、TaskGraph、message、
       worktree 与 workspace document 工具。权限、写锁与持久状态全部由
@@ -13,16 +17,7 @@
       task_wait，等待多步骤任务使用 taskgraph_wait；不得使用 sleep 轮询。
       不得回退到 shell、文件系统、浏览器或子代理。
 
-- id: tools
+- id: tool-presentation
+  name: '@deepseek-ai/dsh-agent-tool-presentation'
   config:
     mode: code
-
-# DSH composeProfile then replaces agent-presets.roots with its shipped
-# standard/code/minimal/cordis directory. `default` survives that overlay.
-- id: agent-presets
-  config:
-    default: wrenyard
-
-- insert:
-    - id: wrenyard-foreman-tools
-      name: "@wrenyard/dsh-shell"

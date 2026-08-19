@@ -18,6 +18,7 @@ Electron main (dist/main.js)
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
             ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (public kimi-coding / zhipu-coding)
+            ├─ agent preset `wrenyard` at DSH_HOME/.agent-presets/wrenyard (模式 dropdown)
             └─ talks to Wrenyard through the public MCP/IPC contract
                  (@wrenyard/control-client — never Wrenyard internals)
 ```
@@ -33,14 +34,17 @@ Electron main (dist/main.js)
   a visible diagnostic. LaunchServices provides no shell environment, so the
   CLI is located explicitly and the resolved connection context is passed to
   the DSH child directly. Wrenyard remains the sole state/permission owner.
-- **DSH web child** — started with `--profile web --host 127.0.0.1 --port 0`
-  and a last `--patch` overlay that injects the public Forge llm-pi-ai catalog
-  (`kimi-coding` / `zhipu-coding`) without replacing native `deepseek-official`
-  routes. Credential values are read from Wrenyard runtime `auth.json` and
-  passed only as child env (`FORGE_DSH_*_API_KEY`); the patch file is
-  secret-free. `DSH_HOME` points at an isolated profile, cwd at the requested
-  workspace. MCP defaults to `http://127.0.0.1:8787/mcp` so the Foreman
-  tools bridge can reach the daemon under LaunchServices.
+- **DSH web child** — started with launcher flags first
+  (`--profile web --patch <overlay>`), then web flags
+  (`--host 127.0.0.1 --port 0`). `--patch` after `--host` is parsed as a
+  web-app option, rejected, and the Desktop flash-quits. The overlay injects
+  the public Forge llm-pi-ai catalog (`kimi-coding` / `zhipu-coding`) without
+  replacing native `deepseek-official` routes. Credential values are read from
+  Wrenyard runtime `auth.json` and passed only as child env
+  (`FORGE_DSH_*_API_KEY`); the patch file is secret-free. `DSH_HOME` points at
+  an isolated profile, cwd at the requested workspace. MCP defaults to
+  `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
+  under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and
   `GET /` returns 2xx. Desktop owns the DSH child process tree and drains it
   synchronously on smoke completion, startup failure and application quit:
@@ -94,7 +98,7 @@ come from `packages/dsh-shell` in the monorepo.
 | `npm run start` | run Electron against the current build |
 | `npm run dev` | build then run Electron |
 | `npm run smoke` | build then launch hidden Electron; exits 0 on load + health, non-zero on timeout |
-| `npm run dist:dir` | unpacked Electron build into `release/` |
+| `npm run dist:dir` | unpacked Electron build into `release/` (Spotlight-hidden; `install-dev` then deletes the leftover `.app`) |
 | `npm run dist:zip` | zip artifacts for the current platform (publish never) |
 
 ## Signing

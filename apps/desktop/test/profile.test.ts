@@ -17,9 +17,12 @@ async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 async function makeShellSource(dir: string): Promise<string> {
   const src = join(dir, 'shell-src');
   await mkdir(join(src, 'src'), { recursive: true });
+  await mkdir(join(src, 'presets', 'wrenyard'), { recursive: true });
   await writeFile(join(src, 'package.json'), JSON.stringify({ name: '@wrenyard/dsh-shell', version: '1.0.0-dev.0' }));
   await writeFile(join(src, 'cordis.patch.yml'), '# shell patch\n');
   await writeFile(join(src, 'src', 'index.js'), 'module.exports = {};\n');
+  await writeFile(join(src, 'presets', 'wrenyard', 'agent.cordis.yml'), '- id: persona\n  name: \'@deepseek-ai/dsh-persona\'\n');
+  await writeFile(join(src, 'presets', 'wrenyard', 'preset.yml'), 'name: Wrenyard 编排\n');
   return src;
 }
 
@@ -40,6 +43,10 @@ test('prepareProfile composes an isolated web profile from packaged resources', 
       '@deepseek-ai/dsh-web-app',
       '@wrenyard/dsh-shell',
     ]);
+    assert.equal(
+      await readFile(join(dshHome, '.agent-presets', 'wrenyard', 'preset.yml'), 'utf8'),
+      'name: Wrenyard 编排\n',
+    );
 
     const patch = await readFile(profile.cordisPatchPath, 'utf8');
     assert.ok(patch.startsWith('# Managed by @wrenyard/desktop'));

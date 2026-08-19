@@ -64,8 +64,13 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     const port = options.port ?? 0;
     const timeoutMs = options.timeoutMs ?? 30_000;
     const runAsElectron = options.runAsElectron ?? Boolean(process.versions.electron);
-    const args = ['--profile', 'web', '--host', host, '--port', String(port)];
+    // Launcher flags (--profile, --patch) must precede web-app flags
+    // (--host, --port). dsh 0.1.0-rc.6 treats everything after the first
+    // app flag as web argv; `--patch` after `--host` is `unknown option`
+    // and the child exits 1 before ready — Desktop then flash-quits.
+    const args = ['--profile', 'web'];
     if (options.patchPath) args.push('--patch', options.patchPath);
+    args.push('--host', host, '--port', String(port));
 
     const injected = options.command && options.command.length > 0 ? options.command : null;
     const program = injected ? injected[0] : process.execPath;
