@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/runtime-resolver",
-  "version": "1.0.0-dev.11",
+  "version": "1.0.0-dev.12",
   "private": true,
   "license": "MIT",
   "type": "module",
