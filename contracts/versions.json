@@ -5,7 +5,7 @@
   "activity_snapshot": "foreman.activity.snapshot.v1",
   "taskgraph_slip": "foreman.taskgraph.slip.v1",
   "release_manifest": "wrenyard.release-manifest.v1",
-  "desktop": "1.0.0-dev.11",
-  "dsh_shell": "1.0.0-dev.11",
+  "desktop": "1.0.0-dev.12",
+  "dsh_shell": "1.0.0-dev.12",
   "dsh": "0.1.0-rc.6"
 }
