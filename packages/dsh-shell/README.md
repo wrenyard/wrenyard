@@ -12,7 +12,7 @@ surfaces.
   through DSH's public plugin/profile bundle mechanism. **No DeepSeek source is
   vendored** and no internal/private provider is bundled.
 - **Desktop profile composition**: the bundled desktop shell composes this
-  plugin with DSH via `cordis.patch.yml` (Wrenyard 编排者 persona, `tools mode
+  plugin with DSH via `cordis.patch.yml` (啾啾工坊编排者 persona, `tools mode
   code`, `includeRuntimeContext: false`) and installs the `wrenyard` agent
   preset into `$DSH_HOME/.agent-presets/wrenyard` so it appears in the Web
   模式 dropdown. DSH overwrites `agent-presets.roots` with its shipped

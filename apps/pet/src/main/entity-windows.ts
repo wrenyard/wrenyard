@@ -47,6 +47,11 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
+  // Overlay entities have no context menu; settings/restart live on the tray.
+  win.webContents.on('context-menu', (event) => {
+    event.preventDefault();
+  });
+
   // ── Deny renderer-created child windows ────────────────────────
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 

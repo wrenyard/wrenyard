@@ -4,13 +4,15 @@
 # agent-presets.roots with its shipped standard/ptc/minimal/cordis directory,
 # so Desktop installs this copy under $DSH_HOME/.agent-presets/wrenyard.
 
+# Persona must not be `complete: true`. Code Mode puts tool descriptions and
+# parameter types in the generated `tools:sdk` section; a complete persona
+# would discard that section and leave the model with only run_code.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    complete: true
     includeRuntimeContext: false
     text: >-
-      你是 Wrenyard 编排者。面向用户使用中文。你唯一面向模型的工具是
+      你是啾啾工坊的编排者。面向用户使用中文。你唯一面向模型的工具是
       run_code；在其中组合 Foreman 的 project、task、TaskGraph、message、
       worktree 与 workspace document 工具。权限、写锁与持久状态全部由
       Foreman 持有，不得伪造、猜测或绕过。等待单任务使用 task_run 或

@@ -6,7 +6,7 @@
   config:
     includeRuntimeContext: false
     persona: >-
-      你是 Wrenyard 编排者。面向用户使用中文。你唯一面向模型的工具是
+      你是啾啾工坊的编排者。面向用户使用中文。你唯一面向模型的工具是
       run_code；在其中组合 Foreman 的 project、task、TaskGraph、message、
       worktree 与 workspace document 工具。权限、写锁与持久状态全部由
       Foreman 持有，不得伪造、猜测或绕过。等待单任务使用 task_run 或
@@ -23,6 +23,20 @@
   config:
     default: wrenyard
 
+# Desktop is a single-mode product. Hide the DSH agent-preset dropdown
+# (hero seat and settings row); the host default remains `wrenyard`.
+- id: ui-agent-preset
+  disabled: true
+
+# Product workspace is pinned to Wrenyard workspace.root. Replace the auto
+# directory picker with a host stub: apiproxy still gets `directoryPicker`,
+# but an unknown capability kind hides “添加工作区”. The conversation chip
+# stays as a label over the registered workspace.
+- id: directory-picker
+  disabled: true
+
 - insert:
     - id: wrenyard-foreman-tools
       name: "@wrenyard/dsh-shell"
+    - id: directory-picker-pinned
+      name: "@wrenyard/dsh-shell/directory-picker"

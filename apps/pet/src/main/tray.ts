@@ -16,13 +16,14 @@ export interface TrayCallbacks {
   };
   onSettings?: () => void;
   onStats?: () => void;
+  onRestart?: () => void | Promise<unknown>;
   /** Structured remaining-bar rows for the 额度 submenu. */
   getQuotaRows?: () => QuotaMenuRow[];
 }
 
 export function createTray(callbacks: TrayCallbacks = {}): { tray: Tray; rebuildMenu: () => void } {
   const tray = new Tray(createTrayIcon());
-  tray.setToolTip('Wrenyard Pet');
+  tray.setToolTip('啾啾工坊');
 
   const rebuildMenu = () => {
     const quotaRows = callbacks.getQuotaRows?.() ?? [];
@@ -88,6 +89,14 @@ export function createTray(callbacks: TrayCallbacks = {}): { tray: Tray; rebuild
       {
         label: '设置',
         click: () => callbacks?.onSettings?.(),
+      },
+      {
+        label: '重启',
+        click: () => {
+          Promise.resolve(callbacks?.onRestart?.()).catch((err: unknown) => {
+            console.warn('Tray restart callback rejected:', err);
+          });
+        },
       },
       {
         label: '退出',

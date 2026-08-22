@@ -1,63 +1,63 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; frame-src 'none';" />
   <link rel="stylesheet" href="./panel.css" />
-  <title>Workshop Settings</title>
+  <title>工坊设置</title>
 </head>
 <body>
   <div class="title-bar">
-    <span class="title">Workshop Settings</span>
+    <span class="title">工坊设置</span>
     <button id="close-btn" class="close-btn">&times;</button>
   </div>
   <div class="content">
 
     <div class="section">
-      <h3>Appearance</h3>
+      <h3>外观</h3>
       <div class="settings-field">
-        <label for="house-skin">House skin</label>
+        <label for="house-skin">房屋外观</label>
         <select id="house-skin">
-          <option value="classic">Classic Lodge</option>
-          <option value="mushroom">Mushroom Hut</option>
+          <option value="classic">经典木屋</option>
+          <option value="mushroom">蘑菇小屋</option>
         </select>
       </div>
-      <p class="note">Classic keeps crates; Mushroom grows mini mushrooms</p>
+      <p class="note">经典木屋保留木箱；蘑菇小屋长出小蘑菇</p>
       <div class="settings-field">
-        <label for="scale">Scale (1-6)</label>
+        <label for="scale">缩放（1-6）</label>
         <input type="number" id="scale" min="1" max="6" step="1" />
       </div>
       <div class="settings-field">
-        <label for="bottom-offset">Bottom offset (0-512)</label>
+        <label for="bottom-offset">底部偏移（0-512）</label>
         <input type="number" id="bottom-offset" min="0" max="512" step="1" />
       </div>
     </div>
 
     <div class="section">
-      <h3>Companions</h3>
+      <h3>同伴</h3>
       <div class="settings-field">
-        <label>Show house</label>
+        <label>显示房屋</label>
         <input type="checkbox" id="show-house" />
       </div>
       <div class="settings-field">
-        <label>Show workers</label>
+        <label>显示工人</label>
         <input type="checkbox" id="show-workers" />
       </div>
       <div class="settings-field">
-        <label for="bubble-seconds">Bubble (1-60s)</label>
+        <label for="bubble-seconds">气泡时长（1-60 秒）</label>
         <input type="number" id="bubble-seconds" min="1" max="60" step="1" />
       </div>
-      <p id="drag-note" class="note">House position: drag the house window</p>
+      <p id="drag-note" class="note">房屋位置：拖动房屋窗口</p>
     </div>
 
     <div class="section">
-      <h3>Quota Providers</h3>
+      <h3>额度提供方</h3>
       <div id="quota-providers"></div>
     </div>
 
     <div class="save-bar">
-      <button id="save-btn" disabled>Save</button>
-      <button id="save-restart-btn" disabled>Save &amp; Restart</button>
+      <button id="save-btn" disabled>保存</button>
+      <button id="save-restart-btn" disabled>保存并重启</button>
     </div>
   </div>
   <script src="./settings.js"></script>

@@ -58,7 +58,7 @@ function renderSettings(config: SettingsPayload): void {
   // Read-only drag note
   const dragNote = document.getElementById('drag-note');
   if (dragNote) {
-    dragNote.textContent = 'House position: drag the house window';
+    dragNote.textContent = '房屋位置：拖动房屋窗口';
   }
 
   // Quota providers
@@ -183,7 +183,7 @@ async function saveSettings(): Promise<void> {
     const saveBtn = document.getElementById('save-btn') as HTMLButtonElement | null;
     if (saveBtn) {
       const originalText = saveBtn.textContent;
-      saveBtn.textContent = 'Saved ✓';
+      saveBtn.textContent = '已保存 ✓';
       setTimeout(() => {
         saveBtn.textContent = originalText;
       }, 1500);

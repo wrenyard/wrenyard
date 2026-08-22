@@ -207,11 +207,21 @@ describe('tray', () => {
     expect(display!.submenu!.every((item) => item.type === 'radio')).toBe(true);
   });
 
-  it('places Settings immediately before Quit', async () => {
+  it('places Settings then Restart immediately before Quit', async () => {
     const { createTray } = await import('../src/main/tray');
     createTray({ onSettings: vi.fn(), onStats: vi.fn() });
     const labels = menuItems.map((item) => item.label ?? item.type);
-    expect(labels).toEqual(['实体', '统计', '额度', '显示器', 'separator', '设置', '退出']);
+    expect(labels).toEqual(['实体', '统计', '额度', '显示器', 'separator', '设置', '重启', '退出']);
+  });
+
+  it('includes Restart entry that invokes the correct callback', async () => {
+    const onRestart = vi.fn();
+    const { createTray } = await import('../src/main/tray');
+    createTray({ onSettings: vi.fn(), onStats: vi.fn(), onRestart });
+    const restart = findMenuItem(menuItems, '重启');
+    expect(restart).toBeDefined();
+    restart!.click!();
+    expect(onRestart).toHaveBeenCalledTimes(1);
   });
 
   it('includes a Quit entry that calls app.quit', async () => {
