@@ -16,6 +16,7 @@
     "start": "electron .",
     "dev": "npm run build && electron .",
     "smoke": "npm run build && electron . --smoke",
+    "icon": "node tools/render-app-icon.mjs",
     "dist:dir": "npm run build && electron-builder --dir",
     "dist:zip": "npm run build && electron-builder --publish never"
   },

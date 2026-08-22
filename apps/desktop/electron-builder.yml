@@ -14,6 +14,8 @@ directories:
 files:
   - dist/**
   - package.json
+  - resources/icon.png
+  - resources/icon-256.png
 
 extraResources:
   - from: ../../packages/dsh-shell
@@ -23,6 +25,8 @@ extraResources:
       - cordis.patch.yml
       - src/**
       - presets/**
+  - from: resources/icon.png
+    to: icon.png
 
 npmRebuild: false
 
@@ -35,14 +39,17 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: true
   forceCodeSigning: false
+  icon: resources/icon.icns
 
 win:
   executableName: wrenyard-desktop
   target:
     - zip
+  icon: resources/icon.png
 
 linux:
   executableName: wrenyard-desktop
   target:
     - zip
   category: Development
+  icon: resources/icon.png
