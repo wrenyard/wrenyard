@@ -17,9 +17,9 @@ describe('Settings panel — HTML contract', () => {
     expect(options!).toHaveLength(2);
   });
 
-  it('has classic/Classic Lodge and mushroom/Mushroom Hut options', () => {
-    expect(html).toContain('<option value="classic">Classic Lodge</option>');
-    expect(html).toContain('<option value="mushroom">Mushroom Hut</option>');
+  it('has classic/经典木屋 and mushroom/蘑菇小屋 options', () => {
+    expect(html).toContain('<option value="classic">经典木屋</option>');
+    expect(html).toContain('<option value="mushroom">蘑菇小屋</option>');
   });
 
   it('retains all critical settings control IDs', () => {
@@ -39,7 +39,9 @@ describe('Settings panel — HTML contract', () => {
     }
   });
 
-  it('has title Workshop Settings', () => {
-    expect(html).toContain('<title>Workshop Settings</title>');
+  it('has title 工坊设置', () => {
+    expect(html).toContain('<title>工坊设置</title>');
+    expect(html).toContain('<span class="title">工坊设置</span>');
+    expect(html).toContain('lang="zh-CN"');
   });
 });

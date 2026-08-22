@@ -1,5 +1,5 @@
 appId: dev.wrenyard.desktop
-productName: Wrenyard Desktop
+productName: 啾啾工坊
 copyright: "Copyright © 2026 Dluckxx"
 # DSH resolves profile plugins from an isolated user-data directory. Keep app
 # code in ASAR while unpacking the runtime module tree so the profile can link
@@ -37,10 +37,12 @@ mac:
   forceCodeSigning: false
 
 win:
+  executableName: wrenyard-desktop
   target:
     - zip
 
 linux:
+  executableName: wrenyard-desktop
   target:
     - zip
   category: Development

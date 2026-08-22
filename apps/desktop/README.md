@@ -18,7 +18,8 @@ Electron main (dist/main.js)
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
             ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (public kimi-coding / zhipu-coding)
-            ├─ agent preset `wrenyard` at DSH_HOME/.agent-presets/wrenyard (模式 dropdown)
+            ├─ cwd + Host workspace registry pinned to Wrenyard `workspace.root`
+            ├─ agent preset `wrenyard` at $DSH_HOME/.agent-presets/wrenyard (display name 啾啾工坊模式; hero dropdown disabled)
             └─ talks to Wrenyard through the public MCP/IPC contract
                  (@wrenyard/control-client — never Wrenyard internals)
 ```
@@ -37,12 +38,18 @@ Electron main (dist/main.js)
 - **DSH web child** — started with launcher flags first
   (`--profile web --patch <overlay>`), then web flags
   (`--host 127.0.0.1 --port 0`). `--patch` after `--host` is parsed as a
-  web-app option, rejected, and the Desktop flash-quits. The overlay injects
+  web-app option, rejected, and the Desktop flash-quits. The Electron-as-node
+  child must also receive `--expose-internals` *before* the DSH script path:
+  `dsh-base` constructs `cordis-plugin-hmr` before `dsh-web-app` can disable
+  it, and missing the flag exits the child with code 1 (same flash-quit). The overlay injects
   the public Forge llm-pi-ai catalog (`kimi-coding` / `zhipu-coding`) without
   replacing native `deepseek-official` routes. Credential values are read from
   Wrenyard runtime `auth.json` and passed only as child env
   (`FORGE_DSH_*_API_KEY`); the patch file is secret-free. `DSH_HOME` points at
-  an isolated profile, cwd at the requested workspace. MCP defaults to
+  an isolated profile. Child cwd and the Host workspace registry are pinned to
+  Wrenyard `workspace.root` (`WRENYARD_DESKTOP_WORKSPACE` can override). The
+  directory picker is disabled, so the conversation chip is a label rather
+  than an “添加工作区” flow. MCP defaults to
   `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
   under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and

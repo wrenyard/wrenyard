@@ -9,7 +9,6 @@ import { ForemanStatsPoller } from './foreman-stats-poller';
 import { ActivitySnapshotPoller } from './activity-snapshot-poller';
 import { QuotaService } from './quota-service';
 import { createDiagnosticLogger } from './diagnostic-logger';
-import { attachHouseContextMenu } from './house-context-menu';
 import { requestForemanPetRestart } from './foreman-pet-control';
 import { PanelOwner } from './panel-windows';
 import { buildQuotaTips, formatQuotaBarMenuRows, type QuotaMenuRow } from './panel-view-model';
@@ -104,14 +103,6 @@ app.whenReady().then(() => {
     debugRenderer: petDebug === '1' || petDebug === 'true',
   });
   entityManager.start();
-
-  const houseWindow = entityManager.getHouseWindow();
-  if (houseWindow) {
-    attachHouseContextMenu(houseWindow, {
-      onRestart: () => requestForemanPetRestart(),
-      onOpenSettings: () => panelOwner?.openSettings(),
-    });
-  }
 
   // IPC: push snapshots to entity manager
   model.onChange((snap) => {
@@ -342,13 +333,14 @@ app.whenReady().then(() => {
     onSettings: () => {
       panelOwner?.openSettings();
     },
+    onRestart: () => requestForemanPetRestart(),
     onStats: () => {
       panelOwner?.openStats();
     },
     getQuotaRows: () => lastQuotaMenuRows,
   });
 
-  console.log('Foreman Pet started');
+  console.log('啾啾工坊 started');
   console.log('Polling Foreman events over IPC', foremanEventPoller.getIpcPath() || '(not configured)');
   console.log('Polling Foreman stats over IPC', foremanStatsPoller.getIpcPath() || '(not configured)');
 });

@@ -42,7 +42,7 @@ child.on('error', (err) => {
 process.on('SIGINT', () => stopChild());
 process.on('SIGTERM', () => stopChild());
 
-console.log(`Foreman Pet started (pid ${child.pid})`);
+console.log(`啾啾工坊 started (pid ${child.pid})`);
 console.log(`Logs: ${logFile}`);
 
 function stopChild() {

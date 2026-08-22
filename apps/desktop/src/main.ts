@@ -1,6 +1,6 @@
 import { app, BrowserWindow, session } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -8,7 +8,9 @@ import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control-cli
 import { startDshWeb, type DshWebHandle } from './dsh-process.js';
 import { defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
+import { ensureProductWorkspaceRegistered, resolveProductWorkspace } from './workspace.js';
 
+const PRODUCT_TITLE = '啾啾工坊';
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 const SERVICE_RETRY_ATTEMPTS = 10;
@@ -99,18 +101,41 @@ async function assertForemanHealthy(): Promise<void> {
   );
 }
 
+function ensureChineseLocale(dshHome: string): void {
+  const settingsPath = join(dshHome, 'settings.yaml');
+  let existing = '';
+  if (existsSync(settingsPath)) existing = readFileSync(settingsPath, 'utf8');
+  if (/(?:^|\n)locale\s*:/.test(existing)) return;
+  const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
+  writeFileSync(settingsPath, `${prefix}locale:\n  preference: zh\n`);
+}
+
+function resolveAppIcon(): string | undefined {
+  const packaged = join(process.resourcesPath, 'icon.png');
+  if (app.isPackaged && existsSync(packaged)) return packaged;
+  const fromApp = join(app.getAppPath(), 'resources', 'icon.png');
+  return existsSync(fromApp) ? fromApp : undefined;
+}
+
 function createWindow(url: string): BrowserWindow {
+  const icon = resolveAppIcon();
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     show: false,
+    title: PRODUCT_TITLE,
     backgroundColor: '#0f1115',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
     },
+  });
+  win.on('page-title-updated', (event) => {
+    event.preventDefault();
+    win.setTitle(PRODUCT_TITLE);
   });
 
   const origin = new URL(url).origin;
@@ -140,11 +165,11 @@ function createWindow(url: string): BrowserWindow {
 function errorPage(code: number | null, signal: string | null): string {
   return [
     '<!doctype html>',
-    '<html><head><meta charset="utf-8"><title>Wrenyard Desktop</title></head>',
+    `<html><head><meta charset="utf-8"><title>${PRODUCT_TITLE}</title></head>`,
     '<body style="background:#0f1115;color:#e6e6e6;font-family:system-ui,sans-serif;padding:3rem;line-height:1.5">',
-    '<h1>DSH stopped</h1>',
-    `<p>The DSH web process exited unexpectedly (code ${code ?? 'unknown'}, signal ${signal ?? 'none'}).</p>`,
-    '<p>Restart the application to relaunch DSH.</p>',
+    '<h1>啾啾工坊已停止</h1>',
+    `<p>工作区进程意外退出（code ${code ?? 'unknown'}，signal ${signal ?? 'none'}）。</p>`,
+    '<p>请重新打开应用以再次启动。</p>',
     '</body></html>',
   ].join('\n');
 }
@@ -192,7 +217,9 @@ async function bootstrap(): Promise<void> {
     ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
     : join(app.getAppPath(), 'node_modules');
   const profile = await prepareProfile(dshHome, shellSource, runtimeModules);
-  const workspace = process.env.WRENYARD_DESKTOP_WORKSPACE ?? homedir();
+  ensureChineseLocale(profile.dshHome);
+  const workspace = await resolveProductWorkspace();
+  await ensureProductWorkspaceRegistered(profile.dshHome, workspace);
   const patchPath = await writeModelPatch(profile.dshHome);
   const extraEnv = await resolveModelCredentialEnv();
 

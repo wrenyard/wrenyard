@@ -1,3 +1,3 @@
-name: Wrenyard 编排
-description: 通过 Code Mode 只组合 Wrenyard 的 project、task、TaskGraph 与文档工具；不使用 DSH 本地 shell、文件系统、浏览器或子代理。
+name: 啾啾工坊模式
+description: 通过 Code Mode 只组合啾啾工坊的 project、task、TaskGraph 与文档工具；不使用本地 shell、文件系统、浏览器或子代理。
 order: 1

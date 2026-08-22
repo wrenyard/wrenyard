@@ -6,11 +6,12 @@
  *    or installs from an existing artifact when `--artifact` is given.
  * 2. Requires exactly one `.app` bundle in the release output.
  * 3. Stages the bundle on the home volume and verifies its code signature.
- * 4. Atomically replaces `~/Applications/Wrenyard Desktop.app`, keeping the
+ * 4. Atomically replaces `~/Applications/啾啾工坊.app`, keeping the
  *    previous bundle for rollback if the swap fails.
  * 5. Registers the installed app with LaunchServices, unregisters the
  *    unpacked build leftover, and deletes it so Spotlight only lists
- *    `~/Applications/Wrenyard Desktop.app`.
+ *    `~/Applications/啾啾工坊.app`. A leftover `Wrenyard Desktop.app` from
+ *    earlier branding is unregistered and removed.
  *
  * The installer is explicit that unsupported platforms must use the official
  * build artifacts instead.
@@ -30,7 +31,8 @@ import {
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-const APP_NAME = 'Wrenyard Desktop.app';
+const APP_NAME = '啾啾工坊.app';
+const LEGACY_APP_NAME = 'Wrenyard Desktop.app';
 const SOURCE_DIR = resolve(import.meta.dirname, '..', '..', 'apps', 'desktop');
 const RELEASE_DIR = join(SOURCE_DIR, 'release');
 const DEST_DIR = join(homedir(), 'Applications');
@@ -102,6 +104,16 @@ function unregisterAndRemoveReleaseApp(appPath) {
   rmSync(resolved, { recursive: true, force: true });
   hideFromSpotlight(dirname(resolved));
   hideFromSpotlight(releaseRoot);
+}
+
+function removeLegacyDesktopApp() {
+  const legacy = join(DEST_DIR, LEGACY_APP_NAME);
+  if (!existsSync(legacy) || resolve(legacy) === resolve(DEST_APP)) return;
+  if (existsSync(LSREGISTER)) {
+    spawnSync(LSREGISTER, ['-u', resolve(legacy)], { stdio: 'ignore' });
+  }
+  log(`removing leftover ${legacy}…`);
+  rmSync(legacy, { recursive: true, force: true });
 }
 
 function run(command, args, options = {}) {
@@ -235,14 +247,15 @@ try {
   }
 
   unregisterAndRemoveReleaseApp(builtApp);
+  removeLegacyDesktopApp();
 
   const version = readBundleVersion(DEST_APP);
   const result = { path: DEST_APP, version, previous: hadPrevious };
   if (options.json) {
     console.log(JSON.stringify(result));
   } else {
-    log(`installed Wrenyard Desktop v${version} at ${DEST_APP}`);
-    console.log(`Wrenyard Desktop ${version}\n${DEST_APP}`);
+    log(`installed 啾啾工坊 v${version} at ${DEST_APP}`);
+    console.log(`啾啾工坊 ${version}\n${DEST_APP}`);
   }
 } finally {
   if (artifactExtractDir) rmSync(artifactExtractDir, { recursive: true, force: true });

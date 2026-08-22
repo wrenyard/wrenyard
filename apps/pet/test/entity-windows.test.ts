@@ -375,4 +375,30 @@ describe('entity windows', () => {
     expect(mockHide).not.toHaveBeenCalled();
     expect(mockClose).not.toHaveBeenCalled();
   });
+
+  it('suppresses the default context menu on overlay entities', async () => {
+    const { createHouseWindow } = await import('../src/main/entity-windows');
+    const { BrowserWindow } = await import('electron');
+
+    const mockOn = vi.fn();
+    const mockWc = { on: mockOn, once: vi.fn(), send: vi.fn(), setWindowOpenHandler: vi.fn() };
+    vi.mocked(BrowserWindow).mockReturnValueOnce({
+      ...makeMockWin(),
+      webContents: mockWc,
+      once: vi.fn(),
+    } as any);
+
+    createHouseWindow({
+      preloadPath: '/tmp/preload.js',
+      htmlPath: '/tmp/house.html',
+      bounds: { x: 0, y: 0, width: 120, height: 160 },
+      visible: true,
+    });
+
+    const contextMenu = mockOn.mock.calls.find((c: unknown[]) => c[0] === 'context-menu');
+    expect(contextMenu).toBeDefined();
+    const event = { preventDefault: vi.fn() };
+    (contextMenu![1] as (event: { preventDefault: () => void }) => void)(event);
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+  });
 });
