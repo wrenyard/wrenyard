@@ -34,6 +34,7 @@ server.listen(0, '127.0.0.1', () => {
     WRENYARD_MCP_SENDER: process.env.WRENYARD_MCP_SENDER || null,
     FORGE_DSH_KIMI_CODING_API_KEY: process.env.FORGE_DSH_KIMI_CODING_API_KEY || null,
     argv: process.argv.slice(2),
+    execArgv: process.execArgv,
   }));
 });
 const shutdown = () => server.close(() => process.exit(0));
@@ -281,5 +282,25 @@ test('startDshWeb puts --patch before web flags and injects extraEnv without dro
     assert.ok(patchAt < argv.indexOf('--host'), '--patch must precede --host');
     assert.ok(patchAt < argv.indexOf('--port'), '--patch must precede --port');
     assert.equal(childEnv.FORGE_DSH_KIMI_CODING_API_KEY, 'sk-test-not-for-logs');
+  });
+});
+
+test('startDshWeb puts --expose-internals in execArgv, not DSH argv', async () => {
+  await withTemp(async (dir) => {
+    const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
+    const handle = await startDshWeb({
+      binPath: bin,
+      profileHome: join(dir, 'dsh-home'),
+      workspace: dir,
+      runAsElectron: false,
+      timeoutMs: 5_000,
+    });
+    await handle.stop();
+
+    const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
+    const execArgv = childEnv.execArgv as string[];
+    const argv = childEnv.argv as string[];
+    assert.ok(execArgv.includes('--expose-internals'), 'HMR requires --expose-internals in process.execArgv');
+    assert.ok(!argv.includes('--expose-internals'), 'flag must not leak into DSH argv');
   });
 });

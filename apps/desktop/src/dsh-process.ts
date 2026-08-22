@@ -74,7 +74,14 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
 
     const injected = options.command && options.command.length > 0 ? options.command : null;
     const program = injected ? injected[0] : process.execPath;
-    const programArgs = injected ? [...injected.slice(1), ...args] : [options.binPath, ...args];
+    // dsh-base instantiates cordis-plugin-hmr before dsh-web-app can set
+    // `disabled: true`. HMR requires `--expose-internals` in process.execArgv;
+    // without it the child exits 1 during profile boot and Desktop flash-quits
+    // before the window shows. Keep the flag ahead of the script path so
+    // Electron-as-node / Node put it in execArgv, not in DSH argv.
+    const programArgs = injected
+      ? [...injected.slice(1), ...args]
+      : ['--expose-internals', options.binPath, ...args];
 
     const env: NodeJS.ProcessEnv = { ...process.env, DSH_HOME: options.profileHome };
     if (runAsElectron) env.ELECTRON_RUN_AS_NODE = '1';
