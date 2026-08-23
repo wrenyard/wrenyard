@@ -12,12 +12,13 @@ surfaces.
   through DSH's public plugin/profile bundle mechanism. **No DeepSeek source is
   vendored** and no internal/private provider is bundled.
 - **Desktop profile composition**: the bundled desktop shell composes this
-  plugin with DSH via `cordis.patch.yml` (啾啾工坊编排者 persona, `tools mode
-  code`, `includeRuntimeContext: false`) and installs the `wrenyard` agent
-  preset into `$DSH_HOME/.agent-presets/wrenyard` so it appears in the Web
-  模式 dropdown. DSH overwrites `agent-presets.roots` with its shipped
-  standard/PTC/minimal/cordis directory, so a bundle cannot add a system
-  roster root.
+  plugin with DSH via `cordis.patch.yml` (short 啾啾工坊编排者 persona pointing
+  at workspace `AGENTS.md`, `tools mode code`, `includeRuntimeContext: false`;
+  not `complete: true`) and installs the `wrenyard` agent preset into
+  `$DSH_HOME/.agent-presets/wrenyard`. DSH overwrites `agent-presets.roots`
+  with its shipped standard/PTC/minimal/cordis directory, so a bundle cannot
+  add a system roster root. Tool contracts live in workspace `AGENTS.md`, not
+  in this harness.
 - **Public boundaries only**: everything goes through Wrenyard's public MCP
   (HTTP/SSE JSON-RPC) and owner-only NDJSON IPC. No Forge or Wrenyard
   implementation code is imported, and no credentials or raw environment values
