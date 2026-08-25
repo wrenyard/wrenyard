@@ -14,15 +14,17 @@ var timeNow = time.Now
 func CanonicalLabel(pool string) string {
 	switch pool {
 	case "codex":
-		return "codex"
+		return "Codex"
 	case "codex-spark":
 		return "spark"
 	case "cursor":
-		return "cursor"
+		return "Cursor"
+	case "deepseek":
+		return "DeepSeek"
 	case "kimi-coding":
-		return "kimi"
+		return "KIMI"
 	case "zhipu-coding":
-		return "glm"
+		return "GLM"
 	case "super-grok":
 		return "super-grok"
 	default:
@@ -116,6 +118,9 @@ func DisplayLine(q Quota) string {
 	if len(q.Windows) > 0 {
 		line = WindowDisplayLine(q.Windows)
 	}
+	if line == "" && len(q.Balances) > 0 {
+		line = BalanceDisplayLine(q.Balances)
+	}
 	if line == "" && q.Used != nil && q.Total != nil && *q.Total > 0 && !q.QuotaHidden {
 		remaining := *q.Total - *q.Used
 		if remaining < 0 {
@@ -127,6 +132,44 @@ func DisplayLine(q Quota) string {
 		line = q.Label + " " + line
 	}
 	return line
+}
+
+// BalanceDisplayLine renders one or more monetary balances as a compact
+// display line. Balances are shown with currency-aware symbols and exact
+// amounts; no pace, percent or progress semantics are attached.
+func BalanceDisplayLine(balances []MoneyBalance) string {
+	if len(balances) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(balances))
+	for _, b := range balances {
+		parts = append(parts, "remain "+FormatBalance(b))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// FormatBalance renders a single monetary balance with a currency-aware
+// symbol and the exact decimal amount, without pace/percent/progress.
+func FormatBalance(b MoneyBalance) string {
+	amount := strings.TrimSpace(b.Amount)
+	if amount == "" {
+		return ""
+	}
+	currency := strings.ToUpper(strings.TrimSpace(b.Currency))
+	switch currency {
+	case "CNY", "JPY":
+		return "¥" + amount
+	case "USD":
+		return "$" + amount
+	case "EUR":
+		return "€" + amount
+	case "GBP":
+		return "£" + amount
+	default:
+		// Unknown valid currencies render the exact amount with the currency
+		// code, rather than pretending to be CNY.
+		return amount + " " + currency
+	}
 }
 
 func compactMoney(v float64) string {

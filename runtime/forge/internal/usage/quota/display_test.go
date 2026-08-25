@@ -22,10 +22,12 @@ func TestCanonicalLabel(t *testing.T) {
 		pool string
 		want string
 	}{
-		{"codex", "codex"},
+		{"codex", "Codex"},
 		{"codex-spark", "spark"},
-		{"kimi-coding", "kimi"},
-		{"zhipu-coding", "glm"},
+		{"cursor", "Cursor"},
+		{"deepseek", "DeepSeek"},
+		{"kimi-coding", "KIMI"},
+		{"zhipu-coding", "GLM"},
 		{"super-grok", "super-grok"},
 		{"unknown", "unknown"},
 	}
@@ -421,6 +423,59 @@ func TestDisplayLineEmpty(t *testing.T) {
 	q := Quota{Provider: "empty"}
 	if got := DisplayLine(q); got != "" {
 		t.Fatalf("expected empty display line, got %q", got)
+	}
+}
+
+func TestFormatBalanceCurrencySymbols(t *testing.T) {
+	tests := []struct {
+		name     string
+		currency string
+		amount   string
+		want     string
+	}{
+		{name: "usd", currency: "USD", amount: "8.25", want: "$8.25"},
+		{name: "cny", currency: "CNY", amount: "120.50", want: "¥120.50"},
+		{name: "cny lowercase", currency: "cny", amount: "3", want: "¥3"},
+		{name: "eur", currency: "EUR", amount: "10", want: "€10"},
+		{name: "unknown currency default", currency: "JPY", amount: "5", want: "¥5"},
+		{name: "generic currency fallback", currency: "XYZ", amount: "5", want: "5 XYZ"},
+		{name: "empty amount", currency: "USD", amount: "  ", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FormatBalance(MoneyBalance{Currency: tc.currency, Amount: tc.amount}); got != tc.want {
+				t.Fatalf("FormatBalance(%q,%q) = %q, want %q", tc.currency, tc.amount, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBalanceDisplayLineNoPaceOrPercent(t *testing.T) {
+	q := Quota{
+		Label:    "DeepSeek",
+		Balances: []MoneyBalance{{Currency: "CNY", Amount: "120.50"}, {Currency: "USD", Amount: "8.25"}},
+	}
+	line := DisplayLine(q)
+	if line != "DeepSeek remain ¥120.50 · remain $8.25" {
+		t.Fatalf("DisplayLine balance = %q, want exact balance line", line)
+	}
+	if strings.Contains(line, "%") {
+		t.Fatalf("balance display must not contain percent, got %q", line)
+	}
+	if strings.Contains(line, "(") || strings.Contains(line, ")") {
+		t.Fatalf("balance display must not contain pace, got %q", line)
+	}
+	if strings.Contains(line, "remain ¥0") {
+		t.Fatalf("balance display must show exact amounts, got %q", line)
+	}
+}
+
+func TestBalanceDisplayLineEmpty(t *testing.T) {
+	if got := BalanceDisplayLine(nil); got != "" {
+		t.Fatalf("expected empty for nil balances, got %q", got)
+	}
+	if got := BalanceDisplayLine([]MoneyBalance{}); got != "" {
+		t.Fatalf("expected empty for empty balances, got %q", got)
 	}
 }
 
