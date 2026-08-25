@@ -31,9 +31,12 @@ const PROVIDER_X = 8;
 const WINDOW_X = 104;
 /** Indented child column: parent + 6px. */
 export const QUOTA_MENU_CHILD_X = WINDOW_X + 6;
+/** Balance label keeps the full label column, leaving a glyph-space before amount. */
+export const QUOTA_MENU_BALANCE_X = WINDOW_X;
 const PCT_X = 248;
 const PROVIDER_MAX = QUOTA_MENU_BAR_X - PROVIDER_X - 8;
 const CHILD_MAX = QUOTA_MENU_BAR_X - QUOTA_MENU_CHILD_X - 4;
+const BALANCE_MAX = QUOTA_MENU_BAR_X - QUOTA_MENU_BALANCE_X - 4;
 const PCT_MAX = QUOTA_MENU_ROW_WIDTH - PCT_X - 8;
 const AMOUNT_MAX = QUOTA_MENU_ROW_WIDTH - QUOTA_MENU_BAR_X - 8;
 const ERROR_MAX = QUOTA_MENU_ROW_WIDTH - QUOTA_MENU_CHILD_X - 8;
@@ -167,7 +170,7 @@ function renderMenuLine(
     if (isFirstLine) {
       drawString(buffer, strideWidth, PROVIDER_X, lineTop, row.provider, PROVIDER_MAX, PROVIDER_COLOR, true);
     }
-    drawString(buffer, strideWidth, QUOTA_MENU_CHILD_X, lineTop, 'bal.', CHILD_MAX, CHILD_COLOR);
+    drawString(buffer, strideWidth, QUOTA_MENU_BALANCE_X, lineTop, 'bal.', BALANCE_MAX, CHILD_COLOR);
     const amount = row.balances[0].display || row.balances[0].amount;
     drawString(buffer, strideWidth, QUOTA_MENU_BAR_X, lineTop, amount, AMOUNT_MAX, AMOUNT_COLOR);
     return;
