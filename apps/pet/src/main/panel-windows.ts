@@ -19,6 +19,8 @@ export interface PanelOwnerOptions {
   onStatsRequestRefresh: () => Promise<{ summary?: SummaryStats; dailyStats?: DailyStatsSnapshot } | undefined>;
   onRestart: () => void;
   onGetEnabledProviderOrder: () => string[];
+  /** Called after settings persist an explicit provider order/enabled list. */
+  onQuotaProviderOrderChange?: (providers: AppConfig['quota']['providers']) => void;
   /** Returns the owner application's house window, or null if not available.
    *  Used by requireHouseWindow for sender-identity checks. */
   getHouseWindow: () => BrowserWindow | null;
@@ -36,6 +38,7 @@ export class PanelOwner {
   private readonly onStatsRequestRefresh: () => Promise<{ summary?: SummaryStats; dailyStats?: DailyStatsSnapshot } | undefined>;
   private readonly onRestart: () => void;
   private readonly onGetEnabledProviderOrder: () => string[];
+  private readonly onQuotaProviderOrderChange: ((providers: AppConfig['quota']['providers']) => void) | undefined;
   private readonly getHouseWindow: () => BrowserWindow | null;
   private readonly onHouseSkinChange: ((skin: 'classic' | 'mushroom') => void) | undefined;
   private statsCache: {
@@ -51,6 +54,7 @@ export class PanelOwner {
     this.onStatsRequestRefresh = opts.onStatsRequestRefresh;
     this.onRestart = opts.onRestart;
     this.onGetEnabledProviderOrder = opts.onGetEnabledProviderOrder;
+    this.onQuotaProviderOrderChange = opts.onQuotaProviderOrderChange;
     this.getHouseWindow = opts.getHouseWindow;
     this.onHouseSkinChange = opts.onHouseSkinChange;
     this.registerIpcHandlers();
@@ -333,6 +337,7 @@ export class PanelOwner {
     const obj = partial && typeof partial === 'object' ? partial as Record<string, unknown> : {};
     const cfg = { ...this.config };
     let skinChanged = false;
+    let quotaProvidersChanged = false;
 
     if (typeof obj.scale === 'number') cfg.scale = Math.max(1, Math.min(6, Math.round(obj.scale)));
     if (typeof obj.bubbleSeconds === 'number') cfg.bubbleSeconds = Math.max(1, Math.min(60, Math.round(obj.bubbleSeconds)));
@@ -362,12 +367,16 @@ export class PanelOwner {
             enabled: typeof entry.enabled === 'boolean' ? entry.enabled : true,
           };
         }).filter((p) => p.id.length > 0);
+        quotaProvidersChanged = true;
       }
     }
 
     // Synchronize the in-memory config and fire notifications
     Object.assign(this.config, cfg);
     this.onConfigChange(this.config);
+    if (quotaProvidersChanged) {
+      this.onQuotaProviderOrderChange?.(this.config.quota.providers.map((provider) => ({ ...provider })));
+    }
     if (skinChanged && this.onHouseSkinChange) {
       this.onHouseSkinChange(this.config.appearance.houseSkin);
     }
