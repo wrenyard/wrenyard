@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -276,11 +277,19 @@ func TestCursorDefaultStatePathResolution(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(t.TempDir(), "ambient-appdata"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "ambient-config"))
 
-	// Darwin is the host platform here; assert the macOS path resolves under HOME
-	// via the shared cursor.StatePath helper.
-	want := filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
+	var want string
+	switch runtime.GOOS {
+	case "darwin":
+		want = filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
+	case "windows":
+		want = filepath.Join(home, "AppData", "Roaming", "Cursor", "User", "globalStorage", "state.vscdb")
+	default:
+		want = filepath.Join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb")
+	}
 	if got := cursor.StatePath(home); got != want {
-		t.Fatalf("darwin path = %q, want %q", got, want)
+		t.Fatalf("state path = %q, want %q", got, want)
 	}
 }

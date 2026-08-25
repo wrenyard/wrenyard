@@ -19,6 +19,7 @@ const accessTokenKey = "cursorAuth/accessToken"
 // platform. When home is empty it is resolved from HOME/USERPROFILE. Passing a
 // home allows tests to point at a temporary directory.
 func StatePath(home string) string {
+	explicitHome := strings.TrimSpace(home) != ""
 	if home == "" {
 		home = os.Getenv("HOME")
 	}
@@ -29,13 +30,19 @@ func StatePath(home string) string {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
 	case "windows":
-		appData := os.Getenv("APPDATA")
+		appData := ""
+		if !explicitHome {
+			appData = os.Getenv("APPDATA")
+		}
 		if appData == "" {
 			appData = filepath.Join(home, "AppData", "Roaming")
 		}
 		return filepath.Join(appData, "Cursor", "User", "globalStorage", "state.vscdb")
 	default:
-		config := os.Getenv("XDG_CONFIG_HOME")
+		config := ""
+		if !explicitHome {
+			config = os.Getenv("XDG_CONFIG_HOME")
+		}
 		if config == "" {
 			config = filepath.Join(home, ".config")
 		}
