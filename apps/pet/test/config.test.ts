@@ -189,10 +189,52 @@ describe('Config — V1 to V2 migration', () => {
 });
 
 describe('Config — grok to super-grok quota migration', () => {
-  it('defaults contain cursor first, super-grok, and not grok', () => {
+  it('defaults contain official popular order: codex, cursor, deepseek, zhipu-coding, kimi-coding, then codex-spark, super-grok', () => {
     const c = normalizeConfig({});
     const ids = c.quota.providers.map((p) => p.id);
-    expect(ids[0]).toBe('cursor');
+    expect(ids).toEqual(['codex', 'cursor', 'deepseek', 'zhipu-coding', 'kimi-coding', 'codex-spark', 'super-grok']);
+    expect(ids).not.toContain('grok');
+  });
+
+  it('inserts deepseek exactly once at the popularity position for legacy providers, preserving order/enabled', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'grok', enabled: false },
+          { id: 'kimi-coding', enabled: true },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+      { id: 'super-grok', enabled: false },
+      { id: 'kimi-coding', enabled: true },
+    ]);
+  });
+
+  it('inserts deepseek at popularity position for legacy pools without duplicating', () => {
+    const c = normalizeConfig({
+      quota: {
+        pools: ['codex', 'grok', 'kimi-coding'],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+      { id: 'super-grok', enabled: true },
+      { id: 'kimi-coding', enabled: true },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'deepseek')).toHaveLength(1);
+  });
+
+  it('defaults contain codex first, cursor second, super-grok, and not grok', () => {
+    const c = normalizeConfig({});
+    const ids = c.quota.providers.map((p) => p.id);
+    expect(ids.slice(0, 2)).toEqual(['codex', 'cursor']);
     expect(ids).toContain('cursor');
     expect(ids).toContain('super-grok');
     expect(ids).not.toContain('grok');
@@ -210,9 +252,10 @@ describe('Config — grok to super-grok quota migration', () => {
     });
     expect(c.quota.providers).toEqual([
       { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: false },
       { id: 'kimi-coding', enabled: true },
-      { id: 'cursor', enabled: true },
     ]);
   });
 
@@ -224,9 +267,10 @@ describe('Config — grok to super-grok quota migration', () => {
     });
     expect(c.quota.providers).toEqual([
       { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: true },
       { id: 'kimi-coding', enabled: true },
-      { id: 'cursor', enabled: true },
     ]);
   });
 
@@ -244,6 +288,7 @@ describe('Config — grok to super-grok quota migration', () => {
       { id: 'super-grok', enabled: true },
       { id: 'codex', enabled: true },
       { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
     ]);
   });
 
@@ -258,8 +303,9 @@ describe('Config — grok to super-grok quota migration', () => {
     });
     expect(c.quota.providers).toEqual([
       { id: 'codex', enabled: true },
-      { id: 'zhipu-coding', enabled: false },
       { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+      { id: 'zhipu-coding', enabled: false },
     ]);
   });
 
@@ -275,8 +321,26 @@ describe('Config — grok to super-grok quota migration', () => {
     expect(c.quota.providers).toEqual([
       { id: 'codex', enabled: true },
       { id: 'cursor', enabled: false },
+      { id: 'deepseek', enabled: true },
     ]);
     expect(c.quota.providers.filter((p) => p.id === 'cursor')).toHaveLength(1);
+  });
+
+  it('preserves explicit deepseek enabled/manual order without duplicating', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'zhipu-coding', enabled: true },
+          { id: 'deepseek', enabled: false },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'zhipu-coding', enabled: true },
+      { id: 'deepseek', enabled: false },
+      { id: 'cursor', enabled: true },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'deepseek')).toHaveLength(1);
   });
 });
 

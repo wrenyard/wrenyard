@@ -3,7 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import type { DiagnosticLogger } from './diagnostic-logger';
 import type { QuotaProviderState, QuotaWindowRow } from '../shared/entities';
-
 /** Timeout for the forge quota --json child process. Exported so tests
  *  and callers can verify the budget without real-time waiting. */
 export const FORGE_QUOTA_TIMEOUT_MS = 30_000;
@@ -156,6 +155,11 @@ interface RawQuotaEntry {
     remaining_pct?: number;
     expected_remaining_pct?: number;
   }>;
+  /** Monetary balances from forge quota JSON */
+  balances?: Array<{
+    currency?: unknown;
+    amount?: unknown;
+  }>;
 }
 
 function isFiniteZeroToOneHundred(v: unknown): v is number {
@@ -197,6 +201,65 @@ function parseWindowBars(e: RawQuotaEntry): QuotaProviderState['bars'] {
   return undefined;
 }
 
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+/**
+ * Validate a non-negative decimal-string amount (e.g. `"12.50"`).
+ * Rejects missing, non-string, empty, negative, and non-numeric values.
+ */
+function isValidDecimalString(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length === 0) return false;
+  if (!/^\d+(\.\d+)?$/.test(v)) return false;
+  return true;
+}
+
+/**
+ * Format a monetary amount for a currency: CNY/UZS use the CNY prefix form
+ * (¥/₩ style symbol), other ISO currencies use a symbol + amount form where
+ * a common symbol exists, falling back to `AMOUNT CURRENCY`.
+ */
+function formatBalanceAmount(currency: string, amount: string): string {
+  const symbol = currencySymbol(currency);
+  if (symbol) return `${symbol}${amount}`;
+  return `${amount} ${currency}`;
+}
+
+function currencySymbol(currency: string): string | null {
+  switch (currency) {
+    case 'CNY': return '¥';
+    case 'USD': return '$';
+    case 'EUR': return '€';
+    case 'GBP': return '£';
+    case 'JPY': return '¥';
+    default: return null;
+  }
+}
+
+/**
+ * Parse the forge quota `balances` array defensively into structured monetary
+ * rows distinct from percentage windows. Each row validates an uppercase
+ * three-letter currency and a non-negative decimal-string amount. A malformed
+ * array entry is dropped rather than becoming an ok zero balance; an entirely
+ * malformed/non-array `balances` yields `undefined` (no balances).
+ */
+function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
+  if (!Array.isArray(e.balances) || e.balances.length === 0) return undefined;
+  const rows: QuotaProviderState['balances'] = [];
+  for (const b of e.balances) {
+    if (!b || typeof b !== 'object') continue;
+    const currency = b.currency;
+    const amount = b.amount;
+    if (typeof currency !== 'string' || !CURRENCY_RE.test(currency)) continue;
+    if (!isValidDecimalString(amount)) continue;
+    rows.push({
+      currency,
+      amount,
+      display: formatBalanceAmount(currency, amount),
+    });
+  }
+  return rows.length > 0 ? rows : undefined;
+}
+
 export function parseQuotaJson(raw: string): QuotaProviderState[] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
@@ -236,6 +299,7 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
           : 'unavailable';
 
     const bars = parseWindowBars(e);
+    const balances = parseBalances(e);
 
     results.push({
       id,
@@ -246,6 +310,7 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
       stale,
       code,
       bars,
+      balances,
     });
   }
 

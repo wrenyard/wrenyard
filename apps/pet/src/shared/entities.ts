@@ -176,12 +176,29 @@ export interface QuotaProviderState {
   code?: string | null;
   /** Parsed window data for graphical rendering */
   bars?: QuotaProviderBars;
+  /** Structured monetary balances, distinct from percentage windows. */
+  balances?: QuotaBalanceRow[];
+}
+
+/** A single monetary quota balance row, separate from percentage bars. */
+export interface QuotaBalanceRow {
+  /** Uppercase three-letter ISO currency code, e.g. `CNY` or `USD`. */
+  currency: string;
+  /** Non-negative decimal-string amount, e.g. `"12.50"`. */
+  amount: string;
+  /** Pre-formatted display value for the currency (e.g. `¥12.50`, `$12.50`). */
+  display: string;
 }
 
 export interface QuotaTipLine {
   text: string;
   /** Structured bar data for graphical rendering in hover tips */
   bars?: QuotaBarRow[];
+  /** Structured monetary balance rows, distinct from bars. */
+  balances?: QuotaBalanceRow[];
+  /** Explicit group identity for monetary balances (e.g. provider id), so
+   *  renderers never infer the provider from balance text. */
+  balanceLabel?: string;
   /** Optional structured provider error row for two-column rendering */
   errorRow?: { label: string; message: string };
 }

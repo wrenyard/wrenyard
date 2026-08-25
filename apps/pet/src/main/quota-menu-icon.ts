@@ -25,6 +25,10 @@ const GLYPHS: Record<string, readonly number[]> = {
   ' ': [0, 0, 0, 0, 0, 0, 0],
   '-': [0, 0, 0, 0b01110, 0, 0, 0],
   '%': [0b10001, 0b10010, 0b00100, 0b01000, 0b10010, 0b10001, 0],
+  '.': [0, 0, 0, 0, 0, 0b00100, 0b00100],
+  '$': [0b00100, 0b01110, 0b10100, 0b01110, 0b00101, 0b01110, 0b00100],
+  '¥': [0b10001, 0b10001, 0b01010, 0b11111, 0b00100, 0b00100, 0b00100],
+  '€': [0b01110, 0b10000, 0b11110, 0b10000, 0b11110, 0b10000, 0b01110],
   '0': [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
   '1': [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
   '2': [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
@@ -76,6 +80,19 @@ export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
   if (row.error) {
     drawString(buffer, pixelWidth, PROVIDER_X, TEXT_Y, row.provider, 88);
     drawString(buffer, pixelWidth, WINDOW_X, TEXT_Y, row.error, QUOTA_MENU_ROW_WIDTH - WINDOW_X - 8);
+    return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
+  }
+
+  // Monetary balance rows (quota-only providers): provider | currency |
+  // right-side amount. No bar track/fill/expected marker/percentage.
+  if (row.balances && row.balances.length > 0) {
+    if (row.provider) drawString(buffer, pixelWidth, PROVIDER_X, TEXT_Y, row.provider, 88);
+    const bal = row.balances[0];
+    drawString(buffer, pixelWidth, WINDOW_X, TEXT_Y, bal.currency, 28);
+    const amount = bal.display || bal.amount;
+    const amountWidth = amount.length * 6;
+    const amountX = Math.max(WINDOW_X + 28 + 8, QUOTA_MENU_ROW_WIDTH - 8 - amountWidth);
+    drawString(buffer, pixelWidth, amountX, TEXT_Y, amount, QUOTA_MENU_ROW_WIDTH - 8 - amountX);
     return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
   }
 

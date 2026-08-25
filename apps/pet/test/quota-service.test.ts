@@ -244,6 +244,108 @@ describe('parseQuotaJson', () => {
   });
 });
 
+describe('parseQuotaJson — monetary balances', () => {
+  it('parses a single valid CNY balance distinct from bars', () => {
+    const raw = JSON.stringify([
+      {
+        pool: 'deepseek',
+        label: 'DeepSeek',
+        status: 'ok',
+        display_line: 'DeepSeek ¥12.50',
+        balances: [{ currency: 'CNY', amount: '12.50' }],
+      },
+    ]);
+
+    const [provider] = parseQuotaJson(raw);
+    expect(provider.id).toBe('deepseek');
+    expect(provider.balances).toBeDefined();
+    expect(provider.balances).toHaveLength(1);
+    expect(provider.balances![0].currency).toBe('CNY');
+    expect(provider.balances![0].amount).toBe('12.50');
+    expect(provider.balances![0].display).toBe('¥12.50');
+    // Monetary balances are separate from bars: no window bars produced.
+    expect(provider.bars).toBeUndefined();
+  });
+
+  it('parses multiple balance currencies in order with generic formatting', () => {
+    const raw = JSON.stringify([
+      {
+        pool: 'deepseek',
+        label: 'DeepSeek',
+        status: 'ok',
+        display_line: 'DeepSeek ¥12.50 · $1.00',
+        balances: [
+          { currency: 'CNY', amount: '12.50' },
+          { currency: 'USD', amount: '1.00' },
+          { currency: 'XYZ', amount: '7' },
+        ],
+      },
+    ]);
+
+    const [provider] = parseQuotaJson(raw);
+    expect(provider.balances).toHaveLength(3);
+    expect(provider.balances!.map((b) => b.currency)).toEqual(['CNY', 'USD', 'XYZ']);
+    expect(provider.balances![0].display).toBe('¥12.50');
+    expect(provider.balances![1].display).toBe('$1.00');
+    expect(provider.balances![2].display).toBe('7 XYZ');
+  });
+
+  it('drops malformed balance entries without becoming ok zero balances', () => {
+    const raw = JSON.stringify([
+      {
+        pool: 'deepseek',
+        label: 'DeepSeek',
+        status: 'ok',
+        display_line: 'DeepSeek ¥12.50',
+        balances: [
+          { currency: 'cny', amount: '12.50' }, // lowercase currency rejected
+          { currency: 'CNY', amount: '-3' }, // negative amount rejected
+          { currency: 'CNY', amount: 'abc' }, // non-numeric rejected
+          { currency: 'CNY', amount: 12.5 }, // non-string amount rejected
+          { currency: 'US', amount: '1' }, // too-short currency rejected
+          'not-an-object', // non-object entry skipped
+          { currency: 'CNY', amount: '12.50' }, // valid entry retained
+        ],
+      },
+    ]);
+
+    const [provider] = parseQuotaJson(raw);
+    expect(provider.balances).toHaveLength(1);
+    expect(provider.balances![0]).toEqual({ currency: 'CNY', amount: '12.50', display: '¥12.50' });
+  });
+
+  it('retains balances alongside window bars without producing extra bars', () => {
+    const raw = JSON.stringify([
+      {
+        pool: 'deepseek',
+        label: 'DeepSeek',
+        status: 'ok',
+        display_line: 'DeepSeek ¥12.50 · 7d 40%',
+        remaining_pct: 40,
+        windows: [{ name: '7d', remaining_pct: 40 }],
+        balances: [{ currency: 'CNY', amount: '12.50' }],
+      },
+    ]);
+
+    const [provider] = parseQuotaJson(raw);
+    expect(provider.bars).toBeDefined();
+    expect(provider.bars!.windows).toHaveLength(1);
+    expect(provider.balances).toBeDefined();
+    expect(provider.balances!).toHaveLength(1);
+  });
+
+  it('yields no balances for missing or non-array balances field', () => {
+    const raw = JSON.stringify([
+      { pool: 'codex', label: 'Codex', status: 'ok', display_line: 'Codex 40%', remaining_pct: 40 },
+      { pool: 'deepseek', label: 'DeepSeek', status: 'ok', display_line: 'x', balances: 'nope' },
+    ]);
+
+    const providers = parseQuotaJson(raw);
+    expect(providers[0].balances).toBeUndefined();
+    expect(providers[1].balances).toBeUndefined();
+  });
+});
+
 describe('QuotaService runForgeQuotaJson timeout', () => {
   beforeEach(() => {
     vi.mocked(spawn).mockClear();

@@ -1171,4 +1171,100 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     expect(result!.x).toBeGreaterThanOrEqual(STATS_MARGIN);
     expect(result!.x + result!.width + STATS_MARGIN).toBeLessThanOrEqual(250);
   });
+
+  it('renders mixed percentage bars and monetary balance rows in one aligned card', () => {
+    const surface = mockSurface();
+    const container = mockContainer();
+
+    const node = createStatsCard(container, surface);
+    const result = updateStatsCard(node, {
+      dailyStats: { dispatchCount: 7, totalTokens: 1540, inputTokens: 1200, outputTokens: 340, source: 'sqlite' },
+      runningWorkerCount: 1,
+      queuedCount: 0,
+      dailyStatsUnavailable: false,
+      quotaTips: [
+        {
+          text: 'Codex: 60%',
+          bars: [{
+            provider: {
+              remainingPct: 60,
+              expectedRemainingPct: 35,
+              windows: [{ name: '5h', usedPct: 40, remainingPct: 60, expectedRemainingPct: 45 }],
+            },
+            label: 'Codex',
+            error: null,
+            status: 'ok',
+            stale: false,
+          }],
+        },
+        {
+          text: 'deepseek CNY ¥12.50 · USD $8.00',
+          balanceLabel: 'deepseek',
+          balances: [
+            { currency: 'CNY', amount: '12.50', display: '¥12.50' },
+            { currency: 'USD', amount: '8.00', display: '$8.00' },
+          ],
+        },
+      ],
+      pointer: { x: 100, y: 100, inside: true },
+      dragging: false,
+      houseRect: { x: 50, y: 50, width: 200, height: 150 },
+      viewportWidth: 1920,
+      viewportHeight: 1080,
+    });
+
+    expect(result).toBeDefined();
+
+    // Mixed layout lines: percentage bar provider and monetary balance rows
+    expect(result!.lines).toEqual(expect.arrayContaining(['Codex 5h']));
+    expect(result!.lines.some((line) => line.includes('deepseek') && line.includes('CNY') && line.includes('¥12.50'))).toBe(true);
+    expect(result!.lines.some((line) => line.includes('deepseek') && line.includes('USD') && line.includes('$8.00'))).toBe(true);
+
+    // Percentage bar provider still emits a track (Codex 5h)
+    const barsGfxMock = (node.barsGfx as any).setCommands;
+    expect(barsGfxMock).toHaveBeenCalled();
+    const barCommands = barsGfxMock.mock.calls[0][0];
+    const tracks = barCommands.filter((c: any) => c.kind === 'roundedRect' && c.fill === '#2E2018');
+    expect(tracks.length).toBe(1); // Codex only; monetary rows have no bar
+
+    // Right-aligned amount: amount node x puts the right edge at the card's content edge
+    const codexRowIdx = 0; // first visual row = Codex 5h
+    const deepseekCnyIdx = 1; // first balance row
+    const deepseekUsdIdx = 2; // second balance row
+    const contentRight = result!.x + result!.width - STATS_PADDING_X;
+    const amountCnyPos = (node.amountNodes[deepseekCnyIdx].setPosition as any).mock.calls.slice(-1)[0];
+    const amountUsdPos = (node.amountNodes[deepseekUsdIdx].setPosition as any).mock.calls.slice(-1)[0];
+    const cnyWidth = Array.from('¥12.50').length * 6;
+    const usdWidth = Array.from('$8.00').length * 6;
+    expect(amountCnyPos[0] + cnyWidth).toBe(contentRight);
+    expect(amountUsdPos[0] + usdWidth).toBe(contentRight);
+
+    // No pct node content is emitted for monetary rows (kept invisible)
+    expect(node.pctNodes[deepseekCnyIdx].setVisible).toHaveBeenLastCalledWith(false);
+    expect(node.pctNodes[deepseekUsdIdx].setVisible).toHaveBeenLastCalledWith(false);
+
+    // Multi-currency same-provider rows are compact (SAME_PROVIDER_ROW_STEP apart),
+    // with an inter-provider gap between Codex bar group and the DeepSeek balance group
+    const codexWindowY = (node.windowNodes[codexRowIdx].setPosition as any).mock.calls.slice(-1)[0][1];
+    const cnyCurrencyY = (node.windowNodes[deepseekCnyIdx].setPosition as any).mock.calls.slice(-1)[0][1];
+    const usdCurrencyY = (node.windowNodes[deepseekUsdIdx].setPosition as any).mock.calls.slice(-1)[0][1];
+    // Codex 5h (SAME_PROVIDER_ROW_STEP) → DeepSeek group: add INTER_PROVIDER_EXTRA_GAP
+    expect(cnyCurrencyY - codexWindowY).toBe(SAME_PROVIDER_ROW_STEP + INTER_PROVIDER_EXTRA_GAP);
+    // DeepSeek CNY → USD: compact same-provider step, no inter-provider gap
+    expect(usdCurrencyY - cnyCurrencyY).toBe(SAME_PROVIDER_ROW_STEP);
+
+    // Balance rows carry currency in the window column and no pct node content:
+    // currency node x equals windowLabelX
+    const windowLabelX = result!.x + STATS_PADDING_X + PROVIDER_LABEL_WIDTH;
+    const cnyCurrencyPos = (node.windowNodes[deepseekCnyIdx].setPosition as any).mock.calls.slice(-1)[0];
+    expect(cnyCurrencyPos[0]).toBe(windowLabelX);
+    const cnyCurrencyText = (node.windowNodes[deepseekCnyIdx].setText as any).mock.calls.slice(-1)[0][0];
+    expect(cnyCurrencyText).toBe('CNY');
+    const usdCurrencyText = (node.windowNodes[deepseekUsdIdx].setText as any).mock.calls.slice(-1)[0][0];
+    expect(usdCurrencyText).toBe('USD');
+
+    // Provider label visible only on the first balance row (groupStart)
+    expect(node.providerNodes[deepseekCnyIdx].setVisible).toHaveBeenLastCalledWith(true);
+    expect(node.providerNodes[deepseekUsdIdx].setVisible).toHaveBeenLastCalledWith(false);
+  });
 });

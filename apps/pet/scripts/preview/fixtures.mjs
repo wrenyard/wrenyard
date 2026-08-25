@@ -233,32 +233,40 @@ export const HOUSE_FIXTURES = [
       },
       quotaTips: [
         {
-          text: 'codex-spark 7d 25%',
+          text: 'codex 5h 60% · 7d 25%',
           bars: [{
-            provider: { remainingPct: 25, expectedRemainingPct: null, windows: [{ name: '7d', usedPct: 75, remainingPct: 25, expectedRemainingPct: null }] },
-            label: 'codex-spark',
+            provider: {
+              remainingPct: 25,
+              expectedRemainingPct: null,
+              windows: [
+                { name: '5h', usedPct: 40, remainingPct: 60, expectedRemainingPct: 45 },
+                { name: '7d', usedPct: 75, remainingPct: 25, expectedRemainingPct: null },
+              ],
+            },
+            label: 'codex',
             error: null,
             status: 'ok',
             stale: false,
           }],
         },
         {
-          text: 'kimi-coding 5h 80%',
+          text: 'cursor 7d 80%',
           bars: [{
             provider: {
               remainingPct: 80,
-              expectedRemainingPct: 90,
-              windows: [
-                { name: '5h', usedPct: 20, remainingPct: 80, expectedRemainingPct: 90 },
-                { name: '7d', usedPct: 40, remainingPct: 60, expectedRemainingPct: 50 },
-                { name: '1mo', usedPct: 72.5, remainingPct: 27.5, expectedRemainingPct: null },
-              ],
+              expectedRemainingPct: 50,
+              windows: [{ name: '7d', usedPct: 20, remainingPct: 80, expectedRemainingPct: 50 }],
             },
-            label: 'kimi-coding',
+            label: 'cursor',
             error: null,
             status: 'ok',
             stale: false,
           }],
+        },
+        {
+          text: 'deepseek CNY ¥12.50',
+          balanceLabel: 'deepseek',
+          balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
         },
         {
           text: 'super-grok error \u2014 rate limit hit',

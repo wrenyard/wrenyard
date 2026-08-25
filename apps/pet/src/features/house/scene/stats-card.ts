@@ -42,6 +42,8 @@ export interface StatsCardNode {
   providerNodes: RenderText[];
   windowNodes: RenderText[];
   pctNodes: RenderText[];
+  /** Lazily-created per-row text nodes for monetary balance amounts */
+  amountNodes: RenderText[];
 }
 
 export interface StatsCardLayout {
@@ -61,7 +63,7 @@ export function createStatsCard(container: RenderContainer, surface: RenderSurfa
   container.add(barsGfx);
   container.add(text);
   container.setVisible(false);
-  return { container, background, text, barsGfx, surface, providerNodes: [], windowNodes: [], pctNodes: [] };
+  return { container, background, text, barsGfx, surface, providerNodes: [], windowNodes: [], pctNodes: [], amountNodes: [] };
 }
 
 export function formatCount(value: number): string {
@@ -137,11 +139,14 @@ export function updateStatsCard(
     for (const tn of node.providerNodes) tn.setVisible(false);
     for (const tn of node.windowNodes) tn.setVisible(false);
     for (const tn of node.pctNodes) tn.setVisible(false);
+    for (const tn of node.amountNodes) tn.setVisible(false);
     return undefined;
   }
 
-  // Check if any tip has structured bar data
-  const hasBarData = tipsAvailable && input.quotaTips!.some((tip) => (tip.bars && tip.bars.length > 0) || tip.errorRow);
+  // Check if any tip has structured bar or monetary balance data
+  const hasBarData = tipsAvailable && input.quotaTips!.some(
+    (tip) => (tip.bars && tip.bars.length > 0) || tip.errorRow || (tip.balances && tip.balances.length > 0),
+  );
 
   if (hasBarData) {
     return renderBarsCard(node, input);
@@ -152,6 +157,7 @@ export function updateStatsCard(
   for (const tn of node.providerNodes) tn.setVisible(false);
   for (const tn of node.windowNodes) tn.setVisible(false);
   for (const tn of node.pctNodes) tn.setVisible(false);
+  for (const tn of node.amountNodes) tn.setVisible(false);
 
   // Build two-line Lamplight summary
   const summaryLineCount = 2;
@@ -303,11 +309,13 @@ function renderBarsCard(
   const barCommands: ShapeCommand[] = [];
 
   interface VisualRow {
-    type: 'text' | 'bar-window' | 'error-row';
+    type: 'text' | 'bar-window' | 'error-row' | 'balance';
     providerLabel: string;
     windowName: string;
     groupStart: boolean;
     errorMessage?: string;
+    currency?: string;
+    amount?: string;
     barDef?: {
       remainingPct: number;
       expectedRemainingPct: number | null;
@@ -332,6 +340,28 @@ function renderBarsCard(
         errorMessage: fittedMessage,
         groupStart: true,
       });
+      continue;
+    }
+
+    // Monetary balance rows (quota-only providers, e.g. DeepSeek). Multiple
+    // currencies form compact same-provider rows; no bar track/fill/expected
+    // marker/pct node is emitted for these rows.
+    if (tip.balances && tip.balances.length > 0) {
+      providerGroupCount++;
+      const providerLabel = tip.balanceLabel ?? tip.bars?.[0]?.label ?? '';
+      const fittedLabel = fitLineToWidth(providerLabel, PROVIDER_LABEL_WIDTH, node.text);
+      let isBalanceGroupStart = true;
+      for (const bal of tip.balances) {
+        visualRows.push({
+          type: 'balance',
+          providerLabel: fittedLabel,
+          windowName: '',
+          currency: bal.currency,
+          amount: bal.display || bal.amount,
+          groupStart: isBalanceGroupStart,
+        });
+        isBalanceGroupStart = false;
+      }
       continue;
     }
 
@@ -416,6 +446,8 @@ function renderBarsCard(
       lines.push(r.providerLabel);
     } else if (r.type === 'error-row') {
       lines.push(`${r.providerLabel} ${r.errorMessage}`);
+    } else if (r.type === 'balance') {
+      lines.push(`${r.providerLabel} ${r.currency} ${r.amount}`);
     } else {
       lines.push(`${r.providerLabel} ${r.windowName}`);
     }
@@ -437,6 +469,11 @@ function renderBarsCard(
     node.pctNodes.push(pctn);
     node.container.add(pctn);
   }
+  while (node.amountNodes.length < visualRows.length) {
+    const amn = node.surface.createText('', { ...statsTextStyle(), align: 'left' });
+    node.amountNodes.push(amn);
+    node.container.add(amn);
+  }
 
   // Hide all row nodes first, then selectively show used ones
   for (let i = 0; i < node.providerNodes.length; i++) {
@@ -445,6 +482,9 @@ function renderBarsCard(
   }
   for (let i = 0; i < node.pctNodes.length; i++) {
     node.pctNodes[i].setVisible(false);
+  }
+  for (let i = 0; i < node.amountNodes.length; i++) {
+    node.amountNodes[i].setVisible(false);
   }
 
   // Estimate height — 2 summary lines for Lamplight, then provider rows
@@ -533,6 +573,42 @@ function renderBarsCard(
 
       // No bar commands (track, fill, marker)
       rowTop += STATS_LINE_HEIGHT;
+      rowIdx++;
+      continue;
+    }
+
+    if (r.type === 'balance') {
+      // Provider label text node (visible only on groupStart, like bar rows)
+      const pn = node.providerNodes[rowIdx];
+      if (r.groupStart) {
+        pn.setText(r.providerLabel);
+        pn.setPosition(providerLabelX, rowTop);
+        pn.setVisible(true);
+        pn.setAlpha(0.90);
+      }
+
+      // Currency code in the window column
+      const wn = node.windowNodes[rowIdx];
+      wn.setText(r.currency ?? '');
+      wn.setPosition(windowLabelX, rowTop);
+      wn.setVisible(true);
+      wn.setAlpha(0.90);
+
+      // Amount right-aligned to the card's right content edge — no bar track/fill/
+      // expected marker and no pct node are emitted for monetary rows.
+      const amountTxt = r.amount ?? '';
+      const amountNode = node.amountNodes[rowIdx];
+      amountNode.setText(amountTxt);
+      const { width: amountMeas } = amountNode.measure();
+      amountNode.setPosition(Math.max(windowLabelX, x + width - STATS_PADDING_X - amountMeas), rowTop);
+      amountNode.setVisible(true);
+      amountNode.setAlpha(0.90);
+
+      // No percentage node for balance rows
+      const pctn = node.pctNodes[rowIdx];
+      pctn.setVisible(false);
+
+      rowTop += SAME_PROVIDER_ROW_STEP;
       rowIdx++;
       continue;
     }
