@@ -1296,10 +1296,11 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     // DeepSeek CNY → USD: compact same-provider step, no inter-provider gap
     expect(usdBalY - cnyBalY).toBe(SAME_PROVIDER_ROW_STEP);
 
-    // Balance child label is exactly 'bal.', indented inside the window column
+    // Balance label uses the full window column, leaving one glyph-space before
+    // the amount; quota window names remain indented children.
     const windowLabelX = result!.x + STATS_PADDING_X + PROVIDER_LABEL_WIDTH;
     const cnyBalPos = (node.windowNodes[deepseekCnyIdx].setPosition as any).mock.calls.slice(-1)[0];
-    expect(cnyBalPos[0]).toBe(windowLabelX + CHILD_LABEL_INDENT);
+    expect(cnyBalPos[0]).toBe(windowLabelX);
     const cnyBalText = (node.windowNodes[deepseekCnyIdx].setText as any).mock.calls.slice(-1)[0][0];
     expect(cnyBalText).toBe('bal.');
     const usdBalText = (node.windowNodes[deepseekUsdIdx].setText as any).mock.calls.slice(-1)[0][0];
