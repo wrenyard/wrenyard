@@ -49,6 +49,7 @@ func denylistKeys() []string {
 		"CODEX_API_KEY",
 		"CODEX_ACCESS_TOKEN",
 		"CODEX_HOME",
+		"CURSOR_AUTH_TOKEN",
 		"GROK_HOME",
 		"XAI_API_KEY",
 		"OPENCODE_CONFIG",

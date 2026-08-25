@@ -13,6 +13,7 @@ const (
 	DialectOpenCode   = schema.DialectOpenCode
 	DialectGrok       = schema.DialectGrok
 	DialectDSH        = schema.DialectDSH
+	DialectCursor     = schema.DialectCursor
 )
 
 // DSH-specific client and transcript constants. They are distinct from the
@@ -23,6 +24,16 @@ const (
 	EnvDSHModel = "DSH_MODEL"
 	// TranscriptFamilyDSH is the transcript family for DSH client sessions.
 	TranscriptFamilyDSH = "dsh"
+)
+
+// Cursor-specific client and transcript constants. The Cursor dialect is its
+// own codec and the model id is carried verbatim through CURSOR_MODEL.
+const (
+	// EnvCursorModel is the environment variable carrying the canonical
+	// provider/model value to the Cursor client.
+	EnvCursorModel = "CURSOR_MODEL"
+	// TranscriptFamilyCursor is the transcript family for Cursor sessions.
+	TranscriptFamilyCursor = "cursor"
 )
 
 // BinarySpec describes how to locate and invoke the client binary.

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	_ "modernc.org/sqlite"
 )
 
@@ -30,7 +31,7 @@ func createCursorStateDB(t *testing.T, dir, token string) string {
 		t.Fatalf("create ItemTable: %v", err)
 	}
 	if token != "" {
-		if _, err := db.Exec(`INSERT INTO ItemTable (key, value) VALUES (?, ?)`, cursorAccessTokenKey, token); err != nil {
+		if _, err := db.Exec(`INSERT INTO ItemTable (key, value) VALUES (?, ?)`, "cursorAuth/accessToken", token); err != nil {
 			t.Fatalf("insert token: %v", err)
 		}
 	}
@@ -276,9 +277,10 @@ func TestCursorDefaultStatePathResolution(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	// Darwin is the host platform here; assert the macOS path resolves under HOME.
+	// Darwin is the host platform here; assert the macOS path resolves under HOME
+	// via the shared cursor.StatePath helper.
 	want := filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
-	if got := defaultCursorStatePath(); got != want {
+	if got := cursor.StatePath(home); got != want {
 		t.Fatalf("darwin path = %q, want %q", got, want)
 	}
 }

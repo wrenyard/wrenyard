@@ -111,6 +111,36 @@ func TestCredentialNonKimiTargetEnv(t *testing.T) {
 	}
 }
 
+func TestCredentialCursorTargetEnv(t *testing.T) {
+	cb := fakeCredentialCallbacks(nil, nil, false, "desktop-token", true, true)
+	plan, err := PlanCredential(InputProfile{Provider: "cursor"}, cb)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plan.TargetEnv != "CURSOR_AUTH_TOKEN" {
+		t.Fatalf("expected CURSOR_AUTH_TOKEN for cursor, got %q", plan.TargetEnv)
+	}
+	if plan.Value != "desktop-token" {
+		t.Fatalf("expected desktop-token value, got %q", plan.Value)
+	}
+	if plan.Source != "provider" {
+		t.Fatalf("expected source provider, got %q", plan.Source)
+	}
+}
+
+func TestCredentialCursorSecretRefTargetEnv(t *testing.T) {
+	// Cursor must route its secret to CURSOR_AUTH_TOKEN even via secret_ref.
+	cb := fakeCredentialCallbacks(nil, nil, false, "", false, false)
+	ref := "profile:cursor-token"
+	plan, err := PlanCredential(InputProfile{Provider: "cursor", SecretRef: &ref}, cb)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plan.TargetEnv != "CURSOR_AUTH_TOKEN" {
+		t.Fatalf("expected CURSOR_AUTH_TOKEN for cursor secret_ref, got %q", plan.TargetEnv)
+	}
+}
+
 func TestCredentialNoProviderNoCatalogDefaultLookup(t *testing.T) {
 	// Empty provider + callback that would only return a value for a known
 	// provider: with empty provider, ResolveProviderCredential must NOT be
@@ -155,6 +185,25 @@ func TestCredentialValueAbsentFromJSON(t *testing.T) {
 	}
 	if !strings.Contains(s, "source") {
 		t.Fatalf("expected source in JSON: %s", s)
+	}
+}
+
+func TestCredentialValueAbsentFromJSONForCursor(t *testing.T) {
+	plan := CredentialPlan{
+		TargetEnv: "CURSOR_AUTH_TOKEN",
+		Value:     "cursor-super-secret",
+		Source:    "provider",
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	if strings.Contains(s, "cursor-super-secret") {
+		t.Fatalf("cursor credential Value leaked into JSON: %s", s)
+	}
+	if !strings.Contains(s, "CURSOR_AUTH_TOKEN") {
+		t.Fatalf("expected CURSOR_AUTH_TOKEN target_env in JSON: %s", s)
 	}
 }
 

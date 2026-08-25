@@ -16,6 +16,7 @@ func TestBuildChildEnvDeniesManagedAndGitKeys(t *testing.T) {
 	t.Setenv("CODEX_API_KEY", "sk-test-codex")
 	t.Setenv("CODEX_ACCESS_TOKEN", "tok-codex")
 	t.Setenv("CODEX_HOME", "/home/codex-test")
+	t.Setenv("CURSOR_AUTH_TOKEN", "tok-cursor-inherited")
 	t.Setenv("OPENCODE_CONFIG", "/parent/opencode.json")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"permission":"allow"}`)
 	t.Setenv("OPENCODE_CONFIG_DIR", "/parent/opencode")
@@ -36,6 +37,7 @@ func TestBuildChildEnvDeniesManagedAndGitKeys(t *testing.T) {
 		"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
 		"CLAUDE_CONFIG_DIR", "CLAUDE_JOB_DIR",
 		"CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_HOME",
+		"CURSOR_AUTH_TOKEN",
 		"OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION",
 		"FORGE_INTERNAL_OPENCODE_BASH_GATE_EXECUTABLE", "FORGE_INTERNAL_OPENCODE_BASH_PERMISSION",
 		"FORGE_PROFILE", "FORGE_REPO_DIR", "FORGE_BINARY",
@@ -57,6 +59,7 @@ func TestBuildChildEnvDeniesKeysCaseInsensitively(t *testing.T) {
 		"codex_api_key=sk-codex",
 		"CODEX_ACCESS_TOKEN=tok-mixed",
 		"Codex_Home=/home/low",
+		"cursor_auth_token=tok-cursor-low",
 		"git_dir=/repo/.git",
 		"GIT_WORK_TREE=/repo/work-low",
 		"Git_Index_File=/repo/.git/index",
@@ -68,7 +71,8 @@ func TestBuildChildEnvDeniesKeysCaseInsensitively(t *testing.T) {
 
 	for _, key := range []string{
 		"anthropic_api_key", "claude_config_dir", "codex_api_key",
-		"CODEX_ACCESS_TOKEN", "Codex_Home", "git_dir", "GIT_WORK_TREE",
+		"CODEX_ACCESS_TOKEN", "Codex_Home", "cursor_auth_token",
+		"git_dir", "GIT_WORK_TREE",
 		"Git_Index_File", "GIT_COMMON_DIR",
 	} {
 		if _, ok := env[key]; ok {
@@ -111,8 +115,17 @@ func TestBuildChildEnvDeniesLowercaseClaudeModelOnWindows(t *testing.T) {
 
 func TestBuildChildEnvPlannedOverlayWins(t *testing.T) {
 	result := buildChildEnv(
-		map[string]string{"Path": "/planned/bin", "CODEX_API_KEY": "planned-key"},
-		[]string{"PATH=/parent/bin", "CODEX_API_KEY=parent-key", "BENIGN=kept"},
+		map[string]string{
+			"Path":              "/planned/bin",
+			"CODEX_API_KEY":     "planned-key",
+			"CURSOR_AUTH_TOKEN": "planned-cursor-token",
+		},
+		[]string{
+			"PATH=/parent/bin",
+			"CODEX_API_KEY=parent-key",
+			"CURSOR_AUTH_TOKEN=parent-cursor-token",
+			"BENIGN=kept",
+		},
 		true,
 	)
 	env := envListToMap(result)
@@ -125,6 +138,9 @@ func TestBuildChildEnvPlannedOverlayWins(t *testing.T) {
 	}
 	if got := env["CODEX_API_KEY"]; got != "planned-key" {
 		t.Fatalf("planned managed key = %q, want planned-key: %v", got, result)
+	}
+	if got := env["CURSOR_AUTH_TOKEN"]; got != "planned-cursor-token" {
+		t.Fatalf("explicit planned CURSOR_AUTH_TOKEN = %q, want planned-cursor-token: %v", got, result)
 	}
 	if got := env["BENIGN"]; got != "kept" {
 		t.Fatalf("benign inherited value = %q, want kept", got)

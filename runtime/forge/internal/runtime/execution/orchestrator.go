@@ -594,7 +594,7 @@ func classifyGrokAttemptTrust(child ChildResult, childError bool) driver.GrokAtt
 }
 
 func supportsNativeResume(dialect catalog.Dialect) bool {
-	return dialect == catalog.DialectClaudeCode || dialect == catalog.DialectCodeBuddy || dialect == catalog.DialectCodex || dialect == catalog.DialectOpenCode || dialect == catalog.DialectGrok
+	return dialect == catalog.DialectClaudeCode || dialect == catalog.DialectCodeBuddy || dialect == catalog.DialectCodex || dialect == catalog.DialectOpenCode || dialect == catalog.DialectGrok || dialect == catalog.DialectCursor
 }
 
 func clockFor(deps Dependencies) Clock {
