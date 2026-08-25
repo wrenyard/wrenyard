@@ -15,6 +15,7 @@ import {
   createQuotaMenuRowIcon,
   groupQuotaMenuRows,
   QUOTA_MENU_AMOUNT_ALPHA,
+  QUOTA_MENU_BALANCE_X,
   QUOTA_MENU_BAR_X,
   QUOTA_MENU_BAR_H,
   QUOTA_MENU_BAR_W,
@@ -132,8 +133,9 @@ describe('quota menu row bitmap', () => {
     // No solid bar track/fill reaches the far right bar edge (short amount text cannot).
     expect(alphaAt(row, QUOTA_MENU_BAR_X + QUOTA_MENU_BAR_W - 1, QUOTA_MENU_BAR_Y)).toBe(0);
     expect(alphaAt(row, QUOTA_MENU_BAR_X + QUOTA_MENU_BAR_W - 1, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H - 1)).toBe(0);
-    // bal. sits in the indented child column at lower alpha.
-    expect(alphaAt(row, QUOTA_MENU_CHILD_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_CHILD_ALPHA);
+    // bal. uses the full label column at lower alpha, leaving a glyph-space
+    // before the amount-aligned bar column.
+    expect(alphaAt(row, QUOTA_MENU_BALANCE_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_CHILD_ALPHA);
     // Amount starts exactly at the bar column and is strong.
     expect(alphaAt(row, QUOTA_MENU_BAR_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_AMOUNT_ALPHA);
   });
@@ -228,7 +230,7 @@ describe('quota menu row bitmap', () => {
     expect(alphaAt(full, markerX + 1, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_FILL_ALPHA);
   });
 
-  it('places balance bal. in the child column and amount at the bar column with no bar semantics', () => {
+  it('places balance bal. in the label column and amount at the bar column with no bar semantics', () => {
     const row = renderQuotaMenuRowBitmap({
       provider: 'deepseek',
       window: '',
@@ -237,8 +239,8 @@ describe('quota menu row bitmap', () => {
       label: 'deepseek bal. ¥12.50',
       balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal. ¥12.50' }],
     });
-    // bal. rendered in the indented child column at lower alpha.
-    expect(alphaAt(row, QUOTA_MENU_CHILD_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_CHILD_ALPHA);
+    // bal. rendered in the full label column at lower alpha.
+    expect(alphaAt(row, QUOTA_MENU_BALANCE_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_CHILD_ALPHA);
     // Amount starts exactly at the bar column and is strong.
     expect(alphaAt(row, QUOTA_MENU_BAR_X, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_AMOUNT_ALPHA);
     // No solid bar track/fill reaches the far right edge where short amount text cannot.
