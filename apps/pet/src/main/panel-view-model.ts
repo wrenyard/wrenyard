@@ -1,4 +1,5 @@
 import type { QuotaProviderState, QuotaTipLine, QuotaBarRow, QuotaWindowRow } from '../shared/entities';
+import { floorQuotaPercentage } from '../shared/quota-percentage';
 export interface StatsSummaryLine {
   text: string;
 }
@@ -89,11 +90,6 @@ export function buildQuotaTips(providers: QuotaProviderState[], order: string[])
   return tips;
 }
 
-function roundRemainPct(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.round(Math.min(100, Math.max(0, n)));
-}
-
 export interface QuotaMenuRow {
   provider: string;
   window: string;
@@ -173,7 +169,7 @@ export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
       continue;
     }
     windows.forEach((window, index) => {
-      const remain = roundRemainPct(window.remainingPct);
+      const remain = floorQuotaPercentage(window.remainingPct);
       const provider = index === 0 ? bar.label : '';
       rows.push({
         provider,
@@ -201,7 +197,7 @@ export function formatRemainQuotaLine(
   const reset = src.match(/·\s*([^·]*\breset)\s*$/)?.[1]?.trim();
   const has7d = windows.some((window) => window.name.toLowerCase() === '7d');
   const parts = windows.map((window, index) => {
-    let part = `${window.name} ${roundRemainPct(window.remainingPct)}% remain`;
+    let part = `${window.name} ${floorQuotaPercentage(window.remainingPct)}% remain`;
     const isAnchor = has7d ? window.name.toLowerCase() === '7d' : index === windows.length - 1;
     if (isAnchor && pace) part += ` ${pace}`;
     return part;

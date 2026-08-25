@@ -1,4 +1,5 @@
 import { nativeImage, type NativeImage } from 'electron';
+import { floorQuotaPercentage } from '../shared/quota-percentage';
 import type { QuotaMenuRow } from './panel-view-model';
 
 export const QUOTA_MENU_SCALE = 2;
@@ -115,7 +116,7 @@ export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
         MARKER,
       );
     }
-    const remain = Math.round(Math.min(100, Math.max(0, row.remainingPct)));
+    const remain = floorQuotaPercentage(row.remainingPct);
     drawString(buffer, pixelWidth, PCT_X, TEXT_Y, `${remain}% remain`, 72);
   }
 

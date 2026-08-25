@@ -7,6 +7,7 @@ import type {
   ShapeCommand,
 } from '../../../render';
 import type { QuotaTipLine } from '../../../shared/entities';
+import { floorQuotaPercentage } from '../../../shared/quota-percentage';
 import { pointInRect, type HouseRect, type PointerInput } from './hit-regions';
 
 export const STATS_MAX_WIDTH = 240;
@@ -674,7 +675,7 @@ function renderBarsCard(
     }
 
     // Percentage text node — right-aligned within BAR_PCT_WIDTH
-    const pctTxt = `${Math.round(r.barDef!.remainingPct)}%`;
+    const pctTxt = `${floorQuotaPercentage(r.barDef!.remainingPct)}%`;
     const pctn = node.pctNodes[rowIdx];
     pctn.setText(pctTxt);
     pctn.setVisible(true);
