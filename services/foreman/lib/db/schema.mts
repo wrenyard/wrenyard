@@ -92,12 +92,12 @@ function tableExists(database: ForemanDatabase, table: string): boolean {
   return tableCreateSql(database, table) !== undefined
 }
 
-function needsOpenCodeClientFamilyMigration(sql: string | undefined): boolean {
-  return Boolean(sql?.includes("client_family IN ('claude','codex')") && !sql.includes("'opencode'"))
+function needsCursorClientFamilyMigration(sql: string | undefined): boolean {
+  return Boolean(sql?.includes('client_family IN') && !sql.includes("'cursor'"))
 }
 
 function needsCurrentExecutionsMigration(sql: string | undefined): boolean {
-  return Boolean(sql && (needsOpenCodeClientFamilyMigration(sql) || /\bsession_id\b/iu.test(sql)))
+  return Boolean(sql && (needsCursorClientFamilyMigration(sql) || /\bsession_id\b/iu.test(sql)))
 }
 
 function needsNullableEventExecutionsMigration(sql: string | undefined): boolean {
@@ -191,6 +191,21 @@ function addStatusMetadataColumns(database: ForemanDatabase): void {
 function rebuildExecutionsForCurrentSchema(database: ForemanDatabase): void {
   database.prepare('ALTER TABLE executions RENAME TO executions_schema_old').run()
   database.prepare(EXECUTIONS_TABLE_SQL).run()
+
+  const sourceColumns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(executions_schema_old)')
+    .all()
+    .map((column) => column.name))
+  // Preserve requested_agent_runtime and resolved_profile verbatim when the
+  // legacy source table already carries them; NULL only for older schemas that
+  // predate these columns.
+  const runtimeColumn = sourceColumns.has('requested_agent_runtime')
+    ? 'requested_agent_runtime'
+    : 'NULL'
+  const resolvedColumn = sourceColumns.has('resolved_profile')
+    ? 'resolved_profile'
+    : 'NULL'
+
   database.prepare(`
     INSERT INTO executions (
       id, task_id, profile, permission, cwd, prompt, status,
@@ -202,7 +217,7 @@ function rebuildExecutionsForCurrentSchema(database: ForemanDatabase): void {
       id, task_id, profile, permission, cwd, prompt, status,
       native_session_id, client_family, pid, pgid, started_at, ended_at, exit_code,
       kill_signal, kill_reason, output, raw_result, error, timeout_ms,
-      NULL, NULL, created_at, updated_at
+      ${runtimeColumn}, ${resolvedColumn}, created_at, updated_at
     FROM executions_schema_old
   `).run()
   database.prepare('DROP TABLE executions_schema_old').run()
@@ -262,7 +277,7 @@ const EXECUTIONS_TABLE_SQL = `CREATE TABLE executions (
   status            TEXT NOT NULL CHECK(status IN
                       ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
   native_session_id TEXT,
-  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode')),
+  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor')),
   pid               INTEGER, pgid INTEGER,
   started_at        TEXT, ended_at TEXT,
   exit_code         INTEGER, kill_signal TEXT,
