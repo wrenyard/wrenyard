@@ -2738,6 +2738,7 @@ func TestCachePathCanonicalContract(t *testing.T) {
 	}{
 		{"codex", "codex.json"},
 		{"codex-spark", "codex-spark.json"},
+		{"cursor", "cursor.json"},
 		{"kimi-coding", "kimi-coding.json"},
 		{"zhipu-coding", "zhipu-coding.json"},
 		{"anthropic", "anthropic.json"},
@@ -2803,6 +2804,7 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
+	deps.ProviderForOverride = cursorSafeProviderFor(deps)
 
 	// Capture JSON output
 	r, w, _ := os.Pipe()
@@ -2938,6 +2940,7 @@ func TestQuotaListAllJSONLegacyCompat(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
+	deps.ProviderForOverride = cursorSafeProviderFor(deps)
 
 	r, w, _ := os.Pipe()
 	old := os.Stdout
@@ -2980,6 +2983,7 @@ func TestCLIAliasResolution(t *testing.T) {
 		{"codex", "codex"},
 		{"codex-spark", "codex-spark"},
 		{"spark", "codex-spark"},
+		{"cursor", "cursor"},
 		{"kimi-coding", "kimi-coding"},
 		{"kimi", "kimi-coding"},
 		{"zhipu-coding", "zhipu-coding"},
@@ -3246,7 +3250,8 @@ func TestQuotaListAllJSONWithProviderError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deps := CommandDeps{
+	var deps CommandDeps
+	deps = CommandDeps{
 		DataDir:              tmpDir,
 		LoadConfig:           func() (ConfigInfo, []string, error) { return ConfigInfo{}, nil, nil },
 		LoadBilling:          func() BillingInfo { return BillingInfo{DefaultQuotaTotal: 7000} },
@@ -3254,7 +3259,18 @@ func TestQuotaListAllJSONWithProviderError(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return true },
 		ProviderForOverride: func(name string, billing BillingInfo) Provider {
-			return fakeProvider{name: "codex", err: errors.New("simulated fetch error")}
+			if name == "cursor" {
+				return fakeProvider{name: "cursor", q: Quota{
+					Provider:  "cursor",
+					Source:    "cursor-dashboard",
+					FetchedAt: timeNow(),
+					Windows:   []Window{{Name: "Cursor", Pct: 10, WindowMinutes: 43200}},
+				}}
+			}
+			if name == "codex" {
+				return fakeProvider{name: "codex", err: errors.New("simulated fetch error")}
+			}
+			return innerProviderFor(deps, name, billing)
 		},
 	}
 
@@ -3331,6 +3347,7 @@ func TestSuperGrokListUnavailableEvenWithFreshCache(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
+	deps.ProviderForOverride = cursorSafeProviderFor(deps)
 
 	r, w, _ := os.Pipe()
 	old := os.Stdout
@@ -3404,6 +3421,7 @@ func TestListCacheHitCopiesStale(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
+	deps.ProviderForOverride = cursorSafeProviderFor(deps)
 
 	r, w, _ := os.Pipe()
 	old := os.Stdout
@@ -3538,6 +3556,7 @@ func TestQuotaListAllJSONZeroUsedTotal(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
+	deps.ProviderForOverride = cursorSafeProviderFor(deps)
 
 	r, w, _ := os.Pipe()
 	old := os.Stdout
@@ -3765,6 +3784,105 @@ func testQuotaCommandDeps(dataDir string) CommandDeps {
 		ResolveBigModelToken: func() string { return "" },
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
+	}
+}
+
+// cursorSafeProviderFor returns a ProviderForOverride that keeps the cursor
+// pool hermetic in list/show tests: it substitutes a fixed cursor fixture and
+// delegates every other pool to the real factory. This prevents the cursor
+// pool from reading a real state.vscdb or hitting the live dashboard.
+func cursorSafeProviderFor(deps CommandDeps) func(string, BillingInfo) Provider {
+	return func(name string, billing BillingInfo) Provider {
+		if name == "cursor" {
+			return fakeProvider{name: "cursor", q: Quota{
+				Provider:  "cursor",
+				Source:    "cursor-dashboard",
+				FetchedAt: timeNow(),
+				Windows:   []Window{{Name: "Cursor", Pct: 10, WindowMinutes: 43200}},
+			}}
+		}
+		return innerProviderFor(deps, name, billing)
+	}
+}
+
+func TestCursorInnerProviderFactory(t *testing.T) {
+	deps := CommandDeps{
+		LoadConfig:           func() (ConfigInfo, []string, error) { return ConfigInfo{}, nil, nil },
+		ResolveBigModelToken: func() string { return "" },
+		ResolveKimiToken:     func() string { return "" },
+		CodexBarEnabled:      func() bool { return false },
+	}
+	provider := innerProviderFor(deps, "cursor", BillingInfo{})
+	if provider == nil {
+		t.Fatal("innerProviderFor(cursor) must return a provider")
+	}
+	if provider.Name() != "cursor" {
+		t.Fatalf("innerProviderFor(cursor).Name() = %q, want cursor", provider.Name())
+	}
+}
+
+func TestCursorCanonicalLabelAndAlias(t *testing.T) {
+	if got := CanonicalLabel("cursor"); got != "cursor" {
+		t.Fatalf("CanonicalLabel(cursor) = %q, want cursor", got)
+	}
+	if got := canonicalName("cursor"); got != "cursor" {
+		t.Fatalf("canonicalName(cursor) = %q, want cursor", got)
+	}
+}
+
+func TestCursorFailClosedAndRequiredSource(t *testing.T) {
+	if !failClosedPool("cursor") {
+		t.Fatal("cursor must be a fail-closed pool")
+	}
+	if got := requiredSource("cursor"); got != "cursor-dashboard" {
+		t.Fatalf("requiredSource(cursor) = %q, want cursor-dashboard", got)
+	}
+	// Existing pools remain unchanged.
+	if got := requiredSource("codex"); got != "codex-app-server" {
+		t.Fatalf("requiredSource(codex) = %q, want codex-app-server", got)
+	}
+	if !failClosedPool("codex") || !failClosedPool("codex-spark") {
+		t.Fatal("codex and codex-spark must remain fail-closed")
+	}
+	if failClosedPool("kimi-coding") || failClosedPool("anthropic") {
+		t.Fatal("kimi-coding and anthropic must not be fail-closed")
+	}
+}
+
+func TestCursorCacheRequiresCursorDashboardSource(t *testing.T) {
+	now := timeNow()
+	// Correct source is eligible within TTL.
+	if !cacheEligibleForPool(Quota{Source: "cursor-dashboard", FetchedAt: now}, "cursor") {
+		t.Fatal("cursor cache with cursor-dashboard source must be eligible")
+	}
+	// Wrong source must be rejected even when fresh.
+	if cacheEligibleForPool(Quota{Source: "codex-app-server", FetchedAt: now}, "cursor") {
+		t.Fatal("cursor cache with wrong source must be rejected")
+	}
+	// Absent source must be rejected.
+	if cacheEligibleForPool(Quota{FetchedAt: now}, "cursor") {
+		t.Fatal("cursor cache with absent source must be rejected")
+	}
+}
+
+func TestCursorDisplayLineStaysCompact(t *testing.T) {
+	now := timeNow()
+	q := Quota{
+		Provider:  "cursor",
+		Source:    "cursor-dashboard",
+		Label:     "Cursor Team",
+		FetchedAt: now,
+		Windows: []Window{
+			{Name: "Cursor", Pct: 42, WindowMinutes: 43200},
+			{Name: "Other", Pct: 12, WindowMinutes: 43200},
+		},
+	}
+	line := DisplayLine(q)
+	if !strings.Contains(line, "Cursor 58% remain") {
+		t.Fatalf("display_line = %q, want compact Cursor window", line)
+	}
+	if !strings.Contains(line, "Other 88% remain") {
+		t.Fatalf("display_line = %q, want compact Other window", line)
 	}
 }
 

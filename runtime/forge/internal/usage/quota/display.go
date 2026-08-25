@@ -17,6 +17,8 @@ func CanonicalLabel(pool string) string {
 		return "codex"
 	case "codex-spark":
 		return "spark"
+	case "cursor":
+		return "cursor"
 	case "kimi-coding":
 		return "kimi"
 	case "zhipu-coding":

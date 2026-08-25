@@ -9,7 +9,7 @@ import (
 )
 
 func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
-	want := []string{"anthropic", "codebuddy", "codex", "codex-spark", "kimi-coding", "opencode-native", "xai", "zhipu-coding"}
+	want := []string{"anthropic", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "opencode-native", "xai", "zhipu-coding"}
 	modules := providers.Modules()
 	got := make([]string, len(modules))
 	reg := catalog.DefaultRegistry()
@@ -101,5 +101,45 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 	}
 	if _, err := reg.LookupBinding("deepseek"); err == nil {
 		t.Fatal("deepseek must not be a registered Forge binding")
+	}
+}
+
+func TestCursorProviderModuleQuotaOnly(t *testing.T) {
+	reg := catalog.DefaultRegistry()
+	module, ok := providers.Lookup("cursor")
+	if !ok {
+		t.Fatal("cursor builtin module must be registered")
+	}
+	binding := module.Binding()
+	if binding.Name != "cursor" {
+		t.Fatalf("binding name = %q, want cursor", binding.Name)
+	}
+	if binding.Inference != nil {
+		t.Fatal("cursor must not declare an inference transport")
+	}
+	if len(binding.RawLLM) != 0 {
+		t.Fatalf("cursor must not declare raw LLM capability, got %#v", binding.RawLLM)
+	}
+	if binding.UseClientBinary {
+		t.Fatal("cursor must not use a client binary")
+	}
+	if source := binding.CredentialSource(); source != "" {
+		t.Fatalf("cursor credential source = %q, want empty (no auth surface)", source)
+	}
+	if binding.QuotaProvider != "cursor" {
+		t.Fatalf("cursor quota provider = %q, want cursor", binding.QuotaProvider)
+	}
+	if len(module.Models()) != 0 {
+		t.Fatalf("cursor must expose no models, got %#v", module.Models())
+	}
+	quotaInfo := module.Quota()
+	if quotaInfo.Kind != "cursor" || quotaInfo.Name != "cursor" {
+		t.Fatalf("cursor quota metadata = %#v, want kind/name cursor", quotaInfo)
+	}
+	if module.Auth().Login {
+		t.Fatal("cursor must not expose an auth-login surface")
+	}
+	if _, err := reg.LookupBinding("cursor"); err != nil {
+		t.Fatalf("cursor binding must be registered: %v", err)
 	}
 }
