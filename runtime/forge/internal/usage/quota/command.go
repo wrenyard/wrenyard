@@ -86,7 +86,7 @@ func quotaWindowsJSON(windows []Window) []quotaWindowJSON {
 }
 
 // canonicalPools lists the canonical pool names in deterministic order.
-var canonicalPools = []string{"codex", "codex-spark", "kimi-coding", "zhipu-coding", "anthropic", "super-grok"}
+var canonicalPools = []string{"codex", "codex-spark", "cursor", "kimi-coding", "zhipu-coding", "anthropic", "super-grok"}
 
 // Command dispatches the quota command. Usage: forge quota [name] [--json] [--refresh]
 func Command(deps CommandDeps, args []string) int {
@@ -206,15 +206,15 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 
 	q, err := provider.Fetch(ctx)
 	if err != nil {
-		// Codex and codex-spark use fail-closed cache: replace expired
-		// quota with a failure marker instead of preserving stale data.
-		// The failure-marker write is atomic with ownership: the token is
-		// re-verified under the guard immediately before the write, so a
+		// Codex, codex-spark, and cursor use fail-closed cache: replace
+		// expired quota with a failure marker instead of preserving stale
+		// data. The failure-marker write is atomic with ownership: the token
+		// is re-verified under the guard immediately before the write, so a
 		// stale worker resumed after reclaim can never overwrite a newer
 		// owner's cache or marker. On ownership loss we exit without
 		// writing or releasing the newer token.
 		guardErr := rl.WithOwnedGuard(func() error {
-			if canonical == "codex" || canonical == "codex-spark" {
+			if failClosedPool(canonical) {
 				return writeRefreshFailureForce(cachePath, time.Now(), err.Error())
 			}
 			return writeRefreshFailure(cachePath, time.Now(), err.Error())
@@ -337,22 +337,22 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 
 		q, err := provider.Fetch(ctx)
 		if err != nil {
-			// Codex and codex-spark use fail-closed cache: replace any existing
-			// valid quota with a failure marker so stale data is never rendered.
-			if pool == "codex" || pool == "codex-spark" {
-				_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
-			}
-			entry.Status = "error"
-			entry.Error = err.Error()
-			if asJSON {
-				entries = append(entries, entry)
-			} else {
-				fmt.Printf("%s: error: %v\n", pool, err)
-			}
-			continue
+		// Fail-closed pools replace any existing valid quota with a failure
+		// marker so stale data is never rendered.
+		if failClosedPool(pool) {
+			_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 		}
+		entry.Status = "error"
+		entry.Error = err.Error()
+		if asJSON {
+			entries = append(entries, entry)
+		} else {
+			fmt.Printf("%s: error: %v\n", pool, err)
+		}
+		continue
+	}
 
-		// Persist the fetched data to the canonical cache.
+	// Persist the fetched data to the canonical cache.
 		if q.FetchedAt.IsZero() {
 			q.FetchedAt = timeNow()
 		}
@@ -488,9 +488,9 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 
 	q, err := provider.Fetch(ctx)
 	if err != nil {
-		// Codex and codex-spark use fail-closed cache: replace any existing
-		// valid quota with a failure marker so stale data is never rendered.
-		if canonical == "codex" || canonical == "codex-spark" {
+		// Fail-closed pools replace any existing valid quota with a failure
+		// marker so stale data is never rendered.
+		if failClosedPool(canonical) {
 			_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 		}
 		if asJSON {
@@ -587,10 +587,34 @@ func poolCachePath(dataDir, pool string) string {
 	return filepath.Join(dataDir, "quota", pool+".json")
 }
 
+// failClosedPool reports whether the given canonical pool uses a fail-closed
+// cache: on fetch failure, stale success data is force-replaced with a failure
+// marker so it is never rendered.
+func failClosedPool(pool string) bool {
+	switch pool {
+	case "codex", "codex-spark", "cursor":
+		return true
+	}
+	return false
+}
+
+// requiredSource returns the exact cache source a fail-closed pool must carry
+// to be eligible for direct display. Empty means no source validation.
+func requiredSource(pool string) string {
+	switch pool {
+	case "codex", "codex-spark":
+		return "codex-app-server"
+	case "cursor":
+		return "cursor-dashboard"
+	}
+	return ""
+}
+
 // cacheEligibleForPool checks whether the given cached Quota is eligible
 // for direct command display. The cache is usable when:
 //   - FetchedAt is non-zero and age is non-negative and below defaultCacheTTL
-//   - For codex/codex-spark, the source must be exactly "codex-app-server"
+//   - For codex/codex-spark/cursor, the source must be exactly the provider's
+//     authoritative source (requiredSource).
 func cacheEligibleForPool(cached Quota, pool string) bool {
 	if cached.FetchedAt.IsZero() {
 		return false
@@ -599,7 +623,7 @@ func cacheEligibleForPool(cached Quota, pool string) bool {
 	if age < 0 || age >= defaultCacheTTL {
 		return false
 	}
-	if (pool == "codex" || pool == "codex-spark") && cached.Source != "codex-app-server" {
+	if source := requiredSource(pool); source != "" && cached.Source != source {
 		return false
 	}
 	return true
@@ -609,6 +633,7 @@ var canonicalPoolMap = map[string]string{
 	"codex":        "codex",
 	"codex-spark":  "codex-spark",
 	"spark":        "codex-spark",
+	"cursor":       "cursor",
 	"kimi-coding":  "kimi-coding",
 	"kimi":         "kimi-coding",
 	"zhipu-coding": "zhipu-coding",
@@ -656,6 +681,8 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 		return CodexProvider{
 			ProviderName: name,
 		}
+	case "cursor":
+		return CursorProvider{}
 	default:
 		return nil
 	}

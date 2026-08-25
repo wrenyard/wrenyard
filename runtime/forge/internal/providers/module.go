@@ -12,6 +12,7 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codebuddy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codex"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codexspark"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/kimi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/opencode"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
@@ -32,6 +33,7 @@ var modules = []ProviderModule{
 	codebuddy.Module(),
 	codex.Module(),
 	codexspark.Module(),
+	cursor.Module(),
 	kimi.Module(),
 	opencode.Module(),
 	xai.Module(),
