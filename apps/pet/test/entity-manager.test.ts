@@ -134,7 +134,7 @@ describe('EntityManager — key reuse after retirement', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
 
@@ -237,7 +237,7 @@ describe('EntityManager — bubble-based delayed retirement', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
 
@@ -375,7 +375,7 @@ describe('EntityManager — stats clear regression', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
 
@@ -439,7 +439,7 @@ describe('EntityManager — quota tips plumbing', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
 
@@ -496,7 +496,7 @@ describe('EntityManager — house skin', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
 
@@ -540,7 +540,7 @@ describe('EntityManager — house skin', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     };
     const localEm = new EntityManager({

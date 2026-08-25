@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 interface MockMenuItem {
   label: string;
-  click?: () => void;
+  click?: (menuItem?: MockMenuItem) => void;
   submenu?: MockMenuItem[];
   type?: 'normal' | 'separator' | 'checkbox' | 'radio';
   checked?: boolean;
@@ -191,10 +191,33 @@ describe('tray', () => {
     createTray({ onSettings: vi.fn(), onStats: vi.fn() });
     const houseVisible = findMenuItem(menuItems, '房屋');
     const workersVisible = findMenuItem(menuItems, '工人');
+    const taskgraphsVisible = findMenuItem(menuItems, '图纸燕');
     expect(houseVisible).toBeDefined();
     expect(houseVisible!.type).toBe('checkbox');
     expect(workersVisible).toBeDefined();
     expect(workersVisible!.type).toBe('checkbox');
+    expect(taskgraphsVisible).toBeDefined();
+    expect(taskgraphsVisible!.type).toBe('checkbox');
+  });
+
+  it('reflects and updates taskgraph entity visibility', async () => {
+    const setTaskgraphsVisible = vi.fn();
+    const { createTray } = await import('../src/main/tray');
+    createTray({
+      onSettings: vi.fn(),
+      onStats: vi.fn(),
+      entities: {
+        getVisibility: () => ({ house: true, workers: true, taskgraphs: false }),
+        setHouseVisible: vi.fn(),
+        setWorkersVisible: vi.fn(),
+        setTaskgraphsVisible,
+      },
+    });
+
+    const taskgraphsVisible = findMenuItem(menuItems, '图纸燕');
+    expect(taskgraphsVisible?.checked).toBe(false);
+    taskgraphsVisible!.click!({ ...taskgraphsVisible!, checked: true });
+    expect(setTaskgraphsVisible).toHaveBeenCalledWith(true);
   });
 
   it('includes display submenu with radio entries', async () => {
