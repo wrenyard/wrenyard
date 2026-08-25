@@ -51,8 +51,9 @@ export interface AppConfig {
 
 const GROK_PROVIDER_ID = 'super-grok';
 const LEGACY_GROK_ID = 'grok';
+const CURSOR_PROVIDER_ID = 'cursor';
 
-const DEFAULT_PROVIDER_IDS = ['codex', 'codex-spark', 'kimi-coding', 'zhipu-coding', GROK_PROVIDER_ID];
+const DEFAULT_PROVIDER_IDS = [CURSOR_PROVIDER_ID, 'codex', 'codex-spark', 'kimi-coding', 'zhipu-coding', GROK_PROVIDER_ID];
 
 const DEFAULT_CONFIG: AppConfig = {
   scale: 3,
@@ -159,7 +160,7 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
   if (Array.isArray(quotaObj.pools)) {
     const ids = quotaObj.pools as string[];
     return {
-      providers: migrateQuotaPoolIds(ids).map((id) => ({ id, enabled: true })),
+      providers: appendCursorWhenAbsent(migrateQuotaPoolIds(ids).map((id) => ({ id, enabled: true }))),
     };
   }
 
@@ -178,7 +179,7 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
       }
     }
     if (providers.length > 0) {
-      return { providers: migrateQuotaProviderIds(providers) };
+      return { providers: appendCursorWhenAbsent(migrateQuotaProviderIds(providers)) };
     }
   }
 
@@ -186,6 +187,16 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
   return {
     providers: DEFAULT_PROVIDER_IDS.map((id) => ({ id, enabled: true })),
   };
+}
+
+/**
+ * Append the cursor provider enabled:true exactly once when absent, preserving
+ * explicit cursor disabled state and existing order. Never duplicates cursor.
+ */
+function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
+  const hasCursor = providers.some((p) => p.id === CURSOR_PROVIDER_ID);
+  if (hasCursor) return providers;
+  return [...providers, { id: CURSOR_PROVIDER_ID, enabled: true }];
 }
 
 /**
