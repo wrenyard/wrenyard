@@ -94,6 +94,37 @@ describe('parseQuotaJson', () => {
     expect(kimi.bars?.windows.map((window) => window.remainingPct)).toEqual([80, 60, 27.5]);
   });
 
+  it('preserves Cursor Cursor/Other windows generically through parseQuotaJson', () => {
+    const raw = JSON.stringify([
+      {
+        pool: 'cursor',
+        label: 'Cursor',
+        status: 'ok',
+        display_line: 'Cursor Cursor 62% · Other 40%',
+        stale: false,
+        remaining_pct: 62,
+        expected_remaining_pct: null,
+        windows: [
+          { name: 'Cursor', pct: 38, remaining_pct: 62, expected_remaining_pct: null },
+          { name: 'Other', pct: 60, remaining_pct: 40, expected_remaining_pct: null },
+        ],
+      },
+    ]);
+
+    const providers = parseQuotaJson(raw);
+    expect(providers).toHaveLength(1);
+
+    const cursor = providers[0];
+    expect(cursor.id).toBe('cursor');
+    expect(cursor.bars).toBeDefined();
+    expect(cursor.bars!.remainingPct).toBe(62);
+    expect(cursor.bars!.expectedRemainingPct).toBeNull();
+    // Both Cursor and Other windows preserved in order with remaining percentages
+    expect(cursor.bars!.windows.map((window) => window.name)).toEqual(['Cursor', 'Other']);
+    expect(cursor.bars!.windows.map((window) => window.remainingPct)).toEqual([62, 40]);
+    expect(cursor.bars!.windows[0].expectedRemainingPct).toBeNull();
+  });
+
   it('parses a window that has used_pct but no pct or remaining_pct', () => {
     const raw = JSON.stringify([
       {
@@ -252,6 +283,20 @@ describe('QuotaService runForgeQuotaJson timeout', () => {
     ).toBe(true);
 
     // Cleanup: let the mock promise resolve
+    await promise;
+  });
+
+  it('does not read Cursor Desktop credentials (spawns forge quota --json only)', async () => {
+    const service = new QuotaService();
+    const promise = service.listProviders(true);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [cmd, args] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+    // QuotaService stays provider-agnostic: it only invokes forge, never
+    // shells out to Cursor Desktop state.vscdb or passes cursor credential args.
+    expect(cmd).toBe('forge');
+    expect(args).toEqual(['quota', '--json']);
+
     await promise;
   });
 

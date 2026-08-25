@@ -189,14 +189,16 @@ describe('Config — V1 to V2 migration', () => {
 });
 
 describe('Config — grok to super-grok quota migration', () => {
-  it('defaults contain super-grok and not grok', () => {
+  it('defaults contain cursor first, super-grok, and not grok', () => {
     const c = normalizeConfig({});
     const ids = c.quota.providers.map((p) => p.id);
+    expect(ids[0]).toBe('cursor');
+    expect(ids).toContain('cursor');
     expect(ids).toContain('super-grok');
     expect(ids).not.toContain('grok');
   });
 
-  it('migrates legacy quota.providers grok with order and enabled preserved', () => {
+  it('migrates legacy quota.providers grok with order and enabled preserved, appending cursor once', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
@@ -210,10 +212,11 @@ describe('Config — grok to super-grok quota migration', () => {
       { id: 'codex', enabled: true },
       { id: 'super-grok', enabled: false },
       { id: 'kimi-coding', enabled: true },
+      { id: 'cursor', enabled: true },
     ]);
   });
 
-  it('migrates legacy quota.pools grok', () => {
+  it('migrates legacy quota.pools grok, appending cursor once', () => {
     const c = normalizeConfig({
       quota: {
         pools: ['codex', 'grok', 'kimi-coding'],
@@ -223,6 +226,7 @@ describe('Config — grok to super-grok quota migration', () => {
       { id: 'codex', enabled: true },
       { id: 'super-grok', enabled: true },
       { id: 'kimi-coding', enabled: true },
+      { id: 'cursor', enabled: true },
     ]);
   });
 
@@ -239,7 +243,40 @@ describe('Config — grok to super-grok quota migration', () => {
     expect(c.quota.providers).toEqual([
       { id: 'super-grok', enabled: true },
       { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
     ]);
+  });
+
+  it('appends cursor enabled:true exactly once when absent from existing providers', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'zhipu-coding', enabled: false },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'codex', enabled: true },
+      { id: 'zhipu-coding', enabled: false },
+      { id: 'cursor', enabled: true },
+    ]);
+  });
+
+  it('preserves explicit cursor disabled without appending a duplicate', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'cursor', enabled: false },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: false },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'cursor')).toHaveLength(1);
   });
 });
 

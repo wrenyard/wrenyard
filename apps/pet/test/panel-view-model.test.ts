@@ -362,4 +362,52 @@ describe('quota panel view model', () => {
       },
     ]);
   });
+
+  it('preserves Cursor Cursor/Other windows through tips and tray submenu rows', () => {
+    const cursor: QuotaProviderState = {
+      id: 'cursor',
+      label: 'Cursor',
+      displayLine: 'Cursor Cursor 62% · Other 40%',
+      error: null,
+      status: 'ok',
+      stale: false,
+      bars: {
+        remainingPct: 62,
+        expectedRemainingPct: null,
+        windows: [
+          { name: 'Cursor', usedPct: 38, remainingPct: 62, expectedRemainingPct: null },
+          { name: 'Other', usedPct: 60, remainingPct: 40, expectedRemainingPct: null },
+        ],
+      },
+    };
+
+    const tips = buildQuotaTips([cursor], ['cursor']);
+    expect(tips).toHaveLength(1);
+    expect(tips[0].bars).toBeDefined();
+    expect(tips[0].bars!).toHaveLength(1);
+    expect(tips[0].bars![0].label).toBe('cursor');
+    // Generic formatting preserves Cursor/Other order and remaining percentages
+    expect(tips[0].bars![0].provider.windows.map((window) => window.name)).toEqual(['Cursor', 'Other']);
+    expect(tips[0].bars![0].provider.windows.map((window) => window.remainingPct)).toEqual([62, 40]);
+    expect(tips[0].text).toBe('cursor Cursor 62% remain · Other 40% remain');
+
+    // Tray submenu rows preserve the same order and remaining percentages
+    const rows = formatQuotaBarMenuRows(tips);
+    expect(rows).toEqual([
+      {
+        provider: 'cursor',
+        window: 'Cursor',
+        remainingPct: 62,
+        expectedRemainingPct: null,
+        label: 'cursor Cursor 62% remain',
+      },
+      {
+        provider: '',
+        window: 'Other',
+        remainingPct: 40,
+        expectedRemainingPct: null,
+        label: 'cursor Other 40% remain',
+      },
+    ]);
+  });
 });
