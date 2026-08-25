@@ -590,10 +590,11 @@ function renderBarsCard(
         pn.setAlpha(1);
       }
 
-      // Child label rendered as 'bal.' indented inside the window column
+      // Balance label uses the full window column so one monospace-space of
+      // separation remains before the amount aligned at trackX.
       const wn = node.windowNodes[rowIdx];
       wn.setText('bal.');
-      wn.setPosition(windowLabelX + CHILD_LABEL_INDENT, rowTop);
+      wn.setPosition(windowLabelX, rowTop);
       wn.setVisible(true);
       wn.setAlpha(0.68);
 
