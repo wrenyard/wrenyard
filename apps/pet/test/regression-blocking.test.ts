@@ -132,7 +132,7 @@ const baseConfig: AppConfig = {
   bubbleSeconds: 6,
   bottomOffset: 0,
   house: {},
-  entities: { house: true, workers: true },
+  entities: { house: true, workers: true, taskgraphs: true },
   appearance: { houseSkin: 'classic' },
   quota: {
     providers: [

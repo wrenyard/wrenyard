@@ -95,7 +95,7 @@ describe('Config — V1 to V2 migration', () => {
       entityX: undefined,
       entityY: undefined,
     });
-    expect(c.entities).toEqual({ house: true, workers: true });
+    expect(c.entities).toEqual({ house: true, workers: true, taskgraphs: true });
   });
 
   it('prefers V2 house position over legacy displayId', () => {
@@ -112,7 +112,15 @@ describe('Config — V1 to V2 migration', () => {
       entityX: undefined,
       entityY: undefined,
     });
-    expect(c.entities).toEqual({ house: false, workers: true });
+    expect(c.entities).toEqual({ house: false, workers: true, taskgraphs: true });
+  });
+
+  it('preserves an explicit taskgraph entity visibility choice', () => {
+    const c = normalizeConfig({
+      entities: { house: true, workers: true, taskgraphs: false },
+    });
+
+    expect(c.entities).toEqual({ house: true, workers: true, taskgraphs: false });
   });
 
   it('roundtrips the V3 visible-house anchor independently from legacy carrier coordinates', () => {
@@ -135,7 +143,7 @@ describe('Config — V1 to V2 migration', () => {
   it('defaults appearance.houseSkin to classic when missing', () => {
     const c = normalizeConfig({
       scale: 3,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
     });
     expect(c.appearance).toEqual({ houseSkin: 'classic' });
   });
@@ -176,7 +184,7 @@ describe('Config — V1 to V2 migration', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'mushroom' as const },
       quota: { providers: [] },
       windows: {},
@@ -443,7 +451,7 @@ describe('Config — settings.json path (hermetic)', () => {
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: { displayId: 42, x: 100, y: -200 },
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
     };
     mod.saveConfig(config, { configHome: cfgHome });
 
@@ -477,7 +485,7 @@ describe('Config — legacy migration (hermetic)', () => {
     writeFile(legacyPath, JSON.stringify({
       scale: 2,
       house: { displayId: 7, x: 50, y: -30 },
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
     }));
 
     const mod = await importFreshConfig();

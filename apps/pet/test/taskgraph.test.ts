@@ -3651,6 +3651,43 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
     expect(internals.entities.size).toBe(0);
   });
 
+  it('hides only Wren entity windows while preserving activity state and Graph Slips', async () => {
+    owner = new TaskGraphWindowOwner({
+      foremanIpcClient: client as unknown as ForemanIpcClient,
+      htmlDir: '/nonexistent/html',
+      preloadDir: '/nonexistent/preload',
+      getHouseWindow: () => null,
+      entitiesVisible: false,
+      logger: { warn: () => {}, error: () => {}, log: () => {} },
+    });
+    const internals = owner as unknown as OwnerInternals;
+
+    owner.applyActivity(presenceWith([graphPresence('tg-hidden', 'running')]));
+    await flushAsync();
+    const entityWin = electronMocks.createdWindows()[0] as any;
+    entityWin.emit('ready-to-show');
+    expect(entityWin.showInactive).not.toHaveBeenCalled();
+    expect(owner.getEntitiesVisible()).toBe(false);
+    expect(owner.getTrackedTaskgraphIds()).toEqual(['tg-hidden']);
+    expect(internals.entities.get('tg-hidden')?.dto.state).toBe('running');
+
+    owner.setEntitiesVisible(true);
+    expect(entityWin.showInactive).toHaveBeenCalledTimes(1);
+
+    await electronMocks.invokeIpc('entity:open-self', { sender: entityWin.webContents });
+    const slipWin = electronMocks.createdWindows()[1] as any;
+    expect(internals.graphSlips.size).toBe(1);
+
+    owner.setEntitiesVisible(false);
+    expect(entityWin.hide).toHaveBeenCalledTimes(1);
+    expect(slipWin.hide).not.toHaveBeenCalled();
+    expect(owner.getTrackedTaskgraphIds()).toEqual(['tg-hidden']);
+
+    owner.applyActivity(presenceWith([graphPresence('tg-hidden', 'paused')]));
+    expect(internals.entities.get('tg-hidden')?.dto.state).toBe('paused');
+    expect(internals.graphSlips.size).toBe(1);
+  });
+
   it('creates entity windows with the enlarged footprint', () => {
     owner = makeOwner();
     owner.applyActivity(presenceWith([graphPresence('tg-fp', 'running')]));
