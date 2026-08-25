@@ -470,8 +470,8 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     // Geometry: provider and window text are left of the track
     const tileX = 30; // result.x = clamp(round(50+100-120), 2, 1678) = 30
     const providerLabelX = tileX + 6; // x + STATS_PADDING_X
-    const windowLabelX = providerLabelX + 78; // + PROVIDER_LABEL_WIDTH
-    const trackX = windowLabelX + 30; // + WINDOW_LABEL_WIDTH
+    const windowLabelX = providerLabelX + PROVIDER_LABEL_WIDTH;
+    const trackX = windowLabelX + WINDOW_LABEL_WIDTH;
 
     const provPos0 = node.providerNodes[0].setPosition.mock.calls.slice(-1)[0];
     expect(provPos0[0]).toBe(providerLabelX);
@@ -497,7 +497,7 @@ describe('HouseStatsCard — hover tip background alpha', () => {
       queuedCount: 0,
       dailyStatsUnavailable: false,
       quotaTips: [{
-        text: 'cursor Cursor 99% remain · Other 99% remain',
+        text: 'cursor Cursor 99% · Other 99%',
         bars: [{
           provider: {
             remainingPct: 99.8,
@@ -606,9 +606,9 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     const container = mockContainer();
     const node = createStatsCard(container, surface);
 
-    // Provider label with hard separators exceeding PROVIDER_LABEL_WIDTH (72px / 7 = ~10 chars)
+    // Provider label with hard separators exceeding PROVIDER_LABEL_WIDTH.
     const labelWithSeparators = 'Super\r\nLong\u2028ProviderNameThatTruncates';
-    // Window name exceeding WINDOW_LABEL_WIDTH (30px / 7 = ~4 chars)
+    // Window name exceeding the indented WINDOW_LABEL_WIDTH.
     const longWindowName = 'veeery\nlooong\u2029window';
 
     const result = updateStatsCard(node, {
@@ -891,7 +891,7 @@ describe('HouseStatsCard — hover tip background alpha', () => {
 
     // codex-spark pending row uses explicit errorRow label and message.
     // Both the diagnostics line and the rendered provider label fit the provider
-    // id into the 78px PROVIDER_LABEL_WIDTH column, sharing the same fixed-width
+    // id into the PROVIDER_LABEL_WIDTH column, sharing the same fixed-width
     // fit contract, so both render the fitted label 'codex-…'.
     const fittedPendingLabel = 'codex-\u2026 ';
     const pendingLine = result!.lines.find((line) => line.startsWith(fittedPendingLabel));
@@ -971,13 +971,13 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     const provPos = (node.providerNodes[0].setPosition as any).mock.calls.slice(-1)[0];
     expect(provPos[0]).toBe(expectedProviderLabelX);
 
-    // Message rendered at windowLabelX, using full window-plus-track-plus-percentage width
+    // Message rendered on the shared child-column baseline.
     expect(node.windowNodes[0].setVisible).toHaveBeenCalledWith(true);
     const errorText = (node.windowNodes[0].setText as any).mock.calls.slice(-1)[0][0];
     expect(errorText).toBe('error — rate limited');
     const windowLabelX = expectedProviderLabelX + PROVIDER_LABEL_WIDTH;
     const windowPos = (node.windowNodes[0].setPosition as any).mock.calls.slice(-1)[0];
-    expect(windowPos[0]).toBe(windowLabelX);
+    expect(windowPos[0]).toBe(windowLabelX + CHILD_LABEL_INDENT);
 
     // No bar tracks, markers, or percentage
     expect(node.pctNodes[0].setVisible).toHaveBeenCalledWith(false);
@@ -988,7 +988,7 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     expect(tracks.length).toBe(0);
   });
 
-  it('renders error-row message column at windowLabelX using full window-plus-track-plus-percentage width (structured and compatibility)', () => {
+  it('aligns error-row messages with the shared child column (structured and compatibility)', () => {
     function measureWidth(text: string): number {
       return Array.from(text).length * 6;
     }
@@ -1062,15 +1062,15 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     const provPos = (node.providerNodes[0].setPosition as any).mock.calls.slice(-1)[0];
     expect(provPos[0]).toBe(providerLabelX);
 
-    // Error message node x must equal windowLabelX, NOT trackX
+    // Error messages share the same indented left edge as quota names/bal.
     const msgPos = (node.windowNodes[0].setPosition as any).mock.calls.slice(-1)[0];
-    expect(msgPos[0]).toBe(expectedWindowLabelX);
+    expect(msgPos[0]).toBe(expectedWindowLabelX + CHILD_LABEL_INDENT);
     expect(msgPos[0]).not.toBe(trackX);
 
-    // Fitted message uses WINDOW_LABEL_WIDTH + trackW + BAR_PCT_WIDTH (156)
+    // Fitted message accounts for the child-column indent.
     const fittedText = (node.windowNodes[0].setText as any).mock.calls.slice(-1)[0][0];
     const fittedWidth = measureWidth(fittedText);
-    expect(fittedWidth).toBeLessThanOrEqual(WINDOW_LABEL_WIDTH + trackW + BAR_PCT_WIDTH);
+    expect(fittedWidth).toBeLessThanOrEqual(WINDOW_LABEL_WIDTH + trackW + BAR_PCT_WIDTH - CHILD_LABEL_INDENT);
 
     // No bar tracks or percentage
     expect(node.pctNodes[0].setVisible).toHaveBeenCalledWith(false);
@@ -1256,9 +1256,9 @@ describe('HouseStatsCard — hover tip background alpha', () => {
 
     // Mixed layout lines: percentage bar provider and monetary balance rows
     expect(result!.lines).toEqual(expect.arrayContaining(['Codex 5h']));
-    // Diagnostics for balance rows use `provider bal. amount`
-    expect(result!.lines.some((line) => line === 'deepseek bal. ¥12.50')).toBe(true);
-    expect(result!.lines.some((line) => line === 'deepseek bal. $8.00')).toBe(true);
+    // Diagnostics for balance rows use `provider bal amount`
+    expect(result!.lines.some((line) => line === 'deepseek bal ¥12.50')).toBe(true);
+    expect(result!.lines.some((line) => line === 'deepseek bal $8.00')).toBe(true);
 
     // Percentage bar provider still emits a track (Codex 5h)
     const barsGfxMock = (node.barsGfx as any).setCommands;
@@ -1296,22 +1296,22 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     // DeepSeek CNY → USD: compact same-provider step, no inter-provider gap
     expect(usdBalY - cnyBalY).toBe(SAME_PROVIDER_ROW_STEP);
 
-    // Balance label uses the full window column, leaving one glyph-space before
-    // the amount; quota window names remain indented children.
+    // Balance labels and quota window names share one left-aligned child column;
+    // amounts stay aligned to the track.
     const windowLabelX = result!.x + STATS_PADDING_X + PROVIDER_LABEL_WIDTH;
     const cnyBalPos = (node.windowNodes[deepseekCnyIdx].setPosition as any).mock.calls.slice(-1)[0];
-    expect(cnyBalPos[0]).toBe(windowLabelX);
+    expect(cnyBalPos[0]).toBe(windowLabelX + CHILD_LABEL_INDENT);
     const cnyBalText = (node.windowNodes[deepseekCnyIdx].setText as any).mock.calls.slice(-1)[0][0];
-    expect(cnyBalText).toBe('bal.');
+    expect(cnyBalText).toBe('bal');
     const usdBalText = (node.windowNodes[deepseekUsdIdx].setText as any).mock.calls.slice(-1)[0][0];
-    expect(usdBalText).toBe('bal.');
+    expect(usdBalText).toBe('bal');
 
     // Provider label visible only on the first balance row (groupStart)
     expect(node.providerNodes[deepseekCnyIdx].setVisible).toHaveBeenLastCalledWith(true);
     expect(node.providerNodes[deepseekUsdIdx].setVisible).toHaveBeenLastCalledWith(false);
   });
 
-  it('enforces the Tips hierarchy: provider 600/alpha1, child indent+low alpha, metric stronger alpha, stronger bars', () => {
+  it('enforces the Tips hierarchy: provider normal/alpha1, child indent+low alpha, metric stronger alpha, stronger bars', () => {
     const surface = mockSurface();
     const container = mockContainer();
 
@@ -1342,9 +1342,9 @@ describe('HouseStatsCard — hover tip background alpha', () => {
       viewportHeight: 1080,
     });
 
-    // Provider label node created with fontWeight 600 and rendered at alpha 1
+    // Provider label node keeps the regular stats font weight and full alpha.
     const createdStyles = (surface.createText as any).mock.calls.map((c: any) => c[1]);
-    expect(createdStyles.some((s: any) => s.fontWeight === 600)).toBe(true);
+    expect(createdStyles.every((s: any) => s.fontWeight === 'normal')).toBe(true);
     expect(node.providerNodes[0].setAlpha).toHaveBeenLastCalledWith(1);
 
     // Child window label is indented inside the window column and uses a lower alpha
@@ -1376,9 +1376,12 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     expect(markerCmd.height).toBe(BAR_TRACK_HEIGHT);
   });
 
-  it('keeps exported spacing constants at the confirmed 11/8 values for geometry tests', () => {
-    expect(SAME_PROVIDER_ROW_STEP).toBe(11);
+  it('keeps exported spacing constants at the confirmed 11.5/8 values for geometry tests', () => {
+    expect(SAME_PROVIDER_ROW_STEP).toBe(11.5);
     expect(INTER_PROVIDER_EXTRA_GAP).toBe(8);
     expect(CHILD_LABEL_INDENT).toBe(6);
+    expect(PROVIDER_LABEL_WIDTH).toBe(76);
+    expect(WINDOW_LABEL_WIDTH).toBe(32);
+    expect(PROVIDER_LABEL_WIDTH + WINDOW_LABEL_WIDTH).toBe(108);
   });
 });

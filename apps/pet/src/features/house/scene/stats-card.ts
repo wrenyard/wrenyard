@@ -24,11 +24,11 @@ export const STATS_MAX_VISIBLE_ROWS = 6;
 export const BAR_TRACK_HEIGHT = 6;
 export const BAR_TRACK_RADIUS = 2;
 export const BAR_MARKER_RADIUS = 2;
-export const PROVIDER_LABEL_WIDTH = 78;
-export const WINDOW_LABEL_WIDTH = 30;
+export const PROVIDER_LABEL_WIDTH = 76;
+export const WINDOW_LABEL_WIDTH = 32;
 export const BAR_PCT_WIDTH = 28;
 /** Compact step for same-provider window rows */
-export const SAME_PROVIDER_ROW_STEP = 11;
+export const SAME_PROVIDER_ROW_STEP = 11.5;
 /** Extra gap before a different provider group */
 export const INTER_PROVIDER_EXTRA_GAP = 8;
 /** Horizontal indent for child quota/window labels inside the window column */
@@ -335,7 +335,11 @@ function renderBarsCard(
     if (tip.errorRow) {
       providerGroupCount++;
       const fittedLabel = fitLineToWidth(tip.errorRow.label, PROVIDER_LABEL_WIDTH, node.text);
-      const fittedMessage = fitLineToWidth(tip.errorRow.message, WINDOW_LABEL_WIDTH + trackWidth + BAR_PCT_WIDTH, node.text);
+      const fittedMessage = fitLineToWidth(
+        tip.errorRow.message,
+        WINDOW_LABEL_WIDTH + trackWidth + BAR_PCT_WIDTH - CHILD_LABEL_INDENT,
+        node.text,
+      );
       visualRows.push({
         type: 'error-row',
         providerLabel: fittedLabel,
@@ -377,7 +381,11 @@ function renderBarsCard(
       const compatMessage = first.status === 'error'
         ? (first.error ? `error — ${first.error}` : 'error')
         : 'unavailable';
-      const fittedCompatMessage = fitLineToWidth(compatMessage, WINDOW_LABEL_WIDTH + trackWidth + BAR_PCT_WIDTH, node.text);
+      const fittedCompatMessage = fitLineToWidth(
+        compatMessage,
+        WINDOW_LABEL_WIDTH + trackWidth + BAR_PCT_WIDTH - CHILD_LABEL_INDENT,
+        node.text,
+      );
       visualRows.push({
         type: 'error-row',
         providerLabel: fittedLabel,
@@ -450,7 +458,7 @@ function renderBarsCard(
     } else if (r.type === 'error-row') {
       lines.push(`${r.providerLabel} ${r.errorMessage}`);
     } else if (r.type === 'balance') {
-      lines.push(`${r.providerLabel} bal. ${r.amount}`);
+      lines.push(`${r.providerLabel} bal ${r.amount}`);
     } else {
       lines.push(`${r.providerLabel} ${r.windowName}`);
     }
@@ -460,7 +468,7 @@ function renderBarsCard(
 
   // Lazy-create text nodes if needed
   while (node.providerNodes.length < visualRows.length) {
-    const pn = node.surface.createText('', { ...statsTextStyle(), align: 'left', fontWeight: 600 });
+    const pn = node.surface.createText('', { ...statsTextStyle(), align: 'left' });
     const wn = node.surface.createText('', { ...statsTextStyle(), align: 'left' });
     node.providerNodes.push(pn);
     node.windowNodes.push(wn);
@@ -560,13 +568,14 @@ function renderBarsCard(
       pn.setVisible(true);
       pn.setAlpha(1);
 
-      // Window column left empty — reused text node renders message at windowLabelX
+      // Window column left empty — reused text node renders the message on the
+      // same child-column baseline as quota names and balance labels.
       const wn = node.windowNodes[rowIdx];
 
-      // Error message at windowLabelX using full window-plus-track-plus-percentage width — already fitted
+      // Error message uses the remaining child-column width — already fitted.
       const fittedMessage = r.errorMessage ?? '';
       wn.setText(fittedMessage);
-      wn.setPosition(windowLabelX, rowTop);
+      wn.setPosition(windowLabelX + CHILD_LABEL_INDENT, rowTop);
       wn.setVisible(true);
       wn.setAlpha(0.90);
 
@@ -590,11 +599,11 @@ function renderBarsCard(
         pn.setAlpha(1);
       }
 
-      // Balance label uses the full window column so one monospace-space of
-      // separation remains before the amount aligned at trackX.
+      // Balance label shares the same child-column baseline as quota names; the
+      // amount remains aligned with percentage-row tracks at trackX.
       const wn = node.windowNodes[rowIdx];
-      wn.setText('bal.');
-      wn.setPosition(windowLabelX, rowTop);
+      wn.setText('bal');
+      wn.setPosition(windowLabelX + CHILD_LABEL_INDENT, rowTop);
       wn.setVisible(true);
       wn.setAlpha(0.68);
 
