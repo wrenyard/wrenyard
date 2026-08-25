@@ -12,7 +12,7 @@ export interface OperationDescriptor {
 }
 
 export type AgentRuntimePermission = 'readonly' | 'edit' | 'yolo'
-export type ClientFamily = 'claude' | 'codex' | 'opencode'
+export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor'
 export type ExecutionStatus =
   | 'queued'
   | 'starting'
