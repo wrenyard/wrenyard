@@ -10,6 +10,7 @@ interface SettingsPayload {
   entities: {
     house: boolean;
     workers: boolean;
+    taskgraphs: boolean;
   };
   appearance: {
     houseSkin: string;
@@ -48,6 +49,9 @@ function renderSettings(config: SettingsPayload): void {
 
   const workersCheck = document.getElementById('show-workers') as HTMLInputElement | null;
   if (workersCheck) workersCheck.checked = config.entities.workers;
+
+  const taskgraphsCheck = document.getElementById('show-taskgraphs') as HTMLInputElement | null;
+  if (taskgraphsCheck) taskgraphsCheck.checked = config.entities.taskgraphs;
 
   // House skin
   const skinSelect = document.getElementById('house-skin') as HTMLSelectElement | null;
@@ -148,6 +152,7 @@ function collectPartial(): Record<string, unknown> {
     entities: {
       house: (document.getElementById('show-house') as HTMLInputElement)?.checked ?? true,
       workers: (document.getElementById('show-workers') as HTMLInputElement)?.checked ?? true,
+      taskgraphs: (document.getElementById('show-taskgraphs') as HTMLInputElement)?.checked ?? true,
     },
     appearance: {
       houseSkin: skinSelect?.value ?? 'classic',
@@ -173,7 +178,7 @@ async function saveSettings(): Promise<void> {
         scale: 3,
         bubbleSeconds: 6,
         bottomOffset: 0,
-        entities: { house: true, workers: true },
+        entities: { house: true, workers: true, taskgraphs: true },
         appearance: { houseSkin: 'classic' },
         quota: { providers: [] },
       }),

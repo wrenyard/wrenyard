@@ -95,7 +95,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -130,7 +130,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' as const },
@@ -167,7 +167,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -198,7 +198,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [{ id: 'codex', enabled: true }] },
       appearance: { houseSkin: 'classic' },
@@ -227,7 +227,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [{ id: 'codex', enabled: true }] },
       appearance: { houseSkin: 'classic' },
@@ -268,7 +268,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [{ id: 'codex', enabled: true }, { id: 'openai', enabled: true }] },
       appearance: { houseSkin: 'classic' },
@@ -341,7 +341,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -392,7 +392,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -438,7 +438,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -475,7 +475,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -511,7 +511,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -566,7 +566,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -627,7 +627,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -692,7 +692,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -731,7 +731,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -782,7 +782,7 @@ describe('panel windows security and lifecycle', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' },
@@ -851,7 +851,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'mushroom' as const },
@@ -878,6 +878,40 @@ describe('panel windows — house skin settings', () => {
     owner.destroy();
   });
 
+  it('settings:save persists taskgraph entity visibility', async () => {
+    const { PanelOwner } = await import('../src/main/panel-windows');
+    const onConfigChange = vi.fn();
+    const config = {
+      scale: 3,
+      bubbleSeconds: 6,
+      bottomOffset: 0,
+      entities: { house: true, workers: true, taskgraphs: true },
+      windows: {},
+      quota: { providers: [] },
+      appearance: { houseSkin: 'classic' as const },
+    };
+    const owner = new PanelOwner({
+      config,
+      htmlDir: '/tmp',
+      preloadPath: '/tmp/preload.js',
+      onConfigChange,
+      onStatsRequestRefresh: vi.fn(),
+      onRestart: vi.fn(),
+      onGetEnabledProviderOrder: () => [],
+      getHouseWindow: () => null,
+    });
+    const mockSettingsWin = { webContents: mockWebContentsSelf, isDestroyed: () => false, destroy: vi.fn() };
+    (owner as any).settingsWindow = mockSettingsWin;
+    mockSettingsWindow = mockSettingsWin;
+
+    const saveHandler = ipcHandlers.get('settings:save')!;
+    saveHandler({ sender: mockWebContentsSelf }, { entities: { taskgraphs: false } });
+
+    expect(config.entities.taskgraphs).toBe(false);
+    expect(onConfigChange).toHaveBeenCalledWith(config);
+    owner.destroy();
+  });
+
   it('settings:save accepts classic and mushroom, invoking onHouseSkinChange', async () => {
     const { PanelOwner } = await import('../src/main/panel-windows');
     const onHouseSkinChange = vi.fn();
@@ -885,7 +919,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' as const },
@@ -926,7 +960,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: {
         providers: [
@@ -975,7 +1009,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' as const },
@@ -1011,7 +1045,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' as const },
@@ -1046,7 +1080,7 @@ describe('panel windows — house skin settings', () => {
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
-      entities: { house: true, workers: true },
+      entities: { house: true, workers: true, taskgraphs: true },
       windows: {},
       quota: { providers: [] },
       appearance: { houseSkin: 'classic' as const },

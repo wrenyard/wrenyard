@@ -30,6 +30,7 @@ describe('Settings panel — HTML contract', () => {
       'bottom-offset',
       'show-house',
       'show-workers',
+      'show-taskgraphs',
       'quota-providers',
       'save-btn',
       'save-restart-btn',
