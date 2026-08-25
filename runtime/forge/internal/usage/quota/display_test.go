@@ -299,6 +299,18 @@ func TestWindowDisplayLineSingleWindow(t *testing.T) {
 	}
 }
 
+func TestWindowDisplayLineFloorsFractionalRemainingPercentage(t *testing.T) {
+	windows := []Window{
+		{Name: "Cursor", Pct: 0.6},
+		{Name: "Other", Pct: 0.2},
+	}
+	got := WindowDisplayLine(windows)
+	want := "Cursor 99% remain · Other 99% remain"
+	if got != want {
+		t.Fatalf("WindowDisplayLine = %q, want floored percentages %q", got, want)
+	}
+}
+
 func TestWindowDisplayLineWindowless(t *testing.T) {
 	if got := WindowDisplayLine(nil); got != "" {
 		t.Fatalf("expected empty for nil windows, got %q", got)
