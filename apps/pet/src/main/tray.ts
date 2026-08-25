@@ -3,12 +3,14 @@ import { displayMenuLabel } from './display-placement';
 import { createQuotaMenuRowIcon } from './quota-menu-icon';
 import { createTrayIcon } from './tray-icon';
 import type { QuotaMenuRow } from './panel-view-model';
+import type { EntityVisibilityConfig } from './config';
 
 export interface TrayCallbacks {
   entities?: {
-    getVisibility: () => { house: boolean; workers: boolean };
+    getVisibility: () => EntityVisibilityConfig;
     setHouseVisible: (visible: boolean) => void;
     setWorkersVisible: (visible: boolean) => void;
+    setTaskgraphsVisible: (visible: boolean) => void;
   };
   displays?: {
     getActiveDisplayId: () => number | undefined;
@@ -29,7 +31,7 @@ export function createTray(callbacks: TrayCallbacks = {}): { tray: Tray; rebuild
     const quotaRows = callbacks.getQuotaRows?.() ?? [];
     const displays = screen.getAllDisplays();
     const activeDisplayId = callbacks?.displays?.getActiveDisplayId();
-    const visibility = callbacks.entities?.getVisibility() ?? { house: true, workers: true };
+    const visibility = callbacks.entities?.getVisibility() ?? { house: true, workers: true, taskgraphs: true };
     const displaySubmenu: MenuItemConstructorOptions[] = displays.map((display, index) => ({
       label: displayMenuLabel(display, index),
       type: 'radio',
@@ -67,6 +69,15 @@ export function createTray(callbacks: TrayCallbacks = {}): { tray: Tray; rebuild
             checked: visibility.workers,
             click: (menuItem) => {
               callbacks.entities?.setWorkersVisible(menuItem.checked);
+              rebuildMenu();
+            },
+          },
+          {
+            label: '图纸燕',
+            type: 'checkbox',
+            checked: visibility.taskgraphs,
+            click: (menuItem) => {
+              callbacks.entities?.setTaskgraphsVisible(menuItem.checked);
               rebuildMenu();
             },
           },

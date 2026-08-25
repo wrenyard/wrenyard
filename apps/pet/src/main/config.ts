@@ -16,6 +16,7 @@ export interface HouseConfig {
 export interface EntityVisibilityConfig {
   house: boolean;
   workers: boolean;
+  taskgraphs: boolean;
 }
 
 export interface QuotaProviderEntry {
@@ -72,6 +73,7 @@ const DEFAULT_CONFIG: AppConfig = {
   entities: {
     house: true,
     workers: true,
+    taskgraphs: true,
   },
   appearance: {
     houseSkin: 'classic',
@@ -371,6 +373,7 @@ function normalizeEntityVisibility(value: unknown): EntityVisibilityConfig {
   return {
     house: typeof obj.house === 'boolean' ? obj.house : DEFAULT_CONFIG.entities.house,
     workers: typeof obj.workers === 'boolean' ? obj.workers : DEFAULT_CONFIG.entities.workers,
+    taskgraphs: typeof obj.taskgraphs === 'boolean' ? obj.taskgraphs : DEFAULT_CONFIG.entities.taskgraphs,
   };
 }
 

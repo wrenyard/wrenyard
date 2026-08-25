@@ -2,7 +2,7 @@ import { BrowserWindow, screen } from 'electron';
 import * as path from 'node:path';
 import { getAppearance } from '../features/worker/appearance';
 import { classifyWorkerClient } from './client-family';
-import { AppConfig } from './config';
+import { AppConfig, type EntityVisibilityConfig } from './config';
 import { DisplayRect, resolveDisplay } from './display-placement';
 import {
   clampRectToRect,
@@ -310,7 +310,7 @@ export class EntityManager {
     this.onConfigChange(this.config);
   }
 
-  getEntityVisibility(): { house: boolean; workers: boolean } {
+  getEntityVisibility(): EntityVisibilityConfig {
     return { ...this.config.entities };
   }
 

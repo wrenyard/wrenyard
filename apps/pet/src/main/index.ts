@@ -158,7 +158,13 @@ app.whenReady().then(() => {
     htmlDir: path.join(__dirname, '..', '..', 'renderer'),
     preloadPath: preloadResolved,
     getHouseWindow: () => entityManager?.getHouseWindow() ?? null,
-    onConfigChange: saveConfig,
+    onConfigChange: (nextConfig) => {
+      saveConfig(nextConfig);
+      entityManager?.setHouseVisible(nextConfig.entities.house);
+      entityManager?.setWorkersVisible(nextConfig.entities.workers);
+      taskGraphWindowOwner?.setEntitiesVisible(nextConfig.entities.taskgraphs);
+      tray?.rebuildMenu();
+    },
     onQuotaProviderOrderChange: (providers) => {
       const order = providers.filter((provider) => provider.enabled).map((provider) => provider.id);
       if (lastQuotaProviders.length > 0) {
@@ -206,6 +212,7 @@ app.whenReady().then(() => {
       preloadDir: __dirname,
       getHouseWindow: () => entityManager?.getHouseWindow() ?? null,
       graphSlipGeometry: config.windows.graphSlip,
+      entitiesVisible: config.entities.taskgraphs,
       onGraphSlipGeometryChange: (geometry) => {
         config.windows.graphSlip = geometry;
         saveConfig(config);
@@ -330,9 +337,14 @@ app.whenReady().then(() => {
   // ─── Tray ─────────────────────────────────────────────────────────
   tray = createTray({
     entities: {
-      getVisibility: () => entityManager?.getEntityVisibility() ?? { house: true, workers: true },
+      getVisibility: () => entityManager?.getEntityVisibility() ?? { ...config.entities },
       setHouseVisible: (visible: boolean) => entityManager?.setHouseVisible(visible),
       setWorkersVisible: (visible: boolean) => entityManager?.setWorkersVisible(visible),
+      setTaskgraphsVisible: (visible: boolean) => {
+        config.entities.taskgraphs = visible;
+        taskGraphWindowOwner?.setEntitiesVisible(visible);
+        saveConfig(config);
+      },
     },
     displays: {
       getActiveDisplayId: () => entityManager?.getHouseDisplayId(),

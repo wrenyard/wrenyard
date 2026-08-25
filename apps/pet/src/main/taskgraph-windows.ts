@@ -40,6 +40,8 @@ export interface TaskGraphWindowOwnerOptions {
   getHouseWindow: () => BrowserWindow | null;
   graphSlipGeometry?: { x?: number; y?: number; width?: number; height?: number };
   onGraphSlipGeometryChange?: (geometry: { x?: number; y?: number; width?: number; height?: number }) => void;
+  /** Whether Blueprint Wren entity windows are currently visible. */
+  entitiesVisible?: boolean;
   /** Capture harness only: render windows without ever showing or focusing them. */
   stayHidden?: boolean;
   logger?: Pick<Console, 'warn' | 'error' | 'log'>;
@@ -157,6 +159,7 @@ export class TaskGraphWindowOwner {
   private graphSlipGeometry: { x?: number; y?: number; width?: number; height?: number } | undefined;
   private readonly onGraphSlipGeometryChange?: TaskGraphWindowOwnerOptions['onGraphSlipGeometryChange'];
   private readonly stayHidden: boolean;
+  private entitiesVisible: boolean;
   private readonly logger: Pick<Console, 'warn' | 'error' | 'log'>;
   private readonly onCleanup?: () => void;
   private destroyed = false;
@@ -222,6 +225,7 @@ export class TaskGraphWindowOwner {
     this.graphSlipGeometry = opts.graphSlipGeometry;
     this.onGraphSlipGeometryChange = opts.onGraphSlipGeometryChange;
     this.stayHidden = opts.stayHidden ?? false;
+    this.entitiesVisible = opts.entitiesVisible ?? true;
     this.logger = opts.logger ?? console;
     this.onCleanup = opts.onCleanup;
     this.registerIpcHandlers();
@@ -374,6 +378,19 @@ export class TaskGraphWindowOwner {
     for (const id of this.entities.keys()) ids.add(id);
     for (const id of this.graphSlips.keys()) ids.add(id);
     return [...ids];
+  }
+
+  setEntitiesVisible(visible: boolean): void {
+    this.entitiesVisible = visible;
+    for (const entity of this.entities.values()) {
+      if (entity.window.isDestroyed()) continue;
+      if (visible && !this.stayHidden) entity.window.showInactive();
+      else entity.window.hide();
+    }
+  }
+
+  getEntitiesVisible(): boolean {
+    return this.entitiesVisible;
   }
 
   private markAllEntitiesStale(): void {
@@ -656,7 +673,7 @@ export class TaskGraphWindowOwner {
       if (this.entities.get(id) === entityState && !win.isDestroyed() && !loadFailed) {
         this.pushEntityPlacement(entityState);
         this.pushEntityState(entityState);
-        if (!this.stayHidden) win.showInactive();
+        if (!this.stayHidden && this.entitiesVisible) win.showInactive();
       }
     });
 

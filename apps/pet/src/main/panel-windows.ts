@@ -346,6 +346,7 @@ export class PanelOwner {
       const e = obj.entities as Record<string, unknown>;
       if (typeof e.house === 'boolean') cfg.entities.house = e.house;
       if (typeof e.workers === 'boolean') cfg.entities.workers = e.workers;
+      if (typeof e.taskgraphs === 'boolean') cfg.entities.taskgraphs = e.taskgraphs;
     }
     if (obj.appearance && typeof obj.appearance === 'object') {
       const a = obj.appearance as Record<string, unknown>;
