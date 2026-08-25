@@ -44,4 +44,8 @@ describe('Settings panel — HTML contract', () => {
     expect(html).toContain('<span class="title">工坊设置</span>');
     expect(html).toContain('lang="zh-CN"');
   });
+
+  it('explains that provider order controls both quota surfaces', () => {
+    expect(html).toContain('这里的顺序会同步用于 Tips 和状态栏「额度」菜单');
+  });
 });
