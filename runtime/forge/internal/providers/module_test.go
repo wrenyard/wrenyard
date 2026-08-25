@@ -104,7 +104,7 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 	}
 }
 
-func TestCursorProviderModuleQuotaOnly(t *testing.T) {
+func TestCursorProviderModuleRuntimeAndQuota(t *testing.T) {
 	reg := catalog.DefaultRegistry()
 	module, ok := providers.Lookup("cursor")
 	if !ok {
@@ -120,17 +120,42 @@ func TestCursorProviderModuleQuotaOnly(t *testing.T) {
 	if len(binding.RawLLM) != 0 {
 		t.Fatalf("cursor must not declare raw LLM capability, got %#v", binding.RawLLM)
 	}
-	if binding.UseClientBinary {
-		t.Fatal("cursor must not use a client binary")
+	if !binding.UseClientBinary {
+		t.Fatal("cursor must use the client binary")
 	}
-	if source := binding.CredentialSource(); source != "" {
-		t.Fatalf("cursor credential source = %q, want empty (no auth surface)", source)
+	if source := binding.CredentialSource(); source != catalog.CredentialResolverCursor {
+		t.Fatalf("cursor credential source = %q, want cursor", source)
+	}
+	if !binding.SupportsDialect(catalog.DialectCursor) {
+		t.Fatal("cursor provider must support the cursor dialect")
 	}
 	if binding.QuotaProvider != "cursor" {
 		t.Fatalf("cursor quota provider = %q, want cursor", binding.QuotaProvider)
 	}
-	if len(module.Models()) != 0 {
-		t.Fatalf("cursor must expose no models, got %#v", module.Models())
+	wantModels := []string{"composer-2.5", "cursor-grok-4.6-high"}
+	models := module.Models()
+	if len(models) != len(wantModels) {
+		t.Fatalf("cursor model count = %d, want %d", len(models), len(wantModels))
+	}
+	for _, id := range wantModels {
+		if _, ok := models[id]; !ok {
+			t.Fatalf("cursor models missing public model %q", id)
+		}
+		if err := binding.ValidateModel(id); err != nil {
+			t.Fatalf("cursor must allow public model %q: %v", id, err)
+		}
+	}
+	for id := range models {
+		found := false
+		for _, want := range wantModels {
+			if id == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("cursor exposes unexpected internal model id %q", id)
+		}
 	}
 	quotaInfo := module.Quota()
 	if quotaInfo.Kind != "cursor" || quotaInfo.Name != "cursor" {

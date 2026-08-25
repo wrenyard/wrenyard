@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 )
 
@@ -25,6 +27,8 @@ const (
 	ResolverClaude = schema.CredentialResolverClaude
 	// ResolverGrokOAuth probes native Grok auth.json without exposing tokens.
 	ResolverGrokOAuth = schema.CredentialResolverGrokOAuth
+	// ResolverCursor reads credentials from Cursor Desktop's state.vscdb.
+	ResolverCursor = schema.CredentialResolverCursor
 )
 
 // ProviderAuthStatus describes the authentication state for a single provider,
@@ -139,6 +143,8 @@ func (r *ProviderAuthStatusResolver) ProviderAuthStatus(providerID string) Provi
 		return r.resolveClaude(status)
 	case ResolverGrokOAuth:
 		return r.resolveGrokOAuth(status)
+	case ResolverCursor:
+		return r.resolveCursor(status)
 	default:
 		status.Detail = "unsupported credential resolver"
 		return status
@@ -154,6 +160,30 @@ func (r *ProviderAuthStatusResolver) resolveGrokOAuth(status ProviderAuthStatus)
 	status.SourcePath = source
 	status.OK = true
 	status.Detail = "native OAuth available and copyable"
+	return status
+}
+
+// resolveCursor recognizes Cursor Desktop login by checking that a readable
+// state.vscdb exists and holds an access token. The status only ever reports
+// availability and the database path; it never carries the token.
+func (r *ProviderAuthStatusResolver) resolveCursor(status ProviderAuthStatus) ProviderAuthStatus {
+	statePath := cursor.StatePath(r.UserHome())
+	status.SourcePath = statePath
+	if !r.FileExists(statePath) {
+		status.Detail = "Cursor state.vscdb not found"
+		return status
+	}
+	token, err := cursor.AccessToken(statePath)
+	if err != nil {
+		status.Detail = "Cursor state.vscdb access token unavailable"
+		return status
+	}
+	if strings.TrimSpace(token) == "" {
+		status.Detail = "Cursor state.vscdb missing access token"
+		return status
+	}
+	status.OK = true
+	status.Detail = "authenticated"
 	return status
 }
 
@@ -350,6 +380,14 @@ func (r *ProviderAuthStatusResolver) Credential(providerID string) (*Credential,
 			return nil, false
 		}
 		return &Credential{Value: parsed.accessToken}, true
+
+	case ResolverCursor:
+		statePath := cursor.StatePath(r.UserHome())
+		token, err := cursor.AccessToken(statePath)
+		if err != nil || strings.TrimSpace(token) == "" {
+			return nil, false
+		}
+		return &Credential{Value: token}, true
 
 	default:
 		return nil, false

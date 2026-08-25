@@ -98,6 +98,8 @@ func synthesizeProfile(name string, recipe config.ProfileRecipe, reg *catalog.Re
 		env["OPENCODE_MODEL"] = recipe.Provider + "/" + recipe.Model
 	case catalog.DialectDSH:
 		env[catalog.EnvDSHModel] = recipe.Provider + "/" + recipe.Model
+	case catalog.DialectCursor:
+		env[catalog.EnvCursorModel] = recipe.Model
 	default:
 		return Profile{}, fmt.Errorf("profiles.%s: client %q has no profile template", name, recipe.Client)
 	}

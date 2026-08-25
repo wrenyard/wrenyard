@@ -24,6 +24,7 @@ var nativeClientInstalls = []nativeClientInstall{
 	{ID: "dsh", Binary: "dsh", Hint: "Install with: npm install -g @deepseek-ai/dsh, or set FORGE_DSH_BIN."},
 	{ID: "codebuddy", Binary: "codebuddy", Hint: "Install with: npm install -g @tencent-ai/codebuddy-code."},
 	{ID: "grok", Binary: "grok", Hint: "Install Grok Build and ensure grok is on PATH."},
+	{ID: "cursor", Binary: "cursor-agent", Hint: "Install Cursor Desktop and ensure cursor-agent is on PATH (never the generic agent command, which belongs to Grok)."},
 }
 
 // InstallationDoctorCheck reports whether each native client binary is present

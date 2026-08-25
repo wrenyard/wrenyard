@@ -732,3 +732,70 @@ func TestSameNameCBRecipeOverrideCarriesAnthropicModel(t *testing.T) {
 		t.Fatalf("cb-hy ANTHROPIC_MODEL = %q, want hunyuan-chat", p.Env["ANTHROPIC_MODEL"])
 	}
 }
+
+func TestCursorBuiltinProfilesExistWithExactModels(t *testing.T) {
+	manifest := *manifest.BuiltinManifest()
+	cases := []struct {
+		name      string
+		wantModel string
+	}{
+		{name: "cur-composer", wantModel: "composer-2.5"},
+		{name: "cur-grok", wantModel: "cursor-grok-4.6-high"},
+	}
+	for _, tc := range cases {
+		p, ok := manifest.Profiles[tc.name]
+		if !ok {
+			t.Fatalf("builtin profiles should include %s, got %#v", tc.name, sortedProfileKeys(manifest.Profiles))
+		}
+		if p.Client != "cursor" || p.Provider != "cursor" {
+			t.Fatalf("%s client/provider = %s/%s, want cursor/cursor", tc.name, p.Client, p.Provider)
+		}
+		if p.Env["CURSOR_AUTH_TOKEN"] != "" {
+			t.Fatalf("%s should source its token via native Cursor auth, got literal CURSOR_AUTH_TOKEN %q", tc.name, p.Env["CURSOR_AUTH_TOKEN"])
+		}
+		if got := p.Env["CURSOR_MODEL"]; got != tc.wantModel {
+			t.Fatalf("%s CURSOR_MODEL = %q, want %s", tc.name, got, tc.wantModel)
+		}
+		// The launcher must use the canonical cursor-agent binary only.
+		if cmd, _ := p.Launcher["command"].(string); cmd != "cursor-agent" {
+			t.Fatalf("%s launcher command = %q, want cursor-agent (never the generic agent command)", tc.name, cmd)
+		}
+	}
+}
+
+func TestCursorProfilesAreDiscoverableAndDoctorEligible(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	manifest, err := loadManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := availableProfileNames(manifest)
+	for _, want := range []string{"cur-composer", "cur-grok"} {
+		if !contains(names, want) {
+			t.Fatalf("expected available profile list to include %s, got %#v", want, names)
+		}
+	}
+
+	reg := catalog.DefaultRegistry()
+	binding, err := reg.LookupBinding("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.CredentialSource() != catalog.CredentialResolverCursor {
+		t.Fatalf("cursor credential source = %q, want cursor", binding.CredentialSource())
+	}
+	if !binding.SupportsDialect(catalog.DialectCursor) {
+		t.Fatal("cursor provider must support the cursor dialect")
+	}
+	models := reg.ProviderModels("cursor")
+	for _, id := range []string{"composer-2.5", "cursor-grok-4.6-high"} {
+		if _, ok := models[id]; !ok {
+			t.Fatalf("cursor provider models missing %q", id)
+		}
+	}
+}

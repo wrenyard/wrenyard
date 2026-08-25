@@ -19,6 +19,7 @@ const (
 	DialectOpenCode   Dialect = "opencode"
 	DialectGrok       Dialect = "grok"
 	DialectDSH        Dialect = "dsh"
+	DialectCursor     Dialect = "cursor"
 )
 
 // CredentialResolver identifies the provider credential source.
@@ -30,6 +31,7 @@ const (
 	CredentialResolverCodex        CredentialResolver = "codex"
 	CredentialResolverClaude       CredentialResolver = "claude"
 	CredentialResolverGrokOAuth    CredentialResolver = "grok-oauth"
+	CredentialResolverCursor       CredentialResolver = "cursor"
 )
 
 // InferenceBinding describes the default text-inference transport.
