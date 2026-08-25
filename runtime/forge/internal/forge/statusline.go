@@ -3,6 +3,7 @@ package forge
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
@@ -19,9 +20,23 @@ func quotaCommand(args []string) int {
 		},
 		ResolveBigModelToken: func() string { return sl.ResolveBigModelToken(statuslineDeps()) },
 		ResolveKimiToken:     func() string { return sl.ResolveKimiToken(statuslineDeps()) },
+		ResolveDeepSeekToken: resolveDeepSeekQuotaToken,
 		CodexBarEnabled:      sl.CodexBarEnabled,
 	}
 	return quota.Command(deps, args)
+}
+
+// resolveDeepSeekQuotaToken returns the DeepSeek quota bearer token from the
+// user-owned DEEPSEEK_API_KEY with FORGE_DEEPSEEK_API_KEY compatibility only.
+// DeepSeek is quota-only: it never reads/writes auth.json and never registers
+// an inference binding.
+func resolveDeepSeekQuotaToken() string {
+	for _, key := range []string{"FORGE_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func statuslineCommand(args []string) int {
