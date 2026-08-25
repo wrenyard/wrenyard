@@ -50,7 +50,7 @@ describe('quota panel view model', () => {
     expect(tips[0].bars![0].provider.windows).toHaveLength(2);
     expect(tips[0].bars![0].provider.windows[0].remainingPct).toBe(60);
     expect(tips[0].bars![0].provider.windows[0].expectedRemainingPct).toBe(45);
-    expect(tips[0].text).toBe('codex 5h 60% remain · 7d 40% remain');
+    expect(tips[0].text).toBe('codex 5h 60% · 7d 40%');
 
     // OpenAI (error) included with structured bar and errorRow
     expect(tips[1].bars).toBeDefined();
@@ -129,19 +129,19 @@ describe('quota panel view model', () => {
     // Single window
     expect(tips[0].bars![0].provider.windows).toHaveLength(1);
     expect(tips[0].bars![0].provider.windows[0].remainingPct).toBe(25);
-    expect(tips[0].text).toBe('codex 7d 25% remain');
+    expect(tips[0].text).toBe('codex 7d 25%');
 
     // Double window
     expect(tips[1].bars![0].provider.windows).toHaveLength(2);
     expect(tips[1].bars![0].provider.windows[1].name).toBe('7d');
     expect(tips[1].bars![0].provider.windows[1].remainingPct).toBe(40);
-    expect(tips[1].text).toBe('openai 5h 60% remain · 7d 40% remain');
+    expect(tips[1].text).toBe('openai 5h 60% · 7d 40%');
 
     // Kimi three-pool quota remains one grouped provider in the tips card.
     expect(tips[2].bars).toHaveLength(1);
     expect(tips[2].bars![0].label).toBe('kimi-coding');
     expect(tips[2].bars![0].provider.windows.map((window) => window.name)).toEqual(['5h', '7d', '1mo']);
-    expect(tips[2].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain · 1mo 27% remain');
+    expect(tips[2].text).toBe('kimi-coding 5h 80% · 7d 60% · 1mo 27%');
   });
 
   it('floors fractional remaining percentages in tips and tray rows', () => {
@@ -163,13 +163,13 @@ describe('quota panel view model', () => {
     };
 
     const tips = buildQuotaTips([provider], ['cursor']);
-    expect(tips[0].text).toBe('cursor Cursor 99% remain · Other 99% remain');
+    expect(tips[0].text).toBe('cursor Cursor 99% · Other 99%');
 
     const rows = formatQuotaBarMenuRows(tips);
     expect(rows.map((row) => row.remainingPct)).toEqual([99, 99]);
     expect(rows.map((row) => row.label)).toEqual([
-      'cursor Cursor 99% remain',
-      'cursor Other 99% remain',
+      'cursor Cursor 99%',
+      'cursor Other 99%',
     ]);
   });
 
@@ -258,7 +258,7 @@ describe('quota panel view model', () => {
     expect(tips[0].bars).toBeDefined();
     expect(tips[0].bars![0].label).toBe('codex-spark');
     // Healthy tip text normalises family-label prefix to provider id
-    expect(tips[0].text).toBe('codex-spark 7d 25% remain');
+    expect(tips[0].text).toBe('codex-spark 7d 25%');
   });
 
   it('uses provider id (not label) for errorRow label to avoid collapsing kimi-coding→kimi', () => {
@@ -312,7 +312,7 @@ describe('quota panel view model', () => {
     expect(bar.provider.windows[0].name).toBe('quota');
     expect(bar.provider.windows[0].remainingPct).toBe(55);
     expect(bar.provider.windows[0].expectedRemainingPct).toBe(30);
-    expect(tips[0].text).toBe('codex quota 55% remain');
+    expect(tips[0].text).toBe('codex quota 55%');
   });
 
   it('copies Forge pace and reset onto remaining window percents', () => {
@@ -334,7 +334,7 @@ describe('quota panel view model', () => {
     };
 
     const tips = buildQuotaTips([provider], ['kimi-coding']);
-    expect(tips[0].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain (+8%) · 4h 21m reset');
+    expect(tips[0].text).toBe('kimi-coding 5h 80% · 7d 60% (+8%) · 4h 21m reset');
   });
 
   it('formats remaining bar rows for the tray submenu', () => {
@@ -372,14 +372,14 @@ describe('quota panel view model', () => {
         window: '5h',
         remainingPct: 100,
         expectedRemainingPct: null,
-        label: 'kimi-coding 5h 100% remain',
+        label: 'kimi-coding 5h 100%',
       },
       {
         provider: '',
         window: '7d',
         remainingPct: 97,
         expectedRemainingPct: 52,
-        label: 'kimi-coding 7d 97% remain',
+        label: 'kimi-coding 7d 97%',
       },
       {
         provider: 'codex',
@@ -418,7 +418,7 @@ describe('quota panel view model', () => {
     // Generic formatting preserves Cursor/Other order and remaining percentages
     expect(tips[0].bars![0].provider.windows.map((window) => window.name)).toEqual(['Cursor', 'Other']);
     expect(tips[0].bars![0].provider.windows.map((window) => window.remainingPct)).toEqual([62, 40]);
-    expect(tips[0].text).toBe('cursor Cursor 62% remain · Other 40% remain');
+    expect(tips[0].text).toBe('cursor Cursor 62% · Other 40%');
 
     // Tray submenu rows preserve the same order and remaining percentages
     const rows = formatQuotaBarMenuRows(tips);
@@ -428,14 +428,14 @@ describe('quota panel view model', () => {
         window: 'Cursor',
         remainingPct: 62,
         expectedRemainingPct: null,
-        label: 'cursor Cursor 62% remain',
+        label: 'cursor Cursor 62%',
       },
       {
         provider: '',
         window: 'Other',
         remainingPct: 40,
         expectedRemainingPct: null,
-        label: 'cursor Other 40% remain',
+        label: 'cursor Other 40%',
       },
     ]);
   });
@@ -467,6 +467,19 @@ describe('quota panel view model', () => {
     expect(tips[0].errorRow).toBeUndefined();
     // Text is the normalized display line (no % or bar semantics).
     expect(tips[0].text).toBe('deepseek ¥12.50 · $1.00');
+  });
+
+  it('removes remain only as a percentage suffix in normalized fallback text', () => {
+    const tips = buildQuotaTips([{
+      id: 'custom',
+      label: 'Custom',
+      displayLine: 'Custom 50% remain · 3 requests remain',
+      error: null,
+      status: 'ok',
+      stale: false,
+    }], ['custom']);
+
+    expect(tips[0].text).toBe('custom 50% · 3 requests remain');
   });
 
   it('mixes percentage and balance providers in settings order', () => {
@@ -577,16 +590,16 @@ describe('quota panel view model', () => {
       window: '',
       remainingPct: null,
       expectedRemainingPct: null,
-      label: 'deepseek bal. ¥12.50',
-      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal. ¥12.50' }],
+      label: 'deepseek bal ¥12.50',
+      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal ¥12.50' }],
     });
     expect(rows[1]).toEqual({
       provider: '',
       window: '',
       remainingPct: null,
       expectedRemainingPct: null,
-      label: 'deepseek bal. $1.00',
-      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'deepseek bal. $1.00' }],
+      label: 'deepseek bal $1.00',
+      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'deepseek bal $1.00' }],
     });
   });
 
@@ -608,7 +621,7 @@ describe('quota panel view model', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].provider).toBe('deepseek');
     expect(rows[0].balances).toEqual([
-      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal. ¥12.50' },
+      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal ¥12.50' },
     ]);
   });
 });

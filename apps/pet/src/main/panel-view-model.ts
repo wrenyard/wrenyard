@@ -112,7 +112,7 @@ export interface QuotaBalanceMenuRow {
 
 /**
  * Tray 额度 submenu rows: same four columns as house tips
- * (`provider | window | remaining bar | integer % remain`).
+ * (`provider | window | remaining bar | integer %`).
  * Provider id only on the first window of a group. Error rows skip the bar.
  * Balance-only tips render one explicit row per currency with provider on the
  * first row and a single-row balances payload for quota-menu-icon.
@@ -140,7 +140,7 @@ export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
         const label = tip.balanceLabel ?? '';
         tip.balances.forEach((balance, index) => {
           const displayAmount = balance.display || balance.amount;
-          const balanceLabel = `${label || balance.currency} bal. ${displayAmount}`;
+          const balanceLabel = `${label || balance.currency} bal ${displayAmount}`;
           rows.push({
             provider: index === 0 ? label : '',
             window: '',
@@ -178,7 +178,7 @@ export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
         window: window.name,
         remainingPct: remain,
         expectedRemainingPct: window.expectedRemainingPct,
-        label: `${provider || bar.label} ${window.name} ${remain}% remain`,
+        label: `${provider || bar.label} ${window.name} ${remain}%`,
       });
     });
   }
@@ -199,7 +199,7 @@ export function formatRemainQuotaLine(
   const reset = src.match(/·\s*([^·]*\breset)\s*$/)?.[1]?.trim();
   const has7d = windows.some((window) => window.name.toLowerCase() === '7d');
   const parts = windows.map((window, index) => {
-    let part = `${window.name} ${floorQuotaPercentage(window.remainingPct)}% remain`;
+    let part = `${window.name} ${floorQuotaPercentage(window.remainingPct)}%`;
     const isAnchor = has7d ? window.name.toLowerCase() === '7d' : index === windows.length - 1;
     if (isAnchor && pace) part += ` ${pace}`;
     return part;
@@ -220,8 +220,7 @@ function normalizeDisplayLine(p: QuotaProviderState): string {
   } else {
     line = p.id + ' ' + p.displayLine;
   }
-  if (/\bremain\b/.test(line) || /\bused\b/.test(line)) return line;
-  return line.replace(/(\d+(?:\.\d+)?)%/g, '$1% remain');
+  return line.replace(/(\d+(?:\.\d+)?%)\s+remain\b/g, '$1');
 }
 
 /**

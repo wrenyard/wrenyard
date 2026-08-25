@@ -127,21 +127,21 @@ describe('tray', () => {
           window: '5h',
           remainingPct: 100,
           expectedRemainingPct: null,
-          label: 'kimi-coding 5h 100% remain',
+          label: 'kimi-coding 5h 100%',
         },
         {
           provider: '',
           window: '7d',
           remainingPct: 97,
           expectedRemainingPct: 52,
-          label: 'kimi-coding 7d 97% remain',
+          label: 'kimi-coding 7d 97%',
         },
         {
           provider: 'codex',
           window: '7d',
           remainingPct: 40,
           expectedRemainingPct: null,
-          label: 'codex 7d 40% remain',
+          label: 'codex 7d 40%',
         },
       ],
     });
@@ -167,7 +167,7 @@ describe('tray', () => {
       window: '7d',
       remainingPct: 0,
       expectedRemainingPct: 8,
-      label: 'codex 7d 0% remain',
+      label: 'codex 7d 0%',
     }];
     const { tray, rebuildMenu } = createTray({
       onSettings: vi.fn(),
@@ -179,7 +179,7 @@ describe('tray', () => {
       window: '7d',
       remainingPct: 100,
       expectedRemainingPct: 0,
-      label: 'codex-spark 7d 100% remain',
+      label: 'codex-spark 7d 100%',
     }];
     rebuildMenu();
     const quota = menuItems.find((item) => item.label === '额度');
