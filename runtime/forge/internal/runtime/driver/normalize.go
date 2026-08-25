@@ -1366,35 +1366,38 @@ func cursorNormalizerMap(event map[string]any) []protocol.Event {
 // A result with no recognized success/failure signal leaves the stream
 // non-terminal so structural validation can reject it.
 func cursorTerminalOutcome(typ string, event map[string]any) (string, CursorAttemptTrust, bool) {
-	if isError, ok := getBool(event, "is_error"); ok && isError {
-		return "failed", CursorTrustCompleteNativeFailure, true
-	}
-	subtype, _ := getString(event, "subtype")
-	switch strings.ToLower(strings.TrimSpace(subtype)) {
-	case "success", "done", "ok", "complete", "completed":
-		return "done", CursorTrustCompleteSuccess, true
-	case "error", "failed", "failure", "cancelled", "canceled":
-		return "failed", CursorTrustCompleteNativeFailure, true
-	}
-	// Legacy flattened status field fallback for forward compatibility.
-	if status, _ := getString(event, "status"); strings.TrimSpace(status) != "" {
-		switch strings.ToLower(strings.TrimSpace(status)) {
-		case "done", "success", "complete", "completed":
-			return "done", CursorTrustCompleteSuccess, true
-		case "error", "failed", "failure", "cancelled", "canceled":
-			return "failed", CursorTrustCompleteNativeFailure, true
-		}
-		return "", CursorTrustInvalidOrIncomplete, false
-	}
+	typ = strings.ToLower(strings.TrimSpace(typ))
 	switch typ {
 	case "error", "failed":
 		return "failed", CursorTrustCompleteNativeFailure, true
 	case "result", "run_finished":
+		if isError, ok := getBool(event, "is_error"); ok && isError {
+			return "failed", CursorTrustCompleteNativeFailure, true
+		}
+		subtype, _ := getString(event, "subtype")
+		switch strings.ToLower(strings.TrimSpace(subtype)) {
+		case "success", "done", "ok", "complete", "completed":
+			return "done", CursorTrustCompleteSuccess, true
+		case "error", "failed", "failure", "cancelled", "canceled":
+			return "failed", CursorTrustCompleteNativeFailure, true
+		}
+		// Legacy flattened status field fallback for forward compatibility.
+		if status, _ := getString(event, "status"); strings.TrimSpace(status) != "" {
+			switch strings.ToLower(strings.TrimSpace(status)) {
+			case "done", "success", "complete", "completed":
+				return "done", CursorTrustCompleteSuccess, true
+			case "error", "failed", "failure", "cancelled", "canceled":
+				return "failed", CursorTrustCompleteNativeFailure, true
+			}
+		}
 		// A terminal record with no recognized success/failure signal is
 		// malformed and must never be treated as a clean terminal.
 		return "", CursorTrustInvalidOrIncomplete, false
+	default:
+		// Cursor also uses subtype=completed on thinking and tool_call records.
+		// Those are lifecycle boundaries inside a turn, never run terminals.
+		return "", CursorTrustInvalidOrIncomplete, false
 	}
-	return "", CursorTrustInvalidOrIncomplete, false
 }
 
 // cursorAssistantText aggregates the text blocks from a Cursor assistant
