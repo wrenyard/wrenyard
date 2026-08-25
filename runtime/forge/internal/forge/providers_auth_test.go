@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
@@ -821,6 +823,86 @@ func TestProviderAuthStatusClaudeMissing(t *testing.T) {
 	}
 }
 
+// writeForgeCursorStateDB creates a Cursor state.vscdb under home at the
+// platform path resolved by the shared helper, storing a token.
+func writeForgeCursorStateDB(t *testing.T, home, value string) {
+	t.Helper()
+	path := cursor.StatePath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO ItemTable (key, value) VALUES (?, ?)", "cursorAuth/accessToken", value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderAuthStatusCursor(t *testing.T) {
+	home := t.TempDir()
+	setupForgedHome(t, home)
+	t.Setenv("HOME", home)
+	writeForgeCursorStateDB(t, home, "forge-cursor-token")
+
+	resolver := auth.NewProviderAuthStatusResolver(
+		forgeCatalogAuthResolver,
+		forgeDataDir,
+		userHome,
+	)
+	status := resolver.ProviderAuthStatus("cursor")
+	if !status.OK {
+		t.Fatalf("cursor should be authenticated, got status: %+v", status)
+	}
+	if status.Kind != auth.ResolverCursor {
+		t.Fatalf("expected cursor resolver, got %s", status.Kind)
+	}
+	// Status and source path must never expose the token.
+	joined := status.SourcePath + " " + status.Detail
+	if strings.Contains(joined, "forge-cursor-token") {
+		t.Fatalf("cursor status leaked token: %q", joined)
+	}
+
+	cred, ok := resolver.Credential("cursor")
+	if !ok {
+		t.Fatal("cursor credential should be available")
+	}
+	if cred.Value != "forge-cursor-token" {
+		t.Fatalf("cursor credential value = %q, want forge-cursor-token", cred.Value)
+	}
+	if cred.Headers != nil && len(cred.Headers) > 0 {
+		t.Fatalf("cursor credential must carry no extra headers, got %v", cred.Headers)
+	}
+	if got := resolver.Headers("cursor").Get("Authorization"); got != "Bearer forge-cursor-token" {
+		t.Fatalf("Authorization header = %q, want Bearer forge-cursor-token", got)
+	}
+}
+
+func TestProviderAuthStatusCursorMissing(t *testing.T) {
+	home := t.TempDir()
+	setupForgedHome(t, home)
+	t.Setenv("HOME", home)
+
+	resolver := auth.NewProviderAuthStatusResolver(
+		forgeCatalogAuthResolver,
+		forgeDataDir,
+		userHome,
+	)
+	status := resolver.ProviderAuthStatus("cursor")
+	if status.OK {
+		t.Fatal("cursor should NOT be authenticated without state.vscdb")
+	}
+	cred, ok := resolver.Credential("cursor")
+	if ok || cred != nil {
+		t.Fatalf("cursor credential should not resolve without state.vscdb, got: %+v / %v", cred, ok)
+	}
+}
+
 func TestProviderAuthStatusMalformedFiles(t *testing.T) {
 	home := t.TempDir()
 	setupForgedHome(t, home)
@@ -927,23 +1009,18 @@ func codebuddyCatalogAuthResolver(providerID string) (auth.CredentialResolverKin
 }
 
 // forgeCatalogAuthResolver is a test helper that resolves the credential
-// resolver kind from the catalog.
+// resolver kind from the catalog, mirroring the production
+// resolveCatalogCredentialResolver. The top-level CredentialSource works for
+// native client providers that declare no inference transport.
 func forgeCatalogAuthResolver(providerID string) (auth.CredentialResolverKind, bool) {
 	reg := catalog.DefaultRegistry()
 	binding, err := reg.LookupBinding(providerID)
-	if err != nil || binding.Inference == nil {
+	if err != nil {
 		return "", false
 	}
-	switch binding.Inference.CredentialResolver {
-	case catalog.CredentialResolverForgeManaged:
-		return auth.ResolverForgeManaged, true
-	case catalog.CredentialResolverCodeBuddy:
-		return auth.ResolverCodeBuddy, true
-	case catalog.CredentialResolverCodex:
-		return auth.ResolverCodex, true
-	case catalog.CredentialResolverClaude:
-		return auth.ResolverClaude, true
-	default:
+	source := binding.CredentialSource()
+	if source == "" {
 		return "", false
 	}
+	return source, true
 }

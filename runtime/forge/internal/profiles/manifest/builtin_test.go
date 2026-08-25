@@ -9,19 +9,21 @@ func TestBuiltinProfileSet(t *testing.T) {
 
 	// Verify exact active profiles are present.
 	wantActive := map[string]bool{
-		"codex-sol":   true,
-		"codex-terra": true,
-		"codex-luna":  true,
-		"codex-spark": true,
-		"cb-hy":       true,
-		"cb-ds":       true,
-		"cb-dsf":      true,
-		"cb-kimi":     true,
-		"cc-kimi":     true,
-		"cc-glm":      true,
-		"gk-glm":      true,
-		"gk-kimi":     true,
-		"gk-grok":     true,
+		"codex-sol":    true,
+		"codex-terra":  true,
+		"codex-luna":   true,
+		"codex-spark":  true,
+		"cb-hy":        true,
+		"cb-ds":        true,
+		"cb-dsf":       true,
+		"cb-kimi":      true,
+		"cc-kimi":      true,
+		"cc-glm":       true,
+		"gk-glm":       true,
+		"gk-kimi":      true,
+		"gk-grok":      true,
+		"cur-composer": true,
+		"cur-grok":     true,
 	}
 	// Verify no retired or removed profiles.
 	notWant := map[string]bool{
@@ -195,6 +197,34 @@ func TestBuiltinGrokProfiles(t *testing.T) {
 	}
 }
 
+func TestBuiltinCursorProfiles(t *testing.T) {
+	want := map[string]struct {
+		model    string
+		launcher string
+	}{
+		"cur-composer": {model: "composer-2.5", launcher: "cursor-agent"},
+		"cur-grok":     {model: "cursor-grok-4.6-high", launcher: "cursor-agent"},
+	}
+	for id, expected := range want {
+		profile := Get(id)
+		if profile == nil {
+			t.Fatalf("Get(%q) returned nil", id)
+		}
+		if profile.Client != "cursor" || profile.Provider != "cursor" {
+			t.Fatalf("%s = client %q provider %q, want cursor/cursor", id, profile.Client, profile.Provider)
+		}
+		if profile.Env["CURSOR_MODEL"] != expected.model {
+			t.Fatalf("%s CURSOR_MODEL = %q, want %q", id, profile.Env["CURSOR_MODEL"], expected.model)
+		}
+		if profile.Launcher["command"] != expected.launcher {
+			t.Fatalf("%s launcher command = %q, want %q", id, profile.Launcher["command"], expected.launcher)
+		}
+		if len(profile.Settings) != 0 {
+			t.Fatalf("%s settings should be empty, got %#v", id, profile.Settings)
+		}
+	}
+}
+
 func TestDeterministicOrder(t *testing.T) {
 	all := List()
 	// Sol, Terra, Luna must appear before Spark.
@@ -244,7 +274,7 @@ func TestRemovedProfilesNotFound(t *testing.T) {
 }
 
 func TestActiveProfilesNotDeprecated(t *testing.T) {
-	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "gk-glm", "gk-kimi", "gk-grok"} {
+	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "gk-glm", "gk-kimi", "gk-grok", "cur-composer", "cur-grok"} {
 		p := Get(id)
 		if p == nil {
 			t.Fatalf("Get(%q) returned nil", id)

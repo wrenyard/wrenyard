@@ -2,7 +2,8 @@ package manifest
 
 // builtinProfiles defines the complete source-owned profile registry.
 // Order is deterministic: Codex order (Sol, Terra, Luna, Spark), then
-// CodeBuddy profiles, then Claude Code profiles.
+// CodeBuddy profiles, then Claude Code profiles, then Grok profiles, then
+// Cursor profiles.
 var builtinProfiles = []Profile{
 	{
 		Name:        "codex-sol",
@@ -187,6 +188,32 @@ var builtinProfiles = []Profile{
 		},
 		Env: map[string]string{
 			"GROK_MODEL": "grok-4.5",
+		},
+		Settings: map[string]any{},
+	},
+	{
+		Name:        "cur-composer",
+		Client:      "cursor",
+		Provider:    "cursor",
+		Description: "Cursor (Composer 2.5)",
+		Launcher: map[string]any{
+			"command": "cursor-agent",
+		},
+		Env: map[string]string{
+			"CURSOR_MODEL": "composer-2.5",
+		},
+		Settings: map[string]any{},
+	},
+	{
+		Name:        "cur-grok",
+		Client:      "cursor",
+		Provider:    "cursor",
+		Description: "Cursor (Grok 4.6 High)",
+		Launcher: map[string]any{
+			"command": "cursor-agent",
+		},
+		Env: map[string]string{
+			"CURSOR_MODEL": "cursor-grok-4.6-high",
 		},
 		Settings: map[string]any{},
 	},

@@ -70,7 +70,7 @@ func TestInstallationDoctorCheckStableOrder(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("FORGE_DSH_BIN", "")
 	rows := InstallationRows(InstallationDoctorCheck())
-	want := []string{"claude-code", "opencode", "codex", "dsh", "codebuddy", "grok"}
+	want := []string{"claude-code", "opencode", "codex", "dsh", "codebuddy", "grok", "cursor"}
 	if len(rows) != len(want) {
 		t.Fatalf("len(rows) = %d, want %d (%#v)", len(rows), len(want), rows)
 	}
@@ -78,6 +78,20 @@ func TestInstallationDoctorCheckStableOrder(t *testing.T) {
 		if rows[i]["id"] != id {
 			t.Fatalf("clients[%d] = %v, want %s", i, rows[i]["id"], id)
 		}
+	}
+	// Cursor is collision-safe: its binary and hint must never resolve to the
+	// generic agent command, which belongs to Grok on this host.
+	cursorRow := rows[len(rows)-1]
+	binary, _ := cursorRow["binary"].(string)
+	if binary != "cursor-agent" {
+		t.Fatalf("cursor binary = %q, want cursor-agent", binary)
+	}
+	hint, _ := cursorRow["hint"].(string)
+	if !strings.Contains(hint, "cursor-agent") {
+		t.Fatalf("cursor hint must name cursor-agent, got %q", hint)
+	}
+	if !strings.Contains(hint, "generic agent") || !strings.Contains(hint, "Grok") {
+		t.Fatalf("cursor hint must warn that the generic agent belongs to Grok, got %q", hint)
 	}
 }
 
