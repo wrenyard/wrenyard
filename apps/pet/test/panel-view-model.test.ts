@@ -477,6 +477,53 @@ describe('quota panel view model', () => {
     expect(tips[1].balanceLabel).toBe('deepseek');
   });
 
+  it('uses the same user-defined provider order for Tips and the status-bar quota submenu', () => {
+    const providers: QuotaProviderState[] = [
+      {
+        id: 'codex',
+        label: 'Codex',
+        displayLine: 'Codex 7d 40%',
+        error: null,
+        status: 'ok',
+        stale: false,
+        bars: {
+          remainingPct: 40,
+          expectedRemainingPct: null,
+          windows: [{ name: '7d', usedPct: 60, remainingPct: 40, expectedRemainingPct: null }],
+        },
+      },
+      {
+        id: 'cursor',
+        label: 'Cursor',
+        displayLine: 'Cursor 7d 80%',
+        error: null,
+        status: 'ok',
+        stale: false,
+        bars: {
+          remainingPct: 80,
+          expectedRemainingPct: null,
+          windows: [{ name: '7d', usedPct: 20, remainingPct: 80, expectedRemainingPct: null }],
+        },
+      },
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        displayLine: 'DeepSeek ¥12.50',
+        error: null,
+        status: 'ok',
+        stale: false,
+        balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
+      },
+    ];
+    const settingsOrder = ['deepseek', 'cursor', 'codex'];
+
+    const tips = buildQuotaTips(providers, settingsOrder);
+    expect(tips.map((tip) => tip.balanceLabel ?? tip.bars?.[0]?.label)).toEqual(settingsOrder);
+
+    const menuRows = formatQuotaBarMenuRows(tips);
+    expect(menuRows.map((row) => row.provider)).toEqual(settingsOrder);
+  });
+
   it('formats balance tray submenu rows as provider,currency,amount only via the production projection', () => {
     const tips = buildQuotaTips([
       {

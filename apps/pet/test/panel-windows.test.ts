@@ -918,6 +918,56 @@ describe('panel windows — house skin settings', () => {
     owner.destroy();
   });
 
+  it('settings:save publishes the exact provider order after persisting config', async () => {
+    const { PanelOwner } = await import('../src/main/panel-windows');
+    const onConfigChange = vi.fn();
+    const onQuotaProviderOrderChange = vi.fn();
+    const config = {
+      scale: 3,
+      bubbleSeconds: 6,
+      bottomOffset: 0,
+      entities: { house: true, workers: true },
+      windows: {},
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'cursor', enabled: true },
+          { id: 'deepseek', enabled: true },
+        ],
+      },
+      appearance: { houseSkin: 'classic' as const },
+    };
+    const owner = new PanelOwner({
+      config,
+      htmlDir: '/tmp',
+      preloadPath: '/tmp/preload.js',
+      onConfigChange,
+      onStatsRequestRefresh: vi.fn(),
+      onRestart: vi.fn(),
+      onGetEnabledProviderOrder: () => config.quota.providers.filter((provider) => provider.enabled).map((provider) => provider.id),
+      onQuotaProviderOrderChange,
+      getHouseWindow: () => null,
+    });
+
+    const mockSettingsWin = { webContents: mockWebContentsSelf, isDestroyed: () => false, destroy: vi.fn() };
+    (owner as any).settingsWindow = mockSettingsWin;
+    mockSettingsWindow = mockSettingsWin;
+
+    const reordered = [
+      { id: 'deepseek', enabled: true },
+      { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: false },
+    ];
+    const saveHandler = ipcHandlers.get('settings:save')!;
+    saveHandler({ sender: mockWebContentsSelf }, { quota: { providers: reordered } });
+
+    expect(onConfigChange).toHaveBeenCalledTimes(1);
+    expect(onQuotaProviderOrderChange).toHaveBeenCalledWith(reordered);
+    expect(config.quota.providers).toEqual(reordered);
+
+    owner.destroy();
+  });
+
   it('settings:save does not invoke onHouseSkinChange for same skin value', async () => {
     const { PanelOwner } = await import('../src/main/panel-windows');
     const onHouseSkinChange = vi.fn();

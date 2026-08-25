@@ -125,19 +125,22 @@ describe('house fixture contract', () => {
     expect(Array.isArray(tips)).toBe(true);
     expect(tips.length).toBeGreaterThanOrEqual(3);
 
-    // codex-spark: 7d-only
-    const codex = tips.find((t: any) => t.text.includes('codex-spark'));
+    // codex: both subscription windows remain grouped
+    const codex = tips.find((t: any) => t.text.includes('codex'));
     expect(codex).toBeDefined();
     expect(codex.bars).toHaveLength(1);
-    expect(codex.bars[0].provider.windows[0].name).toBe('7d');
+    expect(codex.bars[0].provider.windows.map((window: any) => window.name)).toEqual(['5h', '7d']);
 
-    // kimi-coding: all three pools stay ordered and grouped
-    const kimi = tips.find((t: any) => t.text.includes('kimi-coding'));
-    expect(kimi).toBeDefined();
-    expect(kimi.bars).toHaveLength(1);
-    expect(kimi.bars[0].provider.windows[0].name).toBe('5h');
-    expect(kimi.bars[0].provider.windows[1].name).toBe('7d');
-    expect(kimi.bars[0].provider.windows[2].name).toBe('1mo');
+    // cursor: one subscription window follows Codex in the fixture order
+    const cursor = tips.find((t: any) => t.text.includes('cursor'));
+    expect(cursor).toBeDefined();
+    expect(cursor.bars[0].provider.windows.map((window: any) => window.name)).toEqual(['7d']);
+
+    // deepseek: amount-only row has no percentage bars
+    const deepseek = tips.find((t: any) => t.text.includes('deepseek'));
+    expect(deepseek).toBeDefined();
+    expect(deepseek.bars).toBeUndefined();
+    expect(deepseek.balances).toEqual([{ currency: 'CNY', amount: '12.50', display: '¥12.50' }]);
 
     // super-grok: error shape
     const superGrok = tips.find((t: any) => t.text.includes('super-grok'));
