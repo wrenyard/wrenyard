@@ -95,6 +95,27 @@ func TestCursorTeeAggregatesAssistantTextAndEmitsExactlyOneUsage(t *testing.T) {
 	}
 }
 
+// TestCursorTeeIgnoresCompletedSubtypesOnNonTerminalRecords covers the live
+// Cursor wire sequence, where both thinking and tool calls use
+// subtype=completed before the final result. Those records must not be counted
+// as run terminals or poison the otherwise trustworthy usage contract.
+func TestCursorTeeIgnoresCompletedSubtypesOnNonTerminalRecords(t *testing.T) {
+	tee, events := newCursorTee(t)
+	writeCursorLine(t, tee, `{"type":"thinking","subtype":"completed","session_id":"s1"}`)
+	writeCursorLine(t, tee, `{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":{"shellToolCall":{"args":{"command":"pwd"}}}}`)
+	writeCursorLine(t, tee, `{"type":"tool_call","subtype":"completed","call_id":"c1","tool_call":{"shellToolCall":{"result":{"success":{"stdout":"/workspace\n","stderr":"","exitCode":0}}}}}`)
+	writeCursorLine(t, tee, `{"type":"result","subtype":"success","is_error":false,"duration_ms":11717,"session_id":"s1","usage":{"inputTokens":10,"outputTokens":3,"cacheReadTokens":5,"cacheWriteTokens":2}}`)
+	tee.FinalizeCursorStream()
+
+	usage := lastTurnUsage(*events)
+	if usage["token_scope"] != "agent_turn" || usage["duration_scope"] != "agent_turn" || usage["tps_contract"] != "agent_turn_v1" {
+		t.Fatalf("non-terminal completed subtypes poisoned trusted usage: %#v", usage)
+	}
+	if got := countTurnUsage(*events); got != 1 {
+		t.Fatalf("turn_usage count = %d, want 1", got)
+	}
+}
+
 // TestCursorTeePairsToolsByCallID verifies tool_call records pair by the
 // top-level call_id across started/completed subtypes, deriving a stable
 // snake-case tool name from the single nested shellToolCall object and reading
