@@ -238,22 +238,32 @@ describe('final preview capture contract', () => {
     expect(Array.isArray(hoverFixture.value.quotaTips)).toBe(true);
 
     const tips = hoverFixture.value.quotaTips;
-    expect(tips.length).toBeGreaterThanOrEqual(3);
+    expect(tips.length).toBeGreaterThanOrEqual(4);
 
-    // codex-spark: 7d-only, no expected marker
-    const codex = tips.find((t: any) => t.text.includes('codex-spark'));
+    // codex: two percentage windows ordered first
+    const codex = tips.find((t: any) => t.text.includes('codex'));
     expect(codex).toBeDefined();
     expect(codex.bars).toHaveLength(1);
-    expect(codex.bars[0].provider.windows[0].name).toBe('7d');
+    expect(codex.bars[0].provider.windows[0].name).toBe('5h');
+    expect(codex.bars[0].provider.windows[1].name).toBe('7d');
     expect(codex.bars[0].provider.expectedRemainingPct).toBeNull();
 
-    // kimi-coding: all three pools stay ordered and grouped
-    const kimi = tips.find((t: any) => t.text.includes('kimi-coding'));
-    expect(kimi).toBeDefined();
-    expect(kimi.bars).toHaveLength(1);
-    expect(kimi.bars[0].provider.windows[0].name).toBe('5h');
-    expect(kimi.bars[0].provider.windows[1].name).toBe('7d');
-    expect(kimi.bars[0].provider.windows[2].name).toBe('1mo');
+    // cursor: second percentage group
+    const cursor = tips.find((t: any) => t.text.includes('cursor'));
+    expect(cursor).toBeDefined();
+    expect(cursor.bars).toHaveLength(1);
+    expect(cursor.bars[0].provider.windows[0].name).toBe('7d');
+    expect(cursor.bars[0].provider.windows[0].remainingPct).toBe(80);
+
+    // deepseek: monetary balance row (quota-only), no bars
+    const deepseek = tips.find((t: any) => t.text.includes('deepseek'));
+    expect(deepseek).toBeDefined();
+    expect(deepseek.bars).toBeUndefined();
+    expect(deepseek.balances).toBeDefined();
+    expect(deepseek.balances).toHaveLength(1);
+    expect(deepseek.balances[0].currency).toBe('CNY');
+    expect(deepseek.balances[0].amount).toBe('12.50');
+    expect(deepseek.balances[0].display).toBe('¥12.50');
 
     // super-grok: status error, colon-free text, errorRow present
     const superGrok = tips.find((t: any) => t.text.includes('super-grok'));
@@ -272,8 +282,9 @@ describe('final preview capture contract', () => {
     // Capture asserts provider names, error text, 7+ lines, and semantic ROI
     expect(source).toContain('diagnostics?.stats?.lines');
     expect(source).toContain('lines.length < 7');
-    expect(source).toContain('codexSparkMatches.length !== 1');
-    expect(source).toContain('kimiCodingMatches.length < 2');
+    expect(source).toContain('codexMatches.length < 2');
+    expect(source).toContain('cursorMatches.length < 1');
+    expect(source).toContain('deepseek CNY ¥12.50');
     expect(source).toContain('rate limit hit');
     expect(source).toContain("assertSemanticRoi(ref, cap, diagnostics.stats, fixtureId, 'stats')");
   });

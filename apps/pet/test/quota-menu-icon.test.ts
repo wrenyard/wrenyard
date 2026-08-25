@@ -29,6 +29,16 @@ function countFill(buffer: Buffer): number {
   return count;
 }
 
+function countText(buffer: Buffer): number {
+  let count = 0;
+  for (let i = 0; i < buffer.length; i += 4) {
+    if (buffer[i] === 0 && buffer[i + 1] === 0 && buffer[i + 2] === 0 && buffer[i + 3] === 255) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 const sample = {
   provider: 'codex',
   window: '7d',
@@ -55,6 +65,34 @@ describe('quota menu row bitmap', () => {
       label: 'codex  error — initialize failed',
     });
     expect(countFill(row.buffer)).toBe(0);
+  });
+
+  it('draws provider/currency/amount pixels for a balance row with zero progress fill', () => {
+    const row = renderQuotaMenuRowBitmap({
+      provider: 'deepseek',
+      window: '',
+      remainingPct: null,
+      expectedRemainingPct: null,
+      label: 'deepseek CNY ¥12.50',
+      balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
+    });
+    // Provider/currency/amount text is drawn (template mask alpha 255)
+    expect(countText(row.buffer)).toBeGreaterThan(0);
+    // No progress bar track/fill semantics for a monetary row
+    expect(countFill(row.buffer)).toBe(0);
+  });
+
+  it('retains template image behavior for balance rows', () => {
+    setTemplateImage.mockClear();
+    createQuotaMenuRowIcon({
+      provider: 'deepseek',
+      window: '',
+      remainingPct: null,
+      expectedRemainingPct: null,
+      label: 'deepseek CNY ¥12.50',
+      balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
+    });
+    expect(setTemplateImage).toHaveBeenCalledWith(true);
   });
 
   it('marks the row image as a macOS template so AppKit tints it', () => {

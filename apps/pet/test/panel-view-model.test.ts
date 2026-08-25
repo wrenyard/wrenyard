@@ -410,4 +410,129 @@ describe('quota panel view model', () => {
       },
     ]);
   });
+
+  it('projects DeepSeek monetary balances into tips with no pace/percentage/bar semantics', () => {
+    const deepseek: QuotaProviderState = {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      displayLine: 'DeepSeek ¥12.50 · $1.00',
+      error: null,
+      status: 'ok',
+      stale: false,
+      balances: [
+        { currency: 'CNY', amount: '12.50', display: '¥12.50' },
+        { currency: 'USD', amount: '1.00', display: '$1.00' },
+      ],
+    };
+
+    const tips = buildQuotaTips([deepseek], ['deepseek']);
+    expect(tips).toHaveLength(1);
+    expect(tips[0].balances).toBeDefined();
+    expect(tips[0].balances!).toHaveLength(2);
+    // One row per balance currency, in order.
+    expect(tips[0].balances!.map((b) => b.currency)).toEqual(['CNY', 'USD']);
+    // Structured group identity carries the provider id.
+    expect(tips[0].balanceLabel).toBe('deepseek');
+    // No bars produced for balance-only providers.
+    expect(tips[0].bars).toBeUndefined();
+    expect(tips[0].errorRow).toBeUndefined();
+    // Text is the normalized display line (no % or bar semantics).
+    expect(tips[0].text).toBe('deepseek ¥12.50 · $1.00');
+  });
+
+  it('mixes percentage and balance providers in settings order', () => {
+    const providers: QuotaProviderState[] = [
+      {
+        id: 'codex',
+        label: 'Codex',
+        displayLine: 'Codex 7d 40%',
+        error: null,
+        status: 'ok',
+        stale: false,
+        bars: {
+          remainingPct: 40,
+          expectedRemainingPct: null,
+          windows: [{ name: '7d', usedPct: 60, remainingPct: 40, expectedRemainingPct: null }],
+        },
+      },
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        displayLine: 'DeepSeek ¥12.50',
+        error: null,
+        status: 'ok',
+        stale: false,
+        balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
+      },
+    ];
+
+    const tips = buildQuotaTips(providers, ['codex', 'deepseek']);
+    expect(tips).toHaveLength(2);
+    expect(tips[0].bars).toBeDefined();
+    expect(tips[0].balances).toBeUndefined();
+    expect(tips[1].bars).toBeUndefined();
+    expect(tips[1].balances).toBeDefined();
+    expect(tips[1].balances!).toHaveLength(1);
+    expect(tips[1].balances![0].currency).toBe('CNY');
+    expect(tips[1].balanceLabel).toBe('deepseek');
+  });
+
+  it('formats balance tray submenu rows as provider,currency,amount only via the production projection', () => {
+    const tips = buildQuotaTips([
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        displayLine: 'DeepSeek ¥12.50 · $1.00',
+        error: null,
+        status: 'ok',
+        stale: false,
+        balances: [
+          { currency: 'CNY', amount: '12.50', display: '¥12.50' },
+          { currency: 'USD', amount: '1.00', display: '$1.00' },
+        ],
+      },
+    ], ['deepseek']);
+
+    const rows = formatQuotaBarMenuRows(tips);
+    expect(rows).toHaveLength(2);
+    // Provider only on the first row; each row carries a single-row balances payload.
+    expect(rows[0]).toEqual({
+      provider: 'deepseek',
+      window: '',
+      remainingPct: null,
+      expectedRemainingPct: null,
+      label: 'deepseek CNY 12.50',
+      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'CNY 12.50' }],
+    });
+    expect(rows[1]).toEqual({
+      provider: '',
+      window: '',
+      remainingPct: null,
+      expectedRemainingPct: null,
+      label: 'deepseek USD 1.00',
+      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'USD 1.00' }],
+    });
+  });
+
+  it('renders two balance tray rows for the production status-menu projection', () => {
+    const tips = buildQuotaTips([
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        displayLine: 'DeepSeek ¥12.50',
+        error: null,
+        status: 'ok',
+        stale: false,
+        balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
+      },
+    ], ['deepseek']);
+
+    const rows = formatQuotaBarMenuRows(tips);
+    // Balance rows are no longer skipped: one row per balance currency, deepseek on the first.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].provider).toBe('deepseek');
+    expect(rows[0].balances).toEqual([
+      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'CNY 12.50' },
+    ]);
+  });
 });

@@ -52,8 +52,17 @@ export interface AppConfig {
 const GROK_PROVIDER_ID = 'super-grok';
 const LEGACY_GROK_ID = 'grok';
 const CURSOR_PROVIDER_ID = 'cursor';
+const DEEPSEEK_PROVIDER_ID = 'deepseek';
 
-const DEFAULT_PROVIDER_IDS = [CURSOR_PROVIDER_ID, 'codex', 'codex-spark', 'kimi-coding', 'zhipu-coding', GROK_PROVIDER_ID];
+const DEFAULT_PROVIDER_IDS = [
+  'codex',
+  CURSOR_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
+  'zhipu-coding',
+  'kimi-coding',
+  'codex-spark',
+  GROK_PROVIDER_ID,
+];
 
 const DEFAULT_CONFIG: AppConfig = {
   scale: 3,
@@ -160,7 +169,7 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
   if (Array.isArray(quotaObj.pools)) {
     const ids = quotaObj.pools as string[];
     return {
-      providers: appendCursorWhenAbsent(migrateQuotaPoolIds(ids).map((id) => ({ id, enabled: true }))),
+      providers: migrateDefaultGapProviders(migrateQuotaPoolIds(ids).map((id) => ({ id, enabled: true }))),
     };
   }
 
@@ -179,7 +188,7 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
       }
     }
     if (providers.length > 0) {
-      return { providers: appendCursorWhenAbsent(migrateQuotaProviderIds(providers)) };
+      return { providers: migrateDefaultGapProviders(migrateQuotaProviderIds(providers)) };
     }
   }
 
@@ -190,13 +199,43 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
 }
 
 /**
- * Append the cursor provider enabled:true exactly once when absent, preserving
- * explicit cursor disabled state and existing order. Never duplicates cursor.
+ * Insert the cursor provider enabled:true exactly once when absent, preserving
+ * explicit cursor disabled state and the relative order of existing entries.
+ * Also inserts deepseek exactly once immediately after cursor when cursor
+ * exists, otherwise after codex, when absent — preserving enabled values and
+ * unknown providers and never duplicating entries.
+ */
+function migrateDefaultGapProviders(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
+  const result = appendCursorWhenAbsent(providers);
+  const hasDeepseek = result.some((p) => p.id === DEEPSEEK_PROVIDER_ID);
+  if (hasDeepseek) return result;
+  // Insert deepseek immediately after cursor when present to reflect its
+  // popularity slot; otherwise immediately after codex, else at the end.
+  const cursorIdx = result.findIndex((p) => p.id === CURSOR_PROVIDER_ID);
+  let insertAt: number;
+  if (cursorIdx !== -1) {
+    insertAt = cursorIdx + 1;
+  } else {
+    const codexIdx = result.findIndex((p) => p.id === 'codex');
+    insertAt = codexIdx !== -1 ? codexIdx + 1 : result.length;
+  }
+  return [...result.slice(0, insertAt), { id: DEEPSEEK_PROVIDER_ID, enabled: true }, ...result.slice(insertAt)];
+}
+
+/**
+ * Insert cursor immediately after Codex when absent (or at the end when Codex
+ * is absent), preserving explicit cursor state and existing relative order.
  */
 function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
   const hasCursor = providers.some((p) => p.id === CURSOR_PROVIDER_ID);
   if (hasCursor) return providers;
-  return [...providers, { id: CURSOR_PROVIDER_ID, enabled: true }];
+  const codexIdx = providers.findIndex((p) => p.id === 'codex');
+  const insertAt = codexIdx === -1 ? providers.length : codexIdx + 1;
+  return [
+    ...providers.slice(0, insertAt),
+    { id: CURSOR_PROVIDER_ID, enabled: true },
+    ...providers.slice(insertAt),
+  ];
 }
 
 /**

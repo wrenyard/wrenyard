@@ -491,13 +491,17 @@ function compareHouseCapture(capturedPng, refPng, fixtureId, diagnostics) {
       throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} second summary line mismatch`, fixtureId);
     }
     const allText = lines.join(' ');
-    const codexSparkMatches = allText.match(/codex-spark/g) || [];
-    if (codexSparkMatches.length !== 1) {
-      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} expected codex-spark exactly once, got ${codexSparkMatches.length}`, fixtureId);
+    const codexMatches = allText.match(/codex/g) || [];
+    if (codexMatches.length < 2) {
+      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} expected codex at least twice, got ${codexMatches.length}`, fixtureId);
     }
-    const kimiCodingMatches = allText.match(/kimi-coding/g) || [];
-    if (kimiCodingMatches.length < 2) {
-      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} expected kimi-coding at least twice, got ${kimiCodingMatches.length}`, fixtureId);
+    const cursorMatches = allText.match(/cursor/g) || [];
+    if (cursorMatches.length < 1) {
+      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} expected cursor at least once, got ${cursorMatches.length}`, fixtureId);
+    }
+    // DeepSeek monetary balance row must render currency and amount
+    if (!allText.includes('deepseek CNY ¥12.50')) {
+      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} stats lines missing deepseek CNY balance row`, fixtureId);
     }
     if (!/super-grok/.test(allText)) {
       throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} stats lines missing super-grok provider`, fixtureId);

@@ -1,5 +1,4 @@
 import type { QuotaProviderState, QuotaTipLine, QuotaBarRow, QuotaWindowRow } from '../shared/entities';
-
 export interface StatsSummaryLine {
   text: string;
 }
@@ -80,6 +79,10 @@ export function buildQuotaTips(providers: QuotaProviderState[], order: string[])
     const entry: QuotaTipLine = { text: displayText };
     if (bar) entry.bars = [bar];
     if (errorRow) entry.errorRow = errorRow;
+    if (p.balances && p.balances.length > 0) {
+      entry.balances = p.balances;
+      entry.balanceLabel = p.id;
+    }
     tips.push(entry);
   }
 
@@ -98,12 +101,25 @@ export interface QuotaMenuRow {
   expectedRemainingPct: number | null;
   error?: string;
   label: string;
+  /** Optional single-row monetary balance payload for quota-menu-icon. */
+  balances?: QuotaBalanceMenuRow[];
+}
+
+/** A tray menu row for a monetary balance: provider | currency | amount only. */
+export interface QuotaBalanceMenuRow {
+  provider: string;
+  currency: string;
+  amount: string;
+  display: string;
+  label: string;
 }
 
 /**
  * Tray 额度 submenu rows: same four columns as house tips
  * (`provider | window | remaining bar | integer % remain`).
  * Provider id only on the first window of a group. Error rows skip the bar.
+ * Balance-only tips render one explicit row per currency with provider on the
+ * first row and a single-row balances payload for quota-menu-icon.
  */
 export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
   const rows: QuotaMenuRow[] = [];
@@ -122,6 +138,28 @@ export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
     const bar = tip.bars?.[0];
     const windows = bar?.provider.windows ?? [];
     if (!bar || windows.length === 0) {
+      // Balance-only tips render one explicit row per currency with the
+      // structured balanceLabel as provider identity; never infer from text.
+      if (tip.balances && tip.balances.length > 0) {
+        const label = tip.balanceLabel ?? '';
+        tip.balances.forEach((balance, index) => {
+          rows.push({
+            provider: index === 0 ? label : '',
+            window: '',
+            remainingPct: null,
+            expectedRemainingPct: null,
+            label: `${label || balance.currency} ${balance.currency} ${balance.amount}`,
+            balances: [{
+              provider: label,
+              currency: balance.currency,
+              amount: balance.amount,
+              display: balance.display,
+              label: `${balance.currency} ${balance.amount}`,
+            }],
+          });
+        });
+        continue;
+      }
       if (tip.text.trim()) {
         rows.push({
           provider: bar?.label ?? '',
