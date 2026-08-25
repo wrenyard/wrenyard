@@ -141,7 +141,36 @@ describe('quota panel view model', () => {
     expect(tips[2].bars).toHaveLength(1);
     expect(tips[2].bars![0].label).toBe('kimi-coding');
     expect(tips[2].bars![0].provider.windows.map((window) => window.name)).toEqual(['5h', '7d', '1mo']);
-    expect(tips[2].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain · 1mo 28% remain');
+    expect(tips[2].text).toBe('kimi-coding 5h 80% remain · 7d 60% remain · 1mo 27% remain');
+  });
+
+  it('floors fractional remaining percentages in tips and tray rows', () => {
+    const provider: QuotaProviderState = {
+      id: 'cursor',
+      label: 'Cursor',
+      displayLine: 'Cursor 99.4% · Other 99.8%',
+      error: null,
+      status: 'ok',
+      stale: false,
+      bars: {
+        remainingPct: 99.8,
+        expectedRemainingPct: null,
+        windows: [
+          { name: 'Cursor', usedPct: 0.6, remainingPct: 99.4, expectedRemainingPct: null },
+          { name: 'Other', usedPct: 0.2, remainingPct: 99.8, expectedRemainingPct: null },
+        ],
+      },
+    };
+
+    const tips = buildQuotaTips([provider], ['cursor']);
+    expect(tips[0].text).toBe('cursor Cursor 99% remain · Other 99% remain');
+
+    const rows = formatQuotaBarMenuRows(tips);
+    expect(rows.map((row) => row.remainingPct)).toEqual([99, 99]);
+    expect(rows.map((row) => row.label)).toEqual([
+      'cursor Cursor 99% remain',
+      'cursor Other 99% remain',
+    ]);
   });
 
   it('propagates provider-agnostic Forge pending message for status rows', () => {
