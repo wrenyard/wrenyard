@@ -32,6 +32,7 @@ let panelOwner: PanelOwner | null = null;
 let lastSummary: SummaryStatsPayload | null = null;
 let lastDailyStats: DailyStatsSnapshot | null = null;
 let lastQuotaMenuRows: QuotaMenuRow[] = [];
+let lastQuotaProviders: QuotaProviderState[] = [];
 let quotaRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let taskGraphWindowOwner: TaskGraphWindowOwner | null = null;
 
@@ -49,13 +50,14 @@ function isTransientSignal(signal: ForgeEventSignal): boolean {
 }
 
 /**
- * Apply a fetched provider array to house quota tips only.
- * Extracted so refreshQuotaState uses identical formatting/ordering logic.
+ * Apply one provider snapshot to both house Tips and the tray quota submenu.
+ * The explicit order override comes directly from the Pet settings save path;
+ * periodic refreshes resolve the same persisted settings order.
  */
-function applyProvidersToHouseTips(providers: QuotaProviderState[]): void {
+function applyProvidersToQuotaSurfaces(providers: QuotaProviderState[], orderOverride?: string[]): void {
   if (!entityManager) return;
-  const savedConfig = loadConfig();
-  const order = savedConfig.quota.providers.filter((p) => p.enabled).map((p) => p.id);
+  lastQuotaProviders = providers.map((provider) => ({ ...provider }));
+  const order = orderOverride ?? loadConfig().quota.providers.filter((p) => p.enabled).map((p) => p.id);
   const tips = buildQuotaTips(providers, order);
   lastQuotaMenuRows = formatQuotaBarMenuRows(tips);
   entityManager.setQuotaTips(tips);
@@ -71,7 +73,7 @@ async function refreshQuotaState(force: boolean): Promise<void> {
   try {
     const providers = await quotaService.listProviders(force);
     if (providers.length === 0) return;
-    applyProvidersToHouseTips(providers);
+    applyProvidersToQuotaSurfaces(providers);
   } catch (err) {
     console.warn('refreshQuotaState error:', err);
   }
@@ -157,6 +159,14 @@ app.whenReady().then(() => {
     preloadPath: preloadResolved,
     getHouseWindow: () => entityManager?.getHouseWindow() ?? null,
     onConfigChange: saveConfig,
+    onQuotaProviderOrderChange: (providers) => {
+      const order = providers.filter((provider) => provider.enabled).map((provider) => provider.id);
+      if (lastQuotaProviders.length > 0) {
+        applyProvidersToQuotaSurfaces(lastQuotaProviders, order);
+      } else {
+        void refreshQuotaState(false);
+      }
+    },
     onHouseSkinChange: (skin) => entityManager?.setHouseSkin(skin),
     onStatsRequestRefresh: async () => {
       try {
