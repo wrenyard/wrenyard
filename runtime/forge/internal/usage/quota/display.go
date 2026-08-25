@@ -93,7 +93,7 @@ func WindowDisplayLine(windows []Window) string {
 	parts := make([]string, 0, len(windows)+1)
 	anchorIdx := SelectPaceAnchorIndex(windows)
 	for i, w := range windows {
-		part := fmt.Sprintf("%s %.0f%% remain", w.Name, clampPct(100-w.Pct))
+		part := fmt.Sprintf("%s %d%% remain", w.Name, int(math.Floor(clampPct(100-w.Pct))))
 		if anchorIdx >= 0 && i == anchorIdx {
 			delta := WindowPaceDeltaAt(w, timeNow())
 			part += " " + FormatPaceDisplay(delta)
