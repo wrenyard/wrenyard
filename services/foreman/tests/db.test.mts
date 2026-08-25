@@ -131,6 +131,91 @@ test('initDb migrates executions and drops legacy session tables', () => {
   }
 })
 
+test('initDb migrates a deployed opencode-only client_family CHECK without metadata loss', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-deployed-'))
+  const dbPath = join(dir, 'wrenyard.db')
+  try {
+    // Seed the exact deployed opencode-era schema: a client_family CHECK that
+    // accepts claude/codex/opencode but omits cursor, plus the
+    // requested_agent_runtime and resolved_profile metadata columns.
+    const oldDb = new Database(dbPath)
+    oldDb.exec(`
+      CREATE TABLE tasks (
+        id              TEXT PRIMARY KEY,
+        template        TEXT NOT NULL,
+        project         TEXT,
+        worktree        TEXT,
+        input           TEXT, output TEXT, summary TEXT, error TEXT,
+        workflow_id     TEXT REFERENCES workflows(id),
+        failure_category TEXT,
+        suggestion      TEXT,
+        error_message   TEXT,
+        notified_via_channel INTEGER NOT NULL DEFAULT 0,
+        definition_source TEXT CHECK(definition_source IN ('builtin','project')),
+        status          TEXT NOT NULL CHECK(status IN
+                          ('queued','running','done','failed','cancelled','interrupted')),
+        structured      INTEGER DEFAULT 0,
+        execution_id    TEXT REFERENCES executions(id),
+        retry_policy    TEXT NOT NULL DEFAULT 'side-effects'
+                          CHECK(retry_policy IN ('idempotent','side-effects','manual')),
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT
+      );
+      CREATE TABLE executions (
+        id                TEXT PRIMARY KEY,
+        task_id           TEXT REFERENCES tasks(id),
+        profile           TEXT NOT NULL,
+        permission        TEXT NOT NULL CHECK(permission IN ('readonly','edit','yolo')),
+        cwd               TEXT NOT NULL,
+        prompt            TEXT NOT NULL,
+        status            TEXT NOT NULL CHECK(status IN
+                          ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
+        native_session_id TEXT,
+        client_family     TEXT CHECK(client_family IN ('claude','codex','opencode')),
+        pid               INTEGER, pgid INTEGER,
+        started_at        TEXT, ended_at TEXT,
+        exit_code         INTEGER, kill_signal TEXT,
+        kill_reason       TEXT CHECK(kill_reason IN ('cancel','timeout','shutdown','crash','spawn-error')),
+        output            TEXT, raw_result TEXT, error TEXT,
+        timeout_ms        INTEGER,
+        requested_agent_runtime TEXT,
+        resolved_profile  TEXT,
+        created_at        TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `)
+    const now = new Date().toISOString()
+    oldDb.prepare(
+      `INSERT INTO executions (
+        id, profile, permission, cwd, prompt, status, native_session_id, client_family,
+        requested_agent_runtime, resolved_profile, created_at, updated_at
+      ) VALUES (?, ?, 'readonly', '/tmp', 'deployed prompt', 'done', 'native-deployed-1', 'opencode', 'forge/fast', 'cb-deployed', ?, ?)`,
+    ).run('exec_deployed', 'deployed-profile', now, now)
+    oldDb.close()
+
+    const db = initDb(dbPath)
+
+    // The rebuilt CHECK must now accept cursor.
+    const migrated = db.prepare<[string], { requested_agent_runtime: string | null; resolved_profile: string | null }>(
+      `SELECT requested_agent_runtime, resolved_profile FROM executions WHERE id = ?`,
+    ).get('exec_deployed')
+    assert.ok(migrated, 'expected migrated execution row')
+    assert.equal(migrated.requested_agent_runtime, 'forge/fast', 'requested_agent_runtime must survive losslessly')
+    assert.equal(migrated.resolved_profile, 'cb-deployed', 'resolved_profile must survive losslessly')
+
+    assert.doesNotThrow(() => {
+      db.prepare(`
+        INSERT INTO executions (
+          id, profile, permission, cwd, prompt, status, client_family, created_at, updated_at
+        ) VALUES (
+          'exec_cursor', 'cursor-test', 'readonly', '/tmp', 'prompt', 'queued', 'cursor', ?, ?
+        )
+      `).run(now, now)
+    }, 'migrated client_family CHECK must accept cursor')
+  } finally {
+    closeDb()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('initDb adds DB-backed task and workflow status metadata columns', () => {
   const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-status-metadata-'))
   const dbPath = join(dir, 'wrenyard.db')
