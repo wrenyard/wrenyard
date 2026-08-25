@@ -313,16 +313,22 @@ func QuotaProviderFor(deps CommandDeps, name string, allowCLI bool, interactive 
 		inner = quota.CodexProvider{
 			ProviderName: name,
 		}
+	case "cursor":
+		inner = quota.CursorProvider{}
 	default:
 		return nil
 	}
 
-	// Codex and codex-spark use fail-closed cache: never return expired stale data.
-	failClosed := name == "codex" || name == "codex-spark"
-	// Codex cache is only usable when produced by the codex-app-server API.
+	// Codex, codex-spark, and cursor use fail-closed cache: never return
+	// expired stale data.
+	failClosed := name == "codex" || name == "codex-spark" || name == "cursor"
+	// Fail-closed caches are only usable when produced by the authoritative source.
 	var requiredSource string
-	if failClosed {
+	switch name {
+	case "codex", "codex-spark":
 		requiredSource = "codex-app-server"
+	case "cursor":
+		requiredSource = "cursor-dashboard"
 	}
 	return &quota.CachedProvider{
 		Inner:          inner,
