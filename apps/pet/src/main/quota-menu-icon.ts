@@ -11,6 +11,8 @@ const TRACK = [0, 0, 0, 48] as const;
 const FILL = [0, 0, 0, 230] as const;
 const MARKER = [0, 0, 0, 255] as const;
 export const QUOTA_MENU_FILL_ALPHA = 230;
+const PACE_MARKER_OVERSHOOT = 2;
+const PACE_MARKER_CAP_WIDTH = 3;
 
 const PROVIDER_X = 8;
 const WINDOW_X = 104;
@@ -106,13 +108,37 @@ export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
     if (fillWidth > 0) fillRect(buffer, pixelWidth, QUOTA_MENU_BAR_X, QUOTA_MENU_BAR_Y, fillWidth, QUOTA_MENU_BAR_H, FILL);
     if (row.expectedRemainingPct !== null) {
       const markerX = QUOTA_MENU_BAR_X + Math.round((row.expectedRemainingPct / 100) * QUOTA_MENU_BAR_W);
+      const clampedMarkerX = Math.min(
+        QUOTA_MENU_BAR_X + QUOTA_MENU_BAR_W - 1,
+        Math.max(QUOTA_MENU_BAR_X, markerX),
+      );
+      const markerTop = QUOTA_MENU_BAR_Y - PACE_MARKER_OVERSHOOT;
+      const markerBottom = QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + PACE_MARKER_OVERSHOOT - 1;
       fillRect(
         buffer,
         pixelWidth,
-        Math.min(QUOTA_MENU_BAR_X + QUOTA_MENU_BAR_W - 1, Math.max(QUOTA_MENU_BAR_X, markerX)),
-        QUOTA_MENU_BAR_Y,
+        clampedMarkerX,
+        markerTop,
         1,
-        QUOTA_MENU_BAR_H,
+        QUOTA_MENU_BAR_H + PACE_MARKER_OVERSHOOT * 2,
+        MARKER,
+      );
+      fillRect(
+        buffer,
+        pixelWidth,
+        clampedMarkerX - Math.floor(PACE_MARKER_CAP_WIDTH / 2),
+        markerTop,
+        PACE_MARKER_CAP_WIDTH,
+        1,
+        MARKER,
+      );
+      fillRect(
+        buffer,
+        pixelWidth,
+        clampedMarkerX - Math.floor(PACE_MARKER_CAP_WIDTH / 2),
+        markerBottom,
+        PACE_MARKER_CAP_WIDTH,
+        1,
         MARKER,
       );
     }
