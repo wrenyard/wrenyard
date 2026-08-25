@@ -18,6 +18,8 @@ import {
   QUOTA_MENU_BAR_W,
   QUOTA_MENU_BAR_Y,
   QUOTA_MENU_FILL_ALPHA,
+  QUOTA_MENU_PACE_MARKER_ON_FILL_ALPHA,
+  QUOTA_MENU_PACE_MARKER_ON_TRACK_ALPHA,
   renderQuotaMenuRowBitmap,
 } from '../src/main/quota-menu-icon';
 
@@ -67,19 +69,24 @@ describe('quota menu row bitmap', () => {
     expect(countFill(full.buffer)).toBe(QUOTA_MENU_BAR_W * QUOTA_MENU_BAR_H * 2 * 2);
   });
 
-  it('extends the pace marker above and below the bar with visible caps', () => {
-    const rendered = renderQuotaMenuRowBitmap({
+  it('keeps the pace marker at 1x bar height and contrasts it against fill or track', () => {
+    const overFill = renderQuotaMenuRowBitmap({
       ...sample,
+      expectedRemainingPct: 50,
+    });
+    const overTrack = renderQuotaMenuRowBitmap({
+      ...sample,
+      remainingPct: 25,
       expectedRemainingPct: 50,
     });
     const markerX = QUOTA_MENU_BAR_X + Math.round(QUOTA_MENU_BAR_W * 0.5);
 
-    expect(alphaAt(rendered, markerX - 1, QUOTA_MENU_BAR_Y - 2)).toBe(255);
-    expect(alphaAt(rendered, markerX, QUOTA_MENU_BAR_Y - 2)).toBe(255);
-    expect(alphaAt(rendered, markerX + 1, QUOTA_MENU_BAR_Y - 2)).toBe(255);
-    expect(alphaAt(rendered, markerX - 1, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
-    expect(alphaAt(rendered, markerX, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
-    expect(alphaAt(rendered, markerX + 1, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
+    expect(alphaAt(overFill, markerX, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_PACE_MARKER_ON_FILL_ALPHA);
+    expect(alphaAt(overTrack, markerX, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_PACE_MARKER_ON_TRACK_ALPHA);
+    expect(alphaAt(overFill, markerX - 1, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_FILL_ALPHA);
+    expect(alphaAt(overFill, markerX + 1, QUOTA_MENU_BAR_Y)).toBe(QUOTA_MENU_FILL_ALPHA);
+    expect(alphaAt(overFill, markerX, QUOTA_MENU_BAR_Y - 1)).toBe(0);
+    expect(alphaAt(overFill, markerX, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H)).toBe(0);
   });
 
   it('does not draw a bar for error rows', () => {
