@@ -62,6 +62,36 @@ function seedTurnUsage(dayKey: string, inputTokens: number, outputTokens: number
   )
 }
 
+function seedCachedTurnUsage(
+  dayKey: string,
+  inputTokens: number,
+  cachedInputTokens: number,
+  outputTokens: number,
+  executionId?: string,
+  taskId?: string,
+): void {
+  const ts = new Date(localNoon(dayKey))
+  const row = dbQuery<{ next_seq: number }>(
+    `SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM events WHERE execution_id IS ?`,
+    executionId ?? null,
+  )
+  const seq = row[0].next_seq
+  dbRun(
+    `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
+     VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
+    executionId ?? null,
+    taskId ?? null,
+    seq,
+    ts.toISOString(),
+    JSON.stringify({
+      input_tokens: inputTokens,
+      cached_input_tokens: cachedInputTokens,
+      output_tokens: outputTokens,
+    }),
+    ts.toISOString(),
+  )
+}
+
 function seedExecution(id: string, profile: string, taskId: string): void {
   dbRun(
     `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
@@ -284,6 +314,68 @@ describe('stats-query readStatsSummary', () => {
     assert.equal(result.byTask[0].inputTokens, 300)
     assert.equal(result.byTask[0].outputTokens, 125)
     assert.equal(result.byTask[0].totalTokens, 425)
+    closeTestDb()
+  })
+
+  it('aggregates cached-input partitions exactly once into today, daily, profile, task, and window totals', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-cache', 'commit', today, 'done')
+    seedExecution('exec-cache', 'cur-grok', 'task-cache')
+    seedDispatch(today, 1, 'exec-cache', 'task-cache')
+    // Two cached events: input=40+120=160 each → today input 320
+    seedCachedTurnUsage(today, 40, 120, 60, 'exec-cache', 'task-cache')
+    seedCachedTurnUsage(today, 40, 120, 60, 'exec-cache', 'task-cache')
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    // today: full input = (40+120)+(40+120) = 320; output 120
+    assert.equal(result.today.inputTokens, 320)
+    assert.equal(result.today.outputTokens, 120)
+    assert.equal(result.today.totalTokens, 440)
+    // daily bucket matches today
+    const todayBucket = result.daily.find((d) => d.dayKey === today)
+    assert.ok(todayBucket)
+    assert.equal(todayBucket.inputTokens, 320)
+    assert.equal(todayBucket.totalTokens, 440)
+    // profile grouping
+    assert.equal(result.byProfile.length, 1)
+    assert.equal(result.byProfile[0].inputTokens, 320)
+    assert.equal(result.byProfile[0].totalTokens, 440)
+    // task grouping
+    assert.equal(result.byTask.length, 1)
+    assert.equal(result.byTask[0].inputTokens, 320)
+    assert.equal(result.byTask[0].totalTokens, 440)
+    // window totals: all three windows include today
+    for (const w of result.windows ?? []) {
+      assert.equal(w.totalTokens, 440, `${w.period} must include cached input exactly once`)
+    }
+    closeTestDb()
+  })
+
+  it('keeps legacy input_tokens-only usage unchanged and never adds total_tokens', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-legacy', 'commit', today, 'done')
+    seedExecution('exec-legacy', 'claude', 'task-legacy')
+    seedDispatch(today, 1, 'exec-legacy', 'task-legacy')
+    // Legacy event reports input_tokens and total_tokens; the cache partition
+    // is absent and total_tokens must never be added on top of the derived total.
+    const ts = new Date(localNoon(today))
+    dbRun(
+      `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
+       VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
+      'exec-legacy', 'task-legacy', 1,
+      ts.toISOString(),
+      JSON.stringify({ input_tokens: 30, output_tokens: 20, total_tokens: 999 }),
+      ts.toISOString(),
+    )
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    assert.equal(result.today.inputTokens, 30, 'legacy input must remain unchanged')
+    assert.equal(result.today.outputTokens, 20)
+    assert.equal(result.today.totalTokens, 50, 'total is full input + output, never the reported total_tokens')
     closeTestDb()
   })
 

@@ -1575,6 +1575,14 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
       data: {
         input_tokens: numberProp(event, 'input_tokens'),
         output_tokens: numberProp(event, 'output_tokens'),
+        // Preserve the cache partition and aggregate total fields so Cursor's
+        // normalized token usage survives the mapping untouched. The mapper
+        // never infers trust or fabricates values: a missing cache partition
+        // is omitted and an invalid number is never upgraded.
+        cached_input_tokens: numberProp(event, 'cached_input_tokens'),
+        cache_read_input_tokens: numberProp(event, 'cache_read_input_tokens'),
+        cache_creation_input_tokens: numberProp(event, 'cache_creation_input_tokens'),
+        total_tokens: numberProp(event, 'total_tokens'),
         duration_ms: numberProp(event, 'duration_ms'),
         // Preserve the exact normalized three-field versioned contract so only
         // a genuine token_scope=agent_turn, duration_scope=agent_turn, and
@@ -1631,7 +1639,7 @@ function detectNativeSession(event: StreamEventRecord): { nativeSessionId: strin
 }
 
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
-  return value === 'claude' || value === 'codex' || value === 'opencode'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor'
 }
 
 function detectResolvedProfile(event: StreamEventRecord): string | undefined {

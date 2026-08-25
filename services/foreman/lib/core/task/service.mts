@@ -682,6 +682,15 @@ function safeEventProjection(type: string, data: unknown): Record<string, unknow
         result.input_tokens = record.input_tokens
       if (typeof record.output_tokens === 'number' && Number.isFinite(record.output_tokens) && record.output_tokens >= 0)
         result.output_tokens = record.output_tokens
+      // Allowlist the normalized cache partition and aggregate-total numeric
+      // fields so Cursor's usage projection is safe and never discloses more
+      // than the nonnegative numeric contract.
+      if (typeof record.cached_input_tokens === 'number' && Number.isFinite(record.cached_input_tokens) && record.cached_input_tokens >= 0)
+        result.cached_input_tokens = record.cached_input_tokens
+      if (typeof record.cache_read_input_tokens === 'number' && Number.isFinite(record.cache_read_input_tokens) && record.cache_read_input_tokens >= 0)
+        result.cache_read_input_tokens = record.cache_read_input_tokens
+      if (typeof record.cache_creation_input_tokens === 'number' && Number.isFinite(record.cache_creation_input_tokens) && record.cache_creation_input_tokens >= 0)
+        result.cache_creation_input_tokens = record.cache_creation_input_tokens
       if (typeof record.total_tokens === 'number' && Number.isFinite(record.total_tokens) && record.total_tokens >= 0)
         result.total_tokens = record.total_tokens
       if (typeof record.duration_ms === 'number' && Number.isFinite(record.duration_ms) && record.duration_ms >= 0)

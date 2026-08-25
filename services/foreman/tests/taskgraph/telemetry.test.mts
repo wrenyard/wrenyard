@@ -331,6 +331,42 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.equal(row.tps_complete, 1)
   })
 
+  it('ingests trusted Cursor usage with cache partitions, counting output/duration/TPS once and treating cache as irrelevant', async () => {
+    // A trusted Cursor agent_turn event carries cache partitions and total_tokens;
+    // the mapping must preserve them but they never affect the TPS numerator or
+    // denominator (only output_tokens and duration_ms drive the rate).
+    const mapped = mapStreamEventToBClass(normalizedForgeUsage({
+      input_tokens: 40,
+      output_tokens: 2000,
+      cached_input_tokens: 120,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 20,
+      total_tokens: 220,
+      duration_ms: 4000,
+      token_scope: 'agent_turn',
+      duration_scope: 'agent_turn',
+      tps_contract: 'agent_turn_v1',
+    }))
+    const usage = mapped.find((event) => event.type === 'turn_usage')
+    assert.ok(usage, 'production mapping must produce a turn_usage event')
+    assert.equal(usage.data.cached_input_tokens, 120, 'the cache partition must survive the mapping')
+    assert.equal(usage.data.cache_read_input_tokens, 100, 'the read cache partition must survive the mapping')
+    assert.equal(usage.data.cache_creation_input_tokens, 20, 'the creation cache partition must survive the mapping')
+    assert.equal(usage.data.total_tokens, 220, 'the aggregate total must survive the mapping')
+
+    setupTaskAndExecution('tr_cursor', 'exec_cursor')
+    // Duplicate delivery of the same event must not double count.
+    writeEvent('exec_cursor', 'tr_cursor', 1, usage.type, usage.data)
+    writeEvent('exec_cursor', 'tr_cursor', 1, usage.type, usage.data)
+    const row = readTelemetry('tr_cursor')
+    assert.ok(row, 'expected telemetry row for the trusted Cursor usage')
+    assert.equal(row.usage_event_count, 1, 'duplicate delivery must not double count usage')
+    assert.equal(row.output_tokens, 2000, 'output must be counted exactly once')
+    assert.equal(row.agent_turn_ms, 4000, 'duration must be counted exactly once')
+    assert.equal(row.tps_complete, 1, 'a trusted Cursor agent_turn event must keep TPS enabled')
+    assert.equal(countEvents('exec_cursor'), 1, 'duplicate delivery must not insert duplicate events')
+  })
+
   it('sums multiple and parallel usage events into one run', () => {
     setupTaskAndExecution('tr_parallel', 'exec_parallel')
     writeEvent('exec_parallel', 'tr_parallel', 1, 'turn_usage', {

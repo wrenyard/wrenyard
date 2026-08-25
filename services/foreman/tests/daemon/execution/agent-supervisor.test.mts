@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import type { ForemanDatabase } from '../../../lib/db/types.mts'
 import { AgentExecutionSupervisor, ExecutionTerminationFailure } from '../../../lib/daemon/execution/agent-supervisor.mts'
+import { redactEvent } from '../../../lib/daemon/execution/redaction.mts'
 import { RepoWriteLocks } from '../../../lib/daemon/execution/repo-write-locks.mts'
 import { closeTestDb, initTestDb } from '../../helpers/test-db.mts'
 
@@ -614,6 +615,100 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     assert.equal(telemetry.agent_turn_ms, 4000)
     assert.equal(telemetry.usage_event_count, 1)
     assert.equal(telemetry.tps_complete, 1, 'a genuine agent_turn_v1 event must keep TPS enabled')
+  })
+
+  it('preserves Cursor cache partitions and total_tokens while never upgrading trust', async () => {
+    const cwd = makeTempDir('foreman-agent-supervisor-cursor-')
+    installFakeForgeLines(cwd, [
+      forgeStreamEvent(1, 'run_started', { profile: 'cur-grok', client_family: 'cursor', cwd }),
+      forgeStreamEvent(2, 'turn_usage', {
+        input_tokens: 40,
+        output_tokens: 60,
+        cached_input_tokens: 120,
+        cache_read_input_tokens: 100,
+        cache_creation_input_tokens: 20,
+        total_tokens: 220,
+        duration_ms: 300,
+        access_token: 'cred-access-token-secret',
+        auth_token: 'cred-auth-token-secret',
+        cache_read_access_token: 'cred-cache-read-token-secret',
+      }),
+      forgeStreamEvent(3, 'run_finished', {
+        status: 'done',
+        exit_code: 0,
+        summary: 'cursor usage',
+        native_session_id: 'native-cursor-1',
+        client_family: 'cursor',
+      }),
+    ])
+
+    const supervisor = makeSupervisor()
+    const handle = await supervisor.startExecution({
+      profile: 'cur-grok',
+      permission: 'readonly',
+      cwd,
+      prompt: 'emit cursor usage',
+    })
+    const result = await handle.wait()
+    assert.equal(result.status, 'done')
+
+    // Cursor is first-class: the terminal run_finished must be captured and
+    // persisted as a native cursor session, exactly like claude/codex/opencode.
+    const execution = db.prepare<unknown[], NativeSessionRow>(
+      `SELECT native_session_id, client_family
+      FROM executions
+      WHERE id = ?`,
+    ).get(handle.executionId)
+    assert.ok(execution, 'expected execution row')
+    assert.equal(execution.native_session_id, 'native-cursor-1', 'Cursor native session id must persist')
+    assert.equal(execution.client_family, 'cursor', 'Cursor client family must persist')
+
+    // Two-stage security boundary: redaction happens before mapping. Call redactEvent
+    // directly on a turn_usage fixture to prove credential-shaped neighbors are redacted
+    // while the exact numeric cache partition keys survive unchanged.
+    const plainUsageData = {
+      input_tokens: 40,
+      output_tokens: 60,
+      cached_input_tokens: 120,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 20,
+      total_tokens: 220,
+      duration_ms: 300,
+      access_token: 'cred-access-token-secret',
+      auth_token: 'cred-auth-token-secret',
+      cache_read_access_token: 'cred-cache-read-token-secret',
+    }
+    const redacted = redactEvent('turn_usage', plainUsageData) as Record<string, unknown>
+    assert.equal(redacted.access_token, '[REDACTED]', 'access_token must be redacted before mapping')
+    assert.equal(redacted.auth_token, '[REDACTED]', 'auth_token must be redacted before mapping')
+    assert.equal(redacted.cache_read_access_token, '[REDACTED]', 'credential-shaped cache keys must be redacted before mapping')
+    assert.equal(redacted.cache_read_input_tokens, 100, 'the read cache partition must survive redaction as an exact number')
+    assert.equal(redacted.cache_creation_input_tokens, 20, 'the creation cache partition must survive redaction as an exact number')
+
+    const rows = db.prepare<unknown[], EventRow>(
+      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
+    ).all(handle.executionId)
+    const usage = rows.find((row) => row.type === 'turn_usage')
+    assert.ok(usage?.data, 'expected a persisted turn_usage event')
+    const usageData = JSON.parse(usage.data) as Record<string, unknown>
+    assert.equal(usageData.input_tokens, 40)
+    assert.equal(usageData.output_tokens, 60)
+    assert.equal(usageData.cached_input_tokens, 120, 'the cache partition must survive the mapping')
+    assert.equal(usageData.cache_read_input_tokens, 100, 'the read cache partition must survive the mapping')
+    assert.equal(usageData.cache_creation_input_tokens, 20, 'the creation cache partition must survive the mapping')
+    assert.equal(typeof usageData.cache_read_input_tokens, 'number', 'the read cache partition must survive as a number')
+    assert.equal(typeof usageData.cache_creation_input_tokens, 'number', 'the creation cache partition must survive as a number')
+    assert.equal(usageData.total_tokens, 220, 'the aggregate total must survive the mapping')
+    // The mapper allowlists only safe usage fields, so credential-shaped neighbors
+    // must be dropped from the durable mapped event (not persisted as sentinels).
+    assert.equal('access_token' in usageData, false, 'access_token must be dropped by the allowlisted usage mapper')
+    assert.equal('auth_token' in usageData, false, 'auth_token must be dropped by the allowlisted usage mapper')
+    assert.equal('cache_read_access_token' in usageData, false, 'credential-shaped cache keys must be dropped by the allowlisted usage mapper')
+    // Trust is never inferred: a missing token_scope/duration_scope/tps_contract
+    // must stay omitted, not upgraded to agent_turn.
+    assert.equal('token_scope' in usageData, false, 'trust must never be inferred for Cursor usage')
+    assert.equal('duration_scope' in usageData, false, 'trust must never be inferred for Cursor usage')
+    assert.equal('tps_contract' in usageData, false, 'trust must never be inferred for Cursor usage')
   })
 
   it('omits missing provenance and never upgrades wrong token/duration/contract values on persisted usage events', async () => {
