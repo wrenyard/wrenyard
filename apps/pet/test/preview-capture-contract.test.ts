@@ -284,7 +284,7 @@ describe('final preview capture contract', () => {
     expect(source).toContain('lines.length < 7');
     expect(source).toContain('codexMatches.length < 2');
     expect(source).toContain('cursorMatches.length < 1');
-    expect(source).toContain('deepseek CNY ¥12.50');
+    expect(source).toContain('deepseek bal. ¥12.50');
     expect(source).toContain('rate limit hit');
     expect(source).toContain("assertSemanticRoi(ref, cap, diagnostics.stats, fixtureId, 'stats')");
   });
