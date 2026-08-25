@@ -116,7 +116,7 @@ describe('tray', () => {
     expect(onStats).toHaveBeenCalledTimes(1);
   });
 
-  it('includes quota submenu with remaining bar icons', async () => {
+  it('includes quota submenu with one disabled icon item per provider group', async () => {
     const { createTray } = await import('../src/main/tray');
     createTray({
       onSettings: vi.fn(),
@@ -136,10 +136,18 @@ describe('tray', () => {
           expectedRemainingPct: 52,
           label: 'kimi-coding 7d 97% remain',
         },
+        {
+          provider: 'codex',
+          window: '7d',
+          remainingPct: 40,
+          expectedRemainingPct: null,
+          label: 'codex 7d 40% remain',
+        },
       ],
     });
     const quota = menuItems.find((item) => item.label === '额度');
     expect(quota).toBeDefined();
+    // Two consecutive rows of kimi-coding collapse to one item; codex is another.
     expect(quota!.submenu).toHaveLength(2);
     expect(quota!.submenu?.every((item) => item.enabled === false)).toBe(true);
     expect(quota!.submenu?.every((item) => item.icon !== undefined)).toBe(true);
