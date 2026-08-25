@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const testCursorToken = "sk-cursor-test-secret-abc123"
+const testCursorToken = "cursor-test-token-not-a-secret"
 
 // createCursorStateDB builds a temporary Cursor Desktop state.vscdb containing
 // (optionally) the access token under cursorAuth/accessToken.
