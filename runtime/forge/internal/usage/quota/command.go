@@ -23,6 +23,10 @@ type CommandDeps struct {
 	ResolveBigModelToken func() string
 	// ResolveKimiToken resolves the Kimi API token.
 	ResolveKimiToken func() string
+	// ResolveDeepSeekToken resolves the DeepSeek quota bearer token from
+	// the user-owned DEEPSEEK_API_KEY / FORGE_DEEPSEEK_API_KEY. DeepSeek is
+	// quota-only and never reads auth.json.
+	ResolveDeepSeekToken func() string
 	// CodexBarEnabled reports whether CodexBar snapshot is enabled.
 	CodexBarEnabled func() bool
 	// ProviderForOverride, when non-nil, overrides the provider factory
@@ -86,7 +90,7 @@ func quotaWindowsJSON(windows []Window) []quotaWindowJSON {
 }
 
 // canonicalPools lists the canonical pool names in deterministic order.
-var canonicalPools = []string{"codex", "codex-spark", "cursor", "kimi-coding", "zhipu-coding", "anthropic", "super-grok"}
+var canonicalPools = []string{"codex", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "codex-spark", "anthropic", "super-grok"}
 
 // Command dispatches the quota command. Usage: forge quota [name] [--json] [--refresh]
 func Command(deps CommandDeps, args []string) int {
@@ -261,6 +265,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 		Label       string            `json:"label,omitempty"`
 		Used        *float64          `json:"used,omitempty"`
 		Total       *float64          `json:"total,omitempty"`
+		Balances    []MoneyBalance    `json:"balances,omitempty"`
 		Status      string            `json:"status"`
 		Code        string            `json:"code,omitempty"`
 		Error       string            `json:"error,omitempty"`
@@ -307,6 +312,9 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 					if cached.Total != nil {
 						entry.Total = cached.Total
 					}
+					if len(cached.Balances) > 0 {
+						entry.Balances = cached.Balances
+					}
 					if len(cached.Windows) > 0 {
 						entry.Windows = quotaWindowsJSON(cached.Windows)
 						entry.Pace, entry.Reset = PaceAndResetJSON(cached.Windows)
@@ -337,22 +345,22 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 
 		q, err := provider.Fetch(ctx)
 		if err != nil {
-		// Fail-closed pools replace any existing valid quota with a failure
-		// marker so stale data is never rendered.
-		if failClosedPool(pool) {
-			_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
+			// Fail-closed pools replace any existing valid quota with a failure
+			// marker so stale data is never rendered.
+			if failClosedPool(pool) {
+				_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
+			}
+			entry.Status = "error"
+			entry.Error = err.Error()
+			if asJSON {
+				entries = append(entries, entry)
+			} else {
+				fmt.Printf("%s: error: %v\n", pool, err)
+			}
+			continue
 		}
-		entry.Status = "error"
-		entry.Error = err.Error()
-		if asJSON {
-			entries = append(entries, entry)
-		} else {
-			fmt.Printf("%s: error: %v\n", pool, err)
-		}
-		continue
-	}
 
-	// Persist the fetched data to the canonical cache.
+		// Persist the fetched data to the canonical cache.
 		if q.FetchedAt.IsZero() {
 			q.FetchedAt = timeNow()
 		}
@@ -367,6 +375,9 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 		}
 		if q.Total != nil {
 			entry.Total = q.Total
+		}
+		if len(q.Balances) > 0 {
+			entry.Balances = q.Balances
 		}
 		if len(q.Windows) > 0 {
 			entry.Windows = quotaWindowsJSON(q.Windows)
@@ -445,6 +456,7 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 						Label       string            `json:"label,omitempty"`
 						Used        float64           `json:"used"`
 						Total       float64           `json:"total"`
+						Balances    []MoneyBalance    `json:"balances,omitempty"`
 						Windows     []quotaWindowJSON `json:"windows,omitempty"`
 						Pace        *PaceJSON         `json:"pace,omitempty"`
 						Reset       *ResetJSON        `json:"reset,omitempty"`
@@ -461,6 +473,7 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 						Label:       label,
 						Used:        ptrFloatVal(cached.Used),
 						Total:       ptrFloatVal(cached.Total),
+						Balances:    cached.Balances,
 						Windows:     quotaWindowsJSON(cached.Windows),
 						Pace:        pace,
 						Reset:       reset,
@@ -531,6 +544,7 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 			Label       string            `json:"label,omitempty"`
 			Used        float64           `json:"used"`
 			Total       float64           `json:"total"`
+			Balances    []MoneyBalance    `json:"balances,omitempty"`
 			Windows     []quotaWindowJSON `json:"windows,omitempty"`
 			DisplayLine string            `json:"display_line,omitempty"`
 			Pace        *PaceJSON         `json:"pace,omitempty"`
@@ -547,6 +561,7 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 			Label:       label,
 			Used:        ptrFloatVal(q.Used),
 			Total:       ptrFloatVal(q.Total),
+			Balances:    q.Balances,
 			Windows:     quotaWindowsJSON(q.Windows),
 			DisplayLine: dl,
 			Pace:        pace,
@@ -592,7 +607,7 @@ func poolCachePath(dataDir, pool string) string {
 // marker so it is never rendered.
 func failClosedPool(pool string) bool {
 	switch pool {
-	case "codex", "codex-spark", "cursor":
+	case "codex", "codex-spark", "cursor", "deepseek":
 		return true
 	}
 	return false
@@ -606,6 +621,8 @@ func requiredSource(pool string) string {
 		return "codex-app-server"
 	case "cursor":
 		return "cursor-dashboard"
+	case "deepseek":
+		return "deepseek-balance"
 	}
 	return ""
 }
@@ -634,6 +651,8 @@ var canonicalPoolMap = map[string]string{
 	"codex-spark":  "codex-spark",
 	"spark":        "codex-spark",
 	"cursor":       "cursor",
+	"deepseek":     "deepseek",
+	"ds":           "deepseek",
 	"kimi-coding":  "kimi-coding",
 	"kimi":         "kimi-coding",
 	"zhipu-coding": "zhipu-coding",
@@ -683,6 +702,12 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 		}
 	case "cursor":
 		return CursorProvider{}
+	case "deepseek":
+		var token string
+		if deps.ResolveDeepSeekToken != nil {
+			token = deps.ResolveDeepSeekToken()
+		}
+		return DeepSeekProvider{Token: token}
 	default:
 		return nil
 	}

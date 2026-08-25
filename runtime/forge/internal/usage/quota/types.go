@@ -13,15 +13,16 @@ type Provider interface {
 }
 
 type Quota struct {
-	Provider  string        `json:"provider"`
-	Used      *float64      `json:"used,omitempty"`
-	Total     *float64      `json:"total,omitempty"`
-	Windows   []Window      `json:"windows,omitempty"`
-	FetchedAt time.Time     `json:"fetched_at,omitempty"`
-	CacheAge  time.Duration `json:"-"`
-	Stale     bool          `json:"stale,omitempty"`
-	Source    string        `json:"source,omitempty"`
-	Message   string        `json:"message,omitempty"`
+	Provider  string         `json:"provider"`
+	Used      *float64       `json:"used,omitempty"`
+	Total     *float64       `json:"total,omitempty"`
+	Windows   []Window       `json:"windows,omitempty"`
+	Balances  []MoneyBalance `json:"balances,omitempty"`
+	FetchedAt time.Time      `json:"fetched_at,omitempty"`
+	CacheAge  time.Duration  `json:"-"`
+	Stale     bool           `json:"stale,omitempty"`
+	Source    string         `json:"source,omitempty"`
+	Message   string         `json:"message,omitempty"`
 
 	// Unavailable is set by the cache layer when auto-refresh has given up
 	// and a cooldown is active. It signals to rendering code that the data
@@ -44,6 +45,16 @@ type Window struct {
 	Pct           float64    `json:"pct"`
 	ResetsAt      *time.Time `json:"resets_at,omitempty"`
 	WindowMinutes int        `json:"window_minutes,omitempty"`
+}
+
+// MoneyBalance is an exact monetary balance independent of percentage
+// windows. Amount is the exact decimal string as reported by the provider;
+// Currency is the uppercase three-letter ISO currency code. Balances are
+// intentionally distinct from Used/Total and Windows and never fabricate
+// percentage or progress fields.
+type MoneyBalance struct {
+	Currency string `json:"currency"`
+	Amount   string `json:"amount"`
 }
 
 // PaceJSON is the structured JSON representation of window pace.

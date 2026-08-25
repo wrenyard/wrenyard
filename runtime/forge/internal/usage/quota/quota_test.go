@@ -2845,8 +2845,8 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 				}
 			}
 			label, _ := e["label"].(string)
-			if label != "codex" {
-				t.Fatalf("codex label = %q, want codex", label)
+			if label != "Codex" {
+				t.Fatalf("codex label = %q, want Codex", label)
 			}
 			// Pace must be a JSON object with delta_pct and text
 			if pace, hasPace := e["pace"]; !hasPace {
@@ -2872,8 +2872,8 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 		}
 		if pool == "kimi-coding" {
 			label, _ := e["label"].(string)
-			if label != "kimi" {
-				t.Fatalf("kimi label = %q, want kimi", label)
+			if label != "KIMI" {
+				t.Fatalf("kimi label = %q, want KIMI", label)
 			}
 			windows, _ := e["windows"].([]any)
 			if windows != nil && len(windows) != 3 {
@@ -3078,8 +3078,8 @@ func TestQuotaShowOneJSONWithWindows(t *testing.T) {
 	if pool, _ := result["pool"].(string); pool != "zhipu-coding" {
 		t.Fatalf("pool = %q, want zhipu-coding", pool)
 	}
-	if label, _ := result["label"].(string); label != "glm" {
-		t.Fatalf("label = %q, want glm", label)
+	if label, _ := result["label"].(string); label != "GLM" {
+		t.Fatalf("label = %q, want GLM", label)
 	}
 	used, _ := result["used"].(float64)
 	if used != 300 {
@@ -3183,8 +3183,8 @@ func TestQuotaShowOneJSONViaAlias(t *testing.T) {
 		t.Fatalf("pool = %q, want kimi-coding (canonical), not alias 'kimi'", pool)
 	}
 	label, _ := result["label"].(string)
-	if label != "kimi" {
-		t.Fatalf("label = %q, want kimi", label)
+	if label != "KIMI" {
+		t.Fatalf("label = %q, want KIMI", label)
 	}
 }
 
@@ -3783,6 +3783,7 @@ func testQuotaCommandDeps(dataDir string) CommandDeps {
 		LoadBilling:          func() BillingInfo { return BillingInfo{DefaultQuotaTotal: 7000} },
 		ResolveBigModelToken: func() string { return "" },
 		ResolveKimiToken:     func() string { return "" },
+		ResolveDeepSeekToken: func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 	}
 }
@@ -3822,11 +3823,74 @@ func TestCursorInnerProviderFactory(t *testing.T) {
 }
 
 func TestCursorCanonicalLabelAndAlias(t *testing.T) {
-	if got := CanonicalLabel("cursor"); got != "cursor" {
-		t.Fatalf("CanonicalLabel(cursor) = %q, want cursor", got)
+	if got := CanonicalLabel("cursor"); got != "Cursor" {
+		t.Fatalf("CanonicalLabel(cursor) = %q, want Cursor", got)
 	}
 	if got := canonicalName("cursor"); got != "cursor" {
 		t.Fatalf("canonicalName(cursor) = %q, want cursor", got)
+	}
+}
+
+func TestCanonicalPoolsOrder(t *testing.T) {
+	want := []string{"codex", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "codex-spark", "anthropic", "super-grok"}
+	if len(canonicalPools) != len(want) {
+		t.Fatalf("canonicalPools length = %d, want %d", len(canonicalPools), len(want))
+	}
+	for i := range want {
+		if canonicalPools[i] != want[i] {
+			t.Fatalf("canonicalPools[%d] = %q, want %q", i, canonicalPools[i], want[i])
+		}
+	}
+}
+
+func TestQuotaShowOneDeepSeekBalancesJSON(t *testing.T) {
+	deps := CommandDeps{
+		DataDir:              t.TempDir(),
+		LoadConfig:           func() (ConfigInfo, []string, error) { return ConfigInfo{}, nil, nil },
+		LoadBilling:          func() BillingInfo { return BillingInfo{DefaultQuotaTotal: 7000} },
+		ResolveBigModelToken: func() string { return "" },
+		ResolveKimiToken:     func() string { return "" },
+		CodexBarEnabled:      func() bool { return false },
+		ProviderForOverride: func(name string, billing BillingInfo) Provider {
+			if name != "deepseek" {
+				return nil
+			}
+			return fakeProvider{
+				name: "deepseek",
+				q: Quota{
+					Provider:  "deepseek",
+					Source:    "deepseek-balance",
+					FetchedAt: timeNow(),
+					Balances:  []MoneyBalance{{Currency: "CNY", Amount: "120.50"}, {Currency: "USD", Amount: "8.25"}},
+				},
+			}
+		},
+	}
+
+	result, code := captureQuotaShowOneJSON(t, deps, "deepseek")
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	if pool, _ := result["pool"].(string); pool != "deepseek" {
+		t.Fatalf("pool = %q, want deepseek", pool)
+	}
+	balances, ok := result["balances"].([]any)
+	if !ok || len(balances) != 2 {
+		t.Fatalf("expected 2 balances in JSON, got %#v", result["balances"])
+	}
+	if label, _ := result["label"].(string); label != "DeepSeek" {
+		t.Fatalf("label = %q, want DeepSeek", label)
+	}
+	// Balances project exact currency+amount without fabricating windows or pace.
+	if _, hasWindows := result["windows"]; hasWindows {
+		t.Fatal("balances JSON must not include windows")
+	}
+	if _, hasPace := result["pace"]; hasPace {
+		t.Fatal("balances JSON must not include pace")
+	}
+	raw, _ := json.Marshal(result)
+	if strings.Contains(string(raw), "windows") || strings.Contains(string(raw), "pct") {
+		t.Fatalf("balances JSON must not fabricate windows/pct: %s", raw)
 	}
 }
 
@@ -3846,6 +3910,13 @@ func TestCursorFailClosedAndRequiredSource(t *testing.T) {
 	}
 	if failClosedPool("kimi-coding") || failClosedPool("anthropic") {
 		t.Fatal("kimi-coding and anthropic must not be fail-closed")
+	}
+	// DeepSeek is a fail-closed quota-only pool with authoritative source.
+	if !failClosedPool("deepseek") {
+		t.Fatal("deepseek must be a fail-closed pool")
+	}
+	if got := requiredSource("deepseek"); got != "deepseek-balance" {
+		t.Fatalf("requiredSource(deepseek) = %q, want deepseek-balance", got)
 	}
 }
 
