@@ -25,6 +25,7 @@ func TestQuotaProviderForCanonicalNames(t *testing.T) {
 		{name: "codex", provider: "codex", wantName: "codex"},
 		{name: "codex-spark", provider: "codex-spark", wantName: "codex-spark"},
 		{name: "kimi-coding", provider: "kimi-coding", wantName: "kimi-coding"},
+		{name: "cursor", provider: "cursor", wantName: "cursor"},
 	}
 
 	for _, tt := range tests {
@@ -53,6 +54,7 @@ func TestProfileQuotaProviderCanonicalNames(t *testing.T) {
 		{name: "codex-spark provider", profile: profile{Client: "codex", Provider: "codex-spark"}, want: "codex-spark"},
 		{name: "zhipu canonical", profile: profile{Client: "claude", Provider: "zhipu-coding"}, want: "zhipu-coding"},
 		{name: "deepseek", profile: profile{Client: "claude", Provider: "deepseek"}, want: ""},
+		{name: "cursor explicit", profile: profile{Statusline: &statuslineConfig{QuotaProvider: "cursor"}}, want: "cursor"},
 	}
 
 	for _, tc := range cases {
