@@ -1,6 +1,6 @@
 import { Tray, Menu, app, screen, type MenuItemConstructorOptions } from 'electron';
 import { displayMenuLabel } from './display-placement';
-import { createQuotaMenuRowIcon } from './quota-menu-icon';
+import { createQuotaMenuGroupIcon, groupQuotaMenuRows } from './quota-menu-icon';
 import { createTrayIcon } from './tray-icon';
 import type { QuotaMenuRow } from './panel-view-model';
 import type { EntityVisibilityConfig } from './config';
@@ -43,9 +43,9 @@ export function createTray(callbacks: TrayCallbacks = {}): { tray: Tray; rebuild
     }));
 
     const quotaSubmenu: MenuItemConstructorOptions[] = quotaRows.length > 0
-      ? quotaRows.map((row) => ({
+      ? groupQuotaMenuRows(quotaRows).map((group) => ({
           label: '\u200B',
-          icon: createQuotaMenuRowIcon(row),
+          icon: createQuotaMenuGroupIcon(group),
           enabled: false,
         }))
       : [{ label: '暂无额度', enabled: false }];

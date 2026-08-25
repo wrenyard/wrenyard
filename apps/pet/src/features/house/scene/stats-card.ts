@@ -28,9 +28,11 @@ export const PROVIDER_LABEL_WIDTH = 78;
 export const WINDOW_LABEL_WIDTH = 30;
 export const BAR_PCT_WIDTH = 28;
 /** Compact step for same-provider window rows */
-export const SAME_PROVIDER_ROW_STEP = 12;
+export const SAME_PROVIDER_ROW_STEP = 11;
 /** Extra gap before a different provider group */
-export const INTER_PROVIDER_EXTRA_GAP = 5;
+export const INTER_PROVIDER_EXTRA_GAP = 8;
+/** Horizontal indent for child quota/window labels inside the window column */
+export const CHILD_LABEL_INDENT = 6;
 
 export interface StatsCardNode {
   container: RenderContainer;
@@ -246,7 +248,7 @@ function renderTextLines(
 
   node.background.setCommands(statsBackgroundCommands(x, y, width, height));
   node.text.setPosition(Math.round(x + (width - measured.width) / 2), y + STATS_PADDING_Y);
-  node.text.setAlpha(0.90);
+  node.text.setAlpha(0.96);
   node.container.setAlpha(1);
   node.container.setVisible(true);
   return { text: displayText, lines, x, y, width, height };
@@ -397,7 +399,7 @@ function renderBarsCard(
         if (barEntry.status !== 'ok') continue;
         const fittedLabel = fitLineToWidth(barEntry.label, PROVIDER_LABEL_WIDTH, node.text);
         for (const win of barEntry.provider.windows) {
-          const fittedWindowName = fitLineToWidth(win.name, WINDOW_LABEL_WIDTH, node.text);
+          const fittedWindowName = fitLineToWidth(win.name, WINDOW_LABEL_WIDTH - CHILD_LABEL_INDENT, node.text);
           visualRows.push({
             type: 'bar-window',
             providerLabel: fittedLabel,
@@ -448,7 +450,7 @@ function renderBarsCard(
     } else if (r.type === 'error-row') {
       lines.push(`${r.providerLabel} ${r.errorMessage}`);
     } else if (r.type === 'balance') {
-      lines.push(`${r.providerLabel} ${r.currency} ${r.amount}`);
+      lines.push(`${r.providerLabel} bal. ${r.amount}`);
     } else {
       lines.push(`${r.providerLabel} ${r.windowName}`);
     }
@@ -458,7 +460,7 @@ function renderBarsCard(
 
   // Lazy-create text nodes if needed
   while (node.providerNodes.length < visualRows.length) {
-    const pn = node.surface.createText('', { ...statsTextStyle(), align: 'left' });
+    const pn = node.surface.createText('', { ...statsTextStyle(), align: 'left', fontWeight: 600 });
     const wn = node.surface.createText('', { ...statsTextStyle(), align: 'left' });
     node.providerNodes.push(pn);
     node.windowNodes.push(wn);
@@ -544,7 +546,7 @@ function renderBarsCard(
       pn.setText(r.providerLabel);
       pn.setPosition(providerLabelX, rowTop);
       pn.setVisible(true);
-      pn.setAlpha(0.90);
+      pn.setAlpha(1);
       rowTop += STATS_LINE_HEIGHT;
       rowIdx++;
       continue;
@@ -556,7 +558,7 @@ function renderBarsCard(
       pn.setText(r.providerLabel);
       pn.setPosition(providerLabelX, rowTop);
       pn.setVisible(true);
-      pn.setAlpha(0.90);
+      pn.setAlpha(1);
 
       // Window column left empty — reused text node renders message at windowLabelX
       const wn = node.windowNodes[rowIdx];
@@ -585,25 +587,24 @@ function renderBarsCard(
         pn.setText(r.providerLabel);
         pn.setPosition(providerLabelX, rowTop);
         pn.setVisible(true);
-        pn.setAlpha(0.90);
+        pn.setAlpha(1);
       }
 
-      // Currency code in the window column
+      // Child label rendered as 'bal.' indented inside the window column
       const wn = node.windowNodes[rowIdx];
-      wn.setText(r.currency ?? '');
-      wn.setPosition(windowLabelX, rowTop);
+      wn.setText('bal.');
+      wn.setPosition(windowLabelX + CHILD_LABEL_INDENT, rowTop);
       wn.setVisible(true);
-      wn.setAlpha(0.90);
+      wn.setAlpha(0.68);
 
-      // Amount right-aligned to the card's right content edge — no bar track/fill/
+      // Display amount starts exactly at the track start — no bar track/fill/
       // expected marker and no pct node are emitted for monetary rows.
       const amountTxt = r.amount ?? '';
       const amountNode = node.amountNodes[rowIdx];
       amountNode.setText(amountTxt);
-      const { width: amountMeas } = amountNode.measure();
-      amountNode.setPosition(Math.max(windowLabelX, x + width - STATS_PADDING_X - amountMeas), rowTop);
+      amountNode.setPosition(trackX, rowTop);
       amountNode.setVisible(true);
-      amountNode.setAlpha(0.90);
+      amountNode.setAlpha(0.96);
 
       // No percentage node for balance rows
       const pctn = node.pctNodes[rowIdx];
@@ -621,15 +622,15 @@ function renderBarsCard(
       pn.setText(r.providerLabel);
       pn.setPosition(providerLabelX, rowTop);
       pn.setVisible(true);
-      pn.setAlpha(0.90);
+      pn.setAlpha(1);
     }
 
-    // Window name text node
+    // Window name text node — child label indented inside the window column
     const wn = node.windowNodes[rowIdx];
     wn.setText(r.windowName);
-    wn.setPosition(windowLabelX, rowTop);
+    wn.setPosition(windowLabelX + CHILD_LABEL_INDENT, rowTop);
     wn.setVisible(true);
-    wn.setAlpha(0.90);
+    wn.setAlpha(0.68);
 
     // Track background
     const trackY = Math.round(rowTop + (SAME_PROVIDER_ROW_STEP - BAR_TRACK_HEIGHT) / 2);
@@ -641,7 +642,7 @@ function renderBarsCard(
       height: BAR_TRACK_HEIGHT,
       radius: BAR_TRACK_RADIUS,
       fill: '#2E2018',
-      alpha: 0.12,
+      alpha: 0.24,
     });
 
     // Fill — remaining portion from left
@@ -655,7 +656,7 @@ function renderBarsCard(
         height: BAR_TRACK_HEIGHT,
         radius: BAR_TRACK_RADIUS,
         fill: '#7BA05B',
-        alpha: 0.8,
+        alpha: 1,
       });
     }
 
@@ -670,7 +671,7 @@ function renderBarsCard(
         width: 1,
         height: BAR_TRACK_HEIGHT,
         fill: '#2E2018',
-        alpha: 0.8,
+        alpha: 1,
       });
     }
 
@@ -679,7 +680,7 @@ function renderBarsCard(
     const pctn = node.pctNodes[rowIdx];
     pctn.setText(pctTxt);
     pctn.setVisible(true);
-    pctn.setAlpha(0.90);
+    pctn.setAlpha(0.96);
     const { width: pctMeas } = pctn.measure();
     pctn.setPosition(pctAreaX + (BAR_PCT_WIDTH - pctMeas), rowTop);
 
@@ -693,7 +694,7 @@ function renderBarsCard(
   node.barsGfx.setCommands(barCommands);
   node.background.setCommands(statsBackgroundCommands(x, y, width, height));
   node.text.setPosition(Math.round(x + STATS_PADDING_X), y + STATS_PADDING_Y);
-  node.text.setAlpha(0.90);
+  node.text.setAlpha(0.96);
   node.container.setAlpha(1);
   node.container.setVisible(true);
 
