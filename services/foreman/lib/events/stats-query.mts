@@ -76,7 +76,7 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
   for (const row of usageRows) {
     const data = parseJsonValue(row.data)
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-    inputTokens += nonNegativeNumber((data as JsonRecord).input_tokens)
+    inputTokens += fullInputTokens(data as JsonRecord)
     outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
   }
 
@@ -163,7 +163,7 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
     } else if (row.type === 'turn_usage') {
       const data = parseJsonValue(row.data)
       if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      bucket.inputTokens += nonNegativeNumber((data as JsonRecord).input_tokens)
+      bucket.inputTokens += fullInputTokens(data as JsonRecord)
       bucket.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
     }
   }
@@ -231,7 +231,7 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
     } else if (row.type === 'turn_usage') {
       const data = parseJsonValue(row.data)
       if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      g.inputTokens += nonNegativeNumber((data as JsonRecord).input_tokens)
+      g.inputTokens += fullInputTokens(data as JsonRecord)
       g.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
     }
   }
@@ -265,7 +265,7 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
     } else if (row.type === 'turn_usage') {
       const data = parseJsonValue(row.data)
       if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      g.inputTokens += nonNegativeNumber((data as JsonRecord).input_tokens)
+      g.inputTokens += fullInputTokens(data as JsonRecord)
       g.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
     }
   }
@@ -367,6 +367,20 @@ function parseJsonValue(value: string | null): unknown | undefined {
 
 function nonNegativeNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+/**
+ * Full input for a turn_usage event is the untrusted input_tokens plus the
+ * optional cached_input_tokens partition the client reported (Cursor exposes
+ * cached_input_tokens as the total cached-input partition, of which
+ * cache_read_input_tokens and cache_creation_input_tokens are the read/write
+ * split). Legacy events that only report input_tokens are unchanged. The cache
+ * partition is counted exactly once here; the read/creation split is never
+ * added on top, and a separate total_tokens field is never added either
+ * because that would double count the same input.
+ */
+function fullInputTokens(record: JsonRecord): number {
+  return nonNegativeNumber(record.input_tokens) + nonNegativeNumber(record.cached_input_tokens)
 }
 
 function localDayKeyOf(iso: string): string {
@@ -481,7 +495,7 @@ function buildWindow(
       const data = parseJsonValue(row.data)
       if (!data || typeof data !== 'object' || Array.isArray(data)) continue
       const record = data as JsonRecord
-      const inputTokens = nonNegativeNumber(record.input_tokens)
+      const inputTokens = fullInputTokens(record)
       const outputTokens = nonNegativeNumber(record.output_tokens)
       totalTokens += inputTokens + outputTokens
       const profile = normalizeResolvedProfile(row.resolved_profile)

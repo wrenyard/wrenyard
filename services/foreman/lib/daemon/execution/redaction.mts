@@ -40,6 +40,8 @@ function isTokenUsageKey(normalizedKey: string): boolean {
     'totaltokens',
     'reasoningoutputtokens',
     'cachedinputtokens',
+    'cachereadinputtokens',
+    'cachecreationinputtokens',
     // Structural provenance for normalized token usage. This is not a bearer
     // token or credential; preserving it is required for the versioned TPS
     // contract. Credential-shaped keys such as access_token remain redacted.

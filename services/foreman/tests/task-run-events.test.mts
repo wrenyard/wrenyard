@@ -209,6 +209,59 @@ describe('task.run.events', () => {
     assert.deepEqual(result.events[4].data, {})
   })
 
+  it('projects safe cache partitions and total while dropping invalid values', async () => {
+    const taskRunId = 'tr_cache'
+    const execId = 'exec_cache'
+    setupTaskAndExecution(taskRunId, execId)
+    // Valid cache partitions/total survive the allowlist projection.
+    insertEvent(execId, taskRunId, 1, 'turn_usage', '2026-07-01T00:00:40.000Z', {
+      input_tokens: 40,
+      output_tokens: 60,
+      cached_input_tokens: 120,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 20,
+      total_tokens: 220,
+      duration_ms: 300,
+    })
+    // Invalid (negative / non-finite) values are dropped.
+    insertEvent(execId, taskRunId, 2, 'turn_usage', '2026-07-01T00:00:41.000Z', {
+      input_tokens: -1,
+      output_tokens: Number.POSITIVE_INFINITY,
+      cached_input_tokens: -5,
+      cache_read_input_tokens: -1,
+      cache_creation_input_tokens: 'many',
+      total_tokens: -220,
+      duration_ms: -300,
+    })
+
+    const result = await call('task.run.events', {
+      task_run_id: taskRunId,
+      after_seq: 0,
+      limit: 10,
+    }) as {
+      events: Array<{ seq: number; data: Record<string, unknown> }>
+    }
+
+    const valid = result.events[0].data
+    assert.equal(valid.input_tokens, 40)
+    assert.equal(valid.output_tokens, 60)
+    assert.equal(valid.cached_input_tokens, 120)
+    assert.equal(valid.cache_read_input_tokens, 100)
+    assert.equal(valid.cache_creation_input_tokens, 20)
+    assert.equal(valid.total_tokens, 220)
+    assert.equal(valid.duration_ms, 300)
+
+    // Invalid values must be omitted entirely, never coerced.
+    const invalid = result.events[1].data
+    assert.equal('input_tokens' in invalid, false)
+    assert.equal('output_tokens' in invalid, false)
+    assert.equal('cached_input_tokens' in invalid, false)
+    assert.equal('cache_read_input_tokens' in invalid, false)
+    assert.equal('cache_creation_input_tokens' in invalid, false)
+    assert.equal('total_tokens' in invalid, false)
+    assert.equal('duration_ms' in invalid, false)
+  })
+
   it('returns readable summaries while redacting credential forms', async () => {
     const taskRunId = 'tr_cred'
     const execId = 'exec_cred'
