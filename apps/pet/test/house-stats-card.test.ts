@@ -485,6 +485,44 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     expect(pctPos0[0]).toBeGreaterThan(trackX);
   });
 
+  it('floors fractional remaining percentages in Tips text', () => {
+    const surface = mockSurface();
+    const container = mockContainer();
+    const node = createStatsCard(container, surface);
+
+    updateStatsCard(node, {
+      dailyStats: { dispatchCount: 1, totalTokens: 1000, inputTokens: 500, outputTokens: 500, source: 'sqlite' },
+      runningWorkerCount: 0,
+      queuedCount: 0,
+      dailyStatsUnavailable: false,
+      quotaTips: [{
+        text: 'cursor Cursor 99% remain · Other 99% remain',
+        bars: [{
+          provider: {
+            remainingPct: 99.8,
+            expectedRemainingPct: null,
+            windows: [
+              { name: 'Cursor', usedPct: 0.6, remainingPct: 99.4, expectedRemainingPct: null },
+              { name: 'Other', usedPct: 0.2, remainingPct: 99.8, expectedRemainingPct: null },
+            ],
+          },
+          label: 'cursor',
+          error: null,
+          status: 'ok',
+          stale: false,
+        }],
+      }],
+      pointer: { x: 100, y: 100, inside: true },
+      dragging: false,
+      houseRect: { x: 50, y: 50, width: 200, height: 150 },
+      viewportWidth: 1920,
+      viewportHeight: 1080,
+    });
+
+    expect(node.pctNodes[0].setText).toHaveBeenLastCalledWith('99%');
+    expect(node.pctNodes[1].setText).toHaveBeenLastCalledWith('99%');
+  });
+
   it('renders full width without ellipsis when bars are present', () => {
     const surface = mockSurface();
     const container = mockContainer();
