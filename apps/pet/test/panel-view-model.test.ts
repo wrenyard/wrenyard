@@ -577,16 +577,16 @@ describe('quota panel view model', () => {
       window: '',
       remainingPct: null,
       expectedRemainingPct: null,
-      label: 'deepseek CNY 12.50',
-      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'CNY 12.50' }],
+      label: 'deepseek bal. ¥12.50',
+      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal. ¥12.50' }],
     });
     expect(rows[1]).toEqual({
       provider: '',
       window: '',
       remainingPct: null,
       expectedRemainingPct: null,
-      label: 'deepseek USD 1.00',
-      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'USD 1.00' }],
+      label: 'deepseek bal. $1.00',
+      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'deepseek bal. $1.00' }],
     });
   });
 
@@ -608,7 +608,7 @@ describe('quota panel view model', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].provider).toBe('deepseek');
     expect(rows[0].balances).toEqual([
-      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'CNY 12.50' },
+      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal. ¥12.50' },
     ]);
   });
 });
