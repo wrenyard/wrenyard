@@ -139,18 +139,20 @@ export function formatQuotaBarMenuRows(tips: QuotaTipLine[]): QuotaMenuRow[] {
       if (tip.balances && tip.balances.length > 0) {
         const label = tip.balanceLabel ?? '';
         tip.balances.forEach((balance, index) => {
+          const displayAmount = balance.display || balance.amount;
+          const balanceLabel = `${label || balance.currency} bal. ${displayAmount}`;
           rows.push({
             provider: index === 0 ? label : '',
             window: '',
             remainingPct: null,
             expectedRemainingPct: null,
-            label: `${label || balance.currency} ${balance.currency} ${balance.amount}`,
+            label: balanceLabel,
             balances: [{
               provider: label,
               currency: balance.currency,
               amount: balance.amount,
               display: balance.display,
-              label: `${balance.currency} ${balance.amount}`,
+              label: balanceLabel,
             }],
           });
         });

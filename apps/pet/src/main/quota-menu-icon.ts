@@ -6,23 +6,45 @@ export const QUOTA_MENU_SCALE = 2;
 export const QUOTA_MENU_ROW_WIDTH = 328;
 export const QUOTA_MENU_ROW_HEIGHT = 22;
 
-const TEXT = [0, 0, 0, 255] as const;
-const TRACK = [0, 0, 0, 48] as const;
-const FILL = [0, 0, 0, 230] as const;
-export const QUOTA_MENU_FILL_ALPHA = 230;
+/** Vertical pitch between content lines inside one provider group. */
+export const QUOTA_MENU_LINE_STEP = 10;
+export const QUOTA_MENU_GLYPH_H = 7;
+/** Provider glyphs are thickened in place (each set row 2px tall), keeping 5x7 proportions. */
+export const QUOTA_MENU_PROVIDER_GLYPH_H = 8;
+export const QUOTA_MENU_GROUP_PAD_TOP = 4;
+export const QUOTA_MENU_GROUP_PAD_BOTTOM = 4;
+
+export const QUOTA_MENU_BAR_X = 140;
+export const QUOTA_MENU_BAR_Y = QUOTA_MENU_GROUP_PAD_TOP;
+export const QUOTA_MENU_BAR_W = 100;
+export const QUOTA_MENU_BAR_H = 6;
+
+export const QUOTA_MENU_FILL_ALPHA = 255;
+export const QUOTA_MENU_TRACK_ALPHA = 88;
+export const QUOTA_MENU_PROVIDER_ALPHA = 255;
+export const QUOTA_MENU_CHILD_ALPHA = 150;
+export const QUOTA_MENU_AMOUNT_ALPHA = 255;
 export const QUOTA_MENU_PACE_MARKER_ON_FILL_ALPHA = 32;
 export const QUOTA_MENU_PACE_MARKER_ON_TRACK_ALPHA = 255;
-const MARKER_ON_FILL = [0, 0, 0, QUOTA_MENU_PACE_MARKER_ON_FILL_ALPHA] as const;
-const MARKER_ON_TRACK = [0, 0, 0, QUOTA_MENU_PACE_MARKER_ON_TRACK_ALPHA] as const;
 
 const PROVIDER_X = 8;
 const WINDOW_X = 104;
-export const QUOTA_MENU_BAR_X = 140;
-export const QUOTA_MENU_BAR_Y = 8;
-export const QUOTA_MENU_BAR_W = 100;
-export const QUOTA_MENU_BAR_H = 6;
+/** Indented child column: parent + 6px. */
+export const QUOTA_MENU_CHILD_X = WINDOW_X + 6;
 const PCT_X = 248;
-const TEXT_Y = 8;
+const PROVIDER_MAX = QUOTA_MENU_BAR_X - PROVIDER_X - 8;
+const CHILD_MAX = QUOTA_MENU_BAR_X - QUOTA_MENU_CHILD_X - 4;
+const PCT_MAX = QUOTA_MENU_ROW_WIDTH - PCT_X - 8;
+const AMOUNT_MAX = QUOTA_MENU_ROW_WIDTH - QUOTA_MENU_BAR_X - 8;
+const ERROR_MAX = QUOTA_MENU_ROW_WIDTH - QUOTA_MENU_CHILD_X - 8;
+
+const TRACK = [0, 0, 0, QUOTA_MENU_TRACK_ALPHA] as const;
+const FILL = [0, 0, 0, QUOTA_MENU_FILL_ALPHA] as const;
+const PROVIDER_COLOR = [0, 0, 0, QUOTA_MENU_PROVIDER_ALPHA] as const;
+const CHILD_COLOR = [0, 0, 0, QUOTA_MENU_CHILD_ALPHA] as const;
+const AMOUNT_COLOR = [0, 0, 0, QUOTA_MENU_AMOUNT_ALPHA] as const;
+const MARKER_ON_FILL = [0, 0, 0, QUOTA_MENU_PACE_MARKER_ON_FILL_ALPHA] as const;
+const MARKER_ON_TRACK = [0, 0, 0, QUOTA_MENU_PACE_MARKER_ON_TRACK_ALPHA] as const;
 
 /** 5×7 glyphs, bit4 = leftmost pixel. */
 const GLYPHS: Record<string, readonly number[]> = {
@@ -71,42 +93,95 @@ const GLYPHS: Record<string, readonly number[]> = {
   z: [0, 0, 0b11111, 0b00010, 0b00100, 0b01000, 0b11111],
 };
 
-export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
+/** A flattened, consecutive group of rows sharing one provider id. */
+export interface QuotaMenuGroup {
+  provider: string;
+  lines: QuotaMenuRow[];
+}
+
+/**
+ * Group the flattened (provider-first / blank-continuation) rows so each
+ * provider renders as a single compact icon item in the status quota submenu.
+ */
+export function groupQuotaMenuRows(rows: QuotaMenuRow[]): QuotaMenuGroup[] {
+  const groups: QuotaMenuGroup[] = [];
+  let current: QuotaMenuGroup | undefined;
+  for (const row of rows) {
+    if (row.provider) {
+      current = { provider: row.provider, lines: [] };
+      groups.push(current);
+    } else if (!current) {
+      current = { provider: '', lines: [] };
+      groups.push(current);
+    }
+    current.lines.push(row);
+  }
+  return groups;
+}
+
+export function renderQuotaMenuGroupBitmap(group: QuotaMenuGroup): {
   pixelWidth: number;
   pixelHeight: number;
   scale: number;
   buffer: Buffer;
 } {
+  const lineCount = Math.max(1, group.lines.length);
+  // Provider glyphs are thickened in place (8px extent), so a single line keeps
+  // the minimum row height while multi-line groups stay compact.
+  const contentTop = QUOTA_MENU_GROUP_PAD_TOP;
+  const providerBottom = contentTop + QUOTA_MENU_PROVIDER_GLYPH_H;
+  const lastLineBottom = contentTop + (lineCount - 1) * QUOTA_MENU_LINE_STEP + QUOTA_MENU_GLYPH_H;
+  const contentBottom = Math.max(providerBottom, lastLineBottom);
+  const logicalHeight = Math.max(QUOTA_MENU_ROW_HEIGHT, contentBottom + QUOTA_MENU_GROUP_PAD_BOTTOM);
+
   const pixelWidth = QUOTA_MENU_ROW_WIDTH * QUOTA_MENU_SCALE;
-  const pixelHeight = QUOTA_MENU_ROW_HEIGHT * QUOTA_MENU_SCALE;
+  const pixelHeight = logicalHeight * QUOTA_MENU_SCALE;
   const buffer = Buffer.alloc(pixelWidth * pixelHeight * 4);
 
+  group.lines.forEach((row, index) => {
+    const lineTop = QUOTA_MENU_GROUP_PAD_TOP + index * QUOTA_MENU_LINE_STEP;
+    renderMenuLine(buffer, pixelWidth, lineTop, row, index === 0);
+  });
+
+  return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
+}
+
+function renderMenuLine(
+  buffer: Buffer,
+  strideWidth: number,
+  lineTop: number,
+  row: QuotaMenuRow,
+  isFirstLine: boolean,
+): void {
   if (row.error) {
-    drawString(buffer, pixelWidth, PROVIDER_X, TEXT_Y, row.provider, 88);
-    drawString(buffer, pixelWidth, WINDOW_X, TEXT_Y, row.error, QUOTA_MENU_ROW_WIDTH - WINDOW_X - 8);
-    return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
+    if (isFirstLine) {
+      drawString(buffer, strideWidth, PROVIDER_X, lineTop, row.provider, PROVIDER_MAX, PROVIDER_COLOR, true);
+    }
+    drawString(buffer, strideWidth, QUOTA_MENU_CHILD_X, lineTop, row.error, ERROR_MAX, CHILD_COLOR);
+    return;
   }
 
-  // Monetary balance rows (quota-only providers): provider | currency |
-  // right-side amount. No bar track/fill/expected marker/percentage.
+  // Monetary balance rows: provider | bal. | right-aligned amount starting at
+  // the bar column. No track/fill/pace marker/percentage semantics.
   if (row.balances && row.balances.length > 0) {
-    if (row.provider) drawString(buffer, pixelWidth, PROVIDER_X, TEXT_Y, row.provider, 88);
-    const bal = row.balances[0];
-    drawString(buffer, pixelWidth, WINDOW_X, TEXT_Y, bal.currency, 28);
-    const amount = bal.display || bal.amount;
-    const amountWidth = amount.length * 6;
-    const amountX = Math.max(WINDOW_X + 28 + 8, QUOTA_MENU_ROW_WIDTH - 8 - amountWidth);
-    drawString(buffer, pixelWidth, amountX, TEXT_Y, amount, QUOTA_MENU_ROW_WIDTH - 8 - amountX);
-    return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
+    if (isFirstLine) {
+      drawString(buffer, strideWidth, PROVIDER_X, lineTop, row.provider, PROVIDER_MAX, PROVIDER_COLOR, true);
+    }
+    drawString(buffer, strideWidth, QUOTA_MENU_CHILD_X, lineTop, 'bal.', CHILD_MAX, CHILD_COLOR);
+    const amount = row.balances[0].display || row.balances[0].amount;
+    drawString(buffer, strideWidth, QUOTA_MENU_BAR_X, lineTop, amount, AMOUNT_MAX, AMOUNT_COLOR);
+    return;
   }
 
-  if (row.provider) drawString(buffer, pixelWidth, PROVIDER_X, TEXT_Y, row.provider, 88);
-  if (row.window) drawString(buffer, pixelWidth, WINDOW_X, TEXT_Y, row.window, 28);
+  if (isFirstLine) {
+    drawString(buffer, strideWidth, PROVIDER_X, lineTop, row.provider, PROVIDER_MAX, PROVIDER_COLOR, true);
+  }
+  if (row.window) drawString(buffer, strideWidth, QUOTA_MENU_CHILD_X, lineTop, row.window, CHILD_MAX, CHILD_COLOR);
 
   if (row.remainingPct !== null) {
-    fillRect(buffer, pixelWidth, QUOTA_MENU_BAR_X, QUOTA_MENU_BAR_Y, QUOTA_MENU_BAR_W, QUOTA_MENU_BAR_H, TRACK);
+    fillRect(buffer, strideWidth, QUOTA_MENU_BAR_X, lineTop, QUOTA_MENU_BAR_W, QUOTA_MENU_BAR_H, TRACK);
     const fillWidth = Math.max(0, Math.round((row.remainingPct / 100) * QUOTA_MENU_BAR_W));
-    if (fillWidth > 0) fillRect(buffer, pixelWidth, QUOTA_MENU_BAR_X, QUOTA_MENU_BAR_Y, fillWidth, QUOTA_MENU_BAR_H, FILL);
+    if (fillWidth > 0) fillRect(buffer, strideWidth, QUOTA_MENU_BAR_X, lineTop, fillWidth, QUOTA_MENU_BAR_H, FILL);
     if (row.expectedRemainingPct !== null) {
       const markerX = QUOTA_MENU_BAR_X + Math.round((row.expectedRemainingPct / 100) * QUOTA_MENU_BAR_W);
       const clampedMarkerX = Math.min(
@@ -116,34 +191,46 @@ export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
       const markerOverFill = clampedMarkerX - QUOTA_MENU_BAR_X < fillWidth;
       fillRect(
         buffer,
-        pixelWidth,
+        strideWidth,
         clampedMarkerX,
-        QUOTA_MENU_BAR_Y,
+        lineTop,
         1,
         QUOTA_MENU_BAR_H,
         markerOverFill ? MARKER_ON_FILL : MARKER_ON_TRACK,
       );
     }
     const remain = floorQuotaPercentage(row.remainingPct);
-    drawString(buffer, pixelWidth, PCT_X, TEXT_Y, `${remain}% remain`, 72);
+    drawString(buffer, strideWidth, PCT_X, lineTop, `${remain}% remain`, PCT_MAX, AMOUNT_COLOR);
   }
-
-  return { pixelWidth, pixelHeight, scale: QUOTA_MENU_SCALE, buffer };
 }
 
-export function createQuotaMenuRowIcon(row: QuotaMenuRow): NativeImage {
-  const rendered = renderQuotaMenuRowBitmap(row);
+/** Single-row render kept for compatibility; delegates to a one-row group. */
+export function renderQuotaMenuRowBitmap(row: QuotaMenuRow): {
+  pixelWidth: number;
+  pixelHeight: number;
+  scale: number;
+  buffer: Buffer;
+} {
+  return renderQuotaMenuGroupBitmap({ provider: row.provider, lines: [row] });
+}
+
+export function createQuotaMenuGroupIcon(group: QuotaMenuGroup): NativeImage {
+  const rendered = renderQuotaMenuGroupBitmap(group);
   const image = nativeImage.createFromBuffer(rendered.buffer, {
     width: rendered.pixelWidth,
     height: rendered.pixelHeight,
     scaleFactor: rendered.scale,
   });
-  // CodexBar's menu-bar meters are 18×18 template images: the bitmap is a
+  // CodexBar's menu-bar meters are template images: the bitmap is a
   // luminance/alpha mask and AppKit tints it with the current menu/status
-  // foreground. Baking light-gray pixels (previous revision) is unreadable
-  // on Aqua menus; baking green is similarly appearance-locked.
+  // foreground. Baking light-gray or colored pixels is unreadable on Aqua
+  // menus or appearance-locked.
   image.setTemplateImage(true);
   return image;
+}
+
+export function createQuotaMenuRowIcon(row: QuotaMenuRow): NativeImage {
+  return createQuotaMenuGroupIcon({ provider: row.provider, lines: [row] });
 }
 
 function fillRect(
@@ -177,6 +264,8 @@ function drawString(
   y: number,
   text: string,
   maxWidth: number,
+  color: readonly number[],
+  thick = false,
 ): void {
   let cursor = x;
   const maxX = x + maxWidth;
@@ -184,7 +273,8 @@ function drawString(
     const ch = raw === '—' || raw === '–' ? '-' : raw;
     if (cursor + 6 > maxX) break;
     const glyph = GLYPHS[ch] ?? GLYPHS['-'];
-    drawGlyph(buffer, strideWidth, cursor, y, glyph);
+    if (thick) drawGlyphThick(buffer, strideWidth, cursor, y, glyph, color);
+    else drawGlyph(buffer, strideWidth, cursor, y, glyph, color);
     cursor += 6;
   }
 }
@@ -195,12 +285,32 @@ function drawGlyph(
   x: number,
   y: number,
   glyph: readonly number[],
+  color: readonly number[],
 ): void {
   for (let row = 0; row < 7; row++) {
     const bits = glyph[row] ?? 0;
     for (let col = 0; col < 5; col++) {
       if (((bits >> (4 - col)) & 1) === 1) {
-        fillRect(buffer, strideWidth, x + col, y + row, 1, 1, TEXT);
+        fillRect(buffer, strideWidth, x + col, y + row, 1, 1, color);
+      }
+    }
+  }
+}
+
+/** Vertically thickened glyph (each set row 2px tall); column width unchanged. */
+function drawGlyphThick(
+  buffer: Buffer,
+  strideWidth: number,
+  x: number,
+  y: number,
+  glyph: readonly number[],
+  color: readonly number[],
+): void {
+  for (let row = 0; row < 7; row++) {
+    const bits = glyph[row] ?? 0;
+    for (let col = 0; col < 5; col++) {
+      if (((bits >> (4 - col)) & 1) === 1) {
+        fillRect(buffer, strideWidth, x + col, y + row, 1, 2, color);
       }
     }
   }
