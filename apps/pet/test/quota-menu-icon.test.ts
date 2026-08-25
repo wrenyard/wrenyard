@@ -13,8 +13,10 @@ vi.mock('electron', () => ({
 
 import {
   createQuotaMenuRowIcon,
+  QUOTA_MENU_BAR_X,
   QUOTA_MENU_BAR_H,
   QUOTA_MENU_BAR_W,
+  QUOTA_MENU_BAR_Y,
   QUOTA_MENU_FILL_ALPHA,
   renderQuotaMenuRowBitmap,
 } from '../src/main/quota-menu-icon';
@@ -39,6 +41,16 @@ function countText(buffer: Buffer): number {
   return count;
 }
 
+function alphaAt(
+  rendered: ReturnType<typeof renderQuotaMenuRowBitmap>,
+  logicalX: number,
+  logicalY: number,
+): number {
+  const x = logicalX * rendered.scale;
+  const y = logicalY * rendered.scale;
+  return rendered.buffer[(y * rendered.pixelWidth + x) * 4 + 3];
+}
+
 const sample = {
   provider: 'codex',
   window: '7d',
@@ -53,6 +65,21 @@ describe('quota menu row bitmap', () => {
     const full = renderQuotaMenuRowBitmap(sample);
     expect(countFill(empty.buffer)).toBe(0);
     expect(countFill(full.buffer)).toBe(QUOTA_MENU_BAR_W * QUOTA_MENU_BAR_H * 2 * 2);
+  });
+
+  it('extends the pace marker above and below the bar with visible caps', () => {
+    const rendered = renderQuotaMenuRowBitmap({
+      ...sample,
+      expectedRemainingPct: 50,
+    });
+    const markerX = QUOTA_MENU_BAR_X + Math.round(QUOTA_MENU_BAR_W * 0.5);
+
+    expect(alphaAt(rendered, markerX - 1, QUOTA_MENU_BAR_Y - 2)).toBe(255);
+    expect(alphaAt(rendered, markerX, QUOTA_MENU_BAR_Y - 2)).toBe(255);
+    expect(alphaAt(rendered, markerX + 1, QUOTA_MENU_BAR_Y - 2)).toBe(255);
+    expect(alphaAt(rendered, markerX - 1, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
+    expect(alphaAt(rendered, markerX, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
+    expect(alphaAt(rendered, markerX + 1, QUOTA_MENU_BAR_Y + QUOTA_MENU_BAR_H + 1)).toBe(255);
   });
 
   it('does not draw a bar for error rows', () => {
