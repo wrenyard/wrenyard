@@ -52,6 +52,7 @@ func runProcess(ctx context.Context, plan driver.CommandPlan, clientFamily strin
 	hideCommandWindow(cmd)
 	defer func() {
 		transcript.FinalizeOpenCodeStream()
+		transcript.FinalizeCursorStream()
 		grokStream = transcript.FinalizeGrokStream()
 	}()
 

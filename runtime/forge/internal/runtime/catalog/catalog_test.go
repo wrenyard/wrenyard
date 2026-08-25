@@ -159,6 +159,7 @@ func TestPermissionAdaptersCoverThreeModes(t *testing.T) {
 		{name: "codex", adapter: PermissionAdapterCodex},
 		{name: "opencode", adapter: PermissionAdapterOpenCode},
 		{name: "grok", adapter: PermissionAdapterGrok},
+		{name: "cursor", adapter: PermissionAdapterCursor},
 	}
 	modes := []PermissionMode{PermissionReadonly, PermissionEdit, PermissionYolo}
 
@@ -1297,5 +1298,96 @@ func TestProviderRawLLMCapabilities(t *testing.T) {
 	wantOpenAIEndpoint := "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
 	if gotOpenAIEndpoint != wantOpenAIEndpoint {
 		t.Fatalf("zhipu-coding OpenAI RawLLM endpoint = %q, want %q", gotOpenAIEndpoint, wantOpenAIEndpoint)
+	}
+}
+
+func TestCursorClientDescriptor(t *testing.T) {
+	r := defaultReg()
+
+	d, err := r.LookupDescriptor("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Name != "cursor" || d.Dialect != DialectCursor {
+		t.Fatalf("cursor descriptor = %+v", d)
+	}
+	if d.Binary.Name != "cursor-agent" {
+		t.Fatalf("cursor binary = %q, want cursor-agent (never generic agent)", d.Binary.Name)
+	}
+	if d.PermissionAdapter != PermissionAdapterCursor {
+		t.Fatalf("cursor permission adapter = %q, want cursor", d.PermissionAdapter)
+	}
+	if d.TranscriptFamily != TranscriptFamilyCursor {
+		t.Fatalf("cursor transcript family = %q, want %q", d.TranscriptFamily, TranscriptFamilyCursor)
+	}
+	if d.ResumeFlag != ResumeFlagLong {
+		t.Fatalf("cursor resume flag = %q, want %q", d.ResumeFlag, ResumeFlagLong)
+	}
+	if d.DefaultProvider != "cursor" {
+		t.Fatalf("cursor default provider = %q, want cursor", d.DefaultProvider)
+	}
+
+	// No generic-agent fallback: the descriptor must only expose cursor-agent.
+	if d.Binary.Name == "agent" {
+		t.Fatal("cursor must never resolve the generic agent command (belongs to Grok)")
+	}
+}
+
+func TestCursorProviderBinding(t *testing.T) {
+	r := defaultReg()
+	b, err := r.LookupBinding("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Name != "cursor" || b.Kind != "builtin" {
+		t.Fatalf("cursor binding = %+v", b)
+	}
+	if b.QuotaProvider != "cursor" {
+		t.Fatalf("cursor quota provider = %q, want cursor", b.QuotaProvider)
+	}
+	if !b.SupportsDialect(DialectCursor) {
+		t.Fatal("cursor provider must support the cursor dialect")
+	}
+	if b.CredentialSource() != CredentialResolverCursor {
+		t.Fatalf("cursor credential source = %q, want cursor", b.CredentialSource())
+	}
+	if !b.UsesClientBinary() {
+		t.Fatal("cursor provider must use the native cursor-agent binary")
+	}
+	if b.DefaultModel != "composer-2.5" {
+		t.Fatalf("cursor default model = %q, want composer-2.5", b.DefaultModel)
+	}
+	for _, model := range []string{"composer-2.5", "cursor-grok-4.6-high"} {
+		if err := b.ValidateModel(model); err != nil {
+			t.Fatalf("cursor should allow model %q: %v", model, err)
+		}
+		if _, ok := r.LookupProviderModel("cursor", model); !ok {
+			t.Fatalf("cursor should own model %q", model)
+		}
+	}
+	if err := b.ValidateModel("some-other-model"); err == nil {
+		t.Fatal("cursor should reject an unregistered model")
+	}
+}
+
+func TestCursorPermissionMapping(t *testing.T) {
+	want := map[PermissionMode][]string{
+		PermissionReadonly: {"--mode", "plan", "--force", "--sandbox", "enabled"},
+		PermissionEdit:     {"--force", "--sandbox", "enabled"},
+		PermissionYolo:     {"--force", "--sandbox", "disabled"},
+	}
+	for mode, args := range want {
+		if got := CursorPermissionArgs(mode); !reflect.DeepEqual(got, args) {
+			t.Fatalf("CursorPermissionArgs(%s) = %#v, want %#v", mode, got, args)
+		}
+	}
+	d, err := defaultReg().LookupDescriptor("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for mode, args := range want {
+		if got := d.BuildPermissionArgs(mode); !reflect.DeepEqual(got, args) {
+			t.Fatalf("cursor BuildPermissionArgs(%s) = %#v, want %#v", mode, got, args)
+		}
 	}
 }

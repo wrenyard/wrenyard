@@ -3,23 +3,15 @@ package quota
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 )
-
-// cursorAccessTokenKey is the key under which Cursor Desktop persists its
-// access token inside the state.vscdb ItemTable.
-const cursorAccessTokenKey = "cursorAuth/accessToken"
 
 // cursorDashboardEndpoint is the default GetCurrentPeriodUsage endpoint.
 const cursorDashboardEndpoint = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
@@ -55,11 +47,11 @@ func (p CursorProvider) Fetch(ctx context.Context) (Quota, error) {
 
 	statePath := p.StatePath
 	if statePath == "" {
-		statePath = defaultCursorStatePath()
+		statePath = cursor.StatePath("")
 	}
-	token, err := readCursorAccessToken(statePath)
+	token, err := cursor.AccessToken(statePath)
 	if err != nil {
-		return Quota{}, sanitizeCursorError(err)
+		return Quota{}, err
 	}
 	if strings.TrimSpace(token) == "" {
 		return Quota{}, fmt.Errorf("cursor: no access token found in %s", statePath)
@@ -112,56 +104,6 @@ func (p CursorProvider) Fetch(ctx context.Context) (Quota, error) {
 		FetchedAt: now,
 		Windows:   windows,
 	}, nil
-}
-
-// defaultCursorStatePath resolves the standard Cursor Desktop state.vscdb
-// path for the current platform.
-func defaultCursorStatePath() string {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = os.Getenv("USERPROFILE")
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
-	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(home, "AppData", "Roaming")
-		}
-		return filepath.Join(appData, "Cursor", "User", "globalStorage", "state.vscdb")
-	default:
-		config := os.Getenv("XDG_CONFIG_HOME")
-		if config == "" {
-			config = filepath.Join(home, ".config")
-		}
-		return filepath.Join(config, "Cursor", "User", "globalStorage", "state.vscdb")
-	}
-}
-
-// readCursorAccessToken opens state.vscdb read-only and returns the stored
-// access token. The token is never logged, cached, or persisted.
-func readCursorAccessToken(statePath string) (string, error) {
-	db, err := sql.Open("sqlite", "file:"+statePath+"?mode=ro")
-	if err != nil {
-		return "", fmt.Errorf("cursor: open state database: %w", err)
-	}
-	defer db.Close()
-
-	var token string
-	if err := db.QueryRow(
-		"SELECT value FROM ItemTable WHERE key = ?",
-		cursorAccessTokenKey,
-	).Scan(&token); err != nil {
-		return "", fmt.Errorf("cursor: read access token: %w", err)
-	}
-	return token, nil
-}
-
-// sanitizeCursorError re-wraps a database error so it can never leak the
-// access token; it only ever carries the stable message and the state path.
-func sanitizeCursorError(err error) error {
-	return fmt.Errorf("cursor: %w", err)
 }
 
 type cursorUsageResponse struct {

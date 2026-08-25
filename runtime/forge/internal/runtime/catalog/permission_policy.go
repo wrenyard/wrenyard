@@ -13,6 +13,7 @@ const (
 	PermissionAdapterOpenCode  PermissionAdapter = "opencode"
 	PermissionAdapterGrok      PermissionAdapter = "grok"
 	PermissionAdapterDSH       PermissionAdapter = "dsh"
+	PermissionAdapterCursor    PermissionAdapter = "cursor"
 )
 
 // EnvDSHPermissionMode is the environment variable carrying the DSH
@@ -125,6 +126,9 @@ func DSHPermissionEnv(mode PermissionMode) string {
 // callers without capability packs. The richer driver encoder merges resolved
 // capability contributions at its adapter boundary.
 func EncodePermissionArgs(adapter PermissionAdapter, mode PermissionMode) []string {
+	if adapter == PermissionAdapterCursor {
+		return CursorPermissionArgs(mode)
+	}
 	if mode == PermissionYolo {
 		switch adapter {
 		case PermissionAdapterClaude:
@@ -239,6 +243,22 @@ func CodexPermissionArgs(mode PermissionMode) []string {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	return args
+}
+
+// CursorPermissionArgs maps a neutral Forge permission mode to the Cursor CLI
+// argument shape. The mode is neutral: readonly runs plan-only, edit and yolo
+// both run in force mode, differing only by sandbox enablement.
+func CursorPermissionArgs(mode PermissionMode) []string {
+	switch mode {
+	case PermissionReadonly:
+		return []string{"--mode", "plan", "--force", "--sandbox", "enabled"}
+	case PermissionEdit:
+		return []string{"--force", "--sandbox", "enabled"}
+	case PermissionYolo:
+		return []string{"--force", "--sandbox", "disabled"}
+	default:
+		return nil
+	}
 }
 
 func containsAccessKind(values []AccessKind, want AccessKind) bool {

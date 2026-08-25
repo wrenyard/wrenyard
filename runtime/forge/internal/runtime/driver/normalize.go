@@ -190,6 +190,50 @@ type TranscriptTee struct {
 	opencodeUsageOverflow  bool
 	opencodeTurnStarted    time.Time
 	opencodeFinalized      bool
+
+	// cursor stream tracking: cursor-agent stream-json emits one record per
+	// native event. Assistant text records aggregate into a single message at
+	// the response boundary, tool records pair by call_id, and the native
+	// usage record is buffered so exactly one canonical turn_usage is emitted
+	// before the single terminal run_finished at finalization. cursorTrack
+	// records structural validity (exactly one successful complete terminal,
+	// no malformed records) so a trustworthy usage can be distinguished from
+	// an untrusted one.
+	cursorMessage     strings.Builder
+	cursorUsage       map[string]any
+	cursorRunFinished []protocol.Event
+	cursorTrack       cursorStreamTracker
+	cursorTurnStarted time.Time
+	cursorFinalized   bool
+}
+
+// CursorAttemptTrust classifies the finalized Cursor stream so execution can
+// distinguish a trustworthy complete-success stream from an untrusted one.
+type CursorAttemptTrust string
+
+const (
+	CursorTrustCompleteSuccess       CursorAttemptTrust = "trustworthy_complete_success"
+	CursorTrustCompleteNativeFailure CursorAttemptTrust = "trustworthy_complete_native_failure"
+	CursorTrustInvalidOrIncomplete   CursorAttemptTrust = "malformed_truncated_incomplete_duplicate_or_non_final"
+)
+
+// CursorStreamValidity is the finalized Cursor-stream trust result. Checked is
+// true only for a finalized Cursor stream-json transcript.
+type CursorStreamValidity struct {
+	Checked bool
+	Trust   CursorAttemptTrust
+}
+
+func (v CursorStreamValidity) IsValid() bool {
+	return v.Checked && v.Trust == CursorTrustCompleteSuccess
+}
+
+type cursorStreamTracker struct {
+	records          int
+	terminals        int
+	terminalTrust    CursorAttemptTrust
+	terminalPosition int
+	malformed        bool
 }
 
 // codexTurnTimingState is the explicit lifecycle of a native Codex
@@ -329,12 +373,18 @@ func (t *TranscriptTee) processLine(line []byte) {
 	if t.clientFamily == "opencode" && t.opencodeTurnStarted.IsZero() && len(bytes.TrimSpace(line)) > 0 {
 		t.opencodeTurnStarted = t.now()
 	}
+	if t.clientFamily == "cursor" && t.cursorTurnStarted.IsZero() && len(bytes.TrimSpace(line)) > 0 {
+		t.cursorTurnStarted = t.now()
+	}
 	normalized := normalizeTranscriptLine(t.clientFamily, line)
 	if t.clientFamily == "codex" {
 		t.observeCodexTurn(line, normalized)
 	}
 	if t.clientFamily == "codebuddy" {
 		t.observeCodeBuddyInvocation(line)
+	}
+	if t.clientFamily == "cursor" {
+		t.observeCursorStream(line, normalized)
 	}
 	for _, event := range normalized {
 		if event.Type == "" {
@@ -356,6 +406,23 @@ func (t *TranscriptTee) processLine(line []byte) {
 				continue
 			case protocol.EventRunFinished:
 				t.grokRunFinished = append(t.grokRunFinished, protocol.Event{Type: event.Type, Data: copyMap(event.Data)})
+				continue
+			}
+		}
+		if t.clientFamily == "cursor" {
+			switch event.Type {
+			case "message":
+				if text, ok := event.Data["text"].(string); ok {
+					t.cursorMessage.WriteString(text)
+				}
+				continue
+			case "turn_usage":
+				// Buffer usage at the Tee layer: exactly one canonical record is
+				// emitted at finalization.
+				t.cursorUsage = copyMap(event.Data)
+				continue
+			case protocol.EventRunFinished:
+				t.cursorRunFinished = append(t.cursorRunFinished, protocol.Event{Type: event.Type, Data: copyMap(event.Data)})
 				continue
 			}
 		}
@@ -727,6 +794,138 @@ func (t *TranscriptTee) emitCanonicalOpenCodeUsage() {
 	t.eventHandler(protocol.Event{Type: "turn_usage", Data: data})
 }
 
+// FinalizeCursorStream consumes a complete final Cursor JSON record even when
+// it has no trailing newline, flushes the aggregated assistant message, emits
+// the single canonical turn_usage, then forwards the buffered terminal
+// run_finished events so usage is always emitted before the terminal. It is a
+// no-op for non-cursor families and idempotent within one invocation.
+func (t *TranscriptTee) FinalizeCursorStream() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.clientFamily != "cursor" || t.cursorFinalized {
+		return
+	}
+	if len(bytes.TrimSpace(t.buf)) > 0 {
+		line := t.buf
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		t.processLine(line)
+	}
+	t.buf = nil
+	t.cursorFinalized = true
+	t.flushCursorMessage()
+	t.emitCanonicalCursorUsage()
+	for _, event := range t.cursorRunFinished {
+		if t.eventHandler != nil {
+			t.eventHandler(event)
+		}
+	}
+	t.cursorRunFinished = nil
+}
+
+// observeCursorStream records Cursor structural validity on every native line
+// so finalization can distinguish a trustworthy complete-success stream from
+// a malformed, truncated, or duplicate-terminal one.
+func (t *TranscriptTee) observeCursorStream(line []byte, events []protocol.Event) {
+	t.cursorTrack.observe(line)
+}
+
+// observe records one native Cursor stream-json record. A malformed or
+// duplicate-terminal stream is flagged so it can never be trusted.
+func (s *cursorStreamTracker) observe(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return
+	}
+	s.records++
+
+	var event map[string]any
+	if err := json.Unmarshal(line, &event); err != nil || event == nil {
+		s.malformed = true
+		return
+	}
+	typ, ok := getString(event, "type")
+	if !ok || strings.TrimSpace(typ) == "" {
+		s.malformed = true
+		return
+	}
+	_, trust, terminal := cursorTerminalOutcome(typ, event)
+	if !terminal {
+		return
+	}
+	s.terminals++
+	s.terminalTrust = trust
+	s.terminalPosition = s.records
+}
+
+// result returns the finalized validity. A stream is trustworthy only when it
+// contains at least one record, is not malformed, and has exactly one terminal
+// record that is also the final record.
+func (s cursorStreamTracker) result() CursorStreamValidity {
+	trust := CursorTrustInvalidOrIncomplete
+	if s.records > 0 && !s.malformed && s.terminals == 1 && s.terminalPosition == s.records {
+		trust = s.terminalTrust
+	}
+	return CursorStreamValidity{Checked: true, Trust: trust}
+}
+
+// emitCanonicalCursorUsage emits the single turn_usage record for a finalized
+// Cursor stream. When the stream is a structurally valid complete success the
+// buffered native usage claims the full agent_turn_v1 contract with a positive
+// whole-millisecond measured wall interval (or an explicit valid positive
+// native duration). Every other case (invalid/absent usage, malformed or
+// duplicate/truncated stream, failure) emits the best available usage with no
+// trust field and duration_ms normalized to a nonnegative value.
+func (t *TranscriptTee) emitCanonicalCursorUsage() {
+	if t.cursorUsage == nil || t.eventHandler == nil {
+		return
+	}
+	data := copyMap(t.cursorUsage)
+	_, _, completeTokens := completeUsageTokens(data)
+	validity := t.cursorTrack.result()
+	if validity.IsValid() {
+		if duration, ok := positiveIntDuration(data["duration_ms"]); ok {
+			data["duration_ms"] = duration
+			if completeTokens {
+				applyTrustedAgentTurnContract(data)
+			} else {
+				clearTrustedAgentTurnContract(data)
+			}
+		} else {
+			delete(data, "duration_ms")
+			if !t.cursorTurnStarted.IsZero() {
+				if elapsed := int(t.now().Sub(t.cursorTurnStarted).Milliseconds()); elapsed > 0 {
+					data["duration_ms"] = elapsed
+					if completeTokens {
+						applyTrustedAgentTurnContract(data)
+					} else {
+						clearTrustedAgentTurnContract(data)
+					}
+				}
+			}
+		}
+	} else {
+		clearTrustedAgentTurnContract(data)
+	}
+	ensureDurationMs(data)
+	t.eventHandler(protocol.Event{Type: "turn_usage", Data: data})
+}
+
+func (t *TranscriptTee) flushCursorMessage() {
+	if t.cursorMessage.Len() == 0 {
+		return
+	}
+	text := t.cursorMessage.String()
+	t.cursorMessage.Reset()
+	if t.eventHandler != nil {
+		t.eventHandler(protocol.Event{
+			Type: "message",
+			Data: map[string]any{"role": "assistant", "text": text},
+		})
+	}
+}
+
 // observeCodexTurn tracks the native Codex turn.started boundary and, on the
 // matching turn.completed, attaches a trusted measured agent-turn duration to
 // the normalized turn_usage event when Codex omits a valid positive
@@ -854,6 +1053,8 @@ func normalizeTranscriptLine(clientFamily string, line []byte) []protocol.Event 
 		return codebuddyNormalizer(line)
 	case "grok":
 		return grokNormalizer(line)
+	case "cursor":
+		return cursorNormalizer(line)
 	case "dsh":
 		return dshNormalizer(line)
 	default:
@@ -1089,6 +1290,349 @@ func grokErrorValue(event map[string]any) any {
 		}
 	}
 	return "Grok runtime failed"
+}
+
+// cursorNormalizer processes one Cursor agent stream-json record. Assistant
+// text aggregates into a single message at the response boundary, tool records
+// pair by call_id, the native usage record maps its four token partitions, and
+// a single terminal run_finished event closes the stream.
+func cursorNormalizer(line []byte) []protocol.Event {
+	var event map[string]any
+	if err := json.Unmarshal(line, &event); err != nil {
+		return nil
+	}
+	return cursorNormalizerMap(event)
+}
+
+func cursorNormalizerMap(event map[string]any) []protocol.Event {
+	typ, _ := getString(event, "type")
+	typ = strings.ToLower(strings.TrimSpace(typ))
+	var out []protocol.Event
+
+	switch typ {
+	case "assistant":
+		// Assistant text lives in message.content text blocks.
+		if text := cursorAssistantText(event); text != "" {
+			out = append(out, protocol.Event{Type: "message", Data: map[string]any{"role": "assistant", "text": text}})
+		}
+	case "tool_call":
+		// Tool lifecycle is carried by the subtype field on the same record.
+		subtype, _ := getString(event, "subtype")
+		switch strings.ToLower(strings.TrimSpace(subtype)) {
+		case "started":
+			if call := cursorToolStarted(event); call != nil {
+				out = append(out, *call)
+			}
+		case "completed":
+			if result := cursorToolCompleted(event); result != nil {
+				out = append(out, *result)
+			}
+		}
+	case "result", "run_finished":
+		status, _, terminal := cursorTerminalOutcome(typ, event)
+		if !terminal {
+			return out
+		}
+		data := map[string]any{"status": status}
+		if status == "failed" {
+			data["error"] = cursorErrorValue(event)
+		}
+		if sessionID := cursorSessionID(event); sessionID != "" {
+			data["native_session_id"] = sessionID
+		}
+		// Exactly one native usage record lives on the terminal result.
+		if usage := cursorUsage(event); len(usage) > 0 {
+			out = append(out, protocol.Event{Type: "turn_usage", Data: usage})
+		}
+		out = append(out, protocol.Event{Type: protocol.EventRunFinished, Data: data})
+	case "error", "failed":
+		status, _, terminal := cursorTerminalOutcome(typ, event)
+		if !terminal {
+			return out
+		}
+		data := map[string]any{"status": status}
+		data["error"] = cursorErrorValue(event)
+		if sessionID := cursorSessionID(event); sessionID != "" {
+			data["native_session_id"] = sessionID
+		}
+		out = append(out, protocol.Event{Type: protocol.EventRunFinished, Data: data})
+	}
+	return out
+}
+
+// cursorTerminalOutcome classifies a Cursor terminal record against the live
+// wire shape: a native failure signals through subtype=error or is_error=true;
+// a successful terminal result carries subtype=success with is_error=false.
+// A result with no recognized success/failure signal leaves the stream
+// non-terminal so structural validation can reject it.
+func cursorTerminalOutcome(typ string, event map[string]any) (string, CursorAttemptTrust, bool) {
+	if isError, ok := getBool(event, "is_error"); ok && isError {
+		return "failed", CursorTrustCompleteNativeFailure, true
+	}
+	subtype, _ := getString(event, "subtype")
+	switch strings.ToLower(strings.TrimSpace(subtype)) {
+	case "success", "done", "ok", "complete", "completed":
+		return "done", CursorTrustCompleteSuccess, true
+	case "error", "failed", "failure", "cancelled", "canceled":
+		return "failed", CursorTrustCompleteNativeFailure, true
+	}
+	// Legacy flattened status field fallback for forward compatibility.
+	if status, _ := getString(event, "status"); strings.TrimSpace(status) != "" {
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "done", "success", "complete", "completed":
+			return "done", CursorTrustCompleteSuccess, true
+		case "error", "failed", "failure", "cancelled", "canceled":
+			return "failed", CursorTrustCompleteNativeFailure, true
+		}
+		return "", CursorTrustInvalidOrIncomplete, false
+	}
+	switch typ {
+	case "error", "failed":
+		return "failed", CursorTrustCompleteNativeFailure, true
+	case "result", "run_finished":
+		// A terminal record with no recognized success/failure signal is
+		// malformed and must never be treated as a clean terminal.
+		return "", CursorTrustInvalidOrIncomplete, false
+	}
+	return "", CursorTrustInvalidOrIncomplete, false
+}
+
+// cursorAssistantText aggregates the text blocks from a Cursor assistant
+// record's nested message.content array. Each block is {"type":"text","text":
+// "..."}; whitespace inside a block is content and is preserved verbatim.
+func cursorAssistantText(event map[string]any) string {
+	msg, ok := event["message"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	content, ok := msg["content"].([]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	for _, block := range content {
+		blockMap, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		blockType, _ := getString(blockMap, "type")
+		if !strings.EqualFold(strings.TrimSpace(blockType), "text") {
+			continue
+		}
+		if text, ok := getString(blockMap, "text"); ok {
+			sb.WriteString(text)
+		}
+	}
+	return sb.String()
+}
+
+// cursorToolStarted normalizes a tool_call record with subtype=started into a
+// tool_call event keyed by the top-level call_id, with a stable snake-case
+// tool name and a bounded input summary derived from the single nested
+// *ToolCall object.
+func cursorToolStarted(event map[string]any) *protocol.Event {
+	callID, _ := getString(event, "call_id")
+	if strings.TrimSpace(callID) == "" {
+		return nil
+	}
+	name, obj, ok := cursorToolCallObject(event)
+	if !ok {
+		return nil
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "cursor_tool"
+	}
+	return &protocol.Event{
+		Type: "tool_call",
+		Data: map[string]any{
+			"name":          name,
+			"input_summary": truncateHead(jsonStringValue(obj["args"]), inputSummaryMaxBytes),
+			"call_id":       callID,
+		},
+	}
+}
+
+// cursorToolCompleted normalizes a tool_call record with subtype=completed
+// into a tool_result event keyed by the same top-level call_id, reading the
+// result safely from the nested *ToolCall object with a bounded output tail.
+func cursorToolCompleted(event map[string]any) *protocol.Event {
+	callID, _ := getString(event, "call_id")
+	if strings.TrimSpace(callID) == "" {
+		return nil
+	}
+	status, output := cursorToolOutcome(event)
+	return &protocol.Event{
+		Type: "tool_result",
+		Data: map[string]any{
+			"call_id":     callID,
+			"status":      status,
+			"output_tail": truncateTail(output, outputTailMaxBytes),
+		},
+	}
+}
+
+// cursorToolCallObject returns the single nested *ToolCall object carried by a
+// Cursor tool_call record (for example shellToolCall) along with a stable
+// snake-case tool name derived from its key. If the tool_call container holds
+// anything other than exactly one *ToolCall object, it is not the canonical
+// wire shape and fails closed.
+func cursorToolCallObject(event map[string]any) (string, map[string]any, bool) {
+	toolCall, ok := event["tool_call"].(map[string]any)
+	if !ok {
+		return "", nil, false
+	}
+	var name string
+	var obj map[string]any
+	for key, value := range toolCall {
+		inner, isMap := value.(map[string]any)
+		if !isMap {
+			continue
+		}
+		if obj != nil {
+			// More than one *ToolCall object: reject the record.
+			return "", nil, false
+		}
+		obj = inner
+		name = key
+	}
+	if obj == nil {
+		return "", nil, false
+	}
+	return cursorSnakeToolName(name), obj, true
+}
+
+// cursorSnakeToolName converts a camelCase/PascalCase *ToolCall key such as
+// shellToolCall into a stable snake_case tool name such as shell_tool_call.
+func cursorSnakeToolName(key string) string {
+	var sb strings.Builder
+	for i, r := range key {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				sb.WriteByte('_')
+			}
+			sb.WriteRune(r + ('a' - 'A'))
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// cursorToolOutcome reads the completed result from the single nested
+// *ToolCall object. A native failure uses an error result shape; a successful
+// shell tool carries result.success.{stdout,stderr,exitCode}.
+func cursorToolOutcome(event map[string]any) (status, output string) {
+	_, obj, ok := cursorToolCallObject(event)
+	if !ok {
+		return "error", ""
+	}
+	result, ok := obj["result"].(map[string]any)
+	if !ok {
+		return "error", jsonStringValue(obj)
+	}
+	if errObj, ok := result["error"].(map[string]any); ok {
+		return "error", jsonStringValue(errObj)
+	}
+	if errText := jsonStringValue(result["error"]); errText != "" {
+		return "error", errText
+	}
+	success, ok := result["success"].(map[string]any)
+	if !ok {
+		return "ok", jsonStringValue(result)
+	}
+	stdout, _ := getString(success, "stdout")
+	stderr, _ := getString(success, "stderr")
+	switch {
+	case stdout != "" && stderr != "":
+		return "ok", stdout + "\n" + stderr
+	case stdout != "":
+		return "ok", stdout
+	default:
+		return "ok", stderr
+	}
+}
+
+// cursorUsage maps the four native Cursor token partitions onto the common
+// token accounting surface: input/output, cache_read_input, cache_creation
+// input, cached input, and the additive total. cached_input_tokens is the full
+// cached input (cache_read plus cache_creation, summed overflow-safe so a
+// hostile transcript can never wrap the combined cache), while
+// cache_read_input_tokens and cache_creation_input_tokens remain the separate
+// partitions and total_tokens is the additive sum of all four. A record
+// missing any partition or carrying a negative/fractional value is incomplete
+// and yields nil so the invocation fails closed.
+func cursorUsage(event map[string]any) map[string]any {
+	raw, ok := event["usage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	input, inOK := nonnegativeInt(raw["inputTokens"])
+	output, outOK := nonnegativeInt(raw["outputTokens"])
+	cacheRead, crOK := nonnegativeInt(raw["cacheReadTokens"])
+	cacheWrite, cwOK := nonnegativeInt(raw["cacheWriteTokens"])
+	if !inOK || !outOK || !crOK || !cwOK {
+		return nil
+	}
+	// Full cached input is cacheReadTokens + cacheWriteTokens, counted once.
+	cached, cOK := addUsageTokens(cacheRead, cacheWrite)
+	if !cOK {
+		return nil
+	}
+	total, tOK := addUsageTokens(input, output)
+	if !tOK {
+		return nil
+	}
+	total, tOK = addUsageTokens(total, cacheRead)
+	if !tOK {
+		return nil
+	}
+	total, tOK = addUsageTokens(total, cacheWrite)
+	if !tOK {
+		return nil
+	}
+	out := map[string]any{
+		"input_tokens":                input,
+		"output_tokens":               output,
+		"cache_read_input_tokens":     cacheRead,
+		"cache_creation_input_tokens": cacheWrite,
+		"cached_input_tokens":         cached,
+		"total_tokens":                total,
+	}
+	if d, ok := positiveIntDuration(event["duration_ms"]); ok {
+		out["duration_ms"] = d
+	} else {
+		out["duration_ms"] = 0
+	}
+	return out
+}
+
+func cursorSessionID(event map[string]any) string {
+	for _, key := range []string{"session_id", "sessionId", "native_session_id", "conversation_id"} {
+		if id, ok := getString(event, key); ok {
+			return strings.TrimSpace(id)
+		}
+	}
+	for _, container := range []string{"result", "session", "metadata"} {
+		if nested, ok := event[container].(map[string]any); ok {
+			for _, key := range []string{"session_id", "id", "conversation_id"} {
+				if id, ok := getString(nested, key); ok {
+					return strings.TrimSpace(id)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func cursorErrorValue(event map[string]any) any {
+	for _, key := range []string{"error", "message", "detail"} {
+		if value, ok := event[key]; ok {
+			if normalized := normalizedErrorValue(value); normalized != nil && normalized != "" {
+				return normalized
+			}
+		}
+	}
+	return "Cursor runtime failed"
 }
 
 // codebuddyResetRe matches the anchored Chinese rate-limit reset template

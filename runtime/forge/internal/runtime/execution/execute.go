@@ -85,7 +85,7 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 	}
 
 	clientFamily := clientFamily(def)
-	if clientFamily != "claude" && clientFamily != "codex" && clientFamily != "opencode" && clientFamily != "grok" && clientFamily != "dsh" {
+	if clientFamily != "claude" && clientFamily != "codex" && clientFamily != "opencode" && clientFamily != "grok" && clientFamily != "dsh" && clientFamily != "cursor" {
 		return driver.CommandPlan{}, "", fmt.Errorf("profile %q does not support direct runtime dispatch", profileName)
 	}
 
@@ -135,6 +135,8 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 		dialect = catalog.DialectGrok
 	case "dsh":
 		dialect = catalog.DialectDSH
+	case "cursor":
+		dialect = catalog.DialectCursor
 	}
 	clientDesc := resolvedProfile.Client
 	clientDesc.Dialect = dialect
@@ -189,7 +191,7 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 // family so unknown or legacy clients keep the shared family normalization.
 func transcriptFamilyForClient(def ProfileDefinition) string {
 	switch def.Client {
-	case "codebuddy", "claude", "codex", "opencode", "grok", "dsh":
+	case "codebuddy", "claude", "codex", "opencode", "grok", "dsh", "cursor":
 		return def.Client
 	default:
 		return clientFamily(def)

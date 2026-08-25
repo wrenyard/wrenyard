@@ -42,9 +42,18 @@ type CredentialCallbacks struct {
 // other providers target ANTHROPIC_AUTH_TOKEN to preserve current behavior.
 const kimiCoding = "kimi-coding"
 
+// cursorProvider is the provider whose credential targets CURSOR_AUTH_TOKEN,
+// the native Cursor child-process auth env. Its token is never shared with
+// any other credential target.
+const cursorProvider = "cursor"
+
 // CredentialTargetEnv returns the env var that receives the credential for the
-// given provider, preserving the current kimi-coding vs non-kimi distinction.
+// given provider, preserving the current kimi-coding vs non-kimi distinction
+// and routing Cursor's Desktop token only through CURSOR_AUTH_TOKEN.
 func CredentialTargetEnv(provider string) string {
+	if provider == cursorProvider {
+		return "CURSOR_AUTH_TOKEN"
+	}
 	if provider == kimiCoding {
 		return "ANTHROPIC_API_KEY"
 	}

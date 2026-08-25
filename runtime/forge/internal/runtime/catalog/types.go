@@ -11,6 +11,7 @@ const (
 	CredentialResolverCodex        = schema.CredentialResolverCodex
 	CredentialResolverClaude       = schema.CredentialResolverClaude
 	CredentialResolverGrokOAuth    = schema.CredentialResolverGrokOAuth
+	CredentialResolverCursor       = schema.CredentialResolverCursor
 )
 
 type ModelDef = schema.ModelDef

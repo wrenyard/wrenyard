@@ -225,6 +225,8 @@ func BuildPlan(req PlanRequest) (CommandPlan, error) {
 		return buildGrokPlan(req)
 	case catalog.DialectDSH:
 		return buildDSHPlan(req)
+	case catalog.DialectCursor:
+		return buildCursorPlan(req)
 	default:
 		return CommandPlan{}, catalogDialectError(spec)
 	}
@@ -250,6 +252,8 @@ func ParserForDialect(dialect catalog.Dialect) Parser {
 		return &GrokAdapter{}
 	case catalog.DialectDSH:
 		return &DSHAdapter{}
+	case catalog.DialectCursor:
+		return &CursorAdapter{}
 	default:
 		return nil
 	}

@@ -7,6 +7,32 @@ func registerClients(r *Registry) {
 	r.RegisterDescriptor(opencodeClient())
 	r.RegisterDescriptor(grokClient())
 	r.RegisterDescriptor(dshClient())
+	r.RegisterDescriptor(cursorClient())
+}
+
+// cursorClient registers the cursor-agent binary as the sole Cursor client.
+// The generic "cursor-agent" executable is canonical on this host; the generic
+// "agent" command belongs to Grok and must never be used for Cursor.
+func cursorClient() Client {
+	return Client{
+		Name:    "cursor",
+		Dialect: DialectCursor,
+		Binary: BinarySpec{
+			Name: "cursor-agent",
+		},
+		ConfigIsolation:   ConfigIsolation{},
+		PermissionAdapter: PermissionAdapterCursor,
+		DialectFlags: DialectFlags{
+			SupportsVerbose:             false,
+			SupportsBare:                false,
+			SupportsReplayUserMessages:  false,
+			SupportsDevelopmentChannels: false,
+		},
+		TranscriptFamily: TranscriptFamilyCursor,
+		Hygiene:          nil,
+		ResumeFlag:       ResumeFlagLong,
+		DefaultProvider:  "cursor",
+	}
 }
 
 func dshClient() Client {
