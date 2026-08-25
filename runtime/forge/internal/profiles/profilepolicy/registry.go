@@ -21,9 +21,9 @@ var builtinPolicies = map[string]ProfilePolicy{
 	"general": {
 		Name: "general",
 		Candidates: []Candidate{
+			{ProfileID: "cur-grok"},
 			{ProfileID: "cb-ds"},
 			{ProfileID: "gk-glm"},
-			{ProfileID: "codex-luna"},
 		},
 	},
 	"ultra": {

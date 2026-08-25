@@ -43,7 +43,7 @@ func TestRegistryProfilePolicyCollision(t *testing.T) {
 	r := NewRegistry()
 	// Policy ids must not collide with profile ids. Check that
 	// IsReservedPolicy returns false for profile-only ids.
-	for _, id := range []string{"cb-hy", "cb-ds", "cb-dsf", "cc-kimi", "cc-glm", "codex-sol", "codex-terra", "codex-luna", "codex-spark"} {
+	for _, id := range []string{"cb-hy", "cb-ds", "cb-dsf", "cc-kimi", "cc-glm", "codex-sol", "codex-terra", "codex-luna", "codex-spark", "cur-grok"} {
 		if r.IsReservedPolicy(id) {
 			t.Fatalf("profile id %q should not be reserved as a policy name", id)
 		}
@@ -56,7 +56,7 @@ func TestPolicyCandidateMembership(t *testing.T) {
 		want []string
 	}{
 		{name: "fast", want: []string{"cb-dsf", "codex-spark"}},
-		{name: "general", want: []string{"cb-ds", "gk-glm", "codex-luna"}},
+		{name: "general", want: []string{"cur-grok", "cb-ds", "gk-glm"}},
 		{name: "ultra", want: []string{"codex-sol", "gk-kimi"}},
 	}
 	r := NewRegistry()
@@ -173,6 +173,8 @@ func testCanonicalPool(profileID string) string {
 		return "codex-spark"
 	case "gk-glm", "gk-kimi":
 		return "gk"
+	case "cur-grok":
+		return "cursor"
 	default:
 		return ""
 	}
@@ -204,7 +206,7 @@ func TestResolverCanonicalPoolDeduplicatedSuggestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// cb-ds has pool-a pool, gk-glm has gk pool, codex-luna has codex pool.
+	// cur-grok has cursor pool, cb-ds has pool-a, gk-glm has gk pool.
 	// If all fail, one suggestion per pool should appear in candidate order.
 	deps := Dependencies{
 		IsProfileEffective:      func(id string) bool { return false },
@@ -219,13 +221,13 @@ func TestResolverCanonicalPoolDeduplicatedSuggestions(t *testing.T) {
 	if len(res.Suggestions) < 3 {
 		t.Fatalf("expected at least 3 deduplicated suggestions, got %v", res.Suggestions)
 	}
-	if res.Suggestions[0] != "cb-ds" {
-		t.Fatalf("first suggestion should be cb-ds (first pool-a pool), got %q", res.Suggestions[0])
+	if res.Suggestions[0] != "cur-grok" {
+		t.Fatalf("first suggestion should be cur-grok (cursor pool), got %q", res.Suggestions[0])
 	}
-	if res.Suggestions[1] != "gk-glm" {
-		t.Fatalf("second suggestion should be gk-glm (first gk pool), got %q", res.Suggestions[1])
+	if res.Suggestions[1] != "cb-ds" {
+		t.Fatalf("second suggestion should be cb-ds (pool-a), got %q", res.Suggestions[1])
 	}
-	if res.Suggestions[2] != "codex-luna" {
-		t.Fatalf("third suggestion should be codex-luna (first codex pool), got %q", res.Suggestions[2])
+	if res.Suggestions[2] != "gk-glm" {
+		t.Fatalf("third suggestion should be gk-glm (gk pool), got %q", res.Suggestions[2])
 	}
 }
