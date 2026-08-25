@@ -499,9 +499,10 @@ function compareHouseCapture(capturedPng, refPng, fixtureId, diagnostics) {
     if (cursorMatches.length < 1) {
       throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} expected cursor at least once, got ${cursorMatches.length}`, fixtureId);
     }
-    // DeepSeek monetary balance row must render currency and amount
-    if (!allText.includes('deepseek CNY ¥12.50')) {
-      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} stats lines missing deepseek CNY balance row`, fixtureId);
+    // DeepSeek monetary balance row uses the lower-level `bal.` label and
+    // display amount; currency codes are intentionally omitted from the view.
+    if (!allText.includes('deepseek bal. ¥12.50')) {
+      throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} stats lines missing deepseek bal. row`, fixtureId);
     }
     if (!/super-grok/.test(allText)) {
       throw new PreviewFailure('reference-mismatch', `fixture ${fixtureId} stats lines missing super-grok provider`, fixtureId);
