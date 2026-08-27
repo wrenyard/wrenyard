@@ -35,7 +35,7 @@ func TestInjectedProviderCatalogExact(t *testing.T) {
 		baseURL string
 		models  []string
 	}{
-		"llm-pi-ai.zhipu-coding": {"https://open.bigmodel.cn/api/coding/paas/v4", []string{"glm-5.3"}},
+		"llm-pi-ai.zhipu-coding": {"https://open.bigmodel.cn/api/coding/paas/v4", []string{"glm-5.3", "glm-5.3-flash"}},
 		"llm-pi-ai.kimi-coding":  {"https://api.kimi.com/coding/v1", []string{"k3", "k3[1m]"}},
 	}
 	for id, w := range want {
@@ -91,7 +91,7 @@ func TestProviderRouteConfigFields(t *testing.T) {
 			t.Fatalf("route config missing %q:\n%s", want, raw)
 		}
 	}
-	for _, model := range []string{"glm-5.3", "k3[1m]"} {
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash", "k3[1m]"} {
 		if !strings.Contains(raw, "- id: "+yamlStr(model)) {
 			t.Fatalf("route models missing %q:\n%s", model, raw)
 		}
@@ -345,6 +345,14 @@ func TestSelectedDefaultModel(t *testing.T) {
 	if !strings.Contains(raw, "- id: agent-default-model\n  config:\n    provider: llm-pi-ai.zhipu-coding\n    model: glm-5.3") {
 		t.Fatalf("explicit selection must render the agent-default-model row:\n%s", raw)
 	}
+	selFlash, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.zhipu-coding/glm-5.3-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawFlash := string(selFlash)
+	if !strings.Contains(rawFlash, "- id: agent-default-model\n  config:\n    provider: llm-pi-ai.zhipu-coding\n    model: glm-5.3-flash") {
+		t.Fatalf("explicit flash selection must render the agent-default-model row:\n%s", rawFlash)
+	}
 	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.zhipu-coding/does-not-exist"}); err == nil {
 		t.Fatal("unknown selected model must fail loudly")
 	}
@@ -371,6 +379,9 @@ func TestSelectedModelEveryProvider(t *testing.T) {
 	}
 	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.zhipu-coding/glm-5.3"}); err != nil {
 		t.Fatalf("zhipu-coding/glm-5.3 must be selectable: %v", err)
+	}
+	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.zhipu-coding/glm-5.3-flash"}); err != nil {
+		t.Fatalf("zhipu-coding/glm-5.3-flash must be selectable: %v", err)
 	}
 	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.kimi-coding/k3[1m]"}); err != nil {
 		t.Fatalf("kimi-coding/k3[1m] must be selectable: %v", err)

@@ -1153,6 +1153,13 @@ func TestProviderModelMap(t *testing.T) {
 	if canonical != "glm-5.3" {
 		t.Fatalf("zhipu-coding glm-5.3 canonical = %q, want glm-5.3", canonical)
 	}
+	canonicalFlash, ok := r.LookupProviderModel("zhipu-coding", "glm-5.3-flash")
+	if !ok {
+		t.Fatal("zhipu-coding should own glm-5.3-flash")
+	}
+	if canonicalFlash != "glm-5.3-flash" {
+		t.Fatalf("zhipu-coding glm-5.3-flash canonical = %q, want glm-5.3-flash", canonicalFlash)
+	}
 	if _, ok := r.LookupProviderModel("zhipu-coding", "glm-5.2"); ok {
 		t.Fatal("zhipu-coding should no longer own retired glm-5.2")
 	}

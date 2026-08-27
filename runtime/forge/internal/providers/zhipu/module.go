@@ -19,7 +19,8 @@ func Module() schema.ProviderModule {
 			},
 		},
 		ModelSet: schema.ProviderModels{
-			"glm-5.3": {ID: "glm-5.3", DisplayName: "GLM-5.3", ContextWindow: 1048576},
+			"glm-5.3":       {ID: "glm-5.3", DisplayName: "GLM-5.3", ContextWindow: 1048576},
+			"glm-5.3-flash": {ID: "glm-5.3-flash", DisplayName: "GLM-5.3 Flash", ContextWindow: 1048576},
 		},
 		AuthInfo:  schema.AuthMetadata{Login: true},
 		QuotaInfo: schema.QuotaMetadata{Kind: "bigmodel", Name: "zhipu-coding"},
