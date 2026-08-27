@@ -199,6 +199,23 @@ func TestCCGLMProfileIsInEmbeddedSet(t *testing.T) {
 	}
 }
 
+func TestCCGLMFlashProfileIsInEmbeddedSet(t *testing.T) {
+	manifest := *manifest.BuiltinManifest()
+	p, ok := manifest.Profiles["cc-glm-flash"]
+	if !ok {
+		t.Fatal("cc-glm-flash should be in embedded profiles")
+	}
+	if p.Client != "claude" || p.Provider != "zhipu-coding" {
+		t.Fatalf("cc-glm-flash client/provider = %s/%s, want claude/zhipu-coding", p.Client, p.Provider)
+	}
+	if p.Env["ANTHROPIC_BASE_URL"] != "https://open.bigmodel.cn/api/anthropic" {
+		t.Fatalf("cc-glm-flash ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", p.Env["ANTHROPIC_BASE_URL"])
+	}
+	if p.Env["ANTHROPIC_MODEL"] != "glm-5.3-flash" || p.Env["CLAUDE_CODE_SUBAGENT_MODEL"] != "glm-5.3-flash" {
+		t.Fatalf("cc-glm-flash model env not configured for GLM-5.3 Flash: %#v", p.Env)
+	}
+}
+
 // TestClaudeProfilesRouteContract guards the route contract for the Claude Code
 // (claude) profiles: the ANTHROPIC_BASE_URL the Claude client consumes must be
 // the API base (Claude Code appends /v1/messages), while provider inference and
@@ -213,6 +230,9 @@ func TestClaudeProfilesRouteContract(t *testing.T) {
 	}
 	if got := m.Profiles["cc-glm"].Env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
 		t.Fatalf("cc-glm ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", got)
+	}
+	if got := m.Profiles["cc-glm-flash"].Env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
+		t.Fatalf("cc-glm-flash ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", got)
 	}
 
 	// Provider inference bindings must carry the complete Anthropic endpoint

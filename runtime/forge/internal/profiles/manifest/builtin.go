@@ -153,6 +153,22 @@ var builtinProfiles = []Profile{
 		Settings: map[string]any{},
 	},
 	{
+		Name:        "cc-glm-flash",
+		Client:      "claude",
+		Provider:    "zhipu-coding",
+		Description: "Claude Code (GLM 5.3 Flash)",
+		Launcher: map[string]any{
+			"command": "claude",
+		},
+		Env: map[string]string{
+			"ANTHROPIC_BASE_URL":         "https://open.bigmodel.cn/api/anthropic",
+			"ANTHROPIC_API_KEY":          "",
+			"ANTHROPIC_MODEL":            "glm-5.3-flash",
+			"CLAUDE_CODE_SUBAGENT_MODEL": "glm-5.3-flash",
+		},
+		Settings: map[string]any{},
+	},
+	{
 		Name:        "gk-glm",
 		Client:      "grok",
 		Provider:    "zhipu-coding",
@@ -162,6 +178,19 @@ var builtinProfiles = []Profile{
 		},
 		Env: map[string]string{
 			"GROK_MODEL": "forge-zhipu-coding--glm-5-3",
+		},
+		Settings: map[string]any{},
+	},
+	{
+		Name:        "gk-glm-flash",
+		Client:      "grok",
+		Provider:    "zhipu-coding",
+		Description: "Grok (GLM 5.3 Flash)",
+		Launcher: map[string]any{
+			"command": "grok",
+		},
+		Env: map[string]string{
+			"GROK_MODEL": "forge-zhipu-coding--glm-5-3-flash",
 		},
 		Settings: map[string]any{},
 	},
