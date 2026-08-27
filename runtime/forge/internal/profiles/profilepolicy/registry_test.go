@@ -43,7 +43,7 @@ func TestRegistryProfilePolicyCollision(t *testing.T) {
 	r := NewRegistry()
 	// Policy ids must not collide with profile ids. Check that
 	// IsReservedPolicy returns false for profile-only ids.
-	for _, id := range []string{"cb-hy", "cb-ds", "cb-dsf", "cc-kimi", "cc-glm", "cc-glm-flash", "gk-glm-flash", "codex-sol", "codex-terra", "codex-luna", "codex-spark", "cur-grok"} {
+	for _, id := range []string{"cb-hy", "cb-ds", "cb-dsf", "cc-kimi", "cc-glm", "cc-glmf", "gk-glmf", "codex-sol", "codex-terra", "codex-luna", "codex-spark", "cur-grok"} {
 		if r.IsReservedPolicy(id) {
 			t.Fatalf("profile id %q should not be reserved as a policy name", id)
 		}
