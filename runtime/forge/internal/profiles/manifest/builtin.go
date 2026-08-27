@@ -153,7 +153,7 @@ var builtinProfiles = []Profile{
 		Settings: map[string]any{},
 	},
 	{
-		Name:        "cc-glm-flash",
+		Name:        "cc-glmf",
 		Client:      "claude",
 		Provider:    "zhipu-coding",
 		Description: "Claude Code (GLM 5.3 Flash)",
@@ -182,7 +182,7 @@ var builtinProfiles = []Profile{
 		Settings: map[string]any{},
 	},
 	{
-		Name:        "gk-glm-flash",
+		Name:        "gk-glmf",
 		Client:      "grok",
 		Provider:    "zhipu-coding",
 		Description: "Grok (GLM 5.3 Flash)",

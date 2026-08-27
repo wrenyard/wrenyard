@@ -19,9 +19,9 @@ func TestBuiltinProfileSet(t *testing.T) {
 		"cb-kimi":      true,
 		"cc-kimi":      true,
 		"cc-glm":       true,
-		"cc-glm-flash": true,
+		"cc-glmf":      true,
 		"gk-glm":       true,
-		"gk-glm-flash": true,
+		"gk-glmf":      true,
 		"gk-kimi":      true,
 		"gk-grok":      true,
 		"cur-composer": true,
@@ -179,22 +179,22 @@ func TestCCGLMProfile(t *testing.T) {
 	}
 }
 
-func TestCCGLMFlashProfile(t *testing.T) {
-	p := Get("cc-glm-flash")
+func TestCCGLMFProfile(t *testing.T) {
+	p := Get("cc-glmf")
 	if p == nil {
-		t.Fatal("Get(cc-glm-flash) returned nil")
+		t.Fatal("Get(cc-glmf) returned nil")
 	}
 	if p.Client != "claude" || p.Provider != "zhipu-coding" {
-		t.Fatalf("cc-glm-flash client/provider = %s/%s, want claude/zhipu-coding", p.Client, p.Provider)
+		t.Fatalf("cc-glmf client/provider = %s/%s, want claude/zhipu-coding", p.Client, p.Provider)
 	}
 	if p.Env["ANTHROPIC_BASE_URL"] != "https://open.bigmodel.cn/api/anthropic" {
-		t.Errorf("cc-glm-flash ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", p.Env["ANTHROPIC_BASE_URL"])
+		t.Errorf("cc-glmf ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", p.Env["ANTHROPIC_BASE_URL"])
 	}
 	if p.Env["ANTHROPIC_MODEL"] != "glm-5.3-flash" {
-		t.Errorf("cc-glm-flash ANTHROPIC_MODEL = %q, want glm-5.3-flash", p.Env["ANTHROPIC_MODEL"])
+		t.Errorf("cc-glmf ANTHROPIC_MODEL = %q, want glm-5.3-flash", p.Env["ANTHROPIC_MODEL"])
 	}
 	if p.Env["CLAUDE_CODE_SUBAGENT_MODEL"] != "glm-5.3-flash" {
-		t.Errorf("cc-glm-flash CLAUDE_CODE_SUBAGENT_MODEL = %q, want glm-5.3-flash", p.Env["CLAUDE_CODE_SUBAGENT_MODEL"])
+		t.Errorf("cc-glmf CLAUDE_CODE_SUBAGENT_MODEL = %q, want glm-5.3-flash", p.Env["CLAUDE_CODE_SUBAGENT_MODEL"])
 	}
 }
 
@@ -203,10 +203,10 @@ func TestBuiltinGrokProfiles(t *testing.T) {
 		provider string
 		model    string
 	}{
-		"gk-glm":       {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3"},
-		"gk-glm-flash": {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3-flash"},
-		"gk-kimi":      {provider: "kimi-coding", model: "forge-kimi-coding--k3"},
-		"gk-grok":      {provider: "xai", model: "grok-4.5"},
+		"gk-glm":  {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3"},
+		"gk-glmf": {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3-flash"},
+		"gk-kimi": {provider: "kimi-coding", model: "forge-kimi-coding--k3"},
+		"gk-grok": {provider: "xai", model: "grok-4.5"},
 	}
 	for id, expected := range want {
 		profile := Get(id)
@@ -296,7 +296,7 @@ func TestRemovedProfilesNotFound(t *testing.T) {
 }
 
 func TestActiveProfilesNotDeprecated(t *testing.T) {
-	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "cc-glm-flash", "gk-glm", "gk-glm-flash", "gk-kimi", "gk-grok", "cur-composer", "cur-grok"} {
+	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok"} {
 		p := Get(id)
 		if p == nil {
 			t.Fatalf("Get(%q) returned nil", id)
