@@ -13,13 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/execution"
 	profilepkg "github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
-	"github.com/pelletier/go-toml/v2"
 )
 
 func isolateGrokRuntimeTest(t *testing.T) (home, dataHome string) {
@@ -69,7 +69,7 @@ func TestPrepareGrokRuntimeUsesProjectionSSOTWithoutTouchingShellHome(t *testing
 		t.Fatalf("prepared files = %+v", prep.Files)
 	}
 	config := string(prep.Files[0].Data)
-	for _, model := range []string{"forge-zhipu-coding--glm-5-3", "forge-kimi-coding--k3"} {
+	for _, model := range []string{"forge-zhipu-coding--glm-5-3", "forge-zhipu-coding--glm-5-3-flash", "forge-kimi-coding--k3"} {
 		if !strings.Contains(config, model) {
 			t.Fatalf("full eligible projection config missing %q:\n%s", model, config)
 		}
@@ -146,7 +146,7 @@ func TestGrokSelectedSecretRefCredentialIncludesProviderWithoutGlobalAuth(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "forge-zhipu-coding--glm-5-3") || !strings.Contains(string(config), "forge-kimi-coding--k3") {
+	if !strings.Contains(string(config), "forge-zhipu-coding--glm-5-3") || !strings.Contains(string(config), "forge-zhipu-coding--glm-5-3-flash") || !strings.Contains(string(config), "forge-kimi-coding--k3") {
 		t.Fatalf("selected/other projections missing from complete materialization:\n%s", config)
 	}
 	if bytes.Contains(config, []byte("selected-secret-only")) || bytes.Contains(config, []byte("other-global-kimi")) {
@@ -896,7 +896,7 @@ func TestBuiltBinaryFakeGrokExecutionMatrix(t *testing.T) {
 		if observation.Prompt != "inspect Forge 你好 🛠️" || filepath.Dir(observation.PromptPath) != observation.GrokHome {
 			t.Fatalf("prompt rendering observation = %+v", observation)
 		}
-		for _, model := range []string{"forge-zhipu-coding--glm-5-3", "forge-kimi-coding--k3"} {
+		for _, model := range []string{"forge-zhipu-coding--glm-5-3", "forge-zhipu-coding--glm-5-3-flash", "forge-kimi-coding--k3"} {
 			if !strings.Contains(observation.Config, model) {
 				t.Errorf("projected config missing model %q", model)
 			}

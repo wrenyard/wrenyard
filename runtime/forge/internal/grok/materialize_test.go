@@ -8,14 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
 func testProjections() []Projection {
 	return []Projection{
 		ProjectModel("kimi-coding", "https://api.kimi.com/coding/v1", catalog.ModelDef{ID: "k3", DisplayName: "Kimi K3", ContextWindow: 1048576}),
 		ProjectModel("zhipu-coding", "https://open.bigmodel.cn/api/coding/paas/v4", catalog.ModelDef{ID: "glm-5.3", DisplayName: "GLM-5.3", ContextWindow: 1048576}),
+		ProjectModel("zhipu-coding", "https://open.bigmodel.cn/api/coding/paas/v4", catalog.ModelDef{ID: "glm-5.3-flash", DisplayName: "GLM-5.3 Flash", ContextWindow: 1048576}),
 	}
 }
 
@@ -114,6 +115,17 @@ context_window = 1000
 		t.Fatalf("OPENAI_API_KEY must never be written: %#v", kimi)
 	}
 
+	// Flash zhipu projection upserted with correct fields.
+	flash, ok := modelTable["forge-zhipu-coding--glm-5-3-flash"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("forge-zhipu-coding--glm-5-3-flash missing: %#v", modelTable)
+	}
+	if flash["model"] != "glm-5.3-flash" || flash["base_url"] != "https://open.bigmodel.cn/api/coding/paas/v4" ||
+		flash["env_key"] != "FORGE_GROK_ZHIPU_CODING_API_KEY" || flash["api_backend"] != "chat_completions" ||
+		int(flash["context_window"].(int64)) != 1048576 {
+		t.Fatalf("flash projection incorrect: %#v", flash)
+	}
+
 	// [models].default / web_search must not be written by Forge.
 	if _, ok := models["default"]; !ok {
 		t.Fatalf("Forge must not delete [models].default: %#v", models)
@@ -192,6 +204,9 @@ func TestMaterializePreservesForgeModelsThroughOverlay(t *testing.T) {
 	}
 	if _, ok := modelTable["forge-zhipu-coding--glm-5-3"]; !ok {
 		t.Fatalf("zhipu forge model must survive overlay merge: %#v", modelTable)
+	}
+	if _, ok := modelTable["forge-zhipu-coding--glm-5-3-flash"]; !ok {
+		t.Fatalf("zhipu flash forge model must survive overlay merge: %#v", modelTable)
 	}
 	if _, ok := modelTable["manual"]; !ok {
 		t.Fatalf("overlay manual model must be present: %#v", modelTable)
@@ -295,6 +310,9 @@ func TestMaterializeConcurrentContention(t *testing.T) {
 	}
 	if _, ok := modelTable["forge-zhipu-coding--glm-5-3"]; !ok {
 		t.Fatalf("concurrent materialize must produce forge-zhipu-coding--glm-5-3: %#v", modelTable)
+	}
+	if _, ok := modelTable["forge-zhipu-coding--glm-5-3-flash"]; !ok {
+		t.Fatalf("concurrent materialize must produce forge-zhipu-coding--glm-5-3-flash: %#v", modelTable)
 	}
 }
 

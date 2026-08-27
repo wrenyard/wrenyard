@@ -140,8 +140,9 @@ func TestEligibleProjectionsDefaultRegistry(t *testing.T) {
 	proj, skips := EligibleProjections(catalog.DefaultRegistry(), resolveSet("kimi-coding", "zhipu-coding"))
 
 	wantIDs := map[string]bool{
-		"forge-kimi-coding--k3":       true,
-		"forge-zhipu-coding--glm-5-3": true,
+		"forge-kimi-coding--k3":             true,
+		"forge-zhipu-coding--glm-5-3":       true,
+		"forge-zhipu-coding--glm-5-3-flash": true,
 	}
 	gotIDs := map[string]bool{}
 	for _, p := range proj {
@@ -220,6 +221,9 @@ func TestModelIDAndEnvKey(t *testing.T) {
 		t.Fatalf("ModelID = %q", got)
 	}
 	if got := ModelID("zhipu-coding", "glm-5.3"); got != "forge-zhipu-coding--glm-5-3" {
+		t.Fatalf("ModelID = %q", got)
+	}
+	if got := ModelID("zhipu-coding", "glm-5.3-flash"); got != "forge-zhipu-coding--glm-5-3-flash" {
 		t.Fatalf("ModelID = %q", got)
 	}
 

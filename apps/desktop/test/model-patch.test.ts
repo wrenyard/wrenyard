@@ -38,8 +38,10 @@ test('renderModelPatch matches the public fdsh overlay contract', () => {
   assert.ok(raw.includes('          - id: k3\n'));
   assert.ok(raw.includes('          - id: "k3[1m]"\n'));
   assert.ok(raw.includes('          - id: glm-5.3\n'));
+  assert.ok(raw.includes('          - id: glm-5.3-flash\n'));
   assert.ok(raw.includes('            name: "Kimi K3"\n'));
   assert.ok(raw.includes('            name: GLM-5.3\n'));
+  assert.ok(raw.includes('            name: "GLM-5.3 Flash"\n'));
   assert.ok(raw.includes('            contextWindow: 1048576\n'));
   assert.ok(raw.includes('            maxTokens: 32768\n'));
   assert.equal(raw.includes('deepseek-official'), false);

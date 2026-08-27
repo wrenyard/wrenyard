@@ -52,6 +52,7 @@ export const INJECTED_PROVIDERS: readonly InjectedProvider[] = [
     baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
     models: [
       { id: 'glm-5.3', label: 'GLM-5.3', contextWindow: 1048576, maxTokens: 32768 },
+      { id: 'glm-5.3-flash', label: 'GLM-5.3 Flash', contextWindow: 1048576, maxTokens: 32768 },
     ],
   },
 ];
