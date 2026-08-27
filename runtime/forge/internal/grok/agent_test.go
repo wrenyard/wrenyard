@@ -17,7 +17,7 @@ func TestAgentConfigFullyMaterializesEligibleProjectionsWithoutSecrets(t *testin
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, id := range []string{"forge-kimi-coding--k3", "forge-zhipu-coding--glm-5-3"} {
+	for _, id := range []string{"forge-kimi-coding--k3", "forge-zhipu-coding--glm-5-3", "forge-zhipu-coding--glm-5-3-flash"} {
 		if !strings.Contains(text, id) {
 			t.Fatalf("agent config missing eligible projection %q:\n%s", id, text)
 		}
