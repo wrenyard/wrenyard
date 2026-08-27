@@ -98,6 +98,7 @@ var InjectedProviders = []Provider{
 		BaseURL:   "https://open.bigmodel.cn/api/coding/paas/v4",
 		Models: []Model{
 			{ID: "glm-5.3", Label: "GLM-5.3", ContextWindow: 1048576, MaxTokens: 32768},
+			{ID: "glm-5.3-flash", Label: "GLM-5.3 Flash", ContextWindow: 1048576, MaxTokens: 32768},
 		},
 	},
 }
