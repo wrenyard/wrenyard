@@ -199,20 +199,20 @@ func TestCCGLMProfileIsInEmbeddedSet(t *testing.T) {
 	}
 }
 
-func TestCCGLMFlashProfileIsInEmbeddedSet(t *testing.T) {
+func TestCCGLMFProfileIsInEmbeddedSet(t *testing.T) {
 	manifest := *manifest.BuiltinManifest()
-	p, ok := manifest.Profiles["cc-glm-flash"]
+	p, ok := manifest.Profiles["cc-glmf"]
 	if !ok {
-		t.Fatal("cc-glm-flash should be in embedded profiles")
+		t.Fatal("cc-glmf should be in embedded profiles")
 	}
 	if p.Client != "claude" || p.Provider != "zhipu-coding" {
-		t.Fatalf("cc-glm-flash client/provider = %s/%s, want claude/zhipu-coding", p.Client, p.Provider)
+		t.Fatalf("cc-glmf client/provider = %s/%s, want claude/zhipu-coding", p.Client, p.Provider)
 	}
 	if p.Env["ANTHROPIC_BASE_URL"] != "https://open.bigmodel.cn/api/anthropic" {
-		t.Fatalf("cc-glm-flash ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", p.Env["ANTHROPIC_BASE_URL"])
+		t.Fatalf("cc-glmf ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", p.Env["ANTHROPIC_BASE_URL"])
 	}
 	if p.Env["ANTHROPIC_MODEL"] != "glm-5.3-flash" || p.Env["CLAUDE_CODE_SUBAGENT_MODEL"] != "glm-5.3-flash" {
-		t.Fatalf("cc-glm-flash model env not configured for GLM-5.3 Flash: %#v", p.Env)
+		t.Fatalf("cc-glmf model env not configured for GLM-5.3 Flash: %#v", p.Env)
 	}
 }
 
@@ -231,8 +231,8 @@ func TestClaudeProfilesRouteContract(t *testing.T) {
 	if got := m.Profiles["cc-glm"].Env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
 		t.Fatalf("cc-glm ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", got)
 	}
-	if got := m.Profiles["cc-glm-flash"].Env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
-		t.Fatalf("cc-glm-flash ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", got)
+	if got := m.Profiles["cc-glmf"].Env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
+		t.Fatalf("cc-glmf ANTHROPIC_BASE_URL = %q, want Claude base https://open.bigmodel.cn/api/anthropic", got)
 	}
 
 	// Provider inference bindings must carry the complete Anthropic endpoint
