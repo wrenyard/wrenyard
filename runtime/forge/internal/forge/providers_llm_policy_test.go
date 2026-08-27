@@ -646,7 +646,7 @@ func TestProfilesListIncludesAvailableGrokProfiles(t *testing.T) {
 			t.Fatalf("profiles list profile returned %d", code)
 		}
 	})
-	for _, id := range []string{"gk-glm", "gk-glm-flash", "gk-kimi", "gk-grok"} {
+	for _, id := range []string{"gk-glm", "gk-glmf", "gk-kimi", "gk-grok"} {
 		if !strings.Contains(out, id+" (") {
 			t.Fatalf("available Grok profile %s missing from list:\n%s", id, out)
 		}
