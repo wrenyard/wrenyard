@@ -424,6 +424,25 @@ describe('QuotaService runForgeQuotaJson timeout', () => {
       else process.env.WRENYARD_RUNTIME_BIN = prev;
     }
   });
+
+  it('prefers the Desktop-provided runtime command over inherited environment paths', async () => {
+    const previousRuntimeBin = process.env.WRENYARD_RUNTIME_BIN;
+    process.env.WRENYARD_RUNTIME_BIN = '/tmp/inherited-wrenyard-runtime';
+    try {
+      const service = new QuotaService({ runtimeCommand: '/opt/wrenyard/current/bin/forge' });
+      const promise = service.listProviders(true);
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [cmd, args] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(cmd).toBe('/opt/wrenyard/current/bin/forge');
+      expect(args).toEqual(['quota', '--json']);
+
+      await promise;
+    } finally {
+      if (previousRuntimeBin === undefined) delete process.env.WRENYARD_RUNTIME_BIN;
+      else process.env.WRENYARD_RUNTIME_BIN = previousRuntimeBin;
+    }
+  });
 });
 
 describe('sanitizeQuotaChildEnv', () => {

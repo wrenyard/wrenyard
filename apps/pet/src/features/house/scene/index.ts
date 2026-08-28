@@ -1,6 +1,5 @@
 import type {
   RenderContainer,
-  RenderGraphics,
   RenderPixel,
   RenderSurface,
 } from '../../../render';
@@ -16,7 +15,6 @@ import {
   hitTargetAt,
   isPassthrough,
   pointInRect,
-  rightEdgeButtonRects,
   type HouseHitRect,
   type HouseHitTarget,
   type HouseRect,
@@ -62,9 +60,6 @@ export interface HouseNodeOutput {
   status?: StatusLabelLayout;
   broadcast?: BroadcastLayout;
   stats?: StatsCardLayout;
-  buttonsVisible: boolean;
-  settingsBtn?: HouseRect;
-  statsBtn?: HouseRect;
   tipsCardRect?: HouseRect;
 }
 
@@ -76,7 +71,6 @@ export interface HouseScene {
     dragging: boolean,
     viewport: HouseNodeViewport,
     nowMs: number,
-    buttonsVisible?: boolean,
   ): HouseNodeOutput;
   destroy(): void;
 }
@@ -87,8 +81,6 @@ interface HouseNodeLayers {
   status: StatusLabelNode;
   broadcast: BroadcastCardNode;
   stats: StatsCardNode;
-  settingsBtn: RenderGraphics;
-  statsBtn: RenderGraphics;
   x: number;
   y: number;
   scale: number;
@@ -107,15 +99,11 @@ export function createHouseScene(
   const statusContainer = surface.createContainer();
   const broadcastContainer = surface.createContainer();
   const statsContainer = surface.createContainer();
-  const settingsBtn = surface.createGraphics();
-  const statsBtn = surface.createGraphics();
 
   root.add(sprite);
   root.add(statusContainer);
   root.add(broadcastContainer);
   root.add(statsContainer);
-  root.add(settingsBtn);
-  root.add(statsBtn);
 
   const layers: HouseNodeLayers = {
     root,
@@ -123,23 +111,21 @@ export function createHouseScene(
     status: createStatusLabel(statusContainer, surface),
     broadcast: createBroadcastCard(broadcastContainer, surface),
     stats: createStatsCard(statsContainer, surface),
-    settingsBtn,
-    statsBtn,
     x: 0,
     y: 0,
     scale: viewport.scale,
   };
 
   const initial = baseOutput(root, viewport, pointer, dragging);
-  let output = updateHouseSceneOutput(initial, layers, state, pointer, dragging, viewport, nowMs, false);
+  let output = updateHouseSceneOutput(initial, layers, state, pointer, dragging, viewport, nowMs);
   let destroyed = false;
 
   surface.root.add(root);
 
   return {
     root,
-    update(nextState, nextPointer, nextDragging, nextViewport, nextNowMs, buttonsVisible) {
-      output = updateHouseSceneOutput(output, layers, nextState, nextPointer, nextDragging, nextViewport, nextNowMs, buttonsVisible ?? false);
+    update(nextState, nextPointer, nextDragging, nextViewport, nextNowMs) {
+      output = updateHouseSceneOutput(output, layers, nextState, nextPointer, nextDragging, nextViewport, nextNowMs);
       return output;
     },
     destroy() {
@@ -159,7 +145,6 @@ function updateHouseSceneOutput(
   dragging: boolean,
   viewport: HouseNodeViewport,
   nowMs: number,
-  buttonsVisible: boolean,
 ): HouseNodeOutput {
   const logical = houseLogicalPosition(viewport, state.placement);
   layers.x = logical.x;
@@ -218,20 +203,6 @@ function updateHouseSceneOutput(
     viewportHeight,
   });
 
-  // Button rects: visible when hover-retained, hidden during drag
-  const btnRects = buttonsVisible && !dragging ? rightEdgeButtonRects(houseRect, viewportWidth) : undefined;
-  if (btnRects) {
-    layers.settingsBtn.setCommands(buttonCommands(btnRects.settings, '#F7EFD8', '#2E2018', 'settings'));
-    layers.settingsBtn.setVisible(true);
-    layers.statsBtn.setCommands(buttonCommands(btnRects.stats, '#F7EFD8', '#2E2018', 'stats'));
-    layers.statsBtn.setVisible(true);
-  } else {
-    layers.settingsBtn.setCommands([]);
-    layers.settingsBtn.setVisible(false);
-    layers.statsBtn.setCommands([]);
-    layers.statsBtn.setVisible(false);
-  }
-
   // Tips card rect for hover retention
   const tipsCardR = stats ? { x: stats.x, y: stats.y, width: stats.width, height: stats.height } : undefined;
 
@@ -240,9 +211,6 @@ function updateHouseSceneOutput(
     houseRect,
     closeRect,
     dragging,
-    buttonsVisible: buttonsVisible && !dragging,
-    settingsBtn: btnRects?.settings,
-    statsBtn: btnRects?.stats,
     tipsCard: tipsCardR,
   });
   const target = hitTargetAt(hitRects, pointer);
@@ -258,9 +226,6 @@ function updateHouseSceneOutput(
     status,
     broadcast,
     stats,
-    buttonsVisible: buttonsVisible && !dragging,
-    settingsBtn: btnRects?.settings,
-    statsBtn: btnRects?.stats,
     tipsCardRect: tipsCardR,
   };
 }
@@ -308,64 +273,7 @@ function baseOutput(
     target,
     bodyTargeted: target === 'house',
     closeTargeted: target === 'broadcast-close',
-    buttonsVisible: false,
   };
-}
-
-function buttonCommands(rect: HouseRect, fill: string, border: string, kind: 'settings' | 'stats'): import('../../../render').ShapeCommand[] {
-  const x = Math.round(rect.x);
-  const y = Math.round(rect.y);
-  const w = Math.round(rect.width);
-  const h = Math.round(rect.height);
-  const iconColor = '#2E2018';
-  const cmds: import('../../../render').ShapeCommand[] = [
-    {
-      kind: 'roundedRect',
-      x,
-      y,
-      width: w,
-      height: h,
-      radius: 3,
-      fill: '#F7EFD8',
-      alpha: 0.92,
-    },
-    {
-      kind: 'roundedRect',
-      x: x + 1,
-      y: y + 1,
-      width: w - 2,
-      height: h - 2,
-      radius: 2,
-      fill: '#2E2018',
-      alpha: 0.08,
-    },
-  ];
-  if (kind === 'settings') {
-    // Pixel-art gear/cog with a center hole
-    cmds.push(
-      { kind: 'rect', x: x + 3, y: y + 3, width: 14, height: 3, fill: iconColor },
-      { kind: 'rect', x: x + 3, y: y + 14, width: 14, height: 3, fill: iconColor },
-      { kind: 'rect', x: x + 3, y: y + 6, width: 3, height: 8, fill: iconColor },
-      { kind: 'rect', x: x + 14, y: y + 6, width: 3, height: 8, fill: iconColor },
-      { kind: 'rect', x: x + 6, y: y + 1, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 12, y: y + 1, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 6, y: y + 17, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 12, y: y + 17, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 1, y: y + 6, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 1, y: y + 12, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 17, y: y + 6, width: 2, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 17, y: y + 12, width: 2, height: 2, fill: iconColor },
-    );
-  } else {
-    // Pixel-art bar chart with three distinct ascending bars
-    cmds.push(
-      { kind: 'rect', x: x + 3, y: y + 15, width: 14, height: 2, fill: iconColor },
-      { kind: 'rect', x: x + 4, y: y + 9, width: 3, height: 6, fill: iconColor },
-      { kind: 'rect', x: x + 8, y: y + 6, width: 3, height: 9, fill: iconColor },
-      { kind: 'rect', x: x + 12, y: y + 3, width: 3, height: 12, fill: iconColor },
-    );
-  }
-  return cmds;
 }
 
 function clamp(value: number, min: number, max: number): number {

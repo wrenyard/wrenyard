@@ -559,3 +559,79 @@ describe('Config — legacy migration (hermetic)', () => {
     expect(fs.existsSync(newSettingsPath)).toBe(true);
   });
 });
+
+describe('Desktop-owned Pet settings contract', () => {
+  it('serializes only user-editable companion settings', async () => {
+    const mod = await importFreshConfig();
+    const config = mod.normalizeConfig({
+      scale: 4,
+      bubbleSeconds: 9,
+      bottomOffset: 12,
+      house: { displayId: 7, entityX: 100, entityY: 200 },
+      entities: { house: true, workers: false, taskgraphs: true },
+      appearance: { houseSkin: 'mushroom' },
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'cursor', enabled: true },
+          { id: 'deepseek', enabled: true },
+        ],
+      },
+      windows: { stats: { x: 9, y: 9 }, graphSlip: { x: 1, y: 2 } },
+    });
+
+    expect(config.windows).toEqual({ graphSlip: { x: 1, y: 2 } });
+
+    expect(mod.serializePetSettings(config)).toEqual({
+      enabled: true,
+      displayId: 7,
+      scale: 4,
+      bubbleSeconds: 9,
+      bottomOffset: 12,
+      entities: { house: true, workers: false, taskgraphs: true },
+      appearance: { houseSkin: 'mushroom' },
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'cursor', enabled: true },
+          { id: 'deepseek', enabled: true },
+        ],
+      },
+    });
+  });
+
+  it('applies bounded settings without touching placement or window geometry', async () => {
+    const mod = await importFreshConfig();
+    const config = mod.normalizeConfig({
+      house: { displayId: 7, entityX: 100, entityY: 200 },
+      windows: { graphSlip: { x: 1, y: 2, width: 440, height: 640 } },
+    });
+    const result = mod.applyPetSettingsPatch(config, {
+      scale: 99,
+      bubbleSeconds: 0,
+      bottomOffset: 999,
+      entities: { workers: false },
+      appearance: { houseSkin: 'mushroom' },
+      quota: {
+        providers: [
+          { id: 'kimi-coding', enabled: false },
+          { id: 'kimi-coding', enabled: true },
+          { id: 'codex', enabled: true },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.scale).toBe(6);
+    expect(result.config.bubbleSeconds).toBe(1);
+    expect(result.config.bottomOffset).toBe(512);
+    expect(result.config.entities.workers).toBe(false);
+    expect(result.config.appearance.houseSkin).toBe('mushroom');
+    expect(result.config.quota.providers).toEqual([
+      { id: 'kimi-coding', enabled: false },
+      { id: 'codex', enabled: true },
+    ]);
+    expect(result.config.house).toEqual(config.house);
+    expect(result.config.windows).toEqual(config.windows);
+  });
+});

@@ -2152,15 +2152,11 @@ var MANIFEST_FILE = 'taskgraph-e2e-manifest.json';
 // ── Process ownership & cleanup ────────────────────────────────────────
 // The harness runs as its own Electron instance under a dedicated userData
 // dir (artifacts/ui-review/electron-user-data), so every BrowserWindow,
-// renderer and GPU/utility helper it spawns is capture-owned. The
-// Foreman-managed Pet is the `npm start` tree rooted at
-// scripts/run-foreground.mjs; it is recognized by an exact launcher
-// signature and is NEVER terminated by the harness. When the Pet is
-// observed running, capture pauses it only through the official management
-// CLI (`foreman pet disable --json`) and restores it afterwards
-// (`foreman pet enable --json`). Cleanup force-terminates only
-// capture-owned Electron processes and always attempts the official Pet
-// restoration.
+// renderer and GPU/utility helper it spawns is capture-owned. A standalone
+// Pet development harness is recognized by its exact launcher signature and
+// is NEVER terminated. Because production Pet lifecycle belongs to Desktop,
+// capture no longer controls another Pet process; an observed legacy/dev Pet
+// is reported as a preflight conflict for deterministic capture output.
 //
 // Ownership is scoped to the capture Electron instance only: the explicitly
 // spawned Electron root (this process) and its descendant tree, plus the
@@ -2207,7 +2203,6 @@ function hasExactCaptureUserDataDir(proc) {
 
 var captureOwnedPids = [];
 var managedPetPids = [];
-var petStoppedByHarness = false;
 var managedPetWasRunning = false;
 
 function enumerateProcessEvidence() {
@@ -2360,18 +2355,11 @@ function snapshotManagedPetTree() {
 }
 
 function stopManagedPetForCapture() {
-  // Never terminates a Foreman-managed Pet process. When the Pet was
-  // observed running under its exact launcher signature, it is paused only
-  // through the official management CLI; otherwise there is nothing to do.
+  // Desktop owns production Pet lifecycle. This standalone capture harness
+  // may observe another development Pet, but it never pauses or terminates it.
   snapshotManagedPetTree();
   if (!managedPetWasRunning) return;
-  try {
-    runForemanPetCli('disable');
-    petStoppedByHarness = true;
-    console.log('[capture] paused the Foreman-managed Pet via `foreman pet disable --json` for deterministic captures');
-  } catch (e) {
-    fail('pause-managed-pet: ' + (e ? e.message || String(e) : 'unknown error'));
-  }
+  fail('standalone Pet is already running; quit Desktop or the Pet dev harness before deterministic capture');
 }
 
 function terminateProcess(pid) {
@@ -2380,62 +2368,6 @@ function terminateProcess(pid) {
   } else {
     try { process.kill(Number(pid), 'SIGKILL'); } catch (_) {}
   }
-}
-
-// The ONLY lifecycle surface for the Foreman-managed Pet: pause/restore go
-// through the official management CLI, never through process termination.
-// Synchronous with a bounded timeout, hidden on Windows, with the exit
-// status checked and a descriptive error thrown when the command cannot run
-// or exits nonzero.
-//
-// The action is validated against exactly `disable|enable`; the fixed
-// argument shape `pet <action> --json` is never built from user-controlled
-// input. On Windows the CLI is exposed through a PATH shim (foreman.cmd /
-// foreman.ps1) rather than a native executable, so cmd.exe/ComSpec is invoked
-// with `/d /s /c` and the fixed bare PATH-resolved command text
-// `foreman pet <action> --json`; the action is internal enum data and no
-// other interpolation or quoted shim path is ever constructed. On other
-// platforms the command executes directly as an argument vector.
-function runForemanPetCli(action) {
-  if (action !== 'disable' && action !== 'enable') {
-    throw new Error('unsupported foreman pet action: ' + String(action));
-  }
-  var res;
-  if (process.platform === 'win32') {
-    var shell = process.env.ComSpec || 'cmd.exe';
-    res = spawnSync(shell, ['/d', '/s', '/c', 'foreman pet ' + action + ' --json'], {
-      cwd: rootDir,
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 15000,
-    });
-  } else {
-    res = spawnSync('foreman', ['pet', action, '--json'], {
-      cwd: rootDir,
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 15000,
-    });
-  }
-  if (res.error) {
-    throw new Error('foreman pet ' + action + ' --json failed to run: ' + (res.error.message || String(res.error)));
-  }
-  if (res.status !== 0) {
-    throw new Error('foreman pet ' + action + ' --json exited with status ' + res.status + ': ' + String((res.stderr || res.stdout || '').trim()));
-  }
-}
-
-function restoreManagedPet() {
-  // Restore only when the harness observed the Pet running before it paused
-  // it — never start a Pet that was not running before capture.
-  if (!petStoppedByHarness) return;
-  try {
-    runForemanPetCli('enable');
-    console.log('[capture] restored the Foreman-managed Pet via `foreman pet enable --json`');
-  } catch (e) {
-    fail('restore-managed-pet: ' + (e ? e.message || String(e) : 'unknown error'));
-  }
-  petStoppedByHarness = false;
 }
 
 async function cleanupCaptureProcessTree() {
@@ -2484,10 +2416,7 @@ async function cleanupCaptureProcessTree() {
       terminateProcess(captureOwnedPids[k]);
     }
   } finally {
-    // Always attempt the official Pet restoration — even when a cleanup step
-    // threw — because the Pet was paused through the CLI and only the CLI
-    // enable can bring it back.
-    restoreManagedPet();
+    // Production Desktop and any standalone development Pet remain untouched.
   }
 }
 
@@ -2650,10 +2579,8 @@ async function run() {
   }
   try { fs.unlinkSync(path.join(captureBase, MANIFEST_FILE)); } catch (_) {}
 
-  // Observe the Foreman-managed Pet's running state before any capture work
-  // so cleanup never touches it, then pause it through the official CLI
-  // (`foreman pet disable --json`) only when it was actually running — the
-  // harness never terminates a managed Pet process.
+  // Observe any standalone development Pet before capture work. Cleanup uses
+  // it only as an exclusion set and never controls that process's lifecycle.
   snapshotManagedPetTree();
   stopManagedPetForCapture();
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuotaTips, formatQuotaBarMenuRows } from '../src/main/panel-view-model';
+import { buildQuotaTips } from '../src/main/quota-tips';
 import type { QuotaProviderState } from '../src/shared/entities';
 
-describe('quota panel view model', () => {
+describe('passive quota tips', () => {
   it('projects structured bar data into quota tips while retaining all enabled providers including error/unavailable', () => {
     const providers: QuotaProviderState[] = [
       {
@@ -144,7 +144,7 @@ describe('quota panel view model', () => {
     expect(tips[2].text).toBe('kimi-coding 5h 80% · 7d 60% · 1mo 27%');
   });
 
-  it('floors fractional remaining percentages in tips and tray rows', () => {
+  it('floors fractional remaining percentages in tips', () => {
     const provider: QuotaProviderState = {
       id: 'cursor',
       label: 'Cursor',
@@ -164,13 +164,6 @@ describe('quota panel view model', () => {
 
     const tips = buildQuotaTips([provider], ['cursor']);
     expect(tips[0].text).toBe('cursor Cursor 99% · Other 99%');
-
-    const rows = formatQuotaBarMenuRows(tips);
-    expect(rows.map((row) => row.remainingPct)).toEqual([99, 99]);
-    expect(rows.map((row) => row.label)).toEqual([
-      'cursor Cursor 99%',
-      'cursor Other 99%',
-    ]);
   });
 
   it('propagates provider-agnostic Forge pending message for status rows', () => {
@@ -337,62 +330,7 @@ describe('quota panel view model', () => {
     expect(tips[0].text).toBe('kimi-coding 5h 80% · 7d 60% (+8%) · 4h 21m reset');
   });
 
-  it('formats remaining bar rows for the tray submenu', () => {
-    const tips = buildQuotaTips([
-      {
-        id: 'kimi-coding',
-        label: 'kimi',
-        displayLine: 'kimi 5h 20% · 7d 40%',
-        error: null,
-        status: 'ok',
-        stale: false,
-        bars: {
-          remainingPct: 60,
-          expectedRemainingPct: 52,
-          windows: [
-            { name: '5h', usedPct: 0, remainingPct: 100, expectedRemainingPct: null },
-            { name: '7d', usedPct: 3, remainingPct: 97, expectedRemainingPct: 52 },
-          ],
-        },
-      },
-      {
-        id: 'codex',
-        label: 'Codex',
-        displayLine: null,
-        error: 'initialize failed',
-        status: 'error',
-        stale: false,
-      },
-    ], ['kimi-coding', 'codex']);
-
-    const rows = formatQuotaBarMenuRows(tips);
-    expect(rows).toEqual([
-      {
-        provider: 'kimi-coding',
-        window: '5h',
-        remainingPct: 100,
-        expectedRemainingPct: null,
-        label: 'kimi-coding 5h 100%',
-      },
-      {
-        provider: '',
-        window: '7d',
-        remainingPct: 97,
-        expectedRemainingPct: 52,
-        label: 'kimi-coding 7d 97%',
-      },
-      {
-        provider: 'codex',
-        window: '',
-        remainingPct: null,
-        expectedRemainingPct: null,
-        error: 'error — initialize failed',
-        label: 'codex  error — initialize failed',
-      },
-    ]);
-  });
-
-  it('preserves Cursor Cursor/Other windows through tips and tray submenu rows', () => {
+  it('preserves Cursor Cursor/Other windows through tips', () => {
     const cursor: QuotaProviderState = {
       id: 'cursor',
       label: 'Cursor',
@@ -419,25 +357,6 @@ describe('quota panel view model', () => {
     expect(tips[0].bars![0].provider.windows.map((window) => window.name)).toEqual(['Cursor', 'Other']);
     expect(tips[0].bars![0].provider.windows.map((window) => window.remainingPct)).toEqual([62, 40]);
     expect(tips[0].text).toBe('cursor Cursor 62% · Other 40%');
-
-    // Tray submenu rows preserve the same order and remaining percentages
-    const rows = formatQuotaBarMenuRows(tips);
-    expect(rows).toEqual([
-      {
-        provider: 'cursor',
-        window: 'Cursor',
-        remainingPct: 62,
-        expectedRemainingPct: null,
-        label: 'cursor Cursor 62%',
-      },
-      {
-        provider: '',
-        window: 'Other',
-        remainingPct: 40,
-        expectedRemainingPct: null,
-        label: 'cursor Other 40%',
-      },
-    ]);
   });
 
   it('projects DeepSeek monetary balances into tips with no pace/percentage/bar semantics', () => {
@@ -519,7 +438,7 @@ describe('quota panel view model', () => {
     expect(tips[1].balanceLabel).toBe('deepseek');
   });
 
-  it('uses the same user-defined provider order for Tips and the status-bar quota submenu', () => {
+  it('uses the user-defined provider order for Tips', () => {
     const providers: QuotaProviderState[] = [
       {
         id: 'codex',
@@ -561,67 +480,5 @@ describe('quota panel view model', () => {
 
     const tips = buildQuotaTips(providers, settingsOrder);
     expect(tips.map((tip) => tip.balanceLabel ?? tip.bars?.[0]?.label)).toEqual(settingsOrder);
-
-    const menuRows = formatQuotaBarMenuRows(tips);
-    expect(menuRows.map((row) => row.provider)).toEqual(settingsOrder);
-  });
-
-  it('formats balance tray submenu rows as provider,currency,amount only via the production projection', () => {
-    const tips = buildQuotaTips([
-      {
-        id: 'deepseek',
-        label: 'DeepSeek',
-        displayLine: 'DeepSeek ¥12.50 · $1.00',
-        error: null,
-        status: 'ok',
-        stale: false,
-        balances: [
-          { currency: 'CNY', amount: '12.50', display: '¥12.50' },
-          { currency: 'USD', amount: '1.00', display: '$1.00' },
-        ],
-      },
-    ], ['deepseek']);
-
-    const rows = formatQuotaBarMenuRows(tips);
-    expect(rows).toHaveLength(2);
-    // Provider only on the first row; each row carries a single-row balances payload.
-    expect(rows[0]).toEqual({
-      provider: 'deepseek',
-      window: '',
-      remainingPct: null,
-      expectedRemainingPct: null,
-      label: 'deepseek bal ¥12.50',
-      balances: [{ provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal ¥12.50' }],
-    });
-    expect(rows[1]).toEqual({
-      provider: '',
-      window: '',
-      remainingPct: null,
-      expectedRemainingPct: null,
-      label: 'deepseek bal $1.00',
-      balances: [{ provider: 'deepseek', currency: 'USD', amount: '1.00', display: '$1.00', label: 'deepseek bal $1.00' }],
-    });
-  });
-
-  it('renders two balance tray rows for the production status-menu projection', () => {
-    const tips = buildQuotaTips([
-      {
-        id: 'deepseek',
-        label: 'DeepSeek',
-        displayLine: 'DeepSeek ¥12.50',
-        error: null,
-        status: 'ok',
-        stale: false,
-        balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
-      },
-    ], ['deepseek']);
-
-    const rows = formatQuotaBarMenuRows(tips);
-    // Balance rows are no longer skipped: one row per balance currency, deepseek on the first.
-    expect(rows).toHaveLength(1);
-    expect(rows[0].provider).toBe('deepseek');
-    expect(rows[0].balances).toEqual([
-      { provider: 'deepseek', currency: 'CNY', amount: '12.50', display: '¥12.50', label: 'deepseek bal ¥12.50' },
-    ]);
   });
 });

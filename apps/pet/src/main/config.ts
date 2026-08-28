@@ -32,6 +32,7 @@ export interface WindowGeometry {
 }
 
 export interface AppConfig {
+  enabled: boolean;
   scale: number;
   bubbleSeconds: number;
   bottomOffset: number;
@@ -44,10 +45,29 @@ export interface AppConfig {
     providers: QuotaProviderEntry[];
   };
   windows: {
-    stats?: WindowGeometry;
-    settings?: WindowGeometry;
     graphSlip?: WindowGeometry;
   };
+}
+
+/** Desktop-owned, user-editable projection of the headless Pet component. */
+export interface PetSettingsPayload {
+  enabled: boolean;
+  displayId?: number;
+  scale: number;
+  bubbleSeconds: number;
+  bottomOffset: number;
+  entities: EntityVisibilityConfig;
+  appearance: {
+    houseSkin: HouseSkinId;
+  };
+  quota: {
+    providers: QuotaProviderEntry[];
+  };
+}
+
+export interface PetSettingsPatchResult {
+  config: AppConfig;
+  changed: boolean;
 }
 
 const GROK_PROVIDER_ID = 'super-grok';
@@ -66,6 +86,7 @@ const DEFAULT_PROVIDER_IDS = [
 ];
 
 const DEFAULT_CONFIG: AppConfig = {
+  enabled: true,
   scale: 3,
   bubbleSeconds: 6,
   bottomOffset: 0,
@@ -153,6 +174,7 @@ export function normalizeConfig(parsed: unknown): AppConfig {
   const obj = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
 
   return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : DEFAULT_CONFIG.enabled,
     scale: validateRangeNumber(obj.scale, DEFAULT_CONFIG.scale, 1, 6),
     bubbleSeconds: validateRangeNumber(obj.bubbleSeconds, DEFAULT_CONFIG.bubbleSeconds, 1, 60),
     bottomOffset: validateRangeNumber(obj.bottomOffset, DEFAULT_CONFIG.bottomOffset, 0, 512),
@@ -288,8 +310,6 @@ function migrateQuotaProviderIds(entries: QuotaProviderEntry[]): QuotaProviderEn
 export function normalizeWindowConfig(value: unknown): AppConfig['windows'] {
   const obj = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
-    stats: normalizeSingleWindow(obj.stats),
-    settings: normalizeSingleWindow(obj.settings),
     graphSlip: normalizeSingleWindow(obj.graphSlip),
   };
 }
@@ -339,6 +359,96 @@ export function saveConfig(config: AppConfig, opts?: SaveConfigOptions): void {
   } catch {
     // silently ignore write errors
   }
+}
+
+export function serializePetSettings(config: AppConfig): PetSettingsPayload {
+  return {
+    enabled: config.enabled,
+    ...(config.house.displayId !== undefined ? { displayId: config.house.displayId } : {}),
+    scale: config.scale,
+    bubbleSeconds: config.bubbleSeconds,
+    bottomOffset: config.bottomOffset,
+    entities: { ...config.entities },
+    appearance: { ...config.appearance },
+    quota: {
+      providers: config.quota.providers.map((provider) => ({ ...provider })),
+    },
+  };
+}
+
+/**
+ * Apply the Desktop settings payload without exposing Pet window geometry or
+ * runtime-owned placement fields. The returned config is a detached copy.
+ */
+export function applyPetSettingsPatch(config: AppConfig, partial: unknown): PetSettingsPatchResult {
+  const obj = partial && typeof partial === 'object' ? partial as Record<string, unknown> : {};
+  const next: AppConfig = {
+    ...config,
+    house: { ...config.house },
+    entities: { ...config.entities },
+    appearance: { ...config.appearance },
+    quota: { providers: config.quota.providers.map((provider) => ({ ...provider })) },
+    windows: { ...config.windows },
+  };
+
+  if (typeof obj.enabled === 'boolean') next.enabled = obj.enabled;
+  if (Object.prototype.hasOwnProperty.call(obj, 'displayId')) {
+    const displayId = validateOptionalInteger(obj.displayId);
+    if (displayId !== next.house.displayId) {
+      if (displayId === undefined) delete next.house.displayId;
+      else next.house.displayId = displayId;
+      delete next.house.x;
+      delete next.house.y;
+      delete next.house.entityX;
+      delete next.house.entityY;
+    }
+  }
+
+  if (typeof obj.scale === 'number' && Number.isFinite(obj.scale)) {
+    next.scale = Math.max(1, Math.min(6, Math.round(obj.scale)));
+  }
+  if (typeof obj.bubbleSeconds === 'number' && Number.isFinite(obj.bubbleSeconds)) {
+    next.bubbleSeconds = Math.max(1, Math.min(60, Math.round(obj.bubbleSeconds)));
+  }
+  if (typeof obj.bottomOffset === 'number' && Number.isFinite(obj.bottomOffset)) {
+    next.bottomOffset = Math.max(0, Math.min(512, Math.round(obj.bottomOffset)));
+  }
+  if (obj.entities && typeof obj.entities === 'object') {
+    const entities = obj.entities as Record<string, unknown>;
+    if (typeof entities.house === 'boolean') next.entities.house = entities.house;
+    if (typeof entities.workers === 'boolean') next.entities.workers = entities.workers;
+    if (typeof entities.taskgraphs === 'boolean') next.entities.taskgraphs = entities.taskgraphs;
+  }
+  if (obj.appearance && typeof obj.appearance === 'object') {
+    const appearance = obj.appearance as Record<string, unknown>;
+    if (appearance.houseSkin === 'classic' || appearance.houseSkin === 'mushroom') {
+      next.appearance.houseSkin = appearance.houseSkin;
+    }
+  }
+  if (obj.quota && typeof obj.quota === 'object') {
+    const quota = obj.quota as Record<string, unknown>;
+    if (Array.isArray(quota.providers)) {
+      const providers: QuotaProviderEntry[] = [];
+      const seen = new Set<string>();
+      for (const value of quota.providers) {
+        if (!value || typeof value !== 'object') continue;
+        const provider = value as Record<string, unknown>;
+        const id = typeof provider.id === 'string' ? provider.id.trim() : '';
+        if (id.length === 0 || seen.has(id)) continue;
+        seen.add(id);
+        providers.push({
+          id,
+          enabled: typeof provider.enabled === 'boolean' ? provider.enabled : true,
+        });
+      }
+      if (providers.length > 0) next.quota.providers = providers;
+    }
+  }
+
+  return {
+    config: next,
+    changed: JSON.stringify(serializePetSettings(next)) !== JSON.stringify(serializePetSettings(config)),
+  };
 }
 
 function createDefaultConfig(configPath: string): AppConfig {

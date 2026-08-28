@@ -1,7 +1,7 @@
 import '../api/pet-api';
 import { createRenderSurface } from '../../render';
 import { HousePresenter, type HousePresenterOutput } from '../../features/house/presenter';
-import { bindHouseDrag, createHousePassthroughController, bindActionButtons } from '../../features/house/interaction';
+import { bindHouseDrag, createHousePassthroughController } from '../../features/house/interaction';
 import type { BrowserDragController } from '../runtime/drag';
 import { pointInRect } from '../runtime/passthrough';
 import { readBrowserViewport } from '../viewport';
@@ -12,12 +12,8 @@ import type { HouseRendererState } from '../../shared/entities';
 async function main(): Promise<void> {
   const canvas = document.getElementById('scene') as HTMLCanvasElement | null;
   const closeButton = document.getElementById('broadcast-close') as HTMLButtonElement | null;
-  const settingsButton = document.getElementById('settings-btn') as HTMLButtonElement | null;
-  const statsButton = document.getElementById('stats-btn') as HTMLButtonElement | null;
   if (!canvas) throw new Error('missing #scene canvas');
   if (!closeButton) throw new Error('missing #broadcast-close button');
-  if (!settingsButton) throw new Error('missing #settings-btn button');
-  if (!statsButton) throw new Error('missing #stats-btn button');
   const staticPreview = installStaticPreviewMode(window.location.search, canvas, document);
 
   let latestHouseState: HouseRendererState | undefined;
@@ -45,18 +41,12 @@ async function main(): Promise<void> {
 
     const syncOverlay = (output: HousePresenterOutput | undefined = presenter.getOutput()): void => {
       syncCloseTarget(closeButton, output?.closeRect);
-      syncActionButton(settingsButton, output?.settingsBtn, output?.buttonsVisible);
-      syncActionButton(statsButton, output?.statsBtn, output?.buttonsVisible);
       if (drag?.dragging) {
         passthrough.forceBlocking();
         return;
       }
       passthrough.set(output?.passthrough ?? true);
     };
-
-    const hitTargets = document.getElementById('hit-targets');
-    const disposeActionButtons = hitTargets ? bindActionButtons(hitTargets, window.petApi) : () => {};
-    disposables.push(disposeActionButtons);
 
     applyHouseState = (state, nowMs = Date.now()): void => {
       const output = presenter.setState(state, nowMs);
@@ -129,10 +119,10 @@ async function main(): Promise<void> {
 
     // Forwarded mouseleave can be lost while an ignored transparent window is
     // moved or its edge-aware carrier changes anchor. Reconcile only while
-    // hover chrome is visible, using the main process' authoritative cursor.
+    // hover observation is visible, using the main process' authoritative cursor.
     const hoverAuditTimer = window.setInterval(() => {
       const current = presenter.getOutput();
-      if (hoverAuditInFlight || drag?.dragging || (!current?.stats && !current?.buttonsVisible)) return;
+      if (hoverAuditInFlight || drag?.dragging || !current?.stats) return;
       hoverAuditInFlight = true;
       void window.petApi.getHouseCursorPoint()
         .then((point) => {
@@ -185,18 +175,6 @@ async function main(): Promise<void> {
 
 function syncCloseTarget(button: HTMLButtonElement, rect: HousePresenterOutput['closeRect']): void {
   if (!rect) {
-    button.style.display = 'none';
-    return;
-  }
-  button.style.display = 'block';
-  button.style.left = `${Math.round(rect.x)}px`;
-  button.style.top = `${Math.round(rect.y)}px`;
-  button.style.width = `${Math.round(rect.width)}px`;
-  button.style.height = `${Math.round(rect.height)}px`;
-}
-
-function syncActionButton(button: HTMLButtonElement, rect: HousePresenterOutput['settingsBtn'] | undefined, visible: boolean | undefined): void {
-  if (!rect || !visible) {
     button.style.display = 'none';
     return;
   }
