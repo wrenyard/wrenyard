@@ -20,10 +20,13 @@ precompiled Go runtime, and a desktop observer under one command surface:
   tracks task graph work.
 - **`runtime/forge`** — the Go runtime that executes agent work and streams
   activity, shipped as precompiled per-platform packages.
-- **`apps/pet`** — the observer surface that reads task and taskgraph progress
-  from the control plane over a read-only protocol.
-- **`apps/desktop`** — the Desktop DSH shell: an Electron observer surface
-  that hosts the task/taskgraph visualizer.
+- **`apps/pet`** — the headless Desktop companion renderer. It reads current
+  activity from the control plane and owns only passive companion overlays;
+  it has no tray, settings, statistics page or hover action buttons.
+- **`apps/desktop`** — the 啾啾工坊 product shell. It owns the application
+  window, notification-area icon/menu, custom conversation UI, statistics,
+  quota and settings, uses DSH as its conversation backend, and manages Pet as a child
+  component.
 - **`packages/dsh-shell`** — the dsh profile/bundle shell reused by the
   desktop host.
 - **`packages/runtime-*`** — auditable staging manifests for the CI-built
@@ -87,7 +90,7 @@ unsigned by default on Windows (see [Signing (honest)](#signing-honest)).
 
 - `wrenyard` — print help and enter the unified command surface
 - `wrenyard update` — update to the latest-dev build
-- `wrenyard desktop` — launch the Desktop DSH shell / observer
+- `wrenyard desktop` — launch the 啾啾工坊 Desktop product shell
 - `wrenyard doctor` — check the local install and report problems
 - `wrenyard service` — manage the control-plane service
 - `wrenyard task` — schedule and track task-graph work
