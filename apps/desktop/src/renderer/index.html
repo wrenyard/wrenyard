@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN" data-page="workbench">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none';" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>啾啾工坊</title>
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <nav class="activity-bar" aria-label="啾啾工坊功能">
+      <div class="activity-brand" role="img" aria-label="啾啾工坊标识">
+        <img class="app-icon" src="./icon-256.png" alt="" />
+      </div>
+      <button class="activity-item is-selected" id="workbench-nav" type="button" aria-label="会话" aria-current="page" data-page="workbench">
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M4 5.5h16v11H10l-5 3v-3H4v-11Z" />
+          <path d="M8 9.25h8M8 12.75h5" />
+        </svg>
+        <span class="tooltip" role="tooltip">会话</span>
+      </button>
+      <button class="activity-item" id="stats-nav" type="button" aria-label="工房台账" data-page="stats">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
+        <span class="tooltip" role="tooltip">工房台账</span>
+      </button>
+      <button class="activity-item" id="quota-nav" type="button" aria-label="额度" data-page="quota">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h14v10H4V7Z" /><path d="M18 10h2v4h-2M7 10h6v4H7" /></svg>
+        <span class="tooltip" role="tooltip">额度</span>
+      </button>
+      <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z" />
+          <path d="M19.4 13.5a7.7 7.7 0 0 0 .05-1.5 7.7 7.7 0 0 0-.05-1.5l2-1.55-2-3.46-2.46 1a7.75 7.75 0 0 0-2.6-1.5L14 2.35h-4L9.66 5a7.75 7.75 0 0 0-2.6 1.5l-2.46-1-2 3.46 2 1.55a7.7 7.7 0 0 0-.05 1.5 7.7 7.7 0 0 0 .05 1.5l-2 1.55 2 3.46 2.46-1a7.75 7.75 0 0 0 2.6 1.5l.34 2.64h4l.34-2.64a7.75 7.75 0 0 0 2.6-1.5l2.46 1 2-3.46-2-1.55Z" />
+        </svg>
+        <span class="tooltip tooltip-top" role="tooltip">啾啾工坊设置</span>
+      </button>
+    </nav>
+
+    <main class="shell-content">
+      <section class="conversation-page" id="workbench-page" aria-label="会话">
+        <aside class="conversation-sidebar" aria-label="会话列表">
+          <header class="conversation-sidebar-header">
+            <div><span>WRENYARD</span><strong>会话</strong></div>
+            <button class="new-conversation-button" id="new-conversation-button" type="button" aria-label="新建会话" title="新建会话">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+            </button>
+          </header>
+          <div class="workspace-binding" title="由啾啾工坊设置固定绑定">
+            <span class="workspace-dot"></span>
+            <span id="conversation-workspace">读取 workspace…</span>
+          </div>
+          <div class="conversation-session-list" id="conversation-session-list" role="list"></div>
+          <footer class="conversation-sidebar-footer">DSH BACKEND · DESKTOP SURFACE</footer>
+        </aside>
+
+        <section class="conversation-main" aria-label="当前会话">
+          <header class="conversation-header">
+            <div class="conversation-heading">
+              <span class="conversation-kicker">啾啾工坊 / 会话</span>
+              <h1 id="conversation-title">新会话</h1>
+            </div>
+            <div class="conversation-state" id="conversation-state"><i></i><span>正在连接</span></div>
+          </header>
+          <div class="conversation-feed" id="conversation-feed" aria-live="polite">
+            <div class="conversation-welcome" id="conversation-welcome">
+              <img src="./icon-256.png" alt="" />
+              <p class="eyebrow">THE WRENYARD WORKSHOP</p>
+              <h2>今天想让工坊做些什么？</h2>
+              <p>会话固定运行在 Wrenyard workspace 中。DSH 提供后端能力，界面与工作流由啾啾工坊管理。</p>
+            </div>
+          </div>
+          <div class="conversation-error" id="conversation-error" hidden></div>
+          <footer class="composer-wrap">
+            <div class="conversation-composer" id="conversation-composer">
+              <textarea id="conversation-input" rows="1" maxlength="100000" placeholder="交代一件事…" aria-label="发送消息"></textarea>
+              <div class="composer-footer">
+                <span><kbd>↵</kbd> 发送 · <kbd>⇧↵</kbd> 换行</span>
+                <button class="composer-send" id="conversation-send" type="button" aria-label="发送">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></svg>
+                </button>
+                <button class="composer-stop" id="conversation-stop" type="button" aria-label="停止生成" hidden>
+                  <span></span>
+                </button>
+              </div>
+            </div>
+            <p>回答由 DSH 后端生成；执行本地操作前请检查内容。</p>
+          </footer>
+        </section>
+
+        <div class="workspace-gate" id="workspace-gate" hidden>
+          <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
+            <img src="./icon-256.png" alt="" />
+            <p class="eyebrow">WORKSPACE REQUIRED</p>
+            <h2 id="workspace-gate-title">先为工坊安一个家</h2>
+            <p id="workspace-gate-message">会话必须绑定一个 Wrenyard workspace。配置完成前，聊天功能不会启动。</p>
+            <label for="workspace-gate-input">Workspace 路径</label>
+            <input id="workspace-gate-input" type="text" spellcheck="false" placeholder="/path/to/wrenyard-workspace" />
+            <span class="workspace-gate-error" id="workspace-gate-error"></span>
+            <div class="workspace-gate-actions">
+              <button class="secondary-button" id="workspace-open-settings" type="button">前往设置</button>
+              <button class="primary-button" id="workspace-quick-save" type="button">保存并重启工坊</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="product-page stats-page" id="stats-page" aria-labelledby="stats-title" hidden>
+        <header class="ledger-hero">
+          <div>
+            <p class="eyebrow">LAMPLIGHT WORKSHOP LEDGER</p>
+            <h1 id="stats-title">工房台账</h1>
+            <p id="stats-period-range">正在读取本机任务记录…</p>
+          </div>
+          <div class="ledger-actions">
+            <div class="period-switcher" id="stats-period-switcher" role="tablist" aria-label="统计周期">
+              <button class="is-selected" type="button" role="tab" aria-selected="true" data-period="24h">24 小时</button>
+              <button type="button" role="tab" aria-selected="false" data-period="7d">7 天</button>
+              <button type="button" role="tab" aria-selected="false" data-period="1mo">1 个月</button>
+            </div>
+            <button class="secondary-button" id="stats-refresh-button" type="button">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+              <span id="stats-refresh-label">刷新</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="ledger-meta">
+          <span class="status-pill is-pending" id="stats-status">读取中</span>
+          <span id="stats-day-label">等待 Wrenyard 本地台账</span>
+        </div>
+
+        <section class="metric-grid" aria-label="周期摘要">
+          <article class="metric-card"><span>调度次数</span><strong id="stats-dispatch-count">—</strong><small id="stats-dispatch-note">所选周期</small></article>
+          <article class="metric-card"><span>Token 消耗</span><strong id="stats-total-tokens">—</strong><small id="stats-token-split">输入 — · 输出 —</small></article>
+          <article class="metric-card"><span>今日完成率</span><strong id="stats-completion-rate">—</strong><small id="stats-outcome-split">完成 — · 失败 — · 取消 —</small></article>
+          <article class="metric-card"><span>任务总耗时</span><strong id="stats-duration">—</strong><small id="stats-duration-period">所选周期</small></article>
+        </section>
+
+        <section class="ledger-panel heat-panel" aria-labelledby="daily-title">
+          <div class="panel-heading">
+            <div><h2 id="daily-title">近期火光</h2><p>最近 31 个本地自然日；颜色越深，Token 活动越高。</p></div>
+            <span class="panel-legend"><i></i> 安静 <i></i><i></i><i></i> 繁忙</span>
+          </div>
+          <div class="daily-heatmap" id="stats-daily-list" role="list" aria-label="每日活动热度"></div>
+        </section>
+
+        <div class="ledger-columns">
+          <section class="ledger-panel" aria-labelledby="profile-title">
+            <div class="panel-heading"><div><h2 id="profile-title">运行配置</h2><p>具名 Profile 的调度、Token 与平均 TPS。</p></div></div>
+            <div class="ledger-table" id="stats-profile-list"></div>
+          </section>
+          <section class="ledger-panel" aria-labelledby="task-title">
+            <div class="panel-heading panel-heading-action">
+              <div><h2 id="task-title">任务投入</h2><p>按累计耗时排序，展示真实时间投入。</p></div>
+              <label class="compact-switch"><input id="stats-builtin-only" type="checkbox" /><span>仅内置任务</span></label>
+            </div>
+            <div class="ledger-table" id="stats-task-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="product-page quota-page" id="quota-page" aria-labelledby="quota-title" hidden>
+        <header class="quota-hero">
+          <div>
+            <p class="eyebrow">WORKSHOP CAPACITY</p>
+            <h1 id="quota-title">额度</h1>
+            <p>统一查看各模型服务的剩余额度与余额。</p>
+          </div>
+          <button class="secondary-button" id="quota-refresh-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            <span id="quota-refresh-label">刷新</span>
+          </button>
+        </header>
+
+        <div class="quota-meta">
+          <span class="status-pill is-pending" id="quota-status">读取中</span>
+          <span id="quota-updated-at">正在读取 Runtime 额度…</span>
+          <span class="quota-pace-legend"><i></i> 时间进度建议余量</span>
+        </div>
+        <div class="quota-provider-grid" id="quota-provider-grid" aria-live="polite"></div>
+        <p class="quota-footnote">展示顺序与启用状态由「设置 → 桌宠 → 额度来源」统一管理，并同步到通知栏与房屋 Tips。</p>
+      </section>
+
+      <section class="product-page settings-page" id="settings-page" aria-labelledby="settings-title" hidden>
+        <header class="page-hero">
+          <div><p class="eyebrow">WRENYARD DESKTOP</p><h1 id="settings-title">啾啾工坊设置</h1><p>管理本地工作环境与桌宠体验</p></div>
+          <button class="secondary-button" id="refresh-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            <span id="refresh-label">刷新状态</span>
+          </button>
+        </header>
+
+        <div class="settings-layout">
+          <aside class="settings-toc" aria-label="设置分区">
+            <a href="#runtime">运行环境</a>
+            <a href="#companion">桌宠</a>
+            <a href="#models">模型接入</a>
+            <a href="#about">关于</a>
+          </aside>
+
+          <div class="settings-sections">
+            <section class="settings-section" id="runtime">
+              <div class="section-heading"><h2>运行环境</h2><p>Desktop 通过公开协议读取 Wrenyard 控制面。</p></div>
+              <div class="settings-card">
+                <div class="setting-row"><div><h3>本地服务</h3><p id="service-description">正在读取状态…</p></div><span class="status-pill is-pending" id="service-status">检查中</span></div>
+                <div class="setting-row setting-row-stacked workspace-setting-row">
+                  <div><h3>Workspace</h3><p>会话固定绑定此目录，不在聊天界面提供临时切换。</p></div>
+                  <div class="workspace-setting-control">
+                    <input id="workspace-setting-input" type="text" spellcheck="false" placeholder="/path/to/wrenyard-workspace" />
+                    <button class="secondary-button" id="workspace-save-button" type="button">保存并重启</button>
+                  </div>
+                  <span class="workspace-setting-note" id="workspace-setting-note">—</span>
+                </div>
+                <div class="setting-row setting-row-stacked"><div><h3>IPC Endpoint</h3><p>Desktop、DSH 与观测模块共享的只读数据通路。</p></div><code id="endpoint-value">—</code></div>
+              </div>
+            </section>
+
+            <section class="settings-section" id="companion">
+              <div class="section-heading section-heading-with-action">
+                <div><h2>桌宠</h2><p>由啾啾工坊直接管理生命周期；退出 App 后桌宠同步退出。</p></div>
+                <span class="status-pill is-pending" id="pet-status">检查中</span>
+              </div>
+              <div class="settings-card">
+                <label class="setting-row setting-control"><span><strong>启用桌宠</strong><small>关闭后保留设置，但不创建任何悬浮窗口</small></span><input id="pet-enabled" type="checkbox" /></label>
+                <label class="setting-row setting-control"><span><strong>显示器</strong><small>切换后会重置房屋拖动位置</small></span><select id="pet-display"></select></label>
+                <label class="setting-row setting-control"><span><strong>房屋外观</strong><small>沿用桌宠现有像素主题</small></span><select id="pet-house-skin"><option value="classic">经典木屋</option><option value="mushroom">蘑菇小屋</option></select></label>
+                <label class="setting-row setting-control"><span><strong>渲染缩放</strong><small>范围 1–6</small></span><input id="pet-scale" type="number" min="1" max="6" step="1" /></label>
+              </div>
+
+              <h3 class="settings-subtitle">显示内容</h3>
+              <div class="settings-card compact-card">
+                <label class="setting-row setting-control"><span><strong>房屋</strong><small>额度提示与今日观测</small></span><input id="pet-show-house" type="checkbox" /></label>
+                <label class="setting-row setting-control"><span><strong>工人</strong><small>运行任务的桌面角色</small></span><input id="pet-show-workers" type="checkbox" /></label>
+                <label class="setting-row setting-control"><span><strong>图纸燕</strong><small>活跃 TaskGraph 与图纸详情</small></span><input id="pet-show-taskgraphs" type="checkbox" /></label>
+              </div>
+
+              <h3 class="settings-subtitle">行为</h3>
+              <div class="settings-card compact-card">
+                <label class="setting-row setting-control"><span><strong>底部偏移</strong><small>与屏幕底边的距离，范围 0–512</small></span><input id="pet-bottom-offset" type="number" min="0" max="512" step="1" /></label>
+                <label class="setting-row setting-control"><span><strong>气泡时长</strong><small>消息显示秒数，范围 1–60</small></span><input id="pet-bubble-seconds" type="number" min="1" max="60" step="1" /></label>
+              </div>
+
+              <h3 class="settings-subtitle">额度来源</h3>
+              <p class="settings-subcopy">启用状态与顺序同时控制额度页、通知栏菜单和房屋 Tips，不改变服务配置。</p>
+              <div class="settings-card provider-list" id="pet-provider-list"></div>
+              <div class="settings-save-row"><span id="pet-save-note">位置仍可直接拖动房屋保存。</span><button class="primary-button" id="pet-save-button" type="button" disabled>保存并应用</button></div>
+            </section>
+
+            <section class="settings-section" id="models">
+              <div class="section-heading"><h2>模型接入</h2><p>仅显示凭据是否存在；密钥不会进入此页面。</p></div>
+              <div class="settings-card" id="model-list"><div class="setting-row"><div><h3>正在读取模型状态…</h3></div></div></div>
+            </section>
+
+            <section class="settings-section" id="about">
+              <div class="section-heading"><h2>关于</h2><p>啾啾工坊是 Wrenyard 套件的 Desktop 主界面。</p></div>
+              <div class="settings-card">
+                <div class="setting-row"><div><h3>Wrenyard</h3><p>统一任务编排与本地运行环境</p></div><span class="version" id="wrenyard-version">—</span></div>
+                <div class="setting-row"><div><h3>Desktop</h3><p>Electron 产品壳与桌宠宿主</p></div><span class="version" id="desktop-version">—</span></div>
+                <div class="setting-row"><div><h3>DSH</h3><p>主工作台引擎</p></div><span class="version" id="dsh-version">—</span></div>
+                <div class="setting-row"><div><h3>发布通道</h3><p>当前版本仍处于开发预览阶段</p></div><span class="status-pill is-preview">DEV PREVIEW</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

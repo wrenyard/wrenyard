@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   ensureProductWorkspaceRegistered,
+  inspectProductWorkspace,
   resolveProductWorkspace,
   resolveWrenyardConfigPath,
+  saveProductWorkspace,
   workspaceStoragePath,
 } from '../src/workspace.js';
 
@@ -48,6 +50,34 @@ test('resolveProductWorkspace prefers WRENYARD_DESKTOP_WORKSPACE over config.jso
   });
 });
 
+test('inspectProductWorkspace exposes an environment override as the read-only source', async () => {
+  await withTemp(async (dir) => {
+    const override = join(dir, 'override-root');
+    const configured = join(dir, 'configured-root');
+    const xdg = join(dir, 'xdg');
+    await mkdir(override);
+    await mkdir(configured);
+    await mkdir(join(xdg, 'wrenyard'), { recursive: true });
+    await writeFile(
+      join(xdg, 'wrenyard', 'config.json'),
+      JSON.stringify({ workspace: { root: configured } }),
+    );
+
+    const inspected = await inspectProductWorkspace({
+      WRENYARD_DESKTOP_WORKSPACE: override,
+      XDG_CONFIG_HOME: xdg,
+    });
+
+    assert.deepEqual(inspected, {
+      status: 'configured',
+      source: 'environment',
+      configPath: join(xdg, 'wrenyard', 'config.json'),
+      path: await realpath(override),
+      readOnly: true,
+    });
+  });
+});
+
 test('resolveProductWorkspace reads workspace.root from Wrenyard config.json', async () => {
   await withTemp(async (dir) => {
     const root = join(dir, 'agent-workspace');
@@ -71,6 +101,61 @@ test('resolveProductWorkspace rejects a missing workspace.root', async () => {
     await assert.rejects(
       () => resolveProductWorkspace({ XDG_CONFIG_HOME: xdg }),
       /workspace\.root is missing/,
+    );
+  });
+});
+
+test('inspectProductWorkspace reports missing and invalid configuration without throwing', async () => {
+  await withTemp(async (dir) => {
+    const xdg = join(dir, 'xdg');
+    const missing = await inspectProductWorkspace({ XDG_CONFIG_HOME: xdg });
+    assert.equal(missing.status, 'missing');
+    assert.equal(missing.source, 'none');
+    assert.equal(missing.readOnly, false);
+
+    await mkdir(join(xdg, 'wrenyard'), { recursive: true });
+    await writeFile(join(xdg, 'wrenyard', 'config.json'), JSON.stringify({ workspace: { root: join(dir, 'absent') } }));
+    const invalid = await inspectProductWorkspace({ XDG_CONFIG_HOME: xdg });
+    assert.equal(invalid.status, 'invalid');
+    assert.equal(invalid.source, 'user-config');
+    assert.equal(invalid.readOnly, false);
+    assert.match(invalid.message ?? '', /does not exist/);
+  });
+});
+
+test('saveProductWorkspace preserves unrelated config and writes the canonical root', async () => {
+  await withTemp(async (dir) => {
+    const root = join(dir, 'agent-workspace');
+    const xdg = join(dir, 'xdg');
+    await mkdir(root);
+    await mkdir(join(xdg, 'wrenyard'), { recursive: true });
+    const configPath = join(xdg, 'wrenyard', 'config.json');
+    await writeFile(configPath, JSON.stringify({ pet: { enabled: true }, workspace: { label: 'keep' } }));
+
+    const saved = await saveProductWorkspace(root, { XDG_CONFIG_HOME: xdg });
+    assert.equal(saved.status, 'configured');
+    assert.equal(saved.source, 'user-config');
+    assert.equal(saved.readOnly, false);
+    assert.equal(saved.path, await realpath(root));
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    assert.deepEqual(config.pet, { enabled: true });
+    assert.deepEqual(config.workspace, { label: 'keep', root: await realpath(root) });
+  });
+});
+
+test('saveProductWorkspace cannot replace an environment override', async () => {
+  await withTemp(async (dir) => {
+    const override = join(dir, 'override-root');
+    const requested = join(dir, 'requested-root');
+    await mkdir(override);
+    await mkdir(requested);
+
+    await assert.rejects(
+      () => saveProductWorkspace(requested, {
+        WRENYARD_DESKTOP_WORKSPACE: override,
+        XDG_CONFIG_HOME: join(dir, 'xdg'),
+      }),
+      /由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理/,
     );
   });
 });

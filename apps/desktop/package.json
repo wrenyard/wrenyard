@@ -2,7 +2,7 @@
   "name": "@wrenyard/desktop",
   "version": "1.0.0-dev.14",
   "private": true,
-  "description": "Hardened Electron desktop shell for the Wrenyard DSH (development artifact; not yet released).",
+  "description": "Wrenyard Desktop product shell for DSH and the headless Pet companion.",
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",
@@ -10,9 +10,9 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsc --noEmit && node tools/build.mjs && tsc --emitDeclarationOnly",
+    "build": "pnpm --filter @wrenyard/pet build && tsc --noEmit && node tools/build.mjs && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts",
+    "test": "pnpm --filter @wrenyard/pet build:main && tsx --test test/*.test.ts",
     "start": "electron .",
     "dev": "npm run build && electron .",
     "smoke": "npm run build && electron . --smoke",
@@ -46,6 +46,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@wrenyard/pet": "workspace:*",
     "electron": "^39.8.10",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.0",
