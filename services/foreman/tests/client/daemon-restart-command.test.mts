@@ -29,7 +29,6 @@ writeFileSync(configPath, JSON.stringify({
   clients: {},
   service: { enabled: true, bind: '127.0.0.1:8731' },
   workspace: {},
-  pet: { enabled: false },
   message: { enabled: false },
   messageDelivery: { enabled: false },
 }, null, 2))

@@ -4,12 +4,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 
 import { createDefaultForemanConfigData } from '../lib/config/data.mts'
@@ -21,7 +20,6 @@ import {
   normalizeTaskAgentRuntimeOverrides,
   readTaskAgentRuntimeOverrides,
 } from '../lib/config/task-runtime-override.mts'
-import { packagedPetExecutablePath } from '../lib/pet/packaged-pet.mts'
 
 const roots: string[] = []
 
@@ -34,17 +32,6 @@ function workspace(): string {
   roots.push(root)
   writeFileSync(join(root, 'FWA.md'), '# FWA\n')
   writeFileSync(join(root, 'WORK.md'), '# Work\n')
-  return root
-}
-
-function suite(): string {
-  const root = mkdtempSync(join(tmpdir(), 'foreman-config-suite-'))
-  roots.push(root)
-  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
-  writeFileSync(join(root, 'release-manifest.json'), '{}\n')
-  const petDir = join(root, 'apps', 'pet')
-  mkdirSync(petDir, { recursive: true })
-  writeFileSync(join(petDir, 'package.json'), '{ "name": "pet" }\n')
   return root
 }
 
@@ -205,99 +192,6 @@ describe('Foreman config', () => {
     assert.equal(config.workspaceRoot, '/wrenyard-ws')
   })
 
-  it('defaults pet.cwd to the suite apps/pet under WRENYARD_ROOT', () => {
-    const root = suite()
-    const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.cwd, join(realpathSync(root), 'apps', 'pet'))
-  })
-
-  it('resolves the canonical apps/pet candidate without a package.json and never throws', () => {
-    const root = mkdtempSync(join(tmpdir(), 'foreman-config-suite-nopet-'))
-    roots.push(root)
-    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
-    writeFileSync(join(root, 'release-manifest.json'), '{}\n')
-    // Pet is optional and separately packaged: status-style config loads must
-    // normalize successfully even when apps/pet/package.json is absent.
-    const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.cwd, join(realpathSync(root), 'apps', 'pet'))
-    assert.equal(existsSync(join(config.pet.cwd, 'package.json')), false)
-  })
-
-  it('keeps explicit relative pet.cwd relative to configDir, overriding the suite default', () => {
-    const root = suite()
-    const configDir = mkdtempSync(join(tmpdir(), 'foreman-config-cwd-'))
-    roots.push(configDir)
-    const config = normalizeForemanServiceConfig({ pet: { cwd: 'pet-local' } }, { configDir, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.cwd, join(configDir, 'pet-local'))
-  })
-
-  it('selects the packaged pet executable with empty args when a release artifact exists', () => {
-    const root = suite()
-    const petDir = join(realpathSync(root), 'apps', 'pet')
-    rmSync(join(petDir, 'package.json'))
-    const exe = packagedPetExecutablePath(petDir, process.platform)
-    mkdirSync(dirname(exe), { recursive: true })
-    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
-
-    const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.command, exe)
-    assert.deepEqual(config.pet.args, [])
-    assert.equal(config.pet.cwd, petDir)
-  })
-
-  it('a user config that only enables packaged Pet resolves the canonical packaged executable', () => {
-    const root = suite()
-    const petDir = join(realpathSync(root), 'apps', 'pet')
-    rmSync(join(petDir, 'package.json'))
-    const exe = packagedPetExecutablePath(petDir, process.platform)
-    mkdirSync(dirname(exe), { recursive: true })
-    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
-
-    const configHome = mkdtempSync(join(tmpdir(), 'foreman-config-user-'))
-    roots.push(configHome)
-    mkdirSync(join(configHome, 'wrenyard'), { recursive: true })
-    writeFileSync(
-      join(configHome, 'wrenyard', 'config.json'),
-      JSON.stringify({ pet: { enabled: true } }),
-      'utf-8',
-    )
-
-    const manager = new ForemanConfigManager({ env: { XDG_CONFIG_HOME: configHome, WRENYARD_ROOT: root } })
-    const { config } = manager.loadServiceConfig()
-    assert.ok(config.pet)
-    assert.equal(config.pet.command, exe)
-    assert.deepEqual(config.pet.args, [])
-    assert.equal(config.pet.cwd, petDir)
-    assert.equal(existsSync(join(petDir, 'package.json')), false)
-  })
-
-  it('keeps the npm start source defaults for a development pet checkout', () => {
-    const root = suite()
-    const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.command, 'npm')
-    assert.deepEqual(config.pet.args, ['start'])
-  })
-
-  it('explicit pet command, args, and cwd override packaged detection', () => {
-    const root = suite()
-    const petDir = join(realpathSync(root), 'apps', 'pet')
-    const exe = packagedPetExecutablePath(petDir, process.platform)
-    mkdirSync(dirname(exe), { recursive: true })
-    writeFileSync(exe, '#!/bin/sh\n', 'utf-8')
-
-    const config = normalizeForemanServiceConfig({
-      pet: { command: 'custom-pet', args: ['--flag'], cwd: 'pet-local' },
-    }, { configDir: root, env: { WRENYARD_ROOT: root } })
-    assert.ok(config.pet)
-    assert.equal(config.pet.command, 'custom-pet')
-    assert.deepEqual(config.pet.args, ['--flag'])
-    assert.equal(config.pet.cwd, join(root, 'pet-local'))
-  })
 })
 
 describe('tasks.agentRuntime overlay', () => {

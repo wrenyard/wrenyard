@@ -2,11 +2,9 @@ import { existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { MessageRouteConfig, MessageTransportKind } from '../message/types.mts'
 import type { MessageDeliveryAuthConfig, MessageDeliveryRegistryConfig, PeerConfig } from '../message/delivery/types.mts'
-import type { ConfigRecord, ForemanPetConfig, ForemanServiceConfig } from './types.mts'
+import type { ConfigRecord, ForemanServiceConfig } from './types.mts'
 import type { MessagePrincipal, PrincipalRegistry, PrincipalGrant } from '../message/principal.mts'
 import { CANONICAL_PRINCIPALS } from '../message/principal.mts'
-import { resolveWrenyardSuiteRoot } from '../layout/suite-root.mts'
-import { resolvePackagedPetExecutable } from '../pet/packaged-pet.mts'
 export interface NormalizeForemanConfigOptions {
   configDir: string
   env?: NodeJS.ProcessEnv
@@ -92,7 +90,6 @@ export function normalizeForemanServiceConfig(
   }
   const workspace = record(config.workspace)
   const fwa = normalizeFwaConfig(record(config.fwa))
-  const pet = record(config.pet)
   const message = record(config.message)
   const messageDeliveryRaw = record(message.delivery)
 
@@ -118,14 +115,9 @@ export function normalizeForemanServiceConfig(
     workspaceRoot,
     ...(fwa ? { fwa } : {}),
     ...(work ? { work } : {}),
-    pet: normalizePetConfig(pet, options.configDir, env),
     message: normalizedMessage,
     ...(messageDelivery ? { messageDelivery } : {}),
   }
-}
-
-export function defaultForemanPetConfig(configDir = process.cwd(), env?: NodeJS.ProcessEnv): ForemanPetConfig {
-  return normalizePetConfig({}, configDir, env)
 }
 
 export function normalizeMessageDeliveryConfig(raw: ConfigRecord): MessageDeliveryRegistryConfig {
@@ -297,55 +289,6 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number, key: stri
     throw new Error(`${key} must be a non-negative integer, got ${JSON.stringify(value)}`)
   }
   return value
-}
-
-function normalizePetConfig(raw: ConfigRecord, configDir: string, env?: NodeJS.ProcessEnv): ForemanPetConfig {
-  const configuredCwd = typeof raw.cwd === 'string' && raw.cwd.trim()
-    ? raw.cwd.trim()
-    : ''
-  const cwd = configuredCwd
-    ? resolveConfigRelativePath(configuredCwd, configDir)
-    : resolveDefaultPetCwd(env)
-
-  // Explicit command/args always win. With no explicit command, an installed
-  // release's packaged executable is selected when it exists at the resolved
-  // cwd; otherwise the source defaults (npm start) are preserved.
-  const explicitCommand = stringValue(raw.command, '')
-  const explicitArgs = Array.isArray(raw.args)
-    ? raw.args.map(String)
-    : undefined
-  let command = 'npm'
-  let args = ['start']
-  if (explicitCommand) {
-    command = explicitCommand
-  } else {
-    const packaged = resolvePackagedPetExecutable(cwd)
-    if (packaged) {
-      command = packaged
-      args = []
-    }
-  }
-  if (explicitArgs) args = explicitArgs
-
-  return {
-    enabled: booleanValue(raw.enabled, false),
-    command,
-    args,
-    cwd,
-    startupTimeoutMs: numberValue(raw.startup_timeout_ms, 10_000),
-    stopTimeoutMs: numberValue(raw.stop_timeout_ms, 5_000),
-    restartOnExit: booleanValue(raw.restart_on_exit, true),
-    restartDelayMs: numberValue(raw.restart_delay_ms, 1_000),
-  }
-}
-
-function resolveDefaultPetCwd(env?: NodeJS.ProcessEnv): string {
-  const suiteRoot = resolveWrenyardSuiteRoot({ env })
-  // Pet is an optional, separately packaged app: global config normalization
-  // (status/update/daemon loads) must resolve the canonical candidate without
-  // requiring apps/pet/package.json to exist. Start-time validation happens in
-  // the pet service's assertLaunchConfig.
-  return resolve(suiteRoot, 'apps', 'pet')
 }
 
 function isMessageDeliveryConfig(value: ConfigRecord): boolean {

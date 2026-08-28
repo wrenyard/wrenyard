@@ -37,18 +37,6 @@ export interface ForemanServiceConfig {
       retry_backoff_ms: number
     }
   }
-  pet?: ForemanPetConfig
   message: import('./normalize.mts').NormalizedMessageConfig
   messageDelivery?: MessageDeliveryRegistryConfig
-}
-
-export interface ForemanPetConfig {
-  enabled: boolean
-  command: string
-  args: string[]
-  cwd: string
-  startupTimeoutMs: number
-  stopTimeoutMs: number
-  restartOnExit: boolean
-  restartDelayMs: number
 }

@@ -2,10 +2,6 @@
   "workspace": {
     "root": "/path/to/wrenyard-suite"
   },
-  "pet": {
-    "enabled": true,
-    "cwd": "/path/to/wrenyard-suite/apps/pet"
-  },
   "fwa": {
     "workspace_root": "/path/to/wrenyard-suite",
     "llm": {

@@ -244,7 +244,6 @@ function configPathFor(): string {
   writeFileSync(path, JSON.stringify({
     service: { enabled: true, bind: '127.0.0.1:18787', ipc: { path: join(dir, 'foreman.sock') } },
     workspace: {},
-    pet: { enabled: false },
     message: { enabled: false },
     messageDelivery: { enabled: false },
   }), 'utf-8')
