@@ -9,11 +9,16 @@ Hardened Electron desktop shell for the Wrenyard DSH.
 
 ## Architecture
 
-`@wrenyard/desktop` (Electron main process) hosts the DSH web application as an
-isolated child process:
+`@wrenyard/desktop` is the 啾啾工坊 product boundary. Its Electron main process
+owns the application shell, notification-area integration and product settings,
+while DSH remains an isolated child process and Pet runs as an internal module:
 
 ```
-Electron main (dist/main.js)
+Electron product shell
+  ├─ notification-area icon + product menu
+  ├─ Activity Bar + Desktop-owned conversation/statistics/quota/settings pages
+  ├─ bounded DSH HTTP/WebSocket adapter in the Electron main process
+  ├─ Pet controller + in-process Pet runtime (overlay windows and observers)
   └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
@@ -24,18 +29,73 @@ Electron main (dist/main.js)
                  (@wrenyard/control-client — never Wrenyard internals)
 ```
 
+- **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
+  non-interactive Wrenyard brand mark at the top, exposes the Desktop-owned
+  conversation surface as its own navigation item, adds “工房台账” and “额度”
+  as top-level child functions and places “啾啾工坊设置” at the bottom. The single
+  local renderer owns all four pages; no DSH Web UI or `WebContentsView` is
+  embedded. `Cmd+,` / `Ctrl+,` opens settings; `Cmd+1` /
+  `Ctrl+1` opens the workbench; `Cmd+2` / `Ctrl+2` opens statistics; `Cmd+3` /
+  `Ctrl+3` opens quota.
+- **Desktop-owned statistics** — Desktop reads the public `stats.summary`
+  projection directly and falls back to `stats.today` for older/unavailable
+  control planes. The full-width ledger receives a bounded view of today
+  totals, completion rate, a 31-day heat map, Profile rows, Task rows and
+  24h/7d/1mo windows. Pet only polls `stats.today` to enrich its passive house
+  hover summary; it has no statistics window or action.
+- **Desktop-owned quota** — one Desktop controller runs the Runtime `quota
+  --json` adapter on a bounded cache/refresh interval, applies the configured
+  provider order once and projects the result to the full-size quota page, the
+  notification-area “额度” submenu and the Pet house Tips. Pet no longer owns a
+  quota poller; it receives the latest provider projection as passive display
+  data. Percentage windows retain remaining/expected values, while monetary
+  providers retain their currency balances. The notification-area projection
+  preserves the original grouped 5×7 RGBA template-bitmap renderer, including
+  compact provider spacing, progress tracks, pace markers and balance columns;
+  it is not replaced by native text labels or SVG menu images.
+  LaunchServices startup resolves the Runtime from the active installed
+  Wrenyard suite instead of relying on an inherited shell `PATH`.
+- **Desktop-owned product settings** — the settings page reports public
+  Wrenyard health, uptime, workspace root, IPC endpoint, model credential
+  presence and suite/DSH versions. Workspace is a product-level fixed binding:
+  `WRENYARD_DESKTOP_WORKSPACE` is an optional highest-priority override and is
+  shown read-only in settings when present; otherwise Desktop reads and edits
+  the user's `workspace.root` config. With neither source configured, the
+  conversation page remains gated. There is no per-conversation workspace picker. It
+  also owns the former Pet settings:
+  companion appearance, scale, placement offset, bubble duration, entity
+  visibility and quota-provider order. Desktop persists the bounded Pet config
+  in its own settings store and applies it by restarting its in-process Pet
+  runtime; Pet no longer creates a tray, settings window or settings action.
+  Credential values are reduced to booleans in the main process and never sent
+  to the renderer.
+- **Notification-area ownership** — Desktop owns the single three-wren macOS
+  template icon and menu. It exists only while Desktop is active. The compact
+  menu exposes only “打开”, “桌宠”, “额度” and “退出”; settings and statistics
+  remain Desktop Activity Bar pages. Opening or dismissing the notification-area
+  menu never changes the application window state; only the explicit “打开”
+  command raises it. Companion enablement, display, visibility and reload stay
+  consolidated under “桌宠”.
+- **Lifecycle ownership** — Desktop starts and stops Pet in the same Electron
+  main process. Foreman observes and executes agent work but exposes no Pet
+  lifecycle RPC, config field or CLI command.
+
 - **Single instance** — a second launch only focuses the existing window.
-- **Wrenyard gate** — before DSH starts, `WrenyardIpcClient.health.ping()` must
-  succeed on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
+- **Wrenyard and workspace gates** — Desktop probes
+  `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
   `FOREMAN_*` names, then the shared `wrenyard.sock` default). If no daemon is
   answering, the main process locates the installed Wrenyard CLI via
   `WRENYARD_CLI`, the working directory, or `~/.local/bin`, starts the service
   once (`wrenyard daemon start`), and retries health.ping with bounded retries.
-  If the CLI cannot be found or never becomes ready, the app exits loudly with
-  a visible diagnostic. LaunchServices provides no shell environment, so the
+  If the CLI cannot be found or never becomes ready, the product shell and its
+  settings remain available while control-plane features report unavailable.
+  A missing or invalid `workspace.root` prevents DSH from starting and places
+  an explicit gate over conversations. The gate can open settings or save a
+  valid directory directly; Desktop then relaunches against that binding.
+  LaunchServices provides no shell environment, so the
   CLI is located explicitly and the resolved connection context is passed to
   the DSH child directly. Wrenyard remains the sole state/permission owner.
-- **DSH web child** — started with launcher flags first
+- **DSH backend child** — started with launcher flags first
   (`--profile web --patch <overlay>`), then web flags
   (`--host 127.0.0.1 --port 0`). `--patch` after `--host` is parsed as a
   web-app option, rejected, and the Desktop flash-quits. The Electron-as-node
@@ -48,8 +108,10 @@ Electron main (dist/main.js)
   (`FORGE_DSH_*_API_KEY`); the patch file is secret-free. `DSH_HOME` points at
   an isolated profile. Child cwd and the Host workspace registry are pinned to
   Wrenyard `workspace.root` (`WRENYARD_DESKTOP_WORKSPACE` can override). The
-  directory picker is disabled, so the conversation chip is a label rather
-  than an “添加工作区” flow. MCP defaults to
+  directory picker and DSH Web renderer are not product surfaces. Desktop uses
+  the public unary API and mux/host event streams from the loopback child,
+  filters sessions to the fixed workspace, and sends only a bounded
+  conversation projection through preload IPC. MCP defaults to
   `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
   under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and
@@ -59,11 +121,12 @@ Electron main (dist/main.js)
   (`taskkill /T /F` on Windows). No background DSH service is intentionally
   left running.
 - **BrowserWindow hardening** — `contextIsolation: true`, `nodeIntegration:
-  false`, `sandbox: true`, no preload, `window.open` denied, navigation away
-  from the exact origin denied, all permission requests/checks denied, window
-  shown only after `ready-to-show`.
-- **Failure surface** — DSH child exit renders a local `data:text` error page
-  with no raw environment values.
+  false`, `sandbox: true`, a bounded shell preload bridge, `window.open`
+  denied, navigation away from the exact origin denied, all permission
+  requests/checks denied. The renderer never receives the DSH loopback URL.
+- **Failure surface** — DSH startup or child exit switches the conversation
+  projection to an unavailable state while settings, statistics and quota remain
+  usable; no raw environment values cross into the renderer.
 
 ## Isolated profile / state path
 
@@ -92,8 +155,9 @@ come from `packages/dsh-shell` in the monorepo.
 - Wrenyard connection context (`WRENYARD_MCP_URL`, `WRENYARD_MCP_SENDER`,
   `WRENYARD_IPC_PATH`, with legacy `FOREMAN_*` fallbacks) is propagated to the
   child without ever being logged.
-- The renderer has no Node access, no preload bridge, and cannot open windows
-  or navigate off-origin.
+- The shell renderer has no Node access and receives only bounded settings,
+  statistics, quota and conversation projections. Only the Electron main process
+  talks to DSH; the renderer cannot open windows or navigate off-origin.
 
 ## Commands
 
@@ -101,7 +165,7 @@ come from `packages/dsh-shell` in the monorepo.
 | --- | --- |
 | `npm run build` | typecheck + esbuild main bundle + type declarations |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | unit tests (profile + DSH child lifecycle, via tsx) |
+| `npm test` | unit tests (profile, conversation projection + DSH child lifecycle, via tsx) |
 | `npm run start` | run Electron against the current build |
 | `npm run dev` | build then run Electron |
 | `npm run smoke` | build then launch hidden Electron; exits 0 on load + health, non-zero on timeout |
@@ -123,4 +187,5 @@ unsigned unless a signtool identity is supplied; Linux uses checksums.
 - A Wrenyard daemon (the startup health gate starts it on demand via the
   installed CLI; see `tools/desktop/install-dev.mjs`)
 - `npm install` at the monorepo root (workspace deps: `@wrenyard/control-client`,
-  `@wrenyard/dsh-shell`; runtime: `@deepseek-ai/dsh@0.1.0-rc.6` pinned exactly)
+  `@wrenyard/dsh-shell`, `@wrenyard/pet`; runtime:
+  `@deepseek-ai/dsh@0.1.0-rc.6` pinned exactly)

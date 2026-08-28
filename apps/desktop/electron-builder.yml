@@ -1,6 +1,10 @@
 appId: dev.wrenyard.desktop
 productName: 啾啾工坊
 copyright: "Copyright © 2026 Dluckxx"
+protocols:
+  - name: Wrenyard Desktop
+    schemes:
+      - wrenyard
 # DSH resolves profile plugins from an isolated user-data directory. Keep app
 # code in ASAR while unpacking the runtime module tree so the profile can link
 # its @deepseek-ai scope without copying hundreds of packages on every launch.

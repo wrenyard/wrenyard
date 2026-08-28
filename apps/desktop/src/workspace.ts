@@ -7,6 +7,15 @@ import { basename, dirname, join, resolve } from 'node:path';
 const STORAGE_VERSION = 2;
 const STORAGE_RELATIVE = join('storages', 'workspace.json');
 
+export interface WorkspaceConfiguration {
+  status: 'configured' | 'missing' | 'invalid';
+  source: 'environment' | 'user-config' | 'none';
+  configPath: string;
+  path?: string;
+  message?: string;
+  readOnly: boolean;
+}
+
 export interface WorkspaceRecord {
   path: string;
   title: string;
@@ -62,6 +71,109 @@ function readWorkspaceRootFromConfig(configPath: string): string | undefined {
   return typeof root === 'string' && root.trim() ? root.trim() : undefined;
 }
 
+export async function inspectProductWorkspace(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<WorkspaceConfiguration> {
+  const configPath = resolveWrenyardConfigPath(env);
+  const override = env.WRENYARD_DESKTOP_WORKSPACE?.trim();
+  if (override) {
+    try {
+      return {
+        status: 'configured',
+        source: 'environment',
+        configPath,
+        path: await assertDirectory(override, 'WRENYARD_DESKTOP_WORKSPACE'),
+        readOnly: true,
+      };
+    } catch (error) {
+      return {
+        status: 'invalid',
+        source: 'environment',
+        configPath,
+        path: resolve(override),
+        message: error instanceof Error ? error.message : String(error),
+        readOnly: true,
+      };
+    }
+  }
+
+  let configured: string | undefined;
+  try {
+    configured = readWorkspaceRootFromConfig(configPath);
+  } catch (error) {
+    return {
+      status: 'invalid',
+      source: 'user-config',
+      configPath,
+      message: error instanceof Error ? error.message : String(error),
+      readOnly: false,
+    };
+  }
+  if (!configured) {
+    return { status: 'missing', source: 'none', configPath, readOnly: false };
+  }
+  try {
+    return {
+      status: 'configured',
+      source: 'user-config',
+      configPath,
+      path: await assertDirectory(configured, 'Wrenyard workspace.root'),
+      readOnly: false,
+    };
+  } catch (error) {
+    return {
+      status: 'invalid',
+      source: 'user-config',
+      configPath,
+      path: resolve(configured),
+      message: error instanceof Error ? error.message : String(error),
+      readOnly: false,
+    };
+  }
+}
+
+export async function saveProductWorkspace(
+  requestedPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<WorkspaceConfiguration> {
+  if (env.WRENYARD_DESKTOP_WORKSPACE?.trim()) {
+    throw new Error('当前工作区由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理，无法在 App 内修改');
+  }
+  if (!requestedPath.trim()) throw new Error('请输入 workspace 路径');
+  const canonicalPath = await assertDirectory(requestedPath.trim(), 'Workspace');
+  const configPath = resolveWrenyardConfigPath(env);
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch (error) {
+      throw new Error(`Wrenyard config is not valid JSON: ${configPath}`, { cause: error });
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`Wrenyard config is not an object: ${configPath}`);
+    }
+    config = parsed as Record<string, unknown>;
+  }
+  const currentWorkspace = config.workspace;
+  const workspace = currentWorkspace !== null
+    && typeof currentWorkspace === 'object'
+    && !Array.isArray(currentWorkspace)
+    ? currentWorkspace as Record<string, unknown>
+    : {};
+  await atomicWriteJson(configPath, {
+    ...config,
+    workspace: { ...workspace, root: canonicalPath },
+  });
+  return {
+    status: 'configured',
+    source: 'user-config',
+    configPath,
+    path: canonicalPath,
+    readOnly: false,
+  };
+}
+
 async function assertDirectory(path: string, label: string): Promise<string> {
   let canonical: string;
   try {
@@ -83,18 +195,10 @@ async function assertDirectory(path: string, label: string): Promise<string> {
 export async function resolveProductWorkspace(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const override = env.WRENYARD_DESKTOP_WORKSPACE?.trim();
-  if (override) {
-    return assertDirectory(override, 'WRENYARD_DESKTOP_WORKSPACE');
-  }
-  const configPath = resolveWrenyardConfigPath(env);
-  const configured = readWorkspaceRootFromConfig(configPath);
-  if (!configured) {
-    throw new Error(
-      `Wrenyard workspace.root is missing in ${configPath}; set workspace.root or WRENYARD_DESKTOP_WORKSPACE`,
-    );
-  }
-  return assertDirectory(configured, 'Wrenyard workspace.root');
+  const configuration = await inspectProductWorkspace(env);
+  if (configuration.status === 'configured' && configuration.path) return configuration.path;
+  throw new Error(configuration.message
+    ?? `Wrenyard workspace.root is missing in ${configuration.configPath}; set workspace.root or WRENYARD_DESKTOP_WORKSPACE`);
 }
 
 export function workspaceStoragePath(dshHome: string): string {
