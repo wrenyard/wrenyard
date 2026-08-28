@@ -108,7 +108,7 @@ function renderSnapshot(snapshot: SettingsSnapshot): void {
   workspaceSettingInput.readOnly = workspaceFromEnvironment;
   workspaceSettingInput.setAttribute('aria-readonly', String(workspaceFromEnvironment));
   workspaceSaveButton.disabled = workspaceFromEnvironment;
-  workspaceSaveButton.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并重启';
+  workspaceSaveButton.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并应用';
   workspaceSettingNote.textContent = workspaceFromEnvironment
     ? '由环境变量 WRENYARD_DESKTOP_WORKSPACE 提供；路径只读，如需修改请调整启动环境。'
     : snapshot.service.workspace.status === 'configured'
@@ -647,14 +647,15 @@ workspaceSaveButton.addEventListener('click', () => {
   workspaceSaveButton.textContent = '正在保存…';
   workspaceSettingNote.textContent = '';
   void window.wrenyardShell.saveWorkspace(workspaceSettingInput.value)
-    .then(() => {
-      workspaceSaveButton.textContent = '正在重启工坊…';
-      workspaceSettingNote.textContent = 'Workspace 已保存，正在重启会话后端。';
+    .then(async () => {
+      workspaceSaveButton.textContent = '已应用';
+      workspaceSettingNote.textContent = 'Workspace 已保存，会话后端已切换，无需重启 App。';
+      renderSnapshot(await window.wrenyardShell.getSettings());
     })
     .catch((error: unknown) => {
       workspaceSettingNote.textContent = error instanceof Error ? error.message : String(error);
       workspaceSaveButton.disabled = false;
-      workspaceSaveButton.textContent = '保存并重启';
+      workspaceSaveButton.textContent = '保存并应用';
     });
 });
 

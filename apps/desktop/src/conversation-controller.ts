@@ -1,0 +1,137 @@
+import { unavailableConversation } from './dsh-conversation-client.js';
+import type {
+  ConversationSnapshot,
+  WorkspaceConfigurationSnapshot,
+} from './shell-contract.js';
+
+export type ConfiguredWorkspace = WorkspaceConfigurationSnapshot & {
+  status: 'configured';
+  path: string;
+};
+
+export interface DesktopConversationSession {
+  snapshot(): ConversationSnapshot;
+  select(sessionId: string): Promise<ConversationSnapshot>;
+  create(): Promise<ConversationSnapshot>;
+  send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
+  cancel(): Promise<ConversationSnapshot>;
+  stop(): void | Promise<void>;
+}
+
+export interface DesktopConversationControllerOptions {
+  initialWorkspace: WorkspaceConfigurationSnapshot;
+  createSession(
+    workspace: ConfiguredWorkspace,
+    onUnexpectedExit: (message: string) => void,
+  ): Promise<DesktopConversationSession>;
+  onChanged(): void;
+}
+
+/**
+ * Serializes DSH session-backend transitions while keeping the renderer and
+ * Desktop process alive. Workspace changes replace only the backend session.
+ */
+export class DesktopConversationController {
+  private workspaceValue: WorkspaceConfigurationSnapshot;
+  private session: DesktopConversationSession | null = null;
+  private error: string | undefined;
+  private generation = 0;
+  private transition: Promise<void> = Promise.resolve();
+
+  constructor(private readonly options: DesktopConversationControllerOptions) {
+    this.workspaceValue = options.initialWorkspace;
+  }
+
+  get workspace(): WorkspaceConfigurationSnapshot {
+    return this.workspaceValue;
+  }
+
+  start(): Promise<void> {
+    return this.configure(this.workspaceValue);
+  }
+
+  configure(workspace: WorkspaceConfigurationSnapshot): Promise<void> {
+    return this.enqueue(async () => {
+      const generation = ++this.generation;
+      const previous = this.session;
+      this.session = null;
+      this.workspaceValue = workspace;
+      this.error = undefined;
+      await previous?.stop();
+      this.options.onChanged();
+
+      if (workspace.status !== 'configured' || !workspace.path) return;
+      const configured: ConfiguredWorkspace = {
+        ...workspace,
+        status: 'configured',
+        path: workspace.path,
+      };
+      try {
+        const session = await this.options.createSession(configured, (message) => {
+          this.handleUnexpectedExit(generation, message);
+        });
+        if (generation !== this.generation) {
+          await session.stop();
+          return;
+        }
+        this.session = session;
+        this.options.onChanged();
+      } catch (error) {
+        if (generation === this.generation) {
+          this.error = error instanceof Error ? error.message : String(error);
+          this.options.onChanged();
+        }
+        throw error;
+      }
+    });
+  }
+
+  stop(): Promise<void> {
+    return this.enqueue(async () => {
+      this.generation += 1;
+      const session = this.session;
+      this.session = null;
+      await session?.stop();
+    });
+  }
+
+  snapshot(): ConversationSnapshot {
+    return this.session?.snapshot() ?? unavailableConversation(this.workspaceValue, this.error);
+  }
+
+  select(sessionId: string): Promise<ConversationSnapshot> {
+    return this.requireSession().select(sessionId);
+  }
+
+  create(): Promise<ConversationSnapshot> {
+    return this.requireSession().create();
+  }
+
+  send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
+    return this.requireSession().send(text, clientTimeZone);
+  }
+
+  cancel(): Promise<ConversationSnapshot> {
+    return this.requireSession().cancel();
+  }
+
+  private requireSession(): DesktopConversationSession {
+    if (!this.session) throw new Error(this.error ?? '请先配置 Wrenyard workspace');
+    return this.session;
+  }
+
+  private handleUnexpectedExit(generation: number, message: string): void {
+    if (generation !== this.generation) return;
+    const session = this.session;
+    this.session = null;
+    this.error = message;
+    void Promise.resolve(session?.stop()).catch(() => undefined);
+    this.options.onChanged();
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const result = this.transition.catch(() => undefined).then(operation);
+    this.transition = result.catch(() => undefined);
+    return result;
+  }
+}

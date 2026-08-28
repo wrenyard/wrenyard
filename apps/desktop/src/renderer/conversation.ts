@@ -206,7 +206,7 @@ export class ConversationView {
       this.gateInput.setAttribute('aria-readonly', String(workspaceFromEnvironment));
       const quickSave = element<HTMLButtonElement>('workspace-quick-save');
       quickSave.disabled = workspaceFromEnvironment;
-      quickSave.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并重启工坊';
+      quickSave.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并应用';
     }
     this.input.disabled = !ready || this.busy;
     this.sendButton.disabled = !ready || this.busy || !this.input.value.trim();
@@ -389,11 +389,12 @@ export class ConversationView {
     button.textContent = '正在保存…';
     try {
       await this.api.saveWorkspace(this.gateInput.value);
-      button.textContent = '正在重启工坊…';
+      button.textContent = '已应用';
+      await this.refresh();
     } catch (error) {
       this.gateError.textContent = errorMessage(error);
       button.disabled = false;
-      button.textContent = '保存并重启工坊';
+      button.textContent = '保存并应用';
     }
   }
 

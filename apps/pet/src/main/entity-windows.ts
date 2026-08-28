@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { DisplayRect } from './display-placement';
+import { overlaySkipsTaskbar } from './overlay-window-policy';
 
 export interface EntityWindowOptions {
   preloadPath: string;
@@ -29,7 +30,7 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
     frame: false,
     thickFrame: false,
     resizable: false,
-    skipTaskbar: true,
+    skipTaskbar: overlaySkipsTaskbar(),
     hasShadow: false,
     alwaysOnTop: true,
     focusable: true,
