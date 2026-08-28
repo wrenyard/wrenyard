@@ -6,8 +6,13 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control-client';
 import { DesktopPetRuntime, QuotaService } from '@wrenyard/pet/runtime';
-import { startDshWeb, type DshWebHandle } from './dsh-process.js';
-import { DshConversationClient, unavailableConversation } from './dsh-conversation-client.js';
+import { startDshWeb } from './dsh-process.js';
+import { DshConversationClient } from './dsh-conversation-client.js';
+import {
+  DesktopConversationController,
+  type ConfiguredWorkspace,
+  type DesktopConversationSession,
+} from './conversation-controller.js';
 import { defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
@@ -217,8 +222,73 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
   ]);
 }
 
-let dsh: DshWebHandle | null = null;
-let conversation: DshConversationClient | null = null;
+async function createConversationSession(
+  workspace: ConfiguredWorkspace,
+  ipcPath: string,
+  onUnexpectedExit: (message: string) => void,
+): Promise<DesktopConversationSession> {
+  const shellSource = resolveShellSource();
+  const dshHome = join(app.getPath('userData'), 'dsh');
+  const runtimeModules = app.isPackaged
+    ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
+    : join(app.getAppPath(), 'node_modules');
+  const profile = await prepareProfile(dshHome, shellSource, runtimeModules);
+  ensureChineseLocale(profile.dshHome);
+  const registration = await ensureProductWorkspaceRegistered(profile.dshHome, workspace.path);
+  const patchPath = await writeModelPatch(profile.dshHome);
+  const extraEnv = await resolveModelCredentialEnv();
+  const wrenyardEnv: NodeJS.ProcessEnv = {
+    WRENYARD_IPC_PATH: ipcPath,
+    WRENYARD_MCP_URL: defaultMcpUrl(),
+  };
+  const sender = process.env.WRENYARD_MCP_SENDER ?? process.env.FOREMAN_MCP_SENDER;
+  if (sender) wrenyardEnv.WRENYARD_MCP_SENDER = sender;
+
+  const dsh = await startDshWeb({
+    binPath: resolveDshBin(),
+    profileHome: profile.dshHome,
+    workspace: workspace.path,
+    runAsElectron: true,
+    wrenyardEnv,
+    patchPath,
+    extraEnv,
+  });
+  const client = new DshConversationClient({
+    baseUrl: dsh.url,
+    workspaceId: registration.id,
+    workspace,
+    onChanged: () => shellWindow?.notifyConversationChanged(),
+  });
+  let intentionalStop = false;
+  dsh.child.on('exit', (code, signal) => {
+    if (intentionalStop || quitting) return;
+    client.stop();
+    onUnexpectedExit(`DSH 会话后端已停止（code ${code ?? 'unknown'}，signal ${signal ?? 'none'}）`);
+  });
+  try {
+    await client.start();
+  } catch (error) {
+    intentionalStop = true;
+    client.stop();
+    await dsh.stop().catch(() => undefined);
+    throw error;
+  }
+
+  return {
+    snapshot: () => client.snapshot(),
+    select: (sessionId) => client.select(sessionId),
+    create: () => client.create(),
+    send: (text, clientTimeZone) => client.send(text, clientTimeZone),
+    cancel: () => client.cancel(),
+    stop: async () => {
+      intentionalStop = true;
+      client.stop();
+      await dsh.stop();
+    },
+  };
+}
+
+let conversationController: DesktopConversationController | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
@@ -241,71 +311,19 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
   const ipcPath = resolveWrenyardIpcPath();
   const workspaceConfiguration = await inspectProductWorkspace();
-  let conversationError: string | undefined;
 
   await assertForemanHealthy().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] Wrenyard service is unavailable; Desktop settings remain accessible:', error);
   });
 
-  if (workspaceConfiguration.status === 'configured' && workspaceConfiguration.path) {
-    try {
-      const shellSource = resolveShellSource();
-      const dshHome = join(app.getPath('userData'), 'dsh');
-      const runtimeModules = app.isPackaged
-        ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
-        : join(app.getAppPath(), 'node_modules');
-      const profile = await prepareProfile(dshHome, shellSource, runtimeModules);
-      ensureChineseLocale(profile.dshHome);
-      const registration = await ensureProductWorkspaceRegistered(profile.dshHome, workspaceConfiguration.path);
-      const patchPath = await writeModelPatch(profile.dshHome);
-      const extraEnv = await resolveModelCredentialEnv();
-
-      // The DSH process remains the conversation backend. Its Web UI is not
-      // embedded: Desktop owns the only renderer and talks through bounded IPC.
-      const wrenyardEnv: NodeJS.ProcessEnv = {
-        WRENYARD_IPC_PATH: ipcPath,
-        WRENYARD_MCP_URL: defaultMcpUrl(),
-      };
-      const sender = process.env.WRENYARD_MCP_SENDER ?? process.env.FOREMAN_MCP_SENDER;
-      if (sender) wrenyardEnv.WRENYARD_MCP_SENDER = sender;
-
-      dsh = await startDshWeb({
-        binPath: resolveDshBin(),
-        profileHome: profile.dshHome,
-        workspace: workspaceConfiguration.path,
-        runAsElectron: true,
-        wrenyardEnv,
-        patchPath,
-        extraEnv,
-      });
-      conversation = new DshConversationClient({
-        baseUrl: dsh.url,
-        workspaceId: registration.id,
-        workspace: {
-          ...workspaceConfiguration,
-          status: 'configured',
-          path: workspaceConfiguration.path,
-        },
-        onChanged: () => shellWindow?.notifyConversationChanged(),
-      });
-      await conversation.start();
-
-      dsh.child.on('exit', (code, signal) => {
-        if (quitting) return;
-        conversation?.stop();
-        conversation = null;
-        conversationError = `DSH 会话后端已停止（code ${code ?? 'unknown'}，signal ${signal ?? 'none'}）`;
-        shellWindow?.notifyConversationChanged();
-      });
-    } catch (error) {
-      conversationError = error instanceof Error ? error.message : String(error);
-      console.error('[wrenyard-desktop] DSH conversation backend failed to start:', error);
-      conversation?.stop();
-      conversation = null;
-      await dsh?.stop().catch(() => undefined);
-      dsh = null;
-    }
-  }
+  conversationController = new DesktopConversationController({
+    initialWorkspace: workspaceConfiguration,
+    createSession: (workspace, onUnexpectedExit) => createConversationSession(workspace, ipcPath, onUnexpectedExit),
+    onChanged: () => shellWindow?.notifyConversationChanged(),
+  });
+  await conversationController.start().catch((error: unknown) => {
+    console.error('[wrenyard-desktop] DSH conversation backend failed to start:', error);
+  });
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -347,7 +365,7 @@ async function bootstrap(): Promise<void> {
   const version = app.getVersion();
   const getSettings = () => buildSettingsSnapshot({
     endpoint: ipcPath,
-    workspace: workspaceConfiguration,
+    workspace: conversationController!.workspace,
     desktopVersion: version,
     wrenyardVersion: version,
     dshVersion: resolveDshVersion(),
@@ -369,30 +387,20 @@ async function bootstrap(): Promise<void> {
     },
     saveWorkspace: async (path: string) => {
       const saved = await saveProductWorkspace(path);
-      setTimeout(() => {
-        app.relaunch();
-        app.exit(0);
-      }, 350);
+      await conversationController!.configure(saved);
       return saved;
     },
-    getConversation: async () => conversation?.snapshot()
-      ?? unavailableConversation(workspaceConfiguration, conversationError),
-    selectConversation: async (sessionId: string) => {
-      if (!conversation) throw new Error(conversationError ?? '请先配置 Wrenyard workspace');
-      return conversation.select(sessionId);
-    },
-    createConversation: async () => {
-      if (!conversation) throw new Error(conversationError ?? '请先配置 Wrenyard workspace');
-      return conversation.create();
-    },
-    sendConversation: async (text: string, clientTimeZone?: string) => {
-      if (!conversation) throw new Error(conversationError ?? '请先配置 Wrenyard workspace');
-      return conversation.send(text, clientTimeZone);
-    },
-    cancelConversation: async () => {
-      if (!conversation) throw new Error(conversationError ?? '请先配置 Wrenyard workspace');
-      return conversation.cancel();
-    },
+    getConversation: async () => conversationController!.snapshot(),
+    selectConversation: (sessionId: string) => conversationController!.select(sessionId),
+    createConversation: () => conversationController!.create(),
+    sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
+    cancelConversation: () => conversationController!.cancel(),
+  });
+
+  shellWindow.window.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    shellWindow?.window.hide();
   });
 
   desktopTray = createDesktopTray({
@@ -411,16 +419,16 @@ async function bootstrap(): Promise<void> {
   }
 
   if (SMOKE) {
-    if (!conversation) throw new Error('smoke requires a configured workspace and DSH backend');
+    if (conversationController.snapshot().status !== 'ready') {
+      throw new Error('smoke requires a configured workspace and DSH backend');
+    }
     await runSmoke(shellWindow);
     await petController.stop();
     petController = null;
     quotaController.stop();
     quotaController = null;
-    conversation.stop();
-    conversation = null;
-    await dsh?.stop();
-    dsh = null;
+    await conversationController.stop();
+    conversationController = null;
     console.log('[wrenyard-desktop] smoke ok');
     app.exit(0);
   }
@@ -435,6 +443,8 @@ app.on('open-url', (event, url) => {
   if (isSettingsLaunchRequest(url)) showDesktop('settings');
 });
 
+app.on('activate', () => showDesktop('workbench'));
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -447,17 +457,15 @@ app.on('before-quit', (event) => {
     try {
       desktopTray?.destroy();
       desktopTray = null;
-      conversation?.stop();
-      conversation = null;
       quotaController?.stop();
       quotaController = null;
       await petController?.stop();
       petController = null;
-      await dsh?.stop();
+      await conversationController?.stop();
+      conversationController = null;
     } catch {
       // best-effort termination
     } finally {
-      dsh = null;
       app.quit();
     }
   })();
@@ -471,16 +479,14 @@ if (!gotSingleInstanceLock) {
   void bootstrap().catch(async (error) => {
     console.error('[wrenyard-desktop] startup failed:', error instanceof Error ? (error.stack ?? error.message) : String(error));
     try {
-      conversation?.stop();
-      conversation = null;
       quotaController?.stop();
       quotaController = null;
       await petController?.stop();
-      await dsh?.stop();
+      await conversationController?.stop();
+      conversationController = null;
     } catch {
       // best-effort termination
     }
-    dsh = null;
     app.exit(1);
   });
 }

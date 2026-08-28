@@ -7,6 +7,7 @@ import type { TaskGraphEntityDtoWithPresentation, TaskGraphNodeState, GraphSlipS
 import { projectGraphSlipFromActivity, activityAllowsTranscript } from './graph-slip-snapshot-dto';
 import type { ActivityPresence, ActivityTaskGraphPresence } from '../shared/activity-snapshot';
 import { clampRectToRect } from './entity-geometry';
+import { overlaySkipsTaskbar } from './overlay-window-policy';
 
 // K3 Blueprint Wren: 28x22 authored grid at 3x = 84x66 display pixels,
 // hosted inside a 156x84 transparent entity window (fact slip sits below
@@ -616,7 +617,7 @@ export class TaskGraphWindowOwner {
       thickFrame: false,
       hasShadow: false,
       backgroundColor: '#00000000',
-      skipTaskbar: true,
+      skipTaskbar: overlaySkipsTaskbar(),
       alwaysOnTop: true,
       focusable: false,
       show: false,
@@ -839,7 +840,7 @@ export class TaskGraphWindowOwner {
       thickFrame: false,
       hasShadow: false,
       backgroundColor: '#00000000',
-      skipTaskbar: true,
+      skipTaskbar: overlaySkipsTaskbar(),
       alwaysOnTop: true,
       focusable: true,
       show: false,
@@ -1060,7 +1061,7 @@ export class TaskGraphWindowOwner {
       thickFrame: false,
       hasShadow: false,
       backgroundColor: '#00000000',
-      skipTaskbar: true,
+      skipTaskbar: overlaySkipsTaskbar(),
       alwaysOnTop: true,
       focusable: true,
       show: false,

@@ -20,6 +20,8 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(main, /createDesktopTray/);
   assert.match(main, /new DesktopPetController/);
   assert.match(main, /new DesktopPetRuntime/);
+  assert.match(main, /app\.on\(['"]activate['"]/);
+  assert.doesNotMatch(main, /app\.relaunch\(/);
   assert.match(tray, /new Tray\(/);
   assert.match(tray, /label: '打开'/);
   assert.doesNotMatch(tray, /tray\.on\(['"]click['"]/);

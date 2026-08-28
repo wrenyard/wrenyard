@@ -81,6 +81,10 @@ Electron product shell
   lifecycle RPC, config field or CLI command.
 
 - **Single instance** — a second launch only focuses the existing window.
+- **Window identity** — Pet overlays never suppress the macOS Dock identity of
+  the Desktop host. Closing the product window hides it without ending the tray,
+  DSH or Pet lifecycle; the Dock activation event and the tray “打开” command
+  restore the same window.
 - **Wrenyard and workspace gates** — Desktop probes
   `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
   `FOREMAN_*` names, then the shared `wrenyard.sock` default). If no daemon is
@@ -91,7 +95,9 @@ Electron product shell
   settings remain available while control-plane features report unavailable.
   A missing or invalid `workspace.root` prevents DSH from starting and places
   an explicit gate over conversations. The gate can open settings or save a
-  valid directory directly; Desktop then relaunches against that binding.
+  valid directory directly; Desktop persists the path and replaces only the DSH
+  conversation session in-process, so the new binding is usable without an App
+  relaunch.
   LaunchServices provides no shell environment, so the
   CLI is located explicitly and the resolved connection context is passed to
   the DSH child directly. Wrenyard remains the sole state/permission owner.
