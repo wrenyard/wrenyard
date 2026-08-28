@@ -16,6 +16,7 @@ import {
 import { defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
+import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
 import { DesktopPetSettingsStore } from './pet-settings-store.js';
 import { DesktopQuotaController } from './quota-controller.js';
@@ -309,6 +310,10 @@ function showDesktop(page: ShellPage = 'workbench'): void {
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
+  await ensureDesktopActivationPolicy({
+    setActivationPolicy: (policy) => app.setActivationPolicy(policy),
+    ...(app.dock ? { showDock: () => app.dock!.show() } : {}),
+  });
   const ipcPath = resolveWrenyardIpcPath();
   const workspaceConfiguration = await inspectProductWorkspace();
 
