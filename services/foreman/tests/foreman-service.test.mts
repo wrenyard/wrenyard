@@ -382,7 +382,6 @@ test('service IPC exposes message.send through service runtime', async () => {
       ipc: { path: endpoint.path },
     },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: { enabled: false, default: [], channels: {} },
   }, {
@@ -417,63 +416,6 @@ test('service IPC exposes message.send through service runtime', async () => {
   }
 })
 
-test('service IPC controls daemon-owned pet service', async () => {
-  const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-ipc-pet-'))
-  const workspaceProject = join(workDir, 'projects', 'workspace')
-  mkdirSync(workspaceProject, { recursive: true })
-  writeFileSync(
-    join(workspaceProject, 'workspace.fmproj'),
-    'name: workspace\ndescription: Workspace shared resources\n',
-    'utf-8',
-  )
-  let petState: 'stopped' | 'running' = 'stopped'
-  const running = await createTestService(workDir, {
-    petService: {
-      setForemanIpcPath() {},
-      async start() {
-        petState = 'running'
-      },
-      async stop() {
-        petState = 'stopped'
-      },
-      async restart() {
-        petState = 'running'
-      },
-      status() {
-        return {
-          state: petState,
-          enabled: true,
-          running: petState === 'running',
-          transport: 'ipc-jsonrpc',
-          command: process.execPath,
-          args: ['-e', 'setInterval(() => {}, 1000)'],
-          cwd: workDir,
-        }
-      },
-    },
-  })
-  const client = await connectIpcForemanClient({ path: running.ipcPath, timeoutMs: 1_000 })
-
-  try {
-    const initial = await client.pet.status()
-    assert.equal(initial.state, 'stopped')
-    assert.equal(initial.transport, 'ipc-jsonrpc')
-
-    const stopped = await client.pet.stop()
-    assert.equal(stopped.ok, true)
-    assert.equal(stopped.status.state, 'stopped')
-
-    const started = await client.pet.start()
-    assert.equal(started.ok, true)
-    assert.equal(started.status.state, 'running')
-  } finally {
-    client.close()
-    await running.stop()
-    resetRegistry()
-    rmSync(workDir, { recursive: true, force: true })
-  }
-})
-
 test('failed service startup closes HTTP when IPC endpoint is occupied', async () => {
   const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-ipc-occupied-'))
   const workspaceProject = join(workDir, 'projects', 'workspace')
@@ -501,16 +443,6 @@ test('failed service startup closes HTTP when IPC endpoint is occupied', async (
           ipc: { path: endpoint.path },
         },
         workspaceRoot: workDir,
-        pet: {
-          enabled: true,
-          command: process.execPath,
-          args: ['-e', 'setInterval(() => {}, 1000)'],
-          cwd: workDir,
-          startupTimeoutMs: 1_000,
-          stopTimeoutMs: 1_000,
-          restartOnExit: false,
-          restartDelayMs: 10,
-        },
         message: testMessageConfig(),
         messageDelivery: {
           enabled: false,
@@ -524,87 +456,6 @@ test('failed service startup closes HTTP when IPC endpoint is occupied', async (
     await assertHttpUnavailable(port)
   } finally {
     await occupiedIpcServer.close()
-    resetRegistry()
-    rmSync(endpoint.dir, { recursive: true, force: true })
-    rmSync(workDir, { recursive: true, force: true })
-  }
-})
-
-test('failed pet service startup closes HTTP and IPC resources', async () => {
-  const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-pet-fail-'))
-  const workspaceProject = join(workDir, 'projects', 'workspace')
-  mkdirSync(workspaceProject, { recursive: true })
-  writeFileSync(
-    join(workspaceProject, 'workspace.fmproj'),
-    'name: workspace\ndescription: Workspace shared resources\n',
-    'utf-8',
-  )
-  const endpoint = createTestIpcEndpoint('petfail')
-  const port = await allocateFreeTcpPort()
-  let petStopCount = 0
-  const { startForemanDaemon } = await import('../lib/daemon/daemon.mts')
-
-  try {
-    await assert.rejects(
-      startForemanDaemon({
-        service: {
-          enabled: true,
-          host: '127.0.0.1',
-          port,
-          ipc: { path: endpoint.path },
-        },
-        workspaceRoot: workDir,
-        pet: {
-          enabled: true,
-          command: process.execPath,
-          args: ['-e', 'setInterval(() => {}, 1000)'],
-          cwd: workDir,
-          startupTimeoutMs: 1_000,
-          stopTimeoutMs: 1_000,
-          restartOnExit: false,
-          restartDelayMs: 10,
-        },
-        message: testMessageConfig(),
-        messageDelivery: {
-          enabled: false,
-          default: ['system'],
-          channels: {},
-        },
-      }, {
-        petService: {
-          async start() {
-            throw new Error('pet service startup failed')
-          },
-          async stop() {
-            petStopCount += 1
-          },
-          status() {
-            return {
-              state: 'failed',
-              enabled: true,
-              running: false,
-              transport: 'ipc-jsonrpc',
-              command: process.execPath,
-              args: ['-e', 'setInterval(() => {}, 1000)'],
-              cwd: workDir,
-              last_error: 'pet service startup failed',
-            }
-          },
-        } as any,
-      }),
-      /pet service startup failed/u,
-    )
-
-    assert.equal(petStopCount, 1)
-    await assertHttpUnavailable(port)
-    await assert.rejects(
-      connectIpcForemanClient({ path: endpoint.path, timeoutMs: 200 }),
-      /Daemon unavailable|Unable to connect|Timed out|ENOENT|ECONNREFUSED/u,
-    )
-    if (process.platform !== 'win32') {
-      assert.equal(existsSync(endpoint.path), false)
-    }
-  } finally {
     resetRegistry()
     rmSync(endpoint.dir, { recursive: true, force: true })
     rmSync(workDir, { recursive: true, force: true })
@@ -634,16 +485,6 @@ test('service unified MCP forwards URL sender metadata into message protocol pay
       ipc: { path: endpoint.path },
     },
     workspaceRoot: workDir,
-    pet: {
-      enabled: false,
-      command: process.execPath,
-      args: ['-e', 'setInterval(() => {}, 1000)'],
-      cwd: workDir,
-      startupTimeoutMs: 1_000,
-      stopTimeoutMs: 1_000,
-      restartOnExit: false,
-      restartDelayMs: 10,
-    },
     message: testMessageConfig(),
     messageDelivery: {
       enabled: false,
@@ -700,7 +541,6 @@ function createTestService(workDir: string, deps?: any) {
         ipc: { path: endpoint.path },
       },
       workspaceRoot: workDir,
-      pet: testPetConfig(workDir),
       message: testMessageConfig(),
       messageDelivery: {
         enabled: false,
@@ -730,19 +570,6 @@ function createTestService(workDir: string, deps?: any) {
     rmSync(endpoint.dir, { recursive: true, force: true })
     throw error
   })
-}
-
-function testPetConfig(workDir: string) {
-  return {
-    enabled: false,
-    command: process.execPath,
-    args: ['-e', 'setInterval(() => {}, 1000)'],
-    cwd: workDir,
-    startupTimeoutMs: 1_000,
-    stopTimeoutMs: 1_000,
-    restartOnExit: false,
-    restartDelayMs: 10,
-  }
 }
 
 function reconcileStartupGraph(): TaskGraph {
@@ -1110,7 +937,6 @@ test('POST /message/deliver dispatches through hub and returns deliveries', asyn
       ipc: { path: endpoint.path },
     },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: true,
@@ -1326,7 +1152,6 @@ test('POST /message/deliver with correct Bearer token returns 200 when auth conf
     const running = await startForemanDaemon({
       service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
       workspaceRoot: workDir,
-      pet: testPetConfig(workDir),
       message: testMessageConfig(),
       messageDelivery: {
         enabled: true,
@@ -1399,7 +1224,6 @@ test('POST /message/deliver with no auth + non-loopback returns 403', async () =
   const running = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: true,
@@ -1448,7 +1272,6 @@ test('POST /message/deliver with hops=1 refuses remote channel with hop-limit', 
   const running = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: true,
@@ -1524,7 +1347,6 @@ test('POST /message/deliver allows remote channel through unified channel delive
   const runningB = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointB.path } },
     workspaceRoot: workDirB,
-    pet: testPetConfig(workDirB),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: true,
@@ -1542,7 +1364,6 @@ test('POST /message/deliver allows remote channel through unified channel delive
   const runningA = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
     workspaceRoot: workDirA,
-    pet: testPetConfig(workDirA),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: true,
@@ -1610,7 +1431,6 @@ test('POST /message/deliver allows authenticated remote channel delivery', async
     const runningB = await startForemanDaemon({
       service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointB.path } },
       workspaceRoot: workDirB,
-      pet: testPetConfig(workDirB),
       message: testMessageConfig(),
       messageDelivery: {
         enabled: true,
@@ -1629,7 +1449,6 @@ test('POST /message/deliver allows authenticated remote channel delivery', async
     const runningA = await startForemanDaemon({
       service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
       workspaceRoot: workDirA,
-      pet: testPetConfig(workDirA),
       message: testMessageConfig(),
       messageDelivery: {
         enabled: true,
@@ -1688,7 +1507,6 @@ test('service with active SSE subscriber stops promptly', async () => {
   const running = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: false,
@@ -1744,7 +1562,6 @@ test('oversized body gets 413 without full buffering', async () => {
   const running = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: false,
@@ -1804,7 +1621,6 @@ test('POST /mcp with X-Foreman-Channel-Connection but without X-Foreman-Channel-
   const running = await startForemanDaemon({
     service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: {
       enabled: false,
@@ -1946,6 +1762,10 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
     'utf-8',
   )
   const endpoint = createTestIpcEndpoint('planned-restart-fail')
+  const occupiedIpcServer = await createIpcServer({
+    path: endpoint.path,
+    onMessage: () => undefined,
+  })
   const { startForemanDaemon } = await import('../lib/daemon/daemon.mts')
 
   const store = new PlannedRestartStore()
@@ -1969,8 +1789,9 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
   })
 
   try {
-    await assert.rejects(
-      startForemanDaemon({
+    let startupError: unknown
+    try {
+      await startForemanDaemon({
         service: {
           enabled: true,
           host: '127.0.0.1',
@@ -1979,46 +1800,18 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
           ipc: { path: endpoint.path },
         },
         workspaceRoot: workDir,
-        pet: {
-          enabled: true,
-          command: process.execPath,
-          args: ['-e', 'setInterval(() => {}, 1000)'],
-          cwd: workDir,
-          startupTimeoutMs: 1_000,
-          stopTimeoutMs: 1_000,
-          restartOnExit: false,
-          restartDelayMs: 10,
-        },
         message: testMessageConfig(),
         messageDelivery: {
           enabled: false,
           default: ['system'],
           channels: {},
         },
-      }, {
-        petService: {
-          async start() {
-            throw new Error('pet service startup failed')
-          },
-          async stop() {
-            // no-op for the failing dependency
-          },
-          status() {
-            return {
-              state: 'failed',
-              enabled: true,
-              running: false,
-              transport: 'ipc-jsonrpc',
-              command: process.execPath,
-              args: ['-e', 'setInterval(() => {}, 1000)'],
-              cwd: workDir,
-              last_error: 'pet service startup failed',
-            }
-          },
-        } as any,
-      }),
-      /pet service startup failed/u,
-    )
+      })
+    } catch (error) {
+      startupError = error
+    }
+    assert(startupError instanceof Error)
+    const startupMessage = startupError.message
 
     // The plan must remain planned_restart and be marked failed / recovery_required.
     const snapshot = store.snapshot()
@@ -2028,7 +1821,7 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
     assert.equal(snapshot.plan.phase, 'failed')
     assert.equal(snapshot.plan.recovery_required, true)
     assert.ok(typeof snapshot.plan.error_code === 'string' && snapshot.plan.error_code.length > 0)
-    assert.equal(snapshot.plan.error_message, 'pet service startup failed')
+    assert.equal(snapshot.plan.error_message, startupMessage)
     assert.ok(typeof snapshot.plan.failed_at === 'string' && snapshot.plan.failed_at.length > 0)
 
     // Pre-seeded plan fields must be merged, not erased.
@@ -2041,6 +1834,7 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
     // No SQLite/schema rollback is performed; the durable plan file is the
     // only state mutated by the failed-closed recovery path.
   } finally {
+    await occupiedIpcServer.close()
     rmSync(endpoint.dir, { recursive: true, force: true })
     rmSync(workDir, { recursive: true, force: true })
   }
@@ -2076,7 +1870,6 @@ test('fwa.assign over IPC returns { session } through daemon RPC surface', async
         retry_backoff_ms: 500,
       },
     },
-    pet: testPetConfig(workDir),
     message: testMessageConfig(),
     messageDelivery: { enabled: false, default: ['system'], channels: {} },
   })

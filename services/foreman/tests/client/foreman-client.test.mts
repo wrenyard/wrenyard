@@ -208,35 +208,6 @@ describe('ForemanClient', () => {
     assertRequest(rpc, 0, 'message.send', messageParams)
   })
 
-  it('pet wrappers delegate to daemon IPC JSON-RPC methods', async () => {
-    const result = {
-      ok: true,
-      status: {
-        state: 'running',
-        enabled: true,
-        running: true,
-        transport: 'ipc-jsonrpc',
-        command: 'npm',
-        args: ['start'],
-        cwd: '/tmp/foreman-pet',
-      },
-    }
-    const rpc = new FakeRpc(result)
-    const client = new ForemanClient(rpc)
-
-    assert.equal(await client.pet.status(), result)
-    assert.equal(await client.pet.start(), result)
-    assert.equal(await client.pet.stop(), result)
-    assert.equal(await client.pet.restart(), result)
-
-    assert.deepEqual(rpc.requests, [
-      { method: 'pet.status', params: {} },
-      { method: 'pet.start', params: {} },
-      { method: 'pet.stop', params: {} },
-      { method: 'pet.restart', params: {} },
-    ])
-  })
-
   it('project wrappers delegate to the matching JSON-RPC methods with original params', async () => {
     const result = { ok: true }
     const rpc = new FakeRpc(result)
@@ -510,7 +481,7 @@ describe('ForemanClient', () => {
     assert.equal(typeof clientShape.project, 'object')
     assert.equal(typeof clientShape.message, 'object')
     assert.equal(typeof clientShape.daemon, 'object')
-    assert.equal(typeof clientShape.pet, 'object')
+    assert.equal(clientShape.pet, undefined)
     assert.equal(typeof clientShape.fwa, 'object')
     assert.equal(clientShape.messageDelivery, undefined)
     assert.equal(clientShape.session, undefined)

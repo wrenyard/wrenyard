@@ -1,6 +1,5 @@
 import { timingSafeEqual, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { dirname } from 'node:path'
 import { closeDb, getDb, initDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { MessageStore } from '../db/stores/message-store.mts'
@@ -8,7 +7,7 @@ import { TaskRunStore } from '../db/stores/task-run-store.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
 import type { OperationHost } from '../core/operations/types.mts'
 import type { ForemanServiceConfig } from '../config/index.mts'
-import { defaultForemanPetConfig, resolveToken } from '../config/index.mts'
+import { resolveToken } from '../config/index.mts'
 import { ForemanMcpServer } from '../server/mcp/server.mts'
 import { resolvePortConflict } from './startup/port-guard.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
@@ -25,13 +24,6 @@ import { PlannedRestartStore } from './planned-restart-store.mts'
 import { MessageDeliveryHub, type BackendFactory } from '../message/delivery/hub.mts'
 import { createBackend, createTransport, deliverToConnection, type BackendDeps, type McpConnection, type TransportFactory } from '../adapters/message/backends/index.mts'
 import type { ChannelConfig, MessageEnvelope, MessageDeliveryResult, MessageDeliveryRegistryConfig } from '../message/delivery/types.mts'
-import {
-  ForemanPetService,
-  type PetRestartOptions,
-  type PetStartOptions,
-  type PetStatus,
-  type PetStopOptions,
-} from '../pet/pet-service.mts'
 import { sessionIdToAddress, FOREMAN_WORK_ADDRESS } from '../message/address.mts'
 import { FwaService } from './services/fwa/service.mts'
 import { createFwaRawExecutor } from './execution/fwa-raw-executor.mts'
@@ -58,7 +50,6 @@ export interface RunningForemanDaemon {
   dispatchControl: DispatchControl
   fwaService?: FwaService
   workService?: WorkService
-  petService: DaemonPetService
   mcpServer: ForemanMcpServer
   httpServer: Server
   ipcPath: string
@@ -67,7 +58,6 @@ export interface RunningForemanDaemon {
 }
 
 export interface ForemanDaemonDeps {
-  petService?: DaemonPetService
   messageTransportFactory?: TransportFactory
   deliveryBackendFactory?: BackendFactory
   /**
@@ -85,14 +75,6 @@ export interface ForemanDaemonOptions {
   configPath?: string
   deps?: ForemanDaemonDeps
   onShutdownRequest?: (reason: string) => void | Promise<void>
-}
-
-export interface DaemonPetService {
-  setForemanIpcPath?(path: string): void
-  start(options?: PetStartOptions): Promise<void>
-  stop(options?: PetStopOptions): Promise<void>
-  restart(options?: PetRestartOptions): Promise<void>
-  status(): PetStatus
 }
 
 export class ForemanDaemon {
@@ -324,13 +306,6 @@ async function startForemanDaemonWithRuntime(
     deliveryHub = new MessageDeliveryHub(deliveryConfig, backendFactory)
   }
 
-  const petConfig = config.pet ?? defaultForemanPetConfig(options.configPath ? dirname(options.configPath) : process.cwd())
-  const petService = deps.petService ?? new ForemanPetService({
-    config: petConfig,
-    configPath: options.configPath,
-    logger: createDaemonPetLogger(),
-  })
-
   const startedAt = Date.now()
   let stopFromShutdownRequest: ((reason: string) => Promise<void>) | undefined
   const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
@@ -339,7 +314,6 @@ async function startForemanDaemonWithRuntime(
     workspaceRoot: config.workspaceRoot,
     messageService,
     operations,
-    petService,
     dispatchControl: runtime.dispatchControl,
     fwaService: fwaService ? {
       assign: async (params, delegationAdmission) => {
@@ -639,14 +613,12 @@ async function startForemanDaemonWithRuntime(
     port: boundPort,
     path: config.service.ipc?.path,
   })
-  petService.setForemanIpcPath?.(ipcPath)
   let ipcServer: IpcServer | undefined
   try {
     ipcServer = await createIpcServer({
       path: ipcPath,
       onMessage: (message) => rpcRouter.handleMessage(message, { transport: 'ipc' }),
     })
-    if (petConfig.enabled) await petService.start({ persist: false })
   } catch (error) {
     await cleanupFailedDaemonResources({
       activeSseStreams,
@@ -654,7 +626,6 @@ async function startForemanDaemonWithRuntime(
       httpServer,
       ipcServer,
       mcpServer,
-      petService,
     })
     throw error
   }
@@ -669,7 +640,6 @@ async function startForemanDaemonWithRuntime(
     dispatchControl: runtime.dispatchControl,
     ...(fwaService ? { fwaService } : {}),
     ...(workService ? { workService } : {}),
-    petService,
     mcpServer,
     httpServer,
     ipcPath,
@@ -678,7 +648,6 @@ async function startForemanDaemonWithRuntime(
       if (stopped) return
       stopped = true
       let ipcError: unknown
-      let petError: unknown
       let supervisorError: unknown
       let fwaError: unknown
       let workError: unknown
@@ -687,12 +656,6 @@ async function startForemanDaemonWithRuntime(
       } catch (error) {
         ipcError = error
         writeDaemonLog('warn', 'IPC server shutdown failed', error)
-      }
-      try {
-        await petService.stop({ persist: false })
-      } catch (error) {
-        petError = error
-        writeDaemonLog('warn', 'foreman pet service shutdown failed', error)
       }
       try {
         if (fwaService) {
@@ -729,7 +692,6 @@ async function startForemanDaemonWithRuntime(
       }
 
       if (ipcError) throw ipcError
-      if (petError) throw petError
       if (fwaError) throw fwaError
       if (workError) throw workError
       if (supervisorError) throw supervisorError
@@ -756,7 +718,6 @@ interface FailedDaemonResourceCleanupOptions {
   httpServer: Server
   ipcServer?: IpcServer
   mcpServer: ForemanMcpServer
-  petService: DaemonPetService
 }
 
 async function cleanupFailedDaemonResources(options: FailedDaemonResourceCleanupOptions): Promise<void> {
@@ -766,12 +727,6 @@ async function cleanupFailedDaemonResources(options: FailedDaemonResourceCleanup
     } catch (error) {
       writeDaemonLog('warn', 'IPC server startup cleanup failed', error)
     }
-  }
-
-  try {
-    await options.petService.stop({ persist: false })
-  } catch (error) {
-    writeDaemonLog('warn', 'foreman pet service startup cleanup failed', error)
   }
 
   try {
@@ -819,7 +774,6 @@ interface DaemonRpcRouterOptions {
   workspaceRoot: string
   messageService?: MessageService
   operations?: OperationHost
-  petService?: DaemonPetService
   shutdown?: (reason: string) => void | Promise<void>
   dispatchControl?: DispatchControl
   fwaService?: FwaHandlerService
@@ -968,14 +922,6 @@ function createDaemonSupervisorLogger(): SupervisorLogger {
     info: (message, meta) => writeDaemonLog('info', message, meta),
     warn: (message, meta) => writeDaemonLog('warn', message, meta),
     error: (message, meta) => writeDaemonLog('error', message, meta),
-  }
-}
-
-function createDaemonPetLogger() {
-  return {
-    info: (message: string, meta?: unknown) => writeDaemonLog('info', message, meta),
-    warn: (message: string, meta?: unknown) => writeDaemonLog('warn', message, meta),
-    error: (message: string, meta?: unknown) => writeDaemonLog('error', message, meta),
   }
 }
 

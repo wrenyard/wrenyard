@@ -9,7 +9,6 @@ import { formatOutcome, parseUpdateArgs, runUpdate } from './release-update.js';
 /** Subcommands of the legacy `foreman` binary routed through the unified CLI. */
 export type ForemanCommand =
   | 'service'
-  | 'pet'
   | 'task'
   | 'taskgraph'
   | 'project'
@@ -84,7 +83,7 @@ Commands:
   help, -h, --help        Show this help
   version, -v, --version  Show the suite version and component versions
   service <command>       Control the wrenyard service
-  pet, task, taskgraph,   Development suite commands
+  task, taskgraph,        Development suite commands
   project, message,
   status
   update [--version V]    Update from the latest release; --json for machine output
@@ -111,7 +110,6 @@ export function routeCommand(argv: string[]): Route {
     case 'service':
     case 'daemon':
       return { kind: 'foreman', args: ['daemon', ...rest] };
-    case 'pet':
     case 'task':
     case 'taskgraph':
     case 'project':

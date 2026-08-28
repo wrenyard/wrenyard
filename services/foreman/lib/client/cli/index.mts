@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url'
 import { handleDaemonDispatchStatus, handleDaemonDrain, handleDaemonFreeze, handleDaemonRestart, handleDaemonStart, handleDaemonStop, handleDaemonThaw } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleMessage } from './commands/message.mts'
-import { handlePet } from './commands/pet.mts'
 import { handlePm } from './commands/pm.mts'
 import { handleProject } from './commands/project.mts'
 import { handleStatus } from './commands/status.mts'
@@ -63,8 +62,6 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return await handleDoctor(args.slice(1))
       case 'message':
         return handleMessage(args.slice(1))
-      case 'pet':
-        return handlePet(args.slice(1))
       case 'pm':
         return handlePm(args.slice(1))
       case 'taskgraph':
@@ -95,7 +92,6 @@ Usage:
   wrenyard task doctor [--config path] [--json]
   wrenyard daemon <start|stop|restart|status|freeze|thaw|drain|dispatch-status> [--config path] [--host 0.0.0.0] [--port 8787] [--no-wait] [--json]
   wrenyard -v | --version
-  wrenyard pet <enable|disable|restart> [--config path] [--json]
   wrenyard status [--config path] [--json]
   wrenyard update [--config path] [--no-wait] [--json]
   wrenyard doctor [--config path]

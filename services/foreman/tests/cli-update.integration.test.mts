@@ -149,7 +149,6 @@ test('task-context update fast-forwards the temporary checkout, hands off to a n
   writeJsonConfig(configPath, {
     service: { enabled: true, bind: `127.0.0.1:${await allocateFreeTcpPort()}`, ipc: { path: endpoint.path } },
     workspace: { root: workDir },
-    pet: { enabled: false },
     message: { enabled: false },
     notify: { enabled: false },
   })

@@ -50,7 +50,6 @@ test('task-context planned restart drains, hands off to a new daemon, and keeps 
   writeJsonConfig(configPath, {
     service: { enabled: true, bind: `127.0.0.1:${port}`, ipc: { path: endpoint.path } },
     workspace: { root: workDir },
-    pet: { enabled: false },
     message: { enabled: false },
     notify: { enabled: false },
   })

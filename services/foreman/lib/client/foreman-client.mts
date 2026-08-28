@@ -17,10 +17,6 @@ import type {
   EventListResult,
   MessageSendParams,
   MessageSendResult,
-  PetControlParams,
-  PetControlResult,
-  PetStatusParams,
-  PetStatusResult,
   ProjectDescribeParams,
   ProjectDescribeResult,
   ProjectListParams,
@@ -237,21 +233,6 @@ export class ForemanClient {
   readonly message = {
     send: (params: MessageSendParams): Promise<MessageSendResult> => {
       return this.rpc.request<MessageSendResult>('message.send', params)
-    },
-  }
-
-  readonly pet = {
-    status: (params: PetStatusParams = {}): Promise<PetStatusResult> => {
-      return this.rpc.request<PetStatusResult>('pet.status', params)
-    },
-    start: (params: PetControlParams = {}): Promise<PetControlResult> => {
-      return this.rpc.request<PetControlResult>('pet.start', params)
-    },
-    stop: (params: PetControlParams = {}): Promise<PetControlResult> => {
-      return this.rpc.request<PetControlResult>('pet.stop', params)
-    },
-    restart: (params: PetControlParams = {}): Promise<PetControlResult> => {
-      return this.rpc.request<PetControlResult>('pet.restart', params)
     },
   }
 

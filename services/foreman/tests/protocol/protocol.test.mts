@@ -65,10 +65,6 @@ const expectedMethods = [
   'project.worktree.remove',
   'project.worktree.merge',
   'message.send',
-  'pet.status',
-  'pet.start',
-  'pet.stop',
-  'pet.restart',
   'pm.ticket.create',
   'pm.ticket.get',
   'pm.ticket.list',
@@ -1105,50 +1101,6 @@ describe('lib/protocol JSON-RPC contract', () => {
 
   it('registers every expected Foreman protocol method', () => {
     assert.deepEqual(Object.keys(methodRegistry).sort(), expectedMethods.sort())
-  })
-
-  it('validates pet lifecycle control params and status results', () => {
-    assert.deepEqual(parseMethodParams('pet.start', {}), {})
-    assert.deepEqual(parseMethodResult('pet.status', {
-      state: 'running',
-      enabled: true,
-      running: true,
-      transport: 'ipc-jsonrpc',
-      command: 'npm',
-      args: ['start'],
-      cwd: '/tmp/foreman-pet',
-    }), {
-      state: 'running',
-      enabled: true,
-      running: true,
-      transport: 'ipc-jsonrpc',
-      command: 'npm',
-      args: ['start'],
-      cwd: '/tmp/foreman-pet',
-    })
-    assert.deepEqual(parseMethodResult('pet.stop', {
-      ok: true,
-      status: {
-        state: 'stopped',
-        enabled: false,
-        running: false,
-        transport: 'ipc-jsonrpc',
-        command: 'npm',
-        args: ['start'],
-        cwd: '/tmp/foreman-pet',
-      },
-    }), {
-      ok: true,
-      status: {
-        state: 'stopped',
-        enabled: false,
-        running: false,
-        transport: 'ipc-jsonrpc',
-        command: 'npm',
-        args: ['start'],
-        cwd: '/tmp/foreman-pet',
-      },
-    })
   })
 
   it('validates stats.summary params and result schema', () => {

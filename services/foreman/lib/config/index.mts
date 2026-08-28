@@ -1,11 +1,9 @@
 export type {
   ConfigRecord,
-  ForemanPetConfig,
   ForemanServiceConfig,
 } from './types.mts'
 
 export {
-  defaultForemanPetConfig,
   normalizeForemanServiceConfig,
   normalizeMessageConfig,
   normalizeMessageDeliveryConfig,
@@ -18,7 +16,6 @@ export {
   type ForemanConfigData,
   type ServiceConfigData,
   type WorkspaceConfigData,
-  type PetConfigData,
   type MessageConfigData,
   type TasksConfigData,
   type TaskAgentRuntimeOverrides,
@@ -52,7 +49,6 @@ export {
 
 export {
   updateForemanConfigData,
-  writeForemanPetEnabled,
   type ForemanConfigDataUpdater,
 } from './writer.mts'
 

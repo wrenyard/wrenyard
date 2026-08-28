@@ -6,7 +6,6 @@ import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activit
 import { listDbEvents } from '../../events/event-query.mts'
 import { readTodayStats, readStatsSummary } from '../../events/stats-query.mts'
 import type { StatsSummaryResult } from '../../protocol/registry.mts'
-import type { ForemanPetService } from '../../pet/pet-service.mts'
 import { createPmTicketCommandsForWorkspace } from '../../daemon/services/pm-ticket-service.mts'
 import { createTaskGraphService } from '../../daemon/services/taskgraph-service.mts'
 import { PmError } from '../../core/pm/index.mts'
@@ -34,8 +33,6 @@ import type {
   DaemonShutdownResult,
   DaemonStatusResult,
   DaemonThawResult,
-  PetControlResult,
-  PetStatusResult,
   EventListResult,
   StatsTodayResult,
   TaskRunCancelResult,
@@ -77,7 +74,6 @@ export interface CoreRpcHandlerOptions {
   startedAt: number
   workspaceRoot: string
   operations?: OperationHost
-  petService?: Pick<ForemanPetService, 'start' | 'stop' | 'restart' | 'status'>
   shutdown?: (reason: string) => void | Promise<void>
   dispatchControl?: DispatchControl
   fwaService?: FwaHandlerService
@@ -398,34 +394,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       ...(rawAttachments.length > 0 ? { attachments: rawAttachments.map(projectAttachmentItem) } : {}),
     } satisfies MessageSendResult
   })
-
-  const petService = options.petService
-  if (petService) {
-    router.register('pet.status', async () => {
-      return petService.status() as PetStatusResult
-    })
-    router.register('pet.start', async () => {
-      await petService.start({ persist: true })
-      return {
-        ok: true,
-        status: petService.status(),
-      } satisfies PetControlResult
-    })
-    router.register('pet.stop', async () => {
-      await petService.stop({ persist: true })
-      return {
-        ok: true,
-        status: petService.status(),
-      } satisfies PetControlResult
-    })
-    router.register('pet.restart', async () => {
-      await petService.restart({ persist: true })
-      return {
-        ok: true,
-        status: petService.status(),
-      } satisfies PetControlResult
-    })
-  }
 
   // --- PM ticket commands ---
   let pmCommands: ReturnType<typeof createPmTicketCommandsForWorkspace> | undefined

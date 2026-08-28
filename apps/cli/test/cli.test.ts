@@ -65,6 +65,7 @@ test('help returns 0 and mentions Wrenyard', (t) => {
   });
   assert.equal(code, 0);
   assert.ok(out.includes('Wrenyard'));
+  assert.ok(!out.includes('pet'));
   assert.equal(recorder.calls.length, 0);
 });
 
@@ -100,6 +101,7 @@ test('routeCommand maps service, task and runtime exactly', () => {
   assert.deepEqual(routeCommand(['-v']), { kind: 'version' });
   assert.deepEqual(routeCommand(['--', 'doctor']), { kind: 'doctor' });
   assert.deepEqual(routeCommand(['bogus']), { kind: 'unknown', command: 'bogus' });
+  assert.deepEqual(routeCommand(['pet', 'restart']), { kind: 'unknown', command: 'pet' });
 });
 
 test('daemon routes to the internal control alongside service', () => {

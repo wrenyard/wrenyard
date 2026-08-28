@@ -229,7 +229,6 @@ test('daemon freeze/thaw/drain/dispatch-status CLI handlers parse args correctly
       ipc: { path: join(isolatedEnv!.root, 'missing-daemon.sock') },
     },
     workspace: {},
-    pet: { enabled: false },
   }))
 
   // Each handler should fail with a config/IPC error rather than a usage error,
@@ -1001,7 +1000,6 @@ test('foreman daemon start/status/restart/stop controls the local daemon lifecyc
   writeJsonConfig(configPath, {
     service: { bind: `127.0.0.1:${port}`, ipc: { path: endpoint.path } },
     workspace: { root: workDir },
-    pet: { enabled: false },
     message: { enabled: false },
     messageDelivery: { enabled: false },
   })
@@ -1461,7 +1459,6 @@ test('foreman fwa assign produces human-readable and --json output', async () =>
         retry_backoff_ms: 500,
       },
     },
-    pet: { enabled: false, command: '', args: [], cwd: '', startupTimeoutMs: 10000, stopTimeoutMs: 5000, restartOnExit: false, restartDelayMs: 1000 },
     message: { enabled: false, principals: {} },
     messageDelivery: { enabled: false, default: ['system'], channels: {} },
   })
@@ -1547,7 +1544,6 @@ test('foreman fwa status produces human-readable suggestions with actual session
         retry_backoff_ms: 500,
       },
     },
-    pet: { enabled: false, command: '', args: [], cwd: '', startupTimeoutMs: 10000, stopTimeoutMs: 5000, restartOnExit: false, restartDelayMs: 1000 },
     message: { enabled: false, principals: {} },
     messageDelivery: { enabled: false, default: ['system'], channels: {} },
   })

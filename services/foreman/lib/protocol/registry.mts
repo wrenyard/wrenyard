@@ -46,20 +46,6 @@ import {
   type MessageSendResult,
 } from './methods/message.mts'
 import {
-  petRestartParamsSchema,
-  petRestartResultSchema,
-  petStartParamsSchema,
-  petStartResultSchema,
-  petStatusParamsSchema,
-  petStatusResultSchema,
-  petStopParamsSchema,
-  petStopResultSchema,
-  type PetControlParams,
-  type PetControlResult,
-  type PetStatusParams,
-  type PetStatusResult,
-} from './methods/pet.mts'
-import {
   projectDescribeParamsSchema,
   projectDescribeResultSchema,
   projectListParamsSchema,
@@ -303,13 +289,6 @@ export type {
   MessageSendResult,
 } from './methods/message.mts'
 export type {
-  PetControlParams,
-  PetControlResult,
-  PetLifecycleState,
-  PetStatusParams,
-  PetStatusResult,
-} from './methods/pet.mts'
-export type {
   ProjectCommitLogParams,
   ProjectCommitLogResult,
   ProjectDescribeParams,
@@ -467,10 +446,6 @@ export interface ForemanMethodParams {
   'project.worktree.merge': ProjectWorktreeMergeParams
   'project.commitLog': ProjectCommitLogParams
   'message.send': MessageSendParams
-  'pet.status': PetStatusParams
-  'pet.start': PetControlParams
-  'pet.stop': PetControlParams
-  'pet.restart': PetControlParams
   'pm.ticket.create': PmTicketCreateParams
   'pm.ticket.get': PmTicketGetParams
   'pm.ticket.list': PmTicketListParams
@@ -532,10 +507,6 @@ export interface ForemanMethodResults {
   'project.worktree.merge': ProjectWorktreeMergeResult
   'project.commitLog': ProjectCommitLogResult
   'message.send': MessageSendResult
-  'pet.status': PetStatusResult
-  'pet.start': PetControlResult
-  'pet.stop': PetControlResult
-  'pet.restart': PetControlResult
   'pm.ticket.create': PmTicketCreateResult
   'pm.ticket.get': PmTicketGetResult
   'pm.ticket.list': PmTicketListResult
@@ -707,22 +678,6 @@ export const methodRegistry: {
   'message.send': {
     params: messageSendParamsSchema,
     result: messageSendResultSchema,
-  },
-  'pet.status': {
-    params: petStatusParamsSchema,
-    result: petStatusResultSchema,
-  },
-  'pet.start': {
-    params: petStartParamsSchema,
-    result: petStartResultSchema,
-  },
-  'pet.stop': {
-    params: petStopParamsSchema,
-    result: petStopResultSchema,
-  },
-  'pet.restart': {
-    params: petRestartParamsSchema,
-    result: petRestartResultSchema,
   },
   'pm.ticket.create': {
     params: pmTicketCreateParamsSchema,
