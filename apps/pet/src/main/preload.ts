@@ -3,27 +3,6 @@ import { HouseRendererState, RendererConfig, WorkerRendererState } from '../shar
 import { SiteSnapshot } from '../shared/snapshot';
 import type { PetApi } from '../overlay/api/pet-api';
 
-const settingsPanelApi = {
-  load: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('settings:load'),
-  save: (partial: Record<string, unknown>): Promise<void> => ipcRenderer.invoke('settings:save', partial),
-  saveAndRestart: (): Promise<void> => ipcRenderer.invoke('settings:save-and-restart'),
-};
-
-const statsPanelApi = {
-  load: (): Promise<unknown> => ipcRenderer.invoke('stats:load'),
-  onData: (cb: (data: unknown) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: unknown) => cb(data);
-    ipcRenderer.on('stats:data', handler);
-    return () => {
-      ipcRenderer.removeListener('stats:data', handler);
-    };
-  },
-};
-
-const panelClose = (): void => {
-  ipcRenderer.send('panel:close');
-};
-
 const petApi: PetApi = {
   onSnapshot: (cb: (snap: SiteSnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snap: SiteSnapshot) => cb(snap);
@@ -79,11 +58,6 @@ const petApi: PetApi = {
   workerDragEnd: (id: string) => {
     ipcRenderer.send('worker:drag-end', id);
   },
-  openSettings: (): Promise<void> => ipcRenderer.invoke('house:open-settings'),
-  openStats: (): Promise<void> => ipcRenderer.invoke('house:open-stats'),
 };
 
 contextBridge.exposeInMainWorld('petApi', petApi);
-contextBridge.exposeInMainWorld('settingsPanelApi', settingsPanelApi);
-contextBridge.exposeInMainWorld('statsPanelApi', { ...statsPanelApi, close: panelClose });
-contextBridge.exposeInMainWorld('panelClose', panelClose);

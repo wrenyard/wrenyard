@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 import { DisplayRect } from './display-placement';
 
 export interface EntityWindowOptions {
@@ -47,7 +47,7 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-  // Overlay entities have no context menu; settings/restart live on the tray.
+  // Overlay entities have no context menu; product controls live in Desktop.
   win.webContents.on('context-menu', (event) => {
     event.preventDefault();
   });
@@ -96,10 +96,6 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
       win.webContents.reload();
     }
   });
-
-  if (process.platform === 'darwin') {
-    app.dock?.hide();
-  }
 
   return win;
 }

@@ -1,6 +1,6 @@
 import type { HouseRendererState, RendererConfig, WorkerRendererState } from '../../shared/entities';
 import type { SiteSnapshot } from '../../shared/snapshot';
-import type { PetApi, SettingsPanelApi, StatsPanelApi } from './pet-api';
+import type { PetApi } from './pet-api';
 
 type ExpectedPetApi = {
   onSnapshot(cb: (snap: SiteSnapshot) => void): () => void;
@@ -17,8 +17,6 @@ type ExpectedPetApi = {
   workerDragStart(id: string): void;
   workerDragMove(id: string): void;
   workerDragEnd(id: string): void;
-  openSettings(): Promise<void>;
-  openStats(): Promise<void>;
 };
 
 type Equal<A, B> =
@@ -30,6 +28,4 @@ type Equal<A, B> =
 type Assert<T extends true> = T;
 
 type _PetApiSurface = Assert<Equal<PetApi, ExpectedPetApi>>;
-type _SettingsPanelApiSurface = Assert<Equal<Window['settingsPanelApi'], SettingsPanelApi>>;
-type _StatsPanelApiSurface = Assert<Equal<Window['statsPanelApi'], StatsPanelApi>>;
 type _WindowSurface = Assert<Equal<Window['petApi'], PetApi>>;

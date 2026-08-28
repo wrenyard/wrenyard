@@ -21,13 +21,12 @@ describe('overlay PetApi contract', () => {
     expect(source).toContain('workerDragStart(id: string): void;');
     expect(source).toContain('workerDragMove(id: string): void;');
     expect(source).toContain('workerDragEnd(id: string): void;');
-    expect(source).toContain('openSettings(): Promise<void>;');
-    expect(source).toContain('openStats(): Promise<void>;');
     expect(source).toContain('petApi: PetApi;');
-    expect(source).toContain('settingsPanelApi: SettingsPanelApi;');
+    expect(source).not.toContain('openSettings');
+    expect(source).not.toContain('openStats');
     expect(source).not.toContain('login');
-    expect(source).toContain('statsPanelApi: StatsPanelApi;');
-    expect(source).toContain('panelClose: () => void;');
+    expect(source).not.toContain('statsPanelApi');
+    expect(source).not.toContain('panelClose');
     expect(source).toContain("from '../../shared/entities'");
     expect(source).toContain("from '../../shared/snapshot'");
   });
@@ -51,26 +50,21 @@ describe('overlay PetApi contract', () => {
     expect(source).toContain("ipcRenderer.send('worker:drag-end', id)");
   });
 
-  it('exposes panel IPC channels in preload', () => {
+  it('does not expose product navigation or panel IPC from the companion preload', () => {
     const source = fs.readFileSync(path.join(rootDir, 'src/main/preload.ts'), 'utf8');
-    expect(source).toContain("ipcRenderer.invoke('settings:load')");
-    expect(source).toMatch(/ipcRenderer\.invoke\('settings:save'/);
-    expect(source).toContain("ipcRenderer.invoke('settings:save-and-restart')");
-    expect(source).not.toContain("ipcRenderer.invoke('settings:login')");
-    expect(source).toContain("ipcRenderer.invoke('stats:load')");
-    expect(source).not.toContain("ipcRenderer.invoke('stats:refresh')");
-    expect(source).toContain("ipcRenderer.invoke('house:open-settings')");
-    expect(source).toContain("ipcRenderer.invoke('house:open-stats')");
-    expect(source).toContain("ipcRenderer.send('panel:close')");
+    expect(source).not.toContain("ipcRenderer.invoke('settings:");
+    expect(source).not.toContain("ipcRenderer.invoke('stats:");
+    expect(source).not.toContain("ipcRenderer.invoke('house:open-");
+    expect(source).not.toContain("ipcRenderer.send('panel:close')");
   });
 
   it('acknowledges sendSync passthrough contract with setIgnoreMouseEvents', () => {
-    const source = fs.readFileSync(path.join(rootDir, 'src/main/index.ts'), 'utf8');
+    const source = fs.readFileSync(path.join(rootDir, 'src/main/runtime.ts'), 'utf8');
     // The main handler must call setIgnoreMouseEvents before returning ack
-    const passthroughHandlerStart = source.indexOf("ipcMain.on('house:mouse-passthrough'");
+    const passthroughHandlerStart = source.indexOf('handleHouseMousePassthrough =');
     expect(passthroughHandlerStart).toBeGreaterThanOrEqual(0);
 
-    const handlerBlock = source.slice(passthroughHandlerStart, passthroughHandlerStart + 600);
+    const handlerBlock = source.slice(passthroughHandlerStart, passthroughHandlerStart + 900);
     expect(handlerBlock).toContain('setIgnoreMouseEvents');
     expect(handlerBlock).toContain('event.returnValue = { ack: true }');
     // setIgnoreMouseEvents must appear before the ack assignment

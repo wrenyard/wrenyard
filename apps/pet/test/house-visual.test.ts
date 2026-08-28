@@ -1264,45 +1264,8 @@ describe('house door contract', () => {
   });
 });
 
-describe('house action buttons in hit regions', () => {
-  it('collectHitRects includes settings and stats buttons', async () => {
-    const { collectHitRects, rightEdgeButtonRects } = await import('../src/features/house/scene/hit-regions');
-    const houseRect = { x: 60, y: 260, width: 240, height: 200 };
-    const buttons = rightEdgeButtonRects(houseRect, 500);
-    const rects = collectHitRects({
-      houseRect,
-      dragging: false,
-      buttonsVisible: true,
-      settingsBtn: buttons.settings,
-      statsBtn: buttons.stats,
-    });
-    expect(rects.some((r) => r.target === 'settings-btn')).toBe(true);
-    expect(rects.some((r) => r.target === 'stats-btn')).toBe(true);
-  });
-
-  it('buttons are hidden during drag', async () => {
-    const { collectHitRects, rightEdgeButtonRects } = await import('../src/features/house/scene/hit-regions');
-    const houseRect = { x: 60, y: 260, width: 240, height: 200 };
-    const buttons = rightEdgeButtonRects(houseRect, 500);
-    const rects = collectHitRects({
-      houseRect,
-      dragging: true,
-      buttonsVisible: true,
-      settingsBtn: buttons.settings,
-      statsBtn: buttons.stats,
-    });
-    expect(rects.some((r) => r.target === 'settings-btn')).toBe(false);
-    expect(rects.some((r) => r.target === 'stats-btn')).toBe(false);
-  });
-
-  it('rightEdgeButtonRects flips buttons when approaching right viewport edge', async () => {
-    const { rightEdgeButtonRects } = await import('../src/features/house/scene/hit-regions');
-    const houseRect = { x: 480, y: 260, width: 240, height: 200 };
-    const buttons = rightEdgeButtonRects(houseRect, 500);
-    expect(buttons.settings.x).toBeLessThan(houseRect.x);
-  });
-
-  it('renders distinct settings and stats icon rect patterns contained within #F7EFD8 rounded background', async () => {
+describe('house remains an observational surface', () => {
+  it('does not create settings or statistics action graphics', async () => {
     const { createHouseScene } = await import('../src/features/house/scene');
     const { surface, graphics } = mockSurface();
     const scene = createHouseScene(
@@ -1319,59 +1282,14 @@ describe('house action buttons in hit regions', () => {
       false,
       { width: 72, height: 92, scale: 5 },
       10000,
-      true,
     );
-
-    // Identify exactly two button graphics by the #F7EFD8 roundedRect background
     const buttonGraphics = graphics.filter((g: any) =>
       g.commands.some(
         (c: ShapeCommand) => c.kind === 'roundedRect' && c.fill === '#F7EFD8',
       ),
     );
-    expect(buttonGraphics).toHaveLength(2);
-
-    // Collect the rect-kind icon commands beyond background and border for each button
-    const iconRectsList = buttonGraphics.map((g: any) => {
-      const bg = g.commands.find(
-        (c: ShapeCommand) => c.kind === 'roundedRect' && c.fill === '#F7EFD8',
-      ) as { x: number; y: number; width: number; height: number };
-      const rects = g.commands.filter(
-        (c: ShapeCommand): c is { kind: 'rect'; x: number; y: number; width: number; height: number; fill: string; alpha?: number } =>
-          c.kind === 'rect',
-      );
-      return { bg, rects };
-    });
-
-    // Assert both collections are non-empty
-    expect(iconRectsList[0].rects.length).toBeGreaterThan(0);
-    expect(iconRectsList[1].rects.length).toBeGreaterThan(0);
-
-    // Normalize coordinates relative to each button background
-    const normalized0 = iconRectsList[0].rects.map((r) => ({
-      x: r.x - iconRectsList[0].bg.x,
-      y: r.y - iconRectsList[0].bg.y,
-      width: r.width,
-      height: r.height,
-    }));
-    const normalized1 = iconRectsList[1].rects.map((r) => ({
-      x: r.x - iconRectsList[1].bg.x,
-      y: r.y - iconRectsList[1].bg.y,
-      width: r.width,
-      height: r.height,
-    }));
-
-    // Assert the settings and stats patterns are distinct
-    expect(normalized0).not.toEqual(normalized1);
-
-    // Assert every icon rect is contained within its own rounded background rectangle
-    for (const entry of iconRectsList) {
-      for (const r of entry.rects) {
-        expect(r.x).toBeGreaterThanOrEqual(entry.bg.x);
-        expect(r.y).toBeGreaterThanOrEqual(entry.bg.y);
-        expect(r.x + r.width).toBeLessThanOrEqual(entry.bg.x + entry.bg.width);
-        expect(r.y + r.height).toBeLessThanOrEqual(entry.bg.y + entry.bg.height);
-      }
-    }
+    expect(buttonGraphics).toHaveLength(0);
+    expect(node.hitRects.some((rect) => rect.target !== 'house' && rect.target !== 'tips-card')).toBe(false);
   });
 });
 

@@ -15,7 +15,7 @@ export function bindHouseDrag(
 ): BrowserDragController {
   return bindBodyDrag({
     ...options,
-    excludeSelector: '.sticky-hit, .action-btn',
+    excludeSelector: '.sticky-hit',
     onStart: () => api.houseDragStart(),
     onMove: () => api.houseDragMove(),
     onEnd: () => api.houseDragEnd(),
@@ -28,27 +28,4 @@ export function createHousePassthroughController(
   return createSenderMemoPassthroughController((passthrough) => {
     api.setHouseMousePassthrough(passthrough);
   });
-}
-
-export function bindActionButtons(
-  container: HTMLElement,
-  api: Pick<PetApi, 'openSettings' | 'openStats'>,
-): () => void {
-  const onSettingsClick = () => api.openSettings();
-  const onStatsClick = () => api.openStats();
-
-  // Use event delegation on the container
-  const handler = (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.dataset?.action === 'settings') {
-      onSettingsClick();
-    } else if (target.dataset?.action === 'stats') {
-      onStatsClick();
-    }
-  };
-
-  container.addEventListener('click', handler);
-  return () => {
-    container.removeEventListener('click', handler);
-  };
 }

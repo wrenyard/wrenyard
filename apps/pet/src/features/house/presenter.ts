@@ -7,8 +7,6 @@ import {
 } from './scene';
 import type { HouseRendererState } from '../../shared/entities';
 
-export const HOVER_LEAVE_DELAY_MS = 200;
-
 export interface HousePresenterOutput extends HouseNodeOutput {}
 
 export interface HousePresenterViewport {
@@ -28,8 +26,6 @@ export class HousePresenter {
   private tickerUnsubscribe: (() => void) | undefined;
   private frameListener: ((output: HousePresenterOutput | undefined) => void) | undefined;
   private destroyed = false;
-  private buttonsVisible = false;
-  private hoverLeaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(surface: RenderSurface) {
     this.surface = surface;
@@ -50,10 +46,6 @@ export class HousePresenter {
   setDragging(dragging: boolean, nowMs = Date.now()): HousePresenterOutput | undefined {
     this.assertAlive();
     this.dragging = dragging;
-    if (dragging) {
-      this.buttonsVisible = false;
-      this.clearHoverLeaveTimer();
-    }
     return this.renderFrame(nowMs);
   }
 
@@ -74,13 +66,10 @@ export class HousePresenter {
 
     const viewport = this.entityViewport(this.state.scale);
 
-    // Determine buttonsVisible from current state
-    this.updateButtonsVisibility(this.pointer, this.output);
-
     if (!this.scene) {
       this.scene = createHouseScene(this.surface, this.state, this.pointer, this.dragging, viewport, nowMs);
     }
-    this.output = this.scene.update(this.state, this.pointer, this.dragging, viewport, nowMs, this.buttonsVisible);
+    this.output = this.scene.update(this.state, this.pointer, this.dragging, viewport, nowMs);
 
     this.surface.render();
     this.frameListener?.(this.output);
@@ -113,7 +102,6 @@ export class HousePresenter {
     this.scene?.destroy();
     this.scene = undefined;
     this.output = undefined;
-    this.clearHoverLeaveTimer();
   }
 
   getOutput(): HousePresenterOutput | undefined {
@@ -132,53 +120,11 @@ export class HousePresenter {
     };
   }
 
-  private updateButtonsVisibility(pointer: PointerInput, output: HousePresenterOutput | undefined): void {
-    if (this.dragging) {
-      this.buttonsVisible = false;
-      this.clearHoverLeaveTimer();
-      return;
-    }
-
-    // Over house body, buttons, or tips card: show buttons, cancel leave timer
-    if (output && pointer.inside) {
-      const overActionable = output.hitRects.some((r) =>
-        pointInRectInternal(pointer.x, pointer.y, r) && (r.target === 'house' || r.target === 'stats-btn' || r.target === 'settings-btn')
-      );
-      if (overActionable) {
-        this.buttonsVisible = true;
-        this.clearHoverLeaveTimer();
-        return;
-      }
-    }
-
-    // Not over actionable - start leave delay if not already started
-    if (this.buttonsVisible && !this.hoverLeaveTimer) {
-      this.hoverLeaveTimer = setTimeout(() => {
-        this.hoverLeaveTimer = null;
-        this.buttonsVisible = false;
-      }, HOVER_LEAVE_DELAY_MS);
-    }
-  }
-
-  private clearHoverLeaveTimer(): void {
-    if (this.hoverLeaveTimer) {
-      clearTimeout(this.hoverLeaveTimer);
-      this.hoverLeaveTimer = null;
-    }
-  }
-
   private assertAlive(): void {
     if (this.destroyed) {
       throw new Error('house presenter has been destroyed');
     }
   }
-}
-
-function pointInRectInternal(x: number, y: number, rect: { x: number; y: number; width: number; height: number }): boolean {
-  return x >= rect.x &&
-    x <= rect.x + rect.width &&
-    y >= rect.y &&
-    y <= rect.y + rect.height;
 }
 
 export function stateWithoutBroadcast(state: HouseRendererState): HouseRendererState {

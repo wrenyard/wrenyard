@@ -16,28 +16,10 @@ export interface PetApi {
   workerDragStart(id: string): void;
   workerDragMove(id: string): void;
   workerDragEnd(id: string): void;
-  openSettings(): Promise<void>;
-  openStats(): Promise<void>;
-}
-
-export interface SettingsPanelApi {
-  load(): Promise<Record<string, unknown>>;
-  save(partial: Record<string, unknown>): Promise<void>;
-  saveAndRestart(): Promise<void>;
-}
-
-export interface StatsPanelApi {
-  load(): Promise<unknown>;
-  refresh(): Promise<unknown>;
-  onData(cb: (data: unknown) => void): () => void;
-  close(): void;
 }
 
 declare global {
   interface Window {
     petApi: PetApi;
-    settingsPanelApi: SettingsPanelApi;
-    statsPanelApi: StatsPanelApi;
-    panelClose: () => void;
   }
 }

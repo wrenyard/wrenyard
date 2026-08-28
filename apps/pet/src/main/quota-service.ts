@@ -10,17 +10,20 @@ export const FORGE_QUOTA_TIMEOUT_MS = 30_000;
 export interface QuotaServiceOptions {
   logger?: DiagnosticLogger;
   cacheTtlMs?: number;
+  runtimeCommand?: string;
 }
 
 export class QuotaService {
   private readonly logger: DiagnosticLogger | undefined;
   private readonly cacheTtlMs: number;
+  private readonly runtimeCommand: string | undefined;
   private cache: { providers: QuotaProviderState[]; fetchedAt: number } | null = null;
   private pending: Promise<QuotaProviderState[]> | null = null;
 
   constructor(opts?: QuotaServiceOptions) {
     this.logger = opts?.logger;
     this.cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
+    this.runtimeCommand = opts?.runtimeCommand;
   }
 
   async listProviders(forceRefresh = false): Promise<QuotaProviderState[]> {
@@ -43,7 +46,7 @@ export class QuotaService {
 
   private async fetchProviders(): Promise<QuotaProviderState[]> {
     try {
-      const output = await runForgeQuotaJson();
+      const output = await runForgeQuotaJson(this.runtimeCommand);
       const providers = parseQuotaJson(output);
       this.cache = { providers, fetchedAt: Date.now() };
       return providers;
@@ -104,9 +107,9 @@ function isNpmNodeModulesBin(entry: string): boolean {
   return normalized === '/node_modules/.bin' || normalized.endsWith('/node_modules/.bin');
 }
 
-function runForgeQuotaJson(): Promise<string> {
+function runForgeQuotaJson(runtimeCommand?: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(resolveQuotaRuntimeCommand(), ['quota', '--json'], {
+    const child = spawn(runtimeCommand ?? resolveQuotaRuntimeCommand(), ['quota', '--json'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
