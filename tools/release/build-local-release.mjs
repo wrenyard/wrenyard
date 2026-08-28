@@ -3,7 +3,7 @@
 // never publishes, and writes a CLI tarball (one public wrenyard launcher, with
 // the Foreman control and the native/bundled runtimes hidden), precompiled
 // Forge runtime tarball, Node SEA executable, portable suite zip, optional
-// Desktop zip, Pet zip, the embedded development identity, legal report,
+// Desktop zip (with its Pet module), the embedded development identity, legal report,
 // checksums and a target-qualified artifact manifest to one output directory.
 
 import archiver from 'archiver';
@@ -731,18 +731,6 @@ async function main() {
       await zipDirectory(built, desktopZip);
     }
 
-    // Pet is a separate Electron desktop artifact. Build an unpacked app and
-    // create the release zip ourselves so Linux, macOS and Windows all emit the
-    // same target-qualified archive shape (electron-builder has no uniform zip
-    // target across all three hosts).
-    let petZip = null;
-    run('pnpm', ['--filter', '@wrenyard/pet', 'run', 'build']);
-    run('pnpm', ['--filter', '@wrenyard/pet', 'exec', 'electron-builder', '--dir', '--publish', 'never']);
-    const builtPet = newestElectronAppDir(path.join(ROOT, 'apps', 'pet', 'release'));
-    if (!builtPet) throw new Error('Pet build produced no unpacked application');
-    petZip = path.join(outputDir, `wrenyard-pet-${version}-${target.triplet}.zip`);
-    await zipDirectory(builtPet, petZip);
-
     copyFile(path.join(ROOT, 'scripts', 'install.sh'), path.join(outputDir, 'install.sh'), 0o755);
     copyFile(path.join(ROOT, 'scripts', 'install.ps1'), path.join(outputDir, 'install.ps1'));
     const licenseReport = path.join(outputDir, 'third-party-licenses.json');
@@ -755,7 +743,7 @@ async function main() {
     const devIdentity = path.join(outputDir, 'release-manifest.json');
     copyFile(path.join(ROOT, 'release-manifest.json'), devIdentity);
 
-    const distributables = [sea, runtimeTgz, cliTgz, suiteZip, desktopZip, petZip, licenseReport, path.join(outputDir, 'install.sh'), path.join(outputDir, 'install.ps1'), devIdentity]
+    const distributables = [sea, runtimeTgz, cliTgz, suiteZip, desktopZip, licenseReport, path.join(outputDir, 'install.sh'), path.join(outputDir, 'install.ps1'), devIdentity]
       .filter(Boolean)
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
     const artifacts = distributables.map((file) => ({

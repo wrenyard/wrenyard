@@ -10,13 +10,24 @@ shell are internal components of that single product.
   `packages/control-client` and `packages/runtime-resolver` to talk to the
   control plane and locate the runtime.
 - **services/foreman** -- the control plane. Schedules and tracks task graph
-  work. Launches the `forge` executable and the `pet` process.
+  work. Launches the `forge` executable; it has no Desktop/Pet lifecycle role.
 - **runtime/forge** -- the Go runtime that executes agent work and streams
   activity. It has no dependency on Node.
-- **apps/pet** -- the observer surface. Reads task and taskgraph progress from
-  Foreman over a read-only control protocol.
-- **apps/desktop** -- the Desktop DSH shell: an Electron observer surface that
-  hosts the task/taskgraph visualizer.
+- **apps/pet** -- the headless Desktop companion renderer. Reads task and
+  taskgraph progress from Foreman over a read-only control protocol and owns
+  only passive companion overlay windows. It has no product tray, settings or
+  statistics window, quota lifecycle or hover action buttons. Its bounded
+  `stats.today` poll enriches the observational house Tips surface, while the
+  Desktop host pushes quota display data into it.
+- **apps/desktop** -- the 啾啾工坊 product shell. Owns the application window,
+  notification-area icon/menu, product-owned conversation UI, statistics,
+  quota and settings. DSH is an isolated loopback backend rather than an embedded Web UI;
+  Desktop projects its public session API through bounded IPC and fixes every
+  conversation to the configured Wrenyard workspace. Desktop also owns Pet
+  configuration and lifecycle through an in-process runtime module. It reads
+  `stats.summary` / `stats.today` directly from the public control protocol and
+  owns the Runtime quota refresh shared by its quota page, tray submenu and Pet
+  Tips rather than routing product data through Pet.
 - **packages/dsh-shell** -- the dsh profile/bundle shell reused by the desktop
   host.
 - **packages/control-client** -- the typed client for the control-plane
@@ -28,9 +39,9 @@ shell are internal components of that single product.
 ## Dependency direction
 
 - CLI -> control-client, runtime-resolver
-- Foreman -> Forge executable and Pet process
-- Pet -> Foreman (read-only control protocol)
-- Desktop -> dsh-shell, Pet/Foreman observer surfaces
+- Foreman -> Forge executable
+- Pet -> Foreman (read-only current activity / today observer protocol)
+- Desktop -> DSH public session API, dsh-shell, public statistics/quota, Pet runtime + config contract
 - Forge has no dependency on Node
 
 ## Execution and distribution
