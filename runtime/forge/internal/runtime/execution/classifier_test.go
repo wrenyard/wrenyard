@@ -252,3 +252,49 @@ func TestClassifyMonthlyExhaustionFlagIsExactOnly(t *testing.T) {
 		t.Fatalf("done classification=%+v must not set monthly exhaustion", done)
 	}
 }
+
+func TestClassifyMixedMonthlyPhraseWithTransientMarkersIsTransient(t *testing.T) {
+	now := time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)
+
+	mixed := []struct {
+		name   string
+		events []protocol.Event
+	}{
+		{name: "429 with exact phrase", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "429 rate limit: You've reached your usage limit for this billing cycle.",
+		}}}},
+		{name: "rate limit with exact phrase", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "Rate limit exceeded. You have reached your usage limit for this billing cycle.",
+		}}}},
+		{name: "retry-after with exact phrase", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "usage limit for this billing cycle reached. Retry-after: 30 seconds.",
+		}}}},
+	}
+	for _, tc := range mixed {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyAttempt(tc.events, now)
+			if got.Classification != ClassificationTransientProvider {
+				t.Fatalf("classification=%+v want transient provider for %q", got, tc.name)
+			}
+			if got.MonthlyExhaustion {
+				t.Fatalf("classification=%+v must not set monthly exhaustion for %q", got, tc.name)
+			}
+			if got.ImmediateCircuit {
+				t.Fatalf("classification=%+v must not mark immediate circuit for %q", got, tc.name)
+			}
+		})
+	}
+
+	// The canonical 403 monthly denial contains "Please try again later" but no
+	// transient marker, so it must stay a hard monthly exhaustion.
+	canonical := ClassifyAttempt([]protocol.Event{{Type: "run_finished", Data: map[string]any{
+		"status": "failed",
+		"error":  "Error code: 403 - insufficient_quota: You've reached your usage limit for this billing cycle. Please try again later or upgrade your plan.",
+	}}}, now)
+	if canonical.Classification != FailureClassProfileSpecificLimit || !canonical.MonthlyExhaustion || !canonical.ImmediateCircuit {
+		t.Fatalf("canonical classification=%+v want hard monthly exhaustion", canonical)
+	}
+}
