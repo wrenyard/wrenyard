@@ -125,6 +125,12 @@ func ClassifyAttempt(events []protocol.Event, now time.Time) AttemptClassificati
 		switch {
 		case monthlyExhaustion:
 			result.Classification = ClassificationProfileSpecificLimit
+		case monthlyPhraseSignal(joined) && transientConflictSignal(joined):
+			// A message that combines the exact billing-cycle phrase with a
+			// transient marker is a mixed implicit error: transient for
+			// classification, never monthly exhaustion, never an immediate
+			// hard circuit.
+			result.Classification = ClassificationTransientProvider
 		case profileSpecificSignal(joined):
 			result.Classification = ClassificationProfileSpecificLimit
 		case transientProviderSignal(joined):
@@ -208,14 +214,26 @@ func profileSpecificSignal(text string) bool {
 
 // hardProfileLimitSignal recognizes exact hard subscription/account denials
 // where retrying is pointless: explicit billing-cycle quota exhaustion and
-// terminated account access. It matches only precise denial phrases, never
-// generic quota, rate-limit, or temporary wording.
+// terminated account access. The billing-cycle phrases count as hard only when
+// no conflicting transient marker is present; access termination is always
+// hard. It matches only precise denial phrases, never generic quota,
+// rate-limit, or temporary wording.
 func hardProfileLimitSignal(text string) bool {
+	if strings.Contains(text, "access terminated") {
+		return true
+	}
+	return monthlyPhraseSignal(text) && !transientConflictSignal(text)
+}
+
+// monthlyPhraseSignal matches only the exact billing-cycle exhaustion phrases
+// regardless of surrounding context. Callers combine it with
+// transientConflictSignal to separate unambiguous monthly exhaustion from
+// mixed implicit errors.
+func monthlyPhraseSignal(text string) bool {
 	for _, phrase := range []string{
 		"you've reached your usage limit for this billing cycle",
 		"you have reached your usage limit for this billing cycle",
 		"usage limit for this billing cycle",
-		"access terminated",
 	} {
 		if strings.Contains(text, phrase) {
 			return true
@@ -224,22 +242,33 @@ func hardProfileLimitSignal(text string) bool {
 	return false
 }
 
-// monthlyQuotaExhaustionSignal recognizes only exact billing-cycle quota
-// exhaustion phrases. It deliberately excludes access termination, 429,
-// generic quota, generic rate-limit, and temporary wording so a strict
-// monthly-exhaustion signal is never derived from recoverable or unrelated
-// errors.
-func monthlyQuotaExhaustionSignal(text string) bool {
-	for _, phrase := range []string{
-		"you've reached your usage limit for this billing cycle",
-		"you have reached your usage limit for this billing cycle",
-		"usage limit for this billing cycle",
+// transientConflictSignal recognizes transient provider markers that, when
+// combined with the exact billing-cycle phrase, make the message a mixed
+// implicit error rather than unambiguous monthly exhaustion. It deliberately
+// excludes "try again later" because the canonical 403 monthly denial itself
+// contains that wording.
+func transientConflictSignal(text string) bool {
+	for _, signal := range []string{
+		"429", "rate limit", "rate_limit", "too many requests", "503",
+		"service unavailable", "connection reset", "connection refused", "connection",
+		"gateway timeout", "upstream timeout", "timeout",
+		"retry-after", "retry in", "retry_in",
 	} {
-		if strings.Contains(text, phrase) {
+		if strings.Contains(text, signal) {
 			return true
 		}
 	}
 	return false
+}
+
+// monthlyQuotaExhaustionSignal recognizes only unambiguous billing-cycle quota
+// exhaustion: the exact phrase with no conflicting transient marker present. A
+// message that combines the exact phrase with 429/rate-limit/timeout or
+// retry-after wording is a mixed implicit error and must never set monthly
+// exhaustion. Access termination, generic quota, generic rate-limit, and
+// temporary wording are likewise excluded.
+func monthlyQuotaExhaustionSignal(text string) bool {
+	return monthlyPhraseSignal(text) && !transientConflictSignal(text)
 }
 
 func transientProviderSignal(text string) bool {

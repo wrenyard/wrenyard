@@ -1449,3 +1449,35 @@ func TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState(t *testing.T) {
 		t.Fatalf("cb-429 circuit=%+v want open structured-recovery circuit", check)
 	}
 }
+
+// TestExecuteCodeBuddyIOAMixedTransientBillingCycleDoesNotPersistMonthlyState
+// verifies that an -ioa CodeBuddy model whose terminal error combines the
+// exact billing-cycle phrase with transient 429/rate-limit/retry-after text is
+// a mixed implicit error: it must not write observed monthly provider state or
+// create the next-month hard circuit.
+func TestExecuteCodeBuddyIOAMixedTransientBillingCycleDoesNotPersistMonthlyState(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
+	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+		return ChildResult{Status: "failed", ExitCode: 1, Events: []protocol.Event{{Type: protocol.EventRunFinished, Data: map[string]any{
+			"status": "failed",
+			"error":  "429 rate limit: You've reached your usage limit for this billing cycle. Retry-after: 30 seconds.",
+		}}}}
+	}, "deepseek-v4-ioa")
+
+	result, err := Execute(Request{ProfileName: "cb-mixed", Prompt: "p", WorkDir: tempDir(t)}, deps, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || result.Status != "failed" {
+		t.Fatalf("result=%+v err=%v want failed mixed transient error", result, err)
+	}
+
+	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
+		t.Fatal("mixed monthly+transient denial must not create the provider exhaustion state")
+	}
+	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-mixed")
+	nextMonth := observedquota.NextLocalMonthStart(clock.Now()).Format(time.RFC3339)
+	if check.Open && check.Record.ReasonCode == CircuitReasonHardProfileLimit {
+		t.Fatalf("cb-mixed circuit=%+v must not be a hard-limit circuit", check)
+	}
+	if check.Open && check.Record.UnlockAt == nextMonth {
+		t.Fatalf("cb-mixed circuit=%+v must not unlock at next local month start %q", check, nextMonth)
+	}
+}
