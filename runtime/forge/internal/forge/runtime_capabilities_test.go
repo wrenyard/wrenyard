@@ -254,6 +254,7 @@ func TestDirectCapabilityCodexInjectsConfigArgsFromEmbeddedRegistry(t *testing.T
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setFakeClientsOnPath(t, "codex")
 
 	plan, err := buildDirectRunPlanWithCapabilities(directPlanInput{Profile: "codex-sol", Prompt: "inspect", CWD: t.TempDir()}, []string{"Browser-Use", "browser-use"})
 	if err != nil {

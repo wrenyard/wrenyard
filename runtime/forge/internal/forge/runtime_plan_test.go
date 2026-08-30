@@ -22,6 +22,8 @@ func TestDirectPlanDirsCreatedBeforeLaterStage(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setFakeClientsOnPath(t, "claude")
 
 	// Managed provider (kimi-coding) with auth injected: credential stage passes.
 	setTestAuth(t, "kimi-coding", "token-kimi")
