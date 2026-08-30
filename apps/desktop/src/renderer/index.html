@@ -23,9 +23,9 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
         <span class="tooltip" role="tooltip">工房台账</span>
       </button>
-      <button class="activity-item" id="quota-nav" type="button" aria-label="额度" data-page="quota">
+      <button class="activity-item" id="quota-nav" type="button" aria-label="模型供应" data-page="quota">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h14v10H4V7Z" /><path d="M18 10h2v4h-2M7 10h6v4H7" /></svg>
-        <span class="tooltip" role="tooltip">额度</span>
+        <span class="tooltip" role="tooltip">模型供应</span>
       </button>
       <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
         <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -47,7 +47,7 @@
           </header>
           <div class="workspace-binding" title="由啾啾工坊设置固定绑定">
             <span class="workspace-dot"></span>
-            <span id="conversation-workspace">读取 workspace…</span>
+            <span id="conversation-workspace">工坊工作区</span>
           </div>
           <div class="conversation-session-list" id="conversation-session-list" role="list"></div>
           <footer class="conversation-sidebar-footer">DSH BACKEND · DESKTOP SURFACE</footer>
@@ -59,7 +59,20 @@
               <span class="conversation-kicker">啾啾工坊 / 会话</span>
               <h1 id="conversation-title">新会话</h1>
             </div>
-            <div class="conversation-state" id="conversation-state"><i></i><span>正在连接</span></div>
+            <div class="conversation-header-actions">
+              <label class="conversation-model-picker" for="conversation-model-select">
+                <select id="conversation-model-select" aria-label="当前会话模型" disabled>
+                  <option>读取模型…</option>
+                </select>
+              </label>
+              <span class="conversation-daemon-status is-pending" id="conversation-daemon-status" tabindex="0" role="status" aria-label="Daemon 状态：正在检查" aria-describedby="conversation-daemon-tooltip">
+                <i aria-hidden="true"></i>
+                <span class="conversation-daemon-tooltip" id="conversation-daemon-tooltip" role="tooltip">
+                  <strong id="conversation-daemon-label">正在检查 Daemon</strong>
+                  <small id="conversation-daemon-started-at">启动时间暂不可用</small>
+                </span>
+              </span>
+            </div>
           </header>
           <div class="conversation-feed" id="conversation-feed" aria-live="polite">
             <div class="conversation-welcome" id="conversation-welcome">
@@ -126,7 +139,6 @@
 
         <div class="ledger-meta">
           <span class="status-pill is-pending" id="stats-status">读取中</span>
-          <span id="stats-day-label">等待 Wrenyard 本地台账</span>
         </div>
 
         <section class="metric-grid" aria-label="周期摘要">
@@ -162,9 +174,9 @@
       <section class="product-page quota-page" id="quota-page" aria-labelledby="quota-title" hidden>
         <header class="quota-hero">
           <div>
-            <p class="eyebrow">WORKSHOP CAPACITY</p>
-            <h1 id="quota-title">额度</h1>
-            <p>统一查看各模型服务的剩余额度与余额。</p>
+            <p class="eyebrow">模型供应目录</p>
+            <h1 id="quota-title">模型供应</h1>
+            <p>模型供应 · 统一查看连接状态、额度与 Key 配置。</p>
           </div>
           <button class="secondary-button" id="quota-refresh-button" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
@@ -174,16 +186,16 @@
 
         <div class="quota-meta">
           <span class="status-pill is-pending" id="quota-status">读取中</span>
-          <span id="quota-updated-at">正在读取 Runtime 额度…</span>
+          <span id="quota-updated-at">正在读取 Runtime 模型提供方…</span>
           <span class="quota-pace-legend"><i></i> 时间进度建议余量</span>
         </div>
         <div class="quota-provider-grid" id="quota-provider-grid" aria-live="polite"></div>
-        <p class="quota-footnote">展示顺序与启用状态由「设置 → 桌宠 → 额度来源」统一管理，并同步到通知栏与房屋 Tips。</p>
+        <p class="quota-footnote">已配置的 Provider 优先显示；行内箭头与「设置 → 桌宠 → 额度来源」共享同一排序。通知栏与房屋 Tips 的启用状态仍在设置中管理。</p>
       </section>
 
       <section class="product-page settings-page" id="settings-page" aria-labelledby="settings-title" hidden>
         <header class="page-hero">
-          <div><p class="eyebrow">WRENYARD DESKTOP</p><h1 id="settings-title">啾啾工坊设置</h1><p>管理本地工作环境与桌宠体验</p></div>
+          <div><p class="eyebrow">WRENYARD DESKTOP</p><h1 id="settings-title">啾啾工坊设置</h1><p>管理本地工作环境、更新与桌宠体验</p></div>
           <button class="secondary-button" id="refresh-button" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
             <span id="refresh-label">刷新状态</span>
@@ -194,7 +206,7 @@
           <aside class="settings-toc" aria-label="设置分区">
             <a href="#runtime">运行环境</a>
             <a href="#companion">桌宠</a>
-            <a href="#models">模型接入</a>
+            <a href="#update">更新</a>
             <a href="#about">关于</a>
           </aside>
 
@@ -241,14 +253,28 @@
               </div>
 
               <h3 class="settings-subtitle">额度来源</h3>
-              <p class="settings-subcopy">启用状态与顺序同时控制额度页、通知栏菜单和房屋 Tips，不改变服务配置。</p>
+              <p class="settings-subcopy">这里与模型供应页面共享顺序；启用状态控制通知栏菜单和房屋 Tips，不改变服务配置。</p>
               <div class="settings-card provider-list" id="pet-provider-list"></div>
               <div class="settings-save-row"><span id="pet-save-note">位置仍可直接拖动房屋保存。</span><button class="primary-button" id="pet-save-button" type="button" disabled>保存并应用</button></div>
             </section>
 
-            <section class="settings-section" id="models">
-              <div class="section-heading"><h2>模型接入</h2><p>仅显示凭据是否存在；密钥不会进入此页面。</p></div>
-              <div class="settings-card" id="model-list"><div class="setting-row"><div><h3>正在读取模型状态…</h3></div></div></div>
+            <section class="settings-section" id="update">
+              <div class="section-heading"><h2>更新</h2><p>自动检查啾啾工坊套件的新版本，由你决定何时安装。</p></div>
+              <div class="settings-card">
+                <div class="setting-row"><div><h3>当前版本</h3><p>Desktop 与本地 Wrenyard 服务使用同一套件版本。</p></div><span class="version" id="update-current-version">—</span></div>
+                <div class="setting-row setting-row-stacked update-channel-row">
+                  <div><h3>更新通道</h3><p id="update-channel-note">开发版更新更频繁，稳定性较低。</p></div>
+                  <div class="period-switcher update-channel-switcher" id="update-channel-switcher" role="tablist" aria-label="更新通道">
+                    <button type="button" data-update-channel="stable" role="tab">正式版</button>
+                    <button type="button" data-update-channel="dev" role="tab">开发版</button>
+                  </div>
+                </div>
+                <div class="setting-row update-status-row">
+                  <div class="update-status-copy"><h3>自动更新</h3><p id="update-description">尚未检查更新。</p><small id="update-checked-at">启动后会在后台自动检查</small></div>
+                  <span class="status-pill is-pending" id="update-status">尚未检查</span>
+                </div>
+              </div>
+              <div class="settings-save-row update-action-row"><span>安装前会确认当前没有运行中的任务。</span><button class="secondary-button" id="update-action-button" type="button">检查更新</button></div>
             </section>
 
             <section class="settings-section" id="about">
@@ -257,12 +283,30 @@
                 <div class="setting-row"><div><h3>Wrenyard</h3><p>统一任务编排与本地运行环境</p></div><span class="version" id="wrenyard-version">—</span></div>
                 <div class="setting-row"><div><h3>Desktop</h3><p>Electron 产品壳与桌宠宿主</p></div><span class="version" id="desktop-version">—</span></div>
                 <div class="setting-row"><div><h3>DSH</h3><p>主工作台引擎</p></div><span class="version" id="dsh-version">—</span></div>
-                <div class="setting-row"><div><h3>发布通道</h3><p>当前版本仍处于开发预览阶段</p></div><span class="status-pill is-preview">DEV PREVIEW</span></div>
               </div>
             </section>
           </div>
         </div>
       </section>
+
+      <div class="provider-dialog-backdrop" id="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" aria-hidden="true" hidden>
+        <div class="provider-dialog-card">
+          <p class="eyebrow">PROVIDER CONFIGURATION</p>
+          <h2 id="provider-dialog-title">提供方配置</h2>
+          <div class="provider-dialog-identity">
+            <strong id="provider-dialog-name"></strong>
+            <code id="provider-dialog-id"></code>
+          </div>
+          <p class="provider-dialog-guidance" id="provider-dialog-guidance"></p>
+          <label id="provider-key-label" for="provider-key-input">API Key</label>
+          <input id="provider-key-input" type="password" spellcheck="false" autocomplete="off" />
+          <span class="provider-dialog-error" id="provider-dialog-error" aria-live="polite"></span>
+          <div class="provider-dialog-actions">
+            <button class="secondary-button" id="provider-dialog-cancel" type="button">取消</button>
+            <button class="primary-button" id="provider-dialog-save" type="button">保存</button>
+          </div>
+        </div>
+      </div>
     </main>
     <script src="./app.js"></script>
   </body>

@@ -4,6 +4,7 @@ import {
 } from './model-patch.js';
 import type { SettingsSnapshot } from './shell-contract.js';
 import type { PetCompanionSnapshot } from './shell-contract.js';
+import type { UpdateSnapshot } from './shell-contract.js';
 import type { WorkspaceConfigurationSnapshot } from './shell-contract.js';
 
 export interface HealthSnapshot {
@@ -20,6 +21,7 @@ export interface SettingsSnapshotOptions {
   readHealth(): Promise<HealthSnapshot>;
   readCredentialEnv?: () => Promise<NodeJS.ProcessEnv>;
   readPet(): Promise<PetCompanionSnapshot>;
+  readUpdate(): UpdateSnapshot;
 }
 
 /**
@@ -27,6 +29,7 @@ export interface SettingsSnapshotOptions {
  * reduced to booleans here so the renderer can never receive a secret.
  */
 export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): Promise<SettingsSnapshot> {
+  const update = options.readUpdate();
   const [health, credentialEnv, pet] = await Promise.all([
     options.readHealth().catch((): HealthSnapshot => ({ connected: false })),
     (options.readCredentialEnv ?? resolveModelCredentialEnv)().catch((): NodeJS.ProcessEnv => ({})),
@@ -47,11 +50,12 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
         && credentialEnv[provider.apiKeyEnv]!.trim() !== '',
     })),
     pet,
+    update,
     about: {
       desktopVersion: options.desktopVersion,
       wrenyardVersion: options.wrenyardVersion,
       dshVersion: options.dshVersion,
-      channel: 'development-preview',
+      channel: update.channel,
     },
   };
 }

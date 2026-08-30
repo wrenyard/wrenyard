@@ -28,6 +28,11 @@ test('renderModelPatch matches the public fdsh overlay contract', () => {
   assert.ok(raw.startsWith('# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n'));
   assert.match(raw, /^      kimi-coding:$/m);
   assert.match(raw, /^      zhipu-coding:$/m);
+  assert.match(raw, /^      openai:$/m);
+  assert.doesNotMatch(raw, /^      anthropic-api:$/m, 'anthropic-only API must not be projected into the OpenAI DSH adapter');
+  for (const route of ['zhipu', 'moonshot', 'minimax', 'minimax-coding', 'qwen', 'qwen-coding', 'tokenhub', 'volcengine']) {
+    assert.match(raw, new RegExp(`^      ${route}:$`, 'm'));
+  }
   assert.ok(raw.includes('        displayName: "Kimi Coding"\n'));
   assert.ok(raw.includes('        displayName: "Zhipu Coding"\n'));
   assert.ok(raw.includes('        api: openai-completions\n'));
@@ -36,18 +41,18 @@ test('renderModelPatch matches the public fdsh overlay contract', () => {
   assert.ok(raw.includes('        baseURL: "https://api.kimi.com/coding/v1"\n'));
   assert.ok(raw.includes('        baseURL: "https://open.bigmodel.cn/api/coding/paas/v4"\n'));
   assert.ok(raw.includes('          - id: k3\n'));
-  assert.ok(raw.includes('          - id: "k3[1m]"\n'));
+  assert.equal(raw.includes('k3[1m]'), false);
   assert.ok(raw.includes('          - id: glm-5.3\n'));
   assert.ok(raw.includes('          - id: glm-5.3-flash\n'));
   assert.ok(raw.includes('            name: "Kimi K3"\n'));
-  assert.ok(raw.includes('            name: GLM-5.3\n'));
-  assert.ok(raw.includes('            name: "GLM-5.3 Flash"\n'));
+  assert.ok(raw.includes('            name: "GLM 5.3"\n'));
+  assert.ok(raw.includes('            name: "GLM 5.3 Flash"\n'));
   assert.ok(raw.includes('            contextWindow: 1048576\n'));
   assert.ok(raw.includes('            maxTokens: 32768\n'));
   assert.equal(raw.includes('deepseek-official'), false);
   assert.equal(raw.includes('sk-'), false);
   assert.equal(raw.includes('!!js'), false);
-  assert.equal(INJECTED_PROVIDERS.length, 2);
+  assert.equal(INJECTED_PROVIDERS.length, 11);
 });
 
 test('writeModelPatch atomically writes the overlay into DSH_HOME', async () => {

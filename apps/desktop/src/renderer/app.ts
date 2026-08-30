@@ -1,14 +1,20 @@
 import type {
   PetCompanionSettings,
+  ProviderCatalogSnapshot,
   QuotaProviderSnapshot,
   QuotaSnapshot,
+  ServiceSnapshot,
   SettingsSnapshot,
   ShellPage,
   StatsPeriod,
   StatsSnapshot,
   StatsWindowSnapshot,
+  UpdateChannel,
+  UpdateSnapshot,
   WrenyardShellApi,
 } from '../shell-contract.js';
+import { daemonStatusPresentation } from '../daemon-status.js';
+import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 
 declare global {
@@ -37,12 +43,29 @@ const builtinOnly = requireElement<HTMLInputElement>('stats-builtin-only');
 const workspaceSettingInput = requireElement<HTMLInputElement>('workspace-setting-input');
 const workspaceSaveButton = requireElement<HTMLButtonElement>('workspace-save-button');
 const workspaceSettingNote = requireElement<HTMLElement>('workspace-setting-note');
+const providerDialog = requireElement<HTMLElement>('provider-dialog');
+const providerDialogTitle = requireElement<HTMLElement>('provider-dialog-title');
+const providerDialogName = requireElement<HTMLElement>('provider-dialog-name');
+const providerDialogId = requireElement<HTMLElement>('provider-dialog-id');
+const providerDialogGuidance = requireElement<HTMLElement>('provider-dialog-guidance');
+const providerKeyLabel = requireElement<HTMLLabelElement>('provider-key-label');
+const providerKeyInput = requireElement<HTMLInputElement>('provider-key-input');
+const providerDialogError = requireElement<HTMLElement>('provider-dialog-error');
+const providerDialogCancel = requireElement<HTMLButtonElement>('provider-dialog-cancel');
+const providerDialogSave = requireElement<HTMLButtonElement>('provider-dialog-save');
+const updateActionButton = requireElement<HTMLButtonElement>('update-action-button');
+const updateChannelSwitcher = requireElement<HTMLElement>('update-channel-switcher');
 
 let petDraft: PetCompanionSettings | null = null;
 let petDirty = false;
+let dialogProvider: ProviderCatalogSnapshot | null = null;
 let currentPage: ShellPage = 'workbench';
 let currentStats: StatsSnapshot | null = null;
+let currentQuota: QuotaSnapshot | null = null;
 let selectedPeriod: StatsPeriod = '24h';
+let providerOrderSaving = false;
+let currentUpdate: UpdateSnapshot | null = null;
+let updateActionBusy = false;
 
 function requireElement<T extends HTMLElement = HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -63,6 +86,30 @@ function formatServiceDuration(value: number | undefined): string {
   if (days > 0) return `已连接 · 已运行 ${days} 天 ${hours} 小时`;
   if (hours > 0) return `已连接 · 已运行 ${hours} 小时 ${minutes} 分钟`;
   return `已连接 · 已运行 ${minutes} 分钟`;
+}
+
+function formatDaemonStartedAt(value: number | undefined): string {
+  if (value === undefined) return '启动时间暂不可用';
+  return `启动时间 ${new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(value)}`;
+}
+
+function renderDaemonStatus(service: Pick<ServiceSnapshot, 'status' | 'uptimeMs'>): void {
+  const presentation = daemonStatusPresentation(service);
+  const status = requireElement('conversation-daemon-status');
+  const startedAt = presentation.status === 'connected'
+    ? formatDaemonStartedAt(presentation.startedAt)
+    : '启动时间不可用';
+  status.className = `conversation-daemon-status is-${presentation.status}`;
+  status.setAttribute('aria-label', `${presentation.label}，${startedAt}`);
+  setText('conversation-daemon-label', presentation.label);
+  setText('conversation-daemon-started-at', startedAt);
 }
 
 function formatTaskDuration(value: number): string {
@@ -99,6 +146,7 @@ function periodLabel(period: StatsPeriod): string {
 
 function renderSnapshot(snapshot: SettingsSnapshot): void {
   const connected = snapshot.service.status === 'connected';
+  renderDaemonStatus(snapshot.service);
   const serviceStatus = requireElement('service-status');
   serviceStatus.textContent = connected ? '已连接' : '不可用';
   serviceStatus.className = `status-pill ${connected ? 'is-connected' : 'is-unavailable'}`;
@@ -116,27 +164,130 @@ function renderSnapshot(snapshot: SettingsSnapshot): void {
       : snapshot.service.workspace.message ?? `尚未配置 · 将写入 ${snapshot.service.workspace.configPath}`;
   setText('endpoint-value', snapshot.service.endpoint);
   renderPet(snapshot);
-
-  const modelList = requireElement('model-list');
-  modelList.replaceChildren(...snapshot.models.map((model) => {
-    const row = document.createElement('div');
-    row.className = 'setting-row';
-    const copy = document.createElement('div');
-    const title = document.createElement('h3');
-    title.textContent = model.label;
-    const description = document.createElement('p');
-    description.textContent = model.id;
-    copy.append(title, description);
-    const status = document.createElement('span');
-    status.className = `status-pill ${model.configured ? 'is-configured' : 'is-missing'}`;
-    status.textContent = model.configured ? '已配置' : '未配置';
-    row.append(copy, status);
-    return row;
-  }));
+  renderUpdate(snapshot.update);
 
   setText('wrenyard-version', snapshot.about.wrenyardVersion);
   setText('desktop-version', snapshot.about.desktopVersion);
   setText('dsh-version', snapshot.about.dshVersion);
+}
+
+function formatUpdateCheckTime(checkedAt: number | undefined): string {
+  if (checkedAt === undefined) return '启动后会在后台自动检查';
+  return `上次检查 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(checkedAt)}`;
+}
+
+function renderUpdate(snapshot: UpdateSnapshot): void {
+  currentUpdate = snapshot;
+  setText('update-current-version', `v${snapshot.currentVersion}`);
+  setText('update-checked-at', formatUpdateCheckTime(snapshot.checkedAt));
+  setText('update-channel-note', snapshot.channel === 'dev'
+    ? '开发版更新更频繁，包含尚在打磨的新功能，稳定性较低。'
+    : '正式版只接收正式发布的版本，更新节奏更稳定。');
+
+  const channelLocked = snapshot.state === 'checking'
+    || snapshot.state === 'preparing'
+    || snapshot.state === 'restart-required';
+  for (const button of Array.from(updateChannelSwitcher.querySelectorAll<HTMLButtonElement>('button[data-update-channel]'))) {
+    const selected = button.dataset.updateChannel === snapshot.channel;
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.disabled = channelLocked || updateActionBusy;
+  }
+
+  const status = requireElement('update-status');
+  let statusLabel = '尚未检查';
+  let statusClass = 'is-pending';
+  let description = snapshot.message ?? '尚未检查更新。';
+  let action = '检查更新';
+  let primary = false;
+  let disabled = updateActionBusy;
+
+  if (snapshot.state === 'checking') {
+    statusLabel = '检查中';
+    description = '正在检查更新…';
+    action = '正在检查…';
+    disabled = true;
+  } else if (snapshot.state === 'up-to-date') {
+    statusLabel = '已是最新';
+    statusClass = 'is-connected';
+    description = snapshot.message ?? '当前已是最新版本。';
+  } else if (snapshot.state === 'stable-unavailable') {
+    statusLabel = '等待正式版';
+    description = '正式版尚未发布，首个正式版上线时会在这里提示你。';
+  } else if (snapshot.state === 'available') {
+    statusLabel = '有新版本';
+    statusClass = 'is-preview';
+    description = `发现新版本 v${snapshot.availableVersion ?? '—'}（当前 v${snapshot.currentVersion}），将一次升级整个啾啾工坊套件。`;
+    action = snapshot.installSupported ? '安装更新' : '暂不支持应用内安装';
+    primary = snapshot.installSupported;
+    disabled ||= !snapshot.installSupported;
+  } else if (snapshot.state === 'preparing') {
+    statusLabel = '准备中';
+    description = snapshot.message ?? '正在下载并校验更新…';
+    action = '正在准备…';
+    disabled = true;
+  } else if (snapshot.state === 'restart-required') {
+    statusLabel = '更新就绪';
+    statusClass = 'is-connected';
+    description = snapshot.message ?? '更新已就绪，重启啾啾工坊后完成安装。';
+    action = '重启并安装';
+    primary = true;
+  } else if (snapshot.state === 'install-blocked') {
+    statusLabel = '等待任务结束';
+    statusClass = 'is-preview';
+    description = snapshot.message ?? '当前仍有任务运行，请完成或停止后再安装更新。';
+    action = '重试安装';
+    primary = true;
+  } else if (snapshot.state === 'check-failed') {
+    statusLabel = '暂时不可用';
+    statusClass = 'is-unavailable';
+    description = snapshot.message ?? '暂时无法检查更新，请检查网络连接后重试。';
+    action = '重试';
+  } else if (snapshot.state === 'install-failed') {
+    statusLabel = '更新未完成';
+    statusClass = 'is-unavailable';
+    description = snapshot.message ?? '更新未完成，当前版本未受影响。';
+    action = '重试安装';
+    primary = true;
+  }
+
+  status.textContent = statusLabel;
+  status.className = `status-pill ${statusClass}`;
+  setText('update-description', description);
+  updateActionButton.textContent = action;
+  updateActionButton.className = primary ? 'primary-button' : 'secondary-button';
+  updateActionButton.disabled = disabled;
+}
+
+async function runUpdateAction(): Promise<void> {
+  if (!currentUpdate || updateActionBusy) return;
+  updateActionBusy = true;
+  renderUpdate(currentUpdate);
+  try {
+    if (currentUpdate.state === 'restart-required') {
+      await window.wrenyardShell.restartUpdate();
+      return;
+    }
+    const prepareStates: UpdateSnapshot['state'][] = ['available', 'install-blocked', 'install-failed'];
+    renderUpdate(prepareStates.includes(currentUpdate.state)
+      ? await window.wrenyardShell.prepareUpdate()
+      : await window.wrenyardShell.checkUpdate());
+  } finally {
+    updateActionBusy = false;
+    if (currentUpdate) renderUpdate(currentUpdate);
+  }
+}
+
+async function selectUpdateChannel(channel: UpdateChannel): Promise<void> {
+  if (!currentUpdate || currentUpdate.channel === channel || updateActionBusy) return;
+  updateActionBusy = true;
+  renderUpdate(currentUpdate);
+  try {
+    renderUpdate(await window.wrenyardShell.setUpdateChannel(channel));
+  } finally {
+    updateActionBusy = false;
+    if (currentUpdate) renderUpdate(currentUpdate);
+  }
 }
 
 function renderPet(snapshot: SettingsSnapshot): void {
@@ -257,8 +408,9 @@ function providerMoveButton(label: string, disabled: boolean, move: () => void):
 
 function moveProvider(from: number, to: number): void {
   if (!petDraft || to < 0 || to >= petDraft.quota.providers.length) return;
-  const [provider] = petDraft.quota.providers.splice(from, 1);
-  petDraft.quota.providers.splice(to, 0, provider);
+  const current = petDraft.quota.providers[from];
+  const neighbor = petDraft.quota.providers[to];
+  petDraft.quota.providers = swapProviders(petDraft.quota.providers, current.id, neighbor.id);
   renderProviders();
   markPetDirty();
 }
@@ -269,108 +421,274 @@ function renderStats(snapshot: StatsSnapshot): void {
   const status = requireElement('stats-status');
   status.textContent = available ? (snapshot.source === 'summary' ? '本地台账' : '兼容数据') : '不可用';
   status.className = `status-pill ${available ? 'is-connected' : 'is-unavailable'}`;
-  setText('stats-day-label', available && snapshot.today
-    ? `${snapshot.today.dayKey} · ${snapshot.source === 'summary' ? 'SQLite 权威汇总' : '仅今日兼容投影'}`
-    : '未能读取本地统计；任务运行不受影响。');
   renderDaily(snapshot);
   renderPeriod(snapshot);
 }
 
 function renderQuota(snapshot: QuotaSnapshot): void {
+  currentQuota = snapshot;
   const available = snapshot.status === 'available';
   const status = requireElement('quota-status');
-  status.textContent = available ? '额度已同步' : '暂不可用';
+  status.textContent = available ? '模型供应已同步' : '暂不可用';
   status.className = `status-pill ${available ? 'is-connected' : 'is-unavailable'}`;
   const updated = snapshot.refreshedAt === undefined
     ? '尚未完成刷新'
     : `更新于 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(snapshot.refreshedAt)}`;
   setText('quota-updated-at', snapshot.message ? `${updated} · ${snapshot.message}` : updated);
 
-  const grid = requireElement('quota-provider-grid');
-  if (snapshot.providers.length === 0) {
-    grid.replaceChildren(emptyQuotaCard(available ? '没有启用的额度来源，可在设置中开启。' : '额度数据暂时不可用，请稍后刷新。'));
+  const list = requireElement('quota-provider-grid');
+  const catalog = snapshot.catalog ?? [];
+  if (catalog.length === 0) {
+    list.replaceChildren(emptyQuotaCard(available ? '未发现受支持的 Provider。' : 'Provider 数据暂时不可用，请稍后刷新。'));
     return;
   }
-  grid.replaceChildren(...snapshot.providers.map(quotaProviderCard));
+  list.replaceChildren(...catalog.map((entry, index) => quotaProviderRow(entry, index, catalog)));
 }
 
-function quotaProviderCard(provider: QuotaProviderSnapshot): HTMLElement {
-  const card = document.createElement('article');
-  card.className = `quota-provider-card quota-status-${provider.status}`;
+function quotaProviderRow(
+  entry: ProviderCatalogSnapshot,
+  index: number,
+  catalog: ProviderCatalogSnapshot[],
+): HTMLElement {
+  const row = document.createElement('article');
+  row.className = `provider-directory-row${entry.configured ? '' : ' is-unconfigured'}`;
 
-  const header = document.createElement('header');
+  const header = document.createElement('div');
+  header.className = 'provider-directory-header';
   const identity = document.createElement('div');
   const title = document.createElement('h2');
-  title.textContent = provider.label;
+  title.textContent = entry.label ?? entry.id;
   const id = document.createElement('code');
-  id.textContent = provider.id;
-  identity.append(title, id);
+  id.textContent = entry.id;
+  const description = document.createElement('p');
+  description.textContent = entry.description;
+  identity.append(title, id, description);
   const state = document.createElement('span');
-  state.className = `quota-provider-state is-${provider.status}`;
-  state.textContent = `${quotaStatusLabel(provider.status)}${provider.stale ? ' · 旧数据' : ''}`;
-  header.append(identity, state);
-  card.append(header);
+  state.className = `provider-directory-state ${entry.configured ? 'is-ok' : 'is-unavailable'}`;
+  state.textContent = entry.quota?.code === 'configuration_missing'
+    ? '未配置'
+    : entry.quota?.code === 'authentication_required'
+      ? '未登录'
+      : entry.authMode === 'none'
+        ? '无需配置'
+        : entry.configured
+          ? '已配置'
+          : entry.authMode === 'native' ? '未登录' : '未配置';
+  const meta = document.createElement('div');
+  meta.className = 'provider-directory-header-meta';
+  meta.append(state, quotaProviderOrderButtons(entry, index, catalog));
+  header.append(identity, meta);
 
-  const body = document.createElement('div');
-  body.className = 'quota-provider-body';
-  for (const window of provider.windows) {
-    const row = document.createElement('div');
-    row.className = 'quota-window-row';
-    const rowHeader = document.createElement('div');
-    const name = document.createElement('strong');
-    name.textContent = window.name;
-    const percentage = document.createElement('span');
-    percentage.textContent = `${Math.floor(window.remainingPct)}%`;
-    rowHeader.append(name, percentage);
-    const track = document.createElement('div');
-    track.className = `quota-track${window.remainingPct < 20 ? ' is-low' : ''}`;
-    track.setAttribute('role', 'progressbar');
-    track.setAttribute('aria-label', `${provider.label} ${window.name} 剩余`);
-    track.setAttribute('aria-valuemin', '0');
-    track.setAttribute('aria-valuemax', '100');
-    track.setAttribute('aria-valuenow', String(window.remainingPct));
-    const fill = document.createElement('i');
-    fill.style.width = `${window.remainingPct}%`;
-    track.append(fill);
-    if (window.expectedRemainingPct !== null) {
-      const marker = document.createElement('b');
-      marker.style.left = `${window.expectedRemainingPct}%`;
-      marker.title = `按当前时间进度建议剩余 ${Math.floor(window.expectedRemainingPct)}%`;
-      track.append(marker);
-    }
-    row.append(rowHeader, track);
-    body.append(row);
-  }
-  for (const balance of provider.balances) {
-    const row = document.createElement('div');
-    row.className = 'quota-balance-row';
-    const name = document.createElement('span');
-    name.textContent = balance.currency;
-    const value = document.createElement('strong');
-    value.textContent = balance.display;
-    row.append(name, value);
-    body.append(row);
-  }
-  if (provider.message || (provider.windows.length === 0 && provider.balances.length === 0)) {
-    const note = document.createElement('p');
-    note.className = 'quota-provider-message';
-    note.textContent = provider.message ?? provider.displayLine ?? '暂无可展示的额度数据。';
-    body.append(note);
-  } else if (provider.displayLine) {
-    const note = document.createElement('p');
-    note.className = 'quota-provider-detail';
-    note.textContent = provider.displayLine;
-    body.append(note);
-  }
-  card.append(body);
-  return card;
+  const quota = document.createElement('div');
+  quota.className = 'provider-directory-quota';
+  appendQuotaContent(quota, entry);
+
+  const action = providerRowAction(entry);
+
+  row.append(header, quota, action);
+  return row;
 }
 
-function quotaStatusLabel(status: QuotaProviderSnapshot['status']): string {
-  if (status === 'ok') return '可用';
-  if (status === 'pending') return '等待中';
-  if (status === 'error') return '错误';
-  return '不可用';
+function quotaProviderOrderButtons(
+  entry: ProviderCatalogSnapshot,
+  index: number,
+  catalog: ProviderCatalogSnapshot[],
+): HTMLElement {
+  const controls = document.createElement('span');
+  controls.className = 'provider-directory-order';
+  const previous = catalog[index - 1];
+  const next = catalog[index + 1];
+  controls.append(
+    providerMoveButton('↑', providerOrderSaving || !previous || previous.configured !== entry.configured, () => {
+      if (previous) void saveQuotaProviderMove(entry.id, previous.id, catalog);
+    }),
+    providerMoveButton('↓', providerOrderSaving || !next || next.configured !== entry.configured, () => {
+      if (next) void saveQuotaProviderMove(entry.id, next.id, catalog);
+    }),
+  );
+  return controls;
+}
+
+async function saveQuotaProviderMove(
+  providerId: string,
+  neighborId: string,
+  catalog: ProviderCatalogSnapshot[],
+): Promise<void> {
+  if (!currentQuota || providerOrderSaving) return;
+  providerOrderSaving = true;
+  const completeOrder = reorderProviders(currentQuota.providerOrder, catalog.map((entry) => entry.id));
+  const nextOrder = swapProviders(completeOrder, providerId, neighborId);
+  let failure = '';
+  renderQuota(currentQuota);
+  try {
+    renderQuota(await window.wrenyardShell.saveProviderOrder(nextOrder.map((entry) => entry.id)));
+  } catch (error) {
+    failure = error instanceof Error ? error.message : String(error);
+  } finally {
+    providerOrderSaving = false;
+    if (currentQuota) renderQuota(currentQuota);
+  }
+  if (failure) setText('quota-updated-at', `顺序保存失败 · ${failure}`);
+}
+
+function appendQuotaContent(container: HTMLElement, entry: ProviderCatalogSnapshot): void {
+  const quota = entry.quota;
+  if (!quota) {
+    const note = document.createElement('p');
+    note.className = 'quota-provider-detail';
+    note.textContent = entry.configured
+      ? '已连接；此 Provider 暂不提供额度查询。'
+      : entry.authMode === 'native'
+        ? '尚未登录，请完成登录后刷新。'
+        : entry.authMode === 'api-key'
+          ? '尚未配置 Key，配置后可在这里查看额度。'
+          : entry.authMode === 'environment'
+            ? '尚未配置，请提供环境变量后刷新。'
+            : '此 Provider 暂不提供额度查询。';
+    container.append(note);
+    return;
+  }
+  const windows = quota.windows;
+  const balances = quota.balances;
+  if (windows.length > 0) {
+    const bars = document.createElement('div');
+    bars.className = 'provider-directory-windows';
+    for (const window of windows) bars.append(quotaWindowRow(entry, window));
+    container.append(bars);
+  }
+  for (const balance of balances) container.append(quotaBalanceRow(balance));
+  if (quota.message || (windows.length === 0 && balances.length === 0)) {
+    const note = document.createElement('p');
+    note.className = 'quota-provider-message';
+    note.textContent = quota.message ?? quota.displayLine ?? '暂无可展示的额度数据。';
+    container.append(note);
+  } else if (quota.displayLine) {
+    const note = document.createElement('p');
+    note.className = 'quota-provider-detail';
+    note.textContent = quota.displayLine;
+    container.append(note);
+  }
+}
+
+function quotaWindowRow(provider: ProviderCatalogSnapshot, window: QuotaProviderSnapshot['windows'][number]): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'quota-window-row';
+  const rowHeader = document.createElement('div');
+  const name = document.createElement('strong');
+  name.textContent = window.name;
+  const percentage = document.createElement('span');
+  percentage.textContent = `${Math.floor(window.remainingPct)}%`;
+  rowHeader.append(name, percentage);
+  const track = document.createElement('div');
+  track.className = `quota-track${window.remainingPct < 20 ? ' is-low' : ''}`;
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-label', `${provider.label} ${window.name} 剩余`);
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  track.setAttribute('aria-valuenow', String(window.remainingPct));
+  const fill = document.createElement('i');
+  fill.style.width = `${window.remainingPct}%`;
+  track.append(fill);
+  if (window.expectedRemainingPct !== null) {
+    const marker = document.createElement('b');
+    marker.style.left = `${window.expectedRemainingPct}%`;
+    marker.title = `按当前时间进度建议剩余 ${Math.floor(window.expectedRemainingPct)}%`;
+    track.append(marker);
+  }
+  row.append(rowHeader, track);
+  return row;
+}
+
+function quotaBalanceRow(balance: QuotaProviderSnapshot['balances'][number]): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'quota-balance-row';
+  const name = document.createElement('span');
+  name.textContent = balance.currency;
+  const value = document.createElement('strong');
+  value.textContent = balance.display;
+  row.append(name, value);
+  return row;
+}
+
+function providerRowAction(entry: ProviderCatalogSnapshot): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'provider-directory-action';
+  const mode = entry.authMode;
+  if (mode === 'api-key') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary-button';
+    button.textContent = entry.configured ? '更新 Key' : '配置 Key';
+    button.addEventListener('click', () => openProviderDialog(entry));
+    wrap.append(button);
+    return wrap;
+  }
+  if (mode === 'native' || mode === 'environment') {
+    const hint = document.createElement('span');
+    hint.className = 'provider-directory-hint';
+    hint.textContent = providerModeHint(mode);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary-button';
+    button.textContent = '查看指引';
+    button.addEventListener('click', () => openProviderDialog(entry));
+    wrap.append(hint, button);
+    return wrap;
+  }
+  const hint = document.createElement('span');
+  hint.className = 'provider-directory-hint';
+  hint.textContent = providerModeHint(mode);
+  wrap.append(hint);
+  return wrap;
+}
+
+function providerModeHint(mode: ProviderCatalogSnapshot['authMode']): string {
+  if (mode === 'api-key') return '支持配置 API Key';
+  if (mode === 'native') return '浏览器登录验证';
+  if (mode === 'environment') return '由环境变量提供';
+  return '无需密钥配置';
+}
+
+function openProviderDialog(entry: ProviderCatalogSnapshot): void {
+  dialogProvider = entry;
+  const mode = entry.authMode;
+  const configured = entry.configured;
+  const apiKeyMode = mode === 'api-key';
+  providerDialogName.textContent = entry.label ?? entry.id;
+  providerDialogId.textContent = entry.id;
+  providerDialogTitle.textContent = apiKeyMode
+    ? (configured ? '更新 API Key' : '配置 API Key')
+    : '提供方配置指引';
+  providerDialogGuidance.textContent = entry.setupHint || providerDialogGuidanceText(mode);
+  providerKeyLabel.hidden = !apiKeyMode;
+  providerKeyInput.hidden = !apiKeyMode;
+  providerDialogSave.hidden = !apiKeyMode;
+  providerDialogError.textContent = '';
+  if (apiKeyMode) {
+    providerKeyInput.value = '';
+    providerKeyInput.disabled = false;
+    providerDialogSave.disabled = false;
+    providerDialogSave.textContent = configured ? '更新' : '保存';
+  }
+  providerDialog.hidden = false;
+  providerDialog.setAttribute('aria-hidden', 'false');
+  if (apiKeyMode) providerKeyInput.focus();
+}
+
+function providerDialogGuidanceText(mode: ProviderCatalogSnapshot['authMode']): string {
+  if (mode === 'api-key') return '在 Provider 控制台创建 API Key 后粘贴到这里；Key 仅写入本地运行时，不会回显到页面。';
+  if (mode === 'native') return '此提供方使用浏览器登录授权，无需 API 密钥。请在提供方登录页完成验证后回到工坊继续使用。';
+  if (mode === 'environment') return '此提供方的密钥由启动环境的环境变量提供，本页面不接收密钥输入。请调整启动环境后重新加载会话。';
+  return '此提供方无需配置密钥。';
+}
+
+function closeProviderDialog(): void {
+  providerDialog.hidden = true;
+  providerDialog.setAttribute('aria-hidden', 'true');
+  providerKeyInput.value = '';
+  providerKeyInput.disabled = false;
+  providerDialogSave.disabled = false;
+  dialogProvider = null;
 }
 
 function emptyQuotaCard(message: string): HTMLElement {
@@ -553,7 +871,7 @@ function renderPage(page: ShellPage): void {
     if (selected) nav.setAttribute('aria-current', 'page');
     else nav.removeAttribute('aria-current');
   }
-  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '额度' : '设置';
+  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '模型供应' : '设置';
   document.title = page === 'workbench' ? '啾啾工坊' : `${pageTitle} — 啾啾工坊`;
 }
 
@@ -601,6 +919,37 @@ refreshButton.addEventListener('click', () => {
 });
 statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => void refreshQuota(true));
+updateActionButton.addEventListener('click', () => void runUpdateAction());
+updateChannelSwitcher.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  const channel = target.dataset.updateChannel;
+  if (channel === 'stable' || channel === 'dev') void selectUpdateChannel(channel);
+});
+providerDialogCancel.addEventListener('click', () => closeProviderDialog());
+providerDialogSave.addEventListener('click', () => {
+  const entry = dialogProvider;
+  if (!entry) return;
+  const apiKey = providerKeyInput.value.trim();
+  if (!apiKey) {
+    providerDialogError.textContent = '请输入 API Key。';
+    providerKeyInput.focus();
+    return;
+  }
+  providerDialogSave.disabled = true;
+  providerKeyInput.disabled = true;
+  providerDialogError.textContent = '';
+  void window.wrenyardShell.configureProviderKey(entry.id, apiKey)
+    .then((snapshot) => {
+      closeProviderDialog();
+      renderQuota(snapshot);
+    })
+    .catch((error: unknown) => {
+      providerDialogError.textContent = error instanceof Error ? error.message : '密钥保存失败，请重试。';
+      providerDialogSave.disabled = false;
+      providerKeyInput.disabled = false;
+    });
+});
 builtinOnly.addEventListener('change', () => {
   if (currentStats) renderPeriod(currentStats);
 });
@@ -660,6 +1009,11 @@ workspaceSaveButton.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !providerDialog.hidden) {
+    event.preventDefault();
+    closeProviderDialog();
+    return;
+  }
   if (event.key === 'Escape' && currentPage !== 'workbench') {
     event.preventDefault();
     void navigate('workbench');
@@ -677,6 +1031,19 @@ window.wrenyardShell.onViewChanged((page) => {
 window.wrenyardShell.onQuotaChanged(() => {
   if (currentPage === 'quota') void refreshQuota(false);
 });
-void window.wrenyardShell.getSettings().then(renderSnapshot);
+window.wrenyardShell.onUpdateChanged(() => {
+  void window.wrenyardShell.getUpdate().then(renderUpdate);
+});
+const refreshDaemonStatus = (): void => {
+  void window.wrenyardShell.getSettings()
+    .then((snapshot) => renderDaemonStatus(snapshot.service))
+    .catch(() => renderDaemonStatus({ status: 'unavailable' }));
+};
+const daemonStatus = requireElement('conversation-daemon-status');
+daemonStatus.addEventListener('pointerenter', refreshDaemonStatus);
+daemonStatus.addEventListener('focus', refreshDaemonStatus);
+void window.wrenyardShell.getSettings()
+  .then(renderSnapshot)
+  .catch(() => renderDaemonStatus({ status: 'unavailable' }));
 const conversationView = new ConversationView(window.wrenyardShell, () => void navigate('settings'));
 conversationView.start();

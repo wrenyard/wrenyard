@@ -30,6 +30,7 @@ function readySnapshot(workspace: ConfiguredWorkspace): ConversationSnapshot {
     workspace,
     sessions: [],
     selectedRunning: false,
+    models: { status: 'idle', groups: [] },
     hasMore: false,
     items: [],
   };
@@ -49,6 +50,7 @@ test('workspace can be configured without restarting the Desktop process', async
         snapshot: () => readySnapshot(workspace),
         select: async () => readySnapshot(workspace),
         create: async () => readySnapshot(workspace),
+        selectModel: async () => readySnapshot(workspace),
         send: async () => readySnapshot(workspace),
         cancel: async () => readySnapshot(workspace),
         stop: () => { stopped.push(workspace.path); },

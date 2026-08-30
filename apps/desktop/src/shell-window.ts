@@ -17,23 +17,33 @@ import {
   type PetCompanionSettings,
   type ShellPage,
   type WorkspaceConfigurationSnapshot,
+  type UpdateChannel,
+  type UpdateSnapshot,
 } from './shell-contract.js';
-
-const PRODUCT_TITLE = '啾啾工坊';
+import { formatShellWindowTitle } from './shell-window-title.js';
 
 export interface ShellWindowOptions {
   rendererPath: string;
   preloadPath: string;
+  appVersion: string;
   smoke: boolean;
   icon?: string;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
+  saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
+  configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
+  getUpdate(): Promise<UpdateSnapshot>;
+  checkUpdate(): Promise<UpdateSnapshot>;
+  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
+  prepareUpdate(): Promise<UpdateSnapshot>;
+  restartUpdate(): Promise<void>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
+  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
 }
@@ -42,7 +52,7 @@ export class ShellWindowController {
   readonly window: BrowserWindow;
   private page: ShellPage = 'workbench';
 
-  private constructor(window: BrowserWindow) {
+  private constructor(window: BrowserWindow, private readonly appVersion: string) {
     this.window = window;
   }
 
@@ -53,7 +63,7 @@ export class ShellWindowController {
       minWidth: 760,
       minHeight: 520,
       show: false,
-      title: PRODUCT_TITLE,
+      title: formatShellWindowTitle('workbench', options.appVersion),
       backgroundColor: '#f7efd8',
       ...(options.icon ? { icon: options.icon } : {}),
       webPreferences: {
@@ -65,7 +75,7 @@ export class ShellWindowController {
       },
     };
     const win = new BrowserWindow(windowOptions);
-    const controller = new ShellWindowController(win);
+    const controller = new ShellWindowController(win, options.appVersion);
     controller.installSecurity(options.rendererPath);
     controller.installIpc(options);
     controller.installShortcuts(win.webContents);
@@ -85,8 +95,7 @@ export class ShellWindowController {
 
   setPage(page: ShellPage, focus = true): void {
     this.page = page;
-    const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '额度' : '设置';
-    this.window.setTitle(page === 'workbench' ? PRODUCT_TITLE : `${pageTitle} — ${PRODUCT_TITLE}`);
+    this.window.setTitle(formatShellWindowTitle(page, this.appVersion));
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.viewChanged, page);
       if (focus) this.window.webContents.focus();
@@ -102,6 +111,12 @@ export class ShellWindowController {
   notifyQuotaChanged(): void {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.quotaChanged);
+    }
+  }
+
+  notifyUpdateChanged(): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.updateChanged);
     }
   }
 
@@ -128,6 +143,41 @@ export class ShellWindowController {
       if (forceRefresh !== undefined && typeof forceRefresh !== 'boolean') throw new Error('额度刷新参数无效');
       return options.getQuota(forceRefresh === true);
     });
+    ipcMain.handle(SHELL_CHANNELS.saveProviderOrder, async (event, providerIds: unknown) => {
+      assertShellSender(event.sender);
+      if (!Array.isArray(providerIds) || providerIds.length > 256
+        || providerIds.some((id) => typeof id !== 'string' || !id || id.length > 256)) {
+        throw new Error('Provider 顺序无效');
+      }
+      return options.saveProviderOrder(providerIds);
+    });
+    ipcMain.handle(SHELL_CHANNELS.configureProviderKey, async (event, providerId: unknown, key: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof providerId !== 'string' || !providerId || providerId.length > 256) throw new Error('Provider id 无效');
+      if (typeof key !== 'string' || !key || key.length > 4096) throw new Error('API Key 无效');
+      return options.configureProviderKey(providerId, key);
+    });
+    ipcMain.handle(SHELL_CHANNELS.updateSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getUpdate();
+    });
+    ipcMain.handle(SHELL_CHANNELS.checkUpdate, async (event) => {
+      assertShellSender(event.sender);
+      return options.checkUpdate();
+    });
+    ipcMain.handle(SHELL_CHANNELS.setUpdateChannel, async (event, channel: unknown) => {
+      assertShellSender(event.sender);
+      if (channel !== 'stable' && channel !== 'dev') throw new Error('更新通道无效');
+      return options.setUpdateChannel(channel);
+    });
+    ipcMain.handle(SHELL_CHANNELS.prepareUpdate, async (event) => {
+      assertShellSender(event.sender);
+      return options.prepareUpdate();
+    });
+    ipcMain.handle(SHELL_CHANNELS.restartUpdate, async (event) => {
+      assertShellSender(event.sender);
+      return options.restartUpdate();
+    });
     ipcMain.handle(SHELL_CHANNELS.savePetSettings, async (event, settings: PetCompanionSettings) => {
       assertShellSender(event.sender);
       return options.savePetSettings(settings);
@@ -150,6 +200,12 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.createConversation();
     });
+    ipcMain.handle(SHELL_CHANNELS.conversationSelectModel, async (event, provider: unknown, model: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof provider !== 'string' || !provider || provider.length > 256) throw new Error('模型 provider 无效');
+      if (typeof model !== 'string' || !model || model.length > 512) throw new Error('模型 id 无效');
+      return options.selectConversationModel(provider, model);
+    });
     ipcMain.handle(SHELL_CHANNELS.conversationSend, async (event, text: unknown, clientTimeZone: unknown) => {
       assertShellSender(event.sender);
       if (typeof text !== 'string') throw new Error('消息格式无效');
@@ -168,11 +224,19 @@ export class ShellWindowController {
       SHELL_CHANNELS.settingsSnapshot,
       SHELL_CHANNELS.statsSnapshot,
       SHELL_CHANNELS.quotaSnapshot,
+      SHELL_CHANNELS.saveProviderOrder,
+      SHELL_CHANNELS.configureProviderKey,
+      SHELL_CHANNELS.updateSnapshot,
+      SHELL_CHANNELS.checkUpdate,
+      SHELL_CHANNELS.setUpdateChannel,
+      SHELL_CHANNELS.prepareUpdate,
+      SHELL_CHANNELS.restartUpdate,
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
       SHELL_CHANNELS.conversationSnapshot,
       SHELL_CHANNELS.conversationSelect,
       SHELL_CHANNELS.conversationCreate,
+      SHELL_CHANNELS.conversationSelectModel,
       SHELL_CHANNELS.conversationSend,
       SHELL_CHANNELS.conversationCancel,
     ]) ipcMain.removeHandler(channel);

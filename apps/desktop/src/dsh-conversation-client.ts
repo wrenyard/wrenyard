@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ConversationItemSnapshot,
+  ConversationModelGroupSnapshot,
+  ConversationModelsSnapshot,
+  ConversationModelSelectionSnapshot,
   ConversationSessionSnapshot,
   ConversationSnapshot,
   WorkspaceConfigurationSnapshot,
@@ -74,6 +77,101 @@ function titleFromSummary(summary: RawSessionSummary): string {
 
 function eventTime(event: Record<string, unknown>): number {
   return asNumber(event.time) ?? Date.now();
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value) throw new Error(`DSH 模型目录缺少 ${field}`);
+  return value;
+}
+
+const PRODUCT_MODEL_LABELS = new Map([
+  ['deepseek-official/deepseek-v4-flash', 'DeepSeek V4 Flash'],
+  ['deepseek-official/deepseek-v4-flash-vision-exp', 'DeepSeek V4 Flash Vision'],
+  ['deepseek-official/deepseek-v4-pro', 'DeepSeek V4 Pro'],
+  ['kimi-coding/k3', 'Kimi K3'],
+  ['zhipu-coding/glm-5.3', 'GLM 5.3'],
+  ['zhipu-coding/glm-5.3-flash', 'GLM 5.3 Flash'],
+]);
+
+function canonicalModelId(provider: string, model: string): string {
+  return provider === 'kimi-coding' && model === 'k3[1m]' ? 'k3' : model;
+}
+
+function productModelLabel(provider: string, model: string, fallback: string): string {
+  return PRODUCT_MODEL_LABELS.get(`${provider}/${model}`) ?? fallback;
+}
+
+function exposeModel(provider: string, model: string): boolean {
+  return !(provider === 'kimi-coding' && model === 'k3[1m]');
+}
+
+function modelSelectionSnapshot(
+  selection: Record<string, unknown>,
+  groups: ConversationModelGroupSnapshot[],
+): ConversationModelSelectionSnapshot {
+  const provider = requiredString(selection.provider, 'current.provider');
+  const model = canonicalModelId(provider, requiredString(selection.model, 'current.model'));
+  const group = groups.find((candidate) => candidate.provider === provider);
+  const option = group?.models.find((candidate) => candidate.model === model);
+  return {
+    provider,
+    model,
+    label: option?.label ?? model,
+    providerLabel: group?.label ?? provider,
+    advertised: option !== undefined,
+    ...(typeof selection.reasoningEffort === 'string' && selection.reasoningEffort
+      ? { reasoningEffort: selection.reasoningEffort }
+      : {}),
+  };
+}
+
+/** Validate and project DSH's advisory per-session model directory. */
+export function projectConversationModels(value: unknown): ConversationModelsSnapshot {
+  if (!isObject(value) || !isObject(value.current) || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
+    throw new Error('DSH 模型目录格式无效');
+  }
+  if (typeof value.routable !== 'boolean') throw new Error('DSH 模型目录缺少 routable');
+  const groups = value.groups.map((rawGroup, groupIndex): ConversationModelGroupSnapshot => {
+    if (!isObject(rawGroup) || !Array.isArray(rawGroup.models)) throw new Error(`DSH 模型目录第 ${groupIndex + 1} 组格式无效`);
+    const provider = requiredString(rawGroup.id, `groups[${groupIndex}].id`);
+    const providerLabel = requiredString(rawGroup.name, `groups[${groupIndex}].name`);
+    return {
+      provider,
+      label: providerLabel,
+      models: rawGroup.models.flatMap((rawModel, modelIndex) => {
+        if (!isObject(rawModel)) throw new Error(`DSH 模型目录 ${provider} 第 ${modelIndex + 1} 项格式无效`);
+        const model = requiredString(rawModel.id, `groups[${groupIndex}].models[${modelIndex}].id`);
+        const sourceLabel = requiredString(rawModel.name, `groups[${groupIndex}].models[${modelIndex}].name`);
+        if (!exposeModel(provider, model)) return [];
+        const reasoning = isObject(rawModel.reasoning) ? rawModel.reasoning : undefined;
+        return [{
+          provider,
+          providerLabel,
+          model,
+          label: productModelLabel(provider, model, sourceLabel),
+          ...(typeof rawModel.description === 'string' && rawModel.description
+            ? { description: rawModel.description.slice(0, 500) }
+            : {}),
+          ...(reasoning && typeof reasoning.defaultEffort === 'string' && reasoning.defaultEffort
+            ? { defaultReasoningEffort: reasoning.defaultEffort }
+            : {}),
+        }];
+      }),
+    };
+  });
+  const failures = value.failures.flatMap((failure) => {
+    if (!isObject(failure)) return [];
+    const name = asString(failure.name) ?? asString(failure.id) ?? '模型提供方';
+    const message = asString(failure.message);
+    return message ? [`${name}: ${message}`] : [];
+  });
+  return {
+    status: 'ready',
+    groups,
+    current: modelSelectionSnapshot(value.current, groups),
+    routable: value.routable,
+    ...(failures.length > 0 ? { message: failures.join('；').slice(0, 1_000) } : {}),
+  };
 }
 
 /** Fold DSH's durable history protocol into the bounded product-owned renderer model. */
@@ -194,6 +292,8 @@ export class DshConversationClient {
   private workspaceSessionIds = new Set<string>();
   private selectedSessionId: string | undefined;
   private history: HistoryPage = { events: [], hasMore: false };
+  private models: ConversationModelsSnapshot = { status: 'idle', groups: [] };
+  private modelGeneration = 0;
   private stopped = false;
   private sockets = new Set<WebSocket>();
   private reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -214,6 +314,7 @@ export class DshConversationClient {
     if (first) {
       this.selectedSessionId = first.sessionId;
       await this.loadHistory(first.sessionId);
+      await this.refreshModels(first.sessionId);
     }
     this.openStream('events.mux');
     this.openStream('events.host');
@@ -221,6 +322,7 @@ export class DshConversationClient {
 
   stop(): void {
     this.stopped = true;
+    this.modelGeneration += 1;
     if (this.notifyTimer) clearTimeout(this.notifyTimer);
     for (const timer of this.reconnectTimers) clearTimeout(timer);
     this.reconnectTimers.clear();
@@ -250,6 +352,7 @@ export class DshConversationClient {
         selectedTitle: titleFromSummary(selected),
       } : {}),
       selectedRunning: selected?.running ?? false,
+      models: this.models,
       hasMore: this.history.hasMore,
       items: projectConversationHistory(this.history.events),
     };
@@ -258,7 +361,10 @@ export class DshConversationClient {
   async select(sessionId: string): Promise<ConversationSnapshot> {
     if (!this.workspaceSessionIds.has(sessionId)) throw new Error('会话不属于当前 workspace');
     this.selectedSessionId = sessionId;
+    this.models = { status: 'loading', groups: [] };
+    this.notify();
     await this.loadHistory(sessionId);
+    await this.refreshModels(sessionId);
     return this.snapshot();
   }
 
@@ -280,8 +386,53 @@ export class DshConversationClient {
     }
     this.selectedSessionId = target.sessionId;
     this.history = { events: [], hasMore: false };
+    this.models = { status: 'loading', groups: [] };
     this.notify();
+    await this.refreshModels(target.sessionId);
     return this.snapshot();
+  }
+
+  async selectModel(provider: string, model: string): Promise<ConversationSnapshot> {
+    const sessionId = this.selectedSessionId;
+    if (!sessionId) throw new Error('请先新建会话');
+    const option = this.models.groups
+      .find((group) => group.provider === provider)
+      ?.models.find((candidate) => candidate.model === model);
+    if (!option) throw new Error('所选模型不在当前 DSH 模型目录中');
+    if (this.models.current?.provider === provider && this.models.current.model === model) return this.snapshot();
+
+    const generation = ++this.modelGeneration;
+    this.models = { ...this.models, status: 'loading', message: undefined };
+    this.notify();
+    try {
+      const value = await this.rpc('session.selectModel', {
+        sessionId,
+        provider,
+        model,
+        ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+      });
+      if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
+      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return this.snapshot();
+      this.models = {
+        ...this.models,
+        status: 'ready',
+        current: modelSelectionSnapshot(value.selected, this.models.groups),
+        routable: true,
+        message: undefined,
+      };
+      this.notify();
+      return this.snapshot();
+    } catch (error) {
+      if (generation === this.modelGeneration && sessionId === this.selectedSessionId) {
+        this.models = {
+          ...this.models,
+          status: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        };
+        this.notify();
+      }
+      throw error;
+    }
   }
 
   async send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
@@ -373,6 +524,26 @@ export class DshConversationClient {
     };
   }
 
+  private async refreshModels(sessionId: string): Promise<void> {
+    const generation = ++this.modelGeneration;
+    this.models = { ...this.models, status: 'loading', message: undefined };
+    this.notify();
+    try {
+      const next = projectConversationModels(await this.rpc('session.models', { sessionId }));
+      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
+      this.models = next;
+      this.notify();
+    } catch (error) {
+      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
+      this.models = {
+        ...this.models,
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      };
+      this.notify();
+    }
+  }
+
   private openStream(name: 'events.mux' | 'events.host', attempt = 0): void {
     if (this.stopped) return;
     const url = new URL(`/api/${name}`, this.baseUrl);
@@ -397,7 +568,11 @@ export class DshConversationClient {
       const timer = setTimeout(() => {
         this.reconnectTimers.delete(timer);
         void this.refreshIndex()
-          .then(() => this.selectedSessionId ? this.loadHistory(this.selectedSessionId) : undefined)
+          .then(async () => {
+            if (!this.selectedSessionId) return;
+            await this.loadHistory(this.selectedSessionId);
+            await this.refreshModels(this.selectedSessionId);
+          })
           .catch(() => undefined)
           .finally(() => this.openStream(name, attempt + 1));
       }, delay);
@@ -443,6 +618,11 @@ export class DshConversationClient {
   private handleHost(frame: Record<string, unknown>): void {
     const type = asString(frame.type);
     const sessionId = asString(frame.sessionId);
+    if (type === 'host/remote-event'
+      && (frame.event === 'llm/adapters-updated' || frame.event === 'settings/document-updated')) {
+      if (this.selectedSessionId) void this.refreshModels(this.selectedSessionId);
+      return;
+    }
     if (type === 'host/session-status' && sessionId && this.workspaceSessionIds.has(sessionId)) {
       const summary = this.sessions.get(sessionId);
       if (summary) {
@@ -475,6 +655,7 @@ export function unavailableConversation(
     workspace,
     sessions: [],
     selectedRunning: false,
+    models: { status: 'idle', groups: [] },
     hasMore: false,
     items: [],
     message: message ?? (workspace.status === 'configured'

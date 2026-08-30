@@ -15,6 +15,9 @@ import {
 interface DesktopSettingsDocument {
   version: 1;
   pet: AppConfig;
+  update?: {
+    channel?: 'stable' | 'dev';
+  };
 }
 
 export interface DesktopPetSettingsStoreOptions {
@@ -33,16 +36,12 @@ export class DesktopPetSettingsStore {
   }
 
   load(): AppConfig {
-    if (existsSync(this.path)) {
-      try {
-        const parsed = JSON.parse(readFileSync(this.path, 'utf8')) as unknown;
-        if (parsed && typeof parsed === 'object' && 'pet' in parsed) {
-          return normalizeConfig((parsed as { pet?: unknown }).pet);
-        }
-        return normalizeConfig(parsed);
-      } catch {
-        // Fall through to the bounded legacy/default projection.
+    const parsed = this.read();
+    if (parsed !== undefined) {
+      if (parsed && typeof parsed === 'object' && 'pet' in parsed) {
+        return normalizeConfig((parsed as { pet?: unknown }).pet);
       }
+      return normalizeConfig(parsed);
     }
     const config = normalizeConfig(this.loadLegacy());
     this.save(config);
@@ -50,8 +49,39 @@ export class DesktopPetSettingsStore {
   }
 
   save(config: AppConfig): void {
+    const current = this.read();
+    const update = current && typeof current === 'object' && 'update' in current
+      ? (current as DesktopSettingsDocument).update
+      : undefined;
+    this.write({ version: 1, pet: config, ...(update ? { update } : {}) });
+  }
+
+  loadUpdateChannel(fallback: 'stable' | 'dev'): 'stable' | 'dev' {
+    const current = this.read();
+    if (!current || typeof current !== 'object' || !('update' in current)) return fallback;
+    const channel = (current as DesktopSettingsDocument).update?.channel;
+    return channel === 'stable' || channel === 'dev' ? channel : fallback;
+  }
+
+  saveUpdateChannel(channel: 'stable' | 'dev'): void {
+    const current = this.read();
+    const pet = current && typeof current === 'object' && 'pet' in current
+      ? normalizeConfig((current as { pet?: unknown }).pet)
+      : this.load();
+    this.write({ version: 1, pet, update: { channel } });
+  }
+
+  private read(): unknown | undefined {
+    if (!existsSync(this.path)) return undefined;
+    try {
+      return JSON.parse(readFileSync(this.path, 'utf8')) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private write(document: DesktopSettingsDocument): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    const document: DesktopSettingsDocument = { version: 1, pet: config };
     const temporary = `${this.path}.${process.pid}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
     renameSync(temporary, this.path);

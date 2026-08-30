@@ -16,13 +16,13 @@ while DSH remains an isolated child process and Pet runs as an internal module:
 ```
 Electron product shell
   ├─ notification-area icon + product menu
-  ├─ Activity Bar + Desktop-owned conversation/statistics/quota/settings pages
+  ├─ Activity Bar + Desktop-owned conversation/statistics/providers/settings pages
   ├─ bounded DSH HTTP/WebSocket adapter in the Electron main process
   ├─ Pet controller + in-process Pet runtime (overlay windows and observers)
   └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
-            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (public kimi-coding / zhipu-coding)
+            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (expanded public llm-pi-ai provider catalog)
             ├─ cwd + Host workspace registry pinned to Wrenyard `workspace.root`
             ├─ agent preset `wrenyard` at $DSH_HOME/.agent-presets/wrenyard (display name 啾啾工坊模式; hero dropdown disabled)
             └─ talks to Wrenyard through the public MCP/IPC contract
@@ -31,33 +31,51 @@ Electron product shell
 
 - **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
   non-interactive Wrenyard brand mark at the top, exposes the Desktop-owned
-  conversation surface as its own navigation item, adds “工房台账” and “额度”
+  conversation surface as its own navigation item, adds “工房台账” and “模型供应”
   as top-level child functions and places “啾啾工坊设置” at the bottom. The single
   local renderer owns all four pages; no DSH Web UI or `WebContentsView` is
   embedded. `Cmd+,` / `Ctrl+,` opens settings; `Cmd+1` /
   `Ctrl+1` opens the workbench; `Cmd+2` / `Ctrl+2` opens statistics; `Cmd+3` /
-  `Ctrl+3` opens quota.
+  `Ctrl+3` opens Providers (模型供应).
 - **Desktop-owned statistics** — Desktop reads the public `stats.summary`
   projection directly and falls back to `stats.today` for older/unavailable
   control planes. The full-width ledger receives a bounded view of today
   totals, completion rate, a 31-day heat map, Profile rows, Task rows and
   24h/7d/1mo windows. Pet only polls `stats.today` to enrich its passive house
   hover summary; it has no statistics window or action.
-- **Desktop-owned quota** — one Desktop controller runs the Runtime `quota
-  --json` adapter on a bounded cache/refresh interval, applies the configured
-  provider order once and projects the result to the full-size quota page, the
-  notification-area “额度” submenu and the Pet house Tips. Pet no longer owns a
-  quota poller; it receives the latest provider projection as passive display
-  data. Percentage windows retain remaining/expected values, while monetary
-  providers retain their currency balances. The notification-area projection
-  preserves the original grouped 5×7 RGBA template-bitmap renderer, including
-  compact provider spacing, progress tracks, pace markers and balance columns;
-  it is not replaced by native text labels or SVG menu images.
+- **Desktop-owned quota & providers** — one Desktop controller runs the Runtime
+  `quota --json` adapter on a bounded cache/refresh interval, applies the
+  configured provider order once and projects the result to the notification-area
+  “额度” submenu and the Pet house Tips; Pet no longer owns a quota poller and
+  receives the latest provider projection as passive display data. The full-size
+  quota page is now the Providers page (模型供应): it renders the unified
+  provider/auth/quota directory, one row per runtime-supported provider, with
+  identity, connection state, compact quota windows or monetary balances and a
+  per-provider action. Unconfigured rows are visually de-emphasized while
+  configuration stays reachable, and unknown/custom provider ids remain visible
+  with safe generic copy. API-key entry covers the full supported Runtime
+  public API provider set: the renderer sends the key through preload
+  IPC and the Electron main process persists it by running the resolved suite
+  Runtime binary with the key supplied on stdin only — keys never appear in
+  argv, logs, snapshots or error text. After a successful write the DSH
+  conversation session is rebuilt so launch-time credentials refresh, then the
+  Provider/quota state is force-refreshed. Native-login providers open a
+  guidance-only dialog instead of a fake key input, `deepseek` remains
+  environment-variable-only, and no-auth rows are informational. Percentage
+  windows retain remaining/expected values, while monetary providers retain
+  their currency balances. Configured providers are grouped before unavailable
+  providers. Provider order is one shared Settings SSOT and can be adjusted from
+  either the Providers page or `设置 → 桌宠 → 额度来源`; tray and Pet enablement
+  remains settings-only. The notification-area
+  projection preserves the original grouped 5×7 RGBA template-bitmap renderer,
+  including compact provider spacing, progress tracks, pace markers and balance
+  columns; it is not replaced by native text labels or SVG menu images.
   LaunchServices startup resolves the Runtime from the active installed
   Wrenyard suite instead of relying on an inherited shell `PATH`.
 - **Desktop-owned product settings** — the settings page reports public
-  Wrenyard health, uptime, workspace root, IPC endpoint, model credential
-  presence and suite/DSH versions. Workspace is a product-level fixed binding:
+  Wrenyard health, uptime, workspace root, IPC endpoint and suite/DSH versions;
+  model credential presence moved to the Providers page. Workspace is a
+  product-level fixed binding:
   `WRENYARD_DESKTOP_WORKSPACE` is an optional highest-priority override and is
   shown read-only in settings when present; otherwise Desktop reads and edits
   the user's `workspace.root` config. With neither source configured, the
@@ -69,6 +87,17 @@ Electron product shell
   runtime; Pet no longer creates a tray, settings window or settings action.
   Credential values are reduced to booleans in the main process and never sent
   to the renderer.
+- **Desktop-owned updates** — settings exposes a quiet `stable` / `dev` channel
+  selector, checks GitHub Releases shortly after startup and then every six
+  hours, and keeps automatic failures silent. Only newer, complete target
+  releases are offered. On macOS the main process downloads and stages only
+  the Desktop archive, verifies its published SHA-256 checksum and the staged
+  app signature, then asks the user before restarting. A separate packaged
+  helper swaps the app and runs the public suite updater during restart as one
+  recoverable operation; it restores the previous app when the suite update
+  fails. Installation is blocked while Desktop conversations or Wrenyard tasks
+  are active. Other platforms retain update discovery and channel selection
+  until an equivalent native replacement flow is available.
 - **Notification-area ownership** — Desktop owns the single three-wren macOS
   template icon and menu. It exists only while Desktop is active. The compact
   menu exposes only “打开”, “桌宠”, “额度” and “退出”; settings and statistics
@@ -108,7 +137,7 @@ Electron product shell
   child must also receive `--expose-internals` *before* the DSH script path:
   `dsh-base` constructs `cordis-plugin-hmr` before `dsh-web-app` can disable
   it, and missing the flag exits the child with code 1 (same flash-quit). The overlay injects
-  the public Forge llm-pi-ai catalog (`kimi-coding` / `zhipu-coding`) without
+  the expanded public Forge llm-pi-ai provider catalog without
   replacing native `deepseek-official` routes. Credential values are read from
   Wrenyard runtime `auth.json` and passed only as child env
   (`FORGE_DSH_*_API_KEY`); the patch file is secret-free. `DSH_HOME` points at
@@ -117,7 +146,20 @@ Electron product shell
   directory picker and DSH Web renderer are not product surfaces. Desktop uses
   the public unary API and mux/host event streams from the loopback child,
   filters sessions to the fixed workspace, and sends only a bounded
-  conversation projection through preload IPC. MCP defaults to
+  conversation projection through preload IPC. The conversation header reads
+  the selected session's advisory model directory through `session.models` and
+  changes its next-request route through `session.selectModel`; models remain
+  grouped by their DSH provider. The header keeps the model picker unlabeled and
+  shows only one Wrenyard daemon status lamp beside it; hovering or focusing the
+  lamp refreshes public health and shows online state plus the start time derived
+  from daemon uptime. The product projection exposes one canonical
+  Kimi K3 route (the
+  default route already has the 1M context window), collapses the Claude-oriented
+  `k3[1m]` alias, and uses concise product labels such as `GLM 5.3` and
+  `DeepSeek V4 Pro` while preserving DSH route ids; the native
+  `deepseek-official` catalog also advertises the image-capable experimental
+  `DeepSeek V4 Flash Vision` route. Desktop does not persist a
+  parallel model preference. MCP defaults to
   `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
   under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and
@@ -164,6 +206,9 @@ come from `packages/dsh-shell` in the monorepo.
 - The shell renderer has no Node access and receives only bounded settings,
   statistics, quota and conversation projections. Only the Electron main process
   talks to DSH; the renderer cannot open windows or navigate off-origin.
+- The renderer never receives release download URLs, filesystem paths, tokens or
+  updater process access. Update staging accepts only exact target asset names,
+  checksum-matched archives and tightly scoped per-run cleanup directories.
 
 ## Commands
 
@@ -194,4 +239,4 @@ unsigned unless a signtool identity is supplied; Linux uses checksums.
   installed CLI; see `tools/desktop/install-dev.mjs`)
 - `npm install` at the monorepo root (workspace deps: `@wrenyard/control-client`,
   `@wrenyard/dsh-shell`, `@wrenyard/pet`; runtime:
-  `@deepseek-ai/dsh@0.1.0-rc.6` pinned exactly)
+  `@deepseek-ai/dsh@0.1.1-rc.2` pinned exactly)

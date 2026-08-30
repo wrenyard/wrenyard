@@ -35,6 +35,12 @@ test('settings snapshot exposes health and credential presence without secrets',
       FORGE_DSH_KIMI_CODING_API_KEY: 'fixture-credential-value',
     }),
     readPet: async () => pet,
+    readUpdate: () => ({
+      channel: 'dev',
+      state: 'up-to-date',
+      currentVersion: '1.0.0-dev.14',
+      installSupported: true,
+    }),
   });
 
   assert.deepEqual(snapshot.service, {
@@ -49,11 +55,16 @@ test('settings snapshot exposes health and credential presence without secrets',
     },
     uptimeMs: 125_000,
   });
-  assert.deepEqual(snapshot.models, [
+  assert.deepEqual(snapshot.models.slice(0, 2), [
     { id: 'kimi-coding', label: 'Kimi Coding', configured: true },
     { id: 'zhipu-coding', label: 'Zhipu Coding', configured: false },
   ]);
+  assert.equal(snapshot.models.length, 11);
+  for (const id of ['openai', 'zhipu', 'moonshot', 'minimax', 'minimax-coding', 'qwen', 'qwen-coding', 'tokenhub', 'volcengine']) {
+    assert.equal(snapshot.models.find((provider) => provider.id === id)?.configured, false);
+  }
   assert.deepEqual(snapshot.pet, pet);
+  assert.equal(snapshot.update.channel, 'dev');
   assert.equal(JSON.stringify(snapshot).includes('fixture-credential-value'), false);
 });
 
@@ -76,6 +87,12 @@ test('settings snapshot degrades health and credentials independently', async ()
       throw new Error('unreadable');
     },
     readPet: async () => pet,
+    readUpdate: () => ({
+      channel: 'stable',
+      state: 'idle',
+      currentVersion: '1.0.0',
+      installSupported: true,
+    }),
   });
 
   assert.equal(snapshot.service.status, 'unavailable');
