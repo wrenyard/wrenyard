@@ -319,6 +319,13 @@ func TestCBGLMProfileIsRemoved(t *testing.T) {
 }
 
 func TestManagedProfileNamesCanDiscoverCodexVariants(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setFakeClientsOnPath(t, "codex")
+
 	manifest, err := loadManifest()
 	if err != nil {
 		t.Fatal(err)
@@ -332,6 +339,13 @@ func TestManagedProfileNamesCanDiscoverCodexVariants(t *testing.T) {
 }
 
 func TestCodexVariantsUseProfileV2Overlays(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setFakeClientsOnPath(t, "codex")
+
 	manifest := *manifest.BuiltinManifest()
 	cases := []struct {
 		name      string
