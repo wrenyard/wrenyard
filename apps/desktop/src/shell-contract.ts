@@ -7,15 +7,24 @@ export const SHELL_CHANNELS = {
   settingsSnapshot: 'wrenyard-shell:settings-snapshot',
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
+  saveProviderOrder: 'wrenyard-shell:save-provider-order',
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
   conversationSnapshot: 'wrenyard-shell:conversation-snapshot',
   conversationSelect: 'wrenyard-shell:conversation-select',
   conversationCreate: 'wrenyard-shell:conversation-create',
+  conversationSelectModel: 'wrenyard-shell:conversation-select-model',
   conversationSend: 'wrenyard-shell:conversation-send',
   conversationCancel: 'wrenyard-shell:conversation-cancel',
+  configureProviderKey: 'wrenyard-shell:configure-provider-key',
+  updateSnapshot: 'wrenyard-shell:update-snapshot',
+  checkUpdate: 'wrenyard-shell:check-update',
+  setUpdateChannel: 'wrenyard-shell:set-update-channel',
+  prepareUpdate: 'wrenyard-shell:prepare-update',
+  restartUpdate: 'wrenyard-shell:restart-update',
   conversationChanged: 'wrenyard-shell:conversation-changed',
   quotaChanged: 'wrenyard-shell:quota-changed',
+  updateChanged: 'wrenyard-shell:update-changed',
   viewChanged: 'wrenyard-shell:view-changed',
 } as const;
 
@@ -43,15 +52,40 @@ export interface ModelSnapshot {
   configured: boolean;
 }
 
+export type UpdateChannel = 'stable' | 'dev';
+
+export type UpdateState =
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'stable-unavailable'
+  | 'available'
+  | 'preparing'
+  | 'restart-required'
+  | 'install-blocked'
+  | 'check-failed'
+  | 'install-failed';
+
+export interface UpdateSnapshot {
+  channel: UpdateChannel;
+  state: UpdateState;
+  currentVersion: string;
+  availableVersion?: string;
+  checkedAt?: number;
+  installSupported: boolean;
+  message?: string;
+}
+
 export interface SettingsSnapshot {
   service: ServiceSnapshot;
   models: ModelSnapshot[];
   pet: PetCompanionSnapshot;
+  update: UpdateSnapshot;
   about: {
     desktopVersion: string;
     wrenyardVersion: string;
     dshVersion: string;
-    channel: 'development-preview';
+    channel: UpdateChannel;
   };
 }
 
@@ -165,11 +199,37 @@ export interface QuotaProviderSnapshot {
   balances: QuotaBalanceSnapshot[];
   displayLine?: string;
   message?: string;
+  code?: string;
+}
+
+export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
+
+export interface ProviderAuthStatus {
+  id: string;
+  configured: boolean;
+  authMode: ProviderAuthMode;
+}
+
+export interface ProviderCatalogSnapshot {
+  id: string;
+  label: string;
+  description: string;
+  configured: boolean;
+  authMode: ProviderAuthMode;
+  setupHint: string;
+  quota?: QuotaProviderSnapshot;
+}
+
+export interface ProviderOrderSnapshot {
+  id: string;
+  enabled: boolean;
 }
 
 export interface QuotaSnapshot {
   status: 'available' | 'unavailable';
   providers: QuotaProviderSnapshot[];
+  catalog: ProviderCatalogSnapshot[];
+  providerOrder: ProviderOrderSnapshot[];
   refreshedAt?: number;
   message?: string;
 }
@@ -194,6 +254,38 @@ export interface ConversationItemSnapshot {
   toolState?: 'running' | 'done' | 'failed';
 }
 
+export interface ConversationModelSelectionSnapshot {
+  provider: string;
+  model: string;
+  label: string;
+  providerLabel: string;
+  advertised: boolean;
+  reasoningEffort?: string;
+}
+
+export interface ConversationModelOptionSnapshot {
+  provider: string;
+  providerLabel: string;
+  model: string;
+  label: string;
+  description?: string;
+  defaultReasoningEffort?: string;
+}
+
+export interface ConversationModelGroupSnapshot {
+  provider: string;
+  label: string;
+  models: ConversationModelOptionSnapshot[];
+}
+
+export interface ConversationModelsSnapshot {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  groups: ConversationModelGroupSnapshot[];
+  current?: ConversationModelSelectionSnapshot;
+  routable?: boolean;
+  message?: string;
+}
+
 export interface ConversationSnapshot {
   status: 'ready' | 'workspace-required' | 'unavailable';
   workspace: WorkspaceConfigurationSnapshot;
@@ -201,6 +293,7 @@ export interface ConversationSnapshot {
   selectedSessionId?: string;
   selectedTitle?: string;
   selectedRunning: boolean;
+  models: ConversationModelsSnapshot;
   hasMore: boolean;
   items: ConversationItemSnapshot[];
   message?: string;
@@ -211,15 +304,24 @@ export interface WrenyardShellApi {
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
+  saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
+  configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
+  getUpdate(): Promise<UpdateSnapshot>;
+  checkUpdate(): Promise<UpdateSnapshot>;
+  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
+  prepareUpdate(): Promise<UpdateSnapshot>;
+  restartUpdate(): Promise<void>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
+  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
   onConversationChanged(listener: () => void): () => void;
   onQuotaChanged(listener: () => void): () => void;
+  onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
 }
 

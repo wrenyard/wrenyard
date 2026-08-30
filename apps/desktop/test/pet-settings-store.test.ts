@@ -65,3 +65,24 @@ test('Desktop settings store normalizes an older unwrapped Pet document', () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Desktop settings store preserves Pet and update channel in one document', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-desktop-settings-'));
+  try {
+    const path = join(root, 'settings.json');
+    const store = new DesktopPetSettingsStore({ path, loadLegacy: fixtureConfig });
+    store.save(fixtureConfig());
+    assert.equal(store.loadUpdateChannel('dev'), 'dev');
+
+    store.saveUpdateChannel('stable');
+    assert.equal(store.loadUpdateChannel('dev'), 'stable');
+    assert.equal(store.load().house.displayId, 5);
+
+    const changed = { ...store.load(), scale: 4 };
+    store.save(changed);
+    assert.equal(store.loadUpdateChannel('dev'), 'stable');
+    assert.equal(store.load().scale, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

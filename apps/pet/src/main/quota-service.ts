@@ -295,6 +295,8 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
 
     const status = e.status === 'pending'
       ? 'pending'
+      : e.status === 'unavailable'
+        ? 'unavailable'
       : displayLine
         ? 'ok'
         : error

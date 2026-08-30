@@ -13,6 +13,7 @@ export interface DesktopConversationSession {
   snapshot(): ConversationSnapshot;
   select(sessionId: string): Promise<ConversationSnapshot>;
   create(): Promise<ConversationSnapshot>;
+  selectModel(provider: string, model: string): Promise<ConversationSnapshot>;
   send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancel(): Promise<ConversationSnapshot>;
   stop(): void | Promise<void>;
@@ -105,6 +106,10 @@ export class DesktopConversationController {
 
   create(): Promise<ConversationSnapshot> {
     return this.requireSession().create();
+  }
+
+  selectModel(provider: string, model: string): Promise<ConversationSnapshot> {
+    return this.requireSession().selectModel(provider, model);
   }
 
   send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {

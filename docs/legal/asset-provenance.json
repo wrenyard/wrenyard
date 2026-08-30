@@ -37,7 +37,7 @@
     {
       "id": "deepseek-harness-ui",
       "paths": [],
-      "package": "@deepseek-ai/dsh@0.1.0-rc.6",
+      "package": "@deepseek-ai/dsh@0.1.1-rc.2",
       "origin": "external npm dependency",
       "owner": "DeepSeek",
       "license": "MIT",

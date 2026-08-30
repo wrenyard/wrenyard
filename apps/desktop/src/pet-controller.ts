@@ -11,6 +11,7 @@ import type {
   PetCompanionSnapshot,
   PetDisplaySnapshot,
 } from './shell-contract.js';
+import { reorderProviders } from './provider-order.js';
 
 export interface DesktopPetRuntimeHandle {
   readonly status: PetRuntimeStatus;
@@ -112,6 +113,12 @@ export class DesktopPetController {
   async setEnabled(enabled: boolean): Promise<void> {
     const current = serializePetSettings(this.getConfig());
     current.enabled = enabled;
+    await this.saveSettings(current);
+  }
+
+  async saveProviderOrder(providerIds: string[]): Promise<void> {
+    const current = serializePetSettings(this.getConfig());
+    current.quota.providers = reorderProviders(current.quota.providers, providerIds);
     await this.saveSettings(current);
   }
 

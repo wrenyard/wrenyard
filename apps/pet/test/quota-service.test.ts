@@ -239,6 +239,20 @@ describe('parseQuotaJson', () => {
     expect(codex.stale).toBe(true);
   });
 
+  it('preserves unavailable auth states instead of promoting them to errors', () => {
+    const [provider] = parseQuotaJson(JSON.stringify([{
+      pool: 'super-grok',
+      label: 'super-grok',
+      status: 'unavailable',
+      code: 'authentication_required',
+      message: 'Grok 登录已失效，请重新登录。',
+    }]));
+
+    expect(provider.status).toBe('unavailable');
+    expect(provider.code).toBe('authentication_required');
+    expect(provider.error).toBe('Grok 登录已失效，请重新登录。');
+  });
+
   it('throws on non-array input', () => {
     expect(() => parseQuotaJson('{"not":"an array"}')).toThrow(TypeError);
   });

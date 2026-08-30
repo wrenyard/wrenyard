@@ -43,6 +43,17 @@ await build({
   logLevel: 'info',
 });
 
+await build({
+  entryPoints: [join(root, 'src', 'update-helper-entry.ts')],
+  outfile: join(dist, 'update-helper.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node22',
+  sourcemap: 'external',
+  logLevel: 'info',
+});
+
 const rendererDist = join(dist, 'renderer');
 await mkdir(rendererDist, { recursive: true });
 await build({

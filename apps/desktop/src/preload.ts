@@ -7,6 +7,8 @@ import {
   type SettingsSnapshot,
   type ConversationSnapshot,
   type WorkspaceConfigurationSnapshot,
+  type UpdateChannel,
+  type UpdateSnapshot,
   type ShellPage,
   type WrenyardShellApi,
 } from './shell-contract.js';
@@ -25,6 +27,27 @@ const api: WrenyardShellApi = {
   getQuota(forceRefresh = false): Promise<QuotaSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.quotaSnapshot, forceRefresh) as Promise<QuotaSnapshot>;
   },
+  saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.saveProviderOrder, providerIds) as Promise<QuotaSnapshot>;
+  },
+  configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.configureProviderKey, providerId, key) as Promise<QuotaSnapshot>;
+  },
+  getUpdate(): Promise<UpdateSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.updateSnapshot) as Promise<UpdateSnapshot>;
+  },
+  checkUpdate(): Promise<UpdateSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.checkUpdate) as Promise<UpdateSnapshot>;
+  },
+  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.setUpdateChannel, channel) as Promise<UpdateSnapshot>;
+  },
+  prepareUpdate(): Promise<UpdateSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.prepareUpdate) as Promise<UpdateSnapshot>;
+  },
+  restartUpdate(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.restartUpdate) as Promise<void>;
+  },
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;
   },
@@ -39,6 +62,9 @@ const api: WrenyardShellApi = {
   },
   createConversation(): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationCreate) as Promise<ConversationSnapshot>;
+  },
+  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelectModel, provider, model) as Promise<ConversationSnapshot>;
   },
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSend, text, clientTimeZone) as Promise<ConversationSnapshot>;
@@ -55,6 +81,11 @@ const api: WrenyardShellApi = {
     const handler = (): void => listener();
     ipcRenderer.on(SHELL_CHANNELS.quotaChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.quotaChanged, handler);
+  },
+  onUpdateChanged(listener: () => void): () => void {
+    const handler = (): void => listener();
+    ipcRenderer.on(SHELL_CHANNELS.updateChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.updateChanged, handler);
   },
   onViewChanged(listener: (page: ShellPage) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, page: unknown): void => {

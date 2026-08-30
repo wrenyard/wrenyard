@@ -29,6 +29,67 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+export const CONVERSATION_PLACEHOLDERS = [
+  '给工坊派个活儿…',
+  '今天从哪件小事开始…',
+  '把想法放到工作台上…',
+  '搭档已就位，说件事吧…',
+  '灯亮着，交代点活计…',
+  '图纸铺开，等你一句话…',
+  '车间安静，就等你开口…',
+  '说说这次想折腾点什么…',
+  '工具摆好了，听你安排…',
+  '想修点什么，还是做点新的…',
+  '把任务轻轻放在台上…',
+  '开工前，先说个大概…',
+  '小锤子待命，听你安排…',
+  '这盏灯下，聊点正事…',
+  '灵感来了就往这儿写…',
+  '给搭档递个话…',
+  '工作台擦干净了，开始吧…',
+  '先描述问题，其余慢慢来…',
+  '灯下说件正经事…',
+  '今天的工单，由你来写…',
+  '把难题放到工坊看看…',
+  '说一说这次的目标…',
+  '写代码也好，聊方案也好…',
+  '这边坐，慢慢说清楚…',
+] as const;
+
+export function pickConversationPlaceholder(
+  previous: string | undefined,
+  random: () => number = Math.random,
+): string {
+  const raw = random();
+  const bounded = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 0.9999999999999999) : 0;
+  let index = Math.floor(bounded * CONVERSATION_PLACEHOLDERS.length);
+  if (CONVERSATION_PLACEHOLDERS[index] === previous) {
+    index = (index + 1) % CONVERSATION_PLACEHOLDERS.length;
+  }
+  return CONVERSATION_PLACEHOLDERS[index];
+}
+
+let lastConversationPlaceholder: string | undefined;
+
+function nextConversationPlaceholder(): string {
+  lastConversationPlaceholder = pickConversationPlaceholder(lastConversationPlaceholder);
+  return lastConversationPlaceholder;
+}
+
+export function conversationModelValue(provider: string, model: string): string {
+  return JSON.stringify([provider, model]);
+}
+
+export function parseConversationModelValue(value: string): { provider: string; model: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length !== 2 || parsed.some((part) => typeof part !== 'string' || !part)) return null;
+    return { provider: parsed[0], model: parsed[1] };
+  } catch {
+    return null;
+  }
+}
+
 function appendInlineMarkdown(target: HTMLElement, text: string): void {
   const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
   for (const part of parts) {
@@ -131,6 +192,7 @@ export class ConversationView {
   private readonly input = element<HTMLTextAreaElement>('conversation-input');
   private readonly sendButton = element<HTMLButtonElement>('conversation-send');
   private readonly stopButton = element<HTMLButtonElement>('conversation-stop');
+  private readonly modelSelect = element<HTMLSelectElement>('conversation-model-select');
   private readonly error = element<HTMLElement>('conversation-error');
   private readonly gate = element<HTMLElement>('workspace-gate');
   private readonly gateInput = element<HTMLInputElement>('workspace-gate-input');
@@ -146,6 +208,7 @@ export class ConversationView {
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
     this.stopButton.addEventListener('click', () => void this.cancel());
+    this.modelSelect.addEventListener('change', () => void this.selectModel());
     element('workspace-open-settings').addEventListener('click', openSettings);
     element('workspace-quick-save').addEventListener('click', () => void this.saveWorkspace());
     this.input.addEventListener('input', () => this.resizeComposer());
@@ -155,6 +218,7 @@ export class ConversationView {
       void this.send();
     });
     this.api.onConversationChanged(() => void this.refresh());
+    this.rotateConversationPlaceholder();
   }
 
   start(): void {
@@ -184,17 +248,12 @@ export class ConversationView {
     const pinnedToBottom = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
     this.snapshot = snapshot;
     const ready = snapshot.status === 'ready';
-    const workspacePath = snapshot.workspace.path ?? '未配置 workspace';
-    element('conversation-workspace').textContent = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath;
-    element('conversation-workspace').title = workspacePath;
+    const workspaceLabel = element('conversation-workspace');
+    workspaceLabel.textContent = '工坊工作区';
+    workspaceLabel.title = snapshot.workspace.path ? '当前绑定的工坊工作区' : '尚未绑定工坊工作区';
     element('conversation-title').textContent = snapshot.selectedTitle ?? '新会话';
 
-    const state = element('conversation-state');
-    state.className = `conversation-state is-${snapshot.status}${snapshot.selectedRunning ? ' is-running' : ''}`;
-    state.querySelector('span')!.textContent = snapshot.selectedRunning
-      ? '工坊工作中'
-      : ready ? '可以开始' : snapshot.status === 'workspace-required' ? '需要 Workspace' : '后端不可用';
-
+    this.renderModels(snapshot);
     this.renderSessions(snapshot);
     this.renderItems(snapshot.items, snapshot.selectedRunning);
     this.gate.hidden = snapshot.status !== 'workspace-required';
@@ -208,13 +267,66 @@ export class ConversationView {
       quickSave.disabled = workspaceFromEnvironment;
       quickSave.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并应用';
     }
-    this.input.disabled = !ready || this.busy;
-    this.sendButton.disabled = !ready || this.busy || !this.input.value.trim();
+    const canPrompt = ready && snapshot.models.routable !== false;
+    this.input.disabled = !canPrompt || this.busy;
+    this.sendButton.disabled = !canPrompt || this.busy || !this.input.value.trim();
     this.sendButton.hidden = snapshot.selectedRunning;
     this.stopButton.hidden = !snapshot.selectedRunning;
     if (snapshot.status === 'unavailable') this.showError(snapshot.message ?? 'DSH 会话后端暂时不可用');
+    else if (snapshot.models.routable === false) this.showError('当前模型暂时不可用，请切换到其他模型');
+    else if (snapshot.models.status === 'error') this.showError(snapshot.models.message ?? '模型目录暂时不可用');
     else this.hideError();
     if (pinnedToBottom || snapshot.selectedRunning) requestAnimationFrame(() => { this.feed.scrollTop = this.feed.scrollHeight; });
+  }
+
+  private renderModels(snapshot: ConversationSnapshot): void {
+    const directory = snapshot.models;
+    const currentValue = directory.current
+      ? conversationModelValue(directory.current.provider, directory.current.model)
+      : '';
+    const options: HTMLOptionElement[] = [];
+    const nodes: Array<HTMLOptionElement | HTMLOptGroupElement> = [];
+
+    if (directory.current && !directory.current.advertised) {
+      const current = document.createElement('option');
+      current.value = currentValue;
+      current.textContent = `${directory.current.label}（当前）`;
+      current.disabled = true;
+      nodes.push(current);
+      options.push(current);
+    }
+    for (const group of directory.groups) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = group.label;
+      for (const model of group.models) {
+        const option = document.createElement('option');
+        option.value = conversationModelValue(model.provider, model.model);
+        option.textContent = model.label;
+        option.title = model.description ?? `${model.providerLabel} / ${model.model}`;
+        optgroup.append(option);
+        options.push(option);
+      }
+      nodes.push(optgroup);
+    }
+    if (nodes.length === 0) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = snapshot.selectedSessionId
+        ? directory.status === 'loading' ? '读取模型…' : '暂无可选模型'
+        : '新建会话后选择模型';
+      nodes.push(placeholder);
+    }
+    this.modelSelect.replaceChildren(...nodes);
+    if (currentValue && options.some((option) => option.value === currentValue)) this.modelSelect.value = currentValue;
+    this.modelSelect.disabled = this.busy
+      || snapshot.status !== 'ready'
+      || !snapshot.selectedSessionId
+      || directory.status === 'loading'
+      || directory.groups.every((group) => group.models.length === 0);
+    const current = directory.current;
+    this.modelSelect.title = current
+      ? `${current.providerLabel} / ${current.label}${current.reasoningEffort ? ` · ${current.reasoningEffort}` : ''}`
+      : directory.message ?? '当前会话模型';
   }
 
   private renderSessions(snapshot: ConversationSnapshot): void {
@@ -341,12 +453,36 @@ export class ConversationView {
     this.busy = true;
     try {
       this.render(await this.api.createConversation());
+      this.rotateConversationPlaceholder();
       this.input.focus();
     } catch (error) {
       this.showError(errorMessage(error));
     } finally {
       this.busy = false;
       if (this.snapshot) this.render(this.snapshot);
+    }
+  }
+
+  private rotateConversationPlaceholder(): void {
+    this.input.placeholder = nextConversationPlaceholder();
+  }
+
+  private async selectModel(): Promise<void> {
+    const selection = parseConversationModelValue(this.modelSelect.value);
+    if (!selection || this.busy || this.snapshot?.status !== 'ready') {
+      if (this.snapshot) this.renderModels(this.snapshot);
+      return;
+    }
+    this.busy = true;
+    this.modelSelect.disabled = true;
+    try {
+      this.render(await this.api.selectConversationModel(selection.provider, selection.model));
+    } catch (error) {
+      this.showError(errorMessage(error));
+    } finally {
+      this.busy = false;
+      if (this.snapshot) this.render(this.snapshot);
+      this.input.focus();
     }
   }
 
@@ -401,7 +537,10 @@ export class ConversationView {
   private resizeComposer(): void {
     this.input.style.height = 'auto';
     this.input.style.height = `${Math.min(180, Math.max(28, this.input.scrollHeight))}px`;
-    this.sendButton.disabled = this.busy || this.snapshot?.status !== 'ready' || !this.input.value.trim();
+    this.sendButton.disabled = this.busy
+      || this.snapshot?.status !== 'ready'
+      || this.snapshot.models.routable === false
+      || !this.input.value.trim();
   }
 
   private showError(message: string): void {

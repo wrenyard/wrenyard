@@ -20,10 +20,12 @@ import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
 import { DesktopPetSettingsStore } from './pet-settings-store.js';
 import { DesktopQuotaController } from './quota-controller.js';
+import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
+import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import {
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
@@ -184,7 +186,7 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
         "document.body?.innerText.includes('啾啾工坊设置') === true",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getSettings().then((value) => value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers)).catch(() => false)",
+        "window.wrenyardShell.getSettings().then((value) => value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && (value?.update?.channel === 'dev' || value?.update?.channel === 'stable')).catch(() => false)",
       ),
       shell.window.webContents.executeJavaScript(
         "window.wrenyardShell.getConversation().then((value) => value?.status === 'ready' && Array.isArray(value?.sessions)).catch(() => false)",
@@ -195,7 +197,7 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     ]);
     shell.setPage('settings', false);
     const settingsVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'settings'",
+      "document.documentElement.dataset.page === 'settings' && document.getElementById('update-action-button') instanceof HTMLButtonElement",
     );
     shell.setPage('stats', false);
     const statsVisible = await shell.window.webContents.executeJavaScript(
@@ -207,7 +209,7 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     );
     shell.setPage('workbench', false);
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null",
+      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-select') instanceof HTMLSelectElement",
     );
     if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !settingsVisible || !statsVisible || !quotaVisible || !workbenchVisible) {
       throw new Error(
@@ -279,6 +281,7 @@ async function createConversationSession(
     snapshot: () => client.snapshot(),
     select: (sessionId) => client.select(sessionId),
     create: () => client.create(),
+    selectModel: (provider, model) => client.selectModel(provider, model),
     send: (text, clientTimeZone) => client.send(text, clientTimeZone),
     cancel: () => client.cancel(),
     stop: async () => {
@@ -294,6 +297,7 @@ let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
 let quotaController: DesktopQuotaController | null = null;
+let updateController: DesktopUpdateController | null = null;
 let quitting = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 
@@ -337,6 +341,19 @@ async function bootstrap(): Promise<void> {
   const petSettings = new DesktopPetSettingsStore({
     path: join(app.getPath('userData'), 'settings.json'),
   });
+  const wrenyardCli = resolveWrenyardCli();
+  updateController = new DesktopUpdateController({
+    currentVersion: app.getVersion(),
+    settings: petSettings,
+    cliPath: wrenyardCli,
+    helperPath: join(app.getAppPath(), 'dist', 'update-helper.cjs'),
+    userDataPath: app.getPath('userData'),
+    isBusy: async () => {
+      const conversationBusy = conversationController?.snapshot().sessions.some((item) => item.running) === true;
+      return conversationBusy || await wrenyardIsBusy(wrenyardCli);
+    },
+    onChanged: () => shellWindow?.notifyUpdateChanged(),
+  });
   petController = new DesktopPetController({
     loadConfig: () => petSettings.load(),
     saveConfig: (config) => petSettings.save(config),
@@ -357,8 +374,10 @@ async function bootstrap(): Promise<void> {
   await petController.start().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] Pet module failed to start:', error);
   });
+  const providerService = new ProviderService({ runtimeCommand: resolveQuotaRuntimeBin() });
   quotaController = new DesktopQuotaController({
     source: new QuotaService({ runtimeCommand: resolveQuotaRuntimeBin() }),
+    providerSource: providerService,
     getProviderOrder: () => petController!.getConfig().quota.providers,
     onChanged: (_snapshot, providers) => {
       petController?.setQuotaProviders(providers);
@@ -376,15 +395,35 @@ async function bootstrap(): Promise<void> {
     dshVersion: resolveDshVersion(),
     readHealth: () => readWrenyardHealth(ipcPath),
     readPet: async () => petController!.snapshot(),
+    readUpdate: () => updateController!.snapshot(),
   });
   shellWindow = await ShellWindowController.create({
     rendererPath: join(app.getAppPath(), 'dist', 'renderer', 'index.html'),
     preloadPath: join(app.getAppPath(), 'dist', 'preload.cjs'),
+    appVersion: version,
     smoke: SMOKE,
     icon: resolveAppIcon(),
     getSettings,
     getStats: () => readStatsSnapshot(ipcPath),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
+    saveProviderOrder: async (providerIds: string[]) => {
+      await petController!.saveProviderOrder(providerIds);
+      return quotaController!.notifyConfigurationChanged();
+    },
+    configureProviderKey: async (providerId: string, key: string) => {
+      await providerService.configureApiKey(providerId, key);
+      if (conversationController) {
+        await conversationController.configure(conversationController.workspace);
+      }
+      return quotaController!.getSnapshot(true);
+    },
+    getUpdate: async () => updateController!.snapshot(),
+    checkUpdate: () => updateController!.check(true),
+    setUpdateChannel: (channel) => updateController!.setChannel(channel),
+    prepareUpdate: () => updateController!.prepareUpdate(),
+    restartUpdate: async () => {
+      if (await updateController!.launchPreparedUpdate()) setImmediate(() => app.quit());
+    },
     savePetSettings: async (settings: PetCompanionSettings) => {
       await petController!.saveSettings(settings);
       quotaController?.notifyConfigurationChanged();
@@ -398,9 +437,11 @@ async function bootstrap(): Promise<void> {
     getConversation: async () => conversationController!.snapshot(),
     selectConversation: (sessionId: string) => conversationController!.select(sessionId),
     createConversation: () => conversationController!.create(),
+    selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
   });
+  if (!SMOKE) updateController.start();
 
   shellWindow.window.on('close', (event) => {
     if (quitting) return;
@@ -464,6 +505,8 @@ app.on('before-quit', (event) => {
       desktopTray = null;
       quotaController?.stop();
       quotaController = null;
+      updateController?.stop();
+      updateController = null;
       await petController?.stop();
       petController = null;
       await conversationController?.stop();
@@ -486,6 +529,8 @@ if (!gotSingleInstanceLock) {
     try {
       quotaController?.stop();
       quotaController = null;
+      updateController?.stop();
+      updateController = null;
       await petController?.stop();
       await conversationController?.stop();
       conversationController = null;
