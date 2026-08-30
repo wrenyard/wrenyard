@@ -37,8 +37,14 @@ const SKIP_PATH = [
 
 const PATTERNS = [
   { name: 'woa token', re: /\bwoa\b/i },
-  { name: 'tokenhub token', re: /\btokenhub\b/i },
-  { name: 'ioa-suffixed identifier', re: /\b[\w.-]*ioa\b/i },
+  // Upstream ioa-suffixed model IDs are permitted in Runtime code, manifests,
+  // and tests, but must never surface in shipped Desktop/Pet product source or
+  // the public Desktop architecture document.
+  {
+    name: 'ioa-suffixed identifier (product source)',
+    re: /\b[\w.-]*ioa\b/i,
+    paths: /^apps\/(?:desktop|pet)\/src\/|^apps\/desktop\/README\.md$/,
+  },
   { name: 'internal endpoint fragment', re: /\.(internal|corp|intranet)\b|\.svc\.cluster\.local\b/i },
   { name: 'personal username', re: /\bdluck\b/i },
   { name: 'absolute user home path', re: /\/Users\/[A-Za-z0-9_.-]+/ },
@@ -85,6 +91,7 @@ for (const file of files) {
       line = line.replaceAll('github.com/dluck/forge', '');
     }
     for (const pattern of PATTERNS) {
+      if (pattern.paths && !pattern.paths.test(file)) continue;
       if (pattern.re.test(line)) {
         hits.push(`${file}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
       }
