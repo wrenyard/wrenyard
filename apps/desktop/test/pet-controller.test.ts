@@ -65,6 +65,27 @@ test('Desktop Pet controller owns runtime startup and exposes display state', as
   assert.deepEqual(events, ['start', 'quota:']);
 });
 
+test('Desktop Pet controller hides runtime-specific and legacy provider ids from product settings', async () => {
+  const config = fixtureConfig();
+  config.quota.providers = [
+    { id: 'codebuddy-ioa', enabled: false },
+    { id: 'codebuddy', enabled: true },
+    { id: 'xai', enabled: true },
+  ];
+  const controller = new DesktopPetController({
+    loadConfig: () => config,
+    saveConfig: () => undefined,
+    createRuntime: () => runtime([]),
+  });
+
+  assert.deepEqual(controller.snapshot().settings.quota.providers, [
+    { id: 'codebuddy', enabled: true },
+    { id: 'spacex-ai', enabled: true },
+  ]);
+  assert.equal(JSON.stringify(controller.snapshot()).toLowerCase().includes('ioa'), false);
+  assert.equal(JSON.stringify(controller.snapshot()).includes('"xai"'), false);
+});
+
 test('Desktop persists changed Pet settings and restarts its in-process runtime', async () => {
   let current = fixtureConfig();
   const events: string[] = [];

@@ -11,7 +11,7 @@ import type {
   PetCompanionSnapshot,
   PetDisplaySnapshot,
 } from './shell-contract.js';
-import { reorderProviders } from './provider-order.js';
+import { normalizeProviderOrder, reorderProviders } from './provider-order.js';
 
 export interface DesktopPetRuntimeHandle {
   readonly status: PetRuntimeStatus;
@@ -45,7 +45,13 @@ export class DesktopPetController {
   }
 
   getConfig(): AppConfig {
-    return this.load();
+    const config = this.load();
+    return {
+      ...config,
+      quota: {
+        providers: normalizeProviderOrder(config.quota.providers),
+      },
+    };
   }
 
   async start(): Promise<void> {
