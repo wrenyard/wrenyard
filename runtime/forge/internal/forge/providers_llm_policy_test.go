@@ -86,7 +86,7 @@ func TestParseProviderModel(t *testing.T) {
 		expectError bool
 	}{
 		{"provider/model", "provider", "model", false},
-		{"codebuddy/hunyuan-chat", "codebuddy", "hunyuan-chat", false},
+		{"codebuddy/hy4-preview-ioa", "codebuddy", "hy4-preview-ioa", false},
 		{"invalid", "", "", true},
 		{"", "", "", true},
 		{"a/b/c", "a", "b/c", false},
@@ -609,6 +609,32 @@ func TestProvidersListReportsStoredAuthAndKimiLoginReachesAuthFlow(t *testing.T)
 	}
 }
 
+func TestProvidersListExposesPublicAPIProviderDirectory(t *testing.T) {
+	home := t.TempDir()
+	setupForgedHome(t, home)
+	t.Setenv("HOME", home)
+	out := captureStdout(t, func() {
+		if code := providersCommand([]string{"list", "--json"}); code != 0 {
+			t.Fatalf("providers list returned %d", code)
+		}
+	})
+	var entries []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		seen[entry.ID] = true
+	}
+	for _, id := range []string{"anthropic-api", "minimax", "minimax-coding", "moonshot", "openai", "qwen", "qwen-coding", "tokenhub", "volcengine", "zhipu"} {
+		if !seen[id] {
+			t.Fatalf("public provider directory missing %q", id)
+		}
+	}
+}
+
 func TestProfilesListShowsProfilesAndPoliciesWithoutTarget(t *testing.T) {
 	home := t.TempDir()
 	setupForgedHome(t, home)
@@ -774,7 +800,7 @@ func TestB5RawModelProjection(t *testing.T) {
 	}
 
 	body := `{"model":"original-model","messages":[{"role":"user","content":"hello"}]}`
-	code := llm.Command(deps, []string{"-m", "codebuddy/hunyuan-chat", body})
+	code := llm.Command(deps, []string{"-m", "codebuddy/hy4-preview-ioa", body})
 	if code != 0 {
 		t.Fatalf("Command returned %d, want 0", code)
 	}
@@ -783,8 +809,8 @@ func TestB5RawModelProjection(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &parsedBody); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	if parsedBody["model"] != "hunyuan-chat" {
-		t.Fatalf("body.model = %q, want hunyuan-chat (RHS of provider/model)", parsedBody["model"])
+	if parsedBody["model"] != "hy4-preview-ioa" {
+		t.Fatalf("body.model = %q, want hy4-preview-ioa (RHS of provider/model)", parsedBody["model"])
 	}
 	if gotProvider != "codebuddy" {
 		t.Fatalf("providerID = %q, want codebuddy (LHS of provider/model)", gotProvider)
@@ -805,7 +831,7 @@ func TestB5RawModelProjectionWithWhitespace(t *testing.T) {
 
 	// TrimSpace of CLI argv is explicitly allowed.
 	body := `{"model":"x","messages":[]}`
-	code := llm.Command(deps, []string{"-m", "  codebuddy/hunyuan-chat  ", body})
+	code := llm.Command(deps, []string{"-m", "  codebuddy/hy4-preview-ioa  ", body})
 	if code != 0 {
 		t.Fatalf("Command returned %d, want 0", code)
 	}
@@ -990,7 +1016,7 @@ func TestSanitizeErrorBodyEndToEndAPIVariantKeys(t *testing.T) {
 			return llm.RawProviderBinding{Endpoint: server.URL, Protocol: p}, nil
 		},
 		ResolveCredential: func(pid string) (string, bool) { return "key", true },
-	}, "codebuddy", llm.RawProtocolOpenAI, []byte(`{"model":"hunyuan-chat","messages":[]}`))
+	}, "codebuddy", llm.RawProtocolOpenAI, []byte(`{"model":"hy4-preview-ioa","messages":[]}`))
 	if err == nil {
 		t.Fatal("expected error for 401 response")
 	}

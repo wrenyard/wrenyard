@@ -91,7 +91,7 @@ func MCPTomlSection(serverName, url string, headers map[string]string) ([]byte, 
 	return MCPConfigBytes([]MCPServerConfig{{Name: serverName, URL: url, Headers: headers}})
 }
 
-// OAuthCandidates returns native xAI OAuth sources in required precedence:
+// OAuthCandidates returns native SpaceXAI OAuth sources in required precedence:
 // Forge's persistent shell-grok home, then the official default Grok home.
 func OAuthCandidates(forgeDataDir, home string) []string {
 	return []string{
@@ -119,13 +119,13 @@ func PrepareOAuth(forgeDataDir, home string) (PreparedOAuth, error) {
 		return prepared, nil
 	}
 	if inaccessible {
-		return PreparedOAuth{}, fmt.Errorf("xAI OAuth auth.json is present but not copyable")
+		return PreparedOAuth{}, fmt.Errorf("SpaceXAI OAuth auth.json is present but not copyable")
 	}
-	return PreparedOAuth{}, fmt.Errorf("xAI OAuth auth.json is missing; run grok login outside Forge")
+	return PreparedOAuth{}, fmt.Errorf("SpaceXAI OAuth auth.json is missing; run grok login outside Forge")
 }
 
 // ReadableOAuthSources returns every readable regular OAuth candidate without
-// selecting or copying one. Grok projections for non-xAI providers still use
+// selecting or copying one. Grok projections for non-SpaceXAI providers still use
 // this metadata to protect credentials that the child could otherwise inspect.
 func ReadableOAuthSources(forgeDataDir, home string) []string {
 	prepared, _ := inspectOAuthCandidates(forgeDataDir, home)

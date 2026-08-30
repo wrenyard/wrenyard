@@ -43,8 +43,8 @@ func TestGrokDoctorCheckSurface(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing details: %#v", check)
 	}
-	if details["binary_installed"] != true || details["agent_parent_writable"] != true || details["xai_oauth_available"] != true {
-		t.Fatalf("expected healthy binary, agent parent, and xAI OAuth checks: %#v", details)
+	if details["binary_installed"] != true || details["agent_parent_writable"] != true || details["spacex_ai_oauth_available"] != true {
+		t.Fatalf("expected healthy binary, agent parent, and SpaceXAI OAuth checks: %#v", details)
 	}
 	eligible, ok := details["eligible_models"].([]map[string]interface{})
 	if !ok || len(eligible) == 0 {

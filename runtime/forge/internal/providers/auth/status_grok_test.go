@@ -25,17 +25,17 @@ func TestGrokOAuthAuthStatusUsesShellThenOfficialDefault(t *testing.T) {
 		func() string { return dataDir },
 		func() string { return home },
 	)
-	status := resolver.ProviderAuthStatus("xai")
+	status := resolver.ProviderAuthStatus("spacex-ai")
 	if !status.OK || status.SourcePath != shellAuth {
 		t.Fatalf("shell OAuth status = %+v", status)
 	}
-	if credential, ok := resolver.Credential("xai"); ok || credential != nil {
+	if credential, ok := resolver.Credential("spacex-ai"); ok || credential != nil {
 		t.Fatal("native Grok OAuth must not be exposed as a Forge credential value")
 	}
 	if err := os.Remove(shellAuth); err != nil {
 		t.Fatal(err)
 	}
-	status = resolver.ProviderAuthStatus("xai")
+	status = resolver.ProviderAuthStatus("spacex-ai")
 	if !status.OK || status.SourcePath != defaultAuth {
 		t.Fatalf("default OAuth status = %+v", status)
 	}

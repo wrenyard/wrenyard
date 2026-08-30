@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
@@ -22,6 +23,9 @@ func quotaCommand(args []string) int {
 		ResolveKimiToken:     func() string { return sl.ResolveKimiToken(statuslineDeps()) },
 		ResolveDeepSeekToken: resolveDeepSeekQuotaToken,
 		CodexBarEnabled:      sl.CodexBarEnabled,
+		ResolveSuperGrokAuthSources: func() []string {
+			return grok.ReadableOAuthSources(forgeDataDir(), userHome())
+		},
 	}
 	return quota.Command(deps, args)
 }

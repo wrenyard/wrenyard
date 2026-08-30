@@ -16,8 +16,9 @@ type CallDeps struct {
 // ProviderBinding describes a provider's inference capability as resolved
 // from the catalog registry.
 type ProviderBinding struct {
-	Protocol string
-	Endpoint string
+	Protocol   string
+	Endpoint   string
+	AuthScheme string
 }
 
 // CallText performs a single-turn LLM call returning just the text.
@@ -72,7 +73,7 @@ func CallWithOptions(deps CallDeps, req Request, opts TransportOptions) (*Result
 	case "openai-chat-completions":
 		return CallOpenAIWithOptions(binding, modelName, cred, req, opts, extraHeaders)
 	case "anthropic-messages":
-		return CallAnthropicWithOptions(Provider{APIKind: "anthropic", BaseURL: binding.Endpoint}, modelName, cred, req, opts)
+		return CallAnthropicWithOptions(Provider{APIKind: "anthropic", BaseURL: binding.Endpoint, AuthScheme: binding.AuthScheme}, modelName, cred, req, opts, extraHeaders)
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q for provider %q", binding.Protocol, providerID)
 	}

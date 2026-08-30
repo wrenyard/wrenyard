@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/observedquota"
 )
 
 type fakeProvider struct {
@@ -3010,13 +3012,19 @@ func TestCLIAliasRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestSuperGrokProviderUnavailable(t *testing.T) {
+func TestSuperGrokProviderUsesOfficialQuotaAdapter(t *testing.T) {
 	deps := CommandDeps{
-		LoadBilling: func() BillingInfo { return BillingInfo{} },
+		LoadBilling:                 func() BillingInfo { return BillingInfo{} },
+		ResolveSuperGrokAuthSources: func() []string { return nil },
 	}
 	provider := innerProviderFor(deps, "super-grok", BillingInfo{})
-	if provider != nil {
-		t.Fatal("super-grok should have no provider (unavailable)")
+	if provider == nil || provider.Name() != "super-grok" {
+		t.Fatalf("super-grok provider = %#v", provider)
+	}
+	_, err := provider.Fetch(context.Background())
+	var statusErr *QuotaStatusError
+	if !errors.As(err, &statusErr) || statusErr.Code != QuotaCodeConfigurationMissing {
+		t.Fatalf("missing local login error = %#v", err)
 	}
 }
 
@@ -5110,5 +5118,174 @@ func TestCacheEligibleForPoolBlankSourceAcceptedByNonCodex(t *testing.T) {
 	}
 	if cacheEligibleForPool(Quota{FetchedAt: time.Now(), Source: ""}, "codex-spark") {
 		t.Fatal("codex-spark with blank source must be rejected")
+	}
+}
+
+// noNetworkProviderFor returns a ProviderForOverride that errors for every
+// pool, so list tests can verify the observed CodeBuddy projection without any
+// real provider fetch or network path.
+func noNetworkProviderFor() func(string, BillingInfo) Provider {
+	return func(name string, billing BillingInfo) Provider {
+		return fakeProvider{name: name, err: errors.New("no network in this test")}
+	}
+}
+
+func captureQuotaListAllJSON(t *testing.T, deps CommandDeps) ([]map[string]any, int) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	code := quotaListAll(deps, deps.LoadBilling(), true, false)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = old
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("parse quota list JSON: %v\noutput: %s", err, data)
+	}
+	return entries, code
+}
+
+func TestCanonicalPoolsExcludeCodeBuddy(t *testing.T) {
+	// codebuddy is never a declared provider quota binding; it appears in list
+	// output only through the observed store projection.
+	for _, pool := range canonicalPools {
+		if pool == "codebuddy" {
+			t.Fatal("codebuddy must not be a canonical quota pool")
+		}
+	}
+	if canonicalName("codebuddy") != "" {
+		t.Fatal("canonicalName(codebuddy) must be empty (no quota binding)")
+	}
+}
+
+func TestQuotaListAllObservedCodeBuddyActiveExhaustion(t *testing.T) {
+	setFixedNow(t)
+	tmpDir := t.TempDir()
+	observedRoot := filepath.Join(tmpDir, "observed")
+
+	resetsAt := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
+	store := observedquota.NewStore(observedRoot)
+	if !store.Write(observedquota.MonthlyExhaustion(observedquota.ProviderCodeBuddy, fixedNow(), resetsAt)) {
+		t.Fatal("seed observed exhaustion record")
+	}
+
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ObservedQuotaRoot = observedRoot
+	deps.ProviderForOverride = noNetworkProviderFor()
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+
+	var cb map[string]any
+	for _, e := range entries {
+		if pool, _ := e["pool"].(string); pool == "codebuddy" {
+			cb = e
+			break
+		}
+	}
+	if cb == nil {
+		t.Fatalf("active observed exhaustion must project a codebuddy entry: %#v", entries)
+	}
+	if label, _ := cb["label"].(string); label != "CodeBuddy" {
+		t.Fatalf("codebuddy label=%v want CodeBuddy", cb["label"])
+	}
+	if status, _ := cb["status"].(string); status != "ok" {
+		t.Fatalf("codebuddy status=%v want ok", cb["status"])
+	}
+
+	windows, _ := cb["windows"].([]any)
+	if len(windows) != 1 {
+		t.Fatalf("codebuddy windows=%v want one monthly window", windows)
+	}
+	w0 := windows[0].(map[string]any)
+	if name, _ := w0["name"].(string); name != "1mo" {
+		t.Fatalf("codebuddy window name=%v want 1mo", w0["name"])
+	}
+	assertJSONFloat(t, w0, "pct", 100)
+	assertJSONFloat(t, w0, "remaining_pct", 0)
+	if resetsAtRaw, _ := w0["resets_at"].(string); resetsAtRaw != resetsAt.Format(time.RFC3339) {
+		t.Fatalf("codebuddy resets_at=%v want %v", w0["resets_at"], resetsAt.Format(time.RFC3339))
+	}
+
+	message, _ := cb["message"].(string)
+	if !strings.Contains(message, "CodeBuddy 本月计费周期额度已耗尽") || !strings.Contains(message, "重置") {
+		t.Fatalf("codebuddy message=%q want friendly Chinese exhaustion message", message)
+	}
+
+	reset, ok := cb["reset"].(map[string]any)
+	if !ok {
+		t.Fatalf("codebuddy reset=%v want reset projection", cb["reset"])
+	}
+	if at, _ := reset["at"].(string); at != resetsAt.Format(time.RFC3339) {
+		t.Fatalf("codebuddy reset.at=%v want %v", reset["at"], resetsAt.Format(time.RFC3339))
+	}
+	if in, _ := reset["in"].(string); in == "" {
+		t.Fatal("codebuddy reset.in must be non-empty")
+	}
+	displayLine, _ := cb["display_line"].(string)
+	if !strings.Contains(displayLine, "0% remain") || !strings.Contains(displayLine, "reset") {
+		t.Fatalf("codebuddy display_line=%q want truthful 0%% remain and reset", displayLine)
+	}
+}
+
+func TestQuotaListAllObservedCodeBuddyOmittedWhenAbsent(t *testing.T) {
+	setFixedNow(t)
+	tmpDir := t.TempDir()
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ObservedQuotaRoot = filepath.Join(tmpDir, "observed")
+	deps.ProviderForOverride = noNetworkProviderFor()
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+	for _, e := range entries {
+		if pool, _ := e["pool"].(string); pool == "codebuddy" {
+			t.Fatalf("absent observed state must omit codebuddy: %#v", e)
+		}
+	}
+}
+
+func TestQuotaListAllObservedCodeBuddyOmittedAfterExpiry(t *testing.T) {
+	setFixedNow(t)
+	tmpDir := t.TempDir()
+	observedRoot := filepath.Join(tmpDir, "observed")
+
+	// The record expired before the fixed now: resets_at is in the past.
+	expiredAt := fixedNow().Add(-24 * time.Hour)
+	store := observedquota.NewStore(observedRoot)
+	if !store.Write(observedquota.MonthlyExhaustion(observedquota.ProviderCodeBuddy, fixedNow().Add(-48*time.Hour), expiredAt)) {
+		t.Fatal("seed expired observed exhaustion record")
+	}
+
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ObservedQuotaRoot = observedRoot
+	deps.ProviderForOverride = noNetworkProviderFor()
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+	for _, e := range entries {
+		if pool, _ := e["pool"].(string); pool == "codebuddy" {
+			t.Fatalf("expired observed state must omit codebuddy: %#v", e)
+		}
+	}
+}
+
+func TestCanonicalLabelCodeBuddy(t *testing.T) {
+	if got := CanonicalLabel("codebuddy"); got != "CodeBuddy" {
+		t.Fatalf("CanonicalLabel(codebuddy) = %q, want CodeBuddy", got)
 	}
 }

@@ -20,7 +20,7 @@ func ProfileMaterializable(p Profile, deps Dependencies) bool {
 func AvailableProfileNames(manifest map[string]Profile, deps Dependencies) []string {
 	out := []string{}
 	for name, p := range manifest {
-		if p.Client != "" && ClientUsability(p.Client, deps) == ClientDisabledByConfig {
+		if p.Client != "" && ClientUsability(p.Client, deps) != ClientOK {
 			continue
 		}
 		out = append(out, name)
@@ -29,10 +29,16 @@ func AvailableProfileNames(manifest map[string]Profile, deps Dependencies) []str
 	return out
 }
 
-// ClientUsability checks whether a client is usable.
+// ClientUsability checks whether a client is usable. An enabled, non-empty
+// client whose binary is absent reports ClientBinaryMissing when the
+// ClientInstalled callback is provided; callers without the callback keep the
+// config-only verdict.
 func ClientUsability(client string, deps Dependencies) ClientEnabledReason {
 	if !IsClientEnabled(client, deps) {
 		return ClientDisabledByConfig
+	}
+	if client != "" && deps.ClientInstalled != nil && !deps.ClientInstalled(client) {
+		return ClientBinaryMissing
 	}
 	return ClientOK
 }

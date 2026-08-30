@@ -15,6 +15,7 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/observedquota"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
 )
@@ -1320,5 +1321,131 @@ func TestRunStartedAndAttemptStartedAddConcreteClient(t *testing.T) {
 				t.Fatalf("attempt_started client=%v want %q", attemptStarted.Data["client"], tc.wantConcrete)
 			}
 		})
+	}
+}
+
+// codeBuddyIOAResilienceDeps builds deterministic execution dependencies for a
+// CodeBuddy profile that selects the given --model id. The launcher default
+// args place the model into the planned argv exactly as a real dispatch would.
+func codeBuddyIOAResilienceDeps(t *testing.T, clock *testClock, runner ChildRunner, model string) Dependencies {
+	t.Helper()
+	d := newFakeDeps(t)
+	d.loadProfile = func(name string) (ProfileDefinition, bool, error) {
+		return ProfileDefinition{
+			Name: name, Client: "codebuddy",
+			Launcher: map[string]interface{}{"default_args": []interface{}{"--model", model}},
+		}, true, nil
+	}
+	d.resolveProfile = func(def ProfileDefinition) (profile.ResolvedProfile, error) {
+		return profile.ResolvedProfile{
+			Name: def.Name, Client: catalog.Client{}, Provider: catalog.Provider{},
+			Compatibility: profile.CompatibilityClientUnregistered,
+			Credential:    profile.CredentialPlan{TargetEnv: "CB_TOKEN"},
+		}, nil
+	}
+	d.Dependencies.Clock = clock
+	d.Dependencies.StateRoot = t.TempDir()
+	d.Dependencies.ObservedQuotaRoot = filepath.Join(t.TempDir(), "observed")
+	d.Dependencies.JitterFn = func(time.Duration) time.Duration { return 0 }
+	d.Dependencies.Runner = runner
+	return d.Dependencies
+}
+
+func billingCycleDenialEvents() []protocol.Event {
+	return []protocol.Event{{Type: protocol.EventRunFinished, Data: map[string]any{
+		"status": "failed",
+		"error":  "Error code: 403 - insufficient_quota: You've reached your usage limit for this billing cycle. Please try again later or upgrade your plan.",
+	}}}
+}
+
+// TestExecuteCodeBuddyIOABillingExhaustionPersistsProviderStateAndNextMonthCircuit
+// verifies the qualifying dispatch: a CodeBuddy transcript that selected an
+// -ioa model and hit exact monthly billing-cycle exhaustion writes the canonical
+// provider state and holds the exact-profile circuit until the next local
+// calendar month, not one hour.
+func TestExecuteCodeBuddyIOABillingExhaustionPersistsProviderStateAndNextMonthCircuit(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
+	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+		return ChildResult{Status: "failed", ExitCode: 1, Events: billingCycleDenialEvents()}
+	}, "deepseek-v4-ioa")
+
+	result, err := Execute(Request{ProfileName: "cb-ioa", Prompt: "p", WorkDir: tempDir(t)}, deps, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || result.Status != "failed" {
+		t.Fatalf("result=%+v err=%v want failed denial", result, err)
+	}
+
+	want := observedquota.NextLocalMonthStart(clock.Now())
+	store := observedquota.NewStore(deps.ObservedQuotaRoot)
+	record, ok := store.Active(observedquota.ProviderCodeBuddy, clock.Now())
+	if !ok {
+		t.Fatal("qualifying -ioa denial must persist the canonical provider exhaustion state")
+	}
+	if !record.ResetsAt.Equal(want) {
+		t.Fatalf("observed resets_at=%v want next local month start %v", record.ResetsAt, want)
+	}
+	if record.ReasonCode != observedquota.ReasonMonthlyQuotaExhausted || !record.Exhausted {
+		t.Fatalf("observed record=%+v", record)
+	}
+
+	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-ioa")
+	if !check.Open || check.Record.ReasonCode != CircuitReasonHardProfileLimit {
+		t.Fatalf("cb-ioa circuit=%+v want open hard-profile-limit circuit", check)
+	}
+	if check.Record.UnlockAt != want.Format(time.RFC3339) {
+		t.Fatalf("circuit unlock=%q want next local month start %q", check.Record.UnlockAt, want.Format(time.RFC3339))
+	}
+}
+
+// TestExecuteOfficialCodeBuddyModelBillingDenialKeepsExistingBehavior verifies
+// that an official CodeBuddy model id retains current behavior: the hard
+// profile circuit still opens after one hour, but no provider exhaustion state
+// is ever written.
+func TestExecuteOfficialCodeBuddyModelBillingDenialKeepsExistingBehavior(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
+	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+		return ChildResult{Status: "failed", ExitCode: 1, Events: billingCycleDenialEvents()}
+	}, "deepseek-v4")
+
+	result, err := Execute(Request{ProfileName: "cb-official", Prompt: "p", WorkDir: tempDir(t)}, deps, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || result.Status != "failed" {
+		t.Fatalf("result=%+v err=%v want failed denial", result, err)
+	}
+
+	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
+		t.Fatal("official CodeBuddy model must not create the provider exhaustion state")
+	}
+	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-official")
+	if !check.Open {
+		t.Fatalf("official denial must still open the profile circuit: %+v", check)
+	}
+	if want := clock.Now().Add(time.Hour).Format(time.RFC3339); check.Record.UnlockAt != want {
+		t.Fatalf("official denial unlock=%q want existing one-hour behavior %q", check.Record.UnlockAt, want)
+	}
+}
+
+// TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState verifies that a
+// structured CodeBuddy frequency-limit 429 (recoverable, with a reset time)
+// opens the structured-recovery circuit but never creates monthly provider
+// state, even when the -ioa model is selected.
+func TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
+	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+		return ChildResult{Status: "done", ExitCode: 0, Events: []protocol.Event{{Type: "message", Data: map[string]any{
+			"role": "assistant",
+			"text": "429 您的使用量已超出频率限制，将在 2026-07-12 15:00:00 UTC+8 重置，您也可以切换其他模型继续使用。 (eae0465ed7664c40bcb0bb7f08afb8ca/1d37242c-c2ea-4c31-812a-2b2cd1e13a92)",
+		}}}}
+	}, "deepseek-v4-ioa")
+
+	result, err := Execute(Request{ProfileName: "cb-429", Prompt: "p", WorkDir: tempDir(t)}, deps, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || result.Status != "failed" {
+		t.Fatalf("result=%+v err=%v want failed 429", result, err)
+	}
+
+	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
+		t.Fatal("structured 429 must not create the provider exhaustion state")
+	}
+	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-429")
+	if !check.Open || check.Record.ReasonCode != CircuitReasonStructuredRecovery {
+		t.Fatalf("cb-429 circuit=%+v want open structured-recovery circuit", check)
 	}
 }

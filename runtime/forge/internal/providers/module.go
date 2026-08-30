@@ -9,15 +9,25 @@ import (
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/anthropic"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/anthropicapi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codebuddy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codex"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codexspark"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/kimi"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxapi"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxcoding"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/moonshot"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/openaiapi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/opencode"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/qwenapi"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/qwencoding"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/tokenhub"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/volcengine"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/xai"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/zhipu"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/zhipuapi"
 )
 
 type ProviderModule = schema.ProviderModule
@@ -30,14 +40,36 @@ type Override struct {
 
 var modules = []ProviderModule{
 	anthropic.Module(),
+	anthropicapi.Module(),
 	codebuddy.Module(),
 	codex.Module(),
 	codexspark.Module(),
 	cursor.Module(),
 	kimi.Module(),
+	minimaxapi.Module(),
+	minimaxcoding.Module(),
+	moonshot.Module(),
 	opencode.Module(),
+	openaiapi.Module(),
+	qwenapi.Module(),
+	qwencoding.Module(),
+	tokenhub.Module(),
+	volcengine.Module(),
 	xai.Module(),
 	zhipu.Module(),
+	zhipuapi.Module(),
+}
+
+const SpaceXAIProviderID = "spacex-ai"
+
+// CanonicalID maps provider ids accepted from historical user configuration
+// to the current product id. New catalog and product output must only emit the
+// canonical id.
+func CanonicalID(id string) string {
+	if id == "xai" {
+		return SpaceXAIProviderID
+	}
+	return id
 }
 
 func Modules() []ProviderModule {
@@ -47,6 +79,7 @@ func Modules() []ProviderModule {
 }
 
 func Lookup(id string) (ProviderModule, bool) {
+	id = CanonicalID(id)
 	for _, module := range modules {
 		if module.ID() == id {
 			return module, true
@@ -72,6 +105,11 @@ func ApplyOverrides(reg schema.Registrar, configured map[string]Override, lookup
 	}
 	for _, module := range Modules() {
 		override := configured[module.ID()]
+		if legacy, ok := configured["xai"]; module.ID() == SpaceXAIProviderID && ok {
+			if _, canonicalSet := configured[SpaceXAIProviderID]; !canonicalSet {
+				override = legacy
+			}
+		}
 		if lookupEnv != nil {
 			prefix := EnvPrefix(module.ID())
 			if value, ok := lookupEnv(prefix + "_OPENAI_BASE_URL"); ok && strings.TrimSpace(value) != "" {
@@ -94,11 +132,20 @@ func ApplyOverrides(reg schema.Registrar, configured map[string]Override, lookup
 }
 
 func EffectiveAPIKey(providerID string, configured map[string]Override, lookupEnv func(string) (string, bool)) (string, bool, error) {
+	providerID = CanonicalID(providerID)
 	module, ok := Lookup(providerID)
 	if !ok {
 		return "", false, fmt.Errorf("unknown provider %q", providerID)
 	}
-	value := strings.TrimSpace(configured[providerID].APIKey)
+	override := configured[providerID]
+	if providerID == SpaceXAIProviderID {
+		if legacy, ok := configured["xai"]; ok {
+			if _, canonicalSet := configured[SpaceXAIProviderID]; !canonicalSet {
+				override = legacy
+			}
+		}
+	}
+	value := strings.TrimSpace(override.APIKey)
 	if lookupEnv != nil {
 		if envValue, exists := lookupEnv(EnvPrefix(providerID) + "_API_KEY"); exists && strings.TrimSpace(envValue) != "" {
 			value = strings.TrimSpace(envValue)

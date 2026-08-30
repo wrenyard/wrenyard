@@ -124,12 +124,12 @@ func GrokDoctorCheck(deps Dependencies) map[string]interface{} {
 		}
 	}
 	oauthSource, oauthErr := grok.SelectOAuthSource(filepath.Dir(filepath.Dir(paths.GrokHome)), home)
-	details["xai_oauth_available"] = oauthErr == nil
+	details["spacex_ai_oauth_available"] = oauthErr == nil
 	if oauthErr == nil {
-		details["xai_oauth_source"] = oauthSource
+		details["spacex_ai_oauth_source"] = oauthSource
 	} else {
 		status = WorstStatus(status, "warning")
-		messages = append(messages, "xAI OAuth auth.json is missing or not copyable")
+		messages = append(messages, "SpaceXAI OAuth auth.json is missing or not copyable")
 	}
 
 	message := "Grok shell and agent runtime ready"

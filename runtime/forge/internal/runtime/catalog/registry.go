@@ -64,7 +64,7 @@ func (r *Registry) LookupDescriptor(name string) (Client, error) {
 // LookupBinding returns the Provider by name, or an error listing available
 // providers. Error wording intentionally preserves the existing CLI contract.
 func (r *Registry) LookupBinding(name string) (Provider, error) {
-	provider, ok := r.providers[name]
+	provider, ok := r.providers[providers.CanonicalID(name)]
 	if !ok {
 		return Provider{}, unknownNameError("provider binding", name, r.providerNames())
 	}
@@ -125,7 +125,7 @@ func (r *Registry) BindingNames() []string {
 // LookupProviderModel checks whether a model is owned by the given canonical
 // provider. Returns the canonical model id and true if found.
 func (r *Registry) LookupProviderModel(providerID, modelID string) (string, bool) {
-	models, ok := r.models[providerID]
+	models, ok := r.models[providers.CanonicalID(providerID)]
 	if !ok {
 		return "", false
 	}
@@ -139,7 +139,7 @@ func (r *Registry) LookupProviderModel(providerID, modelID string) (string, bool
 // ProviderModels returns the set of models owned by the given canonical
 // provider, or nil if the provider is unknown.
 func (r *Registry) ProviderModels(providerID string) map[string]ModelDef {
-	models := r.models[providerID]
+	models := r.models[providers.CanonicalID(providerID)]
 	if models == nil {
 		return nil
 	}

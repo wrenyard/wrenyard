@@ -182,3 +182,73 @@ func TestClassifyHardBillingCycleDenialMarksImmediateCircuit(t *testing.T) {
 		t.Fatalf("done classification=%+v want none without immediate circuit", done)
 	}
 }
+
+func TestClassifyMonthlyExhaustionFlagIsExactOnly(t *testing.T) {
+	now := time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)
+
+	// Exact billing-cycle phrases set the monthly exhaustion flag.
+	for _, tc := range []struct {
+		name   string
+		events []protocol.Event
+	}{
+		{name: "exact you've reached", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "Error code: 403 - insufficient_quota: You've reached your usage limit for this billing cycle. Please try again later or upgrade your plan.",
+		}}}},
+		{name: "exact you have reached", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "You have reached your usage limit for this billing cycle.",
+		}}}},
+		{name: "exact usage limit phrase", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "usage limit for this billing cycle exceeded",
+		}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyAttempt(tc.events, now)
+			if !got.MonthlyExhaustion {
+				t.Fatalf("classification=%+v want monthly exhaustion flag set", got)
+			}
+			if got.Classification != FailureClassProfileSpecificLimit || !got.ImmediateCircuit {
+				t.Fatalf("classification=%+v want profile_specific_limit with immediate circuit", got)
+			}
+		})
+	}
+
+	// Access termination, CodeBuddy structured 429, generic quota, generic
+	// rate-limit, and temporary wording must never set the monthly flag even
+	// when they classify as a hard or profile-specific denial.
+	for _, tc := range []struct {
+		name   string
+		events []protocol.Event
+	}{
+		{name: "access termination", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{
+			"status": "failed",
+			"error":  "Error code: 403 - access terminated: Your subscription has been suspended. Please contact support.",
+		}}}},
+		{name: "codebuddy structured 429 reset", events: []protocol.Event{{Type: "message", Data: map[string]any{
+			"role": "assistant",
+			"text": "429 您的使用量已超出频率限制，将在 2026-07-12 11:49:02 UTC+8 重置，您也可以切换其他模型继续使用。 (eae0465ed7664c40bcb0bb7f08afb8ca/1d37242c-c2ea-4c31-812a-2b2cd1e13a92)",
+		}}}},
+		{name: "generic quota", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{"status": "failed", "error": "profile quota limit reached"}}}},
+		{name: "429 rate limit", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{"status": "failed", "error": "429 rate limit exceeded"}}}},
+		{name: "temporary quota", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{"status": "failed", "error": "temporary quota exhausted, retry shortly"}}}},
+		{name: "billing mention without exact phrase", events: []protocol.Event{{Type: "run_finished", Data: map[string]any{"status": "failed", "error": "billing issue please retry later"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyAttempt(tc.events, now)
+			if got.MonthlyExhaustion {
+				t.Fatalf("classification=%+v must not set monthly exhaustion for %q", got, tc.name)
+			}
+		})
+	}
+
+	// A done run that merely echoes the phrase must not set the flag.
+	done := ClassifyAttempt([]protocol.Event{{Type: "run_finished", Data: map[string]any{
+		"status": "done",
+		"error":  "You've reached your usage limit for this billing cycle.",
+	}}}, now)
+	if done.MonthlyExhaustion {
+		t.Fatalf("done classification=%+v must not set monthly exhaustion", done)
+	}
+}

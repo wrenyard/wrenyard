@@ -63,6 +63,12 @@ type AttemptClassification struct {
 	// classified as profile_specific_limit. Retrying such denials is
 	// pointless, so the orchestrator opens the profile circuit immediately.
 	ImmediateCircuit bool
+	// MonthlyExhaustion is true only for exact billing-cycle quota exhaustion
+	// phrasing. It is independent of the generic hard circuit signal: access
+	// termination, 429, generic quota, generic rate-limit, and temporary
+	// wording never set it, so an observed monthly provider state can never be
+	// created from recoverable errors or terminated access.
+	MonthlyExhaustion bool
 }
 
 // ClassifyAttempt classifies only normalized downstream events. The explicit
@@ -111,11 +117,14 @@ func ClassifyAttempt(events []protocol.Event, now time.Time) AttemptClassificati
 	if sawDone {
 		return AttemptClassification{Classification: ClassificationNone, NativeSessionID: latestNativeSessionID(events)}
 	}
+	monthlyExhaustion := monthlyQuotaExhaustionSignal(joined)
 
 	if explicit := firstExplicitClass(fields); explicit != "" {
 		result.Classification = explicit
 	} else {
 		switch {
+		case monthlyExhaustion:
+			result.Classification = ClassificationProfileSpecificLimit
 		case profileSpecificSignal(joined):
 			result.Classification = ClassificationProfileSpecificLimit
 		case transientProviderSignal(joined):
@@ -133,6 +142,7 @@ func ClassifyAttempt(events []protocol.Event, now time.Time) AttemptClassificati
 	if result.Classification == ClassificationProfileSpecificLimit && hardProfileLimitSignal(joined) {
 		result.ImmediateCircuit = true
 	}
+	result.MonthlyExhaustion = monthlyExhaustion
 	return result
 }
 
@@ -206,6 +216,24 @@ func hardProfileLimitSignal(text string) bool {
 		"you have reached your usage limit for this billing cycle",
 		"usage limit for this billing cycle",
 		"access terminated",
+	} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// monthlyQuotaExhaustionSignal recognizes only exact billing-cycle quota
+// exhaustion phrases. It deliberately excludes access termination, 429,
+// generic quota, generic rate-limit, and temporary wording so a strict
+// monthly-exhaustion signal is never derived from recoverable or unrelated
+// errors.
+func monthlyQuotaExhaustionSignal(text string) bool {
+	for _, phrase := range []string{
+		"you've reached your usage limit for this billing cycle",
+		"you have reached your usage limit for this billing cycle",
+		"usage limit for this billing cycle",
 	} {
 		if strings.Contains(text, phrase) {
 			return true

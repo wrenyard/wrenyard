@@ -10,7 +10,7 @@ func Module() schema.ProviderModule {
 	models := schema.ProviderModels{
 		"deepseek-v4-flash": {ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash"},
 		"deepseek-v4-pro":   {ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro"},
-		"hunyuan-chat":      {ID: "hunyuan-chat", DisplayName: "Hunyuan Chat"},
+		"hy4-preview-ioa":   {ID: "hy4-preview-ioa", DisplayName: "Hunyuan HY4 Preview"},
 		"kimi-k2.6":         {ID: "kimi-k2.6", DisplayName: "Kimi K2.6"},
 	}
 	return schema.StaticModule{
@@ -21,7 +21,7 @@ func Module() schema.ProviderModule {
 			CredentialResolver: schema.CredentialResolverCodeBuddy,
 			UseClientBinary:    true,
 			AllowedModels: []string{
-				"deepseek-v4-flash", "deepseek-v4-pro", "hunyuan-chat", "kimi-k2.6",
+				"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview-ioa", "kimi-k2.6",
 			},
 		},
 	}

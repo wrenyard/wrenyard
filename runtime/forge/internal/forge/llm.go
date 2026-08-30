@@ -54,8 +54,9 @@ func llmCallDeps() llm.CallDeps {
 				return llm.ProviderBinding{}, &bindingNotFoundError{providerID}
 			}
 			return llm.ProviderBinding{
-				Protocol: binding.Inference.Protocol,
-				Endpoint: binding.Inference.Endpoint,
+				Protocol:   binding.Inference.Protocol,
+				Endpoint:   binding.Inference.Endpoint,
+				AuthScheme: string(binding.Inference.AuthScheme),
 			}, nil
 		},
 		ResolveCredential: authStatusCredential,
@@ -67,7 +68,7 @@ func llmCallDeps() llm.CallDeps {
 			}
 			for _, c := range binding.RawLLM {
 				if llm.RawProtocol(c.Protocol) == protocol {
-					return llm.RawProviderBinding{Endpoint: c.BaseEndpoint, Protocol: protocol}, nil
+					return llm.RawProviderBinding{Endpoint: c.BaseEndpoint, Protocol: protocol, AuthScheme: string(c.AuthScheme)}, nil
 				}
 			}
 			return llm.RawProviderBinding{}, fmt.Errorf("provider %q does not advertise raw %q protocol", providerID, protocol)
@@ -75,17 +76,12 @@ func llmCallDeps() llm.CallDeps {
 	}
 }
 
-// authStatusHeaders resolves the full headers (Authorization + context) for a
-// provider using the unified auth SSOT.
+// authStatusHeaders resolves native-provider context headers. Forge-managed
+// API keys are deliberately omitted here: the selected transport owns their
+// Authorization/x-api-key placement from provider capability metadata.
 func authStatusHeaders(providerID string) (http.Header, bool) {
 	if IsManagedProvider(providerID) {
-		credential, ok := ResolveCredential(providerID)
-		if !ok {
-			return nil, false
-		}
-		headers := make(http.Header)
-		headers.Set("Authorization", "Bearer "+credential)
-		return headers, true
+		return nil, false
 	}
 	resolver := authStatusResolver()
 	headers := resolver.Headers(providerID)

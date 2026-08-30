@@ -523,14 +523,14 @@ func TestGrokMCPTomlSectionEmptyURL(t *testing.T) {
 
 func TestGrokOAuthMissingRejectsBeforeDispatchAndCopySourceIsOpaque(t *testing.T) {
 	home, _ := isolateGrokRuntimeTest(t)
-	_, xaiProvider, err := catalog.DefaultRegistry().ResolveBinding("grok", "xai")
+	_, xaiProvider, err := catalog.DefaultRegistry().ResolveBinding("grok", "spacex-ai")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved := profilepkg.ResolvedProfile{Provider: xaiProvider}
-	_, err = prepareClientRuntime(execution.ProfileDefinition{Client: "grok", Provider: "xai"}, resolved)
+	_, err = prepareClientRuntime(execution.ProfileDefinition{Client: "grok", Provider: "spacex-ai"}, resolved)
 	if err == nil || !strings.Contains(err.Error(), "OAuth") {
-		t.Fatalf("missing xAI OAuth error = %v", err)
+		t.Fatalf("missing SpaceXAI OAuth error = %v", err)
 	}
 	if strings.Contains(err.Error(), "zhipu-test-secret") || strings.Contains(err.Error(), "kimi-test-secret") {
 		t.Fatalf("dispatch error leaked secret text: %v", err)
@@ -544,7 +544,7 @@ func TestGrokOAuthMissingRejectsBeforeDispatchAndCopySourceIsOpaque(t *testing.T
 	if err := os.WriteFile(defaultAuth, oauthBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	prep, err := prepareClientRuntime(execution.ProfileDefinition{Client: "grok", Provider: "xai"}, resolved)
+	prep, err := prepareClientRuntime(execution.ProfileDefinition{Client: "grok", Provider: "spacex-ai"}, resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,10 +556,10 @@ func TestGrokOAuthMissingRejectsBeforeDispatchAndCopySourceIsOpaque(t *testing.T
 		t.Fatalf("OAuth sensitive sources = %#v", prep.SensitiveSources)
 	}
 	if len(prep.Env) != 0 || len(prep.SensitiveEnvKeys) != 0 {
-		t.Fatalf("xAI OAuth must be file-copy only: env=%#v sensitive=%#v", prep.Env, prep.SensitiveEnvKeys)
+		t.Fatalf("SpaceXAI OAuth must be file-copy only: env=%#v sensitive=%#v", prep.Env, prep.SensitiveEnvKeys)
 	}
 	if bytes.Contains(prep.Files[0].Data, oauthBytes) {
-		t.Fatal("xAI OAuth bytes leaked into projected config")
+		t.Fatal("SpaceXAI OAuth bytes leaked into projected config")
 	}
 	unchanged, _ := os.ReadFile(defaultAuth)
 	if !bytes.Equal(unchanged, oauthBytes) {
@@ -582,12 +582,12 @@ func TestPrepareGrokOAuthTracksEveryReadableSourceButCopiesOnlyWinner(t *testing
 			t.Fatal(err)
 		}
 	}
-	_, xaiProvider, err := catalog.DefaultRegistry().ResolveBinding("grok", "xai")
+	_, xaiProvider, err := catalog.DefaultRegistry().ResolveBinding("grok", "spacex-ai")
 	if err != nil {
 		t.Fatal(err)
 	}
 	prep, err := prepareClientRuntime(
-		execution.ProfileDefinition{Client: "grok", Provider: "xai"},
+		execution.ProfileDefinition{Client: "grok", Provider: "spacex-ai"},
 		profilepkg.ResolvedProfile{Provider: xaiProvider},
 	)
 	if err != nil {
@@ -615,7 +615,7 @@ func TestGrokCompletePlansUseEffectiveProviderForOAuthMaterialization(t *testing
 		secretRef       bool
 	}{
 		{name: "gk-grok protects Forge and OAuth stores while copying only the winner", model: "grok-4.5", wantAuth: []byte("oauth-source-sentinel-primary-\x00")},
-		{name: "explicit xai keeps official fallback", rawProvider: "xai", model: "grok-4.5", removeShellAuth: true, wantAuth: []byte("oauth-source-sentinel-fallback-\x00")},
+		{name: "legacy xai alias keeps official fallback", rawProvider: "xai", model: "grok-4.5", removeShellAuth: true, wantAuth: []byte("oauth-source-sentinel-fallback-\x00")},
 		{name: "managed provider protects every readable credential store", rawProvider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3", managed: true},
 		{name: "secret_ref protects every store without copying unselected credentials", rawProvider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3", managed: true, secretRef: true},
 	}

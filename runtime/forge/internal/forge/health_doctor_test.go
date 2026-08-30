@@ -225,6 +225,9 @@ func TestDshCLIDoctorCheckBrokenFdsh(t *testing.T) {
 	binDir := t.TempDir()
 	t.Setenv("PATH", binDir)
 	t.Setenv("FORGE_DSH_BIN", "")
+	// Developer/self-installed mode: no suite-managed runtime, so the stable
+	// fdsh launcher must exist on PATH.
+	t.Setenv("WRENYARD_ROOT", "")
 	writeFakeDSHVersion(t, binDir, "0.1.0-rc.6")
 	// fdsh is absent from PATH, so the launcher chain is broken.
 
@@ -238,6 +241,27 @@ func TestDshCLIDoctorCheckBrokenFdsh(t *testing.T) {
 	}
 	if !strings.Contains(msg, "forge setup") {
 		t.Fatalf("expected setup hint in fdsh error, got %s", msg)
+	}
+}
+
+func TestDshCLIDoctorCheckSuiteManagedSkipsFdsh(t *testing.T) {
+	isolateCodebuddyTestEnvironment(t, "")
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	t.Setenv("FORGE_DSH_BIN", "")
+	// Suite-managed installs route through the wrenyard runtime and never
+	// create the retired stable forge/fdsh PATH launchers.
+	t.Setenv("WRENYARD_ROOT", t.TempDir())
+	writeFakeDSHVersion(t, binDir, "0.1.0-rc.6")
+	// No fdsh launcher on PATH.
+
+	check := dshCLIDoctorCheck()
+	if check["status"] != "ok" {
+		t.Fatalf("expected ok for suite-managed dsh chain without fdsh, got %#v", check)
+	}
+	details, _ := check["details"].(map[string]interface{})
+	if details["suite_managed"] != true {
+		t.Fatalf("expected suite_managed detail to be recorded, got %#v", details)
 	}
 }
 
@@ -329,7 +353,7 @@ func TestCbModelWhitelistCheckLocalCustomProviderUsesOwnBinding(t *testing.T) {
 	reg := catalog.NewRegistry()
 	reg.RegisterBinding(catalog.Provider{
 		Name: "codebuddy", Kind: "builtin",
-		AllowedModels: []string{"hunyuan-chat", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"},
+		AllowedModels: []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"},
 	})
 	reg.RegisterBinding(catalog.Provider{
 		Name: "codebuddy-local", Kind: "custom",
@@ -359,7 +383,7 @@ func TestCbModelWhitelistCheckLocalCustomProviderUsesOwnBinding(t *testing.T) {
 		t.Fatalf("local codebuddy-local profile must validate against its own model set, got %#v", check)
 	}
 	// Public codebuddy profile validates against the public model set.
-	if check := doctor.CBModelWhitelistCheck(depsFor(manifestFor("codebuddy", "hunyuan-chat"))); check["status"] != "ok" {
+	if check := doctor.CBModelWhitelistCheck(depsFor(manifestFor("codebuddy", "hy4-preview-ioa"))); check["status"] != "ok" {
 		t.Fatalf("public codebuddy profile must validate against public models, got %#v", check)
 	}
 	// A model outside the custom provider's registered set must warn.
@@ -542,10 +566,10 @@ func TestCodebuddyProfileModelExtraction(t *testing.T) {
 			profile: profile{
 				Launcher: map[string]interface{}{
 					"command":      "codebuddy",
-					"default_args": []interface{}{"--model=hunyuan-chat"},
+					"default_args": []interface{}{"--model=hy4-preview-ioa"},
 				},
 			},
-			want: "hunyuan-chat",
+			want: "hy4-preview-ioa",
 		},
 		{
 			name: "ANTHROPIC_MODEL env fallback",

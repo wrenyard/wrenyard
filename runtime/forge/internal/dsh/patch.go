@@ -293,7 +293,9 @@ func resolveSelection(providers []Provider, sel string) (string, error) {
 }
 
 func splitSelection(sel string) (pid, mid string, err error) {
-	i := strings.LastIndex(sel, "/")
+	// Provider ids never contain '/', while some upstream model ids do
+	// (for example TokenHub's namespaced vision models). Split only once.
+	i := strings.Index(sel, "/")
 	if i <= 0 || i == len(sel)-1 {
 		return "", "", fmt.Errorf("dsh: selected model %q must be providerID/modelID", sel)
 	}

@@ -13,6 +13,8 @@ var timeNow = time.Now
 // CanonicalLabel returns a short display label for a pool name.
 func CanonicalLabel(pool string) string {
 	switch pool {
+	case "codebuddy":
+		return "CodeBuddy"
 	case "codex":
 		return "Codex"
 	case "codex-spark":

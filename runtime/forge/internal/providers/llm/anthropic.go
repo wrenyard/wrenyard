@@ -19,12 +19,12 @@ func ParseProviderModel(composite string) (providerID, modelName string, err err
 
 // CallAnthropic performs a single Anthropic Messages API call.
 func CallAnthropic(provider Provider, modelName, apiKey string, req Request) (*Result, error) {
-	return CallAnthropicWithOptions(provider, modelName, apiKey, req, DefaultTransportOptions())
+	return CallAnthropicWithOptions(provider, modelName, apiKey, req, DefaultTransportOptions(), nil)
 }
 
 // CallAnthropicWithOptions performs an Anthropic Messages API call with
 // caller-selected transport timeout and retry behavior.
-func CallAnthropicWithOptions(provider Provider, modelName, apiKey string, req Request, opts TransportOptions) (*Result, error) {
+func CallAnthropicWithOptions(provider Provider, modelName, apiKey string, req Request, opts TransportOptions, extraHeaders http.Header) (*Result, error) {
 	url := provider.BaseURL
 
 	messages := []map[string]interface{}{
@@ -47,8 +47,11 @@ func CallAnthropicWithOptions(provider Provider, modelName, apiKey string, req R
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	headers.Set("x-api-key", apiKey)
+	setCredentialHeader(headers, provider.AuthScheme, RawProtocolAnthropic, apiKey)
 	headers.Set("anthropic-version", "2023-06-01")
+	for name, values := range extraHeaders {
+		headers[name] = append([]string(nil), values...)
+	}
 	status, respBody, err := doJSONPost(url, headers, bodyBytes, opts)
 	if err != nil {
 		return nil, err

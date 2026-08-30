@@ -4,11 +4,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
 func TestInjectedProviders(t *testing.T) {
-	if len(InjectedProviders) != 2 {
-		t.Fatalf("expected 2 injected providers, got %d", len(InjectedProviders))
+	if len(InjectedProviders) != 11 {
+		t.Fatalf("expected 11 injected providers, got %d", len(InjectedProviders))
 	}
 	seen := map[string]bool{}
 	for _, p := range InjectedProviders {
@@ -23,6 +25,15 @@ func TestInjectedProviders(t *testing.T) {
 	for _, id := range []string{
 		"llm-pi-ai.zhipu-coding",
 		"llm-pi-ai.kimi-coding",
+		"llm-pi-ai.openai",
+		"llm-pi-ai.zhipu",
+		"llm-pi-ai.moonshot",
+		"llm-pi-ai.minimax",
+		"llm-pi-ai.minimax-coding",
+		"llm-pi-ai.qwen",
+		"llm-pi-ai.qwen-coding",
+		"llm-pi-ai.tokenhub",
+		"llm-pi-ai.volcengine",
 	} {
 		if !seen[id] {
 			t.Fatalf("missing provider route %s", id)
@@ -35,8 +46,17 @@ func TestInjectedProviderCatalogExact(t *testing.T) {
 		baseURL string
 		models  []string
 	}{
-		"llm-pi-ai.zhipu-coding": {"https://open.bigmodel.cn/api/coding/paas/v4", []string{"glm-5.3", "glm-5.3-flash"}},
-		"llm-pi-ai.kimi-coding":  {"https://api.kimi.com/coding/v1", []string{"k3", "k3[1m]"}},
+		"llm-pi-ai.zhipu-coding":   {"https://open.bigmodel.cn/api/coding/paas/v4", []string{"glm-5.3", "glm-5.3-flash"}},
+		"llm-pi-ai.kimi-coding":    {"https://api.kimi.com/coding/v1", []string{"k3"}},
+		"llm-pi-ai.openai":         {"https://api.openai.com/v1", []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}},
+		"llm-pi-ai.zhipu":          {"https://open.bigmodel.cn/api/paas/v4", []string{"glm-4.7-flash", "glm-5-turbo", "glm-5.2"}},
+		"llm-pi-ai.moonshot":       {"https://api.moonshot.cn/v1", []string{"kimi-k2.5", "kimi-k2.6"}},
+		"llm-pi-ai.minimax":        {"https://api.minimaxi.com/v1", []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M3"}},
+		"llm-pi-ai.minimax-coding": {"https://api.minimaxi.com/v1", []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M3"}},
+		"llm-pi-ai.qwen":           {"https://dashscope.aliyuncs.com/compatible-mode/v1", []string{"qwen3-coder-next", "qwen3.7-flash", "qwen3.7-plus", "qwen3.8-max"}},
+		"llm-pi-ai.qwen-coding":    {"https://coding.dashscope.aliyuncs.com/v1", []string{"qwen3-coder-next", "qwen3-coder-plus", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus"}},
+		"llm-pi-ai.tokenhub":       {"https://tokenhub.tencentmaas.com/v1", []string{"deepseek-v4-flash-202605", "deepseek-v4-pro-202606", "deepseek/deepseek-v4-flash-vision-exp", "glm-5.3", "glm-5.3-flash", "hy4-preview", "kimi-k2.6", "minimax-m2.7", "qwen3.5-plus"}},
+		"llm-pi-ai.volcengine":     {"https://ark.cn-beijing.volces.com/api/v3", []string{"doubao-seed-2-0-lite-260215"}},
 	}
 	for id, w := range want {
 		p, ok := ProviderByID(id)
@@ -53,6 +73,41 @@ func TestInjectedProviderCatalogExact(t *testing.T) {
 	}
 }
 
+func TestInjectedProvidersMirrorProviderModules(t *testing.T) {
+	reg := catalog.DefaultRegistry()
+	for _, projected := range InjectedProviders {
+		id := RouteKey(projected)
+		binding, err := reg.LookupBinding(id)
+		if err != nil {
+			t.Fatalf("DSH provider %s missing from catalog: %v", id, err)
+		}
+		if !binding.SupportsDialect(catalog.DialectDSH) {
+			t.Fatalf("provider %s does not declare the DSH dialect", id)
+		}
+		raw, ok := binding.RawCapability(catalog.RawLLMProtocolOpenAI)
+		if !ok {
+			t.Fatalf("provider %s has no OpenAI raw endpoint", id)
+		}
+		wantBase := strings.TrimSuffix(raw.BaseEndpoint, "/chat/completions")
+		if projected.BaseURL != wantBase {
+			t.Fatalf("provider %s DSH base = %q, catalog base = %q", id, projected.BaseURL, wantBase)
+		}
+		models := reg.ProviderModels(id)
+		if len(projected.Models) != len(models) {
+			t.Fatalf("provider %s projected model count = %d, catalog count = %d", id, len(projected.Models), len(models))
+		}
+		for _, model := range projected.Models {
+			catalogModel, ok := models[model.ID]
+			if !ok {
+				t.Fatalf("provider %s projects unknown model %s", id, model.ID)
+			}
+			if model.Label != catalogModel.DisplayName || model.ContextWindow != catalogModel.ContextWindow {
+				t.Fatalf("provider %s model %s drifted: DSH %#v catalog %#v", id, model.ID, model, catalogModel)
+			}
+		}
+	}
+}
+
 func TestRenderPatchLoaderOverlay(t *testing.T) {
 	patch, err := RenderPatch(PatchInput{})
 	if err != nil {
@@ -62,7 +117,7 @@ func TestRenderPatchLoaderOverlay(t *testing.T) {
 	if !strings.HasPrefix(raw, "# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n") {
 		t.Fatalf("overlay must be a top-level array led by the llm-pi-ai row:\n%s", raw)
 	}
-	for _, routeKey := range []string{"zhipu-coding", "kimi-coding"} {
+	for _, routeKey := range []string{"zhipu-coding", "kimi-coding", "openai", "zhipu", "moonshot", "minimax", "minimax-coding", "qwen", "qwen-coding", "tokenhub", "volcengine"} {
 		if !strings.Contains(raw, "      "+routeKey+":") {
 			t.Fatalf("providers dict must be keyed by canonical route %q:\n%s", routeKey, raw)
 		}
@@ -91,7 +146,7 @@ func TestProviderRouteConfigFields(t *testing.T) {
 			t.Fatalf("route config missing %q:\n%s", want, raw)
 		}
 	}
-	for _, model := range []string{"glm-5.3", "glm-5.3-flash", "k3[1m]"} {
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash", "k3", "gpt-5.6-sol", "MiniMax-M3", "qwen3.8-max", "hy4-preview", "doubao-seed-2-0-lite-260215"} {
 		if !strings.Contains(raw, "- id: "+yamlStr(model)) {
 			t.Fatalf("route models missing %q:\n%s", model, raw)
 		}
@@ -164,7 +219,7 @@ func TestMissingCredentialsKeepRoutesVisible(t *testing.T) {
 	if !strings.Contains(raw, "- id: llm-pi-ai") {
 		t.Fatal("llm-pi-ai row must stay visible without credentials")
 	}
-	for _, routeKey := range []string{"zhipu-coding", "kimi-coding"} {
+	for _, routeKey := range []string{"zhipu-coding", "kimi-coding", "openai", "zhipu", "moonshot", "minimax", "minimax-coding", "qwen", "qwen-coding", "tokenhub", "volcengine"} {
 		if !strings.Contains(raw, "      "+routeKey+":") {
 			t.Fatalf("route %s hidden without credentials", routeKey)
 		}
@@ -383,8 +438,8 @@ func TestSelectedModelEveryProvider(t *testing.T) {
 	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.zhipu-coding/glm-5.3-flash"}); err != nil {
 		t.Fatalf("zhipu-coding/glm-5.3-flash must be selectable: %v", err)
 	}
-	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.kimi-coding/k3[1m]"}); err != nil {
-		t.Fatalf("kimi-coding/k3[1m] must be selectable: %v", err)
+	if _, err := RenderPatch(PatchInput{SelectedModel: "llm-pi-ai.tokenhub/deepseek/deepseek-v4-flash-vision-exp"}); err != nil {
+		t.Fatalf("tokenhub vision model must be selectable: %v", err)
 	}
 }
 

@@ -256,8 +256,8 @@ func TestFDSHModelPatchCatalogAndOrder(t *testing.T) {
 	if patch == "" {
 		t.Fatal("model patch should not be empty")
 	}
-	if len(dsh.InjectedProviders) != 2 {
-		t.Fatalf("expected two injected llm-pi-ai providers, got %d", len(dsh.InjectedProviders))
+	if len(dsh.InjectedProviders) != 11 {
+		t.Fatalf("expected eleven injected llm-pi-ai providers, got %d", len(dsh.InjectedProviders))
 	}
 	if !strings.HasPrefix(patch, "# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n") {
 		t.Fatalf("patch must be a loader overlay array:\n%s", patch)
