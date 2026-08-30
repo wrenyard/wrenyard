@@ -185,6 +185,14 @@ func dshCLIDoctorCheck() map[string]interface{} {
 		return doctor.Check("dsh", "error", message, nil, details)
 	}
 
+	// Suite-managed installs (WRENYARD_ROOT set) route through the wrenyard
+	// runtime and deliberately do not create the retired stable forge/fdsh
+	// PATH launchers, so a compatible native dsh chain is healthy on its own.
+	if os.Getenv("WRENYARD_ROOT") != "" {
+		details["suite_managed"] = true
+		return doctor.Check("dsh", "ok", "dsh dependency chain is healthy", nil, details)
+	}
+
 	fdshPath, fdshErr := exec.LookPath("fdsh")
 	details["fdsh_binary"] = fdshPath
 	if fdshErr != nil {

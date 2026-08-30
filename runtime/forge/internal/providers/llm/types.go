@@ -10,6 +10,8 @@ type Provider struct {
 	APIKind string `json:"api_kind"`
 	// BaseURL is the complete provider URL and is used verbatim.
 	BaseURL string `json:"base_url,omitempty"`
+	// AuthScheme is "bearer" or "x-api-key". Empty uses the protocol default.
+	AuthScheme string `json:"auth_scheme,omitempty"`
 }
 
 // Request is a single-turn, non-streaming LLM call request.

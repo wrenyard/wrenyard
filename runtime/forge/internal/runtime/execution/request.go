@@ -80,6 +80,10 @@ type Dependencies struct {
 	Clock     Clock
 	Sleeper   Sleeper
 	StateRoot string
-	JitterFn  JitterFn
-	Runner    ChildRunner
+	// ObservedQuotaRoot overrides the observed provider quota store root. Empty
+	// uses the shared XDG-aware default state root; tests set it to isolate
+	// provider observation state.
+	ObservedQuotaRoot string
+	JitterFn          JitterFn
+	Runner            ChildRunner
 }

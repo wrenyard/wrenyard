@@ -12,6 +12,8 @@ type RawProviderBinding struct {
 	Endpoint string
 	// Protocol is the canonical raw protocol.
 	Protocol RawProtocol
+	// AuthScheme overrides the protocol's default credential header.
+	AuthScheme string
 }
 
 // RawDeps carries the minimal callbacks needed for a raw pass-through call.
@@ -26,7 +28,13 @@ type RawDeps struct {
 	ResolveHeaders func(providerID string) (http.Header, bool)
 }
 
-func rawAuthHeader(p RawProtocol) (name, prefix string) {
+func rawAuthHeader(scheme string, p RawProtocol) (name, prefix string) {
+	switch scheme {
+	case "bearer":
+		return "Authorization", "Bearer "
+	case "x-api-key":
+		return "x-api-key", ""
+	}
 	switch p {
 	case RawProtocolOpenAI:
 		return "Authorization", "Bearer "
@@ -34,6 +42,13 @@ func rawAuthHeader(p RawProtocol) (name, prefix string) {
 		return "x-api-key", ""
 	default:
 		return "Authorization", "Bearer "
+	}
+}
+
+func setCredentialHeader(headers http.Header, scheme string, protocol RawProtocol, credential string) {
+	name, prefix := rawAuthHeader(scheme, protocol)
+	if headers.Get(name) == "" {
+		headers.Set(name, prefix+credential)
 	}
 }
 
@@ -71,6 +86,9 @@ func callRawImplWithOptions(deps RawDeps, req RawRequest, opts TransportOptions)
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
+	if req.Protocol == RawProtocolAnthropic {
+		headers.Set("anthropic-version", "2023-06-01")
+	}
 
 	// Preserve provider-specific context headers, then make sure the selected
 	// raw protocol's canonical credential header is present.
@@ -81,10 +99,7 @@ func callRawImplWithOptions(deps RawDeps, req RawRequest, opts TransportOptions)
 			}
 		}
 	}
-	headerName, prefix := rawAuthHeader(req.Protocol)
-	if headers.Get(headerName) == "" {
-		headers.Set(headerName, prefix+cred)
-	}
+	setCredentialHeader(headers, binding.AuthScheme, req.Protocol, cred)
 	status, respBody, err := doJSONPost(url, headers, req.Body, opts)
 	if err != nil {
 		return nil, fmt.Errorf("raw call: %w", err)

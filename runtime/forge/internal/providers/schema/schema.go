@@ -34,11 +34,22 @@ const (
 	CredentialResolverCursor       CredentialResolver = "cursor"
 )
 
+// AuthScheme declares how a resolved credential is carried on HTTP requests.
+// It is transport metadata, independent of where the credential was resolved.
+// Empty values retain the protocol default for backward compatibility.
+type AuthScheme string
+
+const (
+	AuthSchemeBearer AuthScheme = "bearer"
+	AuthSchemeAPIKey AuthScheme = "x-api-key"
+)
+
 // InferenceBinding describes the default text-inference transport.
 type InferenceBinding struct {
 	Protocol           string             `json:"protocol"`
 	Endpoint           string             `json:"endpoint"`
 	CredentialResolver CredentialResolver `json:"credential_resolver"`
+	AuthScheme         AuthScheme         `json:"auth_scheme,omitempty"`
 }
 
 // RawLLMProtocol is a canonical raw protocol exposed by a provider.
@@ -54,6 +65,7 @@ const (
 type RawLLMCapability struct {
 	Protocol     RawLLMProtocol `json:"protocol"`
 	BaseEndpoint string         `json:"base_endpoint"`
+	AuthScheme   AuthScheme     `json:"auth_scheme,omitempty"`
 }
 
 // Provider describes one provider binding.

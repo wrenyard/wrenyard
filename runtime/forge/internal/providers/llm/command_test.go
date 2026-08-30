@@ -256,11 +256,12 @@ func TestCallRawOpenAIPassThrough(t *testing.T) {
 }
 
 func TestCallRawAnthropicPassThrough(t *testing.T) {
-	var gotPath, gotAuth string
+	var gotPath, gotAuth, gotVersion string
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[{"type":"text","text":"raw-ok"}]}`))
@@ -282,11 +283,60 @@ func TestCallRawAnthropicPassThrough(t *testing.T) {
 	if gotAuth != "test-key" {
 		t.Fatalf("auth = %q, want test-key", gotAuth)
 	}
+	if gotVersion != "2023-06-01" {
+		t.Fatalf("anthropic-version = %q, want 2023-06-01", gotVersion)
+	}
 	if !bytes.Equal(gotBody, []byte(`{"model":"claude-x","messages":[]}`)) {
 		t.Fatalf("body not passed through unchanged: %s", gotBody)
 	}
 	if !bytes.Equal(res.Body, []byte(`{"content":[{"type":"text","text":"raw-ok"}]}`)) {
 		t.Fatalf("response body changed: %s", res.Body)
+	}
+}
+
+func TestCallRawAnthropicSupportsBearerProviderAuth(t *testing.T) {
+	var gotAPIKey, gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-api-key")
+		gotAuthorization = r.Header.Get("Authorization")
+		w.Write([]byte(`{"content":[]}`))
+	}))
+	defer server.Close()
+
+	_, err := CallRaw(CallDeps{
+		ResolveRawCapability: func(string, RawProtocol) (RawProviderBinding, error) {
+			return RawProviderBinding{Endpoint: server.URL, Protocol: RawProtocolAnthropic, AuthScheme: "bearer"}, nil
+		},
+		ResolveCredential: func(string) (string, bool) { return "vendor-key", true },
+	}, "minimax", RawProtocolAnthropic, []byte(`{"model":"MiniMax-M3","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuthorization != "Bearer vendor-key" || gotAPIKey != "" {
+		t.Fatalf("headers = Authorization %q x-api-key %q", gotAuthorization, gotAPIKey)
+	}
+}
+
+func TestCallAnthropicSupportsDeclaredAPIKeyAuth(t *testing.T) {
+	var gotAPIKey, gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-api-key")
+		gotAuthorization = r.Header.Get("Authorization")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	}))
+	defer server.Close()
+
+	_, err := Call(CallDeps{
+		ResolveBinding: func(string) (ProviderBinding, error) {
+			return ProviderBinding{Protocol: "anthropic-messages", Endpoint: server.URL, AuthScheme: "x-api-key"}, nil
+		},
+		ResolveCredential: func(string) (string, bool) { return "anthropic-key", true },
+	}, Request{Model: "anthropic-api/claude-sonnet-5", Prompt: "hello", MaxTokens: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAPIKey != "anthropic-key" || gotAuthorization != "" {
+		t.Fatalf("headers = x-api-key %q Authorization %q", gotAPIKey, gotAuthorization)
 	}
 }
 

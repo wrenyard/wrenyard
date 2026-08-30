@@ -65,10 +65,10 @@ var builtinProfiles = []Profile{
 		Name:        "cb-hy",
 		Client:      "codebuddy",
 		Provider:    "codebuddy",
-		Description: "CodeBuddy (Hunyuan)",
+		Description: "CodeBuddy (Hunyuan HY4 Preview)",
 		Launcher: map[string]any{
 			"command":      "codebuddy",
-			"default_args": []any{"--model", "hunyuan-chat"},
+			"default_args": []any{"--model", "hy4-preview-ioa"},
 		},
 		Env:      map[string]string{},
 		Settings: map[string]any{},
@@ -210,8 +210,8 @@ var builtinProfiles = []Profile{
 	{
 		Name:        "gk-grok",
 		Client:      "grok",
-		Provider:    "xai",
-		Description: "Grok (xAI)",
+		Provider:    "spacex-ai",
+		Description: "Grok (SpaceXAI)",
 		Launcher: map[string]any{
 			"command": "grok",
 		},

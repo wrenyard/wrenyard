@@ -99,7 +99,7 @@ func TestCodebuddyProfiles(t *testing.T) {
 		id        string
 		wantModel string
 	}{
-		{"cb-hy", "hunyuan-chat"},
+		{"cb-hy", "hy4-preview-ioa"},
 		{"cb-ds", "deepseek-v4-pro"},
 		{"cb-dsf", "deepseek-v4-flash"},
 		{"cb-kimi", "kimi-k2.6"},
@@ -206,7 +206,7 @@ func TestBuiltinGrokProfiles(t *testing.T) {
 		"gk-glm":  {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3"},
 		"gk-glmf": {provider: "zhipu-coding", model: "forge-zhipu-coding--glm-5-3-flash"},
 		"gk-kimi": {provider: "kimi-coding", model: "forge-kimi-coding--k3"},
-		"gk-grok": {provider: "xai", model: "grok-4.5"},
+		"gk-grok": {provider: "spacex-ai", model: "grok-4.5"},
 	}
 	for id, expected := range want {
 		profile := Get(id)

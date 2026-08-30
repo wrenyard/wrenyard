@@ -74,9 +74,9 @@ func (p Provider) ModelIDs() []string {
 	return ids
 }
 
-// InjectedProviders are the public llm-pi-ai providers mounted by the rc.6
-// patch: kimi-coding and zhipu-coding. This order mirrors the DSH-compatible
-// subset of providers.Modules(). They complement (never replace) the native
+// InjectedProviders are the public OpenAI-compatible llm-pi-ai providers
+// mounted by the runtime patch. This order mirrors the DSH-compatible subset
+// of providers.Modules(). They complement (never replace) the native
 // deepseek-official V4 Flash/Pro routes that fdsh keeps out of the box. The
 // catalog mirrors the real Forge ProviderModule data so rendered routes and
 // DSH_MODEL selections match production endpoints.
@@ -88,7 +88,6 @@ var InjectedProviders = []Provider{
 		BaseURL:   "https://api.kimi.com/coding/v1",
 		Models: []Model{
 			{ID: "k3", Label: "Kimi K3", ContextWindow: 1048576, MaxTokens: 32768},
-			{ID: "k3[1m]", Label: "Kimi K3 1M Context", ContextWindow: 1048576, MaxTokens: 32768},
 		},
 	},
 	{
@@ -99,6 +98,111 @@ var InjectedProviders = []Provider{
 		Models: []Model{
 			{ID: "glm-5.3", Label: "GLM-5.3", ContextWindow: 1048576, MaxTokens: 32768},
 			{ID: "glm-5.3-flash", Label: "GLM-5.3 Flash", ContextWindow: 1048576, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.openai",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_OPENAI_API_KEY",
+		BaseURL:   "https://api.openai.com/v1",
+		Models: []Model{
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", ContextWindow: 1050000, MaxTokens: 131072},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", ContextWindow: 1050000, MaxTokens: 131072},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", ContextWindow: 1050000, MaxTokens: 131072},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.zhipu",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_ZHIPU_API_KEY",
+		BaseURL:   "https://open.bigmodel.cn/api/paas/v4",
+		Models: []Model{
+			{ID: "glm-5.2", Label: "GLM-5.2", ContextWindow: 1048576, MaxTokens: 131072},
+			{ID: "glm-5-turbo", Label: "GLM-5 Turbo", ContextWindow: 202752, MaxTokens: 32768},
+			{ID: "glm-4.7-flash", Label: "GLM-4.7 Flash", ContextWindow: 202752, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.moonshot",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_MOONSHOT_API_KEY",
+		BaseURL:   "https://api.moonshot.cn/v1",
+		Models: []Model{
+			{ID: "kimi-k2.6", Label: "Kimi K2.6", ContextWindow: 262144, MaxTokens: 32768},
+			{ID: "kimi-k2.5", Label: "Kimi K2.5", ContextWindow: 262144, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.minimax",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_MINIMAX_API_KEY",
+		BaseURL:   "https://api.minimaxi.com/v1",
+		Models: []Model{
+			{ID: "MiniMax-M3", Label: "MiniMax M3", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "MiniMax-M2.7", Label: "MiniMax M2.7", ContextWindow: 204800, MaxTokens: 32768},
+			{ID: "MiniMax-M2.7-highspeed", Label: "MiniMax M2.7 Highspeed", ContextWindow: 204800, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.minimax-coding",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_MINIMAX_CODING_API_KEY",
+		BaseURL:   "https://api.minimaxi.com/v1",
+		Models: []Model{
+			{ID: "MiniMax-M3", Label: "MiniMax M3", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "MiniMax-M2.7", Label: "MiniMax M2.7", ContextWindow: 204800, MaxTokens: 32768},
+			{ID: "MiniMax-M2.7-highspeed", Label: "MiniMax M2.7 Highspeed", ContextWindow: 204800, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.qwen",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_QWEN_API_KEY",
+		BaseURL:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		Models: []Model{
+			{ID: "qwen3.8-max", Label: "Qwen3.8 Max", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3.7-plus", Label: "Qwen3.7 Plus", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3.7-flash", Label: "Qwen3.7 Flash", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3-coder-next", Label: "Qwen3 Coder Next", ContextWindow: 262144, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.qwen-coding",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_QWEN_CODING_API_KEY",
+		BaseURL:   "https://coding.dashscope.aliyuncs.com/v1",
+		Models: []Model{
+			{ID: "qwen3.7-plus", Label: "Qwen3.7 Plus", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3.6-plus", Label: "Qwen3.6 Plus", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3.5-plus", Label: "Qwen3.5 Plus", ContextWindow: 1000000, MaxTokens: 131072},
+			{ID: "qwen3-coder-next", Label: "Qwen3 Coder Next", ContextWindow: 262144, MaxTokens: 32768},
+			{ID: "qwen3-coder-plus", Label: "Qwen3 Coder Plus", ContextWindow: 1000000, MaxTokens: 131072},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.tokenhub",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_TOKENHUB_API_KEY",
+		BaseURL:   "https://tokenhub.tencentmaas.com/v1",
+		Models: []Model{
+			{ID: "hy4-preview", Label: "Hunyuan HY4 Preview", ContextWindow: 262144, MaxTokens: 32768},
+			{ID: "deepseek-v4-flash-202605", Label: "DeepSeek V4 Flash", ContextWindow: 1048576, MaxTokens: 393216},
+			{ID: "deepseek-v4-pro-202606", Label: "DeepSeek V4 Pro", ContextWindow: 1048576, MaxTokens: 393216},
+			{ID: "deepseek/deepseek-v4-flash-vision-exp", Label: "DeepSeek V4 Flash Vision", ContextWindow: 1048576, MaxTokens: 393216},
+			{ID: "glm-5.3", Label: "GLM-5.3", ContextWindow: 1048576, MaxTokens: 32768},
+			{ID: "glm-5.3-flash", Label: "GLM-5.3 Flash", ContextWindow: 1048576, MaxTokens: 32768},
+			{ID: "kimi-k2.6", Label: "Kimi K2.6", ContextWindow: 262144, MaxTokens: 32768},
+			{ID: "minimax-m2.7", Label: "MiniMax M2.7", ContextWindow: 204800, MaxTokens: 32768},
+			{ID: "qwen3.5-plus", Label: "Qwen3.5 Plus", ContextWindow: 1048576, MaxTokens: 32768},
+		},
+	},
+	{
+		ID:        "llm-pi-ai.volcengine",
+		APIType:   APITypeOpenAICompletions,
+		APIKeyEnv: "FORGE_DSH_VOLCENGINE_API_KEY",
+		BaseURL:   "https://ark.cn-beijing.volces.com/api/v3",
+		Models: []Model{
+			{ID: "doubao-seed-2-0-lite-260215", Label: "Doubao Seed 2.0 Lite", ContextWindow: 262144, MaxTokens: 32768},
 		},
 	},
 }

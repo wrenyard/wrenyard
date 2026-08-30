@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/observedquota"
 )
 
 // CommandDeps is the explicit dependency bundle for the quota command tree.
@@ -35,6 +37,13 @@ type CommandDeps struct {
 	// WriteCache, when non-nil, overrides the cache writer used by the
 	// refresh-provider subcommand. Used by tests to inject errors.
 	WriteCache func(path string, q Quota) error
+	// ObservedQuotaRoot overrides the observed provider quota store root.
+	// Empty uses the shared XDG-aware default state root; tests set it to
+	// isolate the observed CodeBuddy projection.
+	ObservedQuotaRoot string
+	// ResolveSuperGrokAuthSources returns readable native Grok auth.json paths
+	// in precedence order. Nil/empty means the local login is not configured.
+	ResolveSuperGrokAuthSources func() []string
 }
 
 // ConfigInfo is a neutral view of the forge config for quota commands.
@@ -259,25 +268,27 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 	return 0
 }
 
-func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) int {
-	type poolEntry struct {
-		Pool        string            `json:"pool"`
-		Label       string            `json:"label,omitempty"`
-		Used        *float64          `json:"used,omitempty"`
-		Total       *float64          `json:"total,omitempty"`
-		Balances    []MoneyBalance    `json:"balances,omitempty"`
-		Status      string            `json:"status"`
-		Code        string            `json:"code,omitempty"`
-		Error       string            `json:"error,omitempty"`
-		Message     string            `json:"message,omitempty"`
-		Windows     []quotaWindowJSON `json:"windows,omitempty"`
-		Pace        *PaceJSON         `json:"pace,omitempty"`
-		Reset       *ResetJSON        `json:"reset,omitempty"`
-		DisplayLine string            `json:"display_line,omitempty"`
-		FetchedAt   *time.Time        `json:"fetched_at,omitempty"`
-		Stale       bool              `json:"stale,omitempty"`
-	}
+// poolEntry is the canonical quota list row shared by the regular pools and
+// the observed CodeBuddy projection.
+type poolEntry struct {
+	Pool        string            `json:"pool"`
+	Label       string            `json:"label,omitempty"`
+	Used        *float64          `json:"used,omitempty"`
+	Total       *float64          `json:"total,omitempty"`
+	Balances    []MoneyBalance    `json:"balances,omitempty"`
+	Status      string            `json:"status"`
+	Code        string            `json:"code,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	Message     string            `json:"message,omitempty"`
+	Windows     []quotaWindowJSON `json:"windows,omitempty"`
+	Pace        *PaceJSON         `json:"pace,omitempty"`
+	Reset       *ResetJSON        `json:"reset,omitempty"`
+	DisplayLine string            `json:"display_line,omitempty"`
+	FetchedAt   *time.Time        `json:"fetched_at,omitempty"`
+	Stale       bool              `json:"stale,omitempty"`
+}
 
+func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) int {
 	entries := make([]poolEntry, 0, len(canonicalPools))
 
 	for _, pool := range canonicalPools {
@@ -350,8 +361,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 			if failClosedPool(pool) {
 				_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 			}
-			entry.Status = "error"
-			entry.Error = err.Error()
+			projectQuotaFetchError(&entry, err)
 			if asJSON {
 				entries = append(entries, entry)
 			} else {
@@ -402,10 +412,56 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 		}
 	}
 
+	// Project the locally observed CodeBuddy exhaustion from the privacy-safe
+	// store. This is the only CodeBuddy quota surface: no CodeBuddy endpoint is
+	// ever fetched and no provider quota binding is declared. When the state is
+	// absent or expired, codebuddy is omitted so Desktop keeps its
+	// connected-but-no-quota behavior.
+	if entry, ok := observedCodeBuddyEntry(deps); ok {
+		entries = append(entries, entry)
+		if !asJSON {
+			if dl := entry.DisplayLine; dl != "" {
+				fmt.Println(dl)
+			}
+		}
+	}
+
 	if asJSON {
 		return printJSONQuota(entries)
 	}
 	return 0
+}
+
+// observedCodeBuddyEntry projects the canonical CodeBuddy provider from an
+// active, locally observed monthly exhaustion record. The window is a truthful
+// 0%-remaining monthly window carrying the friendly Chinese message and the
+// reset time. A nil/absent/expired record yields no entry.
+func observedCodeBuddyEntry(deps CommandDeps) (poolEntry, bool) {
+	store := observedquota.NewStore(deps.ObservedQuotaRoot)
+	record, ok := store.Active(observedquota.ProviderCodeBuddy, timeNow())
+	if !ok {
+		return poolEntry{}, false
+	}
+	label := CanonicalLabel(observedquota.ProviderCodeBuddy)
+	resetsAt := record.ResetsAt
+	window := Window{
+		Name: "1mo", Pct: 100, ResetsAt: &resetsAt, WindowMinutes: 43200,
+	}
+	pace, reset := PaceAndResetJSON([]Window{window})
+	q := Quota{Provider: observedquota.ProviderCodeBuddy, Label: label, Windows: []Window{window}}
+	return poolEntry{
+		Pool:        observedquota.ProviderCodeBuddy,
+		Label:       label,
+		Status:      "ok",
+		Windows:     quotaWindowsJSON([]Window{window}),
+		Pace:        pace,
+		Reset:       reset,
+		DisplayLine: DisplayLine(q),
+		Message: fmt.Sprintf(
+			"CodeBuddy 本月计费周期额度已耗尽，将于 %s 重置，请下月再试。",
+			resetsAt.In(time.Local).Format("2006-01-02 15:04"),
+		),
+	}, true
 }
 
 func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, refresh bool) int {
@@ -507,18 +563,9 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 			_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 		}
 		if asJSON {
-			type singleEntry struct {
-				Pool   string `json:"pool"`
-				Label  string `json:"label,omitempty"`
-				Status string `json:"status"`
-				Error  string `json:"error"`
-			}
-			return printJSONQuota(singleEntry{
-				Pool:   canonical,
-				Label:  CanonicalLabel(canonical),
-				Status: "error",
-				Error:  err.Error(),
-			})
+			entry := poolEntry{Pool: canonical, Label: CanonicalLabel(canonical)}
+			projectQuotaFetchError(&entry, err)
+			return printJSONQuota(entry)
 		}
 		fmt.Fprintf(os.Stderr, "forge quota: %v\n", err)
 		return 1
@@ -607,7 +654,7 @@ func poolCachePath(dataDir, pool string) string {
 // marker so it is never rendered.
 func failClosedPool(pool string) bool {
 	switch pool {
-	case "codex", "codex-spark", "cursor", "deepseek":
+	case "codex", "codex-spark", "cursor", "deepseek", "super-grok":
 		return true
 	}
 	return false
@@ -623,6 +670,8 @@ func requiredSource(pool string) string {
 		return "cursor-dashboard"
 	case "deepseek":
 		return "deepseek-balance"
+	case "super-grok":
+		return superGrokACPSource
 	}
 	return ""
 }
@@ -708,8 +757,25 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 			token = deps.ResolveDeepSeekToken()
 		}
 		return DeepSeekProvider{Token: token}
+	case "super-grok":
+		return SuperGrokProvider{ResolveAuthSources: deps.ResolveSuperGrokAuthSources}
 	default:
 		return nil
+	}
+}
+
+func projectQuotaFetchError(entry *poolEntry, err error) {
+	entry.Status = "error"
+	entry.Error = err.Error()
+	var statusErr *QuotaStatusError
+	if !errors.As(err, &statusErr) {
+		return
+	}
+	entry.Code = statusErr.Code
+	entry.Message = statusErr.Message
+	entry.Error = statusErr.Message
+	if statusErr.Code != QuotaCodeQueryFailed {
+		entry.Status = "unavailable"
 	}
 }
 

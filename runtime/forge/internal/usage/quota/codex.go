@@ -92,6 +92,15 @@ type jsonrpcError struct {
 	Message string `json:"message"`
 }
 
+type jsonRPCResponseError struct {
+	Code    int
+	Message string
+}
+
+func (e *jsonRPCResponseError) Error() string {
+	return fmt.Sprintf("JSON-RPC error %d: %s", e.Code, e.Message)
+}
+
 // rpcConn manages the stdio connection to a JSON-RPC subprocess over newline-delimited JSON.
 type rpcConn struct {
 	cmd       *exec.Cmd
@@ -200,7 +209,7 @@ func (c *rpcConn) call(ctx context.Context, method string, params json.RawMessag
 		}
 
 		if resp.Error != nil {
-			return nil, fmt.Errorf("JSON-RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+			return nil, &jsonRPCResponseError{Code: resp.Error.Code, Message: resp.Error.Message}
 		}
 
 		return resp.Result, nil

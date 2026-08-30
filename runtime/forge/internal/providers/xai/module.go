@@ -4,9 +4,9 @@ import "github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 
 func Module() schema.ProviderModule {
 	return schema.StaticModule{
-		ProviderID: "xai",
+		ProviderID: "spacex-ai",
 		Provider: schema.Provider{
-			Name: "xai", Kind: "builtin",
+			Name: "spacex-ai", Kind: "builtin",
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok},
 			SecretResolution:   "native-oauth", AllowedModels: []string{"grok-4.5"}, DefaultModel: "grok-4.5",
 			Inference: &schema.InferenceBinding{

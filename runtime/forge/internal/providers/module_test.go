@@ -2,6 +2,7 @@ package providers_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
-	want := []string{"anthropic", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "opencode-native", "xai", "zhipu-coding"}
+	want := []string{"anthropic", "anthropic-api", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-native", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
 	modules := providers.Modules()
 	got := make([]string, len(modules))
 	reg := catalog.DefaultRegistry()
@@ -34,7 +35,7 @@ func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
 func TestProviderOverridesRespectDeclaredCapabilities(t *testing.T) {
 	reg := catalog.DefaultRegistry()
 	err := providers.ApplyOverrides(reg, map[string]providers.Override{
-		"xai": {APIKey: "must-not-be-used"},
+		"spacex-ai": {APIKey: "must-not-be-used"},
 	}, nil)
 	if err == nil {
 		t.Fatal("OAuth provider accepted an API-key override")
@@ -46,6 +47,95 @@ func TestProviderOverridesRespectDeclaredCapabilities(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("provider override enabled an undeclared protocol")
+	}
+}
+
+func TestPublicAPIProviderContracts(t *testing.T) {
+	tests := []struct {
+		id              string
+		protocol        string
+		endpoint        string
+		authScheme      catalog.AuthScheme
+		rawAnthropic    bool
+		anthropicScheme catalog.AuthScheme
+	}{
+		{"anthropic-api", "anthropic-messages", "https://api.anthropic.com/v1/messages", catalog.AuthSchemeAPIKey, true, catalog.AuthSchemeAPIKey},
+		{"minimax", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
+		{"minimax-coding", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
+		{"moonshot", "openai-chat-completions", "https://api.moonshot.cn/v1/chat/completions", catalog.AuthSchemeBearer, false, ""},
+		{"openai", "openai-chat-completions", "https://api.openai.com/v1/chat/completions", catalog.AuthSchemeBearer, false, ""},
+		{"qwen", "openai-chat-completions", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
+		{"qwen-coding", "openai-chat-completions", "https://coding.dashscope.aliyuncs.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
+		{"tokenhub", "openai-chat-completions", "https://tokenhub.tencentmaas.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeAPIKey},
+		{"volcengine", "openai-chat-completions", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", catalog.AuthSchemeBearer, false, ""},
+		{"zhipu", "openai-chat-completions", "https://open.bigmodel.cn/api/paas/v4/chat/completions", catalog.AuthSchemeBearer, false, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			module, ok := providers.Lookup(tc.id)
+			if !ok {
+				t.Fatalf("provider %s is not registered", tc.id)
+			}
+			binding := module.Binding()
+			if binding.Inference == nil {
+				t.Fatal("public API provider must expose direct inference")
+			}
+			if binding.Inference.Protocol != tc.protocol || binding.Inference.Endpoint != tc.endpoint {
+				t.Fatalf("inference = %#v, want protocol %q endpoint %q", binding.Inference, tc.protocol, tc.endpoint)
+			}
+			if binding.Inference.AuthScheme != tc.authScheme {
+				t.Fatalf("auth scheme = %q, want %q", binding.Inference.AuthScheme, tc.authScheme)
+			}
+			if binding.CredentialSource() != catalog.CredentialResolverForgeManaged || !module.Auth().Login {
+				t.Fatal("public API provider must use Forge-managed API-key auth")
+			}
+			anthropic, ok := binding.RawCapability(catalog.RawLLMProtocolAnthropic)
+			if ok != tc.rawAnthropic {
+				t.Fatalf("raw Anthropic capability = %t, want %t", ok, tc.rawAnthropic)
+			}
+			if ok && anthropic.AuthScheme != tc.anthropicScheme {
+				t.Fatalf("raw Anthropic auth scheme = %q, want %q", anthropic.AuthScheme, tc.anthropicScheme)
+			}
+		})
+	}
+}
+
+func TestPlanAndOpenPlatformCredentialsRemainSeparate(t *testing.T) {
+	for _, pair := range [][2]string{{"minimax", "minimax-coding"}, {"qwen", "qwen-coding"}, {"moonshot", "kimi-coding"}, {"zhipu", "zhipu-coding"}, {"openai", "codex"}, {"anthropic-api", "anthropic"}} {
+		left, leftOK := providers.Lookup(pair[0])
+		right, rightOK := providers.Lookup(pair[1])
+		if !leftOK || !rightOK || left.ID() == right.ID() {
+			t.Fatalf("provider identities must stay separate: %v", pair)
+		}
+	}
+}
+
+func TestLegacyXAIProviderIDResolvesToSpaceXAICanonicalModule(t *testing.T) {
+	module, ok := providers.Lookup("xai")
+	if !ok || module.ID() != providers.SpaceXAIProviderID {
+		t.Fatalf("legacy xai lookup = (%v, %t), want canonical %q", module, ok, providers.SpaceXAIProviderID)
+	}
+	reg := catalog.DefaultRegistry()
+	binding, err := reg.LookupBinding("xai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Name != providers.SpaceXAIProviderID {
+		t.Fatalf("legacy xai binding name = %q, want %q", binding.Name, providers.SpaceXAIProviderID)
+	}
+	for _, id := range reg.BindingNames() {
+		if id == "xai" {
+			t.Fatal("legacy xai id must not be emitted by the canonical catalog")
+		}
+	}
+}
+
+func TestLegacyXAIOverrideStillUsesCanonicalProviderPolicy(t *testing.T) {
+	err := providers.ApplyOverrides(catalog.DefaultRegistry(), map[string]providers.Override{
+		"xai": {APIKey: "must-not-be-used"},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "spacex-ai") {
+		t.Fatalf("legacy xai override error = %v, want canonical native-provider rejection", err)
 	}
 }
 
@@ -74,7 +164,7 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 	if source := binding.CredentialSource(); source != catalog.CredentialResolverCodeBuddy {
 		t.Fatalf("codebuddy credential source = %q, want codebuddy", source)
 	}
-	wantModels := []string{"deepseek-v4-flash", "deepseek-v4-pro", "hunyuan-chat", "kimi-k2.6"}
+	wantModels := []string{"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview-ioa", "kimi-k2.6"}
 	models := module.Models()
 	if len(models) != len(wantModels) {
 		t.Fatalf("codebuddy model count = %d, want %d", len(models), len(wantModels))

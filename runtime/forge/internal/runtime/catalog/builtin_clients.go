@@ -66,7 +66,7 @@ func grokClient() Client {
 		},
 		PermissionAdapter: PermissionAdapterGrok,
 		ResumeFlag:        ResumeFlagLong,
-		DefaultProvider:   "xai",
+		DefaultProvider:   "spacex-ai",
 	}
 }
 

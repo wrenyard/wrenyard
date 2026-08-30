@@ -34,6 +34,21 @@ func TestRegistryLookupDescriptor(t *testing.T) {
 	if d.DefaultProvider != "codebuddy" {
 		t.Fatalf("codebuddy default provider = %q, want codebuddy", d.DefaultProvider)
 	}
+
+	d, err = r.LookupDescriptor("grok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.DefaultProvider != "spacex-ai" {
+		t.Fatalf("grok default provider = %q, want spacex-ai", d.DefaultProvider)
+	}
+	_, provider, err := r.ResolveBinding("grok", "xai")
+	if err != nil {
+		t.Fatalf("legacy xai provider alias should resolve: %v", err)
+	}
+	if provider.Name != "spacex-ai" {
+		t.Fatalf("legacy xai alias resolved provider = %q, want spacex-ai", provider.Name)
+	}
 }
 
 func TestRegistryLookupDescriptorUnknown(t *testing.T) {
@@ -727,7 +742,7 @@ func TestModelWhitelistAccept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []string{"hunyuan-chat", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
+	for _, model := range []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
 		if err := b.ValidateModel(model); err != nil {
 			t.Fatalf("expected model %q to be allowed: %v", model, err)
 		}
@@ -1133,7 +1148,7 @@ func TestProviderModelMap(t *testing.T) {
 	r := defaultReg()
 
 	// codebuddy provider owns the public Hunyuan and DeepSeek models.
-	for _, model := range []string{"hunyuan-chat", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
+	for _, model := range []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
 		canonical, ok := r.LookupProviderModel("codebuddy", model)
 		if !ok {
 			t.Fatalf("codebuddy should own model %q", model)

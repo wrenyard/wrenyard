@@ -12,6 +12,44 @@ type Provider interface {
 	Fetch(ctx context.Context) (Quota, error)
 }
 
+const (
+	// QuotaCodeConfigurationMissing means the provider's local login or
+	// required client setup is absent, so no remote quota request was made.
+	QuotaCodeConfigurationMissing = "configuration_missing"
+	// QuotaCodeAuthenticationRequired means local login state exists but the
+	// provider rejected it or could not refresh it.
+	QuotaCodeAuthenticationRequired = "authentication_required"
+	// QuotaCodeQueryFailed means authentication reached the real quota surface,
+	// but that surface failed or returned an invalid response.
+	QuotaCodeQueryFailed = "quota_query_failed"
+)
+
+// QuotaStatusError carries a product-safe provider state without exposing
+// upstream response bodies, tokens, or protocol diagnostics to UI consumers.
+type QuotaStatusError struct {
+	Code    string
+	Message string
+	cause   error
+}
+
+func (e *QuotaStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+func (e *QuotaStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func newQuotaStatusError(code, message string, cause error) error {
+	return &QuotaStatusError{Code: code, Message: message, cause: cause}
+}
+
 type Quota struct {
 	Provider  string         `json:"provider"`
 	Used      *float64       `json:"used,omitempty"`

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -159,16 +160,24 @@ func TestEmbeddedProfiles_CodexProvider(t *testing.T) {
 	}
 }
 
-func TestEmbeddedConfigDoesNotIncludeNativeOpenAIProvider(t *testing.T) {
+func TestOfficialOpenAIAPIProviderIsSeparateFromCodex(t *testing.T) {
 	reg := catalog.DefaultRegistry()
-	if _, err := reg.LookupBinding("openai"); err == nil {
-		t.Fatal("catalog registry should not include native OpenAI API provider")
+	openai, err := reg.LookupBinding("openai")
+	if err != nil {
+		t.Fatal("catalog registry should include the official OpenAI API provider")
+	}
+	codex, err := reg.LookupBinding("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openai.CredentialSource() == codex.CredentialSource() {
+		t.Fatal("official OpenAI API keys must remain separate from Codex native login")
 	}
 }
 
-func TestOpenAIProviderIsNotManagedOrMigrated(t *testing.T) {
-	if IsManagedProvider("openai") {
-		t.Fatal("openai should not be a Forge-managed provider")
+func TestOpenAIProviderIsManagedWithoutLegacyMigration(t *testing.T) {
+	if !IsManagedProvider("openai") {
+		t.Fatal("openai should accept a Forge-managed official API key")
 	}
 	if got := legacyKeyToProviderID("openai-api-key"); got != "" {
 		t.Fatalf("legacyKeyToProviderID(openai-api-key) = %q, want empty", got)
@@ -726,7 +735,7 @@ func TestSameNameCBRecipeOverrideCarriesAnthropicModel(t *testing.T) {
 	path := writeTempConfig(t, `{
 		"clients": {"codebuddy": {"enabled": true}},
 		"profiles": {
-			"cb-hy": {"client": "codebuddy", "provider": "codebuddy", "model": "hunyuan-chat", "description": "CodeBuddy Hunyuan override"}
+			"cb-hy": {"client": "codebuddy", "provider": "codebuddy", "model": "hy4-preview-ioa", "description": "CodeBuddy Hunyuan override"}
 		}
 	}`)
 	cfg, _, err := config.LoadForgeConfig(path, config.EmbeddedData(), &strings.Builder{})
@@ -748,8 +757,8 @@ func TestSameNameCBRecipeOverrideCarriesAnthropicModel(t *testing.T) {
 	if p.Provider != "codebuddy" {
 		t.Fatalf("cb-hy provider = %q, want codebuddy", p.Provider)
 	}
-	if p.Env["ANTHROPIC_MODEL"] != "hunyuan-chat" {
-		t.Fatalf("cb-hy ANTHROPIC_MODEL = %q, want hunyuan-chat", p.Env["ANTHROPIC_MODEL"])
+	if p.Env["ANTHROPIC_MODEL"] != "hy4-preview-ioa" {
+		t.Fatalf("cb-hy ANTHROPIC_MODEL = %q, want hy4-preview-ioa", p.Env["ANTHROPIC_MODEL"])
 	}
 }
 
@@ -789,6 +798,20 @@ func TestCursorProfilesAreDiscoverableAndDoctorEligible(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Provision an explicit installed-client fixture so discovery is
+	// deterministic and independent of the developer machine PATH.
+	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		if err := os.WriteFile(filepath.Join(binDir, "cursor-agent.exe"), []byte("@echo off\r\nexit /b 0\r\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.WriteFile(filepath.Join(binDir, "cursor-agent"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir)
 
 	manifest, err := loadManifest()
 	if err != nil {

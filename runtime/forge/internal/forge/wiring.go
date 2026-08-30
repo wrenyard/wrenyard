@@ -70,7 +70,7 @@ func selectionDeps() selection.Dependencies {
 }
 
 func selectionCredential(providerID string) (string, bool) {
-	if providerID == "xai" {
+	if providers.CanonicalID(providerID) == providers.SpaceXAIProviderID {
 		if _, err := grok.SelectOAuthSource(forgeDataDir(), userHome()); err == nil {
 			return "native-oauth-present", true
 		}
@@ -219,7 +219,7 @@ func isProfileEffective(profileID string) bool {
 	}
 	p.Name = profileID
 	sp := selection.ProfileFrom(p)
-	if p.Client != "" && selection.ClientUsability(p.Client, selectionDeps()) == selection.ClientDisabledByConfig {
+	if p.Client != "" && selection.ClientUsability(p.Client, selectionDeps()) != selection.ClientOK {
 		return false
 	}
 	if !selection.ProfileCredentialAvailable(sp, selectionDeps()) {
@@ -239,8 +239,14 @@ func profileAvailabilityReason(profileID string) string {
 	}
 	p.Name = profileID
 	sp := selection.ProfileFrom(p)
-	if p.Client != "" && selection.ClientUsability(p.Client, selectionDeps()) == selection.ClientDisabledByConfig {
-		return "client_missing"
+	if p.Client != "" {
+		usability := selection.ClientUsability(p.Client, selectionDeps())
+		if usability == selection.ClientDisabledByConfig {
+			return "client_disabled_by_config"
+		}
+		if usability != selection.ClientOK {
+			return "client_not_installed"
+		}
 	}
 	if !selection.ProfileCredentialAvailable(sp, selectionDeps()) {
 		return "provider_auth_missing"
@@ -542,7 +548,7 @@ func prepareClientRuntime(def execution.ProfileDefinition, resolved profilepkg.R
 	}
 	// Projection evaluates the Forge store for every eligible managed provider,
 	// regardless of which credential ultimately wins. Protect that readable
-	// source even for xAI OAuth and profile secret_ref runs, and protect every
+	// source even for SpaceXAI OAuth and profile secret_ref runs, and protect every
 	// readable native OAuth candidate without copying an unselected credential.
 	appendRuntimeSensitiveSource(&prep, authPath())
 	for _, path := range grok.ReadableOAuthSources(forgeDataDir(), userHome()) {
@@ -562,7 +568,7 @@ func prepareClientRuntime(def execution.ProfileDefinition, resolved profilepkg.R
 			break
 		}
 	}
-	if selectedProvider == "xai" {
+	if selectedProvider == providers.SpaceXAIProviderID {
 		oauth, err := grok.PrepareOAuth(forgeDataDir(), userHome())
 		if err != nil {
 			return driver.RuntimePreparation{}, err
