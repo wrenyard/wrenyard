@@ -8,8 +8,8 @@ Wrenyard is a development-preview product that unifies task orchestration, a
 precompiled Go runtime, and a desktop observer under one command surface:
 **`wrenyard`**.
 
-> **Status: 1.0.0-dev.0 preview.** Installable from source and from the
-> latest-dev channel, but not a supported public release. See
+> **Status: development preview.** Installable from source and from the
+> rolling latest-dev channel, but not a supported stable release. See
 > [Status](#status).
 
 ## What it is
@@ -136,9 +136,9 @@ and never runs in this repository. See
 
 ## Status
 
-This is the first public development preview (`1.0.0-dev.0`). Nothing is
-published to npm, and no stable release exists. Remaining before a stable
-release:
+This repository publishes rolling `1.0.0-dev.N` development prereleases.
+Nothing is published to npm, and no stable release exists. Remaining before a
+stable release:
 
 - Final trusted code signing of the desktop app and platform payloads
 - Wider clean-machine testing and a documented compatibility policy

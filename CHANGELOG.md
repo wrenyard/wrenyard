@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.0-dev.16
+
+Development preview release.
+
+### Desktop productization
+
+- Add a model picker to conversations with availability-aware ordering and a
+  shared user-controlled order across model and Provider surfaces.
+- Replace the quota page with the localized Provider directory, including Key
+  configuration, friendly login/configuration states, aligned quota rows, and
+  a single public CodeBuddy identity.
+- Use the 「工坊工作区」 product name, show the suite version in the title bar,
+  add rotating workshop prompt copy, and reduce daemon readiness to a status
+  lamp with uptime details.
+
+### Updates
+
+- Add non-blocking stable/development update channels to Desktop settings.
+- Verify Desktop and suite assets with checksums before staging; macOS applies
+  them through an external transactional helper with rollback and active-work
+  guards.
+
+### Providers and models
+
+- Add public API Provider modules for OpenAI, Anthropic, Zhipu, Moonshot,
+  MiniMax, Qwen, Tencent Cloud TokenHub, and Volcengine while keeping native
+  subscription credentials distinct.
+- Update DeepSeek and CodeBuddy model catalogs, adopt the SpaceXAI Provider
+  name, and require the selected client binary before a profile is offered.
+- Record only unambiguous, non-rate-limit CodeBuddy monthly exhaustion locally;
+  mixed monthly and transient errors never persist until the next month.
+
 ## 1.0.0-dev.0
 
 Development preview release.
