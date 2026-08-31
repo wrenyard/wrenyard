@@ -1,9 +1,8 @@
 {
   "tiers": {
-    "fast": ["cb-hy", "cb-dsf", "codex-spark"],
-    "general": ["cb-hy", "cb-ds", "cc-kimi", "codex-luna"],
-    "strong": ["cb-glm", "cc-glm", "codex-terra"],
-    "ultra": ["codex-sol"]
+    "fast": ["cb-hy", "cb-dsf", "gk-glmf"],
+    "general": ["cur-grok", "cb-ds", "gk-glm"],
+    "ultra": ["cur-kimi", "gk-kimi", "codex-sol"]
   },
   "quota_floor_pct": 90
 }
