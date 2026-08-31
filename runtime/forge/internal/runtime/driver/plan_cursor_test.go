@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,51 +31,77 @@ func cursorPlanRequest(t *testing.T, mode catalog.PermissionMode) PlanRequest {
 	}
 }
 
+// TestCursorPlanPermissionModesForPlatform exercises the production permission
+// helper for every simulated platform, so Windows-specific refusals and the
+// catalog-sourced non-Windows shapes are asserted on any host.
+func TestCursorPlanPermissionModesForPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		goos    string
+		mode    catalog.PermissionMode
+		want    []string
+		wantErr bool
+	}{
+		{goos: "windows", mode: catalog.PermissionReadonly, want: []string{"--mode", "plan", "--force", "--sandbox", "disabled"}},
+		{goos: "windows", mode: catalog.PermissionEdit, wantErr: true},
+		{goos: "windows", mode: catalog.PermissionYolo, want: []string{"--force", "--sandbox", "disabled"}},
+		{goos: "linux", mode: catalog.PermissionReadonly, want: []string{"--mode", "plan", "--force", "--sandbox", "enabled"}},
+		{goos: "linux", mode: catalog.PermissionEdit, want: []string{"--force", "--sandbox", "enabled"}},
+		{goos: "linux", mode: catalog.PermissionYolo, want: []string{"--force", "--sandbox", "disabled"}},
+		{goos: "darwin", mode: catalog.PermissionReadonly, want: []string{"--mode", "plan", "--force", "--sandbox", "enabled"}},
+		{goos: "darwin", mode: catalog.PermissionEdit, want: []string{"--force", "--sandbox", "enabled"}},
+		{goos: "darwin", mode: catalog.PermissionYolo, want: []string{"--force", "--sandbox", "disabled"}},
+	} {
+		t.Run(tc.goos+"/"+string(tc.mode), func(t *testing.T) {
+			got, err := cursorPermissionArgs("cur-composer", tc.mode, tc.goos)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("%s %s must refuse to plan without --sandbox enabled, got args %v", tc.goos, tc.mode, got)
+				}
+				if len(got) != 0 {
+					t.Fatalf("%s %s must not emit args on failure, got %v", tc.goos, tc.mode, got)
+				}
+				if !strings.Contains(strings.ToLower(err.Error()), "sandbox") {
+					t.Fatalf("%s %s error must name the sandbox limitation, got %v", tc.goos, tc.mode, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("cursorPermissionArgs(%s, %s): %v", tc.goos, tc.mode, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%s %s permission args = %v, want %v", tc.goos, tc.mode, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCursorPlanUsesCanonicalExecutableAndFlags(t *testing.T) {
-	req := cursorPlanRequest(t, catalog.PermissionEdit)
+	req := cursorPlanRequest(t, catalog.PermissionReadonly)
 	plan, err := buildCursorPlan(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Command) == 0 || !strings.HasSuffix(plan.Command[0], "/go") && plan.Command[0] != "go" {
+	// The canonical executable is "go" on every platform; Windows resolves it
+	// as go.exe, so compare the extension-stripped base name.
+	if len(plan.Command) == 0 || strings.TrimSuffix(filepath.Base(plan.Command[0]), ".exe") != "go" {
 		t.Fatalf("cursor plan must invoke the canonical cursor-agent binary, got %v", plan.Command)
 	}
 	if !containsOrderedArgs(plan.Command, "-p", "--output-format", "stream-json", "--trust", "--model", "composer-2.5") {
 		t.Fatalf("cursor plan missing fixed flags: %v", plan.Command)
 	}
-	if !containsArg(plan.Command, req.Prompt) {
-		t.Fatalf("cursor plan must carry the prompt positionally: %v", plan.Command)
+	if containsArg(plan.Command, req.Prompt) {
+		t.Fatalf("cursor prompt must not be exposed through argv: %v", plan.Command)
+	}
+	if got := readCommandStdin(t, plan.Stdin); got != req.Prompt {
+		t.Fatalf("cursor stdin prompt = %q, want %q", got, req.Prompt)
 	}
 	if plan.Dialect != catalog.DialectCursor {
 		t.Fatalf("dialect = %v, want cursor", plan.Dialect)
 	}
 }
 
-func TestCursorPlanAllPermissionModes(t *testing.T) {
-	for _, tc := range []struct {
-		mode  catalog.PermissionMode
-		flags []string
-	}{
-		{catalog.PermissionReadonly, []string{"--mode", "plan", "--force", "--sandbox", "enabled"}},
-		{catalog.PermissionEdit, []string{"--force", "--sandbox", "enabled"}},
-		{catalog.PermissionYolo, []string{"--force", "--sandbox", "disabled"}},
-	} {
-		t.Run(string(tc.mode), func(t *testing.T) {
-			plan, err := buildCursorPlan(cursorPlanRequest(t, tc.mode))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, f := range tc.flags {
-				if !containsArg(plan.Command, f) {
-					t.Fatalf("mode %s missing flag %q: %v", tc.mode, f, plan.Command)
-				}
-			}
-		})
-	}
-}
-
 func TestCursorPlanAuthTokenOnlyThroughChildEnv(t *testing.T) {
-	plan, err := buildCursorPlan(cursorPlanRequest(t, catalog.PermissionEdit))
+	plan, err := buildCursorPlan(cursorPlanRequest(t, catalog.PermissionReadonly))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +116,7 @@ func TestCursorPlanAuthTokenOnlyThroughChildEnv(t *testing.T) {
 }
 
 func TestCursorPlanResumeUsesNativeFlag(t *testing.T) {
-	req := cursorPlanRequest(t, catalog.PermissionEdit)
+	req := cursorPlanRequest(t, catalog.PermissionReadonly)
 	req.ResumeSessionID = "sess_123"
 	plan, err := buildCursorPlan(req)
 	if err != nil {
@@ -100,7 +128,7 @@ func TestCursorPlanResumeUsesNativeFlag(t *testing.T) {
 }
 
 func TestCursorPlanRejectsCapabilities(t *testing.T) {
-	req := cursorPlanRequest(t, catalog.PermissionEdit)
+	req := cursorPlanRequest(t, catalog.PermissionReadonly)
 	req.Capabilities = []string{"some-pack"}
 	_, err := buildCursorPlan(req)
 	if err == nil {
@@ -109,7 +137,7 @@ func TestCursorPlanRejectsCapabilities(t *testing.T) {
 }
 
 func TestCursorPlanMissingModelFails(t *testing.T) {
-	req := cursorPlanRequest(t, catalog.PermissionEdit)
+	req := cursorPlanRequest(t, catalog.PermissionReadonly)
 	delete(req.Spec.Env, catalog.EnvCursorModel)
 	_, err := buildCursorPlan(req)
 	if err == nil {
@@ -118,7 +146,7 @@ func TestCursorPlanMissingModelFails(t *testing.T) {
 }
 
 func TestCursorPlanMissingBinaryFails(t *testing.T) {
-	req := cursorPlanRequest(t, catalog.PermissionEdit)
+	req := cursorPlanRequest(t, catalog.PermissionReadonly)
 	req.Spec.ClientDesc.Binary = catalog.BinarySpec{Name: "definitely-not-a-real-cursor-agent-binary"}
 	_, err := buildCursorPlan(req)
 	if err == nil {
