@@ -260,6 +260,8 @@ export interface ConversationModelSelectionSnapshot {
   label: string;
   providerLabel: string;
   advertised: boolean;
+  /** True when the current model's provider credentials were passed to DSH. */
+  configured: boolean;
   reasoningEffort?: string;
 }
 

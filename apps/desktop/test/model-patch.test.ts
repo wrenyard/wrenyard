@@ -7,12 +7,31 @@ import {
   DEFAULT_WRENYARD_MCP_URL,
   INJECTED_PROVIDERS,
   MODEL_PATCH_FILENAME,
+  configuredModelProviderIds,
   defaultMcpUrl,
   renderModelPatch,
   resolveModelCredentialEnv,
   runtimeAuthPath,
   writeModelPatch,
 } from '../src/model-patch.js';
+
+test('configuredModelProviderIds returns only routable provider ids without exposing credentials', () => {
+  const injectedSecret = 'sk-injected-test';
+  const nativeSecret = 'sk-native-test';
+  const ids = configuredModelProviderIds(
+    {
+      FORGE_DSH_KIMI_CODING_API_KEY: injectedSecret,
+      FORGE_DSH_OPENAI_API_KEY: '   ',
+    },
+    { DEEPSEEK_API_KEY: nativeSecret },
+  );
+
+  assert.deepEqual(ids, ['kimi-coding', 'deepseek']);
+  const serialized = JSON.stringify(ids);
+  assert.ok(!serialized.includes(injectedSecret));
+  assert.ok(!serialized.includes(nativeSecret));
+  assert.deepEqual(configuredModelProviderIds({}, {}), []);
+});
 
 async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-model-patch-test-'));

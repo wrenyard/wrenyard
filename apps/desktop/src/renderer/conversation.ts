@@ -287,7 +287,7 @@ export class ConversationView {
     const options: HTMLOptionElement[] = [];
     const nodes: Array<HTMLOptionElement | HTMLOptGroupElement> = [];
 
-    if (directory.current && !directory.current.advertised) {
+    if (directory.current && !directory.current.advertised && directory.current.configured) {
       const current = document.createElement('option');
       current.value = currentValue;
       current.textContent = `${directory.current.label}（当前）`;
