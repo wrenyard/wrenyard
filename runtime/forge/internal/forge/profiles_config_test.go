@@ -784,6 +784,8 @@ func TestCursorBuiltinProfilesExistWithExactModels(t *testing.T) {
 	}{
 		{name: "cur-composer", wantModel: "composer-2.5"},
 		{name: "cur-grok", wantModel: "cursor-grok-4.6-high"},
+		{name: "cur-kimi", wantModel: "kimi-k3"},
+		{name: "cur-opus", wantModel: "claude-opus-5"},
 	}
 	for _, tc := range cases {
 		p, ok := manifest.Profiles[tc.name]
@@ -832,7 +834,7 @@ func TestCursorProfilesAreDiscoverableAndDoctorEligible(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := availableProfileNames(manifest)
-	for _, want := range []string{"cur-composer", "cur-grok"} {
+	for _, want := range []string{"cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
 		if !contains(names, want) {
 			t.Fatalf("expected available profile list to include %s, got %#v", want, names)
 		}
@@ -850,7 +852,7 @@ func TestCursorProfilesAreDiscoverableAndDoctorEligible(t *testing.T) {
 		t.Fatal("cursor provider must support the cursor dialect")
 	}
 	models := reg.ProviderModels("cursor")
-	for _, id := range []string{"composer-2.5", "cursor-grok-4.6-high"} {
+	for _, id := range []string{"composer-2.5", "cursor-grok-4.6-high", "kimi-k3", "claude-opus-5"} {
 		if _, ok := models[id]; !ok {
 			t.Fatalf("cursor provider models missing %q", id)
 		}
