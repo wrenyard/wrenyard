@@ -285,6 +285,51 @@ test('startDshWeb puts --patch before web flags and injects extraEnv without dro
   });
 });
 
+function spawnOptionsBlock(source: string, startNeedle: string, endNeedle: string, label: string): string {
+  const start = source.indexOf(startNeedle);
+  assert.ok(start >= 0, `${label}: could not locate ${startNeedle}`);
+  const end = source.indexOf(endNeedle, start);
+  assert.ok(end > start, `${label}: could not locate end of the spawn options for ${startNeedle}`);
+  return source.slice(start, end);
+}
+
+test('startDshWeb suppresses the DSH browser launch and hides Windows console children', async () => {
+  await withTemp(async (dir) => {
+    const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
+    const patchPath = join(dir, 'forge-model-patch.yaml');
+    await writeFile(patchPath, '- id: llm-pi-ai\n');
+    const handle = await startDshWeb({ ...baseOptions(dir, bin), patchPath });
+    await handle.stop();
+
+    const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
+    const argv = childEnv.argv as string[];
+    const noOpenAt = argv.indexOf('--no-open');
+    assert.ok(noOpenAt >= 0, 'DSH web argv must include --no-open so app restarts do not open the DSH page');
+    assert.ok(argv.indexOf('--patch') < noOpenAt, '--no-open must follow the launcher flags');
+    assert.ok(noOpenAt < argv.indexOf('--host'), '--no-open must precede the web-app flags');
+
+    const [dshProcessSource, mainSource] = await Promise.all([
+      readFile(new URL('../src/dsh-process.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../src/main.ts', import.meta.url), 'utf8'),
+    ]);
+    assert.match(
+      spawnOptionsBlock(dshProcessSource, 'spawn(program, programArgs', 'let settled', 'DSH child'),
+      /windowsHide:\s*true/,
+      'the DSH child must be spawned with windowsHide: true',
+    );
+    assert.match(
+      spawnOptionsBlock(dshProcessSource, "spawn('taskkill'", 'const settle', 'taskkill child'),
+      /windowsHide:\s*true/,
+      'the Windows taskkill child must be spawned with windowsHide: true',
+    );
+    assert.match(
+      spawnOptionsBlock(mainSource, "spawn(cli, ['daemon', 'start']", 'child.unref()', 'daemon start'),
+      /windowsHide:\s*true/,
+      'the detached daemon-start child must be spawned with windowsHide: true',
+    );
+  });
+});
+
 test('startDshWeb puts --expose-internals in execArgv, not DSH argv', async () => {
   await withTemp(async (dir) => {
     const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
