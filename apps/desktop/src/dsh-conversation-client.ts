@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { canonicalProviderId } from './model-patch.js';
 import type {
   ConversationItemSnapshot,
   ConversationModelGroupSnapshot,
@@ -45,6 +46,11 @@ interface DshConversationClientOptions {
   baseUrl: string;
   workspaceId: string;
   workspace: WorkspaceConfigurationSnapshot & { status: 'configured'; path: string };
+  /**
+   * Canonical product provider ids whose credentials were passed to the DSH
+   * child. Copied defensively; used to filter the advertised model directory.
+   */
+  configuredProviderIds: readonly string[];
   onChanged(): void;
 }
 
@@ -108,6 +114,7 @@ function exposeModel(provider: string, model: string): boolean {
 function modelSelectionSnapshot(
   selection: Record<string, unknown>,
   groups: ConversationModelGroupSnapshot[],
+  configuredProviderIds?: ReadonlySet<string>,
 ): ConversationModelSelectionSnapshot {
   const provider = requiredString(selection.provider, 'current.provider');
   const model = canonicalModelId(provider, requiredString(selection.model, 'current.model'));
@@ -119,18 +126,30 @@ function modelSelectionSnapshot(
     label: option?.label ?? model,
     providerLabel: group?.label ?? provider,
     advertised: option !== undefined,
+    configured: configuredProviderIds === undefined
+      || configuredProviderIds.has(canonicalProviderId(provider)),
     ...(typeof selection.reasoningEffort === 'string' && selection.reasoningEffort
       ? { reasoningEffort: selection.reasoningEffort }
       : {}),
   };
 }
 
-/** Validate and project DSH's advisory per-session model directory. */
-export function projectConversationModels(value: unknown): ConversationModelsSnapshot {
+/**
+ * Validate and project DSH's advisory per-session model directory. When
+ * `configuredProviderIds` is supplied, only providers whose credentials were
+ * actually passed to the DSH child are advertised.
+ */
+export function projectConversationModels(
+  value: unknown,
+  configuredProviderIds?: readonly string[],
+): ConversationModelsSnapshot {
   if (!isObject(value) || !isObject(value.current) || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
     throw new Error('DSH 模型目录格式无效');
   }
   if (typeof value.routable !== 'boolean') throw new Error('DSH 模型目录缺少 routable');
+  const configured = configuredProviderIds === undefined
+    ? undefined
+    : new Set(configuredProviderIds);
   const groups = value.groups.map((rawGroup, groupIndex): ConversationModelGroupSnapshot => {
     if (!isObject(rawGroup) || !Array.isArray(rawGroup.models)) throw new Error(`DSH 模型目录第 ${groupIndex + 1} 组格式无效`);
     const provider = requiredString(rawGroup.id, `groups[${groupIndex}].id`);
@@ -158,7 +177,7 @@ export function projectConversationModels(value: unknown): ConversationModelsSna
         }];
       }),
     };
-  });
+  }).filter((group) => configured === undefined || configured.has(canonicalProviderId(group.provider)));
   const failures = value.failures.flatMap((failure) => {
     if (!isObject(failure)) return [];
     const name = asString(failure.name) ?? asString(failure.id) ?? '模型提供方';
@@ -168,7 +187,7 @@ export function projectConversationModels(value: unknown): ConversationModelsSna
   return {
     status: 'ready',
     groups,
-    current: modelSelectionSnapshot(value.current, groups),
+    current: modelSelectionSnapshot(value.current, groups, configured),
     routable: value.routable,
     ...(failures.length > 0 ? { message: failures.join('；').slice(0, 1_000) } : {}),
   };
@@ -287,6 +306,7 @@ export class DshConversationClient {
   private readonly baseUrl: URL;
   private readonly workspaceId: string;
   private readonly workspace: DshConversationClientOptions['workspace'];
+  private readonly configuredProviderIds: ReadonlySet<string>;
   private readonly onChanged: () => void;
   private sessions = new Map<string, RawSessionSummary>();
   private workspaceSessionIds = new Set<string>();
@@ -304,6 +324,7 @@ export class DshConversationClient {
     this.baseUrl = new URL(options.baseUrl);
     this.workspaceId = options.workspaceId;
     this.workspace = options.workspace;
+    this.configuredProviderIds = new Set(options.configuredProviderIds);
     this.onChanged = options.onChanged;
   }
 
@@ -416,7 +437,7 @@ export class DshConversationClient {
       this.models = {
         ...this.models,
         status: 'ready',
-        current: modelSelectionSnapshot(value.selected, this.models.groups),
+        current: modelSelectionSnapshot(value.selected, this.models.groups, this.configuredProviderIds),
         routable: true,
         message: undefined,
       };
@@ -529,7 +550,10 @@ export class DshConversationClient {
     this.models = { ...this.models, status: 'loading', message: undefined };
     this.notify();
     try {
-      const next = projectConversationModels(await this.rpc('session.models', { sessionId }));
+      const next = projectConversationModels(
+        await this.rpc('session.models', { sessionId }),
+        [...this.configuredProviderIds],
+      );
       if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
       this.models = next;
       this.notify();

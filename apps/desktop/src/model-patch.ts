@@ -226,7 +226,8 @@ interface AuthEntry {
 
 /**
  * Resolve launch-time credential env for injected providers.
- * Missing or unreadable auth.json yields an empty map; routes stay visible.
+ * Missing or unreadable auth.json yields an empty map; the corresponding
+ * routes remain absent from Desktop's configured model picker.
  * Values are never logged.
  */
 export async function resolveModelCredentialEnv(
@@ -256,6 +257,38 @@ export async function resolveModelCredentialEnv(
     }
   }
   return out;
+}
+
+/** DSH provider id of the native DeepSeek route, mapped to its product id. */
+const NATIVE_DEEPSEEK_PROVIDER = 'deepseek-official';
+
+/** Product provider id for the native DeepSeek route. */
+export const DEEPSEEK_PROVIDER_ID = 'deepseek';
+
+/**
+ * Canonical product provider ids whose credentials are actually routable by the
+ * DSH child: injected routes only when their `apiKeyEnv` value is present in
+ * the resolved injected credential env, native DeepSeek only when the
+ * inherited `DEEPSEEK_API_KEY` is non-empty. Pure helper; values are never
+ * returned or logged.
+ */
+export function configuredModelProviderIds(
+  injectedEnv: NodeJS.ProcessEnv = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const ids: string[] = [];
+  for (const provider of INJECTED_PROVIDERS) {
+    const value = injectedEnv[provider.apiKeyEnv];
+    if (typeof value === 'string' && value.trim() !== '') ids.push(provider.routeKey);
+  }
+  const native = env.DEEPSEEK_API_KEY;
+  if (typeof native === 'string' && native.trim() !== '') ids.push(DEEPSEEK_PROVIDER_ID);
+  return ids;
+}
+
+/** Map a DSH provider id to its canonical product provider id. */
+export function canonicalProviderId(provider: string): string {
+  return provider === NATIVE_DEEPSEEK_PROVIDER ? DEEPSEEK_PROVIDER_ID : provider;
 }
 
 export async function writeModelPatch(
