@@ -1379,7 +1379,7 @@ func TestCursorProviderBinding(t *testing.T) {
 	if b.DefaultModel != "composer-2.5" {
 		t.Fatalf("cursor default model = %q, want composer-2.5", b.DefaultModel)
 	}
-	for _, model := range []string{"composer-2.5", "cursor-grok-4.6-high"} {
+	for _, model := range []string{"composer-2.5", "cursor-grok-4.6-high", "kimi-k3", "claude-opus-5"} {
 		if err := b.ValidateModel(model); err != nil {
 			t.Fatalf("cursor should allow model %q: %v", model, err)
 		}
