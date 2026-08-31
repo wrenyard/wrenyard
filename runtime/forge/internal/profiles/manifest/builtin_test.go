@@ -26,6 +26,8 @@ func TestBuiltinProfileSet(t *testing.T) {
 		"gk-grok":      true,
 		"cur-composer": true,
 		"cur-grok":     true,
+		"cur-kimi":     true,
+		"cur-opus":     true,
 	}
 	// Verify no retired or removed profiles.
 	notWant := map[string]bool{
@@ -226,6 +228,8 @@ func TestBuiltinCursorProfiles(t *testing.T) {
 	}{
 		"cur-composer": {model: "composer-2.5", launcher: "cursor-agent"},
 		"cur-grok":     {model: "cursor-grok-4.6-high", launcher: "cursor-agent"},
+		"cur-kimi":     {model: "kimi-k3", launcher: "cursor-agent"},
+		"cur-opus":     {model: "claude-opus-5", launcher: "cursor-agent"},
 	}
 	for id, expected := range want {
 		profile := Get(id)
@@ -296,7 +300,7 @@ func TestRemovedProfilesNotFound(t *testing.T) {
 }
 
 func TestActiveProfilesNotDeprecated(t *testing.T) {
-	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok"} {
+	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
 		p := Get(id)
 		if p == nil {
 			t.Fatalf("Get(%q) returned nil", id)

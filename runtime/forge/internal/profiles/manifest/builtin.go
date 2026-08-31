@@ -246,6 +246,32 @@ var builtinProfiles = []Profile{
 		},
 		Settings: map[string]any{},
 	},
+	{
+		Name:        "cur-kimi",
+		Client:      "cursor",
+		Provider:    "cursor",
+		Description: "Cursor (Kimi K3)",
+		Launcher: map[string]any{
+			"command": "cursor-agent",
+		},
+		Env: map[string]string{
+			"CURSOR_MODEL": "kimi-k3",
+		},
+		Settings: map[string]any{},
+	},
+	{
+		Name:        "cur-opus",
+		Client:      "cursor",
+		Provider:    "cursor",
+		Description: "Cursor (Claude Opus 5)",
+		Launcher: map[string]any{
+			"command": "cursor-agent",
+		},
+		Env: map[string]string{
+			"CURSOR_MODEL": "claude-opus-5",
+		},
+		Settings: map[string]any{},
+	},
 }
 
 // builtinManifest is the memoized manifest built from builtinProfiles.

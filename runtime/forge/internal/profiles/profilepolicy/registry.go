@@ -14,8 +14,9 @@ var builtinPolicies = map[string]ProfilePolicy{
 	"fast": {
 		Name: "fast",
 		Candidates: []Candidate{
+			{ProfileID: "cb-hy"},
 			{ProfileID: "cb-dsf"},
-			{ProfileID: "codex-spark"},
+			{ProfileID: "gk-glmf"},
 		},
 	},
 	"general": {
@@ -29,8 +30,9 @@ var builtinPolicies = map[string]ProfilePolicy{
 	"ultra": {
 		Name: "ultra",
 		Candidates: []Candidate{
-			{ProfileID: "codex-sol"},
+			{ProfileID: "cur-kimi"},
 			{ProfileID: "gk-kimi"},
+			{ProfileID: "codex-sol"},
 		},
 	},
 }
