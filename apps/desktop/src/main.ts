@@ -13,7 +13,7 @@ import {
   type ConfiguredWorkspace,
   type DesktopConversationSession,
 } from './conversation-controller.js';
-import { defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
+import { configuredModelProviderIds, defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
@@ -117,6 +117,7 @@ function startWrenyardService(cli: string): void {
   const child = spawn(cli, ['daemon', 'start'], {
     stdio: 'ignore',
     detached: process.platform !== 'win32',
+    windowsHide: true,
   });
   child.unref();
 }
@@ -240,6 +241,9 @@ async function createConversationSession(
   const registration = await ensureProductWorkspaceRegistered(profile.dshHome, workspace.path);
   const patchPath = await writeModelPatch(profile.dshHome);
   const extraEnv = await resolveModelCredentialEnv();
+  // Provider ids are derived from the exact credential env handed to the DSH
+  // child; only presence is used and no value is logged.
+  const configuredProviderIds = configuredModelProviderIds(extraEnv);
   const wrenyardEnv: NodeJS.ProcessEnv = {
     WRENYARD_IPC_PATH: ipcPath,
     WRENYARD_MCP_URL: defaultMcpUrl(),
@@ -260,6 +264,7 @@ async function createConversationSession(
     baseUrl: dsh.url,
     workspaceId: registration.id,
     workspace,
+    configuredProviderIds,
     onChanged: () => shellWindow?.notifyConversationChanged(),
   });
   let intentionalStop = false;

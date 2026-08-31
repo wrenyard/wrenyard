@@ -70,6 +70,10 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     // and the child exits 1 before ready — Desktop then flash-quits.
     const args = ['--profile', 'web'];
     if (options.patchPath) args.push('--patch', options.patchPath);
+    // First web-app flag: dsh-web-app opens the default browser unless
+    // --no-open is passed. Desktop embeds its own renderer, so the loopback
+    // backend must stay headless.
+    args.push('--no-open');
     args.push('--host', host, '--port', String(port));
 
     const injected = options.command && options.command.length > 0 ? options.command : null;
@@ -95,6 +99,7 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
+      windowsHide: true,
     });
 
     let settled = false;
@@ -272,6 +277,7 @@ export function killTree(child: ChildProcess, graceMs = STOP_GRACE_MS): Promise<
       const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
         stdio: 'ignore',
         shell: false,
+        windowsHide: true,
       });
       const settle = () => void awaitChildExit(child, graceMs).then(resolveKill);
       killer.once('exit', settle);
