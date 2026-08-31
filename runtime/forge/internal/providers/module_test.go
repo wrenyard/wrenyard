@@ -222,7 +222,7 @@ func TestCursorProviderModuleRuntimeAndQuota(t *testing.T) {
 	if binding.QuotaProvider != "cursor" {
 		t.Fatalf("cursor quota provider = %q, want cursor", binding.QuotaProvider)
 	}
-	wantModels := []string{"composer-2.5", "cursor-grok-4.6-high"}
+	wantModels := []string{"composer-2.5", "cursor-grok-4.6-high", "kimi-k3", "claude-opus-5"}
 	models := module.Models()
 	if len(models) != len(wantModels) {
 		t.Fatalf("cursor model count = %d, want %d", len(models), len(wantModels))
