@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import {
   ensureProductWorkspaceRegistered,
@@ -27,7 +27,7 @@ test('resolveWrenyardConfigPath prefers WRENYARD_CONFIG_HOME', () => {
     XDG_CONFIG_HOME: '/tmp/xdg-config',
     HOME: '/tmp/home',
   });
-  assert.equal(path, '/tmp/wrenyard-config-home/config.json');
+  assert.equal(path, resolve('/tmp/wrenyard-config-home', 'config.json'));
 });
 
 test('resolveProductWorkspace prefers WRENYARD_DESKTOP_WORKSPACE over config.json', async () => {

@@ -132,7 +132,9 @@ Electron product shell
   the DSH child directly. Wrenyard remains the sole state/permission owner.
 - **DSH backend child** — started with launcher flags first
   (`--profile web --patch <overlay>`), then web flags
-  (`--host 127.0.0.1 --port 0`). `--patch` after `--host` is parsed as a
+  (`--no-open --host 127.0.0.1 --port 0`). `--no-open` is the first web-app
+  flag: `dsh-web-app` otherwise opens the default browser, which Desktop never
+  wants because its own renderer talks to the loopback backend. `--patch` after `--host` is parsed as a
   web-app option, rejected, and the Desktop flash-quits. The Electron-as-node
   child must also receive `--expose-internals` *before* the DSH script path:
   `dsh-base` constructs `cordis-plugin-hmr` before `dsh-web-app` can disable
@@ -149,7 +151,13 @@ Electron product shell
   conversation projection through preload IPC. The conversation header reads
   the selected session's advisory model directory through `session.models` and
   changes its next-request route through `session.selectModel`; models remain
-  grouped by their DSH provider. The header keeps the model picker unlabeled and
+  grouped by their DSH provider. The conversation model picker lists only
+  providers whose credentials were actually passed to the DSH child — injected
+  routes when their `FORGE_DSH_*_API_KEY` value is present, and the native
+  `deepseek-official` route (mapped to the product id `deepseek`) only when
+  `DEEPSEEK_API_KEY` is inherited. Unconfigured providers keep their setup rows
+  on the Providers page (模型供应), so configuration stays reachable even though
+  their models never appear in the picker. The header keeps the model picker unlabeled and
   shows only one Wrenyard daemon status lamp beside it; hovering or focusing the
   lamp refreshes public health and shows online state plus the start time derived
   from daemon uptime. The product projection exposes one canonical
