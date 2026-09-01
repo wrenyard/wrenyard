@@ -1110,6 +1110,7 @@ describe('lib/protocol JSON-RPC contract', () => {
     // Valid days and limit
     assert.deepEqual(parseMethodParams('stats.summary', { days: 7, limit: 20 }), { days: 7, limit: 20 })
     assert.deepEqual(parseMethodParams('stats.summary', { days: 1 }), { days: 1 })
+    assert.deepEqual(parseMethodParams('stats.summary', { days: 365 }), { days: 365 })
     assert.deepEqual(parseMethodParams('stats.summary', { limit: 50 }), { limit: 50 })
 
     // Invalid days range
@@ -1121,7 +1122,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       },
     )
     assert.throws(
-      () => parseMethodParams('stats.summary', { days: 32 }),
+      () => parseMethodParams('stats.summary', { days: 367 }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true

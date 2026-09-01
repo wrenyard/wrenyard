@@ -26,6 +26,7 @@ import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
+import { resolveDesktopBuildTime } from './build-metadata.js';
 import {
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
@@ -392,12 +393,14 @@ async function bootstrap(): Promise<void> {
   });
   await quotaController.start();
   const version = app.getVersion();
+  const buildTime = resolveDesktopBuildTime();
   const getSettings = () => buildSettingsSnapshot({
     endpoint: ipcPath,
     workspace: conversationController!.workspace,
     desktopVersion: version,
     wrenyardVersion: version,
     dshVersion: resolveDshVersion(),
+    buildTime,
     readHealth: () => readWrenyardHealth(ipcPath),
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),

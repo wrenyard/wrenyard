@@ -85,6 +85,7 @@ export interface SettingsSnapshot {
     desktopVersion: string;
     wrenyardVersion: string;
     dshVersion: string;
+    buildTime?: string;
     channel: UpdateChannel;
   };
 }
@@ -248,6 +249,8 @@ export interface ConversationItemSnapshot {
   kind: 'user' | 'assistant' | 'tool';
   text: string;
   time: number;
+  /** Stable DSH turn identity used to render one assistant message per turn. */
+  turnId?: string;
   running?: boolean;
   reasoning?: string;
   toolName?: string;
@@ -302,6 +305,7 @@ export interface ConversationSnapshot {
 }
 
 export interface WrenyardShellApi {
+  platform: NodeJS.Platform;
   navigate(page: ShellPage): Promise<void>;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;

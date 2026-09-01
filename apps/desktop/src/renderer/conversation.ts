@@ -90,6 +90,96 @@ export function parseConversationModelValue(value: string): { provider: string; 
   }
 }
 
+export interface MarkdownTable {
+  headers: string[];
+  rows: string[][];
+  nextIndex: number;
+}
+
+function markdownTableCells(line: string): string[] | null {
+  const source = line.trim();
+  if (!source.includes('|')) return null;
+  const cells: string[] = [];
+  let cell = '';
+  let escaped = false;
+  let inCode = false;
+  for (const character of source) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      cell += character;
+      continue;
+    }
+    if (character === '`') inCode = !inCode;
+    if (character === '|' && !inCode) {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += character;
+  }
+  cells.push(cell.trim());
+  if (source.startsWith('|')) cells.shift();
+  if (source.endsWith('|')) cells.pop();
+  return cells.length > 0 ? cells : null;
+}
+
+export function parseMarkdownTable(lines: readonly string[], startIndex: number): MarkdownTable | null {
+  const headers = markdownTableCells(lines[startIndex] ?? '');
+  const delimiter = markdownTableCells(lines[startIndex + 1] ?? '');
+  if (!headers || !delimiter || headers.length !== delimiter.length
+    || delimiter.some((cell) => !/^:?-{3,}:?$/u.test(cell))) return null;
+  const rows: string[][] = [];
+  let nextIndex = startIndex + 2;
+  for (; nextIndex < lines.length; nextIndex += 1) {
+    if (!(lines[nextIndex] ?? '').trim()) break;
+    const row = markdownTableCells(lines[nextIndex] ?? '');
+    if (!row) break;
+    rows.push(headers.map((_, index) => row[index] ?? ''));
+  }
+  return { headers, rows, nextIndex };
+}
+
+export function isMarkdownHorizontalRule(line: string): boolean {
+  const compact = line.trim().replace(/\s/gu, '');
+  return /^(?:-{3,}|\*{3,}|_{3,})$/u.test(compact);
+}
+
+export interface ConversationRenderGroup {
+  kind: 'item' | 'assistant-turn';
+  items: ConversationItemSnapshot[];
+}
+
+export function groupConversationItems(items: readonly ConversationItemSnapshot[]): ConversationRenderGroup[] {
+  const groups: ConversationRenderGroup[] = [];
+  for (let index = 0; index < items.length;) {
+    const item = items[index];
+    if (item && item.turnId && (item.kind === 'assistant' || item.kind === 'tool')) {
+      const turnItems: ConversationItemSnapshot[] = [];
+      while (index < items.length) {
+        const candidate = items[index];
+        if (!candidate || candidate.turnId !== item.turnId
+          || (candidate.kind !== 'assistant' && candidate.kind !== 'tool')) break;
+        turnItems.push(candidate);
+        index += 1;
+      }
+      groups.push({ kind: 'assistant-turn', items: turnItems });
+      continue;
+    }
+    if (item) groups.push({ kind: 'item', items: [item] });
+    index += 1;
+  }
+  return groups;
+}
+
+export function shouldFollowConversationTail(options: { sessionChanged: boolean; wasPinned: boolean }): boolean {
+  return options.sessionChanged || options.wasPinned;
+}
+
 function appendInlineMarkdown(target: HTMLElement, text: string): void {
   const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
   for (const part of parts) {
@@ -126,8 +216,41 @@ function renderRichText(text: string): DocumentFragment {
     let paragraph: HTMLParagraphElement | undefined;
     let list: HTMLUListElement | HTMLOListElement | undefined;
     const flush = (): void => { paragraph = undefined; list = undefined; };
-    for (const line of lines) {
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const line = lines[lineIndex] ?? '';
       if (!line.trim()) {
+        flush();
+        continue;
+      }
+      const markdownTable = parseMarkdownTable(lines, lineIndex);
+      if (markdownTable) {
+        const table = document.createElement('table');
+        const head = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        for (const value of markdownTable.headers) {
+          const cell = document.createElement('th');
+          appendInlineMarkdown(cell, value);
+          headerRow.append(cell);
+        }
+        head.append(headerRow);
+        const body = document.createElement('tbody');
+        for (const values of markdownTable.rows) {
+          const row = document.createElement('tr');
+          for (const value of values) {
+            const cell = document.createElement('td');
+            appendInlineMarkdown(cell, value);
+            row.append(cell);
+          }
+          body.append(row);
+        }
+        table.append(head, body);
+        fragment.append(table);
+        lineIndex = markdownTable.nextIndex - 1;
+        flush();
+        continue;
+      }
+      if (isMarkdownHorizontalRule(line)) {
+        fragment.append(document.createElement('hr'));
         flush();
         continue;
       }
@@ -198,6 +321,7 @@ export class ConversationView {
   private readonly gateInput = element<HTMLInputElement>('workspace-gate-input');
   private readonly gateError = element<HTMLElement>('workspace-gate-error');
   private snapshot: ConversationSnapshot | undefined;
+  private readonly expandedItemIds = new Set<string>();
   private refreshing = false;
   private refreshQueued = false;
   private busy = false;
@@ -245,7 +369,11 @@ export class ConversationView {
   }
 
   private render(snapshot: ConversationSnapshot): void {
-    const pinnedToBottom = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
+    const sessionChanged = snapshot.selectedSessionId !== this.snapshot?.selectedSessionId;
+    const wasPinned = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
+    const previousScrollTop = this.feed.scrollTop;
+    this.captureExpandedItems();
+    if (sessionChanged) this.expandedItemIds.clear();
     this.snapshot = snapshot;
     const ready = snapshot.status === 'ready';
     const workspaceLabel = element('conversation-workspace');
@@ -276,7 +404,12 @@ export class ConversationView {
     else if (snapshot.models.routable === false) this.showError('当前模型暂时不可用，请切换到其他模型');
     else if (snapshot.models.status === 'error') this.showError(snapshot.models.message ?? '模型目录暂时不可用');
     else this.hideError();
-    if (pinnedToBottom || snapshot.selectedRunning) requestAnimationFrame(() => { this.feed.scrollTop = this.feed.scrollHeight; });
+    const followTail = shouldFollowConversationTail({ sessionChanged, wasPinned });
+    requestAnimationFrame(() => {
+      this.feed.scrollTop = followTail
+        ? this.feed.scrollHeight
+        : Math.min(previousScrollTop, Math.max(0, this.feed.scrollHeight - this.feed.clientHeight));
+    });
   }
 
   private renderModels(snapshot: ConversationSnapshot): void {
@@ -375,8 +508,20 @@ export class ConversationView {
       this.feed.replaceChildren(welcome);
       return;
     }
-    const nodes = items.map((item) => this.renderItem(item));
+    const groups = groupConversationItems(items);
+    let waitingGroupIndex = -1;
     if (running && !items.some((item) => item.running)) {
+      for (let index = groups.length - 1; index >= 0; index -= 1) {
+        if (groups[index]?.kind === 'assistant-turn') {
+          waitingGroupIndex = index;
+          break;
+        }
+      }
+    }
+    const nodes = groups.map((group, index) => group.kind === 'assistant-turn'
+      ? this.renderAssistantTurn(group.items, index === waitingGroupIndex)
+      : this.renderItem(group.items[0]!));
+    if (running && !items.some((item) => item.running) && waitingGroupIndex === -1) {
       const waiting = document.createElement('article');
       waiting.className = 'message message-assistant message-waiting';
       waiting.innerHTML = '<div class="message-avatar">啾</div><div class="message-body"><span class="thinking-dots"><i></i><i></i><i></i></span></div>';
@@ -387,16 +532,9 @@ export class ConversationView {
 
   private renderItem(item: ConversationItemSnapshot): HTMLElement {
     if (item.kind === 'tool') {
-      const tool = document.createElement('details');
-      tool.className = `tool-card is-${item.toolState ?? 'running'}`;
-      const summary = document.createElement('summary');
-      const state = item.toolState === 'failed' ? '失败' : item.toolState === 'done' ? '完成' : '运行中';
-      summary.textContent = `${item.toolName ?? '工具'} · ${state}`;
-      const code = document.createElement('pre');
-      code.textContent = item.text || '无参数';
-      tool.append(summary, code);
-      return tool;
+      return this.renderToolItem(item);
     }
+    if (item.kind === 'assistant') return this.renderAssistantTurn([item], false);
     const article = document.createElement('article');
     article.className = `message message-${item.kind}${item.running ? ' is-streaming' : ''}`;
     const avatar = document.createElement('div');
@@ -412,9 +550,48 @@ export class ConversationView {
     time.textContent = formatTime(item.time);
     meta.append(author, time);
     body.append(meta);
+    this.appendAssistantContent(body, item);
+    article.append(avatar, body);
+    return article;
+  }
+
+  private renderAssistantTurn(items: ConversationItemSnapshot[], waiting: boolean): HTMLElement {
+    const first = items.find((item) => item.kind === 'assistant') ?? items[0]!;
+    const article = document.createElement('article');
+    article.className = `message message-assistant${items.some((item) => item.running) ? ' is-streaming' : ''}`;
+    article.dataset.turnId = first.turnId ?? first.id;
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = '啾';
+    const body = document.createElement('div');
+    body.className = 'message-body';
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+    const author = document.createElement('strong');
+    author.textContent = '啾啾工坊';
+    const time = document.createElement('time');
+    time.textContent = formatTime(first.time);
+    meta.append(author, time);
+    body.append(meta);
+    for (const item of items) {
+      if (item.kind === 'tool') body.append(this.renderToolItem(item));
+      else this.appendAssistantContent(body, item);
+    }
+    if (waiting) {
+      const dots = document.createElement('span');
+      dots.className = 'thinking-dots';
+      dots.innerHTML = '<i></i><i></i><i></i>';
+      body.append(dots);
+    }
+    article.append(avatar, body);
+    return article;
+  }
+
+  private appendAssistantContent(body: HTMLElement, item: ConversationItemSnapshot): void {
     if (item.reasoning) {
       const thinking = document.createElement('details');
       thinking.className = 'reasoning-block';
+      this.bindExpandedState(thinking, `${item.id}:reasoning`);
       const label = document.createElement('summary');
       label.textContent = item.running ? '正在思考' : '思考过程';
       const content = document.createElement('div');
@@ -422,8 +599,9 @@ export class ConversationView {
       thinking.append(label, content);
       body.append(thinking);
     }
+    if (!item.text && !item.running) return;
     const content = document.createElement('div');
-    content.className = 'message-content';
+    content.className = 'message-content message-content-segment';
     content.append(renderRichText(item.text));
     if (item.running) {
       const cursor = document.createElement('span');
@@ -431,8 +609,37 @@ export class ConversationView {
       content.append(cursor);
     }
     body.append(content);
-    article.append(avatar, body);
-    return article;
+  }
+
+  private renderToolItem(item: ConversationItemSnapshot): HTMLDetailsElement {
+    const tool = document.createElement('details');
+    tool.className = `tool-card is-${item.toolState ?? 'running'}`;
+    this.bindExpandedState(tool, item.id);
+    const summary = document.createElement('summary');
+    const state = item.toolState === 'failed' ? '失败' : item.toolState === 'done' ? '完成' : '运行中';
+    summary.textContent = `${item.toolName ?? '工具'} · ${state}`;
+    const code = document.createElement('pre');
+    code.textContent = item.text || '无参数';
+    tool.append(summary, code);
+    return tool;
+  }
+
+  private bindExpandedState(details: HTMLDetailsElement, id: string): void {
+    details.dataset.expandId = id;
+    details.open = this.expandedItemIds.has(id);
+    details.addEventListener('toggle', () => {
+      if (details.open) this.expandedItemIds.add(id);
+      else this.expandedItemIds.delete(id);
+    });
+  }
+
+  private captureExpandedItems(): void {
+    for (const details of Array.from(this.feed.querySelectorAll<HTMLDetailsElement>('details[data-expand-id]'))) {
+      const id = details.dataset.expandId;
+      if (!id) continue;
+      if (details.open) this.expandedItemIds.add(id);
+      else this.expandedItemIds.delete(id);
+    }
   }
 
   private async select(sessionId: string): Promise<void> {

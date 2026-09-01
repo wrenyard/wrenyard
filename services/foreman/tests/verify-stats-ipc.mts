@@ -199,7 +199,7 @@ describe('stats.summary RPC smoke', () => {
   it('returns INVALID_PARAMS for invalid stats.summary request values', async () => {
     const cases = [
       { days: 0 },
-      { days: 32 },
+      { days: 367 },
       { limit: 0 },
       { limit: 100 },
       { days: '7' as unknown as number },

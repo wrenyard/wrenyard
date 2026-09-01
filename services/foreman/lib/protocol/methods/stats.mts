@@ -130,10 +130,12 @@ export interface StatsSummaryResult {
   windows?: StatsWindowSummary[]
 }
 
+export const MAX_STATS_SUMMARY_DAYS = 366
+
 export const statsSummaryParamsSchema = {
   type: 'object',
   properties: {
-    days: { type: 'integer', minimum: 1, maximum: 31 },
+    days: { type: 'integer', minimum: 1, maximum: MAX_STATS_SUMMARY_DAYS },
     limit: { type: 'integer', minimum: 1, maximum: 50 },
   },
   additionalProperties: true,

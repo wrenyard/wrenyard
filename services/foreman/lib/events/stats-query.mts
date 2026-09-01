@@ -1,4 +1,5 @@
 import { get as dbGet, query as dbQuery } from '../db/connection.mts'
+import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
 import type {
   StatsTodayItem,
   ProfileRankingItem,
@@ -96,8 +97,8 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
   const days = params.days ?? 7
   const limit = params.limit ?? 20
 
-  if (!Number.isInteger(days) || days < 1 || days > 31) {
-    throw new Error(`Invalid days: ${days}. Must be an integer between 1 and 31.`)
+  if (!Number.isInteger(days) || days < 1 || days > MAX_STATS_SUMMARY_DAYS) {
+    throw new Error(`Invalid days: ${days}. Must be an integer between 1 and ${MAX_STATS_SUMMARY_DAYS}.`)
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
     throw new Error(`Invalid limit: ${limit}. Must be an integer between 1 and 50.`)
@@ -106,13 +107,14 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
   const todayWindow = localDayWindow(now)
   const dailyBuckets = buildDailyBuckets(now, days)
 
-  // One fixed 31-local-day scan covers the 24h/7d/1mo windows and the
-  // requested daily buckets; shorter days requests only shrink the buckets.
+  // Keep the fixed 31-local-day period window while allowing the daily
+  // activity projection to extend to a full year.
   const windowsStartIso = localDayOffsetStartIso(now, -(31 - 1))
-  const fullStartIso = windowsStartIso
+  const dailyStartIso = localDayOffsetStartIso(now, -(days - 1))
+  const fullStartIso = days > 31 ? dailyStartIso : windowsStartIso
   const fullEndIso = todayWindow.endAt
 
-  // One bounded events query over the longest 31-day window
+  // One bounded events query over the longest requested projection.
   const allEventsRows = dbQuery<StatsEventRow>(
     `SELECT e.type, e.data, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template
      FROM events e INDEXED BY idx_event_created_at

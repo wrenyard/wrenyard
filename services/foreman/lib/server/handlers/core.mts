@@ -6,6 +6,7 @@ import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activit
 import { listDbEvents } from '../../events/event-query.mts'
 import { readTodayStats, readStatsSummary } from '../../events/stats-query.mts'
 import type { StatsSummaryResult } from '../../protocol/registry.mts'
+import { MAX_STATS_SUMMARY_DAYS } from '../../protocol/methods/stats.mts'
 import { createPmTicketCommandsForWorkspace } from '../../daemon/services/pm-ticket-service.mts'
 import { createTaskGraphService } from '../../daemon/services/taskgraph-service.mts'
 import { PmError } from '../../core/pm/index.mts'
@@ -175,9 +176,9 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   router.register('stats.summary', (params) => {
     const days = typeof params.days === 'number' ? params.days : 7
     const limit = typeof params.limit === 'number' ? params.limit : 20
-    if (!Number.isInteger(days) || days < 1 || days > 31) {
+    if (!Number.isInteger(days) || days < 1 || days > MAX_STATS_SUMMARY_DAYS) {
       throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: `Invalid days: ${days}. Must be an integer between 1 and 31.` },
+        { code: INVALID_PARAMS.code, message: `Invalid days: ${days}. Must be an integer between 1 and ${MAX_STATS_SUMMARY_DAYS}.` },
         { param: 'days', value: days },
       )
     }
