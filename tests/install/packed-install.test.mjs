@@ -326,8 +326,25 @@ function assertInstallPs1LinkOnlyRemoval(root) {
   );
 }
 
+function assertInstallPs1LongPathCopy(root) {
+  const source = fs.readFileSync(path.join(root, 'scripts', 'install.ps1'), 'utf8');
+  assert.match(source, /function Copy-DirectoryTree \{/);
+  assert.match(source, /robocopy\.exe/);
+  assert.match(source, /\$LASTEXITCODE -ge 8/);
+  assert.match(source, /Copy-DirectoryTree -Source \$extract -Destination \$stagingDir/);
+  assert.doesNotMatch(
+    source,
+    /Copy-Item -Path \(Join-Path \$extract '\*'\) -Destination \$stagingDir -Recurse/,
+    'the installer must not stage deep dependency trees through Copy-Item',
+  );
+}
+
 test('Windows installer removes current through link-only System.IO APIs', () => {
   assertInstallPs1LinkOnlyRemoval(ROOT);
+});
+
+test('Windows installer stages long dependency paths through robocopy', () => {
+  assertInstallPs1LongPathCopy(ROOT);
 });
 
 // Pet is a Desktop module and must not return as a separately downloaded or
@@ -725,7 +742,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
       const zipUrl = `http://127.0.0.1:${port}/${path.basename(zipPath)}`;
       if (process.platform === 'win32') {
         await runAsync('powershell.exe', [
-          '-NoProfile', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
@@ -778,7 +795,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
       fs.writeFileSync(tamperTarget, tamperMarker);
       if (process.platform === 'win32') {
         await runAsync('powershell.exe', [
-          '-NoProfile', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT, 'scripts', 'install.ps1'),
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
