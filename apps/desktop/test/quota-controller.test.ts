@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { QuotaProviderState } from '@wrenyard/pet/runtime';
 import type { ProviderAuthStatus } from '../src/shell-contract.js';
-import { projectQuotaSnapshot } from '../src/quota-controller.js';
+import { DesktopQuotaController, projectQuotaSnapshot } from '../src/quota-controller.js';
 
 const providers: QuotaProviderState[] = [
   {
@@ -29,12 +29,16 @@ const providers: QuotaProviderState[] = [
   },
 ];
 
-test('quota projection follows Desktop settings order and hides disabled providers', () => {
+test('quota projection follows provider order, ignores legacy enablement, and shows only active quota sources', () => {
   const snapshot = projectQuotaSnapshot(providers, [
     { id: 'deepseek', enabled: true },
     { id: 'cursor', enabled: false },
-    { id: 'codex', enabled: true },
-  ], 123);
+    { id: 'codex', enabled: false },
+  ], 123, undefined, [
+    { id: 'deepseek', configured: true, authMode: 'environment' },
+    { id: 'cursor', configured: false, authMode: 'native' },
+    { id: 'codex', configured: true, authMode: 'native' },
+  ]);
 
   assert.equal(snapshot.status, 'available');
   assert.equal(snapshot.refreshedAt, 123);
@@ -43,20 +47,16 @@ test('quota projection follows Desktop settings order and hides disabled provide
   assert.deepEqual(snapshot.providers[1].windows, [{ name: '7d', remainingPct: 75.8, expectedRemainingPct: 64.2 }]);
 });
 
-test('quota projection keeps configured providers visible when a runtime result is missing', () => {
-  const snapshot = projectQuotaSnapshot([], [{ id: 'cursor', enabled: true }], 456, 'runtime unavailable');
+test('quota projection omits configured providers when the runtime has no quota source', () => {
+  const snapshot = projectQuotaSnapshot([], [{ id: 'cursor', enabled: true }], 456, 'runtime unavailable', [
+    { id: 'cursor', configured: true, authMode: 'native' },
+  ]);
 
   assert.equal(snapshot.status, 'unavailable');
   assert.equal(snapshot.message, 'runtime unavailable');
-  assert.deepEqual(snapshot.providers, [{
-    id: 'cursor',
-    label: 'cursor',
-    status: 'unavailable',
-    stale: false,
-    windows: [],
-    balances: [],
-    message: '当前额度结果中没有这个来源。',
-  }]);
+  assert.deepEqual(snapshot.providers, []);
+  assert.equal(snapshot.catalog[0].configured, true);
+  assert.equal(snapshot.catalog[0].quota, undefined);
 });
 
 test('quota projection clamps malformed percentages at the renderer boundary', () => {
@@ -74,7 +74,7 @@ test('quota projection clamps malformed percentages at the renderer boundary', (
   assert.equal(snapshot.providers[0].windows[0].expectedRemainingPct, 0);
 });
 
-test('catalog keeps disabled quota providers visible but the tray projection does not', () => {
+test('catalog keeps inactive providers visible while quota surfaces show only active sources with data', () => {
   const discovered: ProviderAuthStatus[] = [
     { id: 'kimi-coding', configured: false, authMode: 'api-key' },
     { id: 'deepseek', configured: true, authMode: 'environment' },
@@ -85,9 +85,13 @@ test('catalog keeps disabled quota providers visible but the tray projection doe
     { id: 'kimi-coding', enabled: true },
   ], 123, undefined, discovered);
 
-  assert.deepEqual(snapshot.providers.map((p) => p.id), ['deepseek', 'kimi-coding']);
+  assert.deepEqual(snapshot.providers.map((p) => p.id), ['deepseek', 'codex']);
   assert.deepEqual(snapshot.catalog.map((c) => c.id), ['deepseek', 'codex', 'cursor', 'kimi-coding']);
-  assert.deepEqual(snapshot.providerOrder.map((p) => p.id), ['deepseek', 'cursor', 'kimi-coding']);
+  assert.deepEqual(snapshot.providerOrder, [
+    { id: 'deepseek', enabled: true },
+    { id: 'cursor', enabled: true },
+    { id: 'kimi-coding', enabled: true },
+  ]);
   const cursor = snapshot.catalog.find((c) => c.id === 'cursor')!;
   assert.equal(cursor.configured, false);
   assert.equal(cursor.authMode, 'native');
@@ -121,7 +125,7 @@ test('catalog migrates legacy xai state and presents the SpaceXAI provider name'
   ]);
 
   assert.deepEqual(snapshot.providerOrder, [{ id: 'spacex-ai', enabled: true }]);
-  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['spacex-ai']);
+  assert.deepEqual(snapshot.providers, []);
   const row = snapshot.catalog.find((entry) => entry.id === 'spacex-ai')!;
   assert.equal(row.label, 'SpaceXAI');
   assert.equal(row.configured, true);
@@ -195,8 +199,7 @@ test('quota projection never exposes raw provider failures to product surfaces',
 
   assert.equal(JSON.stringify(snapshot).includes('all claude sources exhausted'), false);
   assert.equal(JSON.stringify(snapshot).includes('Grok 登录已失效'), false);
-  assert.equal(snapshot.providers[0].message, '额度数据暂不可用。');
-  assert.equal(snapshot.providers[1].message, '额度数据暂不可用。');
+  assert.deepEqual(snapshot.providers, []);
 
   const anthropic = snapshot.catalog.find((entry) => entry.id === 'anthropic')!;
   assert.equal(anthropic.configured, false);
@@ -221,15 +224,18 @@ test('SuperGrok distinguishes missing configuration from expired login and query
   });
 
   const missing = projectQuotaSnapshot([makeProvider('configuration_missing')], [{ id: 'super-grok', enabled: true }]);
+  assert.deepEqual(missing.providers, []);
   assert.equal(missing.catalog[0].configured, false);
   assert.equal(missing.catalog[0].authMode, 'native');
   assert.equal(missing.catalog[0].quota?.message, '尚未配置，请先完成 Grok 登录。');
 
   const expired = projectQuotaSnapshot([makeProvider('authentication_required')], [{ id: 'super-grok', enabled: true }]);
+  assert.deepEqual(expired.providers, []);
   assert.equal(expired.catalog[0].configured, false);
   assert.equal(expired.catalog[0].quota?.message, '登录已失效，请重新登录后刷新。');
 
   const failed = projectQuotaSnapshot([makeProvider('quota_query_failed')], [{ id: 'super-grok', enabled: true }]);
+  assert.deepEqual(failed.providers.map((provider) => provider.id), ['super-grok']);
   assert.equal(failed.catalog[0].configured, true);
   assert.equal(failed.catalog[0].quota?.message, '额度查询失败，请稍后刷新。');
   assert.equal(JSON.stringify(failed).includes('runtime detail'), false);
@@ -309,5 +315,43 @@ test('duplicate codebuddy discovery merges with configured=true winning', () => 
 test('connected CodeBuddy with no observation says quota lookup is unavailable', () => {
   const discovered: ProviderAuthStatus[] = [{ id: 'codebuddy', configured: true, authMode: 'native' }];
   const snapshot = projectQuotaSnapshot([], [{ id: 'codebuddy', enabled: true }], 1, undefined, discovered);
-  assert.equal(snapshot.providers[0].message, '此 Provider 暂不提供额度查询。');
+  assert.deepEqual(snapshot.providers, []);
+  assert.equal(snapshot.catalog[0].configured, true);
+  assert.equal(snapshot.catalog[0].quota, undefined);
+});
+
+test('controller sends Pet only the active quota subset in provider order', async (t) => {
+  const missingSuperGrok: QuotaProviderState = {
+    id: 'super-grok',
+    label: 'SuperGrok',
+    status: 'unavailable',
+    stale: false,
+    displayLine: null,
+    error: 'not configured',
+    code: 'configuration_missing',
+  };
+  let projected: QuotaProviderState[] = [];
+  const controller = new DesktopQuotaController({
+    source: { listProviders: async () => [providers[0], missingSuperGrok, providers[1]] },
+    providerSource: {
+      listProviders: async () => [
+        { id: 'codex', configured: true, authMode: 'native' },
+        { id: 'super-grok', configured: false, authMode: 'native' },
+        { id: 'deepseek', configured: true, authMode: 'environment' },
+      ],
+    },
+    getProviderOrder: () => [
+      { id: 'deepseek', enabled: false },
+      { id: 'super-grok', enabled: true },
+      { id: 'codex', enabled: true },
+    ],
+    onChanged: (_snapshot, next) => { projected = next; },
+    refreshIntervalMs: 60_000,
+  });
+  t.after(() => controller.stop());
+
+  const snapshot = await controller.start();
+
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['deepseek', 'codex']);
+  assert.deepEqual(projected.map((provider) => provider.id), ['deepseek', 'codex']);
 });

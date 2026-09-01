@@ -8,12 +8,13 @@ const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const petRoot = join(desktopRoot, '..', 'pet');
 
 test('Desktop owns the product tray, Pet runtime, conversations, statistics and settings bridge', async () => {
-  const [main, tray, quotaMenuIcon, contract, renderer, rendererStyles, conversationRenderer, shellWindow] = await Promise.all([
+  const [main, tray, quotaMenuIcon, contract, renderer, rendererScript, rendererStyles, conversationRenderer, shellWindow] = await Promise.all([
     readFile(join(desktopRoot, 'src', 'main.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'desktop-tray.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'quota-menu-icon.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'shell-contract.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8'),
+    readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8'),
@@ -29,6 +30,8 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.doesNotMatch(tray, /tray\.on\(['"]click['"]/);
   assert.match(tray, /桌宠/);
   assert.match(tray, /label: '额度'/);
+  assert.match(tray, /暂无可展示额度/);
+  assert.doesNotMatch(tray, /未启用额度来源/);
   assert.match(tray, /label: '退出'/);
   assert.match(quotaMenuIcon, /nativeImage\.createFromBuffer/);
   assert.match(quotaMenuIcon, /setTemplateImage\(true\)/);
@@ -47,7 +50,11 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(renderer, /id="quota-title">模型供应/);
   assert.match(renderer, /模型供应/);
   assert.match(renderer, /id="quota-provider-grid"/);
-  assert.match(renderer, /共享同一排序/);
+  assert.match(renderer, /Provider 次序同时用于模型供应与额度显示/);
+  assert.doesNotMatch(renderer, /id="pet-provider-list"|settings-subtitle">额度来源/);
+  assert.doesNotMatch(rendererScript, /function renderProviders|function moveProvider/);
+  assert.match(rendererScript, /entry\.configured \? quotaProviderOrderButtons/);
+  assert.match(rendererScript, /entry\.configured \? '更新 Key' : '激活 Provider'/);
   assert.match(rendererStyles, /grid-template-columns: minmax\(200px, \.9fr\) minmax\(0, 1\.6fr\) 176px/);
   assert.match(rendererStyles, /\.provider-directory-action \{ width: 176px;/);
   assert.match(renderer, /id="provider-dialog"/);

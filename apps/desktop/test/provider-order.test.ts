@@ -6,13 +6,13 @@ import {
   swapProviders,
 } from '../src/provider-order.js';
 
-test('provider ordering preserves enablement and adds discoveries disabled', () => {
+test('provider ordering migrates legacy enablement away and activates new discoveries', () => {
   assert.deepEqual(reorderProviders([
     { id: 'codex', enabled: true },
     { id: 'cursor', enabled: false },
   ], ['cursor', 'anthropic', 'codex']), [
-    { id: 'cursor', enabled: false },
-    { id: 'anthropic', enabled: false },
+    { id: 'cursor', enabled: true },
+    { id: 'anthropic', enabled: true },
     { id: 'codex', enabled: true },
   ]);
 });

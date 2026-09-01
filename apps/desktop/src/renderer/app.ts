@@ -321,7 +321,6 @@ function renderPet(snapshot: SettingsSnapshot): void {
   setChecked('pet-show-house', petDraft.entities.house);
   setChecked('pet-show-workers', petDraft.entities.workers);
   setChecked('pet-show-taskgraphs', petDraft.entities.taskgraphs);
-  renderProviders();
 }
 
 function petStatusLabel(status: SettingsSnapshot['pet']['status']): string {
@@ -368,33 +367,6 @@ function collectPetSettings(): PetCompanionSettings | null {
   };
 }
 
-function renderProviders(): void {
-  const providers = petDraft?.quota.providers ?? [];
-  requireElement('pet-provider-list').replaceChildren(...providers.map((provider, index) => {
-    const row = document.createElement('div');
-    row.className = 'provider-row';
-    const toggle = document.createElement('input');
-    toggle.type = 'checkbox';
-    toggle.checked = provider.enabled;
-    toggle.setAttribute('aria-label', `显示 ${provider.id}`);
-    toggle.addEventListener('change', () => {
-      if (!petDraft) return;
-      petDraft.quota.providers[index].enabled = toggle.checked;
-      markPetDirty();
-    });
-    const id = document.createElement('span');
-    id.className = 'provider-id';
-    id.textContent = provider.id;
-    row.append(
-      toggle,
-      id,
-      providerMoveButton('↑', index === 0, () => moveProvider(index, index - 1)),
-      providerMoveButton('↓', index === providers.length - 1, () => moveProvider(index, index + 1)),
-    );
-    return row;
-  }));
-}
-
 function providerMoveButton(label: string, disabled: boolean, move: () => void): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button';
@@ -404,15 +376,6 @@ function providerMoveButton(label: string, disabled: boolean, move: () => void):
   button.setAttribute('aria-label', label === '↑' ? '上移' : '下移');
   button.addEventListener('click', move);
   return button;
-}
-
-function moveProvider(from: number, to: number): void {
-  if (!petDraft || to < 0 || to >= petDraft.quota.providers.length) return;
-  const current = petDraft.quota.providers[from];
-  const neighbor = petDraft.quota.providers[to];
-  petDraft.quota.providers = swapProviders(petDraft.quota.providers, current.id, neighbor.id);
-  renderProviders();
-  markPetDirty();
 }
 
 function renderStats(snapshot: StatsSnapshot): void {
@@ -469,14 +432,14 @@ function quotaProviderRow(
     ? '未配置'
     : entry.quota?.code === 'authentication_required'
       ? '未登录'
-      : entry.authMode === 'none'
-        ? '无需配置'
-        : entry.configured
-          ? '已配置'
-          : entry.authMode === 'native' ? '未登录' : '未配置';
+      : entry.configured
+        ? entry.authMode === 'none' ? '无需配置' : '已配置'
+        : entry.authMode === 'native' ? '未登录' : '未激活';
   const meta = document.createElement('div');
   meta.className = 'provider-directory-header-meta';
-  meta.append(state, quotaProviderOrderButtons(entry, index, catalog));
+  const orderButtons = entry.configured ? quotaProviderOrderButtons(entry, index, catalog) : undefined;
+  meta.append(state);
+  if (orderButtons) meta.append(orderButtons);
   header.append(identity, meta);
 
   const quota = document.createElement('div');
@@ -532,6 +495,13 @@ async function saveQuotaProviderMove(
 }
 
 function appendQuotaContent(container: HTMLElement, entry: ProviderCatalogSnapshot): void {
+  if (!entry.configured) {
+    const note = document.createElement('p');
+    note.className = 'quota-provider-detail';
+    note.textContent = '请先激活 Provider；激活后才会加入模型与额度服务。';
+    container.append(note);
+    return;
+  }
   const quota = entry.quota;
   if (!quota) {
     const note = document.createElement('p');
@@ -618,7 +588,7 @@ function providerRowAction(entry: ProviderCatalogSnapshot): HTMLElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary-button';
-    button.textContent = entry.configured ? '更新 Key' : '配置 Key';
+    button.textContent = entry.configured ? '更新 Key' : '激活 Provider';
     button.addEventListener('click', () => openProviderDialog(entry));
     wrap.append(button);
     return wrap;
@@ -630,14 +600,14 @@ function providerRowAction(entry: ProviderCatalogSnapshot): HTMLElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary-button';
-    button.textContent = '查看指引';
+    button.textContent = entry.configured ? '查看指引' : '激活 Provider';
     button.addEventListener('click', () => openProviderDialog(entry));
     wrap.append(hint, button);
     return wrap;
   }
   const hint = document.createElement('span');
   hint.className = 'provider-directory-hint';
-  hint.textContent = providerModeHint(mode);
+  hint.textContent = entry.configured ? providerModeHint(mode) : '等待 Runtime 激活';
   wrap.append(hint);
   return wrap;
 }

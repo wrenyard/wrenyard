@@ -187,13 +187,13 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
         "document.body?.innerText.includes('啾啾工坊设置') === true",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getSettings().then((value) => value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && (value?.update?.channel === 'dev' || value?.update?.channel === 'stable')).catch(() => false)",
+        "window.wrenyardShell.getSettings().then((value) => value?.service?.status === 'connected' && value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && (value?.update?.channel === 'dev' || value?.update?.channel === 'stable')).catch(() => false)",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getConversation().then((value) => value?.status === 'ready' && Array.isArray(value?.sessions)).catch(() => false)",
+        "window.wrenyardShell.getConversation().then((value) => value?.status === 'ready' && Array.isArray(value?.sessions) && value?.models?.status === 'ready' && value?.models?.routable === true && value.models.groups.length > 0).catch(() => false)",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers)).catch(() => false)",
+        "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers) && value.providers.every((provider) => value.catalog?.some((entry) => entry.id === provider.id && entry.configured === true && entry.quota))).catch(() => false)",
       ),
     ]);
     shell.setPage('settings', false);
@@ -430,7 +430,13 @@ async function bootstrap(): Promise<void> {
       if (await updateController!.launchPreparedUpdate()) setImmediate(() => app.quit());
     },
     savePetSettings: async (settings: PetCompanionSettings) => {
-      await petController!.saveSettings(settings);
+      // Provider order has one mutation surface: the Provider page. A stale
+      // settings draft must never overwrite that order when Pet settings save.
+      const providerOrder = petController!.getConfig().quota.providers;
+      await petController!.saveSettings({
+        ...settings,
+        quota: { providers: providerOrder },
+      });
       quotaController?.notifyConfigurationChanged();
       return getSettings();
     },

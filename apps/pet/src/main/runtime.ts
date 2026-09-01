@@ -167,7 +167,7 @@ export class DesktopPetRuntime {
 
   private applyProvidersToHouseTips(providers: QuotaProviderState[]): void {
     if (!this.entityManager) return;
-    const order = this.config.quota.providers.filter((provider) => provider.enabled).map((provider) => provider.id);
+    const order = providers.map((provider) => provider.id);
     this.entityManager.setQuotaTips(buildQuotaTips(providers, order));
   }
 

@@ -123,9 +123,13 @@ export class DesktopPetController {
   }
 
   async saveProviderOrder(providerIds: string[]): Promise<void> {
-    const current = serializePetSettings(this.getConfig());
-    current.quota.providers = reorderProviders(current.quota.providers, providerIds);
-    await this.saveSettings(current);
+    const current = this.getConfig();
+    const providers = reorderProviders(current.quota.providers, providerIds);
+    if (JSON.stringify(providers) === JSON.stringify(current.quota.providers)) return;
+    this.save({
+      ...current,
+      quota: { providers },
+    });
   }
 
   setQuotaProviders(providers: QuotaProviderState[]): void {

@@ -54,7 +54,7 @@ export function createDesktopTray(options: DesktopTrayOptions): DesktopTrayHandl
             ? { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false }
             : { label: '\u200B', icon, enabled: false };
         })
-      : [{ label: quota.status === 'available' ? '未启用额度来源' : '额度暂不可用', enabled: false }];
+      : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];
 
     const contextMenu = Menu.buildFromTemplate([
       { label: '打开', click: options.openDesktop },

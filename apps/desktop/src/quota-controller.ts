@@ -72,7 +72,7 @@ export class DesktopQuotaController {
 
   notifyConfigurationChanged(): QuotaSnapshot {
     const snapshot = this.snapshot();
-    this.options.onChanged?.(snapshot, cloneProviders(this.providers));
+    this.options.onChanged?.(snapshot, selectVisibleProviderStates(this.providers, snapshot));
     return snapshot;
   }
 
@@ -102,7 +102,7 @@ export class DesktopQuotaController {
       this.message = '暂时无法读取额度数据，请稍后刷新。';
     }
     const snapshot = this.snapshot();
-    this.options.onChanged?.(snapshot, cloneProviders(this.providers));
+    this.options.onChanged?.(snapshot, selectVisibleProviderStates(this.providers, snapshot));
     return snapshot;
   }
 }
@@ -117,18 +117,12 @@ export function projectQuotaSnapshot(
   const canonicalProviders = canonicalizeProviders(providers);
   const canonicalOrder = canonicalizeOrder(configuredOrder);
   const canonicalDiscovered = canonicalizeDiscovered(discovered);
-  const byId = new Map(canonicalProviders.map((provider) => [provider.id, provider]));
-  const seen = new Set<string>();
-  const order = canonicalOrder.filter((entry) => {
-    if (!entry.enabled || seen.has(entry.id)) return false;
-    seen.add(entry.id);
-    return true;
-  });
-  const projected = order.map((entry) => projectProvider(entry.id, byId.get(entry.id)));
+  const catalog = projectCatalog(canonicalProviders, canonicalOrder, canonicalDiscovered);
+  const projected = catalog.flatMap((entry) => entry.configured && entry.quota ? [entry.quota] : []);
   return {
-    status: canonicalProviders.length > 0 || order.length === 0 ? 'available' : 'unavailable',
+    status: canonicalProviders.length > 0 || canonicalOrder.length === 0 ? 'available' : 'unavailable',
     providers: projected,
-    catalog: projectCatalog(canonicalProviders, canonicalOrder, canonicalDiscovered),
+    catalog,
     providerOrder: normalizeProviderOrder(canonicalOrder),
     ...(refreshedAt !== undefined ? { refreshedAt } : {}),
     ...(message ? { message: sanitizeQuotaText(message) } : {}),
@@ -168,18 +162,7 @@ function canonicalizeDiscovered(discovered: ProviderAuthStatus[]): ProviderAuthS
   return [...byId.values()];
 }
 
-function projectProvider(id: string, provider: QuotaProviderState | undefined): QuotaProviderSnapshot {
-  if (!provider) {
-    return {
-      id,
-      label: id,
-      status: 'unavailable',
-      stale: false,
-      windows: [],
-      balances: [],
-      message: id === 'codebuddy' ? '此 Provider 暂不提供额度查询。' : '当前额度结果中没有这个来源。',
-    };
-  }
+function projectProvider(id: string, provider: QuotaProviderState): QuotaProviderSnapshot {
   const windows: QuotaWindowSnapshot[] = (provider.bars?.windows ?? []).map((window) => ({
     name: sanitizeQuotaText(window.name),
     remainingPct: clampPercentage(window.remainingPct),
@@ -437,6 +420,18 @@ function cloneProviders(providers: QuotaProviderState[]): QuotaProviderState[] {
     } : {}),
     ...(provider.balances ? { balances: provider.balances.map((balance) => ({ ...balance })) } : {}),
   }));
+}
+
+/** Preserve the Provider page order while withholding inactive/non-quota rows from Pet. */
+function selectVisibleProviderStates(
+  providers: QuotaProviderState[],
+  snapshot: QuotaSnapshot,
+): QuotaProviderState[] {
+  const byId = new Map(canonicalizeProviders(providers).map((provider) => [provider.id, provider]));
+  return snapshot.providers.flatMap((provider) => {
+    const source = byId.get(provider.id);
+    return source ? cloneProviders([source]) : [];
+  });
 }
 
 function clampPercentage(value: number): number {
