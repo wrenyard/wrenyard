@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { homedir } from 'node:os';
-import { sep } from 'node:path';
+import { join } from 'node:path';
 import * as xdg from '../scripts/lib/xdg.mjs';
 import * as xdgTs from '../src/main/xdg';
 
@@ -19,7 +19,7 @@ describe('xdg (.mjs)', () => {
 
     it('defaults to ~/.config when XDG_CONFIG_HOME is unset', () => {
       delete process.env.XDG_CONFIG_HOME;
-      const expected = [homedir(), '.config'].join(sep);
+      const expected = join(homedir(), '.config');
       expect(xdg.configHome()).toBe(expected);
     });
   });
@@ -32,7 +32,7 @@ describe('xdg (.mjs)', () => {
 
     it('defaults to ~/.local/state when XDG_STATE_HOME is unset', () => {
       delete process.env.XDG_STATE_HOME;
-      const expected = [homedir(), '.local', 'state'].join(sep);
+      const expected = join(homedir(), '.local', 'state');
       expect(xdg.stateHome()).toBe(expected);
     });
   });
@@ -40,22 +40,22 @@ describe('xdg (.mjs)', () => {
   describe('stateDir', () => {
     it('composes stateHome + wrenyard/pet', () => {
       process.env.XDG_STATE_HOME = '/custom/state';
-      expect(xdg.stateDir()).toBe(['/custom/state', 'wrenyard', 'pet'].join(sep));
+      expect(xdg.stateDir()).toBe(join('/custom/state', 'wrenyard', 'pet'));
     });
   });
 
   describe('configDir', () => {
     it('composes configHome + wrenyard/pet', () => {
       process.env.XDG_CONFIG_HOME = '/custom/config';
-      expect(xdg.configDir()).toBe(['/custom/config', 'wrenyard', 'pet'].join(sep));
+      expect(xdg.configDir()).toBe(join('/custom/config', 'wrenyard', 'pet'));
     });
   });
 
   describe('log path composition', () => {
     it('logs/pet.log is under stateDir/logs', () => {
       process.env.XDG_STATE_HOME = '/custom/state';
-      const logPath = [xdg.stateDir(), 'logs', 'pet.log'].join(sep);
-      expect(logPath).toBe(['/custom/state', 'wrenyard', 'pet', 'logs', 'pet.log'].join(sep));
+      const logPath = join(xdg.stateDir(), 'logs', 'pet.log');
+      expect(logPath).toBe(join('/custom/state', 'wrenyard', 'pet', 'logs', 'pet.log'));
     });
   });
 });
@@ -77,23 +77,23 @@ describe('xdg (.ts)', () => {
 
   it('configDir composes configHome + wrenyard/pet', () => {
     process.env.XDG_CONFIG_HOME = '/custom/config';
-    expect(xdgTs.configDir()).toBe(['/custom/config', 'wrenyard', 'pet'].join(sep));
+    expect(xdgTs.configDir()).toBe(join('/custom/config', 'wrenyard', 'pet'));
   });
 
   it('stateDir composes stateHome + wrenyard/pet', () => {
     process.env.XDG_STATE_HOME = '/custom/state';
-    expect(xdgTs.stateDir()).toBe(['/custom/state', 'wrenyard', 'pet'].join(sep));
+    expect(xdgTs.stateDir()).toBe(join('/custom/state', 'wrenyard', 'pet'));
   });
 
   it('configHome defaults to ~/.config', () => {
     delete process.env.XDG_CONFIG_HOME;
-    const expected = [homedir(), '.config'].join(sep);
+    const expected = join(homedir(), '.config');
     expect(xdgTs.configHome()).toBe(expected);
   });
 
   it('stateHome defaults to ~/.local/state', () => {
     delete process.env.XDG_STATE_HOME;
-    const expected = [homedir(), '.local', 'state'].join(sep);
+    const expected = join(homedir(), '.local', 'state');
     expect(xdgTs.stateHome()).toBe(expected);
   });
 });
@@ -108,8 +108,8 @@ describe('cross-module parity (mjs vs ts)', () => {
     process.env.XDG_STATE_HOME = '/custom/state';
     expect(xdg.configDir()).toBe(xdgTs.configDir());
     expect(xdg.stateDir()).toBe(xdgTs.stateDir());
-    expect([xdg.stateDir(), 'logs', 'pet.log'].join(sep)).toBe(
-      [xdgTs.stateDir(), 'logs', 'pet.log'].join(sep),
+    expect(join(xdg.stateDir(), 'logs', 'pet.log')).toBe(
+      join(xdgTs.stateDir(), 'logs', 'pet.log'),
     );
   });
 

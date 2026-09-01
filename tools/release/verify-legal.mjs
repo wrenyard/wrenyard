@@ -83,7 +83,7 @@ export function collectCertFiles(root) {
 
 export function collectErrors(root) {
   const errors = [];
-  const rel = (file) => path.relative(root, file) || path.basename(file);
+  const rel = (file) => (path.relative(root, file) || path.basename(file)).split(path.sep).join('/');
 
   for (const manifestFile of findFirstPartyManifests(root)) {
     let manifest;
