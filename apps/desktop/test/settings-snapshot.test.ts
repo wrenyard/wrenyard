@@ -30,6 +30,7 @@ test('settings snapshot exposes health and credential presence without secrets',
     desktopVersion: '1.0.0-dev.14',
     wrenyardVersion: '1.0.0-dev.14',
     dshVersion: '0.1.0-rc.6',
+    buildTime: '2026-09-01T02:03:04.000Z',
     readHealth: async () => ({ connected: true, uptimeMs: 125_000 }),
     readCredentialEnv: async () => ({
       FORGE_DSH_KIMI_CODING_API_KEY: 'fixture-credential-value',
@@ -65,6 +66,13 @@ test('settings snapshot exposes health and credential presence without secrets',
   }
   assert.deepEqual(snapshot.pet, pet);
   assert.equal(snapshot.update.channel, 'dev');
+  assert.deepEqual(snapshot.about, {
+    desktopVersion: '1.0.0-dev.14',
+    wrenyardVersion: '1.0.0-dev.14',
+    dshVersion: '0.1.0-rc.6',
+    buildTime: '2026-09-01T02:03:04.000Z',
+    channel: 'dev',
+  });
   assert.equal(JSON.stringify(snapshot).includes('fixture-credential-value'), false);
 });
 
@@ -97,4 +105,5 @@ test('settings snapshot degrades health and credentials independently', async ()
 
   assert.equal(snapshot.service.status, 'unavailable');
   assert.ok(snapshot.models.every((model) => model.configured === false));
+  assert.equal('buildTime' in snapshot.about, false);
 });

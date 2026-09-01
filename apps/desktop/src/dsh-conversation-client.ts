@@ -199,6 +199,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
   const drafts = new Map<string, ConversationItemSnapshot & { order: number }>();
   const finalizedSteps = new Set<string>();
   const tools = new Map<string, ConversationItemSnapshot & { order: number }>();
+  let activeTurnId: string | undefined;
 
   for (const [order, entry] of entries.entries()) {
     const event = entry.event;
@@ -209,6 +210,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
 
     if (type === 'user/message') {
       if (isObject(data.source) && data.source.kind !== 'user') continue;
+      activeTurnId = undefined;
       const text = contentText(data.content);
       if (text) items.push({ id: `user-${seq}`, kind: 'user', text, time, order });
       continue;
@@ -216,20 +218,23 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
 
     if (type === 'assistant/chunk') {
       const chunk = isObject(data.chunk) ? data.chunk : {};
-      const turn = asNumber(data.turn) ?? 0;
+      const turn = asNumber(data.turn);
       const step = asNumber(data.step) ?? 0;
-      const key = `${turn}:${step}`;
-      if (finalizedSteps.has(key)) continue;
       const chunkType = asString(chunk.type);
       if (chunkType !== 'text-delta' && chunkType !== 'reasoning-delta') continue;
       const delta = asString(chunk.text) ?? '';
       if (!delta) continue;
+      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
+      const key = `${turnId}:${step}`;
+      activeTurnId = turnId;
+      if (finalizedSteps.has(key)) continue;
       const draft = drafts.get(key) ?? {
         id: `assistant-draft-${key}`,
         kind: 'assistant' as const,
         text: '',
         reasoning: '',
         time,
+        turnId,
         running: true,
         order,
       };
@@ -240,9 +245,11 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
     }
 
     if (type === 'assistant/message') {
-      const turn = asNumber(data.turn) ?? 0;
+      const turn = asNumber(data.turn);
       const step = asNumber(data.step) ?? 0;
-      const key = `${turn}:${step}`;
+      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
+      const key = `${turnId}:${step}`;
+      activeTurnId = turnId;
       finalizedSteps.add(key);
       drafts.delete(key);
       const message = isObject(data.message) ? data.message : {};
@@ -253,6 +260,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
           id: `assistant-${seq}`,
           kind: 'assistant',
           text,
+          turnId,
           ...(reasoning ? { reasoning } : {}),
           time,
           order,
@@ -272,6 +280,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         toolState: 'running',
         text: args ? args.slice(0, 4_000) : '',
         time,
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
         order,
       };
       tools.set(callId, item);

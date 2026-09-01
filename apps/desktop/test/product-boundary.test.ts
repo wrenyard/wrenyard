@@ -8,7 +8,7 @@ const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const petRoot = join(desktopRoot, '..', 'pet');
 
 test('Desktop owns the product tray, Pet runtime, conversations, statistics and settings bridge', async () => {
-  const [main, tray, quotaMenuIcon, contract, renderer, rendererScript, rendererStyles, conversationRenderer, shellWindow] = await Promise.all([
+  const [main, tray, quotaMenuIcon, contract, renderer, rendererScript, rendererStyles, conversationRenderer, shellWindow, preload] = await Promise.all([
     readFile(join(desktopRoot, 'src', 'main.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'desktop-tray.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'quota-menu-icon.ts'), 'utf8'),
@@ -18,6 +18,7 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
     readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8'),
+    readFile(join(desktopRoot, 'src', 'preload.ts'), 'utf8'),
   ]);
 
   assert.match(main, /createDesktopTray/);
@@ -44,6 +45,9 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(contract, /saveProviderOrder/);
   assert.match(contract, /conversationSnapshot/);
   assert.match(renderer, /id="stats-page"/);
+  assert.match(renderer, /id="stats-heat-tooltip"/);
+  assert.doesNotMatch(renderer, /最近一年；每列一周|具名 Profile 的调度|按累计耗时排序/);
+  assert.match(renderer, /id="desktop-build-time"/);
   assert.doesNotMatch(renderer, /stats-day-label|SQLite 权威汇总/);
   assert.match(renderer, /id="quota-page"/);
   assert.match(renderer, /id="quota-nav"[^>]+aria-label="模型供应"/);
@@ -53,10 +57,14 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(renderer, /Provider 次序同时用于模型供应与额度显示/);
   assert.doesNotMatch(renderer, /id="pet-provider-list"|settings-subtitle">额度来源/);
   assert.doesNotMatch(rendererScript, /function renderProviders|function moveProvider/);
+  assert.match(rendererScript, /formatCompactTokenCount/);
+  assert.doesNotMatch(rendererScript, /cell\.title = tooltipLines/);
   assert.match(rendererScript, /entry\.configured \? quotaProviderOrderButtons/);
   assert.match(rendererScript, /entry\.configured \? '更新 Key' : '激活 Provider'/);
   assert.match(rendererStyles, /grid-template-columns: minmax\(200px, \.9fr\) minmax\(0, 1\.6fr\) 176px/);
   assert.match(rendererStyles, /\.provider-directory-action \{ width: 176px;/);
+  assert.match(rendererStyles, /grid-auto-flow: column/);
+  assert.match(rendererStyles, /grid-template-rows: repeat\(7,/);
   assert.match(renderer, /id="provider-dialog"/);
   assert.doesNotMatch(renderer, /id="model-list"/);
   assert.doesNotMatch(renderer, /id="models"/);
@@ -70,6 +78,14 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(conversationRenderer, /workspaceLabel\.textContent = '工坊工作区'/);
   assert.doesNotMatch(conversationRenderer, /conversation-state|可以开始|工坊工作中/);
   assert.doesNotMatch(conversationRenderer, /workspacePath\.split/);
+  assert.match(conversationRenderer, /createElement\('table'\)/);
+  assert.match(conversationRenderer, /createElement\('hr'\)/);
+  assert.match(conversationRenderer, /expandedItemIds/);
+  assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);
+  assert.match(rendererStyles, /::-webkit-scrollbar-thumb/);
+  assert.match(rendererStyles, /data-platform="win32"/);
+  assert.match(shellWindow, /platformWindowChrome/);
+  assert.match(preload, /platform: process\.platform/);
   assert.match(renderer, /id="workspace-gate"/);
   assert.match(renderer, /class="activity-brand" role="img" aria-label="啾啾工坊标识"/);
   assert.match(renderer, /id="workbench-nav"[^>]+aria-label="会话"/);

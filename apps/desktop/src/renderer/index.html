@@ -150,20 +150,26 @@
 
         <section class="ledger-panel heat-panel" aria-labelledby="daily-title">
           <div class="panel-heading">
-            <div><h2 id="daily-title">近期火光</h2><p>最近 31 个本地自然日；颜色越深，Token 活动越高。</p></div>
-            <span class="panel-legend"><i></i> 安静 <i></i><i></i><i></i> 繁忙</span>
+            <h2 id="daily-title">近期火光</h2>
+            <span class="panel-legend"><span>安静</span><i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i><i class="heat-5"></i><span>400M+</span></span>
           </div>
-          <div class="daily-heatmap" id="stats-daily-list" role="list" aria-label="每日活动热度"></div>
+          <div class="heatmap-scroll">
+            <div class="heatmap-plot">
+              <div class="daily-heatmap" id="stats-daily-list" role="list" aria-label="最近一年每日 Token 活动，每列一周"></div>
+              <div class="heatmap-months" id="stats-heat-months" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="heat-tooltip" id="stats-heat-tooltip" role="tooltip" hidden></div>
         </section>
 
         <div class="ledger-columns">
           <section class="ledger-panel" aria-labelledby="profile-title">
-            <div class="panel-heading"><div><h2 id="profile-title">运行配置</h2><p>具名 Profile 的调度、Token 与平均 TPS。</p></div></div>
+            <div class="panel-heading"><h2 id="profile-title">运行配置</h2></div>
             <div class="ledger-table" id="stats-profile-list"></div>
           </section>
           <section class="ledger-panel" aria-labelledby="task-title">
             <div class="panel-heading panel-heading-action">
-              <div><h2 id="task-title">任务投入</h2><p>按累计耗时排序，展示真实时间投入。</p></div>
+              <h2 id="task-title">任务投入</h2>
               <label class="compact-switch"><input id="stats-builtin-only" type="checkbox" /><span>仅内置任务</span></label>
             </div>
             <div class="ledger-table" id="stats-task-list"></div>
@@ -279,6 +285,7 @@
               <div class="settings-card">
                 <div class="setting-row"><div><h3>Wrenyard</h3><p>统一任务编排与本地运行环境</p></div><span class="version" id="wrenyard-version">—</span></div>
                 <div class="setting-row"><div><h3>Desktop</h3><p>Electron 产品壳与桌宠宿主</p></div><span class="version" id="desktop-version">—</span></div>
+                <div class="setting-row"><div><h3>构建时间</h3><p>当前安装的 Desktop 构建生成时间</p></div><span class="version" id="desktop-build-time">—</span></div>
                 <div class="setting-row"><div><h3>DSH</h3><p>主工作台引擎</p></div><span class="version" id="dsh-version">—</span></div>
               </div>
             </section>

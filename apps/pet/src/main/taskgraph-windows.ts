@@ -7,7 +7,10 @@ import type { TaskGraphEntityDtoWithPresentation, TaskGraphNodeState, GraphSlipS
 import { projectGraphSlipFromActivity, activityAllowsTranscript } from './graph-slip-snapshot-dto';
 import type { ActivityPresence, ActivityTaskGraphPresence } from '../shared/activity-snapshot';
 import { clampRectToRect } from './entity-geometry';
-import { overlaySkipsTaskbar } from './overlay-window-policy';
+import {
+  overlaySkipsTaskbar,
+  overlayWorkspaceVisibilityOptions,
+} from './overlay-window-policy';
 
 // K3 Blueprint Wren: 28x22 authored grid at 3x = 84x66 display pixels,
 // hosted inside a 156x84 transparent entity window (fact slip sits below
@@ -634,7 +637,7 @@ export class TaskGraphWindowOwner {
 
     win.setMenuBarVisibility(false);
     win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('did-create-window', (childWin) => {
       if (!childWin.isDestroyed()) childWin.destroy();
@@ -856,7 +859,7 @@ export class TaskGraphWindowOwner {
 
     win.setMenuBarVisibility(false);
     win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('did-create-window', (childWin) => {
       if (!childWin.isDestroyed()) childWin.destroy();
@@ -1077,7 +1080,7 @@ export class TaskGraphWindowOwner {
 
     win.setMenuBarVisibility(false);
     win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('did-create-window', (childWin) => {
       if (!childWin.isDestroyed()) childWin.destroy();

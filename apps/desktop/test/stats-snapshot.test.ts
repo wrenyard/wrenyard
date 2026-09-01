@@ -16,7 +16,7 @@ const today = {
 test('stats snapshot projects bounded summary data for Desktop', async () => {
   const snapshot = await buildStatsSnapshot(async (method, params) => {
     assert.equal(method, 'stats.summary');
-    assert.deepEqual(params, { days: 31, limit: 20 });
+    assert.deepEqual(params, { days: 365, limit: 20 });
     return {
       source: 'sqlite',
       today: { ...today, outcomes: { done: 9, failed: 1, cancelled: 1, running: 1 } },
@@ -79,7 +79,7 @@ test('stats snapshot rejects malformed projections and caps renderer arrays', as
     return {
       source: 'sqlite',
       today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
-      daily: Array.from({ length: 100 }, (_, index) => ({ ...today, dayKey: `day-${index}` })),
+      daily: Array.from({ length: 400 }, (_, index) => ({ ...today, dayKey: `day-${index}` })),
       byProfile: Array.from({ length: 100 }, (_, index) => ({ profile: `p-${index}`, dispatchCount: 1, totalTokens: 1 })),
       byTask: [],
       windows: [],
@@ -87,7 +87,7 @@ test('stats snapshot rejects malformed projections and caps renderer arrays', as
   });
 
   assert.equal(snapshot.status, 'available');
-  assert.equal(snapshot.daily.length, 31);
+  assert.equal(snapshot.daily.length, 365);
   assert.equal(snapshot.byProfile.length, 20);
 
   const unavailable = await buildStatsSnapshot(async () => ({ ...today, source: 'memory' }));

@@ -1,6 +1,9 @@
 import { BrowserWindow } from 'electron';
 import { DisplayRect } from './display-placement';
-import { overlaySkipsTaskbar } from './overlay-window-policy';
+import {
+  overlaySkipsTaskbar,
+  overlayWorkspaceVisibilityOptions,
+} from './overlay-window-policy';
 
 export interface EntityWindowOptions {
   preloadPath: string;
@@ -46,7 +49,7 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
 
   win.setMenuBarVisibility(false);
   win.setAlwaysOnTop(true, 'screen-saver');
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
 
   // Overlay entities have no context menu; product controls live in Desktop.
   win.webContents.on('context-menu', (event) => {

@@ -52,6 +52,63 @@ test('conversation projection exposes an unfinished stream and tool state', () =
   assert.equal(items[1].toolState, 'done');
 });
 
+test('conversation projection keeps every assistant step and tool in one turn group', () => {
+  const items = projectConversationHistory([
+    entry('user/message', 1, {
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '检查后告诉我结果' }],
+    }),
+    entry('assistant/message', 2, {
+      turn: 7,
+      step: 1,
+      message: { content: [{ type: 'text', text: '先检查一下。' }] },
+    }),
+    entry('tool/call', 3, { callId: 'call-7', name: 'project_describe', arguments: '{}' }),
+    entry('tool/result', 4, {
+      message: {
+        source: { kind: 'tool', callId: 'call-7' },
+        content: [{ type: 'tool-result', toolCallId: 'call-7', content: [], isError: false }],
+      },
+    }),
+    entry('assistant/message', 5, {
+      turn: 7,
+      step: 2,
+      message: { content: [{ type: 'text', text: '检查完成。' }] },
+    }),
+  ]);
+
+  assert.deepEqual(items.map((item) => ({ kind: item.kind, turnId: item.turnId })), [
+    { kind: 'user', turnId: undefined },
+    { kind: 'assistant', turnId: 'turn-7' },
+    { kind: 'tool', turnId: 'turn-7' },
+    { kind: 'assistant', turnId: 'turn-7' },
+  ]);
+});
+
+test('conversation projection keeps a synthetic turn stable when DSH omits turn numbers', () => {
+  const items = projectConversationHistory([
+    entry('user/message', 1, {
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '继续' }],
+    }),
+    entry('assistant/chunk', 2, { step: 1, chunk: { type: 'text-delta', text: '正在' } }),
+    entry('assistant/chunk', 3, { step: 1, chunk: { type: 'text-delta', text: '处理' } }),
+    entry('assistant/message', 4, {
+      step: 1,
+      message: { content: [{ type: 'text', text: '处理完成。' }] },
+    }),
+    entry('tool/call', 5, { callId: 'call-synthetic', name: 'Read', arguments: '{}' }),
+  ]);
+
+  assert.deepEqual(items.map((item) => ({ kind: item.kind, turnId: item.turnId })), [
+    { kind: 'user', turnId: undefined },
+    { kind: 'assistant', turnId: 'assistant-2' },
+    { kind: 'tool', turnId: 'assistant-2' },
+  ]);
+});
+
 test('conversation projection hides non-user context messages', () => {
   const items = projectConversationHistory([
     entry('user/message', 1, {

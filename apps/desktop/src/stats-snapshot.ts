@@ -10,7 +10,7 @@ import type {
 } from './shell-contract.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
-const MAX_DAILY_ROWS = 31;
+const MAX_DAILY_ROWS = 365;
 const MAX_RANKING_ROWS = 20;
 const MAX_WINDOW_ROWS = 20;
 
@@ -27,7 +27,7 @@ export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshot>
 
 export async function buildStatsSnapshot(request: StatsRequest): Promise<StatsSnapshot> {
   try {
-    const summary = parseSummary(await request('stats.summary', { days: 31, limit: MAX_RANKING_ROWS }));
+    const summary = parseSummary(await request('stats.summary', { days: MAX_DAILY_ROWS, limit: MAX_RANKING_ROWS }));
     if (summary) return summary;
   } catch {
     // Older control planes may not expose the summary projection yet.

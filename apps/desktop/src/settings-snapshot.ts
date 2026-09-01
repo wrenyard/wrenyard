@@ -18,6 +18,7 @@ export interface SettingsSnapshotOptions {
   desktopVersion: string;
   wrenyardVersion: string;
   dshVersion: string;
+  buildTime?: string;
   readHealth(): Promise<HealthSnapshot>;
   readCredentialEnv?: () => Promise<NodeJS.ProcessEnv>;
   readPet(): Promise<PetCompanionSnapshot>;
@@ -55,6 +56,7 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       desktopVersion: options.desktopVersion,
       wrenyardVersion: options.wrenyardVersion,
       dshVersion: options.dshVersion,
+      ...(options.buildTime ? { buildTime: options.buildTime } : {}),
       channel: update.channel,
     },
   };

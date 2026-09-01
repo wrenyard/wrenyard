@@ -21,6 +21,7 @@ import {
   type UpdateSnapshot,
 } from './shell-contract.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
+import { platformWindowChrome } from './window-chrome.js';
 
 export interface ShellWindowOptions {
   rendererPath: string;
@@ -65,6 +66,7 @@ export class ShellWindowController {
       show: false,
       title: formatShellWindowTitle('workbench', options.appVersion),
       backgroundColor: '#f7efd8',
+      ...platformWindowChrome(process.platform),
       ...(options.icon ? { icon: options.icon } : {}),
       webPreferences: {
         preload: options.preloadPath,

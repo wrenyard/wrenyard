@@ -469,7 +469,7 @@ describe('stats-query readStatsSummary', () => {
   it('rejects days greater than maximum', () => {
     initTestDb()
     assert.throws(
-      () => readStatsSummary({ days: 32, limit: 10 }),
+      () => readStatsSummary({ days: 367, limit: 10 }),
       /Invalid days/,
     )
     closeTestDb()
@@ -686,17 +686,17 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('respects days boundary at 31', () => {
+  it('respects days boundary at 366', () => {
     initTestDb()
-    const result = readStatsSummary({ days: 31, limit: 10 })
-    assert.equal(result.daily.length, 31)
+    const result = readStatsSummary({ days: 366, limit: 10 })
+    assert.equal(result.daily.length, 366)
     closeTestDb()
   })
 
   it('rejects days greater than maximum', () => {
     initTestDb()
     assert.throws(
-      () => readStatsSummary({ days: 32, limit: 10 }),
+      () => readStatsSummary({ days: 367, limit: 10 }),
       /Invalid days/,
     )
     closeTestDb()

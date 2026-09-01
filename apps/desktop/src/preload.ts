@@ -14,6 +14,7 @@ import {
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
+  platform: process.platform,
   navigate(page: ShellPage): Promise<void> {
     if (!isShellPage(page)) return Promise.reject(new Error('Unsupported shell page'));
     return ipcRenderer.invoke(SHELL_CHANNELS.navigate, page) as Promise<void>;

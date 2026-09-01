@@ -16,12 +16,16 @@ import type {
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
+import { buildActivityHeatmap } from './activity-heatmap.js';
+import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
 
 declare global {
   interface Window {
     wrenyardShell: WrenyardShellApi;
   }
 }
+
+document.documentElement.dataset.platform = window.wrenyardShell.platform;
 
 const workbenchNav = requireElement<HTMLButtonElement>('workbench-nav');
 const statsNav = requireElement<HTMLButtonElement>('stats-nav');
@@ -55,6 +59,7 @@ const providerDialogCancel = requireElement<HTMLButtonElement>('provider-dialog-
 const providerDialogSave = requireElement<HTMLButtonElement>('provider-dialog-save');
 const updateActionButton = requireElement<HTMLButtonElement>('update-action-button');
 const updateChannelSwitcher = requireElement<HTMLElement>('update-channel-switcher');
+const statsHeatTooltip = requireElement<HTMLElement>('stats-heat-tooltip');
 
 let petDraft: PetCompanionSettings | null = null;
 let petDirty = false;
@@ -112,22 +117,8 @@ function renderDaemonStatus(service: Pick<ServiceSnapshot, 'status' | 'uptimeMs'
   setText('conversation-daemon-started-at', startedAt);
 }
 
-function formatTaskDuration(value: number): string {
-  if (value < 1_000) return `${Math.round(value)} ms`;
-  const seconds = Math.round(value / 1_000);
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  return minutes % 60 > 0 ? `${hours} 小时 ${minutes % 60} 分钟` : `${hours} 小时`;
-}
-
 function formatCount(value: number): string {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatCompact(value: number): string {
-  return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
 function formatDateTime(value: string): string {
@@ -168,6 +159,7 @@ function renderSnapshot(snapshot: SettingsSnapshot): void {
 
   setText('wrenyard-version', snapshot.about.wrenyardVersion);
   setText('desktop-version', snapshot.about.desktopVersion);
+  setText('desktop-build-time', formatBuildTime(snapshot.about.buildTime));
   setText('dsh-version', snapshot.about.dshVersion);
 }
 
@@ -681,11 +673,11 @@ function renderPeriod(snapshot: StatsSnapshot): void {
   const dispatch = statsWindow?.dispatchCount ?? today?.dispatchCount;
   const tokens = statsWindow?.totalTokens ?? today?.totalTokens;
   setText('stats-dispatch-count', dispatch === undefined ? '—' : formatCount(dispatch));
-  setText('stats-total-tokens', tokens === undefined ? '—' : formatCompact(tokens));
+  setText('stats-total-tokens', tokens === undefined ? '—' : formatCompactTokenCount(tokens));
   setText('stats-dispatch-note', statsWindow ? periodLabel(statsWindow.period) : '今日兼容数据');
   setText('stats-token-split', statsWindow
     ? `${periodLabel(statsWindow.period)}总量`
-    : today ? `输入 ${formatCompact(today.inputTokens)} · 输出 ${formatCompact(today.outputTokens)}` : '输入 — · 输出 —');
+    : today ? `输入 ${formatCompactTokenCount(today.inputTokens)} · 输出 ${formatCompactTokenCount(today.outputTokens)}` : '输入 — · 输出 —');
 
   const outcomes = today?.outcomes;
   const completed = outcomes ? outcomes.done + outcomes.failed : 0;
@@ -707,26 +699,80 @@ function selectedWindow(snapshot: StatsSnapshot): StatsWindowSnapshot | undefine
   return snapshot.windows.find((item) => item.period === selectedPeriod) ?? snapshot.windows[0];
 }
 
+function heatmapTooltipLines(day: StatsSnapshot['daily'][number]): string[] {
+  const date = new Date(`${day.dayKey}T12:00:00`);
+  const dateLabel = Number.isNaN(date.getTime())
+    ? day.dayKey
+    : new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric', month: 'long', day: 'numeric', weekday: 'short',
+      }).format(date);
+  const lines = [
+    dateLabel,
+    `${formatCompactTokenCount(day.totalTokens)} Token · ${formatCount(day.dispatchCount)} 次调度`,
+    `输入 ${formatCompactTokenCount(day.inputTokens)} · 输出 ${formatCompactTokenCount(day.outputTokens)}`,
+  ];
+  if (day.outcomes) {
+    lines.push(`完成 ${formatCount(day.outcomes.done)} · 失败 ${formatCount(day.outcomes.failed)} · 取消 ${formatCount(day.outcomes.cancelled)}`);
+  }
+  return lines;
+}
+
+function showHeatTooltip(cell: HTMLElement, lines: string[]): void {
+  statsHeatTooltip.textContent = lines.join('\n');
+  statsHeatTooltip.hidden = false;
+  const cellRect = cell.getBoundingClientRect();
+  const tooltipRect = statsHeatTooltip.getBoundingClientRect();
+  const left = Math.min(
+    window.innerWidth - tooltipRect.width / 2 - 10,
+    Math.max(tooltipRect.width / 2 + 10, cellRect.left + cellRect.width / 2),
+  );
+  const above = cellRect.top - tooltipRect.height - 9;
+  statsHeatTooltip.style.left = `${left - tooltipRect.width / 2}px`;
+  statsHeatTooltip.style.top = `${above >= 8 ? above : cellRect.bottom + 9}px`;
+}
+
+function hideHeatTooltip(): void {
+  statsHeatTooltip.hidden = true;
+}
+
 function renderDaily(snapshot: StatsSnapshot): void {
-  const daily = snapshot.daily.slice(-31);
   const list = requireElement('stats-daily-list');
-  if (daily.length === 0) {
+  const months = requireElement('stats-heat-months');
+  const model = buildActivityHeatmap(snapshot.daily.slice(-365));
+  hideHeatTooltip();
+  if (model.slots.length === 0) {
+    list.classList.add('is-empty');
     list.replaceChildren(emptyRow('暂无每日活动记录'));
+    months.replaceChildren();
     return;
   }
-  const maxTokens = Math.max(1, ...daily.map((item) => item.totalTokens));
-  list.replaceChildren(...daily.map((item) => {
+  list.classList.remove('is-empty');
+  const monthByWeek = new Map(model.months.map((month) => [month.weekIndex, month.label]));
+  months.replaceChildren(...Array.from({ length: model.weekCount }, (_, weekIndex) => {
+    const label = document.createElement('span');
+    label.textContent = monthByWeek.get(weekIndex) ?? '';
+    return label;
+  }));
+  list.replaceChildren(...model.slots.map((slot) => {
+    if (!slot.day) {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'heat-cell is-placeholder';
+      placeholder.setAttribute('aria-hidden', 'true');
+      return placeholder;
+    }
+    const item = slot.day;
     const cell = document.createElement('button');
     cell.type = 'button';
-    cell.className = `heat-cell heat-${Math.min(4, Math.ceil(item.totalTokens / maxTokens * 4))}`;
+    cell.className = `heat-cell heat-${slot.level}${item.dayKey === snapshot.today?.dayKey ? ' is-today' : ''}`;
     cell.setAttribute('role', 'listitem');
-    cell.setAttribute('aria-label', `${item.dayKey}，${formatCount(item.dispatchCount)} 次调度，${formatCount(item.totalTokens)} Token`);
-    cell.title = `${item.dayKey}\n${formatCount(item.dispatchCount)} 次调度 · ${formatCount(item.totalTokens)} Token`;
-    const day = document.createElement('span');
-    day.textContent = item.dayKey.slice(-2);
-    const runs = document.createElement('small');
-    runs.textContent = formatCompact(item.totalTokens);
-    cell.append(day, runs);
+    const tooltipLines = heatmapTooltipLines(item);
+    cell.setAttribute('aria-label', tooltipLines.join('，'));
+    cell.setAttribute('aria-describedby', 'stats-heat-tooltip');
+    cell.tabIndex = item.totalTokens > 0 || item.dayKey === snapshot.today?.dayKey ? 0 : -1;
+    cell.addEventListener('pointerenter', () => showHeatTooltip(cell, tooltipLines));
+    cell.addEventListener('pointerleave', hideHeatTooltip);
+    cell.addEventListener('focus', () => showHeatTooltip(cell, tooltipLines));
+    cell.addEventListener('blur', hideHeatTooltip);
     return cell;
   }));
 }
@@ -747,7 +793,7 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
     ...rows.slice(0, 12).map((row) => tableRow([
       row.name,
       formatCount(row.runCount),
-      formatCompact(row.totalTokens),
+      formatCompactTokenCount(row.totalTokens),
       'averageTps' in row && typeof row.averageTps === 'number' ? row.averageTps.toFixed(2) : '—',
     ], 'profile-row')),
   );
