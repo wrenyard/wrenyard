@@ -157,15 +157,16 @@ jobs:
               base.startsWith("release-manifest") ||
               /^(license|licence|notice|copying|third_party|third-party)/i.test(base);
             const seen = new Set();
-            const put = (dest, src) => {
+            const putBytes = (dest, bytes) => {
               const rel = path.relative(out, dest);
               if (seen.has(rel)) {
                 console.error("duplicate flat name: " + rel);
                 process.exit(1);
               }
               seen.add(rel);
-              fs.copyFileSync(src, dest);
+              fs.writeFileSync(dest, bytes);
             };
+            const put = (dest, src) => putBytes(dest, fs.readFileSync(src));
             const sharedBy = new Map();
             for (const target of targets) {
               const files = readdir(target).filter((e) => e.isFile()).map((e) => e.name).sort();
@@ -187,9 +188,17 @@ jobs:
                   continue;
                 }
                 if (isShared(base)) {
-                  const hash = crypto.createHash("sha256").update(fs.readFileSync(src)).digest("hex");
+                  const bytes = fs.readFileSync(src);
+                  // Windows checkouts may materialize installer scripts with
+                  // CRLF while Unix runners use LF. Their release contract is
+                  // text-identical, so normalize only those two shared scripts
+                  // before deduplication and publication.
+                  const data = SHARED.includes(base)
+                    ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"))
+                    : bytes;
+                  const hash = crypto.createHash("sha256").update(data).digest("hex");
                   if (!sharedBy.has(base)) sharedBy.set(base, []);
-                  sharedBy.get(base).push({ hash: hash, src: src, target: target });
+                  sharedBy.get(base).push({ data: data, hash: hash, src: src, target: target });
                   continue;
                 }
                 put(path.join(out, f), src);
@@ -199,7 +208,7 @@ jobs:
             for (const [base, copies] of sharedBy) {
               const hashes = new Set(copies.map((c) => c.hash));
               if (hashes.size === 1) {
-                put(path.join(out, base), copies[0].src);
+                putBytes(path.join(out, base), copies[0].data);
               } else {
                 for (let i = 0; i < copies.length; i++) {
                   put(path.join(out, base + "." + copies[i].target), copies[i].src);
