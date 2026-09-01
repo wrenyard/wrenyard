@@ -2,8 +2,9 @@
 #
 # wrenyard installer/updater
 #
-# POSIX bash (set -euo pipefail). Downloads a checksum-verified suite zip from
-# a GitHub release (or direct URL), validates the required wrenyard executable
+# POSIX bash (set -euo pipefail). Downloads a digest-verified suite zip from a
+# GitHub release (or a direct URL with an explicit checksum sidecar), validates
+# the required wrenyard executable
 # and release manifest, and installs it under <prefix>/versions/<version>
 # before atomically switching the `current` symlink plus the public launcher.
 #
@@ -19,8 +20,9 @@ Options:
   --version <ver>       Version to install (e.g. 1.0.0-dev.0)
   --prefix <dir>        Install root (default: ~/.local/share/wrenyard)
   --bin-dir <dir>       Launcher symlink directory (default: <prefix>/bin)
-  --url <url>           Suite zip URL (default: derived from the GitHub release)
-  --checksum-url <url>  Suite .sha256 sidecar URL (default: <zip-url>.sha256)
+  --url <url>           Suite zip URL (requires --checksum-url)
+  --checksum-url <url>  Explicit suite .sha256 sidecar URL for --url
+  --suite-only          Install/update the suite without the Desktop app
   --update              Install the newest non-draft release (prereleases included)
   -h, --help            Show this help
 
@@ -40,7 +42,9 @@ PREFIX="${WRENYARD_PREFIX:-$HOME/.local/share/wrenyard}"
 BIN_DIR=""
 URL=""
 CHECKSUM_URL=""
+CUSTOM_URL=0
 UPDATE=0
+SUITE_ONLY=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -55,12 +59,14 @@ while [ "$#" -gt 0 ]; do
       BIN_DIR="$2"; shift 2 ;;
     --url)
       [ "$#" -ge 2 ] || die "--url requires a value"
-      URL="$2"; shift 2 ;;
+      URL="$2"; CUSTOM_URL=1; shift 2 ;;
     --checksum-url)
       [ "$#" -ge 2 ] || die "--checksum-url requires a value"
       CHECKSUM_URL="$2"; shift 2 ;;
     --update)
       UPDATE=1; shift ;;
+    --suite-only)
+      SUITE_ONLY=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -154,6 +160,36 @@ resolve_latest() {
   esac
 }
 
+# GitHub computes a sha256 digest for each uploaded release asset. Resolve that
+# server-side digest by exact asset name so the public release does not need a
+# second user-visible checksum file beside every archive.
+resolve_release_asset_sha256() {
+  local tag="$1" wanted="$2"
+  local api="https://api.github.com/repos/$REPO/releases/tags/$tag"
+  local body digest=""
+  body="$(api_get "$api")" || die "could not fetch release $tag for $REPO"
+  digest="$(printf '%s\n' "$body" | awk -v wanted="$wanted" '
+    /"name"[[:space:]]*:/ {
+      name = $0
+      sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name)
+      sub(/".*$/, "", name)
+      matched = (name == wanted)
+      next
+    }
+    matched && /"digest"[[:space:]]*:/ {
+      value = $0
+      sub(/^.*"digest"[[:space:]]*:[[:space:]]*"/, "", value)
+      sub(/".*$/, "", value)
+      if (value ~ /^sha256:[0-9a-fA-F]{64}$/) {
+        print substr(value, 8)
+        exit
+      }
+    }
+  ')"
+  [ -n "$digest" ] || die "release $tag has no SHA-256 digest for $wanted"
+  printf '%s\n' "$digest" | tr '[:upper:]' '[:lower:]'
+}
+
 # Resolve --update before version validation so that --update works without a
 # --version and a non-empty version is guaranteed before any URL is derived.
 if [ -z "$VERSION" ]; then
@@ -175,16 +211,10 @@ case "$(uname -s)" in
   Darwin)
     case "$(uname -m)" in
       arm64)  TARGET="darwin-arm64" ;;
-      x86_64) TARGET="darwin-x64" ;;
-      *) die "unsupported Darwin architecture: $(uname -m) (supported: arm64, x86_64)" ;;
-    esac ;;
-  Linux)
-    case "$(uname -m)" in
-      x86_64) TARGET="linux-x64" ;;
-      *) die "unsupported Linux architecture: $(uname -m) (supported: x86_64)" ;;
+      *) die "unsupported Darwin architecture: $(uname -m) (supported: arm64)" ;;
     esac ;;
   *)
-    die "unsupported host platform: $(uname -s) (supported: Darwin arm64/x86_64, Linux x86_64)" ;;
+    die "unsupported host platform: $(uname -s) (supported: macOS arm64; use install.ps1 on Windows x64)" ;;
 esac
 
 # Normalized suite zip: <repo>/releases/download/<tag>/wrenyard-<version>-<target>-suite.zip
@@ -194,7 +224,8 @@ case "$VERSION" in
 esac
 DEFAULT_URL="https://github.com/$REPO/releases/download/$TAG/wrenyard-$DIR_VERSION-$TARGET-suite.zip"
 URL="${URL:-$DEFAULT_URL}"
-CHECKSUM_URL="${CHECKSUM_URL:-$URL.sha256}"
+ASSET_NAME="wrenyard-$DIR_VERSION-$TARGET-suite.zip"
+[ "$CUSTOM_URL" -eq 0 ] || [ -n "$CHECKSUM_URL" ] || die "--url requires --checksum-url"
 
 VERSIONS_DIR="$PREFIX/versions"
 VERSION_DIR="$VERSIONS_DIR/$DIR_VERSION"
@@ -215,11 +246,15 @@ trap 'rm -rf "$TMP_DIR" "$NETRC"' EXIT
 
 log "downloading suite: $URL"
 fetch "$TMP_DIR/suite.zip" "$URL"
-log "downloading checksum sidecar: $CHECKSUM_URL"
-fetch "$TMP_DIR/suite.zip.sha256" "$CHECKSUM_URL"
-
-EXPECTED="$(awk '{print $1}' "$TMP_DIR/suite.zip.sha256" | tr '[:upper:]' '[:lower:]')"
-[ -n "$EXPECTED" ] || die "checksum sidecar is empty: $CHECKSUM_URL"
+if [ -n "$CHECKSUM_URL" ]; then
+  log "downloading explicit checksum sidecar: $CHECKSUM_URL"
+  fetch "$TMP_DIR/suite.zip.sha256" "$CHECKSUM_URL"
+  EXPECTED="$(awk '{print $1}' "$TMP_DIR/suite.zip.sha256" | tr '[:upper:]' '[:lower:]')"
+  printf '%s\n' "$EXPECTED" | grep -Eq '^[0-9a-f]{64}$' || die "checksum sidecar is invalid: $CHECKSUM_URL"
+else
+  log "resolving GitHub asset digest: $ASSET_NAME"
+  EXPECTED="$(resolve_release_asset_sha256 "$TAG" "$ASSET_NAME")"
+fi
 ACTUAL="$(sha256_of "$TMP_DIR/suite.zip")"
 [ "$ACTUAL" = "$EXPECTED" ] || die "checksum mismatch for $URL (expected $EXPECTED, got $ACTUAL)"
 log "checksum verified ($ACTUAL)"
@@ -313,6 +348,52 @@ current_target() {
 # Only the wrenyard command is a public launcher; the internal Foreman control
 # and the Forge runtime remain hidden inside the installed suite.
 switch_link "$(current_target "$INSTALLED_WRENYARD")" "$BIN_DIR/wrenyard"
+
+# ---------------------------------------------------------------------------
+# Install the matching Desktop archive for one-command bootstrap. The CLI's
+# update path passes --suite-only because the running Desktop uses its external
+# helper to replace itself transactionally after exit.
+# ---------------------------------------------------------------------------
+if [ "$SUITE_ONLY" -eq 0 ]; then
+  DESKTOP_ASSET_NAME="wrenyard-desktop-$DIR_VERSION-$TARGET.zip"
+  DESKTOP_URL="https://github.com/$REPO/releases/download/$TAG/$DESKTOP_ASSET_NAME"
+  DESKTOP_EXPECTED="$(resolve_release_asset_sha256 "$TAG" "$DESKTOP_ASSET_NAME")"
+  log "downloading Desktop: $DESKTOP_URL"
+  fetch "$TMP_DIR/desktop.zip" "$DESKTOP_URL"
+  DESKTOP_ACTUAL="$(sha256_of "$TMP_DIR/desktop.zip")"
+  [ "$DESKTOP_ACTUAL" = "$DESKTOP_EXPECTED" ] \
+    || die "checksum mismatch for $DESKTOP_URL (expected $DESKTOP_EXPECTED, got $DESKTOP_ACTUAL)"
+
+  mkdir -p "$TMP_DIR/desktop-extract"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$TMP_DIR/desktop.zip" -d "$TMP_DIR/desktop-extract"
+  else
+    tar -xf "$TMP_DIR/desktop.zip" -C "$TMP_DIR/desktop-extract"
+  fi
+  DESKTOP_SOURCE="$(find "$TMP_DIR/desktop-extract" -type d -name '啾啾工坊.app' -print -quit)"
+  [ -n "$DESKTOP_SOURCE" ] || die "Desktop archive does not contain 啾啾工坊.app"
+  /usr/bin/codesign --verify --deep --strict "$DESKTOP_SOURCE" \
+    || die "Desktop archive signature verification failed"
+
+  APPLICATIONS_DIR="$HOME/Applications"
+  DESKTOP_DESTINATION="$APPLICATIONS_DIR/啾啾工坊.app"
+  DESKTOP_STAGING="$APPLICATIONS_DIR/.wrenyard-desktop-install.$$"
+  DESKTOP_BACKUP="$APPLICATIONS_DIR/.wrenyard-desktop-previous.$$"
+  mkdir -p "$APPLICATIONS_DIR"
+  rm -rf "$DESKTOP_STAGING" "$DESKTOP_BACKUP"
+  /usr/bin/ditto "$DESKTOP_SOURCE" "$DESKTOP_STAGING"
+  /usr/bin/codesign --verify --deep --strict "$DESKTOP_STAGING" \
+    || die "staged Desktop signature verification failed"
+  if [ -e "$DESKTOP_DESTINATION" ]; then mv "$DESKTOP_DESTINATION" "$DESKTOP_BACKUP"; fi
+  if ! mv "$DESKTOP_STAGING" "$DESKTOP_DESTINATION"; then
+    [ ! -e "$DESKTOP_BACKUP" ] || mv "$DESKTOP_BACKUP" "$DESKTOP_DESTINATION"
+    die "failed to install Desktop at $DESKTOP_DESTINATION"
+  fi
+  rm -rf "$DESKTOP_BACKUP"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$DESKTOP_DESTINATION" >/dev/null 2>&1 || true
+  log "installed Desktop $DIR_VERSION at $DESKTOP_DESTINATION"
+fi
 
 # ---------------------------------------------------------------------------
 # Report

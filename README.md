@@ -49,9 +49,9 @@ docs/          architecture, migration, and signing notes
 
 ## Targets
 
-The precompiled Forge runtime and the portable suite are built for
-`darwin-arm64`, `darwin-x64`, `linux-x64`, and `win32-x64`. The installer
-selects the host target automatically.
+Public releases are maintained for Apple Silicon macOS (`darwin-arm64`) and
+64-bit Windows (`win32-x64`). The installer selects the host target
+automatically.
 
 ## Prerequisites
 
@@ -69,22 +69,30 @@ curl -fsSL https://raw.githubusercontent.com/wrenyard/wrenyard/main/scripts/inst
   bash -s -- --update --bin-dir "$HOME/.local/bin"
 ```
 
-The command installs the launcher at `~/.local/bin/wrenyard`; make sure that
-directory is on `PATH`. Set `WRENYARD_GITHUB_REPOSITORY` only when testing a
-fork or private mirror. Optional `GH_TOKEN` / `GITHUB_TOKEN` authentication is
-supported for those private repositories and is never echoed or embedded in
-the installed suite.
+```powershell
+$installer = Invoke-RestMethod https://raw.githubusercontent.com/wrenyard/wrenyard/main/scripts/install.ps1
+& ([scriptblock]::Create($installer)) -Update
+```
+
+The command installs the complete product: the suite, the `wrenyard` launcher
+at `~/.local/bin/wrenyard`, and 啾啾工坊 in `~/Applications`. Make sure the
+launcher directory is on `PATH`. Set `WRENYARD_GITHUB_REPOSITORY` only when
+testing a fork or private mirror. Optional `GH_TOKEN` / `GITHUB_TOKEN`
+authentication is supported for those private repositories and is never
+echoed or embedded in the installed suite. Windows uses the matching
+`scripts/install.ps1 -Update` entry point and installs 啾啾工坊 under the
+current user's local Programs directory.
 
 Binaries come from the newest non-draft **prerelease** of `wrenyard/wrenyard`.
-The installer downloads the platform-qualified suite zip
-(`wrenyard-<version>-<target>-suite.zip`), verifies its checksum, and sets up the
-`wrenyard` command. No Node, Go, or pnpm is needed by consumers: the packed CLI
-and the suite zip bundle the exact Node runtime that built them (`runtime/node`
-on POSIX, `runtime/node.exe` on Windows), so the native ABI behavior stays stable
+The installer downloads the platform-qualified suite and Desktop ZIPs,
+verifies the SHA-256 digests GitHub records for those release assets, and
+installs both. No Node, Go, or pnpm is needed by consumers: the packed CLI and
+the suite zip bundle the exact Node runtime that built them (`runtime/node` on
+POSIX, `runtime/node.exe` on Windows), so the native ABI behavior stays stable
 regardless of what is installed on the machine.
 
-Preview binaries are signed ad-hoc on macOS, checksum-only on Linux, and
-unsigned by default on Windows (see [Signing (honest)](#signing-honest)).
+Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
+(see [Signing (honest)](#signing-honest)).
 
 ## Command surface
 
@@ -124,14 +132,14 @@ pnpm release:check      # manifest + legal verification (also part of pnpm check
 `pnpm check` covers workspace checks, identifier/secret scans, manifest and
 legal verification, and Go vet/test/build; it does not run packed-install E2E.
 The tag Release workflow also skips that E2E: it packs each target, verifies
-manifests and checksums, and publishes the prerelease.
+the full internal manifests and checksums, and publishes only the suite and
+Desktop archives required by users.
 
 ## Signing (honest)
 
-Preview builds are signed ad-hoc on macOS, checksum-only on Linux, and
-unsigned by default on Windows. Ad-hoc signing proves integrity and
-buildability, not publisher identity. Trusted release signing is future work
-and never runs in this repository. See
+Preview builds are signed ad-hoc on macOS and unsigned by default on Windows.
+Ad-hoc signing proves integrity and buildability, not publisher identity.
+Trusted release signing is future work and never runs in this repository. See
 [docs/release/signing.md](docs/release/signing.md).
 
 ## Status

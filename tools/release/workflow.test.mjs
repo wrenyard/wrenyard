@@ -9,42 +9,29 @@ const workflowPath = resolve(repoRoot, '.github', 'workflows', 'release.yml');
 const workflow = readFileSync(workflowPath, 'utf8');
 const ciWorkflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
 
-test('release.yml upload source is a flat unique staging directory', () => {
-  // The aggregation step materializes one flat release-assets directory and
-  // emits exactly one global SHA256SUMS plus one release-index.json in it.
-  assert.ok(workflow.includes('"../release-assets"'));
-  // Exactly one contents: write occurrence (the aggregate job) and one global
-  // SHA256SUMS + one release-index.json emitted into that flat staging
-  // directory. The aggregation code builds these names with path.join(out, ...)
-  // rather than a literal slash-concatenated path, so assert the unique output
-  // names without assuming a "/" separator.
-  assert.ok(workflow.includes('SHA256SUMS'));
-  assert.ok(workflow.includes('release-index.json'));
-  // The upload loop walks only that flat directory and never uses --clobber.
+test('release.yml publishes only suite and Desktop archives', () => {
+  assert.ok(workflow.includes('for target in darwin-arm64 win32-x64'));
+  assert.ok(workflow.includes('wrenyard-$version-$target-suite.zip'));
+  assert.ok(workflow.includes('wrenyard-desktop-$version-$target.zip'));
+  assert.ok(workflow.includes('expected_count=4'));
   assert.ok(workflow.includes('find release-assets -maxdepth 1 -type f'));
   assert.ok(!workflow.includes('--clobber'));
+  assert.ok(!workflow.includes('release-index.json'));
+  assert.ok(!workflow.includes('path.join(out'));
 });
 
-test('release.yml qualifies per-target evidence names', () => {
-  // Per-target signing-status and SHA256SUMS files are renamed with the
-  // target suffix so a target's evidence is never dropped or collided.
-  assert.ok(workflow.includes('"signing-status-"'));
-  assert.ok(workflow.includes('"SHA256SUMS-"'));
-  assert.ok(workflow.includes('.sha256'));
+test('release.yml keeps build evidence internal and verifies it before selection', () => {
+  assert.ok(workflow.includes("find artifacts -type f -name '*.sha256'"));
+  assert.ok(workflow.includes('crypto.createHash("sha256")'));
+  assert.ok(workflow.includes('transient CI evidence'));
+  assert.ok(!workflow.includes('cp "$source_dir/install.sh"'));
+  assert.ok(!workflow.includes('cp "$source_dir/install.ps1"'));
 });
 
-test('release.yml publishes canonical installers across checkout line endings', () => {
-  // Windows runners may check out CRLF scripts while Unix runners use LF. The
-  // aggregation step must normalize those shared text assets before hashing,
-  // otherwise install.ps1/install.sh disappear behind target-qualified names.
-  assert.ok(workflow.includes('Buffer.from(bytes.toString("utf8").replace(/\\r\\n/g, "\\n"))'));
-  assert.ok(workflow.includes('putBytes(path.join(out, base), copies[0].data)'));
-});
-
-test('release.yml has no duplicate-basename recursive upload pattern', () => {
-  // A recursive find over the merged artifacts tree would upload the same
-  // basename (install.sh, release-manifest.json, SHA256SUMS, ...) many times.
-  assert.ok(!workflow.includes('find artifacts'));
+test('dev21 alone publishes migration checksum sidecars for dev20 clients', () => {
+  assert.ok(workflow.includes('if [ "$version" = "1.0.0-dev.21" ]'));
+  assert.ok(workflow.includes('cp "$suite.sha256" "$desktop.sha256" release-assets/'));
+  assert.ok(workflow.includes('expected_count=8'));
 });
 
 test('release.yml never writes signed from certificate secret presence', () => {
@@ -56,7 +43,7 @@ test('release.yml never writes signed from certificate secret presence', () => {
 });
 
 test('release.yml uses preview-grade ad-hoc/unsigned labels only', () => {
-  // macOS is ad-hoc signed; Windows/Linux are unsigned. Both are preview-grade.
+  // macOS is ad-hoc signed; Windows is unsigned. Both are preview-grade.
   assert.ok(workflow.includes('ad-hoc-preview'));
   assert.ok(workflow.includes('unsigned-preview'));
 });
@@ -65,17 +52,14 @@ test('release.yml keeps prerelease creation enabled', () => {
   assert.ok(workflow.includes('--prerelease'));
 });
 
-test('release.yml builds exactly the four supported targets', () => {
-  // Release builds run one explicit runner row per target: linux-x64,
-  // darwin-arm64, darwin-x64, win32-x64. The two macOS rows must be the
-  // explicit macos-15 (arm64) and macos-15-intel (x64) runners; this must not
-  // collapse to the three implicit latest-OS rows that drop darwin-x64.
-  assert.ok(workflow.includes('linux-x64'));
+test('release.yml builds exactly the two maintained targets', () => {
   assert.ok(workflow.includes('darwin-arm64'));
-  assert.ok(workflow.includes('darwin-x64'));
   assert.ok(workflow.includes('win32-x64'));
   assert.ok(workflow.includes('- os: macos-15'));
-  assert.ok(workflow.includes('- os: macos-15-intel'));
+  assert.ok(workflow.includes('- os: windows-latest'));
+  assert.ok(!workflow.includes('linux-x64'));
+  assert.ok(!workflow.includes('darwin-x64'));
+  assert.ok(!workflow.includes('macos-15-intel'));
 });
 
 test('release.yml build jobs are least-privilege (contents read)', () => {
@@ -155,7 +139,7 @@ test('routine CI never builds or uploads release packages', () => {
 test('release hop artifacts are short-lived and deleted after publish', () => {
   // Actions artifacts are only a job-to-job hop. Durable product is the
   // GitHub Release. Free-org included artifact storage is 500 MB and is
-  // shared with Packages; four ~500 MB platform packs must not linger.
+  // shared with Packages; the two large platform packs must not linger.
   assert.ok(workflow.includes('retention-days: 1'));
   assert.ok(!workflow.includes('retention-days: 7'));
   assert.ok(workflow.includes('actions: write'));

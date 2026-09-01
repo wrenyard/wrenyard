@@ -1,6 +1,8 @@
 import { spawn, type SpawnOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
+  cpSync,
   createReadStream,
   createWriteStream,
   existsSync,
@@ -17,12 +19,15 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { UpdateChannel, UpdateSnapshot } from './shell-contract.js';
+import type { UpdateHelperConfig } from './update-helper.js';
 
 const DEFAULT_REPOSITORY = 'wrenyard/wrenyard';
 const CHECK_DELAY_MS = 5_000;
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
+const CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 const CHECK_TIMEOUT_MS = 10_000;
-const APP_NAME = '啾啾工坊.app';
+const MAC_APP_NAME = '啾啾工坊.app';
+const WINDOWS_APP_DIR = 'Wrenyard Desktop';
+const WINDOWS_EXE_NAME = 'wrenyard-desktop.exe';
 
 interface ParsedSemver {
   major: number;
@@ -34,6 +39,7 @@ interface ParsedSemver {
 export interface GithubReleaseAsset {
   name: string;
   browser_download_url: string;
+  digest?: string | null;
 }
 
 export interface GithubRelease {
@@ -47,9 +53,9 @@ export interface GithubRelease {
 export interface UpdateCandidate {
   version: string;
   desktopUrl: string;
-  desktopChecksumUrl: string;
+  desktopSha256: string;
   suiteUrl: string;
-  suiteChecksumUrl: string;
+  suiteSha256: string;
 }
 
 export interface CandidateSelection {
@@ -76,18 +82,7 @@ type CommandRunner = (
 
 interface PreparedUpdate {
   candidate: UpdateCandidate;
-  stagedApp: string;
-  cleanupRoots: string[];
-}
-
-interface UpdateHelperConfig {
-  schema: 'wrenyard.desktop-update-helper.v1';
-  parentPid: number;
-  version: string;
-  stagedApp: string;
-  destinationApp: string;
-  cliPath: string;
-  resultPath: string;
+  stagedDesktop: string;
   cleanupRoots: string[];
 }
 
@@ -108,6 +103,8 @@ export interface DesktopUpdateControllerOptions {
   settings: UpdateSettingsStore;
   cliPath?: string;
   helperPath?: string;
+  helperRuntimePath?: string;
+  desktopPath?: string;
   userDataPath: string;
   repository?: string;
   platform?: NodeJS.Platform;
@@ -183,14 +180,20 @@ export function compareSemver(left: string, right: string): number {
 }
 
 export function releaseTarget(platform: NodeJS.Platform, arch: string): string | null {
-  if (platform === 'darwin' && (arch === 'arm64' || arch === 'x64')) return `darwin-${arch}`;
-  if (platform === 'linux' && arch === 'x64') return 'linux-x64';
+  if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
   if (platform === 'win32' && arch === 'x64') return 'win32-x64';
   return null;
 }
 
-function assetUrl(release: GithubRelease, name: string): string | undefined {
-  return release.assets.find((asset) => asset.name === name)?.browser_download_url;
+export function parseAssetDigest(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('invalid asset digest');
+  const match = value.match(/^sha256:([a-f0-9]{64})$/iu);
+  if (!match) throw new Error('invalid asset digest');
+  return match[1]!.toLowerCase();
+}
+
+function releaseAsset(release: GithubRelease, name: string): GithubReleaseAsset | undefined {
+  return release.assets.find((asset) => asset.name === name);
 }
 
 function releaseCandidate(release: GithubRelease, target: string): UpdateCandidate | null {
@@ -199,12 +202,20 @@ function releaseCandidate(release: GithubRelease, target: string): UpdateCandida
   const version = release.tag_name.startsWith('v') ? release.tag_name.slice(1) : release.tag_name;
   const desktopName = `wrenyard-desktop-${version}-${target}.zip`;
   const suiteName = `wrenyard-${version}-${target}-suite.zip`;
-  const desktopUrl = assetUrl(release, desktopName);
-  const desktopChecksumUrl = assetUrl(release, `${desktopName}.sha256`);
-  const suiteUrl = assetUrl(release, suiteName);
-  const suiteChecksumUrl = assetUrl(release, `${suiteName}.sha256`);
-  if (!desktopUrl || !desktopChecksumUrl || !suiteUrl || !suiteChecksumUrl) return null;
-  return { version, desktopUrl, desktopChecksumUrl, suiteUrl, suiteChecksumUrl };
+  const desktop = releaseAsset(release, desktopName);
+  const suite = releaseAsset(release, suiteName);
+  if (!desktop || !suite) return null;
+  try {
+    return {
+      version,
+      desktopUrl: desktop.browser_download_url,
+      desktopSha256: parseAssetDigest(desktop.digest),
+      suiteUrl: suite.browser_download_url,
+      suiteSha256: parseAssetDigest(suite.digest),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function selectUpdateCandidate(
@@ -223,13 +234,6 @@ export function selectUpdateCandidate(
     candidate: candidates.find((candidate) => compareSemver(candidate.version, currentVersion) > 0),
     hasChannelRelease: candidates.length > 0,
   };
-}
-
-export function parseChecksum(text: string): string {
-  const tokens = text.trim().split(/\s+/u);
-  const checksum = tokens[0]?.toLowerCase() ?? '';
-  if (!/^[a-f0-9]{64}$/u.test(checksum)) throw new Error('invalid checksum');
-  return checksum;
 }
 
 async function defaultCommandRunner(
@@ -275,6 +279,21 @@ function findAppBundles(root: string, depth = 0): string[] {
   return apps;
 }
 
+function findNamedFiles(root: string, name: string, depth = 0): string[] {
+  if (depth > 3) return [];
+  const matches: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const candidate = join(root, entry.name);
+    if (entry.isFile() && entry.name.toLowerCase() === name.toLowerCase()) matches.push(candidate);
+    else if (entry.isDirectory()) matches.push(...findNamedFiles(candidate, name, depth + 1));
+  }
+  return matches;
+}
+
+function powerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 function readBundleVersion(appPath: string): string | null {
   try {
     const plist = readFileSync(join(appPath, 'Contents', 'Info.plist'), 'utf8');
@@ -295,6 +314,8 @@ export class DesktopUpdateController {
   private readonly settings: UpdateSettingsStore;
   private readonly cliPath?: string;
   private readonly helperPath?: string;
+  private readonly helperRuntimePath?: string;
+  private readonly desktopPath: string;
   private readonly userDataPath: string;
   private readonly repository: string;
   private readonly platform: NodeJS.Platform;
@@ -312,6 +333,8 @@ export class DesktopUpdateController {
   private snapshotValue: UpdateSnapshot;
   private candidate?: UpdateCandidate;
   private prepared?: PreparedUpdate;
+  private releaseCache?: { fetchedAt: number; releases: GithubRelease[] };
+  private checkPromise?: Promise<UpdateSnapshot>;
   private delayTimer?: unknown;
   private intervalTimer?: unknown;
 
@@ -320,6 +343,7 @@ export class DesktopUpdateController {
     this.settings = options.settings;
     this.cliPath = options.cliPath;
     this.helperPath = options.helperPath;
+    this.helperRuntimePath = options.helperRuntimePath;
     this.userDataPath = options.userDataPath;
     this.repository = options.repository ?? DEFAULT_REPOSITORY;
     this.platform = options.platform ?? process.platform;
@@ -333,14 +357,19 @@ export class DesktopUpdateController {
     this.spawnDetached = options.spawnDetached ?? defaultSpawnDetached;
     this.scheduler = options.scheduler ?? defaultUpdateScheduler;
     this.target = releaseTarget(this.platform, this.arch);
+    const localAppData = process.env.LOCALAPPDATA ?? join(this.homePath, 'AppData', 'Local');
+    this.desktopPath = options.desktopPath ?? (this.platform === 'win32'
+      ? join(localAppData, 'Programs', WINDOWS_APP_DIR)
+      : join(this.homePath, 'Applications', MAC_APP_NAME));
     this.resultPath = join(this.userDataPath, 'update-result.json');
     const fallback: UpdateChannel = parseSemver(this.currentVersion)?.prerelease.length ? 'dev' : 'stable';
     this.snapshotValue = {
       channel: this.settings.loadUpdateChannel(fallback),
       state: 'idle',
       currentVersion: this.currentVersion,
-      installSupported: this.platform === 'darwin' && this.target !== null
-        && Boolean(this.cliPath && this.helperPath),
+      installSupported: (this.platform === 'darwin' || this.platform === 'win32')
+        && this.target !== null
+        && Boolean(this.cliPath && this.helperPath && this.helperRuntimePath),
     };
     this.consumeHelperResult();
   }
@@ -382,6 +411,16 @@ export class DesktopUpdateController {
   }
 
   async check(manual = true): Promise<UpdateSnapshot> {
+    if (this.checkPromise) return this.checkPromise;
+    this.checkPromise = this.performCheck(manual);
+    try {
+      return await this.checkPromise;
+    } finally {
+      this.checkPromise = undefined;
+    }
+  }
+
+  private async performCheck(manual: boolean): Promise<UpdateSnapshot> {
     if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'restart-required') {
       return this.snapshot();
     }
@@ -392,23 +431,9 @@ export class DesktopUpdateController {
     timeout.unref?.();
     try {
       if (this.target === null) throw new Error('unsupported target');
-      const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
-      const response = await this.fetcher(
-        `https://api.github.com/repos/${this.repository}/releases?per_page=100`,
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'wrenyard-desktop-updater',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          signal: controller.signal,
-        },
-      );
-      if (!response.ok) throw new Error('release check failed');
-      const payload = await response.json() as unknown;
-      if (!Array.isArray(payload)) throw new Error('invalid release response');
+      const payload = await this.releases(controller.signal);
       const selection = selectUpdateCandidate(
-        payload as GithubRelease[],
+        payload,
         this.currentVersion,
         this.snapshotValue.channel,
         this.target,
@@ -452,6 +477,30 @@ export class DesktopUpdateController {
     return this.snapshot();
   }
 
+  private async releases(signal: AbortSignal): Promise<GithubRelease[]> {
+    if (this.releaseCache && this.now() - this.releaseCache.fetchedAt < CHECK_INTERVAL_MS) {
+      return this.releaseCache.releases;
+    }
+    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+    const response = await this.fetcher(
+      `https://api.github.com/repos/${this.repository}/releases?per_page=20`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'wrenyard-desktop-updater',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal,
+      },
+    );
+    if (!response.ok) throw new Error('release check failed');
+    const payload = await response.json() as unknown;
+    if (!Array.isArray(payload)) throw new Error('invalid release response');
+    const releases = payload as GithubRelease[];
+    this.releaseCache = { fetchedAt: this.now(), releases };
+    return releases;
+  }
+
   async prepareUpdate(): Promise<UpdateSnapshot> {
     if (!this.snapshotValue.installSupported) {
       this.setSnapshot({
@@ -485,7 +534,7 @@ export class DesktopUpdateController {
       message: '正在下载并校验更新…',
     });
     try {
-      this.prepared = await this.prepareMacDesktop(this.candidate);
+      this.prepared = await this.prepareDesktop(this.candidate);
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'restart-required',
@@ -504,7 +553,7 @@ export class DesktopUpdateController {
   }
 
   async launchPreparedUpdate(): Promise<boolean> {
-    if (!this.prepared || !this.helperPath || !this.cliPath) return false;
+    if (!this.prepared || !this.helperPath || !this.helperRuntimePath || !this.cliPath) return false;
     if (await this.isBusy()) {
       this.setSnapshot({
         ...this.snapshotValue,
@@ -517,19 +566,23 @@ export class DesktopUpdateController {
       mkdirSync(this.userDataPath, { recursive: true });
       rmSync(this.resultPath, { force: true });
       const configPath = join(this.prepared.cleanupRoots[0], 'helper-config.json');
+      const helperCopy = join(this.prepared.cleanupRoots[0], 'update-helper.cjs');
+      copyFileSync(this.helperPath, helperCopy);
       const config: UpdateHelperConfig = {
         schema: 'wrenyard.desktop-update-helper.v1',
+        platform: this.platform === 'win32' ? 'win32' : 'darwin',
         parentPid: process.pid,
         version: this.prepared.candidate.version,
-        stagedApp: this.prepared.stagedApp,
-        destinationApp: join(this.homePath, 'Applications', APP_NAME),
+        stagedDesktop: this.prepared.stagedDesktop,
+        destinationDesktop: this.desktopPath,
         cliPath: this.cliPath,
+        userDataPath: this.userDataPath,
         resultPath: this.resultPath,
         cleanupRoots: this.prepared.cleanupRoots,
       };
       writeFileSync(configPath, `${JSON.stringify(config)}\n`, { encoding: 'utf8', mode: 0o600 });
-      this.spawnDetached(process.execPath, [this.helperPath, configPath], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      this.spawnDetached(this.helperRuntimePath, [helperCopy, configPath], {
+        env: { ...process.env },
       });
       return true;
     } catch {
@@ -542,43 +595,58 @@ export class DesktopUpdateController {
     }
   }
 
-  private async prepareMacDesktop(candidate: UpdateCandidate): Promise<PreparedUpdate> {
-    const updateRoot = join(this.homePath, '.wrenyard-updates');
-    const applications = join(this.homePath, 'Applications');
-    mkdirSync(updateRoot, { recursive: true });
-    mkdirSync(applications, { recursive: true });
-    const workRoot = mkdtempSync(join(updateRoot, 'desktop-'));
-    const stageRoot = mkdtempSync(join(applications, '.wrenyard-desktop-update-'));
+  private async prepareDesktop(candidate: UpdateCandidate): Promise<PreparedUpdate> {
+    mkdirSync(this.userDataPath, { recursive: true });
+    const destinationParent = dirname(this.desktopPath);
+    mkdirSync(destinationParent, { recursive: true });
+    const workRoot = mkdtempSync(join(this.userDataPath, '.wrenyard-update-'));
+    const stageRoot = mkdtempSync(join(destinationParent, '.wrenyard-desktop-update-'));
     const archive = join(workRoot, basename(new URL(candidate.desktopUrl).pathname) || 'desktop.zip');
     const extractRoot = join(workRoot, 'extract');
-    const stagedApp = join(stageRoot, APP_NAME);
+    const stagedDesktop = join(stageRoot, this.platform === 'win32' ? WINDOWS_APP_DIR : MAC_APP_NAME);
     try {
-      const checksumResponse = await this.fetcher(candidate.desktopChecksumUrl, {
-        headers: { 'User-Agent': 'wrenyard-desktop-updater' },
-      });
-      if (!checksumResponse.ok) throw new Error('checksum download failed');
-      const expected = parseChecksum(await checksumResponse.text());
+      const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
       const response = await this.fetcher(candidate.desktopUrl, {
-        headers: { 'User-Agent': 'wrenyard-desktop-updater' },
+        headers: {
+          'User-Agent': 'wrenyard-desktop-updater',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
       if (!response.ok || !response.body) throw new Error('desktop download failed');
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(archive, { mode: 0o600 }));
-      if (await sha256(archive) !== expected) throw new Error('desktop checksum mismatch');
+      if (await sha256(archive) !== candidate.desktopSha256) throw new Error('desktop checksum mismatch');
       mkdirSync(extractRoot, { recursive: true });
-      const extracted = await this.commandRunner('/usr/bin/ditto', ['-x', '-k', archive, extractRoot]);
+      const extracted = this.platform === 'win32'
+        ? await this.commandRunner('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Expand-Archive -LiteralPath ${powerShellLiteral(archive)} -DestinationPath ${powerShellLiteral(extractRoot)} -Force`,
+        ], { windowsHide: true })
+        : await this.commandRunner('/usr/bin/ditto', ['-x', '-k', archive, extractRoot]);
       if (extracted.status !== 0) throw new Error('desktop extraction failed');
-      const apps = findAppBundles(extractRoot);
-      if (apps.length !== 1) throw new Error('desktop archive must contain one app');
-      if (readBundleVersion(apps[0]) !== candidate.version) throw new Error('desktop version mismatch');
-      const signature = await this.commandRunner('/usr/bin/codesign', ['--verify', '--deep', '--strict', apps[0]]);
-      if (signature.status !== 0) throw new Error('desktop signature invalid');
-      const staged = await this.commandRunner('/usr/bin/ditto', [apps[0], stagedApp]);
-      if (staged.status !== 0 || !existsSync(stagedApp) || !statSync(stagedApp).isDirectory()) {
-        throw new Error('desktop staging failed');
+      if (this.platform === 'win32') {
+        const executables = findNamedFiles(extractRoot, WINDOWS_EXE_NAME);
+        if (executables.length !== 1) throw new Error('desktop archive must contain one executable');
+        cpSync(dirname(executables[0]!), stagedDesktop, { recursive: true, force: true, verbatimSymlinks: true });
+        const stagedExecutable = join(stagedDesktop, WINDOWS_EXE_NAME);
+        if (!existsSync(stagedExecutable) || statSync(stagedExecutable).size <= 0) {
+          throw new Error('desktop staging failed');
+        }
+      } else {
+        const apps = findAppBundles(extractRoot);
+        if (apps.length !== 1) throw new Error('desktop archive must contain one app');
+        if (readBundleVersion(apps[0]!) !== candidate.version) throw new Error('desktop version mismatch');
+        const signature = await this.commandRunner('/usr/bin/codesign', ['--verify', '--deep', '--strict', apps[0]!]);
+        if (signature.status !== 0) throw new Error('desktop signature invalid');
+        const staged = await this.commandRunner('/usr/bin/ditto', [apps[0]!, stagedDesktop]);
+        if (staged.status !== 0 || !existsSync(stagedDesktop) || !statSync(stagedDesktop).isDirectory()) {
+          throw new Error('desktop staging failed');
+        }
+        const stagedSignature = await this.commandRunner('/usr/bin/codesign', ['--verify', '--deep', '--strict', stagedDesktop]);
+        if (stagedSignature.status !== 0) throw new Error('staged desktop signature invalid');
       }
-      const stagedSignature = await this.commandRunner('/usr/bin/codesign', ['--verify', '--deep', '--strict', stagedApp]);
-      if (stagedSignature.status !== 0) throw new Error('staged desktop signature invalid');
-      return { candidate, stagedApp, cleanupRoots: [workRoot, stageRoot] };
+      return { candidate, stagedDesktop, cleanupRoots: [workRoot, stageRoot] };
     } catch (error) {
       rmSync(workRoot, { recursive: true, force: true });
       rmSync(stageRoot, { recursive: true, force: true });

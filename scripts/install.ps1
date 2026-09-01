@@ -3,7 +3,7 @@
     wrenyard installer/updater (Windows)
 
 .DESCRIPTION
-    Downloads a checksum-verified suite zip, validates the wrenyard executable
+    Downloads a digest-verified suite zip, validates the wrenyard executable
     and release manifest, and installs it under <Prefix>\versions\<version>
     before safely updating the `current` link and the public launcher shim.
     Old versions are retained.
@@ -19,9 +19,11 @@
 .PARAMETER BinDir
     Directory for launcher shims (default: <Prefix>\bin).
 .PARAMETER Url
-    Suite zip URL (default: derived from the GitHub release).
+    Suite zip URL. Requires -ChecksumUrl.
 .PARAMETER ChecksumUrl
-    Suite .sha256 sidecar URL (default: <Url>.sha256).
+    Explicit suite .sha256 sidecar URL for -Url.
+.PARAMETER SuiteOnly
+    Install/update the suite without the Desktop app.
 .PARAMETER Update
     Install the newest non-draft release (prereleases included).
 
@@ -35,6 +37,7 @@ param(
     [string]$BinDir = '',
     [string]$Url = '',
     [string]$ChecksumUrl = '',
+    [switch]$SuiteOnly,
     [switch]$Update
 )
 
@@ -59,14 +62,15 @@ $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:
 $headers = @{ 'User-Agent' = 'wrenyard-install' }
 if ($token) { $headers['Authorization'] = "Bearer $token" }
 
+$releaseInfo = $null
 if (-not $Version) {
     if ($Update) {
         # Newest non-draft release from the full releases list, prereleases
         # included, so the latest v1.0.0-dev.* prerelease is selected.
         $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=100" -Headers $headers
-        $release = $releases | Where-Object { -not $_.draft } | Sort-Object published_at -Descending | Select-Object -First 1
-        if (-not $release) { Die "could not resolve the latest non-draft release tag for $Repo" }
-        $Version = [string]$release.tag_name -replace '^v', ''
+        $releaseInfo = $releases | Where-Object { -not $_.draft } | Sort-Object published_at -Descending | Select-Object -First 1
+        if (-not $releaseInfo) { Die "could not resolve the latest non-draft release tag for $Repo" }
+        $Version = [string]$releaseInfo.tag_name -replace '^v', ''
     } else {
         Die 'a -Version is required (or pass -Update to install the latest release)'
     }
@@ -82,8 +86,10 @@ $Tag = if ($Version -match '^v') { $Version } else { "v$Version" }
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITECTURE -ne 'x86_64') {
     Die "unsupported processor architecture: $env:PROCESSOR_ARCHITECTURE (supported: AMD64/x86_64)"
 }
+$CustomUrl = [bool]$Url
+$AssetName = "wrenyard-$DirVersion-win32-x64-suite.zip"
 if (-not $Url) { $Url = "https://github.com/$Repo/releases/download/$Tag/wrenyard-$DirVersion-win32-x64-suite.zip" }
-if (-not $ChecksumUrl) { $ChecksumUrl = "$Url.sha256" }
+if ($CustomUrl -and -not $ChecksumUrl) { Die '-Url requires -ChecksumUrl' }
 $VersionsDir = Join-Path $Prefix 'versions'
 $VersionDir = Join-Path $VersionsDir $DirVersion
 $CurrentLink = Join-Path $Prefix 'current'
@@ -200,14 +206,25 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wrenyard-install-" + [Guid]
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
     $zipPath = Join-Path $tmp 'suite.zip'
-    $shaPath = Join-Path $tmp 'suite.zip.sha256'
     Write-Log "downloading suite: $Url"
     Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -Headers $headers
-    Write-Log "downloading checksum sidecar: $ChecksumUrl"
-    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $shaPath -UseBasicParsing -Headers $headers
-
-    $expected = ((Get-Content $shaPath | Select-Object -First 1).Split(' ')[0]).Trim().ToLowerInvariant()
-    if (-not $expected) { Die "checksum sidecar is empty: $ChecksumUrl" }
+    if ($ChecksumUrl) {
+        $shaPath = Join-Path $tmp 'suite.zip.sha256'
+        Write-Log "downloading explicit checksum sidecar: $ChecksumUrl"
+        Invoke-WebRequest -Uri $ChecksumUrl -OutFile $shaPath -UseBasicParsing -Headers $headers
+        $expected = ((Get-Content $shaPath | Select-Object -First 1).Split(' ')[0]).Trim().ToLowerInvariant()
+        if ($expected -notmatch '^[0-9a-f]{64}$') { Die "checksum sidecar is invalid: $ChecksumUrl" }
+    } else {
+        Write-Log "resolving GitHub asset digest: $AssetName"
+        if (-not $releaseInfo -or [string]$releaseInfo.tag_name -ne $Tag) {
+            $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers
+        }
+        $asset = $releaseInfo.assets | Where-Object { [string]$_.name -eq $AssetName } | Select-Object -First 1
+        if (-not $asset) { Die "release $Tag has no asset named $AssetName" }
+        $digestMatch = [regex]::Match([string]$asset.digest, '^sha256:([0-9a-fA-F]{64})$')
+        if (-not $digestMatch.Success) { Die "release $Tag has no SHA-256 digest for $AssetName" }
+        $expected = $digestMatch.Groups[1].Value.ToLowerInvariant()
+    }
     $actual = Get-Sha256 -Path $zipPath
     if ($actual -ne $expected) { Die "checksum mismatch for $Url (expected $expected, got $actual)" }
     Write-Log "checksum verified ($actual)"
@@ -274,6 +291,66 @@ try {
     $rel = Relative-To -Path $wrenyardInstalled.FullName -Root $VersionDir
     $target = if ($currentOk) { Join-Path $CurrentLink $rel.TrimStart('\') } else { $wrenyardInstalled.FullName }
     Write-Shim -Name 'wrenyard' -Target $target
+
+    # One-command bootstrap also installs the matching Desktop archive. The
+    # Desktop update helper invokes this script through `wrenyard update` with
+    # -SuiteOnly so the running app can replace itself after exit.
+    if (-not $SuiteOnly) {
+        $desktopAssetName = "wrenyard-desktop-$DirVersion-win32-x64.zip"
+        if (-not $releaseInfo -or [string]$releaseInfo.tag_name -ne $Tag) {
+            $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers
+        }
+        $desktopAsset = $releaseInfo.assets | Where-Object { [string]$_.name -eq $desktopAssetName } | Select-Object -First 1
+        if (-not $desktopAsset) { Die "release $Tag has no asset named $desktopAssetName" }
+        $desktopDigest = [regex]::Match([string]$desktopAsset.digest, '^sha256:([0-9a-fA-F]{64})$')
+        if (-not $desktopDigest.Success) {
+            Die "release $Tag has no SHA-256 digest for $desktopAssetName"
+        }
+        $desktopUrl = [string]$desktopAsset.browser_download_url
+        $desktopZip = Join-Path $tmp 'desktop.zip'
+        $desktopExtract = Join-Path $tmp 'desktop-extract'
+        Write-Log "downloading Desktop: $desktopUrl"
+        Invoke-WebRequest -Uri $desktopUrl -OutFile $desktopZip -UseBasicParsing -Headers $headers
+        $desktopActual = Get-Sha256 -Path $desktopZip
+        $desktopExpected = $desktopDigest.Groups[1].Value.ToLowerInvariant()
+        if ($desktopActual -ne $desktopExpected) {
+            Die "checksum mismatch for $desktopUrl (expected $desktopExpected, got $desktopActual)"
+        }
+        Expand-Archive -Path $desktopZip -DestinationPath $desktopExtract -Force
+        $desktopExecutable = Get-ChildItem -Path $desktopExtract -Recurse -File -Filter 'wrenyard-desktop.exe' |
+            Select-Object -First 1
+        if (-not $desktopExecutable -or $desktopExecutable.Length -le 0) {
+            Die 'Desktop archive does not contain wrenyard-desktop.exe'
+        }
+
+        $programsDir = Join-Path $env:LOCALAPPDATA 'Programs'
+        $desktopDestination = Join-Path $programsDir 'Wrenyard Desktop'
+        $desktopStaging = Join-Path $programsDir ('.wrenyard-desktop-install-' + [Guid]::NewGuid().ToString('N'))
+        $desktopBackup = Join-Path $programsDir ('.wrenyard-desktop-previous-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $programsDir -Force | Out-Null
+        Copy-DirectoryTree -Source $desktopExecutable.Directory.FullName -Destination $desktopStaging
+        $stagedExecutable = Join-Path $desktopStaging 'wrenyard-desktop.exe'
+        if (-not (Test-Path $stagedExecutable) -or (Get-Item $stagedExecutable).Length -le 0) {
+            Die 'staged Desktop executable is invalid'
+        }
+        if (Test-Path $desktopDestination) { Move-Item $desktopDestination $desktopBackup -Force }
+        try {
+            Move-Item $desktopStaging $desktopDestination -ErrorAction Stop
+        } catch {
+            if (Test-Path $desktopBackup) { Move-Item $desktopBackup $desktopDestination -Force }
+            throw
+        }
+        Remove-Item $desktopBackup -Recurse -Force -ErrorAction SilentlyContinue
+
+        $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+        New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut((Join-Path $startMenu '啾啾工坊.lnk'))
+        $shortcut.TargetPath = Join-Path $desktopDestination 'wrenyard-desktop.exe'
+        $shortcut.WorkingDirectory = $desktopDestination
+        $shortcut.Save()
+        Write-Log "installed Desktop $DirVersion at $desktopDestination"
+    }
 
     Write-Log "installed wrenyard $DirVersion at $VersionDir"
     Write-Host "wrenyard $DirVersion installed"

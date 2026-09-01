@@ -29,6 +29,9 @@ import { fileURLToPath } from 'node:url';
 const ENABLED = process.env.WRENYARD_SKIP_PACKED_INSTALL_E2E !== '1';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
+const RELEASE_HOST_SUPPORTED =
+  (process.platform === 'darwin' && process.arch === 'arm64') ||
+  (process.platform === 'win32' && process.arch === 'x64');
 // Windows receives a larger budget for its slower archive, npm, and install
 // checks. Prebuilt mode (WRENYARD_E2E_RELEASE_DIR) consumes an already-built
 // release directory instead of assembling a second copy.
@@ -37,8 +40,6 @@ const E2E_TIMEOUT_MS = process.platform === 'win32' ? 1_800_000 : 600_000;
 // Host triplet embedded in the platform-qualified suite artifact name.
 const TRIPLET = {
   'darwin-arm64': 'darwin-arm64',
-  'darwin-x64': 'darwin-x64',
-  'linux-x64': 'linux-x64',
   'win32-x64': 'win32-x64',
 }[`${process.platform}-${process.arch}`];
 
@@ -360,6 +361,21 @@ test('installers have no standalone Pet artifact contract', () => {
   assertInstallersHaveNoStandalonePet(ROOT);
 });
 
+test('installers use GitHub asset digests and bootstrap suite plus Desktop', () => {
+  const sh = fs.readFileSync(path.join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  const ps1 = fs.readFileSync(path.join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+
+  assert.match(sh, /resolve_release_asset_sha256/);
+  assert.match(sh, /--suite-only/);
+  assert.match(sh, /wrenyard-desktop-\$DIR_VERSION-\$TARGET\.zip/);
+  assert.doesNotMatch(sh, /CHECKSUM_URL="\$\{CHECKSUM_URL:-\$URL\.sha256\}"/);
+
+  assert.match(ps1, /\[switch\]\$SuiteOnly/);
+  assert.match(ps1, /\.digest/);
+  assert.match(ps1, /wrenyard-desktop-\$DirVersion-win32-x64\.zip/);
+  assert.doesNotMatch(ps1, /\$ChecksumUrl = "\$Url\.sha256"/);
+});
+
 function readVersion(manifest, zipPath) {
   if (manifest) {
     try {
@@ -466,7 +482,11 @@ function zipDirectory(source, destination) {
 }
 
 test('packed-install E2E: no consumer-side Go compilation', {
-  skip: ENABLED ? false : 'WRENYARD_SKIP_PACKED_INSTALL_E2E=1',
+  skip: !ENABLED
+    ? 'WRENYARD_SKIP_PACKED_INSTALL_E2E=1'
+    : RELEASE_HOST_SUPPORTED
+      ? false
+      : `public releases do not support ${process.platform}-${process.arch}`,
   timeout: E2E_TIMEOUT_MS,
 }, async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-packed-install-'));
@@ -746,6 +766,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
+          '-SuiteOnly',
           '-Prefix', prefix,
           '-BinDir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -755,6 +776,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '--version', version,
           '--url', zipUrl,
           '--checksum-url', `${zipUrl}.sha256`,
+          '--suite-only',
           '--prefix', prefix,
           '--bin-dir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -799,6 +821,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '-Version', version,
           '-Url', zipUrl,
           '-ChecksumUrl', `${zipUrl}.sha256`,
+          '-SuiteOnly',
           '-Prefix', prefix,
           '-BinDir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -808,6 +831,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
           '--version', version,
           '--url', zipUrl,
           '--checksum-url', `${zipUrl}.sha256`,
+          '--suite-only',
           '--prefix', prefix,
           '--bin-dir', path.join(prefix, 'bin'),
         ], { env: consumerEnv });
@@ -835,10 +859,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
     // draft, and must use the private-release token through a mode-0600 netrc
     // file without ever echoing it.
     if (process.platform !== 'win32') {
-      assert.ok(
-        TRIPLET === 'darwin-arm64' || TRIPLET === 'darwin-x64' || TRIPLET === 'linux-x64',
-        `--update E2E requires a darwin/linux host, got ${process.platform}-${process.arch}`,
-      );
+      assert.equal(TRIPLET, 'darwin-arm64', `unsupported POSIX release host: ${TRIPLET}`);
       const fakeCurlDir = path.join(tmp, 'fake-curl');
       const curlLog = path.join(fakeCurlDir, 'curl.log');
       fs.mkdirSync(fakeCurlDir, { recursive: true });
@@ -864,6 +885,8 @@ fi
 case "$url" in
   *releases?per_page=*|*releases\\?per_page=*)
     if [ -n "$out" ]; then cat "$FAKE_CURL_RELEASES" > "$out"; else cat "$FAKE_CURL_RELEASES"; fi ;;
+  *releases/tags/*)
+    if [ -n "$out" ]; then cat "$FAKE_CURL_RELEASE_DETAIL" > "$out"; else cat "$FAKE_CURL_RELEASE_DETAIL"; fi ;;
   *.sha256)
     if [ -n "$out" ]; then cat "$FAKE_CURL_SHA" > "$out"; else cat "$FAKE_CURL_SHA"; fi ;;
   *)
@@ -871,6 +894,18 @@ case "$url" in
 esac
 `, 'utf8');
       fs.chmodSync(fakeCurl, 0o755);
+
+      const releaseDetailPath = path.join(tmp, 'release-detail.json');
+      fs.writeFileSync(releaseDetailPath, `{
+  "tag_name": "v9.9.9-rc.9",
+  "assets": [
+    {
+      "name": "wrenyard-9.9.9-rc.9-${TRIPLET}-suite.zip",
+      "digest": "sha256:${sha256File(zipPath)}"
+    }
+  ]
+}
+`, 'utf8');
 
       const releasesPath = path.join(tmp, 'releases.json');
       fs.writeFileSync(releasesPath, `[
@@ -906,6 +941,7 @@ esac
         PATH: `${fakeCurlDir}${path.delimiter}/usr/bin:/bin`,
         FAKE_CURL_LOG: curlLog,
         FAKE_CURL_RELEASES: releasesPath,
+        FAKE_CURL_RELEASE_DETAIL: releaseDetailPath,
         FAKE_CURL_ZIP: zipPath,
         FAKE_CURL_SHA: shaPath,
       };
@@ -915,6 +951,9 @@ esac
       await runAsync('bash', [
         path.join(ROOT, 'scripts', 'install.sh'),
         '--version', version,
+        '--url', `https://fake.invalid/${path.basename(zipPath)}`,
+        '--checksum-url', `https://fake.invalid/${path.basename(zipPath)}.sha256`,
+        '--suite-only',
         '--prefix', updatePrefix,
         '--bin-dir', path.join(updatePrefix, 'bin'),
       ], { env: updateEnv });
@@ -981,6 +1020,7 @@ esac
       const updateResult = await runAsync('bash', [
         path.join(ROOT, 'scripts', 'install.sh'),
         '--update',
+        '--suite-only',
         '--prefix', updatePrefix,
         '--bin-dir', path.join(updatePrefix, 'bin'),
       ], { env: updateAuthEnv });
@@ -1035,6 +1075,9 @@ esac
       await runAsync('bash', [
         path.join(ROOT, 'scripts', 'install.sh'),
         '--version', version,
+        '--url', `https://fake.invalid/${path.basename(zipPath)}`,
+        '--checksum-url', `https://fake.invalid/${path.basename(zipPath)}.sha256`,
+        '--suite-only',
         '--prefix', updatePrefix,
         '--bin-dir', path.join(updatePrefix, 'bin'),
       ], { env: updateEnv });
@@ -1070,6 +1113,7 @@ esac
             '--version', version,
             '--url', url,
             '--checksum-url', `${url}.sha256`,
+            '--suite-only',
             '--prefix', badPrefix,
             '--bin-dir', path.join(badPrefix, 'bin'),
           ], { env: consumerEnv }),

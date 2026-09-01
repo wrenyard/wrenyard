@@ -1,4 +1,4 @@
-import { app, screen, session } from 'electron';
+import { app, dialog, Menu, screen, session, type MessageBoxOptions } from 'electron';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -27,6 +27,7 @@ import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage } fr
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
+import { desktopMenuTemplate } from './app-menu.js';
 import {
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
@@ -78,13 +79,35 @@ function resolveShellSource(): string {
 function resolveWrenyardCli(): string | undefined {
   const candidates = [
     process.env.WRENYARD_CLI,
-    join(process.cwd(), 'wrenyard'),
-    join(homedir(), '.local', 'bin', 'wrenyard'),
+    join(process.cwd(), process.platform === 'win32' ? 'wrenyard.exe' : 'wrenyard'),
+    ...(process.platform === 'win32'
+      ? [
+        join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'current', 'wrenyard.exe'),
+        join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'bin', 'wrenyard.cmd'),
+      ]
+      : [join(homedir(), '.local', 'bin', 'wrenyard')]),
   ];
   for (const candidate of candidates) {
     if (candidate && existsSync(candidate)) return candidate;
   }
   return undefined;
+}
+
+function resolveWrenyardNode(): string | undefined {
+  const candidates = [
+    process.env.WRENYARD_NODE_BIN,
+    process.platform === 'win32'
+      ? join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'current', 'runtime', 'node.exe')
+      : join(homedir(), '.local', 'share', 'wrenyard', 'current', 'runtime', 'node'),
+  ];
+  return candidates.find((candidate) => Boolean(candidate && existsSync(candidate)));
+}
+
+function installedDesktopPath(): string {
+  if (process.platform === 'win32') {
+    return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Programs', 'Wrenyard Desktop');
+  }
+  return join(homedir(), 'Applications', '啾啾工坊.app');
 }
 
 /** Read the bounded public health projection from the given IPC socket. */
@@ -306,6 +329,7 @@ let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
 let quitting = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
+let updateDialogActive = false;
 
 function showDesktop(page: ShellPage = 'workbench'): void {
   if (!shellWindow || shellWindow.window.isDestroyed()) {
@@ -316,6 +340,94 @@ function showDesktop(page: ShellPage = 'workbench'): void {
   shellWindow.window.show();
   shellWindow.window.focus();
   shellWindow.setPage(page);
+}
+
+function showUpdateMessage(options: MessageBoxOptions) {
+  const parent = shellWindow?.window;
+  return parent && !parent.isDestroyed()
+    ? dialog.showMessageBox(parent, options)
+    : dialog.showMessageBox(options);
+}
+
+async function promptForPreparedUpdate(version: string): Promise<void> {
+  const decision = await showUpdateMessage({
+    type: 'info',
+    title: '软件更新',
+    message: `啾啾工坊 v${version} 已准备好`,
+    detail: '重启后将原子替换啾啾工坊与 Wrenyard suite；失败时会自动恢复当前版本。',
+    buttons: ['重启并安装', '稍后'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (decision.response !== 0 || !updateController) return;
+  if (await updateController.launchPreparedUpdate()) {
+    setImmediate(() => app.quit());
+    return;
+  }
+  const failed = updateController.snapshot();
+  await showUpdateMessage({
+    type: 'error',
+    title: '软件更新',
+    message: '暂时无法开始安装',
+    detail: failed.message ?? '更新仍已保留，可稍后重试。',
+    buttons: ['好'],
+    noLink: true,
+  });
+}
+
+async function checkForUpdatesFromMenu(): Promise<void> {
+  if (!updateController || updateDialogActive) return;
+  updateDialogActive = true;
+  try {
+    const snapshot = await updateController.check(true);
+    if (snapshot.state === 'restart-required' && snapshot.availableVersion) {
+      await promptForPreparedUpdate(snapshot.availableVersion);
+      return;
+    }
+    if (snapshot.state === 'available' && snapshot.availableVersion) {
+      const decision = await showUpdateMessage({
+        type: 'info',
+        title: '软件更新',
+        message: `啾啾工坊 v${snapshot.availableVersion} 可用`,
+        detail: `当前版本为 v${snapshot.currentVersion}。下载完成后，你可以选择何时重启安装。`,
+        buttons: ['下载更新', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (decision.response !== 0) return;
+      const prepared = await updateController.prepareUpdate();
+      if (prepared.state === 'restart-required' && prepared.availableVersion) {
+        await promptForPreparedUpdate(prepared.availableVersion);
+        return;
+      }
+      await showUpdateMessage({
+        type: 'error',
+        title: '软件更新',
+        message: '更新未能准备完成',
+        detail: prepared.message ?? '当前版本未受影响，请稍后重试。',
+        buttons: ['好'],
+        noLink: true,
+      });
+      return;
+    }
+    const message = snapshot.state === 'stable-unavailable'
+      ? '正式版尚未发布'
+      : snapshot.state === 'up-to-date'
+        ? '啾啾工坊已是最新版本'
+        : '暂时无法检查更新';
+    await showUpdateMessage({
+      type: snapshot.state === 'check-failed' ? 'error' : 'info',
+      title: '软件更新',
+      message,
+      detail: snapshot.message ?? `当前版本为 v${snapshot.currentVersion}。`,
+      buttons: ['好'],
+      noLink: true,
+    });
+  } finally {
+    updateDialogActive = false;
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -348,11 +460,14 @@ async function bootstrap(): Promise<void> {
     path: join(app.getPath('userData'), 'settings.json'),
   });
   const wrenyardCli = resolveWrenyardCli();
+  const wrenyardNode = resolveWrenyardNode();
   updateController = new DesktopUpdateController({
     currentVersion: app.getVersion(),
     settings: petSettings,
     cliPath: wrenyardCli,
     helperPath: join(app.getAppPath(), 'dist', 'update-helper.cjs'),
+    helperRuntimePath: wrenyardNode,
+    desktopPath: installedDesktopPath(),
     userDataPath: app.getPath('userData'),
     isBusy: async () => {
       const conversationBusy = conversationController?.snapshot().sessions.some((item) => item.running) === true;
@@ -455,6 +570,10 @@ async function bootstrap(): Promise<void> {
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
   });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
+    process.platform,
+    () => { void checkForUpdatesFromMenu(); },
+  )));
   if (!SMOKE) updateController.start();
 
   shellWindow.window.on('close', (event) => {

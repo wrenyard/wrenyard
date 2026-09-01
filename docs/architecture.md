@@ -48,11 +48,10 @@ shell are internal components of that single product.
 
 In development execution, the CLI, control plane, and runtime all run from
 the repository. Release artifacts are assembled locally: the Forge Go runtime
-is precompiled and shipped as per-platform packages (`darwin-arm64`,
-`darwin-x64`, `linux-x64`, `win32-x64`), and the packed CLI and portable
-suite zip bundle the pinned Node runtime that built them. Preview builds are
-installable from the latest-dev channel; nothing is published to npm or
-GitHub Releases.
+is precompiled for the maintained public targets (`darwin-arm64` and
+`win32-x64`), and the packed CLI and portable suite zip bundle the pinned Node
+runtime that built them. Preview builds are installable from GitHub Releases'
+latest-dev channel; nothing is published to npm.
 
 ## Unified release, state, and paths
 
@@ -63,9 +62,8 @@ release:check` validates that the manifest is consistent.
 
 ## Signing
 
-Preview builds are signed ad-hoc on macOS, checksum-only on Linux, and
-unsigned by default on Windows. Trusted release signing is future work and
-never runs in this repository. See
+Preview builds are signed ad-hoc on macOS and unsigned by default on Windows.
+Trusted release signing is future work and never runs in this repository. See
 [docs/release/signing.md](release/signing.md).
 
 ## Why pnpm is the single user entry
