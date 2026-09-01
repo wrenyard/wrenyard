@@ -131,7 +131,7 @@ test('Desktop display selection resets only persisted Pet placement', async () =
   assert.deepEqual(events, ['start', 'quota:', 'stop', 'start', 'quota:']);
 });
 
-test('Desktop provider ordering preserves enablement and appends newly discovered providers disabled', async () => {
+test('Desktop provider ordering retires legacy enablement and activates newly discovered providers', async () => {
   let current = fixtureConfig();
   current.quota.providers.push({ id: 'cursor', enabled: false });
   const events: string[] = [];
@@ -145,11 +145,11 @@ test('Desktop provider ordering preserves enablement and appends newly discovere
   await controller.saveProviderOrder(['cursor', 'anthropic', 'codex']);
 
   assert.deepEqual(current.quota.providers, [
-    { id: 'cursor', enabled: false },
-    { id: 'anthropic', enabled: false },
+    { id: 'cursor', enabled: true },
+    { id: 'anthropic', enabled: true },
     { id: 'codex', enabled: true },
   ]);
-  assert.deepEqual(events, ['start', 'quota:', 'stop', 'start', 'quota:']);
+  assert.deepEqual(events, ['start', 'quota:']);
 });
 
 test('disabling the Desktop Pet stops it without starting a replacement runtime', async () => {

@@ -1,5 +1,6 @@
 export interface ProviderOrderEntry {
   id: string;
+  /** @deprecated Retained for settings compatibility; ordering is the only user preference. */
   enabled: boolean;
 }
 
@@ -20,19 +21,17 @@ export function normalizeProviderOrder(entries: readonly ProviderOrderEntry[]): 
     if (!id) continue;
     const position = positions.get(id);
     if (position !== undefined) {
-      normalized[position].enabled ||= entry.enabled;
       continue;
     }
     positions.set(id, normalized.length);
-    normalized.push({ id, enabled: entry.enabled });
+    normalized.push({ id, enabled: true });
   }
   return normalized;
 }
 
 /**
- * Apply a user-supplied id order without changing existing enablement. Newly
- * discovered providers join disabled so reordering cannot silently add quota
- * rows to the tray or Pet Tips.
+ * Apply a user-supplied id order. The legacy enablement bit is normalized to
+ * true because activation and quota capability now determine visibility.
  */
 export function reorderProviders(
   entries: readonly ProviderOrderEntry[],
@@ -45,7 +44,7 @@ export function reorderProviders(
     const id = canonicalProviderId(rawId);
     if (!id || seen.has(id)) return;
     seen.add(id);
-    result.push(existing.get(id) ?? { id, enabled: false });
+    result.push(existing.get(id) ?? { id, enabled: true });
   };
   for (const id of orderedIds) append(id);
   for (const id of existing.keys()) append(id);
@@ -59,8 +58,8 @@ export function swapProviders(
   secondId: string,
 ): ProviderOrderEntry[] {
   const order = normalizeProviderOrder(entries);
-  if (!order.some((entry) => entry.id === firstId)) order.push({ id: firstId, enabled: false });
-  if (!order.some((entry) => entry.id === secondId)) order.push({ id: secondId, enabled: false });
+  if (!order.some((entry) => entry.id === firstId)) order.push({ id: firstId, enabled: true });
+  if (!order.some((entry) => entry.id === secondId)) order.push({ id: secondId, enabled: true });
   const first = order.findIndex((entry) => entry.id === firstId);
   const second = order.findIndex((entry) => entry.id === secondId);
   if (first < 0 || second < 0 || first === second) return order;

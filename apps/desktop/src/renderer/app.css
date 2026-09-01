@@ -299,7 +299,7 @@ button, input, select { accent-color: var(--moss-deep); }
   color: var(--ink);
   background: #fffaf0;
 }
-.setting-control input[type="checkbox"], .provider-row input[type="checkbox"], .compact-switch input { width: 17px; height: 17px; }
+.setting-control input[type="checkbox"], .compact-switch input { width: 17px; height: 17px; }
 .setting-row-stacked { align-items: flex-start; flex-direction: column; gap: 9px; }
 .setting-row code { width: 100%; overflow: hidden; padding: 7px 9px; border: 1px solid rgba(212, 201, 168, .8); border-radius: 3px; color: var(--slate); background: rgba(255, 250, 240, .65); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .version { flex: 0 0 auto; color: var(--slate); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
@@ -313,9 +313,6 @@ button, input, select { accent-color: var(--moss-deep); }
 .update-status-copy { min-width: 0; }
 .update-status-copy small { margin-top: 6px; }
 .update-action-row { min-height: 36px; }
-.provider-row { min-height: 52px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 30px 30px; align-items: center; gap: 8px; padding: 9px 16px; }
-.provider-row + .provider-row { border-top: 1px solid var(--line); }
-.provider-id { overflow: hidden; color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .provider-move { width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); background: transparent; cursor: pointer; }
 .provider-move:hover:not(:disabled) { color: var(--ink); background: var(--paper-dim); }
 .provider-move:disabled { opacity: .3; cursor: default; }
@@ -348,10 +345,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .provider-directory-row.is-unconfigured .provider-directory-header p,
 .provider-directory-row.is-unconfigured .provider-directory-quota,
 .provider-directory-row.is-unconfigured .provider-directory-hint { color: var(--muted); }
-.provider-directory-row.is-unconfigured:hover,
-.provider-directory-row.is-unconfigured:focus-within { border-color: var(--line); background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); opacity: 1; }
-.provider-directory-row.is-unconfigured:hover .provider-directory-header h2,
-.provider-directory-row.is-unconfigured:focus-within .provider-directory-header h2 { color: var(--ink); }
+.provider-directory-row.is-unconfigured .provider-directory-action .secondary-button { opacity: 1; }
 .quota-window-row { display: grid; gap: 8px; }
 .quota-window-row > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .quota-window-row strong { color: var(--ink-soft); font-size: 11px; }

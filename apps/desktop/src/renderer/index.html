@@ -190,7 +190,7 @@
           <span class="quota-pace-legend"><i></i> 时间进度建议余量</span>
         </div>
         <div class="quota-provider-grid" id="quota-provider-grid" aria-live="polite"></div>
-        <p class="quota-footnote">已配置的 Provider 优先显示；行内箭头与「设置 → 桌宠 → 额度来源」共享同一排序。通知栏与房屋 Tips 的启用状态仍在设置中管理。</p>
+        <p class="quota-footnote">Provider 次序同时用于模型供应与额度显示；额度区域只展示已激活且支持额度的 Provider。</p>
       </section>
 
       <section class="product-page settings-page" id="settings-page" aria-labelledby="settings-title" hidden>
@@ -252,9 +252,6 @@
                 <label class="setting-row setting-control"><span><strong>气泡时长</strong><small>消息显示秒数，范围 1–60</small></span><input id="pet-bubble-seconds" type="number" min="1" max="60" step="1" /></label>
               </div>
 
-              <h3 class="settings-subtitle">额度来源</h3>
-              <p class="settings-subcopy">这里与模型供应页面共享顺序；启用状态控制通知栏菜单和房屋 Tips，不改变服务配置。</p>
-              <div class="settings-card provider-list" id="pet-provider-list"></div>
               <div class="settings-save-row"><span id="pet-save-note">位置仍可直接拖动房屋保存。</span><button class="primary-button" id="pet-save-button" type="button" disabled>保存并应用</button></div>
             </section>
 

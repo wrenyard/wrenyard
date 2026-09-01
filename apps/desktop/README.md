@@ -51,8 +51,9 @@ Electron product shell
   quota page is now the Providers page (模型供应): it renders the unified
   provider/auth/quota directory, one row per runtime-supported provider, with
   identity, connection state, compact quota windows or monetary balances and a
-  per-provider action. Unconfigured rows are visually de-emphasized while
-  configuration stays reachable, and unknown/custom provider ids remain visible
+  per-provider action. Unconfigured rows stay visually de-emphasized, expose
+  only their activation action and never enter dispatch/model/quota surfaces;
+  unknown/custom provider ids remain visible
   with safe generic copy. API-key entry covers the full supported Runtime
   public API provider set: the renderer sends the key through preload
   IPC and the Electron main process persists it by running the resolved suite
@@ -64,9 +65,10 @@ Electron product shell
   environment-variable-only, and no-auth rows are informational. Percentage
   windows retain remaining/expected values, while monetary providers retain
   their currency balances. Configured providers are grouped before unavailable
-  providers. Provider order is one shared Settings SSOT and can be adjusted from
-  either the Providers page or `设置 → 桌宠 → 额度来源`; tray and Pet enablement
-  remains settings-only. The notification-area
+  providers. The Providers page is the only ordering/configuration surface;
+  its persisted order also controls the filtered quota subset used by the tray
+  and Pet. The legacy provider `enabled` bit remains wire-compatible but has no
+  product behavior. The notification-area
   projection preserves the original grouped 5×7 RGBA template-bitmap renderer,
   including compact provider spacing, progress tracks, pace markers and balance
   columns; it is not replaced by native text labels or SVG menu images.
@@ -116,7 +118,8 @@ Electron product shell
   restore the same window.
 - **Wrenyard and workspace gates** — Desktop probes
   `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
-  `FOREMAN_*` names, then the shared `wrenyard.sock` default). If no daemon is
+  `FOREMAN_*` names, then `\\.\pipe\wrenyard` on Windows or `/tmp/wrenyard.sock`
+  on Unix). Blank environment values are ignored. If no daemon is
   answering, the main process locates the installed Wrenyard CLI via
   `WRENYARD_CLI`, the working directory, or `~/.local/bin`, starts the service
   once (`wrenyard daemon start`), and retries health.ping with bounded retries.
