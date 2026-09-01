@@ -27,8 +27,6 @@ body:
       label: Platform
       options:
         - macOS arm64
-        - macOS x64
-        - Linux x64
         - Windows x64
     validations:
       required: true

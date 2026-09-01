@@ -301,9 +301,9 @@ function runDesktop(args: string[], ctx: MainContext): number {
   return exitCode(result);
 }
 
-/** `wrenyard update [--version V] [--json]`: release-based public updater. */
+/** `wrenyard update [--version V] [--json]`: suite-only release updater. */
 function runUpdateCommand(args: string[], ctx: MainContext): number {
-  let parsed: { version?: string; json: boolean };
+  let parsed: { version?: string; json: boolean; suiteOnly: boolean };
   try {
     parsed = parseUpdateArgs(args);
   } catch (error) {
@@ -313,6 +313,9 @@ function runUpdateCommand(args: string[], ctx: MainContext): number {
   const outcome = runUpdate({
     suiteRoot: ctx.suiteRoot,
     version: parsed.version,
+    // Desktop owns its own atomic replacement. The CLI updater always changes
+    // only the suite; the raw one-click installers bootstrap both products.
+    suiteOnly: true,
     env: ctx.env,
     // Adapt the main runner (which surfaces spawn errors) to the updater.
     runner: (command, commandArgs, options) => {

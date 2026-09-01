@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   DesktopUpdateController,
   compareSemver,
-  parseChecksum,
+  parseAssetDigest,
   releaseTarget,
   selectUpdateCandidate,
   type GithubRelease,
@@ -16,9 +16,10 @@ function release(version: string, prerelease: boolean, target = 'darwin-arm64'):
     tag_name: `v${version}`,
     draft: false,
     prerelease,
-    assets: [desktop, `${desktop}.sha256`, suite, `${suite}.sha256`].map((name) => ({
+    assets: [desktop, suite].map((name) => ({
       name,
       browser_download_url: `https://example.test/${name}`,
+      digest: `sha256:${'a'.repeat(64)}`,
     })),
   };
 }
@@ -32,9 +33,9 @@ test('semantic versions sort stable after prerelease and compare dev sequence nu
 
 test('release target supports the shipped Desktop platforms only', () => {
   assert.equal(releaseTarget('darwin', 'arm64'), 'darwin-arm64');
-  assert.equal(releaseTarget('darwin', 'x64'), 'darwin-x64');
   assert.equal(releaseTarget('win32', 'x64'), 'win32-x64');
-  assert.equal(releaseTarget('linux', 'x64'), 'linux-x64');
+  assert.equal(releaseTarget('darwin', 'x64'), null);
+  assert.equal(releaseTarget('linux', 'x64'), null);
   assert.equal(releaseTarget('linux', 'arm64'), null);
 });
 
@@ -65,10 +66,10 @@ test('selection never downgrades and ignores releases missing required assets', 
   assert.equal(noStable.hasChannelRelease, false);
 });
 
-test('checksum parser accepts exactly one SHA-256 digest', () => {
+test('GitHub asset digest parser accepts exactly one prefixed SHA-256 digest', () => {
   const digest = 'a'.repeat(64);
-  assert.equal(parseChecksum(`${digest}  desktop.zip\n`), digest);
-  assert.throws(() => parseChecksum('not-a-checksum'), /invalid checksum/);
+  assert.equal(parseAssetDigest(`sha256:${digest}`), digest);
+  assert.throws(() => parseAssetDigest(digest), /invalid asset digest/);
 });
 
 test('controller checks the selected channel and exposes only friendly state', async () => {
@@ -124,7 +125,50 @@ test('manual check failure is friendly while automatic failure stays silent', as
   assert.equal(JSON.stringify(manual).includes('secret'), false);
 });
 
-test('startup check is scheduled at 5s and rechecks every 6 hours via the injected scheduler', async () => {
+test('channel changes reuse the hourly release cache instead of consuming another API request', async () => {
+  let fetchCount = 0;
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: '/tmp/wrenyard-update-controller-cache',
+    platform: 'darwin',
+    arch: 'arm64',
+    settings: {
+      loadUpdateChannel: () => 'dev',
+      saveUpdateChannel: () => undefined,
+    },
+    fetcher: async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+    now: () => 1_000,
+  });
+
+  await controller.check(true);
+  await controller.setChannel('stable');
+  assert.equal(fetchCount, 1);
+});
+
+test('atomic installation is available on the two maintained platforms only', () => {
+  const base = {
+    currentVersion: '1.0.0-dev.20',
+    settings: {
+      loadUpdateChannel: () => 'dev' as const,
+      saveUpdateChannel: () => undefined,
+    },
+    cliPath: '/suite/wrenyard',
+    helperPath: '/app/update-helper.cjs',
+    helperRuntimePath: '/suite/node',
+    userDataPath: '/user/data',
+  };
+  assert.equal(new DesktopUpdateController({ ...base, platform: 'darwin', arch: 'arm64' }).snapshot().installSupported, true);
+  assert.equal(new DesktopUpdateController({ ...base, platform: 'win32', arch: 'x64' }).snapshot().installSupported, true);
+  assert.equal(new DesktopUpdateController({ ...base, platform: 'linux', arch: 'x64' }).snapshot().installSupported, false);
+});
+
+test('startup check is scheduled at 5s and rechecks every hour via the injected scheduler', async () => {
   type ScheduledEntry =
     | { kind: 'timeout'; handle: number; callback: () => void; delay: number }
     | { kind: 'interval'; handle: number; callback: () => void; interval: number };
@@ -132,6 +176,7 @@ test('startup check is scheduled at 5s and rechecks every 6 hours via the inject
   const scheduled: ScheduledEntry[] = [];
   const cleared: unknown[] = [];
   let checkCount = 0;
+  let now = 0;
   const fetcher = async () => {
     checkCount += 1;
     return new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
@@ -149,6 +194,7 @@ test('startup check is scheduled at 5s and rechecks every 6 hours via the inject
       saveUpdateChannel: () => undefined,
     },
     fetcher,
+    now: () => now,
     scheduler: {
       setTimeout: (callback, delay) => {
         scheduled.push({ kind: 'timeout', handle: scheduled.length + 1, callback, delay });
@@ -175,10 +221,11 @@ test('startup check is scheduled at 5s and rechecks every 6 hours via the inject
   assert.equal(scheduled.length, 2);
   const recurring = scheduled[1]!;
   assert.equal(recurring.kind, 'interval');
-  assert.equal(recurring.interval, 6 * 60 * 60 * 1000);
+  assert.equal(recurring.interval, 60 * 60 * 1000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checkCount, 1);
 
+  now += 60 * 60 * 1000;
   recurring.callback();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checkCount, 2);

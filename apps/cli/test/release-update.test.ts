@@ -86,7 +86,7 @@ test('POSIX: selects the bundled install.sh and passes --update plus --version',
   const installer = fake.calls.find((call) => call.command === 'bash');
   assert.ok(installer, 'installer must be invoked through bash');
   assert.equal(installer.args[0], join(env.root, 'install.sh'));
-  assert.deepEqual(installer.args.slice(1), ['--update', '--version', '2.0.0']);
+  assert.deepEqual(installer.args.slice(1), ['--update', '--version', '2.0.0', '--suite-only']);
 });
 
 test('Windows: selects the bundled install.ps1 and passes -Update plus -Version', (t) => {
@@ -115,6 +115,7 @@ test('Windows: selects the bundled install.ps1 and passes -Update plus -Version'
     '-Update',
     '-Version',
     '2.0.0',
+    '-SuiteOnly',
   ]);
 });
 
@@ -129,16 +130,18 @@ test('source scripts are a fallback when no bundled installer exists', (t) => {
   assert.equal(fake.calls[0].args[0], join(root, 'scripts', 'install.sh'));
 });
 
-test('parseUpdateArgs handles --version, --json and --version=V', () => {
-  assert.deepEqual(parseUpdateArgs([]), { version: undefined, json: false });
-  assert.deepEqual(parseUpdateArgs(['--json']), { version: undefined, json: true });
+test('parseUpdateArgs handles --version, --json, --suite-only and --version=V', () => {
+  assert.deepEqual(parseUpdateArgs([]), { version: undefined, json: false, suiteOnly: false });
+  assert.deepEqual(parseUpdateArgs(['--json']), { version: undefined, json: true, suiteOnly: false });
   assert.deepEqual(parseUpdateArgs(['--version', '1.0.0-dev.0']), {
     version: '1.0.0-dev.0',
     json: false,
+    suiteOnly: false,
   });
-  assert.deepEqual(parseUpdateArgs(['--version=1.0.0-dev.0', '--json']), {
+  assert.deepEqual(parseUpdateArgs(['--version=1.0.0-dev.0', '--suite-only', '--json']), {
     version: '1.0.0-dev.0',
     json: true,
+    suiteOnly: true,
   });
   assert.throws(() => parseUpdateArgs(['--version']), /requires a value/);
   assert.throws(() => parseUpdateArgs(['--bogus']), /unknown update argument/);

@@ -90,16 +90,15 @@ Electron product shell
   Credential values are reduced to booleans in the main process and never sent
   to the renderer.
 - **Desktop-owned updates** — settings exposes a quiet `stable` / `dev` channel
-  selector, checks GitHub Releases shortly after startup and then every six
-  hours, and keeps automatic failures silent. Only newer, complete target
-  releases are offered. On macOS the main process downloads and stages only
-  the Desktop archive, verifies its published SHA-256 checksum and the staged
-  app signature, then asks the user before restarting. A separate packaged
-  helper swaps the app and runs the public suite updater during restart as one
-  recoverable operation; it restores the previous app when the suite update
-  fails. Installation is blocked while Desktop conversations or Wrenyard tasks
-  are active. Other platforms retain update discovery and channel selection
-  until an equivalent native replacement flow is available.
+  selector. Desktop checks shortly after startup and then at most once per
+  hour; repeated manual or channel checks reuse that hourly release snapshot,
+  and automatic failures stay silent. Help → Check for Updates opens a native
+  popup for current, available, downloading and restart states. On macOS and
+  Windows the main process verifies the GitHub asset digest, stages the Desktop
+  archive, and starts an external suite-bundled Node helper after user
+  confirmation. The helper atomically swaps Desktop, updates the suite, rolls
+  back Desktop when suite update fails, and relaunches the app. Installation
+  is blocked while Desktop conversations or Wrenyard tasks are active.
 - **Notification-area ownership** — Desktop owns the single three-wren macOS
   template icon and menu. It exists only while Desktop is active. The compact
   menu exposes only “打开”, “桌宠”, “额度” and “退出”; settings and statistics
@@ -219,7 +218,7 @@ come from `packages/dsh-shell` in the monorepo.
   talks to DSH; the renderer cannot open windows or navigate off-origin.
 - The renderer never receives release download URLs, filesystem paths, tokens or
   updater process access. Update staging accepts only exact target asset names,
-  checksum-matched archives and tightly scoped per-run cleanup directories.
+  digest-matched archives and tightly scoped per-run cleanup directories.
 
 ## Commands
 
@@ -241,7 +240,7 @@ ad-hoc app-bundle signature in the `afterPack` hook and are verified before
 zipping. Trusted releases rely on the standard environment hooks
 (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
 `APPLE_TEAM_ID`) supplied at release time. Windows preview artifacts remain
-unsigned unless a signtool identity is supplied; Linux uses checksums.
+unsigned unless a signtool identity is supplied.
 
 ## Requirements
 

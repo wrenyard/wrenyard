@@ -451,22 +451,22 @@ test('update routes to the release updater and never invokes git/pnpm/go', (t) =
   assert.equal(recorder.calls.length, 1);
   assert.equal(recorder.calls[0].command, 'bash');
   assert.ok(recorder.calls[0].args[0].endsWith(join('install.sh')));
-  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update']);
+  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--suite-only']);
   assert.ok(recorder.calls.every((call) => !['git', 'pnpm', 'go'].includes(call.command)));
   assert.ok(out.includes('wrenyard updated'));
 });
 
-test('update forwards --version to the bundled installer', (t) => {
+test('update forwards --version and the Desktop helper suite-only mode to the bundled installer', (t) => {
   const root = makeReleaseSuite();
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const recorder = makeRunner([0]);
   const code = main(
-    ['update', '--version', '1.0.0-dev.0'],
+    ['update', '--version', '1.0.0-dev.0', '--suite-only'],
     { ...baseOptions(root, recorder), env: { ...process.env, HOME: root } },
   );
   assert.equal(code, 0);
   assert.equal(recorder.calls.length, 1);
-  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--version', '1.0.0-dev.0']);
+  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--version', '1.0.0-dev.0', '--suite-only']);
 });
 
 test('update --json emits machine-readable output', (t) => {

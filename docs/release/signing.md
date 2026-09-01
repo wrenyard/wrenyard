@@ -13,7 +13,6 @@ publisher identity.
 
 - macOS: Node SEA artifacts and Desktop `.app` bundles are re-signed ad-hoc
   with `codesign --sign -` and then verified with `codesign --verify`.
-- Linux: checksum-only; no code signing is performed.
 - Windows: unsigned by default; artifacts are signed only when signtool
   credentials are available (see below).
 

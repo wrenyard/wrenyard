@@ -33,6 +33,7 @@ export interface UpdateOptions {
   prefix?: string;
   launcher?: string;
   version?: string;
+  suiteOnly?: boolean;
   runner?: UpdateRunner;
   env?: NodeJS.ProcessEnv;
   /** Injectable for tests; defaults to process.platform. */
@@ -97,14 +98,16 @@ function locateInstaller(suiteRoot: string, platform: NodeJS.Platform): string |
   return null;
 }
 
-function installerArgs(script: string, version: string | undefined): string[] {
+function installerArgs(script: string, version: string | undefined, suiteOnly: boolean): string[] {
   if (script.endsWith('.ps1')) {
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Update'];
     if (version !== undefined) args.push('-Version', version);
+    if (suiteOnly) args.push('-SuiteOnly');
     return args;
   }
   const args = [script, '--update'];
   if (version !== undefined) args.push('--version', version);
+  if (suiteOnly) args.push('--suite-only');
   return args;
 }
 
@@ -264,7 +267,7 @@ export function runUpdate(options: UpdateOptions = {}): UpdateOutcome {
   // build. The token-carrying environment is inherited so private releases work.
   const result = runner(
     isWinFor(platform) ? 'powershell.exe' : 'bash',
-    installerArgs(script, options.version),
+    installerArgs(script, options.version, options.suiteOnly !== false),
     { env: { ...env, WRENYARD_UPDATE: '1' } },
   );
 
@@ -297,13 +300,16 @@ export function runUpdate(options: UpdateOptions = {}): UpdateOutcome {
   return { ok: true, version: options.version, previous: previous ?? undefined, rolledBack: false };
 }
 
-export function parseUpdateArgs(args: string[]): { version?: string; json: boolean } {
+export function parseUpdateArgs(args: string[]): { version?: string; json: boolean; suiteOnly: boolean } {
   let version: string | undefined;
   let json = false;
+  let suiteOnly = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--json') {
       json = true;
+    } else if (arg === '--suite-only') {
+      suiteOnly = true;
     } else if (arg === '--version' || arg === '-V') {
       const value = args[index + 1];
       if (value === undefined) throw new Error('--version requires a value');
@@ -315,7 +321,7 @@ export function parseUpdateArgs(args: string[]): { version?: string; json: boole
       throw new Error(`unknown update argument: ${arg}`);
     }
   }
-  return { version, json };
+  return { version, json, suiteOnly };
 }
 
 export function formatOutcome(outcome: UpdateOutcome, json: boolean): string {
