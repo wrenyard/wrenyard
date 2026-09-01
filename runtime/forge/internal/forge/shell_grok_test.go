@@ -267,7 +267,7 @@ func TestShellGrokExecUserPermissionOverridesDefault(t *testing.T) {
 }
 
 func TestVersionIsCurrent(t *testing.T) {
-	if version != "1.0.0-dev.16" {
-		t.Fatalf("version = %q, want 1.0.0-dev.16", version)
+	if version != "1.0.0-dev.17" {
+		t.Fatalf("version = %q, want 1.0.0-dev.17", version)
 	}
 }
