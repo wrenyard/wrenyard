@@ -106,6 +106,18 @@ function Relative-To {
     return $full
 }
 
+function Copy-DirectoryTree {
+    param([string]$Source, [string]$Destination)
+    # PowerShell Copy-Item still fails on deeply nested node_modules paths on
+    # Windows even when the underlying filesystem supports long paths.
+    # Robocopy uses the native long-path-aware copy implementation. Exit codes
+    # 0-7 are successful outcomes; 8 and above report at least one failure.
+    & robocopy.exe $Source $Destination /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        Die "robocopy failed with exit code $LASTEXITCODE while staging $Source"
+    }
+}
+
 function Remove-LinkOnly {
     param([string]$Path)
     # Never follow a symlink/junction into its version target: only the link
@@ -220,7 +232,7 @@ try {
     $stagingDir = Join-Path $VersionsDir ('.' + $DirVersion + '.staging.' + [Guid]::NewGuid().ToString('N'))
     $backupDir = Join-Path $VersionsDir ('.' + $DirVersion + '.backup.' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-    Copy-Item -Path (Join-Path $extract '*') -Destination $stagingDir -Recurse -Force
+    Copy-DirectoryTree -Source $extract -Destination $stagingDir
 
     $wrenyardInstalled = Find-Artifact -Root $stagingDir -Name 'wrenyard'
     if (-not $wrenyardInstalled) { Die 'installed suite is missing the wrenyard executable' }
