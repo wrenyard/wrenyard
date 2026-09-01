@@ -99,7 +99,7 @@ function locateInstaller(suiteRoot: string, platform: NodeJS.Platform): string |
 
 function installerArgs(script: string, version: string | undefined): string[] {
   if (script.endsWith('.ps1')) {
-    const args = ['-NoProfile', '-File', script, '-Update'];
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Update'];
     if (version !== undefined) args.push('-Version', version);
     return args;
   }
