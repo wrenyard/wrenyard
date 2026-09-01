@@ -33,6 +33,14 @@ test('release.yml qualifies per-target evidence names', () => {
   assert.ok(workflow.includes('.sha256'));
 });
 
+test('release.yml publishes canonical installers across checkout line endings', () => {
+  // Windows runners may check out CRLF scripts while Unix runners use LF. The
+  // aggregation step must normalize those shared text assets before hashing,
+  // otherwise install.ps1/install.sh disappear behind target-qualified names.
+  assert.ok(workflow.includes('Buffer.from(bytes.toString("utf8").replace(/\\r\\n/g, "\\n"))'));
+  assert.ok(workflow.includes('putBytes(path.join(out, base), copies[0].data)'));
+});
+
 test('release.yml has no duplicate-basename recursive upload pattern', () => {
   // A recursive find over the merged artifacts tree would upload the same
   // basename (install.sh, release-manifest.json, SHA256SUMS, ...) many times.
