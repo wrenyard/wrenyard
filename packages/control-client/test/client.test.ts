@@ -42,9 +42,21 @@ test("legacy FOREMAN_PET_FOREMAN_IPC is honored as a further fallback", () => {
   );
 });
 
-test("resolveWrenyardIpcPath falls back to the shared wrenyard.sock default", () => {
+test("resolveWrenyardIpcPath falls back to the daemon's shared platform default", () => {
   assert.equal(resolveWrenyardIpcPath({}), defaultWrenyardIpcPath());
-  assert.ok(defaultWrenyardIpcPath().endsWith("wrenyard.sock"));
+  if (isWindows) {
+    assert.equal(defaultWrenyardIpcPath(), "\\\\.\\pipe\\wrenyard");
+  } else {
+    assert.ok(defaultWrenyardIpcPath().endsWith("wrenyard.sock"));
+  }
+});
+
+test("blank IPC environment values do not suppress the platform default", () => {
+  assert.equal(resolveWrenyardIpcPath({
+    WRENYARD_IPC_PATH: "",
+    FOREMAN_IPC_PATH: "  ",
+    FOREMAN_PET_FOREMAN_IPC: "",
+  }), defaultWrenyardIpcPath());
 });
 
 test("deprecated legacy aliases are wired to the Wrenyard API", () => {

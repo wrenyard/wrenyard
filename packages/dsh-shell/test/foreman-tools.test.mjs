@@ -9,6 +9,7 @@ import path from 'node:path';
 import plugin, { wrenyardIpcPath } from '../src/foreman-tools.mjs';
 
 const tmpDirs = [];
+let ipcSequence = 0;
 
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
@@ -110,7 +111,14 @@ function makeCtx() {
   };
 }
 
-const deadIpc = () => path.join(mkTmp(), 'no-ipc.sock');
+function testIpcPath(name) {
+  ipcSequence += 1;
+  return process.platform === 'win32'
+    ? `\\\\.\\pipe\\wrenyard-dsh-shell-test-${process.pid}-${ipcSequence}-${name}`
+    : path.join(mkTmp(), `${name}.sock`);
+}
+
+const deadIpc = () => testIpcPath('missing');
 
 test('filters session/work/workflow_* tools and registers the remaining catalog', async () => {
   const server = await startMcp((msg) => {
@@ -195,14 +203,14 @@ test('fails loudly when Wrenyard MCP lists no usable tools', async () => {
   server.close();
 });
 
-test('wrenyardIpcPath prefers WRENYARD_IPC_PATH, falls back to legacy, then shared wrenyard.sock', () => {
+test('wrenyardIpcPath prefers non-blank overrides, then uses the daemon platform default', () => {
   assert.equal(
     wrenyardIpcPath({ WRENYARD_IPC_PATH: '/run/wrenyard.sock', FOREMAN_IPC_PATH: '/run/foreman.sock' }),
     '/run/wrenyard.sock',
   );
   assert.equal(wrenyardIpcPath({ FOREMAN_IPC_PATH: '/run/foreman.sock' }), '/run/foreman.sock');
-  const fallback = wrenyardIpcPath({});
-  assert.ok(fallback.endsWith('wrenyard.sock'), `shared default ends with wrenyard.sock: ${fallback}`);
+  assert.equal(wrenyardIpcPath({ WRENYARD_IPC_PATH: ' ', FOREMAN_IPC_PATH: '' }),
+    process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
 });
 
 test('WRENYARD_MCP_URL takes precedence over legacy FOREMAN_MCP_URL', async () => {
@@ -309,7 +317,7 @@ test('AbortSignal cancels an in-flight task wait', async () => {
 });
 
 test('registers NDJSON IPC extras only when absent from the MCP catalog', async () => {
-  const ipcSocket = path.join(mkTmp(), 'foreman.sock');
+  const ipcSocket = testIpcPath('foreman');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     if (msg.method === 'health.ping') return { ok: true, pid: 42 };
     if (msg.method === 'project.list') return { projects: [{ name: 'demo' }] };

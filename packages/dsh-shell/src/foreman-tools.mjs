@@ -236,14 +236,15 @@ async function callTool(mcpUrl, sender, toolName, args, { signal } = {}) {
 
 /**
  * Resolve the Wrenyard NDJSON IPC socket. WRENYARD_IPC_PATH is primary, the
- * legacy FOREMAN_IPC_PATH is still read as a fallback, and the shared
- * wrenyard.sock default (same as @wrenyard/control-client and the desktop app)
- * is used when neither is set.
+ * legacy FOREMAN_IPC_PATH is still read as a fallback. Without an override,
+ * Windows uses the daemon's named pipe and Unix uses the shared socket path.
  */
 export function wrenyardIpcPath(env = process.env) {
-  if (env.WRENYARD_IPC_PATH) return env.WRENYARD_IPC_PATH;
-  if (env.FOREMAN_IPC_PATH) return env.FOREMAN_IPC_PATH;
-  return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard.sock' : '/tmp/wrenyard.sock';
+  for (const candidate of [env.WRENYARD_IPC_PATH, env.FOREMAN_IPC_PATH]) {
+    const socketPath = candidate?.trim();
+    if (socketPath) return socketPath;
+  }
+  return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock';
 }
 
 function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, signal } = {}) {

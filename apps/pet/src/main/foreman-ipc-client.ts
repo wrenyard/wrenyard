@@ -20,8 +20,9 @@ interface PendingRequest {
 /**
  * Resolve the Wrenyard NDJSON IPC socket path. WRENYARD_IPC_PATH is primary;
  * the legacy FOREMAN_IPC_PATH and FOREMAN_PET_FOREMAN_IPC variables are still
- * read as safe legacy fallbacks, and the shared `wrenyard.sock` default is
- * used when none are set.
+ * read as safe legacy fallbacks. Without an override, Windows uses the
+ * daemon's `\\.\pipe\wrenyard` named pipe and Unix uses
+ * `/tmp/wrenyard.sock`.
  */
 export function resolveForemanIpcPath(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = (
@@ -31,7 +32,7 @@ export function resolveForemanIpcPath(env: NodeJS.ProcessEnv = process.env): str
     ''
   ).trim();
   if (explicit) return explicit;
-  return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard.sock' : '/tmp/wrenyard.sock';
+  return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock';
 }
 
 export class ForemanIpcClient {
