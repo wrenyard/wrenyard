@@ -108,6 +108,8 @@ test('Windows: selects the bundled install.ps1 and passes -Update plus -Version'
   assert.equal(fake.calls[0].command, 'powershell.exe');
   assert.deepEqual(fake.calls[0].args, [
     '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
     '-File',
     join(root, 'install.ps1'),
     '-Update',
