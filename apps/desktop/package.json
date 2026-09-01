@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/desktop",
-  "version": "1.0.0-dev.19",
+  "version": "1.0.0-dev.20",
   "private": true,
   "description": "Wrenyard Desktop product shell for DSH and the headless Pet companion.",
   "license": "MIT",
