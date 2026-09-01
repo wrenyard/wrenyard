@@ -99,7 +99,9 @@ test('rejects committed certificate and private-key material without leaking con
 
 test('enumerates first-party manifests under apps, services and packages', () => {
   const tree = makeTree();
-  const manifests = findFirstPartyManifests(tree.root).map((file) => path.relative(tree.root, file)).sort();
+  const manifests = findFirstPartyManifests(tree.root)
+    .map((file) => path.relative(tree.root, file).split(path.sep).join('/'))
+    .sort();
   assert.deepEqual(manifests, ['apps/desktop/package.json', 'package.json', 'packages/alpha/package.json']);
   tree.cleanup();
 });

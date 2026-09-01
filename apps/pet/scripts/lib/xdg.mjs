@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join } from 'node:path';
 
 // Namespace composition matching src/main/xdg.ts: <home>/wrenyard/pet.
 const APP_NAMESPACE = ['wrenyard', 'pet'];
@@ -15,9 +15,9 @@ export function stateHome() {
 }
 
 export function stateDir() {
-  return [stateHome(), ...APP_NAMESPACE].join(sep);
+  return join(stateHome(), ...APP_NAMESPACE);
 }
 
 export function configDir() {
-  return [configHome(), ...APP_NAMESPACE].join(sep);
+  return join(configHome(), ...APP_NAMESPACE);
 }
