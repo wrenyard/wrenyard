@@ -9,25 +9,29 @@ export type WrenyardIpcEnvironment = NodeJS.ProcessEnv;
  */
 export function defaultWrenyardIpcPath(): string {
   return process.platform === "win32"
-    ? "\\\\.\\pipe\\wrenyard.sock"
+    ? "\\\\.\\pipe\\wrenyard"
     : "/tmp/wrenyard.sock";
 }
 
 /**
  * Resolve the Wrenyard NDJSON IPC socket path. `WRENYARD_IPC_PATH` is
  * primary; the legacy `FOREMAN_IPC_PATH` and `FOREMAN_PET_FOREMAN_IPC`
- * variables are still read as fallbacks, and the shared `wrenyard.sock`
- * default is used when none are set.
+ * variables are still read as fallbacks. Without an override, Windows uses
+ * the daemon's `\\.\pipe\wrenyard` named pipe and Unix uses
+ * `/tmp/wrenyard.sock`.
  */
 export function resolveWrenyardIpcPath(
   env: WrenyardIpcEnvironment = process.env,
 ): string {
-  return (
-    env.WRENYARD_IPC_PATH ??
-    env.FOREMAN_IPC_PATH ??
-    env.FOREMAN_PET_FOREMAN_IPC ??
-    defaultWrenyardIpcPath()
-  );
+  for (const candidate of [
+    env.WRENYARD_IPC_PATH,
+    env.FOREMAN_IPC_PATH,
+    env.FOREMAN_PET_FOREMAN_IPC,
+  ]) {
+    const path = candidate?.trim();
+    if (path) return path;
+  }
+  return defaultWrenyardIpcPath();
 }
 
 export interface WrenyardIpcClientOptions {
