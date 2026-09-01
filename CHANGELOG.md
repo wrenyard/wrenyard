@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0-dev.21
+
+Development preview release.
+
+### Application updates
+
+- Add Help → Check for Updates with native current/update/download/restart
+  dialogs and a one-hour GitHub Releases cache shared by automatic and manual
+  checks.
+- Add recoverable atomic Desktop replacement on Apple Silicon macOS and
+  Windows x64. The external helper updates Desktop and the suite together,
+  rolls back Desktop when the suite update fails, and relaunches the app.
+- Verify release archives with GitHub's recorded SHA-256 asset digest so future
+  releases no longer need public checksum sidecars.
+
+### Distribution
+
+- Maintain public releases for `darwin-arm64` and `win32-x64` only.
+- Publish only the suite and Desktop archives required by users; manifests,
+  component packages, installers, notices and aggregate checksums remain CI
+  evidence.
+- Make the one-command installer bootstrap the full suite and Desktop product.
+
 ## 1.0.0-dev.16
 
 Development preview release.
