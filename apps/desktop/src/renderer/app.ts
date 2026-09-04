@@ -13,11 +13,19 @@ import type {
   UpdateSnapshot,
   WrenyardShellApi,
 } from '../shell-contract.js';
+import type {
+  ClientConfigurationId,
+  ClientConfigurationPlanDto,
+  ClientConfigurationSnapshotDto,
+  ClientModelSelectionDto,
+  GatewayProtocol,
+} from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
+import { buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 
 declare global {
   interface Window {
@@ -30,10 +38,12 @@ document.documentElement.dataset.platform = window.wrenyardShell.platform;
 const workbenchNav = requireElement<HTMLButtonElement>('workbench-nav');
 const statsNav = requireElement<HTMLButtonElement>('stats-nav');
 const quotaNav = requireElement<HTMLButtonElement>('quota-nav');
+const clientsNav = requireElement<HTMLButtonElement>('clients-nav');
 const settingsNav = requireElement<HTMLButtonElement>('settings-nav');
 const workbenchPage = requireElement<HTMLElement>('workbench-page');
 const statsPage = requireElement<HTMLElement>('stats-page');
 const quotaPage = requireElement<HTMLElement>('quota-page');
+const clientsPage = requireElement<HTMLElement>('clients-page');
 const settingsPage = requireElement<HTMLElement>('settings-page');
 const refreshButton = requireElement<HTMLButtonElement>('refresh-button');
 const refreshLabel = requireElement<HTMLElement>('refresh-label');
@@ -41,6 +51,14 @@ const statsRefreshButton = requireElement<HTMLButtonElement>('stats-refresh-butt
 const statsRefreshLabel = requireElement<HTMLElement>('stats-refresh-label');
 const quotaRefreshButton = requireElement<HTMLButtonElement>('quota-refresh-button');
 const quotaRefreshLabel = requireElement<HTMLElement>('quota-refresh-label');
+const clientsRefreshButton = requireElement<HTMLButtonElement>('clients-refresh-button');
+const clientsRefreshLabel = requireElement<HTMLElement>('clients-refresh-label');
+const clientsContent = requireElement<HTMLElement>('clients-content');
+const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
+const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
+const clientPlanError = requireElement<HTMLElement>('client-plan-error');
+const clientPlanCancel = requireElement<HTMLButtonElement>('client-plan-cancel');
+const clientPlanConfirm = requireElement<HTMLButtonElement>('client-plan-confirm');
 const petSaveButton = requireElement<HTMLButtonElement>('pet-save-button');
 const petSaveNote = requireElement<HTMLElement>('pet-save-note');
 const builtinOnly = requireElement<HTMLInputElement>('stats-builtin-only');
@@ -71,6 +89,7 @@ let selectedPeriod: StatsPeriod = '24h';
 let providerOrderSaving = false;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
+let pendingClientPlan: ClientConfigurationPlanDto | null = null;
 
 function requireElement<T extends HTMLElement = HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -878,6 +897,7 @@ function renderPage(page: ShellPage): void {
     ['workbench', workbenchNav, workbenchPage],
     ['stats', statsNav, statsPage],
     ['quota', quotaNav, quotaPage],
+    ['clients', clientsNav, clientsPage],
     ['settings', settingsNav, settingsPage],
   ];
   for (const [candidate, nav, section] of pages) {
@@ -887,7 +907,7 @@ function renderPage(page: ShellPage): void {
     if (selected) nav.setAttribute('aria-current', 'page');
     else nav.removeAttribute('aria-current');
   }
-  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '模型供应' : '设置';
+  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '模型供应' : page === 'clients' ? '客户端' : '设置';
   document.title = page === 'workbench' ? '啾啾工坊' : `${pageTitle} — 啾啾工坊`;
 }
 
@@ -896,6 +916,7 @@ async function navigate(page: ShellPage): Promise<void> {
   await window.wrenyardShell.navigate(page);
   if (page === 'stats') await refreshStats();
   if (page === 'quota') await refreshQuota(false);
+  if (page === 'clients') await refreshClients();
   if (page === 'settings') renderSnapshot(await window.wrenyardShell.getSettings());
 }
 
@@ -921,9 +942,81 @@ async function refreshQuota(forceRefresh: boolean): Promise<void> {
   }
 }
 
+function renderClients(snapshot: ClientConfigurationSnapshotDto): void {
+  clientsContent.innerHTML = renderClientPageMarkup(buildClientPageModel(snapshot));
+  const installed = snapshot.surfaces.filter((surface) => surface.installed).length;
+  const connected = snapshot.configurations.filter((entry) => entry.state === 'connected' || entry.state === 'needs-restart').length;
+  const status = requireElement('clients-status');
+  status.className = 'status-pill is-connected';
+  status.textContent = '已探测';
+  setText('clients-message', `发现 ${installed} 个已安装表面 · ${connected} 组已由 Wrenyard 管理 · ${snapshot.models.length} 个可用模型`);
+}
+
+async function refreshClients(): Promise<void> {
+  clientsRefreshButton.disabled = true;
+  clientsRefreshLabel.textContent = '探测中…';
+  const status = requireElement('clients-status');
+  status.className = 'status-pill is-pending';
+  status.textContent = '读取中';
+  try {
+    renderClients(await window.wrenyardShell.getClientConfiguration());
+  } catch (error) {
+    clientsContent.replaceChildren(emptyRow('无法读取客户端配置状态'));
+    status.className = 'status-pill is-unavailable';
+    status.textContent = '不可用';
+    setText('clients-message', error instanceof Error ? error.message : String(error));
+  } finally {
+    clientsRefreshButton.disabled = false;
+    clientsRefreshLabel.textContent = '刷新探测';
+  }
+}
+
+function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
+  const models = Array.from(card.querySelectorAll<HTMLInputElement>('input[data-client-model]:checked')).map((input) => input.dataset.clientModel ?? '').filter(Boolean);
+  if (models.length === 0) throw new Error('请至少选择一个模型');
+  const requestedDefault = card.querySelector<HTMLInputElement>('input[data-client-default]:checked')?.dataset.clientDefault;
+  const defaultModel = requestedDefault && models.includes(requestedDefault) ? requestedDefault : models[0];
+  const protocols: Partial<Record<string, GatewayProtocol>> = {};
+  for (const select of Array.from(card.querySelectorAll<HTMLSelectElement>('select[data-client-protocol]'))) {
+    const model = select.dataset.clientProtocol;
+    if (model && models.includes(model)) protocols[model] = select.value as GatewayProtocol;
+  }
+  return { models, defaultModel, ...(Object.keys(protocols).length > 0 ? { protocols } : {}) };
+}
+
+function showClientPlan(plan: ClientConfigurationPlanDto): void {
+  pendingClientPlan = plan;
+  clientPlanContent.innerHTML = renderClientPlanPreview(plan);
+  clientPlanError.textContent = '';
+  clientPlanConfirm.textContent = plan.operation === 'restore' ? '确认恢复' : '确认应用';
+  clientPlanConfirm.disabled = false;
+  clientPlanDialog.hidden = false;
+  clientPlanDialog.setAttribute('aria-hidden', 'false');
+  clientPlanCancel.focus();
+}
+
+function closeClientPlan(): void {
+  pendingClientPlan = null;
+  clientPlanDialog.hidden = true;
+  clientPlanDialog.setAttribute('aria-hidden', 'true');
+  clientPlanContent.replaceChildren();
+  clientPlanError.textContent = '';
+}
+
+async function planClientAction(card: HTMLElement, action: 'primary' | 'restore'): Promise<void> {
+  const clientId = card.dataset.clientId as ClientConfigurationId | undefined;
+  if (!clientId) return;
+  if (action === 'restore') {
+    showClientPlan(await window.wrenyardShell.planClientConfigurationRestore(clientId));
+    return;
+  }
+  showClientPlan(await window.wrenyardShell.planClientConfiguration(clientId, selectedClientModels(card)));
+}
+
 workbenchNav.addEventListener('click', () => void navigate('workbench'));
 statsNav.addEventListener('click', () => void navigate('stats'));
 quotaNav.addEventListener('click', () => void navigate('quota'));
+clientsNav.addEventListener('click', () => void navigate('clients'));
 settingsNav.addEventListener('click', () => void navigate('settings'));
 refreshButton.addEventListener('click', () => {
   refreshButton.disabled = true;
@@ -935,6 +1028,38 @@ refreshButton.addEventListener('click', () => {
 });
 statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => void refreshQuota(true));
+clientsRefreshButton.addEventListener('click', () => void refreshClients());
+clientsContent.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-action]');
+  const card = button?.closest<HTMLElement>('[data-client-id]');
+  const action = button?.dataset.clientAction;
+  if (!button || !card || (action !== 'primary' && action !== 'restore')) return;
+  button.disabled = true;
+  void planClientAction(card, action).catch((error: unknown) => {
+    const status = requireElement('clients-status');
+    status.className = 'status-pill is-unavailable';
+    status.textContent = '需要处理';
+    setText('clients-message', error instanceof Error ? error.message : String(error));
+  }).finally(() => { button.disabled = false; });
+});
+clientPlanCancel.addEventListener('click', closeClientPlan);
+clientPlanConfirm.addEventListener('click', () => {
+  const plan = pendingClientPlan;
+  if (!plan) return;
+  clientPlanConfirm.disabled = true;
+  clientPlanCancel.disabled = true;
+  clientPlanError.textContent = '';
+  const operation = plan.operation === 'restore'
+    ? window.wrenyardShell.restoreClientConfiguration(plan)
+    : window.wrenyardShell.applyClientConfiguration(plan);
+  void operation.then(async () => {
+    closeClientPlan();
+    await refreshClients();
+  }).catch((error: unknown) => {
+    clientPlanError.textContent = error instanceof Error ? error.message : String(error);
+    clientPlanConfirm.disabled = false;
+  }).finally(() => { clientPlanCancel.disabled = false; });
+});
 updateActionButton.addEventListener('click', () => void runUpdateAction());
 updateChannelSwitcher.addEventListener('click', (event) => {
   const target = event.target;
@@ -1030,6 +1155,11 @@ window.addEventListener('keydown', (event) => {
     closeProviderDialog();
     return;
   }
+  if (event.key === 'Escape' && !clientPlanDialog.hidden) {
+    event.preventDefault();
+    closeClientPlan();
+    return;
+  }
   if (event.key === 'Escape' && currentPage !== 'workbench') {
     event.preventDefault();
     void navigate('workbench');
@@ -1042,6 +1172,7 @@ window.wrenyardShell.onViewChanged((page) => {
   if (!changed) return;
   if (page === 'stats') void refreshStats();
   if (page === 'quota') void refreshQuota(false);
+  if (page === 'clients') void refreshClients();
   if (page === 'settings') void window.wrenyardShell.getSettings().then(renderSnapshot);
 });
 window.wrenyardShell.onQuotaChanged(() => {

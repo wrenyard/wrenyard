@@ -21,6 +21,7 @@ import { DesktopPetController } from './pet-controller.js';
 import { DesktopPetSettingsStore } from './pet-settings-store.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { ProviderService } from './provider-service.js';
+import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage } from './shell-contract.js';
@@ -237,13 +238,17 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const quotaVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'quota' && document.getElementById('quota-provider-grid') !== null",
     );
+    shell.setPage('clients', false);
+    const clientsVisible = await shell.window.webContents.executeJavaScript(
+      "document.documentElement.dataset.page === 'clients' && window.wrenyardShell.getClientConfiguration().then((value) => Array.isArray(value?.surfaces) && Array.isArray(value?.configurations) && Array.isArray(value?.models)).catch(() => false)",
+    );
     shell.setPage('workbench', false);
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-select') instanceof HTMLSelectElement",
     );
-    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !settingsVisible || !statsVisible || !quotaVisible || !workbenchVisible) {
+    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, workbench=${workbenchVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, clients=${clientsVisible}, workbench=${workbenchVisible})`,
       );
     }
   };
@@ -500,6 +505,7 @@ async function bootstrap(): Promise<void> {
     console.warn('[wrenyard-desktop] Pet module failed to start:', error);
   });
   const providerService = new ProviderService({ ipcPath });
+  const clientConfigurationService = new ClientConfigurationDesktopService({ ipcPath });
   quotaController = new DesktopQuotaController({
     source: new QuotaService({ runtimeCommand: resolveQuotaRuntimeBin() }),
     providerSource: providerService,
@@ -545,6 +551,11 @@ async function bootstrap(): Promise<void> {
       }
       return quotaController!.getSnapshot(true);
     },
+    getClientConfiguration: () => clientConfigurationService.snapshot(),
+    planClientConfiguration: (clientId, selection) => clientConfigurationService.plan(clientId, selection),
+    applyClientConfiguration: (plan) => clientConfigurationService.apply(plan),
+    planClientConfigurationRestore: (clientId) => clientConfigurationService.planRestore(clientId),
+    restoreClientConfiguration: (plan) => clientConfigurationService.restore(plan),
     getUpdate: async () => updateController!.snapshot(),
     checkUpdate: () => updateController!.check(true),
     setUpdateChannel: (channel) => updateController!.setChannel(channel),

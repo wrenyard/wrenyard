@@ -52,6 +52,7 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipResult,
   GatewayConnectionResult,
+  ClientConfigurationSnapshotResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
@@ -84,6 +85,13 @@ export interface CoreRpcHandlerOptions {
   gatewayConnection?: () => Promise<GatewayConnectionResult>
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
+  clientConfiguration?: {
+    snapshot(): Promise<ClientConfigurationSnapshotResult>
+    plan(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanResult>
+    apply(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationApplyParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationApplyResult>
+    planRestore(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanRestoreParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanRestoreResult>
+    restore(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationRestoreParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationRestoreResult>
+  }
 }
 
 export type CoreRpcTransport = 'ipc' | 'http' | 'mcp'
@@ -171,6 +179,37 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.providerConfigure!(params)
+    })
+  }
+  if (options.clientConfiguration) {
+    const requireClientConfigurationIpc = (context: unknown, method: string): void => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+          { code: 'client_configuration_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+    }
+    router.register('client.configuration.snapshot', async (_params, _message, context) => {
+      requireClientConfigurationIpc(context, 'client.configuration.snapshot')
+      return options.clientConfiguration!.snapshot()
+    })
+    router.register('client.configuration.plan', async (params, _message, context) => {
+      requireClientConfigurationIpc(context, 'client.configuration.plan')
+      return options.clientConfiguration!.plan(params)
+    })
+    router.register('client.configuration.apply', async (params, _message, context) => {
+      requireClientConfigurationIpc(context, 'client.configuration.apply')
+      return options.clientConfiguration!.apply(params)
+    })
+    router.register('client.configuration.plan-restore', async (params, _message, context) => {
+      requireClientConfigurationIpc(context, 'client.configuration.plan-restore')
+      return options.clientConfiguration!.planRestore(params)
+    })
+    router.register('client.configuration.restore', async (params, _message, context) => {
+      requireClientConfigurationIpc(context, 'client.configuration.restore')
+      return options.clientConfiguration!.restore(params)
     })
   }
   router.register('event.list', (params) => {

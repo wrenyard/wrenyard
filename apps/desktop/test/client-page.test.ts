@@ -13,6 +13,7 @@ test('client page keeps Codex App and CLI status separate while sharing one conf
       { clientId: 'codex-shared', state: 'needs-restart', configuredModels: ['openai/sol'] },
       { clientId: 'grok-build', state: 'connected', configuredModels: ['zhipu/glm'] },
     ],
+    models: [],
   });
   const codex = model.cards.find((card) => card.id === 'codex-shared');
   assert.equal(codex?.surfaces.length, 2);
@@ -27,6 +28,7 @@ test('client page markup exposes cards and escapes paths, models and details', (
   const model = buildClientPageModel({
     surfaces: [{ id: 'claude-code', label: 'Claude <Code>', installed: true, compatibility: 'needs-upgrade', detail: '<upgrade>' }],
     configurations: [{ clientId: 'claude-code', state: 'conflict', configuredModels: ['anthropic/<opus>'] }],
+    models: [],
   });
   const markup = renderClientPageMarkup(model);
   assert.match(markup, /data-client-id="codex-shared"/);

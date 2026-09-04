@@ -27,6 +27,10 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h14v10H4V7Z" /><path d="M18 10h2v4h-2M7 10h6v4H7" /></svg>
         <span class="tooltip" role="tooltip">模型供应</span>
       </button>
+      <button class="activity-item" id="clients-nav" type="button" aria-label="客户端" data-page="clients">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H5V5Z" /><path d="M9 19h6M12 15v4" /><path d="M8 9h8" /></svg>
+        <span class="tooltip" role="tooltip">客户端</span>
+      </button>
       <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z" />
@@ -199,6 +203,22 @@
         <p class="quota-footnote">Provider 次序同时用于模型供应与额度显示；额度区域只展示已激活且支持额度的 Provider。</p>
       </section>
 
+      <section class="product-page clients-page" id="clients-page" aria-labelledby="clients-title" hidden>
+        <header class="page-hero clients-hero">
+          <div>
+            <p class="eyebrow">AGENT CLIENTS</p>
+            <h1 id="clients-title">客户端</h1>
+            <p>把真实安装的 Agent 客户端连接到本机 Wrenyard Model Gateway。</p>
+          </div>
+          <button class="secondary-button" id="clients-refresh-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            <span id="clients-refresh-label">刷新探测</span>
+          </button>
+        </header>
+        <div class="clients-meta"><span class="status-pill is-pending" id="clients-status">读取中</span><span id="clients-message">正在探测本机客户端与 Gateway 模型…</span></div>
+        <div id="clients-content" aria-live="polite"></div>
+      </section>
+
       <section class="product-page settings-page" id="settings-page" aria-labelledby="settings-title" hidden>
         <header class="page-hero">
           <div><p class="eyebrow">WRENYARD DESKTOP</p><h1 id="settings-title">啾啾工坊设置</h1><p>管理本地工作环境、更新与桌宠体验</p></div>
@@ -308,6 +328,17 @@
           <div class="provider-dialog-actions">
             <button class="secondary-button" id="provider-dialog-cancel" type="button">取消</button>
             <button class="primary-button" id="provider-dialog-save" type="button">保存</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="client-plan-backdrop" id="client-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="client-plan-title" aria-hidden="true" hidden>
+        <div class="client-plan-card">
+          <div id="client-plan-content"></div>
+          <span class="client-plan-error" id="client-plan-error"></span>
+          <div class="client-plan-actions">
+            <button class="secondary-button" id="client-plan-cancel" type="button">取消</button>
+            <button class="primary-button" id="client-plan-confirm" type="button">确认应用</button>
           </div>
         </div>
       </div>

@@ -24,7 +24,7 @@ const plan: ClientConfigurationPlanDto = {
 class FakeClient implements ClientConfigurationControlClient {
   closed = false;
   calls: Array<{ id: ClientConfigurationId; selection?: ClientModelSelectionDto }> = [];
-  async clientConfigurationSnapshot() { return { surfaces: [], configurations: [] }; }
+  async clientConfigurationSnapshot() { return { surfaces: [], configurations: [], models: [] }; }
   async clientConfigurationPlan(id: ClientConfigurationId, selection: ClientModelSelectionDto) {
     this.calls.push({ id, selection });
     return plan;

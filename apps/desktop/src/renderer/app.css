@@ -121,6 +121,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .settings-page > * { width: min(100%, 1080px); margin-inline: auto; }
 .stats-page > * { width: min(100%, 1480px); margin-inline: auto; }
 .quota-page > * { width: min(100%, 1280px); margin-inline: auto; }
+.clients-page > * { width: min(100%, 1280px); margin-inline: auto; }
 
 /* Desktop-owned DSH conversation surface */
 .conversation-page { position: relative; width: 100%; height: 100%; display: grid; grid-template-columns: 238px minmax(0, 1fr); background: var(--paper); }
@@ -403,6 +404,44 @@ button, input, select { accent-color: var(--moss-deep); }
 .provider-dialog-error { min-height: 24px; display: block; padding-top: 7px; color: var(--terracotta); font-size: 10px; }
 .provider-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 4px; }
 
+/* Real Agent client configuration */
+.clients-hero { align-items: center; }
+.clients-meta { min-height: 49px; display: flex; align-items: center; gap: 11px; color: var(--muted); font-size: 11px; }
+.client-page__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.client-card { min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 18px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
+.client-card > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.client-card > header h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 18px; }
+.client-card > header span { border-radius: 999px; padding: 4px 8px; color: var(--slate); background: var(--paper-deep); font-size: 9px; font-weight: 750; }
+.client-card__status { margin: 10px 0 12px; color: var(--moss-deep); font-size: 11px; font-weight: 750; }
+.client-surface { min-width: 0; display: grid; grid-template-columns: minmax(100px, .7fr) auto; gap: 4px 12px; border-top: 1px solid rgba(212, 201, 168, .65); padding: 9px 0; }
+.client-surface strong { color: var(--ink-soft); font-size: 11px; }
+.client-surface > span { color: var(--slate); font-size: 10px; text-align: right; }
+.client-surface small { grid-column: 1 / -1; overflow: hidden; color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.client-card__model-list { max-height: 250px; overflow-y: auto; display: grid; gap: 7px; margin-top: 12px; padding-right: 3px; }
+.client-model-option { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; border: 1px solid rgba(212, 201, 168, .75); border-radius: 5px; padding: 8px 9px; background: rgba(255, 250, 240, .52); }
+.client-model-option > span { min-width: 0; display: grid; gap: 2px; }
+.client-model-option strong, .client-model-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-model-option strong { color: var(--ink-soft); font-size: 10px; }
+.client-model-option small { color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 8px; }
+.client-model-option select { max-width: 140px; height: 27px; border: 1px solid var(--line); border-radius: 4px; color: var(--slate); background: var(--paper); font-size: 9px; }
+.client-card__empty { margin: 0; padding: 18px 10px; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
+.client-card__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 15px; }
+.client-card__actions button { min-height: 32px; border: 1px solid var(--line); border-radius: 4px; padding: 0 12px; color: var(--ink-soft); background: #fffaf0; cursor: pointer; font-size: 10px; font-weight: 700; }
+.client-card__actions button:first-child { border-color: var(--moss-deep); color: #fffdf4; background: var(--moss-deep); }
+.client-card__actions button:hover:not(:disabled) { filter: brightness(1.04); }
+.client-card__actions button:disabled { opacity: .55; cursor: wait; }
+.client-plan-backdrop { position: fixed; inset: 0; z-index: 13; display: grid; place-items: center; padding: 30px; background: rgba(41, 37, 31, .68); backdrop-filter: blur(8px); }
+.client-plan-backdrop[hidden] { display: none; }
+.client-plan-card { width: min(100%, 680px); max-height: min(82vh, 760px); overflow-y: auto; border: 1px solid #c9b990; border-radius: 9px; padding: 26px; background: var(--paper); box-shadow: 0 24px 70px rgba(25, 21, 16, .28); }
+.client-plan-preview h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 22px; }
+.client-plan-preview > p { color: var(--muted); font-size: 11px; }
+.client-plan-preview dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; color: var(--ink-soft); font-size: 11px; }
+.client-plan-preview ul { margin: 12px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 10px; line-height: 1.6; }
+.client-plan-preview__files code { overflow-wrap: anywhere; color: var(--slate); }
+.client-plan-preview__files span { display: block; color: var(--muted); }
+.client-plan-error { min-height: 24px; display: block; padding-top: 8px; color: var(--terracotta); font-size: 10px; }
+.client-plan-actions { display: flex; justify-content: flex-end; gap: 9px; }
+
 /* Full-size workshop ledger */
 .ledger-hero { align-items: center; }
 .period-switcher { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper-dim); }
@@ -473,7 +512,8 @@ button, input, select { accent-color: var(--moss-deep); }
   .conversation-feed { padding-inline: 20px; }
   .composer-wrap { padding-inline: 20px; }
   .conversation-error { margin-inline: 20px; }
-  .page-hero, .ledger-hero, .quota-hero { align-items: flex-start; flex-direction: column; }
+  .page-hero, .ledger-hero, .quota-hero, .clients-hero { align-items: flex-start; flex-direction: column; }
+  .client-page__grid { grid-template-columns: 1fr; }
   .ledger-actions { width: 100%; justify-content: space-between; }
   .settings-layout { grid-template-columns: 1fr; gap: 20px; }
   .settings-toc { position: static; display: flex; flex-wrap: wrap; }

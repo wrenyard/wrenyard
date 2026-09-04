@@ -1,17 +1,28 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { InstalledClientDiscovery } from '../../lib/client-configuration/discovery.mts'
 import { applyFileTransaction, readFileSnapshot } from '../../lib/client-configuration/files.mts'
+import {
+  ensureGatewayCredentialHelper,
+  loadOrCreateGatewayCredential,
+} from '../../lib/client-configuration/gateway-source.mts'
 import { JsonClientOwnershipStore } from '../../lib/client-configuration/ownership-store.mts'
 import { ClientConfigurationService } from '../../lib/client-configuration/service.mts'
+import { RpcRouter } from '../../lib/server/rpc-router.mts'
+import { createIpcServer } from '../../lib/transport/ipc-server.mts'
+import { createTestIpcEndpoint } from '../helpers/ipc-endpoint.mts'
 import type {
   ClientAdapter,
   ClientConfigurationPlan,
   GatewayClientConnection,
 } from '../../lib/client-configuration/types.mts'
+
+const execFileAsync = promisify(execFile)
 
 test('file transaction uses private permissions and rolls back every completed replacement', async () => {
   const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-files-'))
@@ -48,6 +59,49 @@ test('ownership store keeps only client-owned baseline and last-applied data', a
   assert.equal((await stat(path)).mode & 0o777, 0o600)
   await store.remove('codex-shared')
   assert.equal((await readFileSnapshot(path)).exists, false)
+})
+
+test('gateway credential is stable and helper stores only the IPC lookup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-credential-'))
+  const credentialPath = join(root, 'gateway', 'credential')
+  const first = await loadOrCreateGatewayCredential(credentialPath)
+  const second = await loadOrCreateGatewayCredential(credentialPath)
+  assert.equal(second, first)
+  assert.ok(first.length >= 32)
+  assert.equal((await stat(credentialPath)).mode & 0o777, 0o600)
+
+  const helperPath = join(root, 'client-configuration', 'gateway-credential-helper')
+  await ensureGatewayCredentialHelper(helperPath, join(root, 'foreman.sock'))
+  const helper = await readFile(helperPath, 'utf8')
+  assert.match(helper, /gateway\.connection/)
+  assert.doesNotMatch(helper, new RegExp(first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.equal((await stat(helperPath)).mode & 0o777, 0o700)
+})
+
+test('gateway credential helper resolves the live token over local IPC', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-helper-'))
+  const endpoint = createTestIpcEndpoint('client-helper')
+  const router = new RpcRouter()
+  router.register('gateway.connection', async () => ({
+    openaiChatBaseUrl: 'http://127.0.0.1/gateway/openai-chat/v1',
+    openaiResponsesBaseUrl: 'http://127.0.0.1/gateway/openai-responses/v1',
+    anthropicBaseUrl: 'http://127.0.0.1/gateway/anthropic/v1',
+    token: 'live-gateway-token',
+    models: [],
+  }))
+  const server = await createIpcServer({
+    path: endpoint.path,
+    onMessage: (message) => router.handleMessage(message),
+  })
+  const helperPath = join(root, 'gateway-credential-helper')
+  try {
+    await ensureGatewayCredentialHelper(helperPath, endpoint.path)
+    const result = await execFileAsync(helperPath, [], { timeout: 2_000 })
+    assert.equal(result.stdout, 'live-gateway-token\n')
+    assert.equal(result.stderr, '')
+  } finally {
+    await server.close()
+  }
 })
 
 test('discovery reports Codex App and CLI independently and accepts capability overrides', async () => {
@@ -110,6 +164,7 @@ test('service keeps read-only plan separate from apply and restore', async () =>
     { read: async () => connection },
   )
   assert.deepEqual(calls, [])
+  assert.deepEqual((await service.snapshot()).models, [])
   const preview = await service.plan('grok-build', { models: ['provider/model'], defaultModel: 'provider/model' })
   assert.deepEqual(calls, ['plan'])
   await service.apply(preview)

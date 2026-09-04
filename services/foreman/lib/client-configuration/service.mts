@@ -12,6 +12,7 @@ import type {
 export interface ClientConfigurationSnapshot {
   surfaces: readonly ClientSurfaceDiscovery[]
   configurations: readonly ClientConfigurationStatus[]
+  models: readonly import('./types.mts').ClientGatewayModel[]
 }
 
 export class ClientConfigurationService {
@@ -27,11 +28,12 @@ export class ClientConfigurationService {
   }
 
   async snapshot(): Promise<ClientConfigurationSnapshot> {
-    const [surfaces, configurations] = await Promise.all([
+    const [surfaces, configurations, connection] = await Promise.all([
       this.discovery.list(),
       Promise.all([...this.adapters.values()].map((adapter) => adapter.status())),
+      this.gateway.read(),
     ])
-    return { surfaces, configurations }
+    return { surfaces, configurations, models: connection.models }
   }
 
   async plan(clientId: ClientConfigurationId, selection: ClientModelSelection): Promise<ClientConfigurationPlan> {

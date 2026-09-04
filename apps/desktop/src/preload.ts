@@ -34,6 +34,21 @@ const api: WrenyardShellApi = {
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.configureProviderKey, providerId, key) as Promise<QuotaSnapshot>;
   },
+  getClientConfiguration() {
+    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationSnapshot);
+  },
+  planClientConfiguration(clientId, selection) {
+    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationPlan, clientId, selection);
+  },
+  applyClientConfiguration(plan) {
+    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationApply, plan);
+  },
+  planClientConfigurationRestore(clientId) {
+    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationPlanRestore, clientId);
+  },
+  restoreClientConfiguration(plan) {
+    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationRestore, plan);
+  },
   getUpdate(): Promise<UpdateSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.updateSnapshot) as Promise<UpdateSnapshot>;
   },

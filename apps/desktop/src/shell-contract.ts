@@ -1,4 +1,11 @@
 import type { PetSettingsPayload } from '@wrenyard/pet/config';
+import type {
+  ClientConfigurationDto,
+  ClientConfigurationId,
+  ClientConfigurationPlanDto,
+  ClientConfigurationSnapshotDto,
+  ClientModelSelectionDto,
+} from './client-configuration/contract.js';
 
 export const ACTIVITY_BAR_WIDTH = 48;
 
@@ -17,6 +24,11 @@ export const SHELL_CHANNELS = {
   conversationSend: 'wrenyard-shell:conversation-send',
   conversationCancel: 'wrenyard-shell:conversation-cancel',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
+  clientConfigurationSnapshot: 'wrenyard-shell:client-configuration-snapshot',
+  clientConfigurationPlan: 'wrenyard-shell:client-configuration-plan',
+  clientConfigurationApply: 'wrenyard-shell:client-configuration-apply',
+  clientConfigurationPlanRestore: 'wrenyard-shell:client-configuration-plan-restore',
+  clientConfigurationRestore: 'wrenyard-shell:client-configuration-restore',
   updateSnapshot: 'wrenyard-shell:update-snapshot',
   checkUpdate: 'wrenyard-shell:check-update',
   setUpdateChannel: 'wrenyard-shell:set-update-channel',
@@ -28,7 +40,7 @@ export const SHELL_CHANNELS = {
   viewChanged: 'wrenyard-shell:view-changed',
 } as const;
 
-export type ShellPage = 'workbench' | 'stats' | 'quota' | 'settings';
+export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings';
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -315,6 +327,11 @@ export interface WrenyardShellApi {
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
+  getClientConfiguration(): Promise<ClientConfigurationSnapshotDto>;
+  planClientConfiguration(clientId: ClientConfigurationId, selection: ClientModelSelectionDto): Promise<ClientConfigurationPlanDto>;
+  applyClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
+  planClientConfigurationRestore(clientId: ClientConfigurationId): Promise<ClientConfigurationPlanDto>;
+  restoreClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
@@ -335,7 +352,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'settings';
+  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings';
 }
 
 export function isSettingsLaunchRequest(value: string): boolean {
@@ -363,5 +380,6 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '1') return 'workbench';
   if (input.key === '2') return 'stats';
   if (input.key === '3') return 'quota';
+  if (input.key === '4') return 'clients';
   return null;
 }

@@ -85,6 +85,16 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipParams,
   TaskGraphSlipResult,
+  ClientConfigurationSnapshotParams,
+  ClientConfigurationSnapshotResult,
+  ClientConfigurationPlanParams,
+  ClientConfigurationPlanResult,
+  ClientConfigurationApplyParams,
+  ClientConfigurationApplyResult,
+  ClientConfigurationPlanRestoreParams,
+  ClientConfigurationPlanRestoreResult,
+  ClientConfigurationRestoreParams,
+  ClientConfigurationRestoreResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -167,6 +177,24 @@ export class ForemanClient {
   readonly activity = {
     snapshot: (params: ActivitySnapshotParams = {}): Promise<ActivitySnapshotV1> => {
       return this.rpc.request<ActivitySnapshotV1>('activity.snapshot', params)
+    },
+  }
+
+  readonly clientConfiguration = {
+    snapshot: (params: ClientConfigurationSnapshotParams = {}): Promise<ClientConfigurationSnapshotResult> => {
+      return this.rpc.request<ClientConfigurationSnapshotResult>('client.configuration.snapshot', params)
+    },
+    plan: (params: ClientConfigurationPlanParams): Promise<ClientConfigurationPlanResult> => {
+      return this.rpc.request<ClientConfigurationPlanResult>('client.configuration.plan', params)
+    },
+    apply: (params: ClientConfigurationApplyParams): Promise<ClientConfigurationApplyResult> => {
+      return this.rpc.request<ClientConfigurationApplyResult>('client.configuration.apply', params)
+    },
+    planRestore: (params: ClientConfigurationPlanRestoreParams): Promise<ClientConfigurationPlanRestoreResult> => {
+      return this.rpc.request<ClientConfigurationPlanRestoreResult>('client.configuration.plan-restore', params)
+    },
+    restore: (params: ClientConfigurationRestoreParams): Promise<ClientConfigurationRestoreResult> => {
+      return this.rpc.request<ClientConfigurationRestoreResult>('client.configuration.restore', params)
     },
   }
 
