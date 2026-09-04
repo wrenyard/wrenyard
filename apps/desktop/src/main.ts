@@ -244,7 +244,7 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     );
     shell.setPage('workbench', false);
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-select') instanceof HTMLSelectElement",
+      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-trigger') instanceof HTMLButtonElement && document.getElementById('conversation-model-list')?.getAttribute('role') === 'listbox'",
     );
     if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
       throw new Error(

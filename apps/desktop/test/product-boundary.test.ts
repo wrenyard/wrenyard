@@ -70,7 +70,9 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.doesNotMatch(renderer, /id="models"/);
   assert.match(renderer, /id="conversation-composer"/);
   assert.match(renderer, /id="conversation-workspace">工坊工作区/);
-  assert.match(renderer, /id="conversation-model-select" aria-label="当前会话模型"/);
+  assert.match(renderer, /id="conversation-model-trigger"[^>]+aria-label="当前会话模型"[^>]+aria-haspopup="listbox"/);
+  assert.match(renderer, /id="conversation-model-list" role="listbox"/);
+  assert.doesNotMatch(renderer, /id="conversation-model-select"|<select[^>]+当前会话模型/);
   assert.doesNotMatch(renderer, /<span>模型<\/span>/);
   assert.match(renderer, /id="conversation-daemon-status"[^>]+role="status"/);
   assert.match(renderer, /id="conversation-daemon-tooltip" role="tooltip"/);
@@ -81,6 +83,14 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(conversationRenderer, /createElement\('table'\)/);
   assert.match(conversationRenderer, /createElement\('hr'\)/);
   assert.match(conversationRenderer, /expandedItemIds/);
+  assert.match(conversationRenderer, /catalogProvider/);
+  assert.match(conversationRenderer, /ArrowDown/);
+  assert.match(conversationRenderer, /ArrowUp/);
+  assert.match(conversationRenderer, /event\.key === 'Enter'/);
+  assert.match(conversationRenderer, /event\.key === 'Escape'/);
+  assert.match(conversationRenderer, /document\.addEventListener\('pointerdown'/);
+  assert.match(conversationRenderer, /setQuotaSnapshot/);
+  assert.doesNotMatch(conversationRenderer, /setInterval|listProviders|configureProvider/);
   assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);
   assert.match(rendererStyles, /::-webkit-scrollbar-thumb/);
   assert.match(rendererStyles, /data-platform="win32"/);

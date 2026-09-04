@@ -146,6 +146,7 @@ test('model projection preserves the single Gateway provider and public model id
   assert.equal(models.routable, true);
   assert.deepEqual(models.current, {
     provider: 'wrenyard',
+    catalogProvider: 'zhipu-coding',
     model: 'zhipu-coding/glm-5.3',
     label: 'GLM 5.3',
     providerLabel: 'Wrenyard',
@@ -180,6 +181,7 @@ test('model projection keeps catalog-provided labels without a Desktop model mir
   ]);
   assert.deepEqual(models.current, {
     provider: 'wrenyard',
+    catalogProvider: 'kimi-coding',
     model: 'kimi-coding/k3',
     label: 'Kimi K3',
     providerLabel: 'Wrenyard',
@@ -198,6 +200,7 @@ test('model projection keeps a routable unadvertised current selection visible',
 
   assert.deepEqual(models.current, {
     provider: 'legacy-provider',
+    catalogProvider: 'legacy-provider',
     model: 'legacy-model',
     label: 'legacy-model',
     providerLabel: 'legacy-provider',

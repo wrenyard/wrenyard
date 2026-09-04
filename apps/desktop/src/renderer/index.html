@@ -64,11 +64,19 @@
               <h1 id="conversation-title">新会话</h1>
             </div>
             <div class="conversation-header-actions">
-              <label class="conversation-model-picker" for="conversation-model-select">
-                <select id="conversation-model-select" aria-label="当前会话模型" disabled>
-                  <option>读取模型…</option>
-                </select>
-              </label>
+              <div class="conversation-model-picker" id="conversation-model-picker">
+                <button id="conversation-model-trigger" class="conversation-model-trigger" type="button" aria-label="当前会话模型" aria-haspopup="listbox" aria-expanded="false" aria-controls="conversation-model-list" disabled>
+                  <span class="conversation-model-trigger-copy">
+                    <strong id="conversation-model-name">读取模型…</strong>
+                    <small id="conversation-model-provider">Wrenyard</small>
+                  </span>
+                  <span class="conversation-model-trigger-signal" id="conversation-model-trigger-signal"></span>
+                  <span class="conversation-model-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="conversation-model-popover" id="conversation-model-popover" hidden>
+                  <div class="conversation-model-list" id="conversation-model-list" role="listbox" aria-label="会话模型"></div>
+                </div>
+              </div>
               <span class="conversation-daemon-status is-pending" id="conversation-daemon-status" tabindex="0" role="status" aria-label="Daemon 状态：正在检查" aria-describedby="conversation-daemon-tooltip">
                 <i aria-hidden="true"></i>
                 <span class="conversation-daemon-tooltip" id="conversation-daemon-tooltip" role="tooltip">
