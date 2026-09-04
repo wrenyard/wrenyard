@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { InstalledClientDiscovery } from '../../lib/client-configuration/discovery.mts'
+import { applyFileTransaction, readFileSnapshot } from '../../lib/client-configuration/files.mts'
+import { JsonClientOwnershipStore } from '../../lib/client-configuration/ownership-store.mts'
+import { ClientConfigurationService } from '../../lib/client-configuration/service.mts'
+import type {
+  ClientAdapter,
+  ClientConfigurationPlan,
+  GatewayClientConnection,
+} from '../../lib/client-configuration/types.mts'
+
+test('file transaction uses private permissions and rolls back every completed replacement', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-files-'))
+  const first = join(root, 'first.json')
+  const second = join(root, 'second.json')
+  await writeFile(first, 'before\n', { mode: 0o640 })
+  await assert.rejects(() => applyFileTransaction([
+    { path: first, content: 'after\n' },
+    { path: second, content: 'created\n' },
+  ], async () => {
+    throw new Error('ownership write failed')
+  }))
+  assert.equal(await readFile(first, 'utf8'), 'before\n')
+  assert.equal((await readFileSnapshot(second)).exists, false)
+
+  const created = join(root, 'private.json')
+  await applyFileTransaction([{ path: created, content: '{}\n' }], async () => undefined)
+  assert.equal((await stat(created)).mode & 0o777, 0o600)
+})
+
+test('ownership store keeps only client-owned baseline and last-applied data', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-store-'))
+  const path = join(root, 'ownership.json')
+  const store = new JsonClientOwnershipStore(path)
+  await store.put({
+    clientId: 'codex-shared',
+    baseline: { model: 'native' },
+    lastApplied: { model: 'provider/model' },
+    models: ['provider/model'],
+    defaultModel: 'provider/model',
+    updatedAt: '2026-09-04T00:00:00.000Z',
+  })
+  assert.equal((await store.get('codex-shared'))?.defaultModel, 'provider/model')
+  assert.equal((await stat(path)).mode & 0o777, 0o600)
+  await store.remove('codex-shared')
+  assert.equal((await readFileSnapshot(path)).exists, false)
+})
+
+test('discovery reports Codex App and CLI independently and accepts capability overrides', async () => {
+  const existing = new Set(['/Applications/ChatGPT.app', '/bin/codex', '/bin/claude'])
+  const discovery = new InstalledClientDiscovery({
+    env: { HOME: '/home/test', PATH: '/bin' },
+    platform: 'darwin',
+    appRoots: ['/Applications'],
+    pathExists: async (path) => existing.has(path),
+    runCommand: async (executable) => ({
+      stdout: executable.endsWith('codex') ? 'codex-cli 0.153.0' : '2.1.179',
+      stderr: '',
+      exitCode: 0,
+    }),
+    capabilityProbes: {
+      'codex-app': async () => ({ compatibility: 'needs-verification', detail: 'App catalog probe pending' }),
+      'codex-cli': async () => ({ compatibility: 'supported' }),
+      'claude-code': async () => ({ compatibility: 'needs-upgrade', detail: 'model discovery unavailable' }),
+    },
+  })
+  const surfaces = await discovery.list()
+  assert.equal(surfaces.find((entry) => entry.id === 'codex-app')?.compatibility, 'needs-verification')
+  assert.equal(surfaces.find((entry) => entry.id === 'codex-cli')?.compatibility, 'supported')
+  assert.equal(surfaces.find((entry) => entry.id === 'claude-code')?.compatibility, 'needs-upgrade')
+  assert.equal(surfaces.find((entry) => entry.id === 'grok-build')?.installed, false)
+})
+
+test('service keeps read-only plan separate from apply and restore', async () => {
+  const calls: string[] = []
+  const plan: ClientConfigurationPlan = {
+    clientId: 'grok-build',
+    operation: 'apply',
+    files: [],
+    models: ['provider/model'],
+    defaultModel: 'provider/model',
+    connectionMode: 'additive',
+    effects: [],
+    requiresRestart: [],
+  }
+  const adapter: ClientAdapter = {
+    id: 'grok-build',
+    status: async () => ({ clientId: 'grok-build', state: 'not-configured', configuredModels: [] }),
+    plan: async () => { calls.push('plan'); return plan },
+    apply: async () => { calls.push('apply'); return { clientId: 'grok-build', state: 'connected', configuredModels: ['provider/model'] } },
+    planRestore: async () => ({ ...plan, operation: 'restore' }),
+    restore: async () => { calls.push('restore'); return { clientId: 'grok-build', state: 'not-configured', configuredModels: [] } },
+  }
+  const connection: GatewayClientConnection = {
+    openaiChatBaseUrl: 'http://127.0.0.1/gateway/openai-chat/v1',
+    openaiResponsesBaseUrl: 'http://127.0.0.1/gateway/openai-responses/v1',
+    anthropicBaseUrl: 'http://127.0.0.1/gateway/anthropic/v1',
+    credential: 'secret',
+    credentialHelperCommand: ['wrenyard', 'gateway', 'credential'],
+    models: [],
+  }
+  const service = new ClientConfigurationService(
+    { list: async () => [] },
+    [adapter],
+    { read: async () => connection },
+  )
+  assert.deepEqual(calls, [])
+  const preview = await service.plan('grok-build', { models: ['provider/model'], defaultModel: 'provider/model' })
+  assert.deepEqual(calls, ['plan'])
+  await service.apply(preview)
+  const restore = await service.planRestore('grok-build')
+  await service.restore(restore)
+  assert.deepEqual(calls, ['plan', 'apply', 'restore'])
+})
