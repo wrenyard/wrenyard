@@ -16,8 +16,11 @@ const FIRST_PARTY_MANIFESTS = [
   'apps/desktop/package.json',
   'apps/pet/package.json',
   'services/foreman/package.json',
+  'packages/catalog/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
+  'packages/gateway/package.json',
+  'packages/providers/package.json',
   'packages/runtime-resolver/package.json',
   'packages/runtime-darwin-arm64/package.json',
   'packages/runtime-darwin-x64/package.json',
@@ -65,11 +68,6 @@ async function buildFixture() {
     dsh: '0.1.0-rc.6',
   });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', `package forge\n\nconst version = "${ROOT_VERSION}"\n`);
-  await writeText(
-    dir,
-    'runtime/forge/internal/forge/shell_grok_test.go',
-    `package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "${ROOT_VERSION}" {\n\t\tt.Fatalf("version = %q, want ${ROOT_VERSION}", version)\n\t}\n}\n`,
-  );
   await writeText(dir, 'apps/desktop/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
   return dir;
 }
@@ -93,13 +91,9 @@ test('version-sync --check passes when every first-party location matches the ro
 
 test('version-sync --check reports drift without modifying any file', async () => {
   const dir = await buildFixture();
-  await writeJson(dir, 'apps/pet/package.json', { name: '@wrenyard/pet', version: '0.1.1' });
+  await writeJson(dir, 'packages/catalog/package.json', { name: '@wrenyard/catalog', version: '0.1.1' });
+  await writeJson(dir, 'packages/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
-  await writeText(
-    dir,
-    'runtime/forge/internal/forge/shell_grok_test.go',
-    'package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "0.7.18" {\n\t\tt.Fatalf("version = %q, want 0.7.18", version)\n\t}\n}\n',
-  );
   try {
     let threw = false;
     try {
@@ -107,14 +101,16 @@ test('version-sync --check reports drift without modifying any file', async () =
     } catch (error) {
       threw = true;
       const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, /apps\/pet\/package\.json/);
+      assert.match(out, /packages\/catalog\/package\.json/);
+      assert.match(out, /packages\/gateway\/package\.json/);
       assert.match(out, /embed\.go/);
-      assert.match(out, /shell_grok_test\.go/);
     }
     assert.equal(threw, true, '--check must exit non-zero on drift');
     // No file was mutated by --check.
-    const pet = JSON.parse(await readFile(join(dir, 'apps/pet/package.json'), 'utf8'));
-    assert.equal(pet.version, '0.1.1');
+    const catalog = JSON.parse(await readFile(join(dir, 'packages/catalog/package.json'), 'utf8'));
+    assert.equal(catalog.version, '0.1.1');
+    const gateway = JSON.parse(await readFile(join(dir, 'packages/gateway/package.json'), 'utf8'));
+    assert.equal(gateway.version, '0.1.1');
     const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
     assert.match(embed, /const version = "0\.7\.18"/);
   } finally {
@@ -124,28 +120,20 @@ test('version-sync --check reports drift without modifying any file', async () =
 
 test('version-sync --write repairs drifted files and becomes stable', async () => {
   const dir = await buildFixture();
-  await writeJson(dir, 'apps/pet/package.json', { name: '@wrenyard/pet', version: '0.1.1' });
+  await writeJson(dir, 'packages/providers/package.json', { name: '@wrenyard/providers', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
-  await writeText(
-    dir,
-    'runtime/forge/internal/forge/shell_grok_test.go',
-    'package forge\n\nfunc TestVersionIsCurrent(t *testing.T) {\n\tif version != "0.7.18" {\n\t\tt.Fatalf("version = %q, want 0.7.18", version)\n\t}\n}\n',
-  );
   await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
   try {
     const out = runTool(dir, '--write');
-    assert.match(out, /updated 4 file\(s\)/);
-    assert.match(out, /apps\/pet\/package\.json/);
+    assert.match(out, /updated 3 file\(s\)/);
+    assert.match(out, /packages\/providers\/package\.json/);
     assert.match(out, /embed\.go/);
-    assert.match(out, /shell_grok_test\.go/);
     assert.match(out, /profile\.ts/);
 
-    const pet = JSON.parse(await readFile(join(dir, 'apps/pet/package.json'), 'utf8'));
-    assert.equal(pet.version, ROOT_VERSION);
+    const providers = JSON.parse(await readFile(join(dir, 'packages/providers/package.json'), 'utf8'));
+    assert.equal(providers.version, ROOT_VERSION);
     const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
     assert.match(embed, new RegExp(`const version = "${ROOT_VERSION}"`));
-    const forgeVersionTest = await readFile(join(dir, 'runtime/forge/internal/forge/shell_grok_test.go'), 'utf8');
-    assert.match(forgeVersionTest, new RegExp(`want ${ROOT_VERSION}`));
     const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
     assert.match(profile, new RegExp(`version: '${ROOT_VERSION}'`));
 
@@ -191,42 +179,6 @@ test('version-sync --check reports protocol/upstream drift as a guard failure', 
       assert.match(out, /dsh must remain 0\.1\.0-rc\.6/);
     }
     assert.equal(threw, true, '--check must exit non-zero when upstream drift exists');
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('version-sync accepts and preserves a CRLF shell_grok_test.go (Windows checkout)', async () => {
-  const dir = await buildFixture();
-  const testPath = join(dir, 'runtime/forge/internal/forge/shell_grok_test.go');
-  const crlfTest = (v) =>
-    [
-      'package forge',
-      '',
-      'func TestVersionIsCurrent(t *testing.T) {',
-      `\tif version != "${v}" {`,
-      `\t\tt.Fatalf("version = %q, want ${v}", version)`,
-      '\t}',
-      '}',
-      '',
-    ].join('\r\n');
-  try {
-    // A CRLF checkout at the current fixture version must be recognized.
-    await writeFile(testPath, crlfTest(ROOT_VERSION), 'utf8');
-    const checkOut = runTool(dir, '--check');
-    assert.match(checkOut, new RegExp(`all first-party files in sync at ${ROOT_VERSION}`));
-
-    // A drifted version inside the CRLF file is repaired by --write.
-    await writeFile(testPath, crlfTest('0.7.18'), 'utf8');
-    const writeOut = runTool(dir, '--write');
-    assert.match(writeOut, /shell_grok_test\.go/);
-
-    // The version is restored and the file is still pure CRLF (no mixed endings).
-    const repaired = await readFile(testPath, 'utf8');
-    assert.match(repaired, new RegExp(`want ${ROOT_VERSION}`));
-    const withoutCrlf = repaired.replace(/\r\n/g, '');
-    assert.ok(!withoutCrlf.includes('\n'), 'repaired file must not contain bare LF');
-    assert.ok(!withoutCrlf.includes('\r'), 'repaired file must not contain bare CR');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

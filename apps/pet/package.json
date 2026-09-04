@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/pet",
-  "version": "1.0.0-dev.21",
+  "version": "1.0.0-dev.22",
   "packageManager": "pnpm@11.19.0",
   "description": "Headless companion renderer managed by Wrenyard Desktop",
   "private": true,
