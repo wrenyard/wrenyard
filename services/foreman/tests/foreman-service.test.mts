@@ -742,7 +742,7 @@ function testMessageConfig(): import('../lib/config/normalize.mts').NormalizedMe
         kind: 'human',
         canSend: true,
         canReceive: true,
-        grants: [{ name: 'message.send' }, { name: 'work.read' }],
+        grants: [{ name: 'message.send' }],
         deliveryRoute: 'operator.telegram',
       },
       relay: {
@@ -750,7 +750,7 @@ function testMessageConfig(): import('../lib/config/normalize.mts').NormalizedMe
         kind: 'agent',
         canSend: true,
         canReceive: true,
-        grants: [{ name: 'message.send' }, { name: 'work.read' }],
+        grants: [{ name: 'message.send' }],
         deliveryRoute: 'relay.openclaw',
       },
     },
@@ -1835,79 +1835,6 @@ test('startup failure over a persisted plan leaves a durable failed-closed recov
     // only state mutated by the failed-closed recovery path.
   } finally {
     await occupiedIpcServer.close()
-    rmSync(endpoint.dir, { recursive: true, force: true })
-    rmSync(workDir, { recursive: true, force: true })
-  }
-})
-
-// ============================================================
-// FWA assign adapter contract
-// ============================================================
-
-test('fwa.assign over IPC returns { session } through daemon RPC surface', async () => {
-  const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-fwa-sim-'))
-  const endpoint = createTestIpcEndpoint('fwa-sim')
-  const workspaceProject = join(workDir, 'projects', 'workspace')
-  mkdirSync(workspaceProject, { recursive: true })
-  writeFileSync(
-    join(workspaceProject, 'workspace.fmproj'),
-    'name: workspace\ndescription: Workspace shared resources\n',
-    'utf-8',
-  )
-  writeFileSync(join(workDir, 'FWA.md'), '# Test FWA\n')
-
-  const { startForemanDaemon } = await import('../lib/daemon/daemon.mts')
-  const running = await startForemanDaemon({
-    service: { enabled: true, host: '127.0.0.1', port: 0, publicUrl: 'http://127.0.0.1:0', ipc: { path: endpoint.path } },
-    workspaceRoot: workDir,
-    fwa: {
-      workspaceRoot: workDir,
-      llm: {
-        model: 'test-model',
-                turn_timeout_ms: 30000,
-        http_timeout_ms: 90000,
-        max_retries: 2,
-        retry_backoff_ms: 500,
-      },
-    },
-    message: testMessageConfig(),
-    messageDelivery: { enabled: false, default: ['system'], channels: {} },
-  })
-
-  let client: Awaited<ReturnType<typeof connectIpcForemanClient>> | undefined
-  try {
-    client = await connectIpcForemanClient({ path: running.ipcPath, timeoutMs: 1_000 })
-
-    const result = await client.fwa.assign({
-      ticket_id: 'test-ticket-1',
-      project_id: 'workspace',
-      prompt: 'test prompt',
-    })
-
-    // Verify { session: { ... } } shape matching FwaAssignResult
-    assert.ok(result.session, 'result must have session key')
-    assert.equal(typeof result.session.id, 'string')
-    assert.equal(result.session.ticket_id, 'test-ticket-1')
-    assert.equal(result.session.project_id, 'workspace')
-    assert.equal(typeof result.session.status, 'string')
-    assert.equal(typeof result.session.queue_depth, 'number')
-    assert.ok(Array.isArray(result.session.graph_refs))
-    assert.ok(Array.isArray(result.session.task_refs))
-
-    // Extra fields from FwaSession (active_turn_seq, last_error, created_at,
-    // updated_at) must not leak through the adapter wrapping. The adapter
-    // explicitly shapes the result so the registered schema
-    // (fwaAssignResultSchema with additionalProperties: false) passes.
-    assert.equal(result.session.message_address, result.session.id.replace(/^fwa_/, 'fwa-'))
-    assert.equal(Object.keys(result.session).length, 8, 'session must have exactly 8 schema-valid fields')
-    assert.equal((result.session as Record<string, unknown>).active_turn_seq, undefined)
-    assert.equal((result.session as Record<string, unknown>).last_error, undefined)
-    assert.equal((result.session as Record<string, unknown>).created_at, undefined)
-    assert.equal((result.session as Record<string, unknown>).updated_at, undefined)
-  } finally {
-    client?.close()
-    await running.stop()
-    resetRegistry()
     rmSync(endpoint.dir, { recursive: true, force: true })
     rmSync(workDir, { recursive: true, force: true })
   }

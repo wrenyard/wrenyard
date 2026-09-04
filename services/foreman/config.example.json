@@ -2,28 +2,6 @@
   "workspace": {
     "root": "/path/to/wrenyard-suite"
   },
-  "fwa": {
-    "workspace_root": "/path/to/wrenyard-suite",
-    "llm": {
-      "model": "kimi-coding/k3",
-      "turn_timeout_ms": 900000,
-      "http_timeout_ms": 120000,
-      "max_retries": 2,
-      "retry_backoff_ms": 500
-    }
-  },
-  "work": {
-    "workspace_root": "/path/to/wrenyard-suite",
-    "max_concurrent_turns": 3,
-    "llm": {
-      "model": "zhipu-coding/glm-5.2",
-      "models": ["zhipu-coding/glm-5.2", "zhipu-coding/glm-5.1"],
-      "turn_timeout_ms": 900000,
-      "http_timeout_ms": 120000,
-      "max_retries": 2,
-      "retry_backoff_ms": 500
-    }
-  },
   "tasks": {
     "agentRuntime": {}
   },
@@ -34,14 +12,14 @@
         "kind": "agent",
         "can_send": true,
         "can_receive": false,
-        "grants": [{ "name": "message.send" }, { "name": "work.read" }]
+        "grants": [{ "name": "message.send" }]
       },
       "operator": {
         "kind": "human",
         "can_send": true,
         "can_receive": true,
         "delivery_route": "operator.telegram",
-        "grants": [{ "name": "message.send" }, { "name": "work.read" }]
+        "grants": [{ "name": "message.send" }]
       }
     },
     "routes": {

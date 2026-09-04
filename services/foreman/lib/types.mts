@@ -37,27 +37,6 @@ export interface ShellResult {
   stderr: string
 }
 
-/** Canonical native LLM request protocols Foreman can forward directly. */
-export type LlmNativeProtocol = 'openai' | 'anthropic'
-
-/**
- * Broadened LLM input. Existing callers pass a prompt string; callers may
- * instead pass a native OpenAI/Anthropic request-body object (with the
- * matching `protocol` option) to forward the body unchanged.
- */
-export type LlmInput = string | Record<string, unknown>
-
-export interface LlmOpts {
-  model?: string
-  temperature?: number
-  maxTokens?: number
-  timeoutMs?: number
-  maxRetries?: number
-  retryBackoffMs?: number
-  /** Native protocol selection; only meaningful for a native request-body input. */
-  protocol?: LlmNativeProtocol
-}
-
 export type CheckpointFn = (opts: {
   id: string
   output: Record<string, unknown>
@@ -81,7 +60,6 @@ export interface ResolvedTarget {
 export interface PrimitiveSet {
   agent: (agentRuntime: string, prompt: string, opts?: AgentOpts) => Promise<AgentResult>
   shell: (command: string, opts?: ShellOpts) => Promise<ShellResult>
-  llm: (input: LlmInput, opts?: LlmOpts) => Promise<string | unknown>
   checkpoint: CheckpointFn
 }
 
@@ -146,7 +124,6 @@ declare global {
   var defineTask: ((config: TaskConfig) => TaskDefinition) | undefined
   var agent: PrimitiveSet['agent'] | undefined
   var shell: PrimitiveSet['shell'] | undefined
-  var llm: PrimitiveSet['llm'] | undefined
   var checkpoint: CheckpointFn | undefined
   var foremanSchemas: ForemanSchemas | undefined
   var foremanInstructions: ForemanInstructions | undefined

@@ -20,9 +20,6 @@ func Module() schema.ProviderModule {
 				CredentialResolver: schema.CredentialResolverForgeManaged,
 				AuthScheme:         schema.AuthSchemeAPIKey,
 			},
-			RawLLM: []schema.RawLLMCapability{{
-				Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: "https://api.anthropic.com/v1/messages", AuthScheme: schema.AuthSchemeAPIKey,
-			}},
 		},
 		ModelSet: models,
 		AuthInfo: schema.AuthMetadata{Login: true},

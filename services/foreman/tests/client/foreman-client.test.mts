@@ -312,64 +312,6 @@ describe('ForemanClient', () => {
     assert.deepEqual(rpc.requests[1]?.params, {})
   })
 
-  it('fwa wrappers delegate to the matching JSON-RPC methods with original params', async () => {
-    const result = { ok: true }
-    const rpc = new FakeRpc(result)
-    const client = new ForemanClient(rpc)
-
-    const assignParams = {
-      ticket_id: 'ticket_abc',
-      project_id: 'proj_xyz',
-      prompt: 'implement the search feature',
-    }
-    const listParams = {}
-    const statusParams = { session_id: 'session_123' }
-    const transcriptParams = { session_id: 'session_123' }
-
-    assert.equal(await client.fwa.assign(assignParams), result)
-    assert.equal(await client.fwa.list(listParams), result)
-    assert.equal(await client.fwa.status(statusParams), result)
-    assert.equal(await client.fwa.transcript(transcriptParams), result)
-
-    assertRequest(rpc, 0, 'fwa.assign', assignParams)
-    assertRequest(rpc, 1, 'fwa.list', listParams)
-    assertRequest(rpc, 2, 'fwa.status', statusParams)
-    assertRequest(rpc, 3, 'fwa.transcript', transcriptParams)
-  })
-
-  it('fwa.list() sends empty params when omitted', async () => {
-    const rpc = new FakeRpc([])
-    const client = new ForemanClient(rpc)
-
-    await client.fwa.list()
-
-    assert.deepEqual(rpc.requests, [{ method: 'fwa.list', params: {} }])
-  })
-
-  it('agent wrappers delegate to the daemon conversation RPC methods', async () => {
-    const result = { ok: true }
-    const rpc = new FakeRpc(result)
-    const client = new ForemanClient(rpc)
-    const sync = { address: 'foreman-work', after_seq: 12, wait_ms: 1_000 }
-    const compact = { address: 'foreman-work' }
-    const review = {
-      address: 'foreman-work',
-      graph_id: 'tg_1',
-      patch_id: 'patch_1',
-      decision: 'reject' as const,
-      client_action_id: 'action_1',
-    }
-
-    assert.equal(await client.agent.list(), result)
-    assert.equal(await client.agent.sync(sync), result)
-    assert.equal(await client.agent.compact(compact), result)
-    assert.equal(await client.agent.graph.review(review), result)
-    assert.deepEqual(rpc.requests[0], { method: 'agent.list', params: {} })
-    assertRequest(rpc, 1, 'agent.sync', sync)
-    assertRequest(rpc, 2, 'agent.compact', compact)
-    assertRequest(rpc, 3, 'agent.graph.review', review)
-  })
-
   it('connectIpcForemanClient connects health.ping over IPC to RpcRouter', async () => {
     const endpoint = createTestIpcEndpoint('health')
     const server = await createHealthServer(endpoint)
@@ -482,7 +424,7 @@ describe('ForemanClient', () => {
     assert.equal(typeof clientShape.message, 'object')
     assert.equal(typeof clientShape.daemon, 'object')
     assert.equal(clientShape.pet, undefined)
-    assert.equal(typeof clientShape.fwa, 'object')
+    assert.equal(clientShape.fwa, undefined)
     assert.equal(clientShape.messageDelivery, undefined)
     assert.equal(clientShape.session, undefined)
     assert.equal(clientShape.worker, undefined)

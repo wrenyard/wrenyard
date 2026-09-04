@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalProviderId } from './model-patch.js';
 import type {
   ConversationItemSnapshot,
   ConversationModelGroupSnapshot,
@@ -90,34 +89,13 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
-const PRODUCT_MODEL_LABELS = new Map([
-  ['deepseek-official/deepseek-v4-flash', 'DeepSeek V4 Flash'],
-  ['deepseek-official/deepseek-v4-flash-vision-exp', 'DeepSeek V4 Flash Vision'],
-  ['deepseek-official/deepseek-v4-pro', 'DeepSeek V4 Pro'],
-  ['kimi-coding/k3', 'Kimi K3'],
-  ['zhipu-coding/glm-5.3', 'GLM 5.3'],
-  ['zhipu-coding/glm-5.3-flash', 'GLM 5.3 Flash'],
-]);
-
-function canonicalModelId(provider: string, model: string): string {
-  return provider === 'kimi-coding' && model === 'k3[1m]' ? 'k3' : model;
-}
-
-function productModelLabel(provider: string, model: string, fallback: string): string {
-  return PRODUCT_MODEL_LABELS.get(`${provider}/${model}`) ?? fallback;
-}
-
-function exposeModel(provider: string, model: string): boolean {
-  return !(provider === 'kimi-coding' && model === 'k3[1m]');
-}
-
 function modelSelectionSnapshot(
   selection: Record<string, unknown>,
   groups: ConversationModelGroupSnapshot[],
   configuredProviderIds?: ReadonlySet<string>,
 ): ConversationModelSelectionSnapshot {
   const provider = requiredString(selection.provider, 'current.provider');
-  const model = canonicalModelId(provider, requiredString(selection.model, 'current.model'));
+  const model = requiredString(selection.model, 'current.model');
   const group = groups.find((candidate) => candidate.provider === provider);
   const option = group?.models.find((candidate) => candidate.model === model);
   return {
@@ -126,8 +104,7 @@ function modelSelectionSnapshot(
     label: option?.label ?? model,
     providerLabel: group?.label ?? provider,
     advertised: option !== undefined,
-    configured: configuredProviderIds === undefined
-      || configuredProviderIds.has(canonicalProviderId(provider)),
+    configured: configuredProviderIds === undefined || configuredProviderIds.has(provider),
     ...(typeof selection.reasoningEffort === 'string' && selection.reasoningEffort
       ? { reasoningEffort: selection.reasoningEffort }
       : {}),
@@ -161,13 +138,12 @@ export function projectConversationModels(
         if (!isObject(rawModel)) throw new Error(`DSH 模型目录 ${provider} 第 ${modelIndex + 1} 项格式无效`);
         const model = requiredString(rawModel.id, `groups[${groupIndex}].models[${modelIndex}].id`);
         const sourceLabel = requiredString(rawModel.name, `groups[${groupIndex}].models[${modelIndex}].name`);
-        if (!exposeModel(provider, model)) return [];
         const reasoning = isObject(rawModel.reasoning) ? rawModel.reasoning : undefined;
         return [{
           provider,
           providerLabel,
           model,
-          label: productModelLabel(provider, model, sourceLabel),
+          label: sourceLabel,
           ...(typeof rawModel.description === 'string' && rawModel.description
             ? { description: rawModel.description.slice(0, 500) }
             : {}),
@@ -177,7 +153,7 @@ export function projectConversationModels(
         }];
       }),
     };
-  }).filter((group) => configured === undefined || configured.has(canonicalProviderId(group.provider)));
+  }).filter((group) => configured === undefined || configured.has(group.provider));
   const failures = value.failures.flatMap((failure) => {
     if (!isObject(failure)) return [];
     const name = asString(failure.name) ?? asString(failure.id) ?? '模型提供方';

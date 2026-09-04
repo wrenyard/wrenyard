@@ -285,8 +285,6 @@ describe('compact task graph compiler', () => {
         }
         return null
       },
-      resolveLlmInputSchema: () => null,
-      resolveLlmStructuredOpts: () => null,
     }
     // Project-dependent task contract resolution (B7): the validator consults
     // the contract resolver under each node's action.params.project scope.
@@ -328,8 +326,6 @@ describe('compact task graph compiler', () => {
           ? { input: { type: 'object', properties: {} }, output: { type: 'object', properties: {} } }
           : null
       },
-      resolveLlmInputSchema: () => null,
-      resolveLlmStructuredOpts: () => null,
     }
     const contractResolver = {
       resolveDefinitionContract(kind, name, project) {

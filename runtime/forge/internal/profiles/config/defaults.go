@@ -45,11 +45,6 @@ func FillDefaults(cfg *Config, data []byte) {
 	if cfg.Quota.StatuslineFetchSec == 0 {
 		cfg.Quota.StatuslineFetchSec = 2
 	}
-	// LLMModel has no internal default: it stays empty unless the user
-	// configures it explicitly.
-	if cfg.LLMProtocol == "" {
-		cfg.LLMProtocol = "openai"
-	}
 }
 
 // Default returns a fully-defaulted Config.

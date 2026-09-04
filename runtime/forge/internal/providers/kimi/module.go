@@ -13,10 +13,6 @@ func Module() schema.ProviderModule {
 				Protocol: "anthropic-messages", Endpoint: "https://api.kimi.com/coding/v1/messages",
 				CredentialResolver: schema.CredentialResolverForgeManaged,
 			},
-			RawLLM: []schema.RawLLMCapability{
-				{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: "https://api.kimi.com/coding/v1/chat/completions"},
-				{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: "https://api.kimi.com/coding/v1/messages"},
-			},
 		},
 		ModelSet:  schema.ProviderModels{"k3": {ID: "k3", DisplayName: "Kimi K3", ContextWindow: 1048576}},
 		AuthInfo:  schema.AuthMetadata{Login: true},

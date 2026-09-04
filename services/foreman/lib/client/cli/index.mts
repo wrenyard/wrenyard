@@ -10,7 +10,6 @@ import { handleStatus } from './commands/status.mts'
 import { handleUpdate } from './commands/update.mts'
 import { handleTask } from './commands/task.mts'
 import { handleTaskgraph } from './commands/taskgraph.mts'
-import { handleFwa } from './commands/fwa.mts'
 import { launchTui } from './tui-launcher.mts'
 import { resolveCliArgs } from './args.mts'
 import { errorMessage, readLocalPackageVersion } from './shared.mts'
@@ -66,8 +65,6 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return handlePm(args.slice(1))
       case 'taskgraph':
         return handleTaskgraph(args.slice(1))
-      case 'fwa':
-        return handleFwa(args.slice(1))
       default:
         if (args.length === 0) return tuiLauncher()
         printUsage()
@@ -122,11 +119,6 @@ Usage:
   wrenyard taskgraph node inspect <json-params> [--config path]
   wrenyard taskgraph list <json-params> [--config path]
   wrenyard taskgraph wait <json-params> [--config path]
-  wrenyard fwa assign <ticket_id> <project_id> <prompt> [--config path] [--json]
-  wrenyard fwa list [--config path] [--json]
-  wrenyard fwa status <session_id> [--config path] [--json]
-  wrenyard fwa transcript <session_id> [--config path] [--json]
-
 Notes:
   task run waits for the task to reach a terminal lifecycle state by default.
   Use wrenyard task output <task_run_id> to fetch the task result content.

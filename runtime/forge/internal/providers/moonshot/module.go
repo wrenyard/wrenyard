@@ -15,7 +15,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      []string{"kimi-k2.6", "kimi-k2.5"}, DefaultModel: "kimi-k2.6",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: endpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM:    []schema.RawLLMCapability{{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: endpoint, AuthScheme: schema.AuthSchemeBearer}},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

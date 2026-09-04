@@ -1,4 +1,4 @@
-export type RuntimeOperationName = 'agent' | 'shell' | 'llm'
+export type RuntimeOperationName = 'agent' | 'shell'
 export type DomainOperationName = 'task'
 export type ControlOperationName = 'checkpoint'
 export type OperationName = DomainOperationName | RuntimeOperationName | ControlOperationName
@@ -108,14 +108,6 @@ export interface StartTaskRunOptions {
   /** Authoritative resolved definition provenance. Absent for legacy/direct
    *  callers that predate source threading; never guessed from project/id. */
   source?: 'builtin' | 'project'
-  /** Internal-only delegation admission descriptor for Work-created tasks. */
-  delegationAdmission?: {
-    address: string
-    turn_seq: number
-    delegation_id: string
-    tool_name: string
-    input: Record<string, unknown>
-  }
 }
 
 export interface TaskWorkflowRunHost {

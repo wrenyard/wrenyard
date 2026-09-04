@@ -27,7 +27,7 @@ func buildOpenCodePlan(req PlanRequest) (CommandPlan, error) {
 	if resumeID := strings.TrimSpace(req.ResumeSessionID); resumeID != "" && !hasFlag(command, "-s") && !hasFlag(command, "--session") {
 		command = append(command, "--session", resumeID)
 	}
-	if model := strings.TrimSpace(spec.Env["OPENCODE_MODEL"]); model != "" && !hasFlag(command, "-m") && !hasFlag(command, "--model") {
+	if model := openCodeGatewayModel(spec, strings.TrimSpace(spec.Env["OPENCODE_MODEL"])); model != "" && !hasFlag(command, "-m") && !hasFlag(command, "--model") {
 		command = append(command, "-m", model)
 	}
 	if !hasFlag(command, "--format") {
@@ -44,6 +44,9 @@ func buildOpenCodePlan(req PlanRequest) (CommandPlan, error) {
 	}
 	env["FORGE_PROFILE"] = spec.Name
 	applyCredentialPlan(env, spec)
+	for key, value := range spec.Runtime.Env {
+		env[key] = value
+	}
 
 	plan := CommandPlan{
 		ProfileName: spec.Name,
@@ -106,6 +109,21 @@ func buildOpenCodePlan(req PlanRequest) (CommandPlan, error) {
 			Data:         bashgate.OpenCodePluginBytes(),
 			Mode:         0o600,
 		})
+	}
+	if spec.Provider.GatewayRouted {
+		gatewayConfig, marshalErr := json.Marshal(map[string]any{
+			"provider": map[string]any{
+				"wrenyard": map[string]any{
+					"npm":     "@ai-sdk/openai-compatible",
+					"name":    "Wrenyard",
+					"options": map[string]any{"baseURL": spec.Runtime.Env["WRENYARD_GATEWAY_OPENAI_CHAT_URL"], "apiKey": "{env:WRENYARD_GATEWAY_TOKEN}"},
+				},
+			},
+		})
+		if marshalErr != nil {
+			return plan, marshalErr
+		}
+		bootstrapConfig = mergeJSONObjects(bootstrapConfig, string(gatewayConfig))
 	}
 	configParent := filepath.Join(spec.ForgeDataDir, "opencode", "direct-runs")
 	preparedFiles = append([]PreparedFile{{

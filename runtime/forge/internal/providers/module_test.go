@@ -41,34 +41,25 @@ func TestProviderOverridesRespectDeclaredCapabilities(t *testing.T) {
 		t.Fatal("OAuth provider accepted an API-key override")
 	}
 
-	reg = catalog.DefaultRegistry()
-	err = providers.ApplyOverrides(reg, map[string]providers.Override{
-		"opencode-native": {AnthropicBaseURL: "https://example.invalid/v1"},
-	}, nil)
-	if err == nil {
-		t.Fatal("provider override enabled an undeclared protocol")
-	}
 }
 
 func TestPublicAPIProviderContracts(t *testing.T) {
 	tests := []struct {
-		id              string
-		protocol        string
-		endpoint        string
-		authScheme      catalog.AuthScheme
-		rawAnthropic    bool
-		anthropicScheme catalog.AuthScheme
+		id         string
+		protocol   string
+		endpoint   string
+		authScheme catalog.AuthScheme
 	}{
-		{"anthropic-api", "anthropic-messages", "https://api.anthropic.com/v1/messages", catalog.AuthSchemeAPIKey, true, catalog.AuthSchemeAPIKey},
-		{"minimax", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
-		{"minimax-coding", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
-		{"moonshot", "openai-chat-completions", "https://api.moonshot.cn/v1/chat/completions", catalog.AuthSchemeBearer, false, ""},
-		{"openai", "openai-chat-completions", "https://api.openai.com/v1/chat/completions", catalog.AuthSchemeBearer, false, ""},
-		{"qwen", "openai-chat-completions", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
-		{"qwen-coding", "openai-chat-completions", "https://coding.dashscope.aliyuncs.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeBearer},
-		{"tokenhub", "openai-chat-completions", "https://tokenhub.tencentmaas.com/v1/chat/completions", catalog.AuthSchemeBearer, true, catalog.AuthSchemeAPIKey},
-		{"volcengine", "openai-chat-completions", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", catalog.AuthSchemeBearer, false, ""},
-		{"zhipu", "openai-chat-completions", "https://open.bigmodel.cn/api/paas/v4/chat/completions", catalog.AuthSchemeBearer, false, ""},
+		{"anthropic-api", "anthropic-messages", "https://api.anthropic.com/v1/messages", catalog.AuthSchemeAPIKey},
+		{"minimax", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"minimax-coding", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"moonshot", "openai-chat-completions", "https://api.moonshot.cn/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"openai", "openai-chat-completions", "https://api.openai.com/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"qwen", "openai-chat-completions", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"qwen-coding", "openai-chat-completions", "https://coding.dashscope.aliyuncs.com/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"tokenhub", "openai-chat-completions", "https://tokenhub.tencentmaas.com/v1/chat/completions", catalog.AuthSchemeBearer},
+		{"volcengine", "openai-chat-completions", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", catalog.AuthSchemeBearer},
+		{"zhipu", "openai-chat-completions", "https://open.bigmodel.cn/api/paas/v4/chat/completions", catalog.AuthSchemeBearer},
 	}
 	for _, tc := range tests {
 		t.Run(tc.id, func(t *testing.T) {
@@ -88,13 +79,6 @@ func TestPublicAPIProviderContracts(t *testing.T) {
 			}
 			if binding.CredentialSource() != catalog.CredentialResolverForgeManaged || !module.Auth().Login {
 				t.Fatal("public API provider must use Forge-managed API-key auth")
-			}
-			anthropic, ok := binding.RawCapability(catalog.RawLLMProtocolAnthropic)
-			if ok != tc.rawAnthropic {
-				t.Fatalf("raw Anthropic capability = %t, want %t", ok, tc.rawAnthropic)
-			}
-			if ok && anthropic.AuthScheme != tc.anthropicScheme {
-				t.Fatalf("raw Anthropic auth scheme = %q, want %q", anthropic.AuthScheme, tc.anthropicScheme)
 			}
 		})
 	}
@@ -152,9 +136,6 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 	if binding.Inference != nil {
 		t.Fatal("codebuddy must not declare an inference transport")
 	}
-	if len(binding.RawLLM) != 0 {
-		t.Fatalf("codebuddy must not declare raw LLM capability, got %#v", binding.RawLLM)
-	}
 	if binding.QuotaProvider != "" {
 		t.Fatalf("codebuddy must not declare a quota provider, got %q", binding.QuotaProvider)
 	}
@@ -206,9 +187,6 @@ func TestCursorProviderModuleRuntimeAndQuota(t *testing.T) {
 	}
 	if binding.Inference != nil {
 		t.Fatal("cursor must not declare an inference transport")
-	}
-	if len(binding.RawLLM) != 0 {
-		t.Fatalf("cursor must not declare raw LLM capability, got %#v", binding.RawLLM)
 	}
 	if !binding.UseClientBinary {
 		t.Fatal("cursor must use the client binary")

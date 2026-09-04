@@ -317,14 +317,14 @@ describe('ForemanMcpServer v2 tools', () => {
     }) as unknown as TestServer
 
     const result = await server.handleToolCall('send_message', {
-      to: 'foreman-work',
-      text: 'hello work',
+      to: 'pet',
+      text: 'hello pet',
     }, {
       sender: { role: 'relay' },
     })
 
     assert.deepEqual(calls, [{
-      params: { to: 'foreman-work', text: 'hello work' },
+      params: { to: 'pet', text: 'hello pet' },
       context: { sender: { role: 'relay' }, transport: 'mcp' },
     }])
     assert.deepEqual(result, {
@@ -353,7 +353,7 @@ describe('ForemanMcpServer v2 tools', () => {
       method: 'tools/call',
       params: {
         name: 'send_message',
-        arguments: { to: 'foreman-work', text: 'hello without sender' },
+        arguments: { to: 'pet', text: 'hello without sender' },
       },
     }))
 

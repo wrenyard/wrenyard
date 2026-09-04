@@ -26,8 +26,6 @@ type Config struct {
 	Profiles          map[string]ProfileRecipe    `json:"profiles,omitempty"`
 	Quota             Quota                       `json:"quota"`
 	CustomProviders   map[string]CustomProvider   `json:"custom_providers,omitempty"`
-	LLMModel          string                      `json:"llm_model,omitempty"`
-	LLMProtocol       string                      `json:"llm_protocol,omitempty"`
 	GeneratedFrom     string                      `json:"_generated_from,omitempty"`
 	PolicyMaxUsagePct map[string]int              `json:"policy_max_usage_pct,omitempty"`
 }

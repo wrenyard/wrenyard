@@ -207,6 +207,9 @@ export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
 export interface ProviderAuthStatus {
   id: string;
+  displayName?: string;
+  description?: string;
+  setupHint?: string;
   configured: boolean;
   authMode: ProviderAuthMode;
 }

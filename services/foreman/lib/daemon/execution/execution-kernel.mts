@@ -6,7 +6,6 @@ import {
   type TaskRunStoreStatus,
 } from '../../db/stores/task-run-store.mts'
 import { executeShell as defaultShell } from '../../adapters/shell/execute.mts'
-import { runForgeLlm as defaultLlm } from '../../adapters/forge/llm-client.mts'
 import { createPrimitiveSet } from '../../core/operations/primitives/registry.mts'
 import { appendForemanEvent } from '../../events/event-store.mts'
 import type { ForemanEvent } from '../../events/event-types.mts'
@@ -546,7 +545,6 @@ function createKernelTaskRunId(): string {
 function mergePrimitives(overrides: Partial<PrimitiveSet> | undefined): PrimitiveSet {
   return createPrimitiveSet({
     shell: defaultShell,
-    llm: defaultLlm,
     ...overrides,
   })
 }
@@ -600,4 +598,3 @@ function taskErrorMessage(error: unknown): string | undefined {
   }
   return undefined
 }
-

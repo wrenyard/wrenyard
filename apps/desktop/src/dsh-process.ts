@@ -39,7 +39,7 @@ export interface DshWebOptions {
   /** Secret-free DSH loader overlay passed as the last `--patch` layer. */
   patchPath?: string;
   /**
-   * Extra child env (credential values for injected llm-pi-ai routes).
+   * Extra child env (the ephemeral local Gateway token).
    * Merged last and never logged.
    */
   extraEnv?: NodeJS.ProcessEnv;

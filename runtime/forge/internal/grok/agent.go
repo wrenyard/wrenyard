@@ -42,6 +42,18 @@ func AgentConfigBytes(projections []Projection, defaultModel string) ([]byte, er
 	return data, nil
 }
 
+func projectionToMap(p Projection) map[string]interface{} {
+	return map[string]interface{}{
+		"name":                    p.Name,
+		"model":                   p.Model,
+		"base_url":                p.BaseURL,
+		"env_key":                 p.EnvKey,
+		"api_backend":             p.APIBackend,
+		"context_window":          p.ContextWindow,
+		"supports_backend_search": p.SupportsBackendSearch,
+	}
+}
+
 // MCPServerConfig is one HTTP MCP entry in an ephemeral Grok config.
 type MCPServerConfig struct {
 	Name    string

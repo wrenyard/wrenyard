@@ -4,7 +4,6 @@ import "github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 
 func Module() schema.ProviderModule {
 	const openAIEndpoint = "https://tokenhub.tencentmaas.com/v1/chat/completions"
-	const anthropicEndpoint = "https://tokenhub.tencentmaas.com/v1/messages"
 	models := schema.ProviderModels{
 		"hy4-preview":                           {ID: "hy4-preview", DisplayName: "Hunyuan HY4 Preview", ContextWindow: 262144},
 		"deepseek-v4-flash-202605":              {ID: "deepseek-v4-flash-202605", DisplayName: "DeepSeek V4 Flash", ContextWindow: 1048576},
@@ -24,10 +23,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      allowed, DefaultModel: "deepseek-v4-flash-202605",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: openAIEndpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM: []schema.RawLLMCapability{
-				{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: openAIEndpoint, AuthScheme: schema.AuthSchemeBearer},
-				{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: anthropicEndpoint, AuthScheme: schema.AuthSchemeAPIKey},
-			},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

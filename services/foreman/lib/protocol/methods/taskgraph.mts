@@ -16,7 +16,7 @@ type GraphStateType = 'created' | 'running' | 'paused' | 'done' | 'cancelled'
 type NodeRunStateType = 'planned' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'cancelled'
 
 interface TaskGraphAction {
-  type: 'start' | 'end' | 'condition' | 'convert' | 'join' | 'checkpoint' | 'task' | 'llm' | 'shell'
+  type: 'start' | 'end' | 'condition' | 'convert' | 'join' | 'checkpoint' | 'task' | 'shell'
   params: JsonObject
 }
 
@@ -290,7 +290,7 @@ const TASKGRAPH_EVENT_SCHEMA = {
 const TASK_GRAPH_ACTION_SCHEMA = {
   type: 'object',
   properties: {
-    type: { type: 'string', enum: ['start', 'end', 'condition', 'convert', 'join', 'checkpoint', 'task', 'llm', 'shell'] },
+    type: { type: 'string', enum: ['start', 'end', 'condition', 'convert', 'join', 'checkpoint', 'task', 'shell'] },
     params: JSON_OBJECT_SCHEMA,
   },
   required: ['type', 'params'],

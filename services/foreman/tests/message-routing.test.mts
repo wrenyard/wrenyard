@@ -17,7 +17,7 @@ describe('message routing', () => {
           delivery_route: 'operator.telegram',
           can_send: true,
           can_receive: true,
-          grants: ['message.send', 'work.read'],
+          grants: ['message.send'],
         },
       },
       routes: {
@@ -26,7 +26,7 @@ describe('message routing', () => {
     })
     assert.equal(config.principals.codex.canSend, true)
     assert.equal(config.principals.codex.canReceive, false)
-    assert.equal(config.principals['foreman-work'].canReceive, true)
+    assert.equal(config.principals['foreman-work'], undefined)
     assert.equal(config.routes?.['operator.telegram'].transport, 'telegram')
   })
 
@@ -42,7 +42,7 @@ describe('message routing', () => {
             delivery_route: 'operator.telegram',
             can_send: true,
             can_receive: true,
-            grants: ['message.send', 'work.read'],
+            grants: ['message.send'],
           },
         },
         routes: { 'operator.telegram': { transport: 'telegram' } },
@@ -86,7 +86,7 @@ describe('message routing', () => {
             delivery_route: 'operator.telegram',
             can_send: true,
             can_receive: true,
-            grants: ['message.send', 'work.read'],
+            grants: ['message.send'],
           },
         },
         routes: { 'operator.telegram': { transport: 'telegram' } },

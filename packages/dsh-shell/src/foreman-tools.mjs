@@ -30,13 +30,11 @@ const TERMINAL_TASK_STATUSES = new Set([
   'interrupted',
 ]);
 
-// DSH-internal session/work plumbing and workflow_* orchestration tools are
-// never exposed to the model.
+// DSH-internal session plumbing and workflow_* compatibility tools are never
+// exposed to the model.
 const BLOCKED_TOOLS = new Set([
   'sessions_list',
   'session_send',
-  'work_send',
-  'work_transcript',
 ]);
 
 // Read-only tools may run concurrently; everything else is serialized.
@@ -45,8 +43,6 @@ const READONLY_TOOLS = new Set([
   'project_describe',
   'project_commit_log',
   'worktree_list',
-  'agent_list',
-  'agent_model_list',
   'workspace_doc_list',
   'workspace_doc_read',
   'task_status',
@@ -61,8 +57,6 @@ const CANONICAL_RPC = {
   project_describe: 'project.describe',
   project_commit_log: 'project.commitLog',
   worktree_list: 'project.worktree.list',
-  agent_list: 'agent.list',
-  agent_model_list: 'agent.model.list',
   workspace_doc_list: 'workspace.doc.list',
   workspace_doc_read: 'workspace.doc.read',
 };

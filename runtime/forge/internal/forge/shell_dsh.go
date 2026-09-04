@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/dsh"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
 )
 
 // FDSH stable launcher contract.
@@ -46,7 +45,7 @@ const (
 
 	// dshModelPatchEnv is the env var that points the real dsh at the
 	// Forge-managed model patch. The real dsh reads this to mount the public
-	// llm-pi-ai providers (zhipu-coding, kimi-coding).
+	// llm-pi-ai.wrenyard Gateway provider.
 	dshModelPatchEnv = "DSH_FORGE_MODEL_PATCH"
 
 	// dshCredentialEnvPrefix is the inherited env prefix that must never be
@@ -150,11 +149,16 @@ func buildDSHPlan(args []string) (dshPlan, error) {
 	if err != nil {
 		return dshPlan{}, err
 	}
-	creds := resolveDSHCredentials()
-	if err := dsh.ValidateCredentials(creds); err != nil {
-		return dshPlan{}, fmt.Errorf("fdsh: invalid dsh credentials: %w", err)
+	gatewayURL := strings.TrimSpace(os.Getenv("WRENYARD_GATEWAY_OPENAI_CHAT_URL"))
+	if gatewayURL == "" {
+		return dshPlan{}, fmt.Errorf("fdsh: model Gateway connection is unavailable")
 	}
-	projections := dsh.ProjectProviders(creds)
+	gatewayProvider := dsh.GatewayProvider(gatewayURL, gatewayModelsFromEnvironment())
+	credential := resolveDSHCredential()
+	if err := dsh.ValidateCredential(gatewayProvider, credential); err != nil {
+		return dshPlan{}, fmt.Errorf("fdsh: invalid dsh credential: %w", err)
+	}
+	projections := []dsh.ProviderProjection{dsh.ProjectProvider(gatewayProvider, credential)}
 
 	var patchPath string
 	if agent {
@@ -166,7 +170,7 @@ func buildDSHPlan(args []string) (dshPlan, error) {
 		return dshPlan{}, err
 	}
 
-	childEnv := dsh.LaunchEnv(creds, scrubInheritedFDSHEnv(os.Environ()))
+	childEnv := dsh.LaunchEnv(gatewayProvider, credential, scrubInheritedFDSHEnv(os.Environ()))
 	childEnv = withEnv(childEnv, "DSH_HOME", home)
 	if !agent {
 		childEnv = withEnv(childEnv, dshModelPatchEnv, patchPath)
@@ -335,55 +339,20 @@ func ensureDSHModelPatch(home string, projections []dsh.ProviderProjection) (str
 // can inject token plus HTTP context headers without touching the real auth
 // files. The default resolves every provider through the typed
 // authStatusResolver().Credential resolver, never ResolveCredential.
-var dshCredentialResolver = func(providerID string) (dsh.TypedCredential, bool) {
-	cred, ok := authStatusResolver().Credential(providerID)
-	if !ok {
-		return dsh.TypedCredential{}, false
-	}
-	return authTypedCredential(cred), true
-}
-
-// authTypedCredential flattens a typed auth.Credential (token plus http.Header)
-// onto the secret-free dsh typed credential projection input.
-func authTypedCredential(cred *auth.Credential) dsh.TypedCredential {
-	headers := map[string]string{}
-	for name, values := range cred.ContextHeaders() {
-		if len(values) > 0 {
-			headers[name] = values[0]
-		}
-	}
-	return dsh.TypedCredential{Token: cred.Value, Headers: headers}
+var dshCredentialResolver = func(_ string) (dsh.TypedCredential, bool) {
+	token := strings.TrimSpace(os.Getenv("WRENYARD_GATEWAY_TOKEN"))
+	return dsh.TypedCredential{Token: token}, token != ""
 }
 
 // resolveDSHCredentials resolves typed credentials (token plus context headers)
 // for the injected llm-pi-ai providers. The patch itself is secret-free;
 // credential values only reach the dsh child process through its environment.
-func resolveDSHCredentials() dsh.Credentials {
-	creds := dsh.Credentials{}
-	for _, provider := range dsh.InjectedProviders {
-		forgeID := strings.TrimPrefix(provider.ID, "llm-pi-ai.")
-		typed, ok := dshCredentialResolver(forgeID)
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(typed.Token) == "" && !hasDSHTypedHeader(typed.Headers) {
-			continue
-		}
-		creds[provider.ID] = typed
+func resolveDSHCredential() dsh.TypedCredential {
+	typed, ok := dshCredentialResolver(dsh.GatewayProviderID)
+	if ok && strings.TrimSpace(typed.Token) != "" {
+		return typed
 	}
-	return creds
-}
-
-func hasDSHTypedHeader(headers map[string]string) bool {
-	for name, value := range headers {
-		if strings.EqualFold(name, "Authorization") {
-			continue
-		}
-		if strings.TrimSpace(value) != "" {
-			return true
-		}
-	}
-	return false
+	return dsh.TypedCredential{}
 }
 
 // scrubInheritedFDSHEnv drops inherited FORGE_DSH_* credential vars (and the
@@ -395,7 +364,7 @@ func scrubInheritedFDSHEnv(base []string) []string {
 		if i := strings.IndexByte(kv, '='); i >= 0 {
 			key = kv[:i]
 		}
-		if strings.HasPrefix(key, dshCredentialEnvPrefix) || key == fdshMarkerEnv {
+		if strings.HasPrefix(key, dshCredentialEnvPrefix) || strings.HasPrefix(key, "WRENYARD_GATEWAY_") || key == fdshMarkerEnv {
 			continue
 		}
 		scrubbed = append(scrubbed, kv)

@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control-client';
+import { WrenyardIpcClient, resolveWrenyardIpcPath, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { DesktopPetRuntime, QuotaService } from '@wrenyard/pet/runtime';
 import { startDshWeb } from './dsh-process.js';
 import { DshConversationClient } from './dsh-conversation-client.js';
@@ -13,7 +13,7 @@ import {
   type ConfiguredWorkspace,
   type DesktopConversationSession,
 } from './conversation-controller.js';
-import { configuredModelProviderIds, defaultMcpUrl, resolveModelCredentialEnv, writeModelPatch } from './model-patch.js';
+import { defaultMcpUrl, WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
@@ -134,6 +134,11 @@ async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
 /** True when health.ping succeeds on the given IPC socket. */
 async function probeWrenyard(path: string): Promise<boolean> {
   return (await readWrenyardHealth(path)).connected;
+}
+
+async function readGatewayConnection(path: string): Promise<WrenyardGatewayConnection> {
+  const client = new WrenyardIpcClient({ path, requestTimeoutMs: FOREMAN_HEALTH_TIMEOUT_MS });
+  try { return await client.gatewayConnection(); } finally { client.close(); }
 }
 
 /** Start the Wrenyard daemon service once, detached from the app process. */
@@ -263,11 +268,10 @@ async function createConversationSession(
   const profile = await prepareProfile(dshHome, shellSource, runtimeModules);
   ensureChineseLocale(profile.dshHome);
   const registration = await ensureProductWorkspaceRegistered(profile.dshHome, workspace.path);
-  const patchPath = await writeModelPatch(profile.dshHome);
-  const extraEnv = await resolveModelCredentialEnv();
-  // Provider ids are derived from the exact credential env handed to the DSH
-  // child; only presence is used and no value is logged.
-  const configuredProviderIds = configuredModelProviderIds(extraEnv);
+  const gateway = await readGatewayConnection(ipcPath);
+  const patchPath = await writeModelPatch(profile.dshHome, gateway);
+  const extraEnv: NodeJS.ProcessEnv = { [WRENYARD_GATEWAY_TOKEN_ENV]: gateway.token };
+  const configuredProviderIds = [WRENYARD_DSH_PROVIDER_ID];
   const wrenyardEnv: NodeJS.ProcessEnv = {
     WRENYARD_IPC_PATH: ipcPath,
     WRENYARD_MCP_URL: defaultMcpUrl(),
@@ -495,7 +499,7 @@ async function bootstrap(): Promise<void> {
   await petController.start().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] Pet module failed to start:', error);
   });
-  const providerService = new ProviderService({ runtimeCommand: resolveQuotaRuntimeBin() });
+  const providerService = new ProviderService({ ipcPath });
   quotaController = new DesktopQuotaController({
     source: new QuotaService({ runtimeCommand: resolveQuotaRuntimeBin() }),
     providerSource: providerService,
@@ -517,6 +521,7 @@ async function bootstrap(): Promise<void> {
     dshVersion: resolveDshVersion(),
     buildTime,
     readHealth: () => readWrenyardHealth(ipcPath),
+    readGatewayModels: () => readGatewayConnection(ipcPath).then((connection) => connection.models),
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),
   });

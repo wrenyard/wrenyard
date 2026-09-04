@@ -18,11 +18,11 @@ describe('operation primitives registry', () => {
   it('registers every supported Foreman operation in the core registry', () => {
     assert.deepEqual(
       Object.keys(operationRegistry).sort(),
-      ['agent', 'checkpoint', 'llm', 'shell', 'task'],
+      ['agent', 'checkpoint', 'shell', 'task'],
     )
     assert.deepEqual(
       listOperationDescriptors().map((entry) => entry.name).sort(),
-      ['agent', 'checkpoint', 'llm', 'shell', 'task'],
+      ['agent', 'checkpoint', 'shell', 'task'],
     )
     assert.equal(isForemanOperationName('task'), true)
     assert.equal(isForemanOperationName('missing'), false)
@@ -31,11 +31,11 @@ describe('operation primitives registry', () => {
   it('keeps primitives as a compatibility view of operations', () => {
     assert.deepEqual(
       Object.keys(primitiveRegistry).sort(),
-      ['agent', 'checkpoint', 'llm', 'shell', 'task'],
+      ['agent', 'checkpoint', 'shell', 'task'],
     )
     assert.deepEqual(
       listPrimitiveDescriptors().map((entry) => entry.name).sort(),
-      ['agent', 'checkpoint', 'llm', 'shell', 'task'],
+      ['agent', 'checkpoint', 'shell', 'task'],
     )
     assert.equal(isForemanPrimitiveName('task'), true)
     assert.equal(isForemanPrimitiveName('missing'), false)
@@ -45,7 +45,6 @@ describe('operation primitives registry', () => {
     const primitives = createPrimitiveSet()
     assert.equal(typeof primitives.agent, 'function')
     assert.equal(typeof primitives.shell, 'function')
-    assert.equal(typeof primitives.llm, 'function')
     assert.equal(typeof primitives.checkpoint, 'function')
   })
 

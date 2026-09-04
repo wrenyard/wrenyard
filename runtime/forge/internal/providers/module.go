@@ -4,7 +4,6 @@ package providers
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 
@@ -33,9 +32,7 @@ import (
 type ProviderModule = schema.ProviderModule
 
 type Override struct {
-	OpenAIBaseURL    string
-	AnthropicBaseURL string
-	APIKey           string
+	APIKey string
 }
 
 var modules = []ProviderModule{
@@ -112,12 +109,6 @@ func ApplyOverrides(reg schema.Registrar, configured map[string]Override, lookup
 		}
 		if lookupEnv != nil {
 			prefix := EnvPrefix(module.ID())
-			if value, ok := lookupEnv(prefix + "_OPENAI_BASE_URL"); ok && strings.TrimSpace(value) != "" {
-				override.OpenAIBaseURL = strings.TrimSpace(value)
-			}
-			if value, ok := lookupEnv(prefix + "_ANTHROPIC_BASE_URL"); ok && strings.TrimSpace(value) != "" {
-				override.AnthropicBaseURL = strings.TrimSpace(value)
-			}
 			if value, ok := lookupEnv(prefix + "_API_KEY"); ok && strings.TrimSpace(value) != "" {
 				override.APIKey = strings.TrimSpace(value)
 			}
@@ -175,36 +166,6 @@ func bindingWithOverride(module ProviderModule, override Override) (schema.Provi
 	if strings.TrimSpace(override.APIKey) != "" && !isForgeManaged(binding) {
 		return schema.Provider{}, fmt.Errorf("providers.%s.api_key: provider does not accept API-key overrides", module.ID())
 	}
-	endpoints := []struct {
-		protocol schema.RawLLMProtocol
-		value    string
-	}{
-		{protocol: schema.RawLLMProtocolOpenAI, value: override.OpenAIBaseURL},
-		{protocol: schema.RawLLMProtocolAnthropic, value: override.AnthropicBaseURL},
-	}
-	for _, candidate := range endpoints {
-		protocol := candidate.protocol
-		endpoint := strings.TrimSpace(candidate.value)
-		if endpoint == "" {
-			continue
-		}
-		if err := validateBaseURL(endpoint); err != nil {
-			return schema.Provider{}, fmt.Errorf("providers.%s.%s_base_url: %w", module.ID(), protocol, err)
-		}
-		found := false
-		for i := range binding.RawLLM {
-			if binding.RawLLM[i].Protocol == protocol {
-				binding.RawLLM[i].BaseEndpoint = endpoint
-				found = true
-			}
-		}
-		if !found {
-			return schema.Provider{}, fmt.Errorf("providers.%s.%s_base_url: protocol is not declared by provider", module.ID(), protocol)
-		}
-		if binding.Inference != nil && inferenceProtocol(binding.Inference.Protocol) == protocol {
-			binding.Inference.Endpoint = endpoint
-		}
-	}
 	return binding, nil
 }
 
@@ -212,7 +173,6 @@ func cloneBinding(binding schema.Provider) schema.Provider {
 	binding.Env = cloneStringMap(binding.Env)
 	binding.CompatibleDialects = append([]schema.Dialect(nil), binding.CompatibleDialects...)
 	binding.AllowedModels = append([]string(nil), binding.AllowedModels...)
-	binding.RawLLM = append([]schema.RawLLMCapability(nil), binding.RawLLM...)
 	if binding.Inference != nil {
 		inference := *binding.Inference
 		binding.Inference = &inference
@@ -231,32 +191,8 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return out
 }
 
-func inferenceProtocol(protocol string) schema.RawLLMProtocol {
-	if strings.HasPrefix(protocol, "openai-") {
-		return schema.RawLLMProtocolOpenAI
-	}
-	if strings.HasPrefix(protocol, "anthropic-") {
-		return schema.RawLLMProtocolAnthropic
-	}
-	return ""
-}
-
 func isForgeManaged(binding schema.Provider) bool {
 	// Forge-managed credential handling still requires an inference transport;
 	// the credential resolver itself is read from the top-level source.
 	return binding.Inference != nil && binding.CredentialSource() == schema.CredentialResolverForgeManaged
-}
-
-func validateBaseURL(raw string) error {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("must be an absolute URL")
-	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return fmt.Errorf("unsupported URL scheme %q", parsed.Scheme)
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("must not contain credentials, query, or fragment")
-	}
-	return nil
 }

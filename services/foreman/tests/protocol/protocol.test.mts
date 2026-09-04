@@ -26,12 +26,6 @@ import {
 } from '../../lib/task-timeouts.mts'
 
 const expectedMethods = [
-  'agent.compact',
-  'agent.graph.review',
-  'agent.list',
-  'agent.model.list',
-  'agent.model.set',
-  'agent.sync',
   'activity.snapshot',
   'daemon.drain',
   'daemon.freeze',
@@ -40,10 +34,9 @@ const expectedMethods = [
   'daemon.thaw',
   'health.ping',
   'event.list',
-  'fwa.list',
-  'fwa.assign',
-  'fwa.status',
-  'fwa.transcript',
+  'gateway.connection',
+  'provider.list',
+  'provider.configure',
   'stats.today',
   'stats.summary',
   'task.definition.list',

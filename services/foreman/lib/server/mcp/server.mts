@@ -15,28 +15,16 @@ import type { ProtocolToolSpec } from '../../protocol/agent-tools.mts'
 import { registerCoreHandlers } from '../handlers/core.mts'
 import { discoverTasks, ensureDiscovered } from '../../workspace/task-loader.mts'
 import { startHotReload, type HotReloadHandle } from '../../workspace/hot-reload.mts'
-import type { MessageService } from '../../message/message-service.mts'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const PROJECT_PARAMETER_DESCRIPTION = "Project qualified name. Resolves to the project's real checkout directory on disk, and identifies its relative path within the workspace. Examples: 'workspace', 'forge', 'foreman', 'ure/service', 'gol/project'"
 
 type JsonRecord = Record<string, unknown>
 
-export interface WorkTranscriptPort {
-  transcript(afterSeq?: number, limit?: number, includeArchived?: boolean): Promise<{
-    entries: Array<{ seq: number; turn_seq?: number; kind: string; payload: unknown; created_at: string }>
-    next_seq: number
-    has_more: boolean
-    state: string
-  }>
-}
-
 export interface ForemanMcpServerOptions {
   workspaceRoot?: string
   operations?: OperationHost
   rpcRouter?: RpcRouter
-  messageService?: MessageService
-  workTranscriptPort?: WorkTranscriptPort
   startedAt?: number
 }
 
@@ -106,49 +94,11 @@ const localToolDefinitions: LocalToolDefinition[] = [
       },
     },
   },
-  {
-    name: 'work_send',
-    description: 'Send a message to the foreman-work agent. The sender is derived from the MCP connection context (sender query parameter).',
-    inputSchema: {
-      type: 'object',
-      required: ['text'],
-      properties: {
-        text: { type: 'string', description: 'Message text to send to foreman-work' },
-        client_message_id: { type: 'string', description: 'Optional client-provided idempotency key' },
-        attachments: {
-          type: 'array',
-          description: 'Attachment descriptors (local filesystem paths to images)',
-          items: {
-            type: 'object',
-            required: ['path'],
-            properties: {
-              path: { type: 'string', description: 'Absolute path to image file' },
-            },
-            additionalProperties: false,
-          },
-        },
-      },
-    },
-  },
-  {
-    name: 'work_transcript',
-    description: 'Read the foreman-work transcript. Requires work.read grant on the sender principal.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        after_seq: { type: 'integer', minimum: 0, description: 'Return events with seq > after_seq' },
-        limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Maximum entries (default 200)' },
-        include_archived: { type: 'boolean', description: 'Include events before the latest compact (default false)' },
-      },
-    },
-  },
 ]
 
 export class ForemanMcpServer {
   private readonly workspaceRoot: string
   private readonly rpcRouter: RpcRouter
-  private readonly messageService?: MessageService
-  private readonly workTranscriptPort?: WorkTranscriptPort
   private readonly version: string
   private hotReloadHandle: HotReloadHandle | undefined
   private connections = new Map<string, McpConnection>()
@@ -156,8 +106,6 @@ export class ForemanMcpServer {
   constructor(options: ForemanMcpServerOptions = {}) {
     this.workspaceRoot = options.workspaceRoot ?? foremanWorkspaceFromEnv() ?? resolveWrenyardSuiteRoot()
     this.rpcRouter = options.rpcRouter ?? this.createDefaultRpcRouter(options)
-    this.messageService = options.messageService
-    this.workTranscriptPort = options.workTranscriptPort
     this.version = this.readPackageVersion()
   }
 
@@ -201,10 +149,6 @@ export class ForemanMcpServer {
         return this.sessionsListTool()
       case 'session_send':
         return this.sessionSendTool(args)
-      case 'work_send':
-        return this.workSendTool(args, requestContext)
-      case 'work_transcript':
-        return this.workTranscriptTool(args, requestContext)
       default:
         throw new MethodNotFoundError()
     }
@@ -339,101 +283,11 @@ export class ForemanMcpServer {
     return deliverToConnection({ connections: this.connections }, sessionId, event)
   }
 
-  private async workSendTool(args: JsonRecord, context: McpRequestContext): Promise<unknown> {
-    const text = requireString(args, 'text')
-    const clientMessageId = optionalString(args, 'client_message_id')
-
-    // Parse attachments
-    const rawAttachments = args.attachments
-    const attachments: Array<{ path: string }> | undefined = Array.isArray(rawAttachments)
-      ? rawAttachments.map((a: unknown) => {
-          if (typeof a !== 'object' || a === null) throw new InvalidParamsError('each attachment must be an object')
-          const record = a as Record<string, unknown>
-          if (typeof record.path !== 'string' || !record.path.trim()) throw new InvalidParamsError('each attachment must have a path string')
-          return { path: record.path.trim() }
-        })
-      : undefined
-
-    // Sender comes from MCP context (set via ?sender= query param)
-    const senderRole = context.sender?.role
-    if (!senderRole) {
-      throw new Error('work_send requires a sender principal. Connect with ?sender=<principal>')
-    }
-
-    if (!this.messageService) {
-      throw new Error('work_send unavailable: message service not configured')
-    }
-
-    const result = await this.messageService.send({
-      from: senderRole,
-      to: 'foreman-work',
-      text,
-      ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
-      ...(attachments ? { attachments } : {}),
-    })
-
-    // Return the spec shape: { message_id, accepted, target_seq, queue_depth, attachments }
-    if ('ok' in result && !result.ok) {
-      throw new Error(`work_send failed: ${(result as { error: string }).error}`)
-    }
-
-    const sendResult = result as { message_id: string; accepted: boolean; target_seq?: number; queue_depth?: number; attachments?: unknown }
-    return {
-      message_id: sendResult.message_id,
-      accepted: sendResult.accepted,
-      ...(sendResult.target_seq !== undefined ? { target_seq: sendResult.target_seq } : {}),
-      ...(sendResult.queue_depth !== undefined ? { queue_depth: sendResult.queue_depth } : {}),
-      ...(sendResult.attachments ? { attachments: sendResult.attachments } : {}),
-    }
-  }
-
-  private async workTranscriptTool(args: JsonRecord, context: McpRequestContext): Promise<unknown> {
-    // Sender must exist and have work.read grant
-    const senderRole = context.sender?.role
-    if (!senderRole) {
-      throw new Error('work_transcript requires a sender principal. Connect with ?sender=<principal>')
-    }
-    if (!this.messageService?.canReadWork(senderRole)) {
-      throw new Error(`work_transcript forbidden for principal '${senderRole}'`)
-    }
-
-    if (!this.workTranscriptPort) {
-      throw new Error('work_transcript unavailable: Work service not started')
-    }
-
-    const afterSeq = typeof args.after_seq === 'number' ? args.after_seq : undefined
-    const limit = typeof args.limit === 'number' ? args.limit : undefined
-    const includeArchived = args.include_archived === true
-
-    const result = await this.workTranscriptPort.transcript(afterSeq, limit, includeArchived)
-    const entries = result.entries.map((e) => {
-      const payload = typeof e.payload === 'object' && e.payload !== null ? e.payload as Record<string, unknown> : {}
-      const attachmentResults = payload.attachments
-      return {
-        seq: e.seq,
-        ...(e.turn_seq !== undefined ? { turn_seq: e.turn_seq } : {}),
-        kind: e.kind,
-        payload: e.payload,
-        ...(Array.isArray(attachmentResults) && attachmentResults.length > 0
-          ? { attachments: attachmentResults }
-          : {}),
-        created_at: e.created_at,
-      }
-    })
-    return {
-      entries,
-      next_seq: result.next_seq,
-      has_more: result.has_more,
-      state: result.state,
-    }
-  }
-
   private createDefaultRpcRouter(options: ForemanMcpServerOptions): RpcRouter {
     const router = new RpcRouter()
     registerCoreHandlers(router, {
       startedAt: options.startedAt ?? Date.now(),
       workspaceRoot: this.workspaceRoot,
-      messageService: options.messageService,
       operations: options.operations,
     })
     return router

@@ -170,6 +170,21 @@ importers:
         specifier: ^3.2.6
         version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0)
 
+  packages/catalog:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/control-client:
     devDependencies:
       '@types/node':
@@ -186,6 +201,47 @@ importers:
         version: 5.9.3
 
   packages/dsh-shell: {}
+
+  packages/gateway:
+    dependencies:
+      '@wrenyard/catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../providers
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/providers:
+    dependencies:
+      '@wrenyard/catalog':
+        specifier: workspace:*
+        version: link:../catalog
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
 
   packages/runtime-darwin-arm64: {}
 
@@ -215,6 +271,15 @@ importers:
       '@langchain/core':
         specifier: 1.2.5
         version: 1.2.5(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
+      '@wrenyard/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
+      '@wrenyard/gateway':
+        specifier: workspace:*
+        version: link:../../packages/gateway
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -4235,7 +4300,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+    deprecated: Glob versions prior to v9 are no longer supported
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}

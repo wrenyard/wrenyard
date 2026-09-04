@@ -51,12 +51,6 @@ function makeResolver(
       }
       return null
     },
-    resolveLlmInputSchema(_params) {
-      return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] }
-    },
-    resolveLlmStructuredOpts(_params) {
-      return null
-    },
     ...overrides,
   }
 }
@@ -473,25 +467,6 @@ describe('MAP_TYPE_MISMATCH — slot/assemble leaf type mismatch', () => {
     assert.ok(result.issues.some((i) => i.code === 'MAP_TYPE_MISMATCH'))
   })
 
-  it('llm with explicit input schema conflicting with resolver', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', { output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] } }),
-      llmNode: {
-        id: 'llmNode',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        // Resolver says prompt is string, but we say it's number
-        input_schema: { type: 'object', properties: { prompt: { type: 'number' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-    assert.equal(result.graph, null)
-    assert.ok(result.issues.some((i) => i.code === 'MAP_TYPE_MISMATCH'))
-  })
 })
 
 describe('INPUT_INCOMPLETE — required input field uncovered', () => {
@@ -693,8 +668,6 @@ describe('SCHEMA_REQUIRED — missing required schema declaration', () => {
   it('task node when resolver returns null and no explicit schema', () => {
     const resolver: TaskGraphAutoSchemaResolver = {
       resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -1000,57 +973,7 @@ describe('frozen auto-schema rows', () => {
   })
 
 
-  it('llm with default text output', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', { output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] } }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: {} },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-    assert.ok(result.graph !== null)
-    const node = result.graph.nodes['llm']
-    // Default text output
-    assert.equal(node.output_schema.properties?.['text']?.type, 'string')
-    assert.deepEqual(node.output_schema.required, ['text'])
-  })
 
-  it('llm with structured output', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
-      resolveLlmStructuredOpts() {
-        return {
-          outputSchema: { type: 'object', properties: { result: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } }, required: ['result'] },
-        }
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', { output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] } }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: {} },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-    assert.ok(result.graph !== null)
-    const node = result.graph.nodes['llm']
-    // Structured output should appear
-    assert.ok(node.output_schema.properties?.['result'], 'structured output should have result field')
-  })
 
   it('convert with one dep — auto schema from upstream and assemble', () => {
     const graph = emptyGraph()
@@ -1336,8 +1259,6 @@ describe('immutability — graph, ops, state view, action params, and resolver s
     const stateBefore = deepClone(nodeStates ?? {})
     const resolverSchemasBefore = {
       task: resolver.resolveActionSchema('task', {}),
-      llmInput: resolver.resolveLlmInputSchema({}),
-      llmStructured: resolver.resolveLlmStructuredOpts({}),
     }
 
     // Call
@@ -1351,8 +1272,6 @@ describe('immutability — graph, ops, state view, action params, and resolver s
     // Resolver schemas should not change
     const resolverSchemasAfter = {
       task: resolver.resolveActionSchema('task', {}),
-      llmInput: resolver.resolveLlmInputSchema({}),
-      llmStructured: resolver.resolveLlmStructuredOpts({}),
     }
     assert.deepEqual(resolverSchemasAfter, resolverSchemasBefore, `${label}: resolver schemas changed`)
 
@@ -1412,10 +1331,6 @@ describe('immutability — graph, ops, state view, action params, and resolver s
     assert.equal(result.graph, null)
     const schemaAfter = resolver.resolveActionSchema('task', {})
     assert.deepEqual(schemaAfter, schemaBefore, 'resolver schema mutated after failure')
-
-    const llmInputBefore = resolver.resolveLlmInputSchema({})
-    const llmInputAfter = resolver.resolveLlmInputSchema({})
-    assert.deepEqual(llmInputAfter, llmInputBefore, 'llm input schema mutated')
   })
 })
 
@@ -3386,8 +3301,6 @@ describe('regression: task_626b9dfe — malformed container shapes produce exact
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -3750,32 +3663,6 @@ describe('regression: task_86cd23f7 — resolver schema guards, empty structured
     })
   })
 
-  it('empty structured LLM output schema is pinned instead of replaced by canonical text', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      llmNode: {
-        id: 'llmNode',
-        name: 'llm-node',
-        action: { type: 'llm', params: { prompt: 'test' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.out' }],
-        input_schema: { type: 'object', properties: {} } as ObjectJsonSchema,
-        output_schema: { type: 'object', properties: {} } as ObjectJsonSchema,
-      } as TaskGraphNode,
-    }
-    // Resolver that declares an empty structured output schema.
-    const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver({
-      resolveLlmStructuredOpts() {
-        return { outputSchema: { type: 'object', properties: {} } as ObjectJsonSchema }
-      },
-    }))
-    assert.ok(result.graph !== null, 'empty structured output schema pinned by resolver should succeed')
-    assert.equal(result.issues.length, 0, 'no issues when prompt covers action.params')
-    // The LLM output_schema should be the empty object schema, not the canonical text schema.
-    assert.deepStrictEqual(result.graph.nodes.llmNode.output_schema.properties, {}, 'output schema should have empty properties')
-    assert.ok(!('text' in result.graph.nodes.llmNode.output_schema), 'output schema should not have a text property')
-  })
 
   it('{const:"$inputs.literal"} remains opaque and does not create spurious INPUT_INCOMPLETE', () => {
     const graph = emptyGraph()
@@ -3895,156 +3782,10 @@ describe('regression: task_86cd23f7 — resolver schema guards, empty structured
 // ─── 30. Regression: task_ddc248be — resolver absence vs malformed values ──────
 
 describe('regression: task_ddc248be — resolver absence vs malformed values and clone preservation', () => {
-  it('llm input resolver returning false yields SCHEMA_INVALID not fallback', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return false as unknown as JsonObject },
-      resolveLlmStructuredOpts() { return null },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-      }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      assert.equal(result.graph, null, 'expected failure for false LLM input resolver')
-      const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID' && i.slot === 'input')
-      assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for false LLM input resolver')
-    })
-  })
 
-  it('llm input resolver returning 0 yields SCHEMA_INVALID not fallback', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return 0 as unknown as JsonObject },
-      resolveLlmStructuredOpts() { return null },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-      }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      assert.equal(result.graph, null, 'expected failure for 0 LLM input resolver')
-      const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID' && i.slot === 'input')
-      assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for 0 LLM input resolver')
-    })
-  })
 
-  it('llm input resolver returning empty string yields SCHEMA_INVALID not fallback', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return '' as unknown as JsonObject },
-      resolveLlmStructuredOpts() { return null },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-      }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      assert.equal(result.graph, null, 'expected failure for "" LLM input resolver')
-      const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID' && i.slot === 'input')
-      assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for "" LLM input resolver')
-    })
-  })
 
-  it('llm structured outputSchema present undefined yields SCHEMA_INVALID', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
-      resolveLlmStructuredOpts() {
-        const r: Record<string, unknown> = {}
-        r.outputSchema = undefined
-        return r as unknown as { outputSchema?: JsonObject }
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-      }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      assert.equal(result.graph, null, 'expected failure for present undefined outputSchema')
-      const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID' && i.slot === 'output')
-      assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for present undefined outputSchema')
-    })
-  })
 
-  it('llm structured outputSchema false yields SCHEMA_INVALID', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema() { return null },
-      resolveLlmInputSchema() { return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
-      resolveLlmStructuredOpts() {
-        return { outputSchema: false as unknown as JsonObject }
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-      }),
-      llm: {
-        id: 'llm',
-        name: 'llm-node',
-        action: { type: 'llm', params: { model: 'gpt-4' } },
-        deps: ['start'],
-        input: [{ name: 'prompt', source: 'start.p' }],
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      assert.equal(result.graph, null, 'expected failure for false outputSchema')
-      const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID' && i.slot === 'output')
-      assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for false outputSchema')
-    })
-  })
 
   it('explicit nested undefined property survives cloning and fails with SCHEMA_INVALID', () => {
     const graph = emptyGraph()
@@ -4197,8 +3938,6 @@ describe('regression: task_ddc248be — resolver absence vs malformed values and
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -4221,48 +3960,6 @@ describe('regression: task_ddc248be — resolver absence vs malformed values and
     })
   })
 
-  it('no throw and no input mutation on all malformed resolver scenarios', () => {
-    // Each scenario exercises public validation without throwing or mutating inputs.
-    const scenarios = [
-      { name: 'llm input false', llmInput: false as unknown as JsonObject, structured: null },
-      { name: 'llm input 0', llmInput: 0 as unknown as JsonObject, structured: null },
-      { name: 'llm input ""', llmInput: '' as unknown as JsonObject, structured: null },
-      { name: 'structured present undefined', llmInput: { type: 'object', properties: {} }, structured: (() => { const r: Record<string, unknown> = {}; r.outputSchema = undefined; return r })() as unknown as { outputSchema?: JsonObject } },
-      { name: 'structured false', llmInput: { type: 'object', properties: {} }, structured: { outputSchema: false as unknown as JsonObject } },
-    ]
-    for (const sc of scenarios) {
-      const graph = emptyGraph()
-      graph.nodes = {
-        start: startNode('start', {
-          output_schema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
-        }),
-        llm: {
-          id: 'llm',
-          name: 'llm-node',
-          action: { type: 'llm', params: { model: 'gpt-4' } },
-          deps: ['start'],
-          input: [{ name: 'prompt', source: 'start.p' }],
-          input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
-          output_schema: { type: 'object', properties: {} },
-        } as TaskGraphNode,
-      }
-      const graphBefore = deepClone(graph)
-      const resolver: TaskGraphAutoSchemaResolver = {
-        resolveActionSchema() { return null },
-        resolveLlmInputSchema() { return sc.llmInput },
-        resolveLlmStructuredOpts() { return sc.structured },
-      }
-      assert.doesNotThrow(() => {
-        const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-        // Input graph never mutated
-        assert.deepEqual(graph, graphBefore, `${sc.name}: graph was mutated`)
-        // Either null or non-null graph — either way no throw
-        if (result.graph === null) {
-          assert.ok(result.issues.length > 0, `${sc.name}: expected issues for malformed input`)
-        }
-      }, `${sc.name}: threw unexpectedly`)
-    }
-  })
 })
 
 // ─── 39. Regression: task_f2e46a67 — unified recursive schema guards ─────────
@@ -4324,8 +4021,6 @@ describe('regression: task_f2e46a67 — unified recursive schema guards', () => 
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -4465,8 +4160,6 @@ describe('regression: task_f2e46a67 — unified recursive schema guards', () => 
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -4998,8 +4691,6 @@ describe('regression: task_574cc6f7 — compareTypes/assertSubset reject malform
         }
         return null
       },
-      resolveLlmInputSchema() { return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -5039,8 +4730,6 @@ describe('regression: task_574cc6f7 — compareTypes/assertSubset reject malform
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {
@@ -5410,8 +5099,6 @@ describe('regression: cyclic resolver schema produces deterministic SCHEMA_INVAL
           output: cyclicSchema,
         }
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
 
     const graph = emptyGraph()
@@ -5449,8 +5136,6 @@ describe('regression: cyclic resolver schema produces deterministic SCHEMA_INVAL
           output: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] },
         }
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
 
     const graph = emptyGraph()
@@ -5924,8 +5609,6 @@ describe('B7 regression — definition input_schema (array-root) must not compar
         }
         return null
       },
-      resolveLlmInputSchema() { return null },
-      resolveLlmStructuredOpts() { return null },
     }
     const graph = emptyGraph()
     graph.nodes = {

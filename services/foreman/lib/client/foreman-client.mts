@@ -85,26 +85,6 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipParams,
   TaskGraphSlipResult,
-  FwaAssignParams,
-  FwaAssignResult,
-  FwaListParams,
-  FwaListResult,
-  FwaStatusParams,
-  FwaStatusResult,
-  FwaTranscriptParams,
-  FwaTranscriptResult,
-  AgentListParams,
-  AgentListResult,
-  AgentSyncParams,
-  AgentSyncResult,
-  AgentCompactParams,
-  AgentCompactResult,
-  AgentGraphReviewParams,
-  AgentGraphReviewResult,
-  AgentModelListParams,
-  AgentModelListResult,
-  AgentModelSetParams,
-  AgentModelSetResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -329,46 +309,6 @@ export class ForemanClient {
     },
     slip: (params: TaskGraphSlipParams): Promise<TaskGraphSlipResult> => {
       return this.rpc.request<TaskGraphSlipResult>('taskgraph.slip', params)
-    },
-  }
-
-  readonly fwa = {
-    assign: (params: FwaAssignParams): Promise<FwaAssignResult> => {
-      return this.rpc.request<FwaAssignResult>('fwa.assign', params)
-    },
-    list: (params: FwaListParams = {}): Promise<FwaListResult> => {
-      return this.rpc.request<FwaListResult>('fwa.list', params)
-    },
-    status: (params: FwaStatusParams): Promise<FwaStatusResult> => {
-      return this.rpc.request<FwaStatusResult>('fwa.status', params)
-    },
-    transcript: (params: FwaTranscriptParams): Promise<FwaTranscriptResult> => {
-      return this.rpc.request<FwaTranscriptResult>('fwa.transcript', params)
-    },
-  }
-
-  readonly agent = {
-    list: (params: AgentListParams = {}): Promise<AgentListResult> => {
-      return this.rpc.request<AgentListResult>('agent.list', params)
-    },
-    sync: (params: AgentSyncParams): Promise<AgentSyncResult> => {
-      return this.rpc.request<AgentSyncResult>('agent.sync', params)
-    },
-    compact: (params: AgentCompactParams): Promise<AgentCompactResult> => {
-      return this.rpc.request<AgentCompactResult>('agent.compact', params)
-    },
-    graph: {
-      review: (params: AgentGraphReviewParams): Promise<AgentGraphReviewResult> => {
-        return this.rpc.request<AgentGraphReviewResult>('agent.graph.review', params)
-      },
-    },
-    model: {
-      list: (params: AgentModelListParams = {}): Promise<AgentModelListResult> => {
-        return this.rpc.request<AgentModelListResult>('agent.model.list', params)
-      },
-      set: (params: AgentModelSetParams): Promise<AgentModelSetResult> => {
-        return this.rpc.request<AgentModelSetResult>('agent.model.set', params)
-      },
     },
   }
 

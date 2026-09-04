@@ -1,12 +1,18 @@
 package profile
 
-import "github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
+import (
+	"fmt"
+	"strings"
 
-// RegistryLookuper is the subset of catalog.Registry used by the resolver. It
-// is satisfied by *catalog.Registry and keeps the resolver testable with fakes.
-type RegistryLookuper interface {
-	LookupDescriptor(name string) (catalog.Client, error)
-	ResolveBinding(clientName, providerName string) (catalog.Client, catalog.Provider, error)
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
+)
+
+type DispatchPlan struct {
+	Client   string                  `json:"client"`
+	Provider string                  `json:"provider"`
+	Model    string                  `json:"model"`
+	Mode     string                  `json:"mode"`
+	Protocol catalog.GatewayProtocol `json:"protocol,omitempty"`
 }
 
 // Callbacks bundles the injected root-side dependencies so the profile package
@@ -15,94 +21,69 @@ type Callbacks struct {
 	Credential CredentialCallbacks
 }
 
-// Resolve resolves an already-loaded and already-dispatch-gated profile
-// snapshot against the current DefaultRegistry (or an equivalent lookuper).
-// When the current catalog supports the client and its provider/binding, it
-// returns CompatibilityNone with the resolved Client and Provider. Otherwise
-// it returns the same usable snapshot with an explicit compatibility mode and
-// reason, and no leaked catalog error.
-//
-// Resolution preserves the current legacy fallback behavior:
-//   - missing client -> CompatibilityClientUnregistered
-//   - missing provider/binding -> CompatibilityProviderUnregistered
-//   - dialect incompatibility -> CompatibilityDialectIncompatible
-//
-// Resolve does NOT validate the model, resolve binaries, create directories,
-// plan command/env/stdin, or perform any CLI/config/auth file I/O. It resolves
-// the CredentialPlan at the credential stage through the injected callbacks.
-// The catalog default provider is never used to trigger credential lookup;
-// only the raw explicit Provider does.
-func Resolve(input InputProfile, reg RegistryLookuper, cb Callbacks) (ResolvedProfile, error) {
+// ResolveDispatch consumes the exact plan selected by the daemon. It performs
+// no provider/model/protocol lookup and never decides between native and
+// Gateway dispatch; Forge only materializes native adapter data for the plan.
+func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Client, provider catalog.Provider, cb Callbacks) (ResolvedProfile, error) {
 	out := ResolvedProfile{
 		Name:     input.Name,
 		Launcher: launcherFromInput(input.Launcher),
 		Env:      cloneEnv(input.Env),
 		Settings: cloneSettings(input.Settings),
 	}
-
-	_, descErr := reg.LookupDescriptor(input.Client)
-	if descErr != nil {
-		out.Compatibility = CompatibilityClientUnregistered
-		// Fall back to credential planning using the raw explicit provider so
-		// current credential behavior is preserved for compatibility profiles.
-		plan, err := PlanCredential(input, cb.Credential)
-		if err != nil {
-			return out, err
-		}
-		out.Credential = plan
-		return out, nil
+	if strings.TrimSpace(plan.Client) == "" || strings.TrimSpace(plan.Provider) == "" || strings.TrimSpace(plan.Model) == "" {
+		return out, fmt.Errorf("dispatch plan for profile %q is incomplete", input.Name)
 	}
-
-	client, binding, bindErr := reg.ResolveBinding(input.Client, input.Provider)
-	if bindErr != nil {
-		// Classify the binding failure without leaking the catalog error text.
-		if isUnknownProvider(bindErr) {
-			out.Compatibility = CompatibilityProviderUnregistered
-		} else {
-			out.Compatibility = CompatibilityDialectIncompatible
-		}
-		plan, err := PlanCredential(input, cb.Credential)
-		if err != nil {
-			return out, err
-		}
-		out.Credential = plan
-		return out, nil
+	if client.Name != plan.Client || provider.Name != plan.Provider {
+		return out, fmt.Errorf("dispatch plan for profile %q does not match its native adapters", input.Name)
 	}
-
-	// Clean catalog hit.
+	if plan.Mode != "native" && plan.Mode != "gateway" {
+		return out, fmt.Errorf("dispatch plan for profile %q has invalid mode %q", input.Name, plan.Mode)
+	}
+	if plan.Mode == "gateway" && plan.Protocol == "" {
+		return out, fmt.Errorf("dispatch plan for profile %q is missing its Gateway protocol", input.Name)
+	}
+	provider.DefaultModel = plan.Model
+	provider.AllowedModels = []string{plan.Model}
+	provider.GatewayRouted = plan.Mode == "gateway"
+	provider.GatewayProtocol = plan.Protocol
+	if plan.Client == "codebuddy" {
+		provider.UseClientBinary = true
+	}
 	out.Client = client
-	out.Provider = binding
+	out.Provider = provider
 	out.Compatibility = CompatibilityNone
-
-	plan, err := PlanCredential(input, cb.Credential)
+	applyDispatchModel(out.Env, plan)
+	if plan.Mode == "gateway" {
+		out.Credential.Value = ""
+		out.Credential.Source = "gateway"
+		return out, nil
+	}
+	credentialInput := input
+	credentialInput.Provider = plan.Provider
+	credential, err := PlanCredential(credentialInput, cb.Credential)
 	if err != nil {
 		return out, err
 	}
-	out.Credential = plan
+	out.Credential = credential
 	return out, nil
 }
 
-// isUnknownProvider reports whether the binding error is an unknown-provider
-// failure rather than a dialect-incompatibility failure. It inspects the error
-// text written by catalog.Registry so the resolver does not new-type errors.
-// The dialect-incompatible error always contains "not compatible with dialect";
-// when absent, an unknown provider binding error is assumed.
-func isUnknownProvider(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	if contains(msg, "not compatible with dialect") {
-		return false
-	}
-	return contains(msg, "provider binding") || contains(msg, "unknown provider")
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+func applyDispatchModel(env map[string]string, plan DispatchPlan) {
+	switch plan.Client {
+	case "claude":
+		env["ANTHROPIC_MODEL"] = plan.Model
+	case "codebuddy":
+		if plan.Mode == "gateway" {
+			env["ANTHROPIC_MODEL"] = plan.Provider + "/" + plan.Model
 		}
+	case "codex":
+		env["CODEX_MODEL"] = plan.Model
+	case "opencode":
+		env["OPENCODE_MODEL"] = plan.Provider + "/" + plan.Model
+	case "dsh":
+		env[catalog.EnvDSHModel] = plan.Provider + "/" + plan.Model
+	case "cursor":
+		env[catalog.EnvCursorModel] = plan.Model
 	}
-	return false
 }

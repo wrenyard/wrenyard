@@ -100,7 +100,8 @@ func buildClaudeCodeFromRegistry(req PlanRequest) ([]string, io.Reader, error) {
 
 	model := modelFromArgs(command)
 	if model != "" {
-		if err := binding.ValidateModel(model); err != nil {
+		validationModel := strings.TrimPrefix(model, binding.Name+"/")
+		if err := binding.ValidateModel(validationModel); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -208,6 +209,9 @@ func configureClaudeFamilyBashGate(plan CommandPlan, adapter catalog.PermissionA
 
 func registryClaudeDefaultModel(spec ProfileSpec, binding catalog.Provider) string {
 	if model := strings.TrimSpace(spec.Env["ANTHROPIC_MODEL"]); model != "" {
+		if binding.GatewayRouted && !strings.HasPrefix(model, binding.Name+"/") {
+			return binding.Name + "/" + model
+		}
 		return model
 	}
 	if len(binding.AllowedModels) == 1 {
@@ -253,6 +257,18 @@ func buildClaudeCodeEnv(req PlanRequest) (map[string]string, string, error) {
 
 		for k, v := range spec.Provider.Env {
 			env[k] = v
+		}
+		for k, v := range spec.Runtime.Env {
+			env[k] = v
+		}
+		if spec.Provider.GatewayRouted {
+			token := spec.Runtime.Env["WRENYARD_GATEWAY_TOKEN"]
+			env["ANTHROPIC_BASE_URL"] = spec.Runtime.Env["WRENYARD_GATEWAY_ANTHROPIC_URL"]
+			env["ANTHROPIC_AUTH_TOKEN"] = token
+			env["ANTHROPIC_API_KEY"] = token
+			model := registryClaudeDefaultModel(spec, spec.Provider)
+			env["ANTHROPIC_MODEL"] = model
+			env["CLAUDE_CODE_SUBAGENT_MODEL"] = model
 		}
 
 		env["CLAUDE_JOB_DIR"] = ClaudeJobDir(spec.ForgeDataDir)

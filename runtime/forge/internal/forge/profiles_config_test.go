@@ -228,7 +228,7 @@ func TestCCGLMFProfileIsInEmbeddedSet(t *testing.T) {
 // TestClaudeProfilesRouteContract guards the route contract for the Claude Code
 // (claude) profiles: the ANTHROPIC_BASE_URL the Claude client consumes must be
 // the API base (Claude Code appends /v1/messages), while provider inference and
-// raw bindings must carry complete request endpoints.
+// native provider metadata carries complete request endpoints.
 func TestClaudeProfilesRouteContract(t *testing.T) {
 	reg := catalog.DefaultRegistry()
 
@@ -261,25 +261,6 @@ func TestClaudeProfilesRouteContract(t *testing.T) {
 		t.Fatalf("zhipu-coding inference endpoint = %q, want https://open.bigmodel.cn/api/anthropic/v1/messages", zhipu.Inference.Endpoint)
 	}
 
-	// Raw bindings must also be complete request endpoints.
-	if got := rawEndpoint(kimi, catalog.RawLLMProtocolOpenAI); got != "https://api.kimi.com/coding/v1/chat/completions" {
-		t.Fatalf("kimi-coding OpenAI raw endpoint = %q, want https://api.kimi.com/coding/v1/chat/completions", got)
-	}
-	if got := rawEndpoint(kimi, catalog.RawLLMProtocolAnthropic); got != "https://api.kimi.com/coding/v1/messages" {
-		t.Fatalf("kimi-coding Anthropic raw endpoint = %q, want https://api.kimi.com/coding/v1/messages", got)
-	}
-	if got := rawEndpoint(zhipu, catalog.RawLLMProtocolAnthropic); got != "https://open.bigmodel.cn/api/anthropic/v1/messages" {
-		t.Fatalf("zhipu-coding Anthropic raw endpoint = %q, want https://open.bigmodel.cn/api/anthropic/v1/messages", got)
-	}
-}
-
-func rawEndpoint(binding catalog.Provider, protocol catalog.RawLLMProtocol) string {
-	for _, c := range binding.RawLLM {
-		if c.Protocol == protocol {
-			return c.BaseEndpoint
-		}
-	}
-	return ""
 }
 
 func TestNewCodexSolTerraLunaProfilesExist(t *testing.T) {
@@ -604,9 +585,6 @@ func TestCustomProviderRegistersIntoCatalog(t *testing.T) {
 	}
 	if binding.Inference != nil {
 		t.Fatal("custom provider must not declare inference transport")
-	}
-	if len(binding.RawLLM) != 0 {
-		t.Fatalf("custom provider must not declare raw LLM capability, got %#v", binding.RawLLM)
 	}
 	if source := binding.CredentialSource(); source != catalog.CredentialResolverCodeBuddy {
 		t.Fatalf("custom provider credential source = %q, want codebuddy", source)

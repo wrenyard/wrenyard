@@ -20,9 +20,6 @@ func Module() schema.ProviderModule {
 				CredentialResolver: schema.CredentialResolverForgeManaged,
 				AuthScheme:         schema.AuthSchemeBearer,
 			},
-			RawLLM: []schema.RawLLMCapability{{
-				Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: "https://api.openai.com/v1/chat/completions", AuthScheme: schema.AuthSchemeBearer,
-			}},
 		},
 		ModelSet: models,
 		AuthInfo: schema.AuthMetadata{Login: true},

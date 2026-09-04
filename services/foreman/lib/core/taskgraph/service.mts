@@ -454,8 +454,6 @@ function contractSchemaResolver(
         output,
       }
     },
-    resolveLlmInputSchema: () => null,
-    resolveLlmStructuredOpts: () => null,
   }
 }
 

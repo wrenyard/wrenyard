@@ -28,12 +28,6 @@ export function makeResolver(
       }
       return null
     },
-    resolveLlmInputSchema(_params) {
-      return { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] }
-    },
-    resolveLlmStructuredOpts(_params) {
-      return null
-    },
     ...overrides,
   }
 }

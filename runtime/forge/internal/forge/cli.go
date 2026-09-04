@@ -78,16 +78,12 @@ func Run(args []string, prog string) int {
 		return doctorCommand(args[1:])
 	case "setup":
 		return setupCommand(args[1:])
-	case "app":
-		return claudeAppCommand(args[1:])
 	case "update":
 		return updateCommand(args[1:])
 	case "statusline":
 		return statuslineCommand(args[1:])
 	case "quota":
 		return quotaCommand(args[1:])
-	case "llm":
-		return llmCommand(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "forge: unknown command %q\n", args[0])
 	return 2
@@ -100,11 +96,9 @@ var topLevelCommands = []string{
 	"shell",
 	"doctor",
 	"setup",
-	"app",
 	"update",
 	"statusline",
 	"quota",
-	"llm",
 }
 
 func resolveTopLevelCommand(input string) (string, bool, bool) {
@@ -144,7 +138,6 @@ COMMANDS
   profiles show <name>     Show profile availability details
 
   providers list           List canonical built-in providers with binding/auth state
-  providers describe [--json]   Describe provider native raw LLM protocol support
   providers auth login <name>   Store credentials for a provider
   providers auth logout <name>  Remove credentials for a provider
 
@@ -156,15 +149,6 @@ COMMANDS
   quota [name] [--json] [--refresh]
                            Report quota for a canonical provider/pool; with no name report all canonical pools
 
-  llm <text|request_body> [-m <provider/model>] [--protocol <openai|anthropic>]
-      [--timeout-ms <ms>] [--max-retries <count>] [--retry-backoff-ms <ms>]
-      [--stdin]
-                           Call a model directly; text, raw JSON request body, or stdin (--stdin) for
-                           large/raw request bodies. Requires -m <provider/model> or config llm_model.
-
-  app use <profile> [--port N] [--json]
-                           Start Claude Code app with a profile (default port: 18080)
-
   statusline [--claude-code|--opencode]
                            Render statusline from stdin JSON
 
@@ -175,11 +159,6 @@ COMMANDS
   setup                    Refresh shell aliases and run doctor
 
   update                   Update Forge, run setup, refresh shell aliases, and run doctor
-
-NOTE
-  CodeBuddy native is accessed through normal Forge profiles (forge profiles list),
-  not through forge llm. forge llm always requires an explicit provider/model via
-  -m <provider/model> or config llm_model.
 
 SHELL (INTERNAL)
   shell dsh plan                Print the resolved fdsh/DSH launch plan

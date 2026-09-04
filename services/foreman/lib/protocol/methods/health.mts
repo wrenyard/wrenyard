@@ -4,6 +4,7 @@ export interface HealthPingParams {}
 
 export interface HealthPingResult {
   ok: true
+  gateway?: { status: 'ready' }
   version?: string
   uptimeMs?: number
   dispatch?: {
@@ -36,6 +37,9 @@ export const healthPingResultSchema = {
     ok: { const: true },
     version: { type: 'string' },
     uptimeMs: { type: 'number', minimum: 0 },
+    gateway: {
+      type: 'object', required: ['status'], properties: { status: { const: 'ready' } }, additionalProperties: false,
+    },
     dispatch: {
       type: 'object',
       properties: {

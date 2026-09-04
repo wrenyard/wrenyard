@@ -112,10 +112,10 @@ function canonicalGraph(): Record<string, unknown> {
 // ─── Enum cardinality tests ────────────────────────────────────────────────────
 
 describe('enum cardinality — domain types', () => {
-  it('ACTION_TYPES contains exactly 9 entries', () => {
+  it('ACTION_TYPES contains exactly 8 entries', () => {
     assert.deepEqual([...ACTION_TYPES].sort(), [
       'checkpoint', 'condition', 'convert', 'end', 'join',
-      'llm', 'shell', 'start', 'task',
+      'shell', 'start', 'task',
     ])
   })
 

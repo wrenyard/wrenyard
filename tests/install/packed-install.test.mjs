@@ -164,28 +164,21 @@ function assertRootDevDepsAvailable(root) {
   }
 }
 
-// Reject any @wrenyard self-link or virtual-store entry in a deployed Foreman
-// tree: this release target has no workspace runtime dependencies. Entry-name
-// checks use path.relative(root, file), so the parent npm scope
-// (node_modules/@wrenyard/cli) can never make every child a violation while an
-// actual @wrenyard segment inside the inspected tree still fails.
+// Gateway packages are production dependencies of Foreman and are expected as
+// physical snapshots. Reject workspace symlinks that would escape the packed
+// runtime after it moves to another machine.
 function assertNoWorkspaceLinks(root) {
   const violations = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
       const rel = path.relative(root, file);
-      if (rel.includes('@wrenyard')) {
-        violations.push(`workspace entry: ${rel}`);
-        continue;
-      }
       if (entry.isDirectory()) {
         walk(file);
         continue;
       }
-      if (entry.isSymbolicLink()) {
-        const target = fs.readlinkSync(file);
-        if (target.includes('@wrenyard')) violations.push(`workspace self-link: ${rel} -> ${target}`);
+      if (entry.isSymbolicLink() && rel.includes('@wrenyard')) {
+        violations.push(`workspace self-link: ${rel} -> ${fs.readlinkSync(file)}`);
       }
     }
   };
@@ -193,12 +186,16 @@ function assertNoWorkspaceLinks(root) {
   assert.ok(violations.length === 0, `@wrenyard workspace entries in extracted Foreman tree:\n${violations.join('\n')}`);
 }
 
-// A deployed Foreman tree is a portable runtime tree and must not carry
-// package-manager workspace metadata: a modern pnpm deploy leaves a root
-// pnpm-lock.yaml/pnpm-workspace.yaml that the release build strips, so neither
-// may appear in the extracted suite or the npm-installed CLI.
+// A deployed Foreman tree is a portable runtime tree and must not carry pnpm
+// metadata that can embed build-host workspace paths.
 function assertNoPnpmWorkspaceMetadata(foremanRoot) {
-  for (const name of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+  for (const name of [
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    'node_modules/.modules.yaml',
+    'node_modules/.pnpm/lock.yaml',
+    'node_modules/.pnpm-workspace-state-v1.json',
+  ]) {
     assert.ok(
       !fs.existsSync(path.join(foremanRoot, name)),
       `deployed Foreman tree must not ship ${name}`,
@@ -605,7 +602,17 @@ test('packed-install E2E: no consumer-side Go compilation', {
     for (const dep of Object.keys(deployedForemanManifest.dependencies)) {
       assertPhysicalInsideTree(extractDir, path.join('services', 'foreman', 'node_modules', dep));
     }
-    for (const dep of ['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core']) {
+    for (const dep of [
+      'tsx',
+      'ajv',
+      'yaml',
+      'zod',
+      'better-sqlite3',
+      '@langchain/core',
+      '@wrenyard/catalog',
+      '@wrenyard/gateway',
+      '@wrenyard/providers',
+    ]) {
       assertPhysicalInsideTree(extractDir, path.join('services', 'foreman', 'node_modules', dep));
     }
 
@@ -614,8 +621,8 @@ test('packed-install E2E: no consumer-side Go compilation', {
     // machine (regression: staging copies once rewrote relative `.bin` links
     // to absolute build-temp paths).
     assertNoBadSymlinks(extractDir);
-    // The release target has no workspace runtime dependencies: the extracted
-    // Foreman tree must contain no @wrenyard self-link or virtual-store entry.
+    // Gateway dependencies are expected as physical package snapshots; no
+    // workspace symlink may survive into the extracted suite.
     assertNoWorkspaceLinks(path.join(extractDir, 'services', 'foreman'));
     // The deployed tree is a portable runtime, not a package-manager workspace:
     // neither pnpm-lock.yaml nor pnpm-workspace.yaml may ship in the extracted
@@ -729,13 +736,23 @@ test('packed-install E2E: no consumer-side Go compilation', {
     // key entry is a physical directory resolving inside the installed package
     // before the installed Foreman is executed through the bundled Node
     // runtime.
-    for (const dep of ['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core']) {
+    for (const dep of [
+      'tsx',
+      'ajv',
+      'yaml',
+      'zod',
+      'better-sqlite3',
+      '@langchain/core',
+      '@wrenyard/catalog',
+      '@wrenyard/gateway',
+      '@wrenyard/providers',
+    ]) {
       assertPhysicalInsideTree(cliPkgDir, path.join('services', 'foreman', 'node_modules', dep));
     }
 
     // The installed CLI tree must likewise keep only internal relative
     // symlinks after the tarball is extracted into the consumer project, its
-    // staged Foreman tree must carry no @wrenyard workspace entries, and it
+    // staged Foreman tree must carry no @wrenyard workspace symlinks, and it
     // must ship no node_modules/.bin or regular file embedding a build path.
     assertNoBadSymlinks(cliPkgDir);
     assertNoWorkspaceLinks(path.join(cliPkgDir, 'services', 'foreman'));

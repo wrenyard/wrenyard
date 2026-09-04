@@ -19,11 +19,6 @@ export const operationRegistry = {
     kind: 'runtime',
     description: 'Runs a shell command through an injected or local shell runtime.',
   },
-  llm: {
-    name: 'llm',
-    kind: 'runtime',
-    description: 'Runs a direct LLM completion operation.',
-  },
   checkpoint: {
     name: 'checkpoint',
     kind: 'control',

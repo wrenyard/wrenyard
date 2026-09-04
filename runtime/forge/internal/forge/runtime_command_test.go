@@ -66,10 +66,11 @@ func TestCCKimiAuthIncludesManagedSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{
-		"ANTHROPIC_API_KEY":               "token-kimi",
-		"ANTHROPIC_BASE_URL":              "https://api.kimi.com/coding/",
-		"ANTHROPIC_MODEL":                 "k3[1m]",
-		"CLAUDE_CODE_SUBAGENT_MODEL":      "k3[1m]",
+		"ANTHROPIC_API_KEY":               "test-gateway-token",
+		"ANTHROPIC_AUTH_TOKEN":            "test-gateway-token",
+		"ANTHROPIC_BASE_URL":              "http://127.0.0.1:4312/gateway/anthropic/v1",
+		"ANTHROPIC_MODEL":                 "kimi-coding/k3",
+		"CLAUDE_CODE_SUBAGENT_MODEL":      "kimi-coding/k3",
 		"ENABLE_TOOL_SEARCH":              "false",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1048576",
 		"CLAUDE_CODE_MAX_CONTEXT_TOKENS":  "1048576",

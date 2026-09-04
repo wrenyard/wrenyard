@@ -120,22 +120,22 @@ test('conversation projection hides non-user context messages', () => {
   assert.deepEqual(items, []);
 });
 
-test('model projection preserves provider groups, current selection and default effort', () => {
+test('model projection preserves the single Gateway provider and public model ids', () => {
   const models = projectConversationModels({
-    current: { provider: 'zhipu-coding', model: 'glm-5.3', reasoningEffort: 'high' },
+    current: { provider: 'wrenyard', model: 'zhipu-coding/glm-5.3', reasoningEffort: 'high' },
     routable: true,
     groups: [
       {
-        id: 'zhipu-coding',
-        name: 'GLM Coding',
+        id: 'wrenyard',
+        name: 'Wrenyard',
         models: [
           {
-            id: 'glm-5.3',
-            name: 'GLM-5.3',
+            id: 'zhipu-coding/glm-5.3',
+            name: 'GLM 5.3',
             description: 'General coding model',
             reasoning: { efforts: [], defaultEffort: 'medium' },
           },
-          { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
+          { id: 'zhipu-coding/glm-5.3-flash', name: 'GLM 5.3 Flash' },
         ],
       },
     ],
@@ -145,10 +145,10 @@ test('model projection preserves provider groups, current selection and default 
   assert.equal(models.status, 'ready');
   assert.equal(models.routable, true);
   assert.deepEqual(models.current, {
-    provider: 'zhipu-coding',
-    model: 'glm-5.3',
+    provider: 'wrenyard',
+    model: 'zhipu-coding/glm-5.3',
     label: 'GLM 5.3',
-    providerLabel: 'GLM Coding',
+    providerLabel: 'Wrenyard',
     advertised: true,
     configured: true,
     reasoningEffort: 'high',
@@ -157,45 +157,32 @@ test('model projection preserves provider groups, current selection and default 
   assert.deepEqual(models.groups[0]?.models.map((model) => model.label), ['GLM 5.3', 'GLM 5.3 Flash']);
 });
 
-test('model projection collapses the Claude-oriented Kimi alias and uses product model names', () => {
+test('model projection keeps catalog-provided labels without a Desktop model mirror', () => {
   const models = projectConversationModels({
-    current: { provider: 'kimi-coding', model: 'k3[1m]' },
+    current: { provider: 'wrenyard', model: 'kimi-coding/k3' },
     routable: true,
     groups: [
       {
-        id: 'deepseek-official',
-        name: 'DeepSeek',
+        id: 'wrenyard',
+        name: 'Wrenyard',
         models: [
-          { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
-          { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek-V4-Flash-Vision' },
-          { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
-        ],
-      },
-      {
-        id: 'kimi-coding',
-        name: 'Kimi Coding',
-        models: [
-          { id: 'k3', name: 'Kimi K3' },
-          { id: 'k3[1m]', name: 'Kimi K3 1M Context' },
+          { id: 'codebuddy/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+          { id: 'kimi-coding/k3', name: 'Kimi K3' },
         ],
       },
     ],
     failures: [],
   });
 
-  assert.deepEqual(models.groups[0]?.models.map((model) => model.label), [
-    'DeepSeek V4 Flash',
-    'DeepSeek V4 Flash Vision',
-    'DeepSeek V4 Pro',
-  ]);
-  assert.deepEqual(models.groups[1]?.models.map((model) => ({ id: model.model, label: model.label })), [
-    { id: 'k3', label: 'Kimi K3' },
+  assert.deepEqual(models.groups[0]?.models.map((model) => ({ id: model.model, label: model.label })), [
+    { id: 'codebuddy/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { id: 'kimi-coding/k3', label: 'Kimi K3' },
   ]);
   assert.deepEqual(models.current, {
-    provider: 'kimi-coding',
-    model: 'k3',
+    provider: 'wrenyard',
+    model: 'kimi-coding/k3',
     label: 'Kimi K3',
-    providerLabel: 'Kimi Coding',
+    providerLabel: 'Wrenyard',
     advertised: true,
     configured: true,
   });
@@ -220,31 +207,27 @@ test('model projection keeps a routable unadvertised current selection visible',
   assert.match(models.message ?? '', /Catalog: temporarily unavailable/);
 });
 
-test('model projection keeps only configured provider groups and marks an unconfigured current selection', () => {
-  // Second argument: canonical product provider ids whose credentials are
-  // actually handed to DSH. DSH `deepseek-official` maps to canonical `deepseek`.
+test('model projection keeps only the configured Gateway provider', () => {
   const models = projectConversationModels(
     {
-      current: { provider: 'openai', model: 'gpt-5.6-sol' },
+      current: { provider: 'legacy-provider', model: 'legacy-model' },
       routable: true,
       groups: [
         {
-          id: 'deepseek-official',
-          name: 'DeepSeek',
-          models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
+          id: 'wrenyard',
+          name: 'Wrenyard',
+          models: [{ id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
         },
-        { id: 'kimi-coding', name: 'Kimi Coding', models: [{ id: 'k3', name: 'Kimi K3' }] },
-        { id: 'zhipu-coding', name: 'GLM Coding', models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] },
-        { id: 'openai', name: 'OpenAI API', models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' }] },
+        { id: 'legacy-provider', name: 'Legacy', models: [{ id: 'legacy-model', name: 'Legacy Model' }] },
       ],
       failures: [],
     },
-    ['kimi-coding', 'deepseek'],
+    ['wrenyard'],
   );
 
   assert.deepEqual(
     models.groups.map((group) => group.provider),
-    ['deepseek-official', 'kimi-coding'],
+    ['wrenyard'],
   );
   // The picker inserts a disabled "current" option only when the unadvertised
   // current selection is actually configured.

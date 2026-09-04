@@ -46,6 +46,40 @@ export interface WrenyardIpcRequestOptions {
   timeoutMs?: number;
 }
 
+export interface WrenyardGatewayModel {
+  id: string;
+  publicId: string;
+  provider: string;
+  displayName: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface WrenyardGatewayConnection {
+  openaiChatBaseUrl: string;
+  openaiResponsesBaseUrl: string;
+  anthropicBaseUrl: string;
+  token: string;
+  models: WrenyardGatewayModel[];
+}
+
+export interface WrenyardProviderStatus {
+  id: string;
+  displayName: string;
+  description: string;
+  setupHint: string;
+  configured: boolean;
+  authMode: 'api-key' | 'native' | 'none';
+  protocols: Array<'openai_chat' | 'openai_responses' | 'anthropic_messages'>;
+  models: Array<{
+    id: string;
+    displayName: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    taskOnly?: boolean;
+  }>;
+}
+
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (error: unknown) => void;
@@ -144,6 +178,21 @@ export class WrenyardIpcClient {
 
       this.socket.write(payload + "\n");
     });
+  }
+
+  /** Resolve the daemon-local Model Gateway connection. Available over IPC only. */
+  gatewayConnection(options?: WrenyardIpcRequestOptions): Promise<WrenyardGatewayConnection> {
+    return this.request<WrenyardGatewayConnection>('gateway.connection', {}, options);
+  }
+
+  /** Read the daemon-owned provider Catalog and authentication state. */
+  providerList(options?: WrenyardIpcRequestOptions): Promise<{ providers: WrenyardProviderStatus[] }> {
+    return this.request('provider.list', {}, options);
+  }
+
+  /** Store a managed provider API key through the daemon's local IPC channel. */
+  providerConfigure(providerId: string, key: string, options?: WrenyardIpcRequestOptions): Promise<{ ok: true }> {
+    return this.request('provider.configure', { providerId, key }, options);
   }
 
   /** Destroy the socket and reject every request still awaiting a reply. */

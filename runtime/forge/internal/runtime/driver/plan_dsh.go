@@ -68,15 +68,7 @@ func buildDSHPlan(req PlanRequest) (CommandPlan, error) {
 	// exact absolute plugin path that materializeDSHHome writes.
 	base := dshRuntimeBasePatch(spec.Runtime)
 	if base == nil {
-		var err error
-		base, err = dsh.RenderPatch(dsh.PatchInput{
-			Providers:     dsh.InjectedProviders,
-			SelectedModel: normalizeDSHModel(strings.TrimSpace(spec.Env[catalog.EnvDSHModel])),
-			Version:       dsh.ProtocolVersion,
-		})
-		if err != nil {
-			return CommandPlan{}, err
-		}
+		return CommandPlan{}, fmt.Errorf("dsh: daemon-prepared Gateway patch is required")
 	}
 	bridgePluginPath := ""
 	if home != "" {
@@ -231,16 +223,3 @@ func sortedDSHEnvPairs(env map[string]string) []string {
 // llm-pi-ai provider id space used by patch rendering. An already-injected id
 // passes through; a bare injected name is prefixed; anything else is returned
 // unchanged so RenderPatch rejects it loudly.
-func normalizeDSHModel(model string) string {
-	pid, mid, ok := strings.Cut(model, "/")
-	if !ok || strings.TrimSpace(pid) == "" || strings.TrimSpace(mid) == "" {
-		return strings.TrimSpace(model)
-	}
-	if _, ok := dsh.ProviderByID(pid); ok {
-		return model
-	}
-	if p, ok := dsh.ProviderByID("llm-pi-ai." + pid); ok {
-		return p.ID + "/" + mid
-	}
-	return model
-}

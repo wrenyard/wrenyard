@@ -1,4 +1,4 @@
-import type { MessageService, SendAttachmentResult } from '../../message/message-service.mts'
+import type { MessageService } from '../../message/message-service.mts'
 import type { MessageSender } from '../../message/protocol.mts'
 import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
@@ -25,7 +25,6 @@ import {
   TASK_NOT_FOUND,
   type ProtocolErrorCode,
 } from '../../protocol/errors.mts'
-import type { AttachmentResultItem } from '../../protocol/methods/message.mts'
 import type {
   ActivitySnapshotV1,
   MessageSendResult,
@@ -52,13 +51,11 @@ import type {
   TaskGraphStatusResult,
   TaskGraphWaitResult,
   TaskGraphSlipResult,
+  GatewayConnectionResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
-import { registerFwaHandlers, type FwaHandlerService } from './fwa.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
-import type { AgentSyncParams, AgentCompactParams, AgentGraphReviewParams } from '../../protocol/methods/agent.mts'
-import type { AgentListResult } from '../../protocol/methods/agent.mts'
 import type {
   PmTicketCreateResult,
   PmTicketGetResult,
@@ -77,32 +74,16 @@ export interface CoreRpcHandlerOptions {
   operations?: OperationHost
   shutdown?: (reason: string) => void | Promise<void>
   dispatchControl?: DispatchControl
-  fwaService?: FwaHandlerService
-  /** Daemon-owned TaskGraphService shared with FWA. When provided it replaces the lazy fallback. */
+  /** Daemon-owned TaskGraphService shared by all transports. */
   taskgraphService?: TaskGraphService
   /** Unified MessageService for principal-based message.send */
   messageService?: import('../../message/message-service.mts').MessageService
-  /** Agent handler service for agent.* RPC methods (available only after batch 2). */
-  agentService?: AgentHandlerService
   /** Workspace doc service for workspace.doc.* RPC methods. */
   workspaceDocService?: WorkspaceDocHandlerService
-}
-
-export interface AgentHandlerService {
-  list(): Promise<AgentListResult>
-  sync(params: AgentSyncParams): Promise<unknown>
-  compact(params: AgentCompactParams): Promise<unknown>
-  graphReview(params: AgentGraphReviewParams): Promise<unknown>
-  modelList(): Promise<unknown>
-  modelSet(params: import('../../protocol/methods/agent.mts').AgentModelSetParams): Promise<unknown>
-}
-
-export interface DelegationAdmissionDescriptor {
-  address: string
-  turn_seq: number
-  delegation_id: string
-  tool_name: string
-  input: Record<string, unknown>
+  /** IPC-only model Gateway connection descriptor for local clients. */
+  gatewayConnection?: () => Promise<GatewayConnectionResult>
+  providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
+  providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
 }
 
 export type CoreRpcTransport = 'ipc' | 'http' | 'mcp'
@@ -111,8 +92,6 @@ export interface CoreRpcContext {
   transport?: CoreRpcTransport
   connectingId?: string
   sender?: MessageSender
-  /** Internal-only delegation admission descriptor. Never accepted from external JSON-RPC params. */
-  delegationAdmission?: DelegationAdmissionDescriptor
 }
 
 export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerOptions): void {
@@ -120,7 +99,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   let taskgraphService: TaskGraphService | undefined
   const getTaskGraphService = (): TaskGraphService => {
     // When the daemon wires its own single TaskGraphService, use it directly
-    // so FWA and RPC share one instance and events flow through the bus.
+    // so every transport shares one instance and events flow through the bus.
     if (options.taskgraphService) return options.taskgraphService
     // Lazy fallback for tests/contexts that do not provide one.
     taskgraphService ??= createTaskGraphService({
@@ -153,12 +132,47 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     } = {
       ok: true as const,
       uptimeMs: Math.max(0, Date.now() - options.startedAt),
+      ...(options.gatewayConnection ? { gateway: { status: 'ready' as const } } : {}),
     }
     if (options.dispatchControl) {
       result.dispatch = projectDispatchStatus(options.dispatchControl.status())
     }
     return result
   })
+  if (options.gatewayConnection) {
+    router.register('gateway.connection', async (_params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'gateway.connection is only available over IPC' },
+          { code: 'gateway_connection_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.gatewayConnection!()
+    })
+  }
+  if (options.providerList && options.providerConfigure) {
+    router.register('provider.list', async (_params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'provider.list is only available over IPC' },
+          { code: 'provider_list_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.providerList!()
+    })
+    router.register('provider.configure', async (params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'provider.configure is only available over IPC' },
+          { code: 'provider_configure_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.providerConfigure!(params)
+    })
+  }
   router.register('event.list', (params) => {
     const since = params.since ?? 0
     const limit = params.limit ?? 100
@@ -278,7 +292,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         input: params.input,
         ctx: params.ctx as import('../../core/task/context.mts').TaskContext | undefined,
         connectingId: rpcContext.connectingId,
-        delegationAdmission: rpcContext.delegationAdmission,
       }),
     )
   })
@@ -375,7 +388,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       to: params.to,
       text: params.text,
       ...(params.client_message_id ? { client_message_id: params.client_message_id } : {}),
-      ...(params.attachments ? { attachments: params.attachments as Array<{ path: string }> } : {}),
     })
     if ("ok" in result) {
       return {
@@ -385,14 +397,12 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         message: result.message,
       } satisfies MessageSendResult
     }
-    const rawAttachments = result.attachments ?? []
     return {
       accepted: result.accepted,
       message_id: result.message_id,
       ...(result.target_seq !== undefined ? { target_seq: result.target_seq } : {}),
       ...(result.queue_depth !== undefined ? { queue_depth: result.queue_depth } : {}),
       ...(result.delivery ? { delivery: result.delivery } : {}),
-      ...(rawAttachments.length > 0 ? { attachments: rawAttachments.map(projectAttachmentItem) } : {}),
     } satisfies MessageSendResult
   })
 
@@ -513,40 +523,18 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     )
   })
 
-  // Register FWA protocol handlers for both backends; when no native FWA service
-  // is configured, methods return a clear FWA_NOT_CONFIGURED error.
-  registerFwaHandlers(
-    router,
-    options.fwaService,
-    (context) => coreRpcContextFromUnknown(context).delegationAdmission,
-  )
-
-  // Register agent.* handlers. When no agent service is configured, they fail explicitly.
-  registerAgentHandlers(router, options.agentService)
 }
 
 function coreRpcContextFromUnknown(value: unknown): CoreRpcContext {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const record = value as { transport?: unknown; connectingId?: unknown; sender?: unknown; delegationAdmission?: unknown }
+  const record = value as { transport?: unknown; connectingId?: unknown; sender?: unknown }
   return {
     ...(isCoreRpcTransport(record.transport) ? { transport: record.transport } : {}),
     ...(typeof record.connectingId === 'string' && record.connectingId.trim()
       ? { connectingId: record.connectingId.trim() }
       : {}),
     ...(isSender(record.sender) ? { sender: record.sender } : {}),
-    ...(isDelegationAdmission(record.delegationAdmission) ? { delegationAdmission: record.delegationAdmission } : {}),
   }
-}
-
-function isDelegationAdmission(value: unknown): value is DelegationAdmissionDescriptor {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const d = value as Record<string, unknown>
-  return typeof d.address === 'string'
-    && typeof d.turn_seq === 'number'
-    && typeof d.delegation_id === 'string'
-    && typeof d.tool_name === 'string'
-    && typeof d.input === 'object'
-    && d.input !== null
 }
 
 function isCoreRpcTransport(value: unknown): value is CoreRpcTransport {
@@ -764,61 +752,6 @@ function projectDispatchStatus(status: DispatchStatus): {
       }
       : {}),
   }
-}
-
-function registerAgentHandlers(router: RpcRouter, agentService: AgentHandlerService | undefined): void {
-  if (!agentService) {
-    const unavailable = () => {
-      throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: 'agent service not available in this runtime' },
-        { service: 'agent', code: 'agent_unavailable' },
-      )
-    }
-  router.register('agent.list', asRpcHandler(unavailable))
-    router.register('agent.sync', asRpcHandler(unavailable))
-    router.register('agent.compact', asRpcHandler(unavailable))
-    router.register('agent.graph.review', asRpcHandler(unavailable))
-    router.register('agent.model.list', asRpcHandler(unavailable))
-    router.register('agent.model.set', asRpcHandler(unavailable))
-    return
-  }
-
-  router.register('agent.list', asRpcHandler(async () => agentService.list()))
-  router.register('agent.sync', asRpcHandler(async (params: AgentSyncParams) => agentService.sync(params)))
-  router.register('agent.compact', asRpcHandler(async (params: AgentCompactParams) => agentService.compact(params)))
-  router.register('agent.graph.review', asRpcHandler(async (params: AgentGraphReviewParams) => agentService.graphReview(params)))
-  router.register('agent.model.list', asRpcHandler(async () => agentService.modelList()))
-  router.register('agent.model.set', asRpcHandler(async (params: import('../../protocol/methods/agent.mts').AgentModelSetParams) => agentService.modelSet(params)))
-}
-
-type AttachmentErrorCode = NonNullable<AttachmentResultItem['error']>
-
-function normalizeAttachmentError(raw: string | undefined): AttachmentErrorCode | undefined {
-  if (raw === undefined) return undefined
-  // Exhaustive switch — the compiler warns when a new code is added to AttachmentErrorCode
-  switch (raw) {
-    case 'file_not_found': return raw
-    case 'invalid_path': return raw
-    case 'not_regular_file': return raw
-    case 'too_large': return raw
-    case 'unsupported_content_type': return raw
-    case 'read_failed': return raw
-    default: return undefined
-  }
-}
-
-function projectAttachmentItem(raw: SendAttachmentResult): AttachmentResultItem {
-  const item: AttachmentResultItem = {
-    path: raw.path,
-    status: raw.status,
-  }
-  if (raw.mime_type !== undefined) item.mime_type = raw.mime_type
-  if (raw.size !== undefined) item.size = raw.size
-  if (raw.sha256 !== undefined) item.sha256 = raw.sha256
-  if (raw.storage_ref !== undefined) item.storage_ref = raw.storage_ref
-  const normError = normalizeAttachmentError(raw.error)
-  if (normError !== undefined) item.error = normError
-  return item
 }
 
 function toJsonShape<T>(value: T): T {

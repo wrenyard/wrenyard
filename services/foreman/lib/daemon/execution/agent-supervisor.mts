@@ -25,7 +25,6 @@ import type {
   ExecutionStatus,
   StartAgentExecutionOptions as StartExecutionOpts,
 } from '../../core/operations/types.mts'
-import type { AgentEventStore, AgentDelegationRecord } from '../../core/agent/agent-event-store.mts'
 export type {
   ClientFamily,
   ExecutionHandle,
@@ -34,25 +33,6 @@ export type {
   ExecutionStatus,
   StartAgentExecutionOptions as StartExecutionOpts,
 } from '../../core/operations/types.mts'
-
-// ─── Delegation types ─────────────────────────────────────────────────
-
-export type DelegationResolution = 'terminal' | 'active' | 'lost'
-
-export interface DelegationResourceResolver {
-  /**
-   * Check the current status of a delegation resource.
-   * Returns true if terminal (done/failed/cancelled), false if active,
-   * undefined if the resource does not exist (lost).
-   */
-  checkResourceStatus(resourceId: string): DelegationResolution | undefined
-
-  /**
-   * Get the terminal payload for a resource (result/output) to include
-   * in the delegation_terminal event and system_completion turn text.
-   */
-  getResourcePayload?(resourceId: string): string | undefined
-}
 
 const MAX_CONCURRENT_EXECUTIONS = 10
 const SHUTDOWN_GRACE_MS = 10_000
@@ -1314,150 +1294,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const fn = this.logger?.[level]
     if (fn) fn.call(this.logger, message, meta)
   }
-}
-
-/**
- * Callback payload size limit for system_completion turn text.
- * Hard boundary: 16 KiB UTF-8. If the payload exceeds this, it is
- * truncated and a truncation marker is appended.
- */
-const SYSTEM_COMPLETION_PAYLOAD_MAX_BYTES = 16 * 1024
-const SYSTEM_COMPLETION_TRUNCATION_MARKER = '\n[truncated: payload too large]'
-
-/**
- * DelegationResolver handles the terminal lifecycle of a delegation:
- * - Resolves pending delegations to terminal
- * - Appends a delegation_terminal agent event
- * - Enqueues exactly one bounded typed system_completion Work turn
- * - Restart reconciliation for pending bindings
- *
- * This is a stateless resolver: call it when a resource reaches terminal
- * or during startup recovery. It never polls.
- */
-export function createDelegationResolver(
-  eventStore: AgentEventStore,
-  resourceResolver: DelegationResourceResolver,
-): DelegationResolver {
-  return new DelegationResolver(eventStore, resourceResolver)
-}
-
-export class DelegationResolver {
-  constructor(
-    private readonly eventStore: AgentEventStore,
-    private readonly resourceResolver: DelegationResourceResolver,
-  ) {}
-
-  /**
-   * Finalize a single delegation. Uses the new atomic event-store finalizer
-   * that resolves the pending row, appends delegation_terminal event, creates
-   * the system_completion turn, and advances sequences in one transaction.
-   * Returns the durable callback turn when resolved, or false if the resource
-   * is still active, already terminal, or not found.
-   */
-  resolveDelegation(address: string, delegationId: string): { turn_seq: number; event_seq: number } | false {
-    const delegations = this.eventStore.getDelegations(address)
-    const delegation = delegations.find(d => d.delegation_id === delegationId)
-    if (!delegation) return false
-
-    const resourceStatus = this.resourceResolver.checkResourceStatus(delegation.resource_id)
-    if (resourceStatus === undefined) {
-      // Resource does not exist — resolve as lost
-      const result = this.eventStore.resolveDelegationWithCallback({
-        address,
-        delegation_id: delegationId,
-        resource_id: delegation.resource_id,
-        tool_name: delegation.tool_name,
-        resolution: 'lost',
-        completion_text: buildBoundedCompletionText(delegation, 'lost', null),
-      })
-      return result
-    } else if (resourceStatus !== 'active') {
-      const payload = this.resourceResolver.getResourcePayload?.(delegation.resource_id)
-      const result = this.eventStore.resolveDelegationWithCallback({
-        address,
-        delegation_id: delegationId,
-        resource_id: delegation.resource_id,
-        tool_name: delegation.tool_name,
-        resolution: 'terminal',
-        completion_text: buildBoundedCompletionText(delegation, 'terminal', payload ?? null),
-      })
-      return result
-    }
-
-    return false
-  }
-
-  /**
-   * One-time restart recovery scan. Reads all pending delegations for
-   * the given address and reconciles them:
-   * - Terminal resource → resolve delegation, append event, enqueue turn
-   * - Active resource → stay pending (wait for authoritative signal)
-   * - Missing resource → resolve as lost
-   *
-   * Never polls; processes each pending delegation exactly once.
-   */
-  reconcileOnStartup(address: string): { resolved: number; active: number; lost: number } {
-    const delegations = this.eventStore.getDelegations(address)
-    const pending = delegations.filter(d => d.status === 'pending')
-
-    let resolved = 0
-    let active = 0
-    let lost = 0
-
-    for (const delegation of pending) {
-      const status = this.resourceResolver.checkResourceStatus(delegation.resource_id)
-      if (status === 'terminal') {
-        const payload = this.resourceResolver.getResourcePayload?.(delegation.resource_id)
-        const result = this.eventStore.resolveDelegationWithCallback({
-          address,
-          delegation_id: delegation.delegation_id,
-          resource_id: delegation.resource_id,
-          tool_name: delegation.tool_name,
-          resolution: 'terminal',
-          completion_text: buildBoundedCompletionText(delegation, 'terminal', payload ?? null),
-        })
-        if (result !== false) resolved++
-      } else if (status === undefined) {
-        const result = this.eventStore.resolveDelegationWithCallback({
-          address,
-          delegation_id: delegation.delegation_id,
-          resource_id: delegation.resource_id,
-          tool_name: delegation.tool_name,
-          resolution: 'lost',
-          completion_text: buildBoundedCompletionText(delegation, 'lost', null),
-        })
-        if (result !== false) lost++
-      } else {
-        // Resource still active — stay pending
-        active++
-      }
-    }
-
-    return { resolved, active, lost }
-  }
-
-}
-
-function buildBoundedCompletionText(
-  delegation: AgentDelegationRecord,
-  resolution: Exclude<DelegationResolution, 'active'>,
-  payload: string | null,
-): string {
-  const statusText = resolution === 'terminal' ? 'completed' : 'lost'
-  let text = `Delegation ${delegation.delegation_id} (${delegation.tool_name}) ${statusText}.`
-  text += resolution === 'terminal'
-    ? '\nThis is the terminal callback. Do not run or inspect this delegation again; answer the original request using the result below.'
-    : '\nThis is the terminal callback. Do not retry automatically; explain that the delegated resource was lost.'
-  if (payload) {
-    text += `\n\nResult:\n${payload}`
-  }
-
-  // Bound to 16 KiB UTF-8
-  const buf = Buffer.from(text, 'utf-8')
-  if (buf.length <= SYSTEM_COMPLETION_PAYLOAD_MAX_BYTES) return text
-
-  const truncated = buf.subarray(0, SYSTEM_COMPLETION_PAYLOAD_MAX_BYTES - Buffer.byteLength(SYSTEM_COMPLETION_TRUNCATION_MARKER, 'utf-8'))
-  return truncated.toString('utf-8') + SYSTEM_COMPLETION_TRUNCATION_MARKER
 }
 
 function resolveTaskAgentEnv(env: NodeJS.ProcessEnv, taskRunId?: string): NodeJS.ProcessEnv {

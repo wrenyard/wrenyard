@@ -30,6 +30,8 @@ func TestBuildChildEnvDeniesManagedAndGitKeys(t *testing.T) {
 	t.Setenv("FORGE_PROFILE", "parent-profile")
 	t.Setenv("FORGE_REPO_DIR", "/parent/repo")
 	t.Setenv("FORGE_BINARY", "/parent/forge")
+	t.Setenv("WRENYARD_GATEWAY_MODELS_JSON", `[{"id":"secret-free-but-internal"}]`)
+	t.Setenv("WRENYARD_DISPATCH_PLANS_JSON", `{"profile":{"client":"codex"}}`)
 	t.Setenv("FORGE_TEST_BENIGN_VAR", "benign-value")
 
 	env := envListToMap(BuildChildEnv(nil))
@@ -41,6 +43,7 @@ func TestBuildChildEnvDeniesManagedAndGitKeys(t *testing.T) {
 		"OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION",
 		"FORGE_INTERNAL_OPENCODE_BASH_GATE_EXECUTABLE", "FORGE_INTERNAL_OPENCODE_BASH_PERMISSION",
 		"FORGE_PROFILE", "FORGE_REPO_DIR", "FORGE_BINARY",
+		"WRENYARD_GATEWAY_MODELS_JSON", "WRENYARD_DISPATCH_PLANS_JSON",
 		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
 	} {
 		if _, ok := env[key]; ok {

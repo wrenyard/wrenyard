@@ -458,34 +458,6 @@ describe('task run admission', { concurrency: false }, () => {
   }
 
 
-  it('fails closed before creating a delegated task when the event store is not wired', async () => {
-    const runner = new TaskWorkflowRunner({
-      db: getDb(),
-      agentExecutionHost: fakeExecutionHost(async () => ({ output: textOutput('x'), status: 'done' })),
-    })
-
-    await assert.rejects(
-      runner.startTaskRun({
-        taskName: 'explore',
-        definitionName: 'explore',
-        project: 'app',
-        executionProject: 'app',
-        input: {},
-        workspaceRoot: process.cwd(),
-        workingDirectory: process.cwd(),
-        delegationAdmission: {
-          address: 'foreman-work',
-          turn_seq: 1,
-          delegation_id: 'del_missing_store',
-          tool_name: 'task_run',
-          input: {},
-        },
-      }),
-      /Delegated task admission requires an AgentEventStore/,
-    )
-    assert.equal(readOnlyTaskRow(), undefined)
-  })
-
   it('rejects startTaskRun during planned_restart before any placeholder or agent call', async () => {
     const admission = plannedRestartAdmission()
     admission.setPlannedRestart(true)

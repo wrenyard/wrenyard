@@ -140,14 +140,22 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 	}
 	clientDesc := resolvedProfile.Client
 	clientDesc.Dialect = dialect
+	resolvedEnv := def.Env
+	if resolvedProfile.Env != nil {
+		resolvedEnv = resolvedProfile.Env
+	}
+	resolvedSettings := def.Settings
+	if resolvedProfile.Settings != nil {
+		resolvedSettings = resolvedProfile.Settings
+	}
 
 	spec := driver.ProfileSpec{
 		Name:             def.Name,
 		Client:           def.Client,
 		ProviderName:     def.Provider,
 		Launcher:         def.Launcher,
-		Env:              def.Env,
-		Settings:         def.Settings,
+		Env:              resolvedEnv,
+		Settings:         resolvedSettings,
 		Supports1M:       def.Supports1M,
 		UseCatalog:       useCatalog,
 		ClientDesc:       clientDesc,

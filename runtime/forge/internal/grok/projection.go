@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -40,85 +39,6 @@ type Projection struct {
 	ProviderID string
 }
 
-// SkipReason describes why a provider or model was excluded from projection.
-// It is fully deterministic and never contains secret material.
-type SkipReason struct {
-	ProviderID string
-	ModelID    string
-	Reason     string
-}
-
-// EligibleProjections evaluates the full default catalog registry and returns
-// the eligible projections together with deterministic, redacted skip reasons
-// for every excluded provider/model. resolveCredential must return (value, ok)
-// where ok reports whether a non-empty Forge-managed credential exists; the
-// value is never inspected or stored here.
-func EligibleProjections(reg *catalog.Registry, resolveCredential func(string) (string, bool)) ([]Projection, []SkipReason) {
-	var projections []Projection
-	var skips []SkipReason
-	for _, entry := range reg.Providers() {
-		provider, err := reg.LookupBinding(entry.ID)
-		if err != nil {
-			continue
-		}
-		ps, ss := projectProvider(provider, entry.Models, resolveCredential)
-		projections = append(projections, ps...)
-		skips = append(skips, ss...)
-	}
-	return projections, skips
-}
-
-// projectProvider evaluates a single provider and its catalog models.
-func projectProvider(provider catalog.Provider, models []catalog.ModelDef, resolveCredential func(string) (string, bool)) ([]Projection, []SkipReason) {
-	if !provider.SupportsDialect(catalog.DialectGrok) {
-		return nil, []SkipReason{{ProviderID: provider.Name, Reason: "provider is not compatible with the Grok dialect"}}
-	}
-
-	// Require a non-empty RawLLM OpenAI endpoint.
-	baseEndpoint := ""
-	for _, cap := range provider.RawLLM {
-		if cap.Protocol == catalog.RawLLMProtocolOpenAI && strings.TrimSpace(cap.BaseEndpoint) != "" {
-			baseEndpoint = strings.TrimSpace(cap.BaseEndpoint)
-			break
-		}
-	}
-	if baseEndpoint == "" {
-		return nil, []SkipReason{{ProviderID: provider.Name, Reason: "provider exposes no OpenAI-compatible raw protocol endpoint"}}
-	}
-
-	// Require a forge-managed credential resolver. Codex OAuth and others are
-	// excluded here even if they advertise an OpenAI-shaped endpoint.
-	if provider.Inference == nil || provider.Inference.CredentialResolver != "forge-managed" {
-		return nil, []SkipReason{{ProviderID: provider.Name, Reason: "provider credential resolver is not forge-managed"}}
-	}
-
-	// Credential presence is resolved once per provider.
-	_, credOK := resolveCredential(provider.Name)
-
-	var projections []Projection
-	var skips []SkipReason
-	for _, model := range models {
-		if model.ContextWindow <= 0 {
-			skips = append(skips, SkipReason{
-				ProviderID: provider.Name,
-				ModelID:    model.ID,
-				Reason:     fmt.Sprintf("model %q has no explicit context_window in catalog", model.ID),
-			})
-			continue
-		}
-		if !credOK {
-			skips = append(skips, SkipReason{
-				ProviderID: provider.Name,
-				ModelID:    model.ID,
-				Reason:     "no forge-managed credential resolved for provider",
-			})
-			continue
-		}
-		projections = append(projections, ProjectModel(provider.Name, baseEndpoint, model))
-	}
-	return projections, skips
-}
-
 // trimChatCompletionsSuffix strips exactly one terminal /chat/completions from
 // url. URLs without that suffix are returned unchanged.
 func trimChatCompletionsSuffix(url string) string {
@@ -130,7 +50,7 @@ func trimChatCompletionsSuffix(url string) string {
 }
 
 // ProjectModel builds a Projection for a single eligible (provider, model).
-// The baseEndpoint is the provider's raw OpenAI BaseEndpoint (which may carry
+// The baseEndpoint is the daemon Gateway OpenAI Chat base URL (which may carry
 // a terminal /chat/completions path). The returned BaseURL strips that path
 // so that the Grok chat_completions backend can append it without doubling.
 func ProjectModel(providerID, baseEndpoint string, model catalog.ModelDef) Projection {

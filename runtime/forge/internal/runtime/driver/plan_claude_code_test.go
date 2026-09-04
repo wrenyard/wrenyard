@@ -30,6 +30,7 @@ func TestBuildClaudeCodePlanDirSideEffectOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookup codebuddy provider: %v", err)
 	}
+	provider.UseClientBinary = true
 
 	// Force a guaranteed-missing binary so binary resolution is the only
 	// expected failure, but only after the directory side effects run.

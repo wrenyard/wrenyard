@@ -1,9 +1,8 @@
 /**
  * MessageService — the single message entry point.
  *
- * All senders (CLI, IPC, MCP, Work/FWA tool reply, external route adapter) call
- * MessageService.send. Agent addresses and external principal routes are
- * resolved by this service alone.
+ * All senders (CLI, IPC, MCP, and external route adapters) call
+ * MessageService.send. External principal routes are resolved here.
  */
 
 import { randomUUID, randomBytes } from 'node:crypto'
@@ -13,39 +12,16 @@ import {
   validateRecipient,
   PRINCIPAL_ERRORS,
   resolvePrincipalDeliveryRoute,
-  hasGrant,
 } from './principal.mts'
-import {
-  isFwaAddress,
-  resolveFwaAddress,
-  FOREMAN_WORK_ADDRESS,
-} from './address.mts'
 import type { MessageStore } from '../db/stores/message-store.mts'
 
 // ─── Types ───────────────────────────────────────────────────────────
-
-/** Path-only attachment descriptor from caller */
-export interface SendAttachment {
-  path: string
-}
-
-/** Per-item attachment result */
-export interface SendAttachmentResult {
-  path: string
-  status: 'accepted' | 'rejected'
-  mime_type?: string
-  size?: number
-  sha256?: string
-  storage_ref?: string
-  error?: 'file_not_found' | 'invalid_path' | 'not_regular_file' | 'too_large' | 'unsupported_content_type' | 'read_failed'
-}
 
 export interface SendRequest {
   from: string
   to: string
   text: string
   client_message_id?: string
-  attachments?: SendAttachment[]
 }
 
 export interface SendResult {
@@ -59,7 +35,6 @@ export interface SendResult {
     ok: boolean
     error?: string
   }
-  attachments?: SendAttachmentResult[]
 }
 
 export interface SendError {
@@ -69,23 +44,6 @@ export interface SendError {
 }
 
 // ─── Service ports (injectable for testing) ──────────────────────────
-
-export interface FwaSendPort {
-  /** Send a message to a specific FWA session by its storage id. */
-  sendToSession(sessionId: string, text: string, from: string, messageId: string): Promise<{ accepted: boolean; target_seq?: number; queue_depth?: number }>
-  /** Check if a session id exists and is non-closed. */
-  hasLiveSession(sessionId: string): boolean
-}
-
-export interface WorkSendPort {
-  /** Send a message to foreman-work with optional attachments. Returns accepted + event seq info + per-item results. */
-  send(text: string, from: string, messageId: string, attachments?: SendAttachment[]): Promise<{
-    accepted: boolean
-    target_seq?: number
-    queue_depth?: number
-    attachment_results?: SendAttachmentResult[]
-  }>
-}
 
 export interface ExternalDeliveryPort {
   /** Deliver a message to an external transport using a durable delivery record.
@@ -97,8 +55,6 @@ export interface ExternalDeliveryPort {
 export interface MessageServiceDeps {
   registry: PrincipalRegistry
   store: MessageStore
-  fwa?: FwaSendPort
-  work?: WorkSendPort
   externalDelivery?: ExternalDeliveryPort
   now?: () => Date
 }
@@ -108,28 +64,14 @@ export interface MessageServiceDeps {
 export class MessageService {
   private readonly registry: PrincipalRegistry
   private readonly store: MessageStore
-  private fwa?: FwaSendPort
-  private workPort?: WorkSendPort
   private externalDelivery?: ExternalDeliveryPort
   private readonly now: () => Date
 
   constructor(deps: MessageServiceDeps) {
     this.registry = deps.registry
     this.store = deps.store
-    this.fwa = deps.fwa
-    this.workPort = deps.work
     this.externalDelivery = deps.externalDelivery
     this.now = deps.now ?? (() => new Date())
-  }
-
-  /** Set the FWA send port after construction (for cyclic dependency resolution). */
-  setFwaSendPort(port: FwaSendPort): void {
-    this.fwa = port
-  }
-
-  /** Set the Work send port after construction (for cyclic dependency resolution). */
-  setWorkSendPort(port: WorkSendPort): void {
-    this.workPort = port
   }
 
   /** Set the external delivery port after construction. */
@@ -137,52 +79,25 @@ export class MessageService {
     this.externalDelivery = port
   }
 
-  canReadWork(principalId: string): boolean {
-    const principal = this.registry.principals[principalId]
-    return Boolean(principal?.canSend && hasGrant(principal, 'work.read'))
-  }
-
   /**
    * Send a message. This is the single entry point for all message routing.
    *
    * Permission checks:
    * - from must be a can_send principal with message.send grant
-   * - to must be an addressable principal, fwa-<id>, or foreman-work
+   * - to must be an addressable principal
    *
    * Idempotency:
    * - (from, client_message_id) has a unique constraint
    * - Duplicate requests return the first result, no double delivery
    * - Message + idempotency key are persisted BEFORE the target side effect
    *
-   * Routing:
-   * - External principal (deliveryRoute) → durable outbox
-   * - fwa-<24hex> → FwaService (native FIFO)
-   * - foreman-work → WorkService (injectable, batch 2)
-   *
-   * Attachments:
-   * - Only forwarded for foreman-work target; rejected for all others.
+   * Routing: external principal (deliveryRoute) → durable outbox.
    */
   async send(req: SendRequest): Promise<SendResult | SendError> {
     // Validate sender
-    if (isFwaAddress(req.from)) {
-      const senderSessionId = resolveFwaAddress(req.from)
-      if (!senderSessionId || !this.fwa?.hasLiveSession(senderSessionId)) {
-        return { ok: false, error: PRINCIPAL_ERRORS.unknown_agent_address, message: `unknown sender address: ${req.from}` }
-      }
-    } else {
-      const senderError = validateSender(this.registry, req.from)
-      if (senderError) {
-        return { ok: false, error: senderError.error, message: senderError.message }
-      }
-    }
-
-    // Reject attachments for non-work targets
-    if (req.attachments && req.attachments.length > 0 && req.to !== FOREMAN_WORK_ADDRESS) {
-      return {
-        ok: false,
-        error: 'attachments_not_supported',
-        message: `attachments are only supported for target '${FOREMAN_WORK_ADDRESS}'`,
-      }
+    const senderError = validateSender(this.registry, req.from)
+    if (senderError) {
+      return { ok: false, error: senderError.error, message: senderError.message }
     }
 
     // Generate or use provided client_message_id for idempotency
@@ -209,8 +124,8 @@ export class MessageService {
     })
     this.store.createClientMessageId(req.from, clientMessageId, messageId, now)
 
-    // Resolve target (side effect: delivery, FWA queuing, etc.)
-    const targetResult = await this.resolveTarget(req.to, req.text, req.from, messageId, req.attachments)
+    // Resolve the configured target and perform any external delivery.
+    const targetResult = await this.resolveTarget(req.to, req.text, req.from, messageId)
     let result: SendResult | SendError
     if (targetResult === null) {
       result = { ok: false, error: PRINCIPAL_ERRORS.unknown_agent_address, message: `unknown target address: ${req.to}` }
@@ -229,9 +144,6 @@ export class MessageService {
         ...('delivery' in targetResult && (targetResult as { delivery?: SendResult['delivery'] }).delivery !== undefined
           ? { delivery: (targetResult as { delivery: SendResult['delivery'] }).delivery }
           : {}),
-        ...('attachment_results' in targetResult && (targetResult as { attachment_results?: SendAttachmentResult[] }).attachment_results !== undefined
-          ? { attachments: (targetResult as { attachment_results: SendAttachmentResult[] }).attachment_results }
-          : {}),
       }
     }
     this.store.storeClientMessageResult(req.from, clientMessageId, result)
@@ -247,25 +159,14 @@ export class MessageService {
     text: string,
     from: string,
     messageId: string,
-    attachments?: SendAttachment[],
-  ): Promise<{ target_seq?: number; queue_depth?: number; delivery?: SendResult['delivery']; attachment_results?: SendAttachmentResult[] } | SendError | null> {
-    // 1. Check if target is an FWA address
-    if (isFwaAddress(to)) {
-      return this.resolveFwaTarget(to, text, from, messageId)
-    }
-
-    // 2. Check if target is foreman-work
-    if (to === FOREMAN_WORK_ADDRESS) {
-      return this.resolveWorkTarget(text, from, messageId, attachments)
-    }
-
-    // 3. Check if target is a registered principal
+  ): Promise<{ delivery?: SendResult['delivery'] } | SendError | null> {
+    // Check if target is a registered principal.
     const recipientError = validateRecipient(this.registry, to)
     if (recipientError) {
       return { ok: false as const, error: recipientError.error, message: recipientError.message }
     }
 
-    // 4. Resolve external delivery via durable outbox
+    // Resolve external delivery via durable outbox.
     const route = resolvePrincipalDeliveryRoute(this.registry, to)
     if (route && this.externalDelivery) {
       const deliveryId = `md_${randomBytes(8).toString('hex')}`
@@ -297,45 +198,6 @@ export class MessageService {
 
     // No route configured for addressable principal
     return { ok: false, error: PRINCIPAL_ERRORS.not_addressable, message: `principal '${to}' has no delivery route configured` }
-  }
-
-  private async resolveFwaTarget(
-    address: string,
-    text: string,
-    from: string,
-    messageId: string,
-  ): Promise<{ target_seq?: number; queue_depth?: number } | SendError | null> {
-    const sessionId = resolveFwaAddress(address)
-    if (!sessionId) return null // invalid FWA address format
-
-    if (!this.fwa) {
-      return { ok: false, error: PRINCIPAL_ERRORS.unknown_agent_address, message: 'FWA service not available' }
-    }
-
-    if (!this.fwa.hasLiveSession(sessionId)) {
-      return { ok: false, error: PRINCIPAL_ERRORS.unknown_agent_address, message: `no live FWA session for address: ${address}` }
-    }
-
-    const result = await this.fwa.sendToSession(sessionId, text, from, messageId)
-    return { target_seq: result.target_seq, queue_depth: result.queue_depth }
-  }
-
-  private async resolveWorkTarget(
-    text: string,
-    from: string,
-    messageId: string,
-    attachments?: SendAttachment[],
-  ): Promise<{ target_seq?: number; queue_depth?: number; attachment_results?: SendAttachmentResult[] } | SendError | null> {
-    if (!this.workPort) {
-      return { ok: false, error: 'work_unavailable', message: 'foreman-work is not available in this runtime' }
-    }
-
-    const result = await this.workPort.send(text, from, messageId, attachments)
-    return {
-      target_seq: result.target_seq,
-      queue_depth: result.queue_depth,
-      ...(result.attachment_results ? { attachment_results: result.attachment_results } : {}),
-    }
   }
 
   /**

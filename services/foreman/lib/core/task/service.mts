@@ -9,7 +9,6 @@ import {
 import { ForemanWorkspace } from '../../workspace/workspace.mts'
 import { validateAnyJsonValue } from '../../workspace/schema-loader.mts'
 import type { ListedDefinition } from '../../workspace/definition-registry.mts'
-import { FOREMAN_WORK_ADDRESS } from '../../message/address.mts'
 import {
   TaskContextError,
   splitTaskInputContext,
@@ -172,13 +171,6 @@ export class TaskService {
     /** Inherited API/TaskGraph context; embedded input.ctx overrides matching keys. */
     ctx?: TaskContext
     connectingId?: string
-    delegationAdmission?: {
-      address: string
-      turn_seq: number
-      delegation_id: string
-      tool_name: string
-      input: Record<string, unknown>
-    }
     /** Internal compatibility path used only by TaskGraph dispatch so a
      *  persisted graph can resume a legacy definition. */
     allowLegacyTask?: boolean
@@ -205,22 +197,6 @@ export class TaskService {
         409,
         { task: taskId, replacement: ['edit', 'test'] },
       )
-    }
-
-    // Front-desk constraint: the Work agent may run readonly tasks directly.
-    // Any write work must be dispatched via pm.ticket.create + fwa.assign. The
-    // delegation admission descriptor is internal-only and is attached solely by
-    // the Work agent's tool adapter, so its address identifies the Work caller.
-    if (params.delegationAdmission?.address === FOREMAN_WORK_ADDRESS) {
-      const permission = description.permission
-      if (permission !== 'readonly') {
-        throw new TaskServiceError(
-          'work_agent_readonly_only',
-          `Task '${taskId}' requires '${permission ?? 'unknown'}' permission, which the Work agent cannot run directly. Dispatch write work via pm.ticket.create + fwa.assign instead.`,
-          403,
-          { task: taskId, permission: permission ?? null },
-        )
-      }
     }
 
     if (params.input === undefined || params.input === null) {
@@ -287,7 +263,6 @@ export class TaskService {
       worktree: params.worktree,
       connectingId: params.connectingId,
       taskContext,
-      delegationAdmission: params.delegationAdmission,
     })
   }
 

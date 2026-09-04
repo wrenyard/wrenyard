@@ -86,36 +86,6 @@ func TestProvidersListIncludesNoInferenceClientBinaryProvider(t *testing.T) {
 	}
 }
 
-func TestProvidersDescribeIncludesNoInferenceClientBinaryProvider(t *testing.T) {
-	reg := noInferenceClientBinaryRegistry()
-	deps := providerDepsForRegistry(reg, nil)
-	var raw []byte
-	deps.PrintJSON = func(value interface{}) int {
-		b, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw = b
-		return 0
-	}
-	if code := ProvidersCommand(deps, []string{"describe", "--json"}); code != 0 {
-		t.Fatalf("describe exit code = %d, want 0", code)
-	}
-	var descs []struct {
-		ID     string   `json:"id"`
-		RawLLM []string `json:"raw_llm"`
-	}
-	if err := json.Unmarshal(raw, &descs); err != nil {
-		t.Fatalf("unmarshal describe output: %v", err)
-	}
-	if len(descs) != 1 || descs[0].ID != "codebuddy" {
-		t.Fatalf("describe entries = %#v, want only codebuddy (opencode-native excluded)", descs)
-	}
-	if len(descs[0].RawLLM) != 0 {
-		t.Fatalf("codebuddy raw_llm = %#v, want none", descs[0].RawLLM)
-	}
-}
-
 func TestProvidersAuthLoginRejectedForNativeClientBinaryProvider(t *testing.T) {
 	reg := noInferenceClientBinaryRegistry()
 	deps := providerDepsForRegistry(reg, nil)

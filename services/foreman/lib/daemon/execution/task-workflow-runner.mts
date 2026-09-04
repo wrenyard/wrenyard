@@ -15,13 +15,11 @@ import {
 import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
 import type { DispatchControl } from '../dispatch-control.mts'
-import type { AgentEventStore } from '../../core/agent/agent-event-store.mts'
 import { appendForemanEvent } from '../../events/event-store.mts'
 
 export interface TaskWorkflowRunnerOptions {
   db: ForemanDatabase
   agentExecutionHost: AgentExecutionHost
-  agentEventStore?: AgentEventStore
   logger?: SupervisorLogger
   /**
    * Optional admission gate. The daemon runtime always supplies it; optionality
@@ -38,7 +36,6 @@ export interface TaskWorkflowRunnerOptions {
 export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly db: ForemanDatabase
   private readonly agentExecutionHost: AgentExecutionHost
-  private readonly agentEventStore?: AgentEventStore
   private readonly logger?: SupervisorLogger
   private readonly taskRunner: DaemonTaskRunner
   private readonly admissionControl?: () => void
@@ -46,7 +43,6 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   constructor(options: TaskWorkflowRunnerOptions) {
     this.db = options.db
     this.agentExecutionHost = options.agentExecutionHost
-    this.agentEventStore = options.agentEventStore
     this.logger = options.logger
     this.admissionControl = options.admissionControl
     this.taskRunner = new DaemonTaskRunner()
@@ -56,47 +52,14 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     this.assertAccepting()
     const taskRunId = createTaskRunId()
 
-    const admission = opts.delegationAdmission
-    if (admission && !this.agentEventStore) {
-      throw new Error('Delegated task admission requires an AgentEventStore')
-    }
-
-    if (admission) {
-      // Transactional: wrap task placeholder insertion + delegation admission
-      this.db.transaction(() => {
-        this.insertTaskPlaceholder({
-          taskRunId,
-          taskName: opts.taskName,
-          project: opts.project,
-          input: opts.input,
-          worktree: opts.worktree,
-          source: opts.source,
-        })
-        try {
-          this.agentEventStore!.admitDelegation({
-            address: admission.address,
-            turn_seq: admission.turn_seq,
-            delegation_id: admission.delegation_id,
-            tool_name: admission.tool_name,
-            input: admission.input,
-            resource_id: taskRunId,
-          })
-        } catch (error) {
-          // Roll back the task row if delegation insert fails
-          this.db.prepare(`DELETE FROM tasks WHERE id = ?`).run(taskRunId)
-          throw error
-        }
-      })()
-    } else {
-      this.insertTaskPlaceholder({
-        taskRunId,
-        taskName: opts.taskName,
-        project: opts.project,
-        input: opts.input,
-        worktree: opts.worktree,
-        source: opts.source,
-      })
-    }
+    this.insertTaskPlaceholder({
+      taskRunId,
+      taskName: opts.taskName,
+      project: opts.project,
+      input: opts.input,
+      worktree: opts.worktree,
+      source: opts.source,
+    })
 
     void this.taskRunner.execute(opts.definitionName, opts.input, {
       workspaceRoot: opts.workspaceRoot,
