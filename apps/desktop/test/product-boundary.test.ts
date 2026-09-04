@@ -91,6 +91,8 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(conversationRenderer, /document\.addEventListener\('pointerdown'/);
   assert.match(conversationRenderer, /setQuotaSnapshot/);
   assert.match(conversationRenderer, /setAttribute\('aria-disabled'/);
+  assert.match(conversationRenderer, /directory\.status === 'loading'/);
+  assert.match(conversationRenderer, /getAttribute\('aria-disabled'\) === 'true'/);
   assert.match(conversationRenderer, /modelTrigger\.focus\(\{ preventScroll: true \}\)/);
   assert.doesNotMatch(conversationRenderer, /setInterval|listProviders|configureProvider/);
   assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);

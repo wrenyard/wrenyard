@@ -580,7 +580,13 @@ export class ConversationView {
       || !snapshot.selectedSessionId
       || directory.status === 'loading'
       || this.modelOptions.length === 0;
-    this.modelTrigger.disabled = unavailable;
+    // DSH emits a transient loading snapshot while it applies a model change.
+    // Keep the already-focused trigger in the tab order through that refresh;
+    // aria-disabled still exposes and enforces the temporary disabled state.
+    const transientLoading = snapshot.status === 'ready'
+      && Boolean(snapshot.selectedSessionId)
+      && directory.status === 'loading';
+    this.modelTrigger.disabled = unavailable && !transientLoading;
     this.modelTrigger.setAttribute('aria-disabled', String(unavailable || this.busy));
     const current = directory.current;
     const placeholder = snapshot.selectedSessionId
@@ -635,7 +641,10 @@ export class ConversationView {
   }
 
   private openModelPicker(preferred: 'first' | 'last' | 'selected'): void {
-    if (this.busy || this.modelTrigger.disabled || this.modelOptions.length === 0) return;
+    if (this.busy
+      || this.modelTrigger.disabled
+      || this.modelTrigger.getAttribute('aria-disabled') === 'true'
+      || this.modelOptions.length === 0) return;
     this.modelPickerOpen = true;
     this.modelPopover.hidden = false;
     this.modelTrigger.setAttribute('aria-expanded', 'true');
