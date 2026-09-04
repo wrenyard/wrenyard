@@ -11,9 +11,6 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
     'hy4-preview-ioa',
     'kimi-k2.6',
     'minimax-m3',
-    'minimax-m2.7',
-    'kimi-k2.7',
-    'hy3-preview',
   ];
   assert.deepEqual(
     catalog.listGatewayModels('openai_chat').filter((entry) => entry.provider === 'codebuddy').map((entry) => entry.id),

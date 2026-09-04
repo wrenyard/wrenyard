@@ -151,9 +151,6 @@ test('service provider.list projects only public model metadata over IPC', async
       'hy4-preview-ioa',
       'kimi-k2.6',
       'minimax-m3',
-      'minimax-m2.7',
-      'kimi-k2.7',
-      'hy3-preview',
     ])
     const anthropicApi = result.providers.find((provider) => provider.id === 'anthropic-api')
     assert.ok(anthropicApi)
