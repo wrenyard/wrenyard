@@ -119,6 +119,52 @@ test('catalog projects discovered auth status and attaches quota by id', () => {
   assert.equal(kimi.quota, undefined);
 });
 
+test('successful runtime quota overrides a false native discovery result', () => {
+  const cursor: QuotaProviderState = {
+    ...providers[0],
+    id: 'cursor',
+    label: 'Cursor',
+    displayLine: 'Cursor 95% remain · Other 72% remain',
+    bars: {
+      remainingPct: null,
+      expectedRemainingPct: null,
+      windows: [
+        { name: 'Cursor', usedPct: 5, remainingPct: 95, expectedRemainingPct: null },
+        { name: 'Other', usedPct: 28, remainingPct: 72, expectedRemainingPct: null },
+      ],
+    },
+  };
+  const authRequired: QuotaProviderState = {
+    id: 'super-grok',
+    label: 'SuperGrok',
+    status: 'unavailable',
+    stale: false,
+    displayLine: null,
+    error: 'runtime detail must not surface',
+    code: 'authentication_required',
+  };
+  const snapshot = projectQuotaSnapshot(
+    [providers[0], cursor, authRequired],
+    [
+      { id: 'codex', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'super-grok', enabled: true },
+    ],
+    1,
+    undefined,
+    [
+      { id: 'codex', displayName: 'Codex', configured: false, authMode: 'native' },
+      { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
+      { id: 'super-grok', displayName: 'SuperGrok', configured: true, authMode: 'native' },
+    ],
+  );
+
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['codex', 'cursor']);
+  assert.equal(snapshot.catalog.find((entry) => entry.id === 'codex')?.configured, true);
+  assert.equal(snapshot.catalog.find((entry) => entry.id === 'cursor')?.configured, true);
+  assert.equal(snapshot.catalog.find((entry) => entry.id === 'super-grok')?.configured, false);
+});
+
 test('catalog migrates legacy xai state and presents the SpaceXAI provider name', () => {
   const snapshot = projectQuotaSnapshot([], [{ id: 'xai', enabled: true }], 1, undefined, [
     { id: 'xai', displayName: 'SpaceXAI', configured: true, authMode: 'native' },
