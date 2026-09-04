@@ -25,6 +25,14 @@ const connection: GatewayClientConnection = {
       id: 'other', publicId: 'zhipu/glm', provider: 'zhipu', displayName: 'GLM',
       protocols: ['anthropic_messages'], claudeFamily: false,
     },
+    {
+      id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3',
+      protocols: ['anthropic_messages'],
+    },
+    {
+      id: 'deepseek', publicId: 'codebuddy/deepseek-v4-flash', provider: 'codebuddy', displayName: 'DeepSeek V4 Flash',
+      protocols: ['openai_chat'],
+    },
   ],
 }
 
@@ -63,7 +71,7 @@ test('Claude Code changes only its three owned settings and restores them withou
   assert.equal(restored.theme, 'dark')
 })
 
-test('Claude Code is capability-gated and rejects non-Claude catalog models', async () => {
+test('Claude Code is capability-gated and rejects models without Anthropic Messages', async () => {
   const root = await mkdtemp(join(tmpdir(), 'wrenyard-claude-code-'))
   const unsupported = new ClaudeCodeAdapter({
     settingsPath: join(root, 'settings.json'),
@@ -79,7 +87,45 @@ test('Claude Code is capability-gated and rejects non-Claude catalog models', as
     capabilityProbe: async () => ({ supported: true }),
   })
   await assert.rejects(() => supported.plan(connection, {
-    models: ['zhipu/glm'], defaultModel: 'zhipu/glm',
+    models: ['codebuddy/deepseek-v4-flash'], defaultModel: 'codebuddy/deepseek-v4-flash',
+  }), /not available/)
+})
+
+test('Claude adapters plan and apply non-Claude-family Anthropic Messages models', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-claude-protocols-'))
+  const selection = {
+    models: ['kimi-coding/k3', 'zhipu/glm'],
+    defaultModel: 'kimi-coding/k3',
+  }
+  const code = new ClaudeCodeAdapter({
+    settingsPath: join(root, 'settings.json'),
+    store: new MemoryClientOwnershipStore(),
+    capabilityProbe: async () => ({ supported: true }),
+  })
+  const codePlan = await code.plan(connection, selection)
+  assert.deepEqual(codePlan.models, selection.models)
+  assert.deepEqual((await code.apply(codePlan, connection)).configuredModels, selection.models)
+
+  const app = new ClaudeAppAdapter({
+    metaPath: join(root, '_meta.json'),
+    profilePath: join(root, `${WRENYARD_CLAUDE_PROFILE_ID}.json`),
+    store: new MemoryClientOwnershipStore(),
+    capabilityProbe: async () => ({ supported: true }),
+  })
+  const appPlan = await app.plan(connection, selection)
+  assert.deepEqual(appPlan.models, selection.models)
+  assert.deepEqual((await app.apply(appPlan, connection)).configuredModels, selection.models)
+  const profile = JSON.parse(await readFile(join(root, `${WRENYARD_CLAUDE_PROFILE_ID}.json`), 'utf8')) as Record<string, any>
+  assert.deepEqual(profile.inferenceModels, [
+    { name: 'kimi-coding/k3', labelOverride: 'Kimi K3' },
+    { name: 'zhipu/glm', labelOverride: 'GLM' },
+  ])
+
+  await assert.rejects(() => code.plan(connection, {
+    models: ['codebuddy/deepseek-v4-flash'], defaultModel: 'codebuddy/deepseek-v4-flash',
+  }), /not available/)
+  await assert.rejects(() => app.plan(connection, {
+    models: ['codebuddy/deepseek-v4-flash'], defaultModel: 'codebuddy/deepseek-v4-flash',
   }), /not available/)
 })
 

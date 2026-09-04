@@ -95,7 +95,7 @@ export class ClaudeCodeAdapter implements ClientAdapter {
   async plan(connection: GatewayClientConnection, selection: ClientModelSelection): Promise<ClientConfigurationPlan> {
     const capability = await this.options.capabilityProbe()
     if (!capability.supported) throw new Error(capability.detail ?? 'Claude Code gateway discovery is not supported')
-    selectModels(connection, selection, 'anthropic_messages', (model) => model.claudeFamily === true)
+    selectModels(connection, selection, 'anthropic_messages')
     const snapshot = await readFileSnapshot(this.options.settingsPath)
     return {
       clientId: this.id,
@@ -117,7 +117,7 @@ export class ClaudeCodeAdapter implements ClientAdapter {
   async apply(plan: ClientConfigurationPlan, connection: GatewayClientConnection): Promise<ClientConfigurationStatus> {
     assertApplyPlan(plan, this.id)
     await this.ensureCapability()
-    selectModels(connection, { models: plan.models, defaultModel: plan.defaultModel ?? '' }, 'anthropic_messages', (model) => model.claudeFamily === true)
+    selectModels(connection, { models: plan.models, defaultModel: plan.defaultModel ?? '' }, 'anthropic_messages')
     const snapshot = await readFileSnapshot(this.options.settingsPath)
     assertPlanDigest(snapshot, plan.files[0]?.digest ?? '')
     const record = await this.options.store.get(this.id)

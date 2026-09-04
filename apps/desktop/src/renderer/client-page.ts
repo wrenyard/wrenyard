@@ -7,6 +7,7 @@ import type {
   ClientGatewayModelDto,
   ClientSurfaceDto,
   ClientSurfaceId,
+  GatewayProtocol,
 } from '../client-configuration/contract.js';
 
 export interface ClientSurfaceRowModel {
@@ -33,25 +34,40 @@ export interface ClientPageModel {
   cards: ClientCardModel[];
 }
 
-function modelsForClient(clientId: ClientConfigurationId, models: readonly ClientGatewayModelDto[]): ClientGatewayModelDto[] {
-  if (clientId === 'claude-app' || clientId === 'claude-code') {
-    return models.filter((model) => model.claudeFamily === true && model.protocols.includes('anthropic_messages'));
-  }
-  if (clientId === 'codex-shared') return models.filter((model) => model.protocols.includes('openai_responses'));
-  return models.filter((model) => model.protocols.length > 0);
-}
-
 const CARD_DEFINITIONS: ReadonlyArray<{
   id: ClientConfigurationId;
   title: string;
   mode: ClientCardModel['connectionMode'];
   surfaces: readonly ClientSurfaceId[];
+  protocols: readonly GatewayProtocol[];
+  emptyMessage: string;
 }> = [
-  { id: 'claude-app', title: 'Claude App', mode: '切换式', surfaces: ['claude-app'] },
-  { id: 'claude-code', title: 'Claude Code', mode: '切换式', surfaces: ['claude-code'] },
-  { id: 'codex-shared', title: 'Codex', mode: '切换式', surfaces: ['codex-app', 'codex-cli'] },
-  { id: 'grok-build', title: 'Grok Build', mode: '加法式', surfaces: ['grok-build'] },
+  {
+    id: 'claude-app', title: 'Claude App', mode: '切换式', surfaces: ['claude-app'],
+    protocols: ['anthropic_messages'], emptyMessage: '当前没有已配置的 Anthropic Messages 模型。',
+  },
+  {
+    id: 'claude-code', title: 'Claude Code', mode: '切换式', surfaces: ['claude-code'],
+    protocols: ['anthropic_messages'], emptyMessage: '当前没有已配置的 Anthropic Messages 模型。',
+  },
+  {
+    id: 'codex-shared', title: 'Codex', mode: '切换式', surfaces: ['codex-app', 'codex-cli'],
+    protocols: ['openai_responses'], emptyMessage: '当前没有已配置的 Responses 模型。',
+  },
+  {
+    id: 'grok-build', title: 'Grok Build', mode: '加法式', surfaces: ['grok-build'],
+    protocols: ['openai_chat', 'openai_responses', 'anthropic_messages'],
+    emptyMessage: '当前没有可用于此客户端的已配置 Gateway 模型。',
+  },
 ];
+
+function modelsForProtocols(
+  protocols: readonly GatewayProtocol[],
+  models: readonly ClientGatewayModelDto[],
+): ClientGatewayModelDto[] {
+  const supported = new Set(protocols);
+  return models.filter((model) => model.protocols.some((protocol) => supported.has(protocol)));
+}
 
 const COMPATIBILITY_LABELS: Record<ClientCompatibility, string> = {
   'not-installed': '未安装',
@@ -105,7 +121,7 @@ export function buildClientPageModel(snapshot: ClientConfigurationSnapshotDto): 
         detail: configuration.detail ?? '',
         surfaces: definition.surfaces.map((id) => surfaceRow(surfaces.get(id), id)),
         models: [...configuration.configuredModels],
-        availableModels: modelsForClient(definition.id, snapshot.models),
+        availableModels: modelsForProtocols(definition.protocols, snapshot.models),
         primaryAction: action(configuration.state),
         canRestore: configuration.state !== 'not-configured',
       };
@@ -134,7 +150,7 @@ ${model.cards.map((card) => `    <article class="client-card" data-client-id="${
             ? `<select data-client-protocol="${escapeHtml(model.publicId)}" aria-label="${escapeHtml(model.displayName)} 协议">${model.protocols.map((protocol) => `<option value="${protocol}">${escapeHtml(protocol)}</option>`).join('')}</select>`
             : '';
           return `<label class="client-model-option"><input type="checkbox" data-client-model="${escapeHtml(model.publicId)}"${selected ? ' checked' : ''} /><span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.publicId)}</small></span><input type="radio" name="${card.id}-default-model" data-client-default="${escapeHtml(model.publicId)}" aria-label="设为默认模型"${defaultModel ? ' checked' : ''} />${protocolOptions}</label>`;
-        }).join('') : '<p class="client-card__empty">当前没有可用于此客户端的已配置 Gateway 模型。</p>'}
+        }).join('') : `<p class="client-card__empty">${escapeHtml(CARD_DEFINITIONS.find((definition) => definition.id === card.id)?.emptyMessage ?? '')}</p>`}
       </div>
       <div class="client-card__actions"><button type="button" data-client-action="primary">${card.primaryAction}</button>${card.canRestore ? '<button type="button" data-client-action="restore">恢复原配置</button>' : ''}</div>
     </article>`).join('\n')}

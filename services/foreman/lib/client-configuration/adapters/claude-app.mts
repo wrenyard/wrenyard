@@ -118,7 +118,7 @@ export class ClaudeAppAdapter implements ClientAdapter {
 
   async plan(connection: GatewayClientConnection, selection: ClientModelSelection): Promise<ClientConfigurationPlan> {
     await this.ensureCapability()
-    const models = selectModels(connection, selection, 'anthropic_messages', (model) => model.claudeFamily === true)
+    const models = selectModels(connection, selection, 'anthropic_messages')
     const [meta, profile] = await Promise.all([
       readFileSnapshot(this.options.metaPath),
       readFileSnapshot(this.options.profilePath),
@@ -145,7 +145,7 @@ export class ClaudeAppAdapter implements ClientAdapter {
   async apply(plan: ClientConfigurationPlan, connection: GatewayClientConnection): Promise<ClientConfigurationStatus> {
     assertApplyPlan(plan, this.id)
     await this.ensureCapability()
-    const models = selectModels(connection, { models: plan.models, defaultModel: plan.defaultModel ?? '' }, 'anthropic_messages', (model) => model.claudeFamily === true)
+    const models = selectModels(connection, { models: plan.models, defaultModel: plan.defaultModel ?? '' }, 'anthropic_messages')
     const [meta, profile] = await Promise.all([
       readFileSnapshot(this.options.metaPath),
       readFileSnapshot(this.options.profilePath),
