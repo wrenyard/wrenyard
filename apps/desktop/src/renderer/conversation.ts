@@ -576,12 +576,12 @@ export class ConversationView {
       groupNodes.push(empty);
     }
     this.modelList.replaceChildren(...groupNodes);
-    const disabled = this.busy
-      || snapshot.status !== 'ready'
+    const unavailable = snapshot.status !== 'ready'
       || !snapshot.selectedSessionId
       || directory.status === 'loading'
       || this.modelOptions.length === 0;
-    this.modelTrigger.disabled = disabled;
+    this.modelTrigger.disabled = unavailable;
+    this.modelTrigger.setAttribute('aria-disabled', String(unavailable || this.busy));
     const current = directory.current;
     const placeholder = snapshot.selectedSessionId
       ? directory.status === 'loading' ? '读取模型…' : '选择模型'
@@ -635,7 +635,7 @@ export class ConversationView {
   }
 
   private openModelPicker(preferred: 'first' | 'last' | 'selected'): void {
-    if (this.modelTrigger.disabled || this.modelOptions.length === 0) return;
+    if (this.busy || this.modelTrigger.disabled || this.modelOptions.length === 0) return;
     this.modelPickerOpen = true;
     this.modelPopover.hidden = false;
     this.modelTrigger.setAttribute('aria-expanded', 'true');
@@ -929,7 +929,7 @@ export class ConversationView {
     }
     const previousSnapshot = this.snapshot;
     this.busy = true;
-    this.closeModelPicker(false);
+    this.closeModelPicker(true);
     this.renderModels(previousSnapshot);
     try {
       this.render(await this.api.selectConversationModel(selection.provider, selection.model));
@@ -940,7 +940,7 @@ export class ConversationView {
     } finally {
       this.busy = false;
       if (this.snapshot) this.renderModels(this.snapshot);
-      if (!this.modelTrigger.disabled) this.modelTrigger.focus();
+      if (!this.modelTrigger.disabled) requestAnimationFrame(() => this.modelTrigger.focus({ preventScroll: true }));
     }
   }
 
