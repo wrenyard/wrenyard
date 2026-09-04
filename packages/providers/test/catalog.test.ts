@@ -9,8 +9,10 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
     'deepseek-v4-flash',
     'deepseek-v4-pro',
     'hy4-preview-ioa',
-    'kimi-k2.6',
     'minimax-m3',
+    'kimi-k3',
+    'glm-5.3',
+    'glm-5.3-flash',
   ];
   assert.deepEqual(
     catalog.listGatewayModels('openai_chat').filter((entry) => entry.provider === 'codebuddy').map((entry) => entry.id),
@@ -29,6 +31,18 @@ test('daemon dispatch plans are resolved by the TypeScript catalog', () => {
   });
   assert.deepEqual(plans['codex-sol'], {
     client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native',
+  });
+  assert.deepEqual(plans['cb-minimax'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'minimax-m3', mode: 'native',
+  });
+  assert.deepEqual(plans['cb-kimi'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'kimi-k3', mode: 'native',
+  });
+  assert.deepEqual(plans['cb-glm'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3', mode: 'native',
+  });
+  assert.deepEqual(plans['cb-glmf'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3-flash', mode: 'native',
   });
 });
 

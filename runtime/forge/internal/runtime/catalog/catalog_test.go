@@ -741,7 +741,10 @@ func TestModelWhitelistAccept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
+	for _, model := range []string{
+		"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+		"kimi-k3", "glm-5.3", "glm-5.3-flash",
+	} {
 		if err := b.ValidateModel(model); err != nil {
 			t.Fatalf("expected model %q to be allowed: %v", model, err)
 		}
@@ -1125,7 +1128,10 @@ func TestProviderModelMap(t *testing.T) {
 	r := defaultReg()
 
 	// codebuddy provider owns the public Hunyuan and DeepSeek models.
-	for _, model := range []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"} {
+	for _, model := range []string{
+		"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+		"kimi-k3", "glm-5.3", "glm-5.3-flash",
+	} {
 		canonical, ok := r.LookupProviderModel("codebuddy", model)
 		if !ok {
 			t.Fatalf("codebuddy should own model %q", model)
@@ -1136,6 +1142,9 @@ func TestProviderModelMap(t *testing.T) {
 	}
 	if _, ok := r.LookupProviderModel("codebuddy", "glm-5.2"); ok {
 		t.Fatal("codebuddy should no longer own removed cb-glm model glm-5.2")
+	}
+	if _, ok := r.LookupProviderModel("codebuddy", "kimi-k2.6"); ok {
+		t.Fatal("codebuddy should no longer own retired Kimi K2.6")
 	}
 
 	canonical, ok := r.LookupProviderModel("zhipu-coding", "glm-5.3")
