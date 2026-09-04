@@ -115,7 +115,7 @@ func TestDirectRunCodexSparkKeepsCodexCommandAndProfile(t *testing.T) {
 	}
 }
 
-func TestDirectRunCBKimiSelectsCodeBuddyWithKimiK26(t *testing.T) {
+func TestDirectRunCBKimiSelectsCodeBuddyWithKimiK3(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -142,16 +142,16 @@ func TestDirectRunCBKimiSelectsCodeBuddyWithKimiK26(t *testing.T) {
 	if plan.Env["FORGE_PROFILE"] != "cb-kimi" {
 		t.Fatalf("cb-kimi FORGE_PROFILE = %q, want cb-kimi", plan.Env["FORGE_PROFILE"])
 	}
-	// Verify the command contains --model kimi-k2.6 in correct order.
+	// Verify the command contains --model kimi-k3 in correct order.
 	foundModel := false
 	for i, a := range plan.Command {
-		if a == "--model" && i+1 < len(plan.Command) && plan.Command[i+1] == "kimi-k2.6" {
+		if a == "--model" && i+1 < len(plan.Command) && plan.Command[i+1] == "kimi-k3" {
 			foundModel = true
 			break
 		}
 	}
 	if !foundModel {
-		t.Fatalf("cb-kimi command must contain ordered --model kimi-k2.6: %#v", plan.Command)
+		t.Fatalf("cb-kimi command must contain ordered --model kimi-k3: %#v", plan.Command)
 	}
 	// Verify NO Kimi Coding / Anthropic endpoint or API-key env is injected.
 	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"} {

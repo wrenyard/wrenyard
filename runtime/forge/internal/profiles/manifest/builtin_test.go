@@ -16,7 +16,10 @@ func TestBuiltinProfileSet(t *testing.T) {
 		"cb-hy":        true,
 		"cb-ds":        true,
 		"cb-dsf":       true,
+		"cb-minimax":   true,
 		"cb-kimi":      true,
+		"cb-glm":       true,
+		"cb-glmf":      true,
 		"cc-kimi":      true,
 		"cc-glm":       true,
 		"cc-glmf":      true,
@@ -44,7 +47,6 @@ func TestBuiltinProfileSet(t *testing.T) {
 		"codex-xhigh": true,
 		"codex-lite":  true,
 		"codex-mini":  true,
-		"cb-glm":      true,
 	}
 
 	got := make(map[string]bool)
@@ -104,7 +106,10 @@ func TestCodebuddyProfiles(t *testing.T) {
 		{"cb-hy", "hy4-preview-ioa"},
 		{"cb-ds", "deepseek-v4-pro"},
 		{"cb-dsf", "deepseek-v4-flash"},
-		{"cb-kimi", "kimi-k2.6"},
+		{"cb-minimax", "minimax-m3"},
+		{"cb-kimi", "kimi-k3"},
+		{"cb-glm", "glm-5.3"},
+		{"cb-glmf", "glm-5.3-flash"},
 	}
 	for _, tc := range tests {
 		p := Get(tc.id)
@@ -291,7 +296,7 @@ func TestImmutableCopy(t *testing.T) {
 }
 
 func TestRemovedProfilesNotFound(t *testing.T) {
-	for _, id := range []string{"codex", "codex-high", "codex-xhigh", "codex-lite", "codex-mini", "cb-glm"} {
+	for _, id := range []string{"codex", "codex-high", "codex-xhigh", "codex-lite", "codex-mini"} {
 		p := Get(id)
 		if p != nil {
 			t.Errorf("Get(%q) should return nil for removed profile", id)
@@ -300,7 +305,7 @@ func TestRemovedProfilesNotFound(t *testing.T) {
 }
 
 func TestActiveProfilesNotDeprecated(t *testing.T) {
-	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-kimi", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
+	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-minimax", "cb-kimi", "cb-glm", "cb-glmf", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
 		p := Get(id)
 		if p == nil {
 			t.Fatalf("Get(%q) returned nil", id)

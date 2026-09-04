@@ -292,10 +292,23 @@ func TestNewCodexSolTerraLunaProfilesExist(t *testing.T) {
 	}
 }
 
-func TestCBGLMProfileIsRemoved(t *testing.T) {
+func TestCodeBuddyCurrentModelProfilesAreEmbedded(t *testing.T) {
 	manifest := *manifest.BuiltinManifest()
-	if _, ok := manifest.Profiles["cb-glm"]; ok {
-		t.Fatal("cb-glm should be removed from embedded profiles")
+	want := map[string]string{
+		"cb-minimax": "minimax-m3",
+		"cb-kimi":    "kimi-k3",
+		"cb-glm":     "glm-5.3",
+		"cb-glmf":    "glm-5.3-flash",
+	}
+	for profileID, modelID := range want {
+		profile, ok := manifest.Profiles[profileID]
+		if !ok {
+			t.Fatalf("embedded profiles missing %s", profileID)
+		}
+		args, ok := profile.Launcher["default_args"].([]any)
+		if !ok || len(args) != 2 || args[0] != "--model" || args[1] != modelID {
+			t.Fatalf("%s default_args = %#v, want [--model %s]", profileID, profile.Launcher["default_args"], modelID)
+		}
 	}
 }
 

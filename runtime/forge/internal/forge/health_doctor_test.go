@@ -353,7 +353,10 @@ func TestCbModelWhitelistCheckLocalCustomProviderUsesOwnBinding(t *testing.T) {
 	reg := catalog.NewRegistry()
 	reg.RegisterBinding(catalog.Provider{
 		Name: "codebuddy", Kind: "builtin",
-		AllowedModels: []string{"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"},
+		AllowedModels: []string{
+			"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+			"kimi-k3", "glm-5.3", "glm-5.3-flash",
+		},
 	})
 	reg.RegisterBinding(catalog.Provider{
 		Name: "codebuddy-local", Kind: "custom",
