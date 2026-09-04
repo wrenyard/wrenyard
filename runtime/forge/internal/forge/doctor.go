@@ -136,7 +136,7 @@ func shellPlanHasConflicts(raw interface{}) bool {
 }
 
 func shellPlanHasActions(raw interface{}) bool {
-	return len(raw.(shell.InstallPlan).Actions) > 0
+	return len(raw.(shell.InstallPlan).ChangePlan.Actions) > 0
 }
 
 func providerCredentialAvailableAsCallback(p doctor.Profile) bool {

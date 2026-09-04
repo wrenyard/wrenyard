@@ -16,6 +16,7 @@ type CommandAction struct {
 }
 
 // Action is a single change-plan action. Exactly one of File or Command is set.
+// File carries the target path for both file_write and file_delete.
 type Action struct {
 	Type    string
 	File    *FileWrite

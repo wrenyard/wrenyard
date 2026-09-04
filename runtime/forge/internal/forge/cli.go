@@ -156,9 +156,9 @@ COMMANDS
     --json                 Output JSON
     target: codex
 
-  setup                    Refresh shell aliases and run doctor
+  setup                    Retire legacy Agent shell aliases and run doctor
 
-  update                   Update Forge, run setup, refresh shell aliases, and run doctor
+  update                   Update Forge, run setup, retire legacy aliases, and run doctor
 
 SHELL (INTERNAL)
   shell dsh plan                Print the resolved fdsh/DSH launch plan

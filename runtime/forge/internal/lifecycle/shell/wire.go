@@ -22,13 +22,13 @@ func BuildInstallPlan(home, targetShell string, deps InstallDeps) (InstallPlan, 
 		// resolved or embedded.
 		launcher := "wrenyard"
 		managed := RenderManagedPowerShell(profiles, funcNames, launcher, deps.ResolveCredential, deps.IsManagedProvider)
-		return PlanPowerShell(home, managed, funcNames)
+		return PlanPowerShellRetirement(home, managed), nil
 	}
 	managed, err := RenderManagedZsh(profiles, funcNames, deps.ResolveCredential, deps.IsManagedProvider)
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	return PlanZsh(home, managed, funcNames)
+	return PlanZshRetirement(home, managed), nil
 }
 
 func RenderManagedShellFile(deps InstallDeps) (string, error) {

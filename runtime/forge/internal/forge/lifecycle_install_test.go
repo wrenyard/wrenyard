@@ -10,6 +10,7 @@ import (
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/install"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/layout"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/shell"
 )
 
 func TestRepoDirFindsCommonCheckoutWithoutEnv(t *testing.T) {
@@ -727,8 +728,8 @@ func TestSetupWithWrenyardRootSkipsStableLaunchers(t *testing.T) {
 	ctx.Home = home
 
 	// Suite-managed setup must succeed while skipping the automatic internal
-	// self-install step, so the retired public forge/fdsh launchers are not
-	// recreated; shell integration must still be written.
+	// self-install step. Retired launchers and Agent shell integration must not
+	// be recreated.
 	if install.SetupCommand(ctx) != 0 {
 		t.Fatal("setup with WRENYARD_ROOT should succeed")
 	}
@@ -743,7 +744,14 @@ func TestSetupWithWrenyardRootSkipsStableLaunchers(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		managed = filepath.Join(configDir, "shell", "wrenyard.ps1")
 	}
-	if !exists(managed) {
-		t.Fatalf("setup with WRENYARD_ROOT should write Wrenyard shell integration at %s", managed)
+	if exists(managed) {
+		t.Fatalf("setup with WRENYARD_ROOT must not recreate retired Wrenyard shell integration at %s", managed)
+	}
+}
+
+func TestShellPlanHasActionsIgnoresRetainedDriftNotice(t *testing.T) {
+	plan := shell.InstallPlan{Actions: []string{"retain drifted managed shell file"}}
+	if shellPlanHasActions(plan) {
+		t.Fatal("a retained drift notice is not a pending filesystem action")
 	}
 }
