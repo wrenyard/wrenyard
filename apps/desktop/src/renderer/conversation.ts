@@ -623,21 +623,14 @@ export class ConversationView {
   }
 
   private renderProviderSignal(target: HTMLElement, presentation: ConversationProviderPresentation): void {
-    target.replaceChildren(...presentation.indicators.map((indicator) => {
-      const dot = document.createElement('i');
-      dot.className = `is-${indicator.kind}`;
-      dot.dataset.kind = indicator.kind;
-      dot.setAttribute('aria-hidden', 'true');
-      return dot;
-    }));
-    target.hidden = presentation.indicators.length === 0;
-    if (presentation.indicators.length > 0) {
-      target.setAttribute('role', 'img');
-      target.setAttribute('aria-label', presentation.tooltip);
-    } else {
-      target.removeAttribute('role');
-      target.removeAttribute('aria-label');
-    }
+    const dot = document.createElement('i');
+    dot.className = `is-${presentation.status}`;
+    dot.dataset.status = presentation.status;
+    dot.setAttribute('aria-hidden', 'true');
+    target.replaceChildren(dot);
+    target.hidden = false;
+    target.setAttribute('role', 'img');
+    target.setAttribute('aria-label', presentation.tooltip);
   }
 
   private openModelPicker(preferred: 'first' | 'last' | 'selected'): void {

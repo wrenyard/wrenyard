@@ -171,7 +171,8 @@ Electron product shell
   parallel model preference. The model control is a Desktop-themed listbox,
   not a native select: every choice shows its Catalog Provider under the model
   name, and the existing Desktop quota snapshot is projected into quiet
-  provider-level status marks with accessible tooltips. Percentage windows and
+  provider-level green/yellow/red status dots with accessible tooltips. Each
+  provider instance renders exactly one same-size dot; percentage windows and
   monetary balances remain distinct; this view neither polls quota separately
   nor infers a subscription tier. MCP defaults to
   `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon

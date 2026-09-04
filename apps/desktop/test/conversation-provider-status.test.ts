@@ -32,67 +32,62 @@ function quota(overrides: Partial<QuotaProviderSnapshot> = {}): QuotaProviderSna
   };
 }
 
-test('picker quota projection distinguishes plan pace and low remaining quota', () => {
+test('picker quota projection collapses plan warnings into one yellow status', () => {
   const presentation = conversationProviderPresentation('codebuddy', snapshot(quota({
     windows: [{ name: '5h', remainingPct: 8, expectedRemainingPct: 24 }],
   })));
 
   assert.equal(presentation.label, 'CodeBuddy');
-  assert.deepEqual(presentation.indicators.map((indicator) => indicator.kind), [
-    'quota-plan',
-    'quota-low',
-    'pace-low',
-  ]);
+  assert.equal(presentation.status, 'yellow');
   assert.match(presentation.tooltip, /额度计划/);
+  assert.match(presentation.tooltip, /剩余额度偏低/);
+  assert.match(presentation.tooltip, /消耗速度偏快/);
   assert.doesNotMatch(presentation.tooltip, /订阅|会员|Pro/);
 });
 
-test('picker quota projection distinguishes balances without inventing a plan', () => {
+test('picker quota projection keeps a healthy balance green without inventing a plan', () => {
   const presentation = conversationProviderPresentation('deepseek', snapshot(quota({
     id: 'deepseek',
     label: 'DeepSeek',
     balances: [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }],
   })));
 
-  assert.deepEqual(presentation.indicators.map((indicator) => indicator.kind), ['balance']);
+  assert.equal(presentation.status, 'green');
   assert.match(presentation.tooltip, /余额 \/ 按量/);
   assert.doesNotMatch(presentation.tooltip, /额度计划/);
 });
 
-test('picker quota projection covers exhaustion and provider lifecycle states', () => {
+test('picker quota projection makes exhaustion and provider failures red', () => {
   const exhausted = conversationProviderPresentation('codebuddy', snapshot(quota({
-    status: 'error',
-    stale: true,
     balances: [{ currency: 'CNY', amount: '0', display: '¥0.00' }],
     message: '计划信息暂不可用',
   })));
-  assert.deepEqual(exhausted.indicators.map((indicator) => indicator.kind), [
-    'balance',
-    'error',
-    'stale',
-    'quota-empty',
-  ]);
+  assert.equal(exhausted.status, 'red');
+  assert.match(exhausted.tooltip, /额度已耗尽/);
   assert.match(exhausted.tooltip, /计划信息暂不可用/);
 
+  const errored = conversationProviderPresentation('codebuddy', snapshot(quota({ status: 'error' })));
+  assert.equal(errored.status, 'red');
+
   const pending = conversationProviderPresentation('codebuddy', snapshot(quota({ status: 'pending' })));
-  assert.deepEqual(pending.indicators.map((indicator) => indicator.kind), ['pending']);
+  assert.equal(pending.status, 'yellow');
+
+  const stale = conversationProviderPresentation('codebuddy', snapshot(quota({ stale: true })));
+  assert.equal(stale.status, 'yellow');
 
   const unavailable = conversationProviderPresentation('codebuddy', snapshot(quota({ status: 'unavailable' })));
-  assert.deepEqual(unavailable.indicators.map((indicator) => indicator.kind), ['unavailable']);
+  assert.equal(unavailable.status, 'red');
 });
 
-test('picker marks globally unavailable provider data but stays quiet when no quota evidence exists', () => {
+test('picker keeps an advertised provider without quota evidence green', () => {
   const unavailable: QuotaSnapshot = {
     status: 'unavailable',
     providers: [],
     catalog: [],
     providerOrder: [],
   };
-  assert.deepEqual(
-    conversationProviderPresentation('codebuddy', unavailable).indicators.map((indicator) => indicator.kind),
-    ['unavailable'],
-  );
+  assert.equal(conversationProviderPresentation('codebuddy', unavailable).status, 'green');
 
   const available = { ...unavailable, status: 'available' as const };
-  assert.deepEqual(conversationProviderPresentation('codebuddy', available).indicators, []);
+  assert.equal(conversationProviderPresentation('codebuddy', available).status, 'green');
 });

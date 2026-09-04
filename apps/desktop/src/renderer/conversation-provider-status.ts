@@ -6,26 +6,12 @@ import type {
 
 const LOW_REMAINING_PERCENT = 10;
 
-export type ConversationProviderIndicatorKind =
-  | 'balance'
-  | 'quota-plan'
-  | 'pace-low'
-  | 'quota-low'
-  | 'quota-empty'
-  | 'pending'
-  | 'error'
-  | 'unavailable'
-  | 'stale';
-
-export interface ConversationProviderIndicator {
-  kind: ConversationProviderIndicatorKind;
-  label: string;
-}
+export type ConversationProviderStatus = 'green' | 'yellow' | 'red';
 
 export interface ConversationProviderPresentation {
   id: string;
   label: string;
-  indicators: ConversationProviderIndicator[];
+  status: ConversationProviderStatus;
   tooltip: string;
 }
 
@@ -56,38 +42,36 @@ export function conversationProviderPresentation(
 ): ConversationProviderPresentation {
   const { catalog, quota } = quotaForProvider(snapshot, providerId);
   const label = catalog?.label || quota?.label || providerId;
-  const indicators: ConversationProviderIndicator[] = [];
+  const details: string[] = [];
 
-  if (quota?.balances.length) indicators.push({ kind: 'balance', label: '余额 / 按量' });
-  if (quota?.windows.length) indicators.push({ kind: 'quota-plan', label: '额度计划' });
+  if (quota?.balances.length) details.push('余额 / 按量');
+  if (quota?.windows.length) details.push('额度计划');
 
-  if (quota?.status === 'pending') indicators.push({ kind: 'pending', label: '额度状态读取中' });
-  if (quota?.status === 'error') indicators.push({ kind: 'error', label: '额度状态异常' });
-  if (quota?.status === 'unavailable') indicators.push({ kind: 'unavailable', label: '额度状态不可用' });
-  if (quota?.stale) indicators.push({ kind: 'stale', label: '额度状态可能已过期' });
+  if (quota?.status === 'pending') details.push('额度状态读取中');
+  if (quota?.status === 'error') details.push('额度状态异常');
+  if (quota?.status === 'unavailable') details.push('额度状态不可用');
+  if (quota?.stale) details.push('额度状态可能已过期');
 
   const remaining = quota?.windows.map((window) => window.remainingPct) ?? [];
-  if (remaining.some((value) => value <= 0) || quota?.balances.some((balance) => balanceIsEmpty(balance.amount))) {
-    indicators.push({ kind: 'quota-empty', label: '额度已耗尽' });
-  } else if (remaining.some((value) => value <= LOW_REMAINING_PERCENT)) {
-    indicators.push({ kind: 'quota-low', label: '剩余额度偏低' });
-  }
-  if (quota?.windows.some((window) => window.expectedRemainingPct !== null
-    && window.remainingPct < window.expectedRemainingPct)) {
-    indicators.push({ kind: 'pace-low', label: '消耗速度偏快' });
-  }
+  const exhausted = remaining.some((value) => value <= 0)
+    || Boolean(quota?.balances.some((balance) => balanceIsEmpty(balance.amount)));
+  const low = !exhausted && remaining.some((value) => value <= LOW_REMAINING_PERCENT);
+  const paceLow = Boolean(quota?.windows.some((window) => window.expectedRemainingPct !== null
+    && window.remainingPct < window.expectedRemainingPct));
+  if (exhausted) details.push('额度已耗尽');
+  else if (low) details.push('剩余额度偏低');
+  if (paceLow) details.push('消耗速度偏快');
 
-  if (!quota && snapshot?.status === 'unavailable') {
-    indicators.push({ kind: 'unavailable', label: 'Provider 状态不可用' });
-  }
-
-  const details = indicators.map((indicator) => indicator.label);
+  const red = exhausted || quota?.status === 'error' || quota?.status === 'unavailable';
+  const yellow = low || paceLow || quota?.status === 'pending' || Boolean(quota?.stale);
+  const status: ConversationProviderStatus = red ? 'red' : yellow ? 'yellow' : 'green';
+  const statusLabel = status === 'red' ? '不可用' : status === 'yellow' ? '需要注意' : '状态正常';
   const message = quota?.message?.trim();
   if (message) details.push(message.slice(0, 160));
   return {
     id: providerId,
     label,
-    indicators,
-    tooltip: [label, ...details].join(' · '),
+    status,
+    tooltip: [label, statusLabel, ...details].join(' · '),
   };
 }
