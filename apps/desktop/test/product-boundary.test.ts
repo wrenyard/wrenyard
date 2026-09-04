@@ -90,11 +90,17 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(conversationRenderer, /event\.key === 'Escape'/);
   assert.match(conversationRenderer, /document\.addEventListener\('pointerdown'/);
   assert.match(conversationRenderer, /setQuotaSnapshot/);
+  assert.match(conversationRenderer, /presentation\.status/);
+  assert.doesNotMatch(conversationRenderer, /presentation\.indicators/);
   assert.match(conversationRenderer, /setAttribute\('aria-disabled'/);
   assert.match(conversationRenderer, /directory\.status === 'loading'/);
   assert.match(conversationRenderer, /getAttribute\('aria-disabled'\) === 'true'/);
   assert.match(conversationRenderer, /modelTrigger\.focus\(\{ preventScroll: true \}\)/);
   assert.doesNotMatch(conversationRenderer, /setInterval|listProviders|configureProvider/);
+  assert.match(rendererStyles, /i\.is-green/);
+  assert.match(rendererStyles, /i\.is-yellow/);
+  assert.match(rendererStyles, /i\.is-red/);
+  assert.doesNotMatch(rendererStyles, /i\.is-balance|i\.is-quota-plan|i\.is-pace-low|i\.is-quota-low|i\.is-quota-empty/);
   assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);
   assert.match(rendererStyles, /::-webkit-scrollbar-thumb/);
   assert.match(rendererStyles, /data-platform="win32"/);
