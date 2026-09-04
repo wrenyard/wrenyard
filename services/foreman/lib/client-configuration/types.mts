@@ -53,6 +53,7 @@ export interface GatewayClientConnection {
 export interface ClientModelSelection {
   models: readonly string[]
   defaultModel: string
+  protocols?: Readonly<Record<string, GatewayProtocol>>
 }
 
 export interface ClientPlanFile {
@@ -68,6 +69,7 @@ export interface ClientConfigurationPlan {
   files: readonly ClientPlanFile[]
   models: readonly string[]
   defaultModel?: string
+  protocols?: Readonly<Record<string, GatewayProtocol>>
   connectionMode: 'additive' | 'switching'
   effects: readonly string[]
   requiresRestart: readonly ClientSurfaceId[]
