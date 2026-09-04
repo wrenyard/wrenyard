@@ -128,6 +128,45 @@ test('service exposes health.ping over IPC without replacing HTTP health', async
   }
 })
 
+test('service provider.list projects only public model metadata over IPC', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-provider-list-'))
+  const workspaceProject = join(workDir, 'projects', 'workspace')
+  mkdirSync(workspaceProject, { recursive: true })
+  writeFileSync(
+    join(workspaceProject, 'workspace.fmproj'),
+    'name: workspace\ndescription: Workspace shared resources\n',
+    'utf-8',
+  )
+
+  const running = await createTestService(workDir)
+  const raw = await connectRawJsonRpcIpcClient(running.ipcPath)
+  try {
+    const result = await raw.client.request('provider.list', {}) as {
+      providers: Array<{ id: string; models: Array<Record<string, unknown>> }>
+    }
+    const codebuddy = result.providers.find((provider) => provider.id === 'codebuddy')
+    assert.deepEqual(codebuddy?.models.map((model) => model.id), [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'hy4-preview-ioa',
+      'kimi-k2.6',
+      'minimax-m3',
+      'minimax-m2.7',
+      'kimi-k2.7',
+      'hy3-preview',
+    ])
+    const anthropicApi = result.providers.find((provider) => provider.id === 'anthropic-api')
+    assert.ok(anthropicApi)
+    assert.equal(anthropicApi.models.some((model) => 'family' in model || 'claudeTier' in model || 'supports1MContext' in model), false)
+  } finally {
+    raw.client.close()
+    raw.transport.close()
+    await running.stop()
+    resetRegistry()
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
 test('service stop closes the IPC health endpoint', async () => {
   const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-ipc-stop-'))
   const workspaceProject = join(workDir, 'projects', 'workspace')

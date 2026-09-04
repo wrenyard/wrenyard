@@ -2,14 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBuiltinCatalog, resolveBuiltinDispatchPlans } from '../src/index.ts';
 
-test('CodeBuddy keeps native routing and exposes its four gateway models', () => {
+test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
   assert.equal(catalog.resolveRun('codebuddy', 'codebuddy', 'deepseek-v4-flash').mode, 'native');
-  assert.equal(catalog.resolveRun('dsh', 'codebuddy', 'deepseek-v4-flash').protocol, 'openai_chat');
+  const modelIds = [
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
+    'hy4-preview-ioa',
+    'kimi-k2.6',
+    'minimax-m3',
+    'minimax-m2.7',
+    'kimi-k2.7',
+    'hy3-preview',
+  ];
   assert.deepEqual(
     catalog.listGatewayModels('openai_chat').filter((entry) => entry.provider === 'codebuddy').map((entry) => entry.id),
-    ['deepseek-v4-flash', 'deepseek-v4-pro', 'hy4-preview-ioa', 'kimi-k2.6'],
+    modelIds,
   );
+  for (const modelId of modelIds) {
+    assert.equal(catalog.resolveRun('dsh', 'codebuddy', modelId).protocol, 'openai_chat');
+    assert.equal(catalog.resolveGatewayModel('openai_chat', `codebuddy/${modelId}`).upstreamModel, modelId);
+  }
 });
 
 test('daemon dispatch plans are resolved by the TypeScript catalog', () => {

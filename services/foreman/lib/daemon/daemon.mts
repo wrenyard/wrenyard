@@ -372,7 +372,13 @@ async function startForemanDaemonWithRuntime(
         authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
           : provider.credentialResolver ? 'native' as const : 'none' as const,
         protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
-        models: provider.models.map((model) => ({ ...model })),
+        models: provider.models.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
+        })),
       }))),
     }),
     providerConfigure: async ({ providerId, key }) => {
