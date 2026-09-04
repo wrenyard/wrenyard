@@ -66,6 +66,8 @@ func Apply(plan Plan, dryRun bool, deps Dependencies) Result {
 		var err error
 		if action.Type == "file_write" && action.File != nil {
 			current, err = applyFileWrite(*action.File, index, runID, deps)
+		} else if action.Type == "file_delete" && action.File != nil {
+			current, err = applyFileDelete(*action.File, index, runID, deps)
 		} else if action.Type == "command" && action.Command != nil {
 			current = applyCommand(*action.Command, index)
 		} else {
@@ -87,6 +89,27 @@ func Apply(plan Plan, dryRun bool, deps Dependencies) Result {
 	}
 	journalPath := writeJournal(plan, entries, runID, succeeded, deps)
 	return Result{Succeeded: succeeded, Entries: entries, JournalPath: &journalPath}
+}
+
+func applyFileDelete(action FileWrite, index int, runID string, deps Dependencies) (map[string]interface{}, error) {
+	if !exists(action.Path) {
+		return entry(Action{Type: "file_delete", File: &action}, index, "succeeded", nil), nil
+	}
+	info, err := os.Stat(action.Path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory", action.Path)
+	}
+	backup, err := backupFile(action.Path, runID, deps)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Remove(action.Path); err != nil {
+		return nil, err
+	}
+	return entry(Action{Type: "file_delete", File: &action}, index, "succeeded", map[string]interface{}{"backup_path": backup}), nil
 }
 
 func applyFileWrite(action FileWrite, index int, runID string, deps Dependencies) (map[string]interface{}, error) {
@@ -145,6 +168,9 @@ func applyCommand(action CommandAction, index int) map[string]interface{} {
 func actionJournal(action Action) map[string]interface{} {
 	if action.Type == "file_write" && action.File != nil {
 		return map[string]interface{}{"type": "file_write", "path": action.File.Path, "encoding": nonEmpty(action.File.Encoding, "utf-8"), "content": action.File.Content}
+	}
+	if action.Type == "file_delete" && action.File != nil {
+		return map[string]interface{}{"type": "file_delete", "path": action.File.Path}
 	}
 	if action.Type == "command" && action.Command != nil {
 		data := map[string]interface{}{"type": "command", "command": action.Command.Command}

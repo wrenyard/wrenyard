@@ -110,6 +110,75 @@ func PlanPowerShell(home string, managedShell string, funcNames []string) (Insta
 	}, nil
 }
 
+// PlanZshRetirement removes only Wrenyard-owned source blocks and a byte-identical
+// generated shell file. Drifted managed files and all isolated client data are retained.
+func PlanZshRetirement(home string, canonicalManagedShell string) InstallPlan {
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "wrenyard.zsh")
+	zshrc := filepath.Join(home, ".zshrc")
+	existing := readTextIfExists(zshrc)
+	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartZsh, blockEndZsh)
+	cleaned, prereleaseForgeFound := removeSourceBlocks(cleaned, legacyBlockStartZsh, legacyBlockEndZsh)
+	cleaned, legacyBlockFound := removeLegacyShortcuts(cleaned)
+	actions := []change.Action{}
+	labels := []string{}
+	if cleaned != existing {
+		actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: zshrc, Content: cleaned, Encoding: "utf-8"}})
+		labels = append(labels, "remove Wrenyard Agent shortcut source block")
+	}
+	drifted := false
+	if exists(managedFile) {
+		if readTextIfExists(managedFile) == canonicalManagedShell {
+			actions = append(actions, change.Action{Type: "file_delete", File: &change.FileWrite{Path: managedFile}})
+			labels = append(labels, "remove unmodified managed shell file")
+		} else {
+			drifted = true
+			labels = append(labels, "retain drifted managed shell file")
+		}
+	}
+	return InstallPlan{
+		ChangePlan: change.Plan{Name: "wrenyard-retire-agent-shell", Actions: actions},
+		Shell:      "zsh", ManagedFile: managedFile, ProfilePath: zshrc, Zshrc: zshrc,
+		LegacyBlockFound:   legacyBlockFound || prereleaseForgeFound,
+		SourceBlockPresent: sourceBlockPresent,
+		DriftedManagedFile: drifted,
+		Actions:            labels,
+	}
+}
+
+// PlanPowerShellRetirement is the PowerShell equivalent of PlanZshRetirement.
+func PlanPowerShellRetirement(home string, canonicalManagedShell string) InstallPlan {
+	managedFile := filepath.Join(layout.NewPaths(home).ConfigDir(), "shell", "wrenyard.ps1")
+	profilePath := PowerShellProfilePathForHome(home)
+	existing := readTextIfExists(profilePath)
+	cleaned, sourceBlockPresent := removeSourceBlocks(existing, blockStartPowerShell, blockEndPowerShell)
+	cleaned, prereleaseForgeFound := removeSourceBlocks(cleaned, legacyBlockStartPowerShell, legacyBlockEndPowerShell)
+	cleaned, legacyBlockFound := RemovePowerShellLegacySourceBlocks(cleaned)
+	actions := []change.Action{}
+	labels := []string{}
+	if cleaned != existing {
+		actions = append(actions, change.Action{Type: "file_write", File: &change.FileWrite{Path: profilePath, Content: cleaned, Encoding: "utf-8"}})
+		labels = append(labels, "remove Wrenyard Agent shortcut source block")
+	}
+	drifted := false
+	if exists(managedFile) {
+		if readTextIfExists(managedFile) == canonicalManagedShell {
+			actions = append(actions, change.Action{Type: "file_delete", File: &change.FileWrite{Path: managedFile}})
+			labels = append(labels, "remove unmodified managed PowerShell file")
+		} else {
+			drifted = true
+			labels = append(labels, "retain drifted managed PowerShell file")
+		}
+	}
+	return InstallPlan{
+		ChangePlan: change.Plan{Name: "wrenyard-retire-agent-shell", Actions: actions},
+		Shell:      "powershell", ManagedFile: managedFile, ProfilePath: profilePath,
+		LegacyBlockFound:   legacyBlockFound || prereleaseForgeFound,
+		SourceBlockPresent: sourceBlockPresent,
+		DriftedManagedFile: drifted,
+		Actions:            labels,
+	}
+}
+
 // --- source-block manipulation ---
 
 func removeSourceBlocks(content, start, end string) (string, bool) {
@@ -228,6 +297,7 @@ func PlanPayload(plan InstallPlan) map[string]interface{} {
 		"profile_path":         plan.ProfilePath,
 		"legacy_block_found":   plan.LegacyBlockFound,
 		"source_block_present": plan.SourceBlockPresent,
+		"drifted_managed_file": plan.DriftedManagedFile,
 		"conflicts":            plan.Conflicts,
 		"actions":              plan.Actions,
 		"plan":                 planJournal(plan.ChangePlan),

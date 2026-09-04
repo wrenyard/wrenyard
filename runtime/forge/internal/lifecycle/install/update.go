@@ -16,7 +16,7 @@ type UpdateCommandContext struct {
 }
 
 // UpdateCommand runs the update pipeline: git pull, go build, versioned install,
-// then setup. Setup refreshes shell integration and runs doctor.
+// then setup. Setup retires legacy Agent shell integration and runs doctor.
 func UpdateCommand(ctx UpdateCommandContext) int {
 	if len(ctx.Args) > 0 {
 		fmt.Fprintln(os.Stderr, "forge update: no arguments expected")
@@ -59,7 +59,7 @@ func UpdateCommand(ctx UpdateCommandContext) int {
 		return 1
 	}
 
-	// Step 4: refresh shell integration and verify the installed environment.
+	// Step 4: retire legacy Agent shell integration and verify the installed environment.
 	fmt.Println("run setup and doctor...")
 	setup := exec.Command(binPath, "setup")
 	setup.Dir = repo

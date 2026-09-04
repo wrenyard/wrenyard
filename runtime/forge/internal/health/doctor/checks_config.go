@@ -158,20 +158,20 @@ func codexAuthPath(home string) string {
 	return filepath.Join(home, ".codex", "auth.json")
 }
 
-// ShellEntriesCheck verifies forge shell entries.
+// ShellEntriesCheck verifies that legacy Agent shell integration is retired.
 func ShellEntriesCheck(deps Dependencies) map[string]interface{} {
 	plan, err := deps.BuildShellPlan(deps.UserHome())
 	if err != nil {
-		return Check("shell", "warning", "Forge shell entries could not be inspected.", []string{"shell"}, map[string]interface{}{"error": err.Error()})
+		return Check("shell", "warning", "Legacy Agent shell integration could not be inspected.", []string{"shell"}, map[string]interface{}{"error": err.Error()})
 	}
 	details := deps.SafeShellPlanDetails(plan)
 	if deps.ShellHasConflicts(plan) {
-		return Check("shell", "warning", "Unmanaged shell shortcuts conflict with Forge shortcuts.", nil, details)
+		return Check("shell", "warning", "Legacy Agent shell integration has unmanaged conflicts.", nil, details)
 	}
 	if deps.ShellHasActions(plan) {
-		return Check("shell", "warning", "Forge shell entries are missing or stale.", nil, details)
+		return Check("shell", "warning", "Legacy Agent shell integration still needs retirement.", nil, details)
 	}
-	return Check("shell", "ok", "Forge shell entries are current.", nil, details)
+	return Check("shell", "ok", "Legacy Agent shell integration is retired.", nil, details)
 }
 
 // ProfileConflictsCheck detects profile environment variable conflicts.

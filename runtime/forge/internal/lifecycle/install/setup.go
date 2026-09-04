@@ -20,7 +20,7 @@ type SetupCommandContext struct {
 	Deps   Dependencies
 }
 
-// SetupCommand runs the setup pipeline (self-install, shell integration, and
+// SetupCommand runs the setup pipeline (self-install, legacy shell retirement, and
 // doctor). Provider API keys are managed exclusively through auth.json by the
 // providers auth commands; setup never imports legacy secret sources.
 func SetupCommand(ctx SetupCommandContext) int {
@@ -33,7 +33,7 @@ func SetupCommand(ctx SetupCommandContext) int {
 	}{}
 	// Suite-managed runs (WRENYARD_ROOT set) skip the automatic internal
 	// self-install step unless --self-install was explicitly requested;
-	// shell integration and doctor still run.
+	// legacy shell retirement and doctor still run.
 	if os.Getenv("WRENYARD_ROOT") == "" || selfInstall {
 		steps = append(steps, struct {
 			name string
@@ -43,7 +43,7 @@ func SetupCommand(ctx SetupCommandContext) int {
 	steps = append(steps, struct {
 		name string
 		fn   func() bool
-	}{"install shell integration", func() bool { return stepShellIntegration(ctx) }})
+	}{"retire legacy Agent shell integration", func() bool { return stepShellIntegration(ctx) }})
 
 	for _, step := range steps {
 		fmt.Printf("wrenyard setup: %s...\n", step.name)
@@ -239,36 +239,14 @@ func InstallShellWrappers(ctx SetupCommandContext, args []string, asJSON bool) i
 	payload["succeeded"] = result.Succeeded
 	payload["entries"] = withoutEntryFileContent(result.Entries)
 	payload["journal_path"] = unwrapJournalPath(result.JournalPath)
-	migration := ShellCCMigrationResult{}
-	var migrationErr error
-	if result.Succeeded {
-		if deps.MigrateShellCCState != nil {
-			migration, migrationErr = deps.MigrateShellCCState(ctx.Home)
-		}
-		payload["shell_cc_state"] = migration
-		if migrationErr != nil {
-			payload["succeeded"] = false
-			payload["shell_cc_state_error"] = migrationErr.Error()
-		} else if migration.CopiedFiles > 0 {
-			plan.Actions = append(plan.Actions, "migrate Claude Code session state")
-		} else if migration.SeededState {
-			plan.Actions = append(plan.Actions, "seed Claude Code onboarding state")
-		}
-	}
 	if asJSON {
 		printJSON(redactWithDeps(deps, payload))
 	} else if len(plan.Actions) == 0 {
-		fmt.Println("shell shortcuts already installed")
+		fmt.Println("legacy Agent shell integration already retired")
 	} else {
 		for _, action := range plan.Actions {
 			fmt.Println(action)
 		}
-	}
-	if migrationErr != nil {
-		if !asJSON {
-			fmt.Fprintln(os.Stderr, migrationErr)
-		}
-		return 1
 	}
 	if result.Succeeded {
 		return 0

@@ -37,6 +37,7 @@ type InstallPlan struct {
 	Conflicts          []Conflict
 	LegacyBlockFound   bool
 	SourceBlockPresent bool
+	DriftedManagedFile bool
 	Actions            []string
 }
 
