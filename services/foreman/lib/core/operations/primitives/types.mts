@@ -6,7 +6,7 @@ import type {
   OperationName,
 } from '../types.mts'
 
-export type RuntimePrimitiveName = Extract<OperationName, 'agent' | 'shell' | 'llm'>
+export type RuntimePrimitiveName = Extract<OperationName, 'agent' | 'shell'>
 export type DomainPrimitiveName = Extract<OperationName, 'task' | 'checkpoint'>
 export type ForemanPrimitiveName = RuntimePrimitiveName | DomainPrimitiveName
 

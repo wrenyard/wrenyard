@@ -30,13 +30,11 @@ afterEach(() => {
 function workspace(): string {
   const root = mkdtempSync(join(tmpdir(), 'foreman-config-'))
   roots.push(root)
-  writeFileSync(join(root, 'FWA.md'), '# FWA\n')
-  writeFileSync(join(root, 'WORK.md'), '# Work\n')
   return root
 }
 
 describe('Foreman config', () => {
-  it('normalizes native FWA, Work, principals, and delivery routes', () => {
+  it('normalizes workspace, principals, and delivery routes while ignoring retired agent config', () => {
     const root = workspace()
     const config = normalizeForemanServiceConfig({
       service: { bind: '127.0.0.1:9876' },
@@ -50,7 +48,7 @@ describe('Foreman config', () => {
             can_send: true,
             can_receive: true,
             delivery_route: 'operator.telegram',
-            grants: [{ name: 'message.send' }, { name: 'work.read' }],
+            grants: [{ name: 'message.send' }],
           },
         },
         routes: {
@@ -61,29 +59,10 @@ describe('Foreman config', () => {
 
     assert.equal(config.service.port, 9876)
     assert.equal(config.workspaceRoot, root)
-    assert.equal(config.fwa?.workspaceRoot, root)
-    assert.equal(config.work?.workspaceRoot, root)
     assert.equal(config.message.principals.codex.canSend, true)
     assert.equal(config.message.principals.codex.canReceive, false)
-    assert.equal(config.message.principals['foreman-work'].canReceive, true)
+    assert.equal(config.message.principals['foreman-work'], undefined)
     assert.equal(config.message.routes?.['operator.telegram'].transport, 'telegram')
-  })
-
-  it('requires FWA.md and WORK.md at configured roots', () => {
-    const root = mkdtempSync(join(tmpdir(), 'foreman-config-missing-'))
-    roots.push(root)
-    assert.throws(
-      () => normalizeForemanServiceConfig({
-        fwa: { workspace_root: root, llm: { model: 'wrenyard-public/model' } },
-      }, { configDir: root, env: {} }),
-      /FWA\.md/,
-    )
-    assert.throws(
-      () => normalizeForemanServiceConfig({
-        work: { workspace_root: root, llm: { model: 'wrenyard-public/model' } },
-      }, { configDir: root, env: {} }),
-      /WORK\.md/,
-    )
   })
 
   it('defaults to the current principal model without a resident agent role', () => {
@@ -98,12 +77,6 @@ describe('Foreman config', () => {
     assert.throws(
       () => normalizeForemanServiceConfig({ daily_session: { workspace_root: root } }, { configDir: root, env: {} }),
       /daily_session/u,
-    )
-    assert.throws(
-      () => normalizeForemanServiceConfig({
-        fwa: { backend: 'opencode', workspace_root: root, llm: { model: 'test' } },
-      }, { configDir: root, env: {} }),
-      /fwa\.backend/u,
     )
     assert.throws(
       () => normalizeForemanServiceConfig({ message: { local_role: 'wrenyard-agent' } }, { configDir: root, env: {} }),

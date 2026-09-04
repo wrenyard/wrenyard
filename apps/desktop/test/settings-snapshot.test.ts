@@ -32,9 +32,11 @@ test('settings snapshot exposes health and credential presence without secrets',
     dshVersion: '0.1.0-rc.6',
     buildTime: '2026-09-01T02:03:04.000Z',
     readHealth: async () => ({ connected: true, uptimeMs: 125_000 }),
-    readCredentialEnv: async () => ({
-      FORGE_DSH_KIMI_CODING_API_KEY: 'fixture-credential-value',
-    }),
+    readGatewayModels: async () => [
+      { id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3' },
+      { id: 'glm-5.3', publicId: 'zhipu-coding/glm-5.3', provider: 'zhipu-coding', displayName: 'GLM 5.3' },
+      { id: 'glm-5.3-flash', publicId: 'zhipu-coding/glm-5.3-flash', provider: 'zhipu-coding', displayName: 'GLM 5.3 Flash' },
+    ],
     readPet: async () => pet,
     readUpdate: () => ({
       channel: 'dev',
@@ -56,14 +58,10 @@ test('settings snapshot exposes health and credential presence without secrets',
     },
     uptimeMs: 125_000,
   });
-  assert.deepEqual(snapshot.models.slice(0, 2), [
-    { id: 'kimi-coding', label: 'Kimi Coding', configured: true },
-    { id: 'zhipu-coding', label: 'Zhipu Coding', configured: false },
+  assert.deepEqual(snapshot.models, [
+    { id: 'kimi-coding', label: 'kimi-coding', configured: true },
+    { id: 'zhipu-coding', label: 'zhipu-coding', configured: true },
   ]);
-  assert.equal(snapshot.models.length, 11);
-  for (const id of ['openai', 'zhipu', 'moonshot', 'minimax', 'minimax-coding', 'qwen', 'qwen-coding', 'tokenhub', 'volcengine']) {
-    assert.equal(snapshot.models.find((provider) => provider.id === id)?.configured, false);
-  }
   assert.deepEqual(snapshot.pet, pet);
   assert.equal(snapshot.update.channel, 'dev');
   assert.deepEqual(snapshot.about, {
@@ -73,7 +71,7 @@ test('settings snapshot exposes health and credential presence without secrets',
     buildTime: '2026-09-01T02:03:04.000Z',
     channel: 'dev',
   });
-  assert.equal(JSON.stringify(snapshot).includes('fixture-credential-value'), false);
+  assert.equal(JSON.stringify(snapshot).includes('token'), false);
 });
 
 test('settings snapshot degrades health and credentials independently', async () => {
@@ -91,7 +89,7 @@ test('settings snapshot degrades health and credentials independently', async ()
     readHealth: async () => {
       throw new Error('offline');
     },
-    readCredentialEnv: async () => {
+    readGatewayModels: async () => {
       throw new Error('unreadable');
     },
     readPet: async () => pet,
@@ -104,6 +102,6 @@ test('settings snapshot degrades health and credentials independently', async ()
   });
 
   assert.equal(snapshot.service.status, 'unavailable');
-  assert.ok(snapshot.models.every((model) => model.configured === false));
+  assert.deepEqual(snapshot.models, []);
   assert.equal('buildTime' in snapshot.about, false);
 });

@@ -12,10 +12,10 @@ export interface RuntimeGlobalOptions {
   checkpoint?: PrimitiveSet['checkpoint']
 }
 
-type GlobalKey = 'defineTask' | 'agent' | 'shell' | 'llm' | 'checkpoint' | 'foremanSchemas' | 'foremanInstructions'
+type GlobalKey = 'defineTask' | 'agent' | 'shell' | 'checkpoint' | 'foremanSchemas' | 'foremanInstructions'
 
 export function installRuntimeGlobals(opts: RuntimeGlobalOptions = {}): () => void {
-  const keys: GlobalKey[] = ['defineTask', 'agent', 'shell', 'llm', 'checkpoint', 'foremanSchemas', 'foremanInstructions']
+  const keys: GlobalKey[] = ['defineTask', 'agent', 'shell', 'checkpoint', 'foremanSchemas', 'foremanInstructions']
   const previous = new Map<GlobalKey, unknown>()
   for (const key of keys) previous.set(key, globalThis[key])
 
@@ -26,7 +26,6 @@ export function installRuntimeGlobals(opts: RuntimeGlobalOptions = {}): () => vo
 
   globalThis.agent = primitives.agent
   globalThis.shell = primitives.shell
-  globalThis.llm = primitives.llm
   globalThis.checkpoint = primitives.checkpoint
   globalThis.defineTask = (config: TaskConfig): TaskDefinition => ({
     __type: 'task',

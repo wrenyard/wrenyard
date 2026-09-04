@@ -44,28 +44,22 @@ const (
 	AuthSchemeAPIKey AuthScheme = "x-api-key"
 )
 
+// GatewayProtocol identifies the daemon-selected protocol carried by an exact
+// dispatch plan. The plan itself contains no upstream endpoint or credential.
+type GatewayProtocol string
+
+const (
+	GatewayProtocolOpenAIChat      GatewayProtocol = "openai_chat"
+	GatewayProtocolOpenAIResponses GatewayProtocol = "openai_responses"
+	GatewayProtocolAnthropic       GatewayProtocol = "anthropic_messages"
+)
+
 // InferenceBinding describes the default text-inference transport.
 type InferenceBinding struct {
 	Protocol           string             `json:"protocol"`
 	Endpoint           string             `json:"endpoint"`
 	CredentialResolver CredentialResolver `json:"credential_resolver"`
 	AuthScheme         AuthScheme         `json:"auth_scheme,omitempty"`
-}
-
-// RawLLMProtocol is a canonical raw protocol exposed by a provider.
-type RawLLMProtocol string
-
-const (
-	RawLLMProtocolOpenAI    RawLLMProtocol = "openai"
-	RawLLMProtocolAnthropic RawLLMProtocol = "anthropic"
-)
-
-// RawLLMCapability is a protocol-specific full base URL. Consumers receive
-// this value verbatim and must not add protocol-version or method path parts.
-type RawLLMCapability struct {
-	Protocol     RawLLMProtocol `json:"protocol"`
-	BaseEndpoint string         `json:"base_endpoint"`
-	AuthScheme   AuthScheme     `json:"auth_scheme,omitempty"`
 }
 
 // Provider describes one provider binding.
@@ -79,9 +73,10 @@ type Provider struct {
 	AllowedModels      []string           `json:"allowed_models,omitempty"`
 	CredentialResolver CredentialResolver `json:"credential_resolver,omitempty"`
 	Inference          *InferenceBinding  `json:"inference,omitempty"`
-	RawLLM             []RawLLMCapability `json:"raw_llm,omitempty"`
 	DefaultModel       string             `json:"default_model,omitempty"`
 	UseClientBinary    bool               `json:"-"`
+	GatewayRouted      bool               `json:"gateway_routed,omitempty"`
+	GatewayProtocol    GatewayProtocol    `json:"gateway_protocol,omitempty"`
 }
 
 func (p Provider) UsesClientBinary() bool { return p.UseClientBinary }
@@ -130,20 +125,13 @@ func (p Provider) DialectList() string {
 	return strings.Join(names, ", ")
 }
 
-func (p Provider) RawCapability(protocol RawLLMProtocol) (RawLLMCapability, bool) {
-	for _, capability := range p.RawLLM {
-		if capability.Protocol == protocol {
-			return capability, true
-		}
-	}
-	return RawLLMCapability{}, false
-}
-
 // ModelDef is provider-owned model metadata.
 type ModelDef struct {
 	ID            string `json:"id"`
 	DisplayName   string `json:"display_name,omitempty"`
 	ContextWindow int    `json:"context_window,omitempty"`
+	MaxTokens     int    `json:"max_tokens,omitempty"`
+	TaskOnly      bool   `json:"task_only,omitempty"`
 }
 
 type ProviderModels map[string]ModelDef
@@ -160,7 +148,8 @@ type QuotaMetadata struct {
 	Name string `json:"name,omitempty"`
 }
 
-// ProviderModule is the complete source of truth for one built-in provider.
+// ProviderModule retains the native client and credential adapters used by Forge.
+// The daemon Gateway's public catalog lives in TypeScript.
 type ProviderModule interface {
 	ID() string
 	Binding() Provider

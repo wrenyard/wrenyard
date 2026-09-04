@@ -25,7 +25,7 @@ describe('message.send sender binding', () => {
     })
 
     const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', { sender: 'operator', to: 'fwa-0123456789abcdef01234567', text: 'hi' }, 1),
+      makeJsonRpcRequest('message.send', { sender: 'operator', to: 'pet', text: 'hi' }, 1),
       { sender: { role: 'codex' } },
     )
 
@@ -47,7 +47,7 @@ describe('message.send sender binding', () => {
     })
 
     const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', { sender: 'operator', to: 'fwa-0123456789abcdef01234567', text: 'hi' }, 2),
+      makeJsonRpcRequest('message.send', { sender: 'operator', to: 'pet', text: 'hi' }, 2),
       { sender: {} },
     )
 
@@ -70,7 +70,7 @@ describe('message.send sender binding', () => {
     })
 
     const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', { sender: 'relay', to: 'fwa-0123456789abcdef01234567', text: 'hello' }, 3),
+      makeJsonRpcRequest('message.send', { sender: 'relay', to: 'pet', text: 'hello' }, 3),
       {},
     )
 
@@ -92,7 +92,7 @@ describe('message.send sender binding', () => {
     })
 
     const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', { to: 'fwa-0123456789abcdef01234567', text: 'hi' }, 4),
+      makeJsonRpcRequest('message.send', { to: 'pet', text: 'hi' }, 4),
       {},
     )
 
@@ -100,60 +100,4 @@ describe('message.send sender binding', () => {
     assert.equal(err.code, INVALID_PARAMS.code)
   })
 
-  it('forwards attachments to messageService.send', async () => {
-    const router = new RpcRouter()
-    const sent: Array<Record<string, unknown>> = []
-    registerCoreHandlers(router, {
-      startedAt: Date.now(),
-      workspaceRoot: '/tmp',
-      messageService: {
-        send(req: Parameters<MessageService['send']>[0]) {
-          sent.push(req as unknown as Record<string, unknown>)
-          return { message_id: 'mid-5', accepted: true, attachments: [{ path: '/tmp/test.png', status: 'accepted', mime_type: 'image/png' }] }
-        },
-      } as unknown as MessageService,
-    })
-
-    const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', {
-        sender: 'codex',
-        to: 'foreman-work',
-        text: 'check this image',
-        attachments: [{ path: '/tmp/test.png' }],
-      }, 5),
-      {},
-    )
-
-    const result = (response as { result: { message_id: string; accepted: boolean; attachments?: Array<unknown> } }).result
-    assert.equal(result.accepted, true)
-    assert.ok(result.attachments)
-    assert.equal((result.attachments as Array<{ path: string }>)[0].path, '/tmp/test.png')
-  })
-
-  it('rejects malformed attachment descriptors with INVALID_PARAMS', async () => {
-    const router = new RpcRouter()
-    registerCoreHandlers(router, {
-      startedAt: Date.now(),
-      workspaceRoot: '/tmp',
-      messageService: {
-        send(_req: Parameters<MessageService['send']>[0]) {
-          return { message_id: 'mid-6', accepted: true }
-        },
-      } as unknown as MessageService,
-    })
-
-    // Attachment without path should be caught by JSON schema
-    const response = await router.handleMessage(
-      makeJsonRpcRequest('message.send', {
-        sender: 'codex',
-        to: 'foreman-work',
-        text: 'bad attachment',
-        attachments: [{ not_path: '/tmp/test.png' }],
-      }, 6),
-      {},
-    )
-
-    const err = (response as { error: { code: number; message?: string } }).error
-    assert.equal(err.code, INVALID_PARAMS.code)
-  })
 })

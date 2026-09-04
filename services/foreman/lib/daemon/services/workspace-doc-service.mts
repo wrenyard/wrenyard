@@ -11,8 +11,8 @@
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, normalize, resolve, sep } from 'node:path'
-import { INVALID_PARAMS, ProtocolError } from '../../../protocol/errors.mts'
-import type { WorkspaceDocListResult, WorkspaceDocReadResult, WorkspaceDocCreateResult, WorkspaceDocUpdateResult } from '../../../protocol/methods/workspace-doc.mts'
+import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
+import type { WorkspaceDocListResult, WorkspaceDocReadResult, WorkspaceDocCreateResult, WorkspaceDocUpdateResult } from '../../protocol/methods/workspace-doc.mts'
 
 const MARKDOWN_EXT = '.md'
 
@@ -253,8 +253,6 @@ export class WorkspaceDocService {
     const results: string[] = []
 
     if (existsSync(join(this.workspaceRoot, 'AGENTS.md'))) results.push('AGENTS.md')
-    if (existsSync(join(this.workspaceRoot, 'FWA.md'))) results.push('FWA.md')
-    if (existsSync(join(this.workspaceRoot, 'WORK.md'))) results.push('WORK.md')
 
     // Walk docs directory
     this.addDocsRecursive(join(this.workspaceRoot, 'docs'), 'docs', results)
@@ -352,5 +350,5 @@ function isAllowedPrefix(normalized: string): boolean {
 }
 
 function isAllowedRootFile(normalized: string): boolean {
-  return normalized === 'AGENTS.md' || normalized === 'FWA.md' || normalized === 'WORK.md'
+  return normalized === 'AGENTS.md'
 }

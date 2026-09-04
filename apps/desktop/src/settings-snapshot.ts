@@ -1,7 +1,4 @@
-import {
-  INJECTED_PROVIDERS,
-  resolveModelCredentialEnv,
-} from './model-patch.js';
+import type { WrenyardGatewayModel } from '@wrenyard/control-client';
 import type { SettingsSnapshot } from './shell-contract.js';
 import type { PetCompanionSnapshot } from './shell-contract.js';
 import type { UpdateSnapshot } from './shell-contract.js';
@@ -20,7 +17,7 @@ export interface SettingsSnapshotOptions {
   dshVersion: string;
   buildTime?: string;
   readHealth(): Promise<HealthSnapshot>;
-  readCredentialEnv?: () => Promise<NodeJS.ProcessEnv>;
+  readGatewayModels?: () => Promise<WrenyardGatewayModel[]>;
   readPet(): Promise<PetCompanionSnapshot>;
   readUpdate(): UpdateSnapshot;
 }
@@ -31,9 +28,9 @@ export interface SettingsSnapshotOptions {
  */
 export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): Promise<SettingsSnapshot> {
   const update = options.readUpdate();
-  const [health, credentialEnv, pet] = await Promise.all([
+  const [health, gatewayModels, pet] = await Promise.all([
     options.readHealth().catch((): HealthSnapshot => ({ connected: false })),
-    (options.readCredentialEnv ?? resolveModelCredentialEnv)().catch((): NodeJS.ProcessEnv => ({})),
+    (options.readGatewayModels ?? (async () => []))().catch((): WrenyardGatewayModel[] => []),
     options.readPet(),
   ]);
 
@@ -44,12 +41,11 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       workspace: options.workspace,
       ...(typeof health.uptimeMs === 'number' ? { uptimeMs: health.uptimeMs } : {}),
     },
-    models: INJECTED_PROVIDERS.map((provider) => ({
-      id: provider.routeKey,
-      label: provider.displayName,
-      configured: typeof credentialEnv[provider.apiKeyEnv] === 'string'
-        && credentialEnv[provider.apiKeyEnv]!.trim() !== '',
-    })),
+    models: [...new Map(gatewayModels.map((model) => [model.provider, {
+      id: model.provider,
+      label: model.provider,
+      configured: true,
+    }])).values()],
     pet,
     update,
     about: {

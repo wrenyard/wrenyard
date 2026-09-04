@@ -6,7 +6,6 @@ import type {
   CheckpointFn,
   ExecutionOptions,
   JsonSchema,
-  LlmOpts,
   PermissionMode,
   PrimitiveSet,
   ResolvedTarget,
@@ -123,13 +122,11 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
     const opts: AgentOpts = { permission: 'edit' }
     const shellOpts: ShellOpts = {}
     const shellResult: ShellResult = { exitCode: 0, stdout: '', stderr: '' }
-    const llmOpts: LlmOpts = { temperature: 0 }
     const execOpts: ExecutionOptions = { workspaceRoot: '/' }
     const checkpoint: CheckpointFn = async () => ({})
     const primitives: PrimitiveSet = {
       agent: async () => ({ output: '', status: 'done' }),
       shell: async () => shellResult,
-      llm: async () => '',
       checkpoint,
     }
     const resolved: ResolvedTarget = {
@@ -141,7 +138,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
       sourcePath: '/x',
     }
 
-    assert.ok(opts && shellOpts && shellResult && llmOpts && execOpts && primitives && resolved)
+    assert.ok(opts && shellOpts && shellResult && execOpts && primitives && resolved)
   })
 })
 

@@ -28,12 +28,6 @@ export interface TaskGraphAutoSchemaResolver {
     input: ObjectJsonSchema;
     output: ObjectJsonSchema;
   } | null;
-
-  /** Return the input schema for an LLM action. */
-  resolveLlmInputSchema(params: JsonObject): ObjectJsonSchema | null;
-
-  /** Return structured output opts for an LLM action, if declared. */
-  resolveLlmStructuredOpts(params: JsonObject): { outputSchema?: ObjectJsonSchema } | null;
 }
 
 // ─── Materialization issue ────────────────────────────────────────────────────
@@ -943,93 +937,6 @@ function materializeNodeSchemas(
       break;
     }
 
-    case 'llm': {
-      const resolvedInput = resolver.resolveLlmInputSchema(params);
-      const structured = resolver.resolveLlmStructuredOpts(params);
-
-      // Input: distinguish resolver absence (null/undefined) from malformed runtime values.
-      if (resolvedInput === null || resolvedInput === undefined) {
-        // Documented absence — preserve explicit input.
-        inputSchema = node.input_schema;
-      } else if (typeof resolvedInput !== 'object' || resolvedInput === null || Array.isArray(resolvedInput)) {
-        issues.push({
-          nodeId: nid,
-          slot: 'input',
-          code: 'SCHEMA_INVALID',
-          message: 'resolver provided malformed LLM input schema',
-        });
-        inputSchema = node.input_schema;
-      } else {
-        if (inputProps && Object.keys(inputProps).length > 0) {
-          const check = assertSubset(resolvedInput as JsonObject, node.input_schema as JsonObject);
-          if (!check.match) {
-            issues.push({
-              nodeId: nid,
-              slot: 'input',
-              code: 'MAP_TYPE_MISMATCH',
-              message: `resolved LLM input conflicts with explicit: ${check.details}`,
-            });
-          }
-        }
-        inputSchema = cloneSchema(resolvedInput, 'input', 'resolver llm input');
-      }
-
-      // Output: use own-property presence for structured.outputSchema.
-      if (structured === null || structured === undefined) {
-        // No structured opts — canonical text output.
-        outputSchema = {
-          type: 'object',
-          properties: { text: { type: 'string' } as JsonObject },
-          required: ['text'],
-          additionalProperties: false,
-        } as ObjectJsonSchema;
-      } else if (typeof structured !== 'object' || Array.isArray(structured)) {
-        issues.push({
-          nodeId: nid,
-          slot: 'output',
-          code: 'SCHEMA_INVALID',
-          message: 'resolver provided malformed LLM structured opts (must be null or object)',
-        });
-        outputSchema = {
-          type: 'object',
-          properties: { text: { type: 'string' } as JsonObject },
-          required: ['text'],
-          additionalProperties: false,
-        } as ObjectJsonSchema;
-      } else if (Object.hasOwn(structured, 'outputSchema')) {
-        const rawSchema = structured.outputSchema;
-        if (rawSchema !== null && typeof rawSchema === 'object' && !Array.isArray(rawSchema)) {
-          // Recursively validate before clone.
-          emitSchemaValidationIssues(rawSchema as JsonObject, 'output');
-          // Valid structured output schema.
-          outputSchema = cloneSchema(rawSchema, 'output', 'resolver structured output');
-        } else {
-          // Present own property but not a valid schema object — malformed.
-          issues.push({
-            nodeId: nid,
-            slot: 'output',
-            code: 'SCHEMA_INVALID',
-            message: 'resolver provided malformed LLM structured output schema (own outputSchema present but invalid)',
-          });
-          outputSchema = {
-            type: 'object',
-            properties: { text: { type: 'string' } as JsonObject },
-            required: ['text'],
-            additionalProperties: false,
-          } as ObjectJsonSchema;
-        }
-      } else {
-        // structured opts object present but no outputSchema own property — no structured output.
-        outputSchema = {
-          type: 'object',
-          properties: { text: { type: 'string' } as JsonObject },
-          required: ['text'],
-          additionalProperties: false,
-        } as ObjectJsonSchema;
-      }
-      break;
-    }
-
     case 'convert': {
       if (node.deps.length !== 1) {
         issues.push({
@@ -1246,7 +1153,6 @@ function deepCloneNodes<T>(nodes: T): T {
  *
  * For each node, applies the frozen materialization table:
  * - task: preserve explicit graph slot input_schema; auto-resolve output
- * - llm: copies resolver input; canonical { text: string } output unless structured opts
  * - convert: derive input from upstream projections; construct output from assemble
  * - join: same as convert
  * - condition: pass through upstream

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { MessageRouteConfig, MessageTransportKind } from '../message/types.mts'
 import type { MessageDeliveryAuthConfig, MessageDeliveryRegistryConfig, PeerConfig } from '../message/delivery/types.mts'
@@ -8,74 +7,6 @@ import { CANONICAL_PRINCIPALS } from '../message/principal.mts'
 export interface NormalizeForemanConfigOptions {
   configDir: string
   env?: NodeJS.ProcessEnv
-}
-
-function normalizeFwaConfig(raw: ConfigRecord): ForemanServiceConfig['fwa'] {
-  if (raw.backend !== undefined) {
-    throw new Error('fwa.backend has been removed; native FWA is the only runtime')
-  }
-  const ws = stringValue(raw.workspace_root, '')
-  if (!ws) return undefined
-  const resolved = resolve(ws)
-  const fwaMd = resolve(resolved, 'FWA.md')
-  if (!existsSync(fwaMd)) {
-    throw new Error(`fwa workspace root ${resolved} must contain FWA.md`)
-  }
-
-  const llmRaw = record(raw.llm)
-  rejectStaleMaxIterations(llmRaw, 'fwa.llm')
-  const model = stringValue(llmRaw.model, '')
-  if (!model) {
-    throw new Error('fwa.llm.model is required; expected provider/model')
-  }
-
-  return {
-    workspaceRoot: resolved,
-    llm: {
-      model,
-      turn_timeout_ms: numberValue(llmRaw.turn_timeout_ms, 300_000),
-      http_timeout_ms: normalizePositiveInteger(llmRaw.http_timeout_ms, 120_000, 'fwa.llm.http_timeout_ms'),
-      max_retries: normalizeNonNegativeInteger(llmRaw.max_retries, 2, 'fwa.llm.max_retries'),
-      retry_backoff_ms: normalizePositiveInteger(llmRaw.retry_backoff_ms, 500, 'fwa.llm.retry_backoff_ms'),
-    },
-  }
-}
-
-function normalizeWorkConfig(raw: ConfigRecord): ForemanServiceConfig['work'] {
-  const ws = stringValue(raw.workspace_root, '')
-  if (!ws) return undefined
-
-  const resolved = resolve(ws)
-  const workMd = resolve(resolved, 'WORK.md')
-  if (!existsSync(workMd)) {
-    throw new Error(`work.workspace_root ${resolved} must contain WORK.md`)
-  }
-
-  const llmRaw = record(raw.llm)
-  rejectStaleMaxIterations(llmRaw, 'work.llm')
-  const model = stringValue(llmRaw.model, '')
-  if (!model) {
-    throw new Error('work.llm.model is required; expected provider/model')
-  }
-  const models = stringArrayValue(llmRaw.models)
-  for (const entry of models) {
-    if (!entry.trim()) {
-      throw new Error('work.llm.models must contain non-empty model strings')
-    }
-  }
-
-  return {
-    workspaceRoot: resolved,
-    max_concurrent_turns: normalizePositiveInteger(raw.max_concurrent_turns, 3, 'work.max_concurrent_turns'),
-    llm: {
-      model,
-      ...(models.length > 0 ? { models } : {}),
-      turn_timeout_ms: numberValue(llmRaw.turn_timeout_ms, 300_000),
-      http_timeout_ms: normalizePositiveInteger(llmRaw.http_timeout_ms, 120_000, 'work.llm.http_timeout_ms'),
-      max_retries: normalizeNonNegativeInteger(llmRaw.max_retries, 2, 'work.llm.max_retries'),
-      retry_backoff_ms: normalizePositiveInteger(llmRaw.retry_backoff_ms, 500, 'work.llm.retry_backoff_ms'),
-    },
-  }
 }
 
 export function normalizeForemanServiceConfig(
@@ -89,7 +20,6 @@ export function normalizeForemanServiceConfig(
     throw new Error('daily_session has been removed; configure workspace.root')
   }
   const workspace = record(config.workspace)
-  const fwa = normalizeFwaConfig(record(config.fwa))
   const message = record(config.message)
   const messageDeliveryRaw = record(message.delivery)
 
@@ -97,8 +27,6 @@ export function normalizeForemanServiceConfig(
   const { host, port } = parseBind(bind)
   const workspaceRoot = resolveWorkspaceRoot(workspace.root, options.configDir, env)
 
-  const workRaw = record(config.work)
-  const work = normalizeWorkConfig(workRaw)
   const normalizedMessage = normalizeMessageConfig(message)
   const messageDelivery = isMessageDeliveryConfig(messageDeliveryRaw)
     ? normalizeMessageDeliveryConfig(messageDeliveryRaw)
@@ -113,8 +41,6 @@ export function normalizeForemanServiceConfig(
       ...(serviceIpc ? { ipc: serviceIpc } : {}),
     },
     workspaceRoot,
-    ...(fwa ? { fwa } : {}),
-    ...(work ? { work } : {}),
     message: normalizedMessage,
     ...(messageDelivery ? { messageDelivery } : {}),
   }
@@ -255,40 +181,6 @@ function stringValue(value: unknown, fallback: string): string {
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
-}
-
-function numberValue(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function stringArrayValue(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.map((entry) => typeof entry === 'string' ? entry.trim() : '')
-}
-
-function rejectStaleMaxIterations(raw: ConfigRecord, keyPrefix: string): void {
-  if (raw.max_iterations !== undefined || raw.maxIterations !== undefined) {
-    throw new Error(
-      `${keyPrefix}.max_iterations has been removed; turn termination is governed by ` +
-      `${keyPrefix}.turn_timeout_ms and no-progress cycle detection`,
-    )
-  }
-}
-
-function normalizePositiveInteger(value: unknown, fallback: number, key: string): number {
-  if (value === undefined || value === null) return fallback
-  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`${key} must be a positive integer, got ${JSON.stringify(value)}`)
-  }
-  return value
-}
-
-function normalizeNonNegativeInteger(value: unknown, fallback: number, key: string): number {
-  if (value === undefined || value === null) return fallback
-  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-    throw new Error(`${key} must be a non-negative integer, got ${JSON.stringify(value)}`)
-  }
-  return value
 }
 
 function isMessageDeliveryConfig(value: ConfigRecord): boolean {

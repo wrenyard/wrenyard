@@ -76,8 +76,9 @@ test('quota projection clamps malformed percentages at the renderer boundary', (
 
 test('catalog keeps inactive providers visible while quota surfaces show only active sources with data', () => {
   const discovered: ProviderAuthStatus[] = [
-    { id: 'kimi-coding', configured: false, authMode: 'api-key' },
-    { id: 'deepseek', configured: true, authMode: 'environment' },
+    { id: 'kimi-coding', displayName: 'Kimi Coding', configured: false, authMode: 'api-key' },
+    { id: 'deepseek', displayName: 'DeepSeek', configured: true, authMode: 'environment' },
+    { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
   ];
   const snapshot = projectQuotaSnapshot(providers, [
     { id: 'deepseek', enabled: true },
@@ -100,8 +101,8 @@ test('catalog keeps inactive providers visible while quota surfaces show only ac
 
 test('catalog projects discovered auth status and attaches quota by id', () => {
   const discovered: ProviderAuthStatus[] = [
-    { id: 'deepseek', configured: true, authMode: 'environment' },
-    { id: 'kimi-coding', configured: false, authMode: 'api-key' },
+    { id: 'deepseek', displayName: 'DeepSeek', configured: true, authMode: 'environment' },
+    { id: 'kimi-coding', displayName: 'Kimi Coding', configured: false, authMode: 'api-key' },
   ];
   const snapshot = projectQuotaSnapshot(providers, [{ id: 'deepseek', enabled: true }], 1, undefined, discovered);
 
@@ -120,8 +121,8 @@ test('catalog projects discovered auth status and attaches quota by id', () => {
 
 test('catalog migrates legacy xai state and presents the SpaceXAI provider name', () => {
   const snapshot = projectQuotaSnapshot([], [{ id: 'xai', enabled: true }], 1, undefined, [
-    { id: 'xai', configured: true, authMode: 'native' },
-    { id: 'spacex-ai', configured: false, authMode: 'native' },
+    { id: 'xai', displayName: 'SpaceXAI', configured: true, authMode: 'native' },
+    { id: 'spacex-ai', displayName: 'SpaceXAI', configured: false, authMode: 'native' },
   ]);
 
   assert.deepEqual(snapshot.providerOrder, [{ id: 'spacex-ai', enabled: true }]);
@@ -222,19 +223,22 @@ test('SuperGrok distinguishes missing configuration from expired login and query
     error: 'runtime detail must not surface',
     code,
   });
+  const discovered: ProviderAuthStatus[] = [
+    { id: 'super-grok', displayName: 'SuperGrok', configured: true, authMode: 'native' },
+  ];
 
-  const missing = projectQuotaSnapshot([makeProvider('configuration_missing')], [{ id: 'super-grok', enabled: true }]);
+  const missing = projectQuotaSnapshot([makeProvider('configuration_missing')], [{ id: 'super-grok', enabled: true }], undefined, undefined, discovered);
   assert.deepEqual(missing.providers, []);
   assert.equal(missing.catalog[0].configured, false);
   assert.equal(missing.catalog[0].authMode, 'native');
   assert.equal(missing.catalog[0].quota?.message, '尚未配置，请先完成 Grok 登录。');
 
-  const expired = projectQuotaSnapshot([makeProvider('authentication_required')], [{ id: 'super-grok', enabled: true }]);
+  const expired = projectQuotaSnapshot([makeProvider('authentication_required')], [{ id: 'super-grok', enabled: true }], undefined, undefined, discovered);
   assert.deepEqual(expired.providers, []);
   assert.equal(expired.catalog[0].configured, false);
   assert.equal(expired.catalog[0].quota?.message, '登录已失效，请重新登录后刷新。');
 
-  const failed = projectQuotaSnapshot([makeProvider('quota_query_failed')], [{ id: 'super-grok', enabled: true }]);
+  const failed = projectQuotaSnapshot([makeProvider('quota_query_failed')], [{ id: 'super-grok', enabled: true }], undefined, undefined, discovered);
   assert.deepEqual(failed.providers.map((provider) => provider.id), ['super-grok']);
   assert.equal(failed.catalog[0].configured, true);
   assert.equal(failed.catalog[0].quota?.message, '额度查询失败，请稍后刷新。');
@@ -267,8 +271,8 @@ test('observed CodeBuddy exhaustion projects friendly message and a 0% bar', () 
 
 test('legacy codebuddy-* ids collapse into one canonical provider with no IOA text', () => {
   const discovered: ProviderAuthStatus[] = [
-    { id: 'codebuddy-ioa', configured: true, authMode: 'native' },
-    { id: 'codebuddy-local', configured: false, authMode: 'native' },
+    { id: 'codebuddy-ioa', displayName: 'CodeBuddy', configured: true, authMode: 'native' },
+    { id: 'codebuddy-local', displayName: 'CodeBuddy', configured: false, authMode: 'native' },
   ];
   const snapshot = projectQuotaSnapshot(
     [{

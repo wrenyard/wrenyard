@@ -1347,6 +1347,7 @@ func codeBuddyIOAResilienceDeps(t *testing.T, clock *testClock, runner ChildRunn
 	d.Dependencies.StateRoot = t.TempDir()
 	d.Dependencies.ObservedQuotaRoot = filepath.Join(t.TempDir(), "observed")
 	d.Dependencies.JitterFn = func(time.Duration) time.Duration { return 0 }
+	d.Dependencies.Sleeper = &recordingSleeper{clock: clock}
 	d.Dependencies.Runner = runner
 	return d.Dependencies
 }

@@ -30,7 +30,6 @@ export const ACTION_TYPES = [
   'join',
   'checkpoint',
   'task',
-  'llm',
   'shell',
 ] as const;
 

@@ -14,16 +14,22 @@ import (
 func dshPlanRequest(t *testing.T) PlanRequest {
 	t.Helper()
 	assets := dsh.DefaultRuntimePatchAssets()
+	provider := dsh.GatewayProvider("http://127.0.0.1:8787/gateway/openai-chat/v1", []dsh.Model{{ID: "zhipu-coding/glm-5.3", Label: "GLM 5.3"}})
+	patch, err := dsh.RenderPatch(dsh.PatchInput{Providers: []dsh.Provider{provider}, SelectedModel: dsh.GatewayProviderID + "/zhipu-coding/glm-5.3", Version: dsh.ProtocolVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return PlanRequest{
 		Spec: ProfileSpec{
 			Name:   "dsh-zhipu",
 			Client: "dsh",
-			Env:    map[string]string{catalog.EnvDSHModel: "llm-pi-ai.zhipu-coding/glm-5.3"},
+			Env:    map[string]string{catalog.EnvDSHModel: "llm-pi-ai.wrenyard/zhipu-coding/glm-5.3"},
 			Runtime: RuntimePreparation{
 				HomeParent: t.TempDir(),
 				HomeEnvVar: "DSH_HOME",
-				Env:        map[string]string{"FORGE_DSH_ZHIPU_CODING_API_KEY": "secret-zhipu-token"},
+				Env:        map[string]string{dsh.GatewayAPIKeyEnv: "local-gateway-token"},
 				Files: []PreparedFile{
+					{RelativePath: assets.PatchPath, Data: patch, Mode: 0o600},
 					{RelativePath: assets.Plugin.Filename, Data: []byte(assets.Plugin.Source), Mode: 0o600},
 				},
 			},
@@ -110,11 +116,11 @@ func TestBuildPlanDSHEnvironmentSafety(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The launch-time credential value lives only in the child env.
-	if plan.Env["FORGE_DSH_ZHIPU_CODING_API_KEY"] != "secret-zhipu-token" {
-		t.Fatalf("credential env missing: %q", plan.Env["FORGE_DSH_ZHIPU_CODING_API_KEY"])
+	if plan.Env[dsh.GatewayAPIKeyEnv] != "local-gateway-token" {
+		t.Fatalf("credential env missing: %q", plan.Env[dsh.GatewayAPIKeyEnv])
 	}
 	for _, arg := range plan.Command {
-		if strings.Contains(arg, "secret-zhipu-token") {
+		if strings.Contains(arg, "local-gateway-token") {
 			t.Fatalf("credential leaked into argv: %q", arg)
 		}
 	}
@@ -123,16 +129,16 @@ func TestBuildPlanDSHEnvironmentSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 	patchText := string(patch)
-	if strings.Contains(patchText, "secret-zhipu-token") {
+	if strings.Contains(patchText, "local-gateway-token") {
 		t.Fatal("patch must never contain a literal credential value")
 	}
-	if !strings.Contains(patchText, "FORGE_DSH_ZHIPU_CODING_API_KEY") {
+	if !strings.Contains(patchText, dsh.GatewayAPIKeyEnv) {
 		t.Fatal("patch must reference the credential env name only")
 	}
 	if !strings.HasPrefix(patchText, "# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n") {
 		t.Fatalf("background patch must be a real loader overlay array:\n%s", patchText)
 	}
-	if !strings.Contains(patchText, "apiKeyEnv: FORGE_DSH_ZHIPU_CODING_API_KEY") {
+	if !strings.Contains(patchText, "apiKeyEnv: "+dsh.GatewayAPIKeyEnv) {
 		t.Fatalf("background patch must reference the credential env name:\n%s", patchText)
 	}
 	bridgePath := filepath.Join(plan.Env["DSH_HOME"], dsh.DefaultRuntimePatchAssets().Plugin.Filename)

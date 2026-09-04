@@ -5,6 +5,7 @@ import "github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 type InferenceBinding = schema.InferenceBinding
 type CredentialResolver = schema.CredentialResolver
 type AuthScheme = schema.AuthScheme
+type GatewayProtocol = schema.GatewayProtocol
 
 const (
 	CredentialResolverForgeManaged = schema.CredentialResolverForgeManaged
@@ -16,17 +17,15 @@ const (
 )
 
 const (
+	GatewayProtocolOpenAIChat      = schema.GatewayProtocolOpenAIChat
+	GatewayProtocolOpenAIResponses = schema.GatewayProtocolOpenAIResponses
+	GatewayProtocolAnthropic       = schema.GatewayProtocolAnthropic
+)
+
+const (
 	AuthSchemeBearer = schema.AuthSchemeBearer
 	AuthSchemeAPIKey = schema.AuthSchemeAPIKey
 )
 
 type ModelDef = schema.ModelDef
-type RawLLMProtocol = schema.RawLLMProtocol
-
-const (
-	RawLLMProtocolOpenAI    = schema.RawLLMProtocolOpenAI
-	RawLLMProtocolAnthropic = schema.RawLLMProtocolAnthropic
-)
-
-type RawLLMCapability = schema.RawLLMCapability
 type ProviderModels = schema.ProviderModels

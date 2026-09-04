@@ -5,7 +5,6 @@ import {
   operationRegistry,
 } from '../registry.mts'
 import { agent } from './agent.mts'
-import { llm } from './llm.mts'
 import { shell } from './shell.mts'
 import type {
   ForemanPrimitiveName,
@@ -18,7 +17,6 @@ export const primitiveRegistry = operationRegistry satisfies Record<ForemanPrimi
 export const defaultRuntimePrimitives = {
   agent,
   shell,
-  llm,
 } satisfies RuntimePrimitiveImplementations
 
 export function listPrimitiveDescriptors(): PrimitiveDescriptor[] {
@@ -35,7 +33,6 @@ export function createPrimitiveSet(
   return {
     agent: overrides.agent ?? defaultRuntimePrimitives.agent,
     shell: overrides.shell ?? defaultRuntimePrimitives.shell,
-    llm: overrides.llm ?? defaultRuntimePrimitives.llm,
     checkpoint: overrides.checkpoint ?? defaultCheckpoint,
   }
 }

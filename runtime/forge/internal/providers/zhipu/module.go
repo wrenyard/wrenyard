@@ -13,10 +13,6 @@ func Module() schema.ProviderModule {
 				Protocol: "anthropic-messages", Endpoint: "https://open.bigmodel.cn/api/anthropic/v1/messages",
 				CredentialResolver: schema.CredentialResolverForgeManaged,
 			},
-			RawLLM: []schema.RawLLMCapability{
-				{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"},
-				{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: "https://open.bigmodel.cn/api/anthropic/v1/messages"},
-			},
 		},
 		ModelSet: schema.ProviderModels{
 			"glm-5.3":       {ID: "glm-5.3", DisplayName: "GLM-5.3", ContextWindow: 1048576},

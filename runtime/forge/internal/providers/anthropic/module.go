@@ -13,7 +13,6 @@ func Module() schema.ProviderModule {
 				Protocol: "anthropic-messages", Endpoint: "https://api.anthropic.com/v1",
 				CredentialResolver: schema.CredentialResolverClaude,
 			},
-			RawLLM: []schema.RawLLMCapability{{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: "https://api.anthropic.com/v1"}},
 		},
 		QuotaInfo: schema.QuotaMetadata{Kind: "claude", Name: "anthropic"},
 	}

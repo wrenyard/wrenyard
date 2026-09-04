@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RpcRouter } from '../../lib/server/rpc-router.mts'
-import { WorkspaceDocService } from '../../lib/daemon/services/work/workspace-doc-service.mts'
+import { WorkspaceDocService } from '../../lib/daemon/services/workspace-doc-service.mts'
 import { registerWorkspaceDocHandlers } from '../../lib/server/handlers/workspace-doc.mts'
 
 let tempDirs: string[] = []
@@ -35,8 +35,6 @@ function makeWorkspace(): MakeWorkspaceResult {
   mkdirSync(join(workspace, 'memories'), { recursive: true })
   mkdirSync(join(workspace, 'projects', 'test', 'docs'), { recursive: true })
   writeFileSync(join(workspace, 'AGENTS.md'), '# Agents\n', 'utf-8')
-  writeFileSync(join(workspace, 'FWA.md'), '# FWA\n', 'utf-8')
-  writeFileSync(join(workspace, 'WORK.md'), '# Work\n', 'utf-8')
   writeFileSync(join(workspace, 'docs', 'readme.md'), '# Docs\n', 'utf-8')
   writeFileSync(join(workspace, 'docs', 'guide.md'), '# Guide\n', 'utf-8')
   writeFileSync(join(workspace, 'memories', 'context.md'), '# Context\n', 'utf-8')
@@ -71,8 +69,6 @@ describe('workspace.doc handlers', () => {
     const result = await callHandler(router, 'workspace.doc.list', {}) as { files: Array<{ path: string }> }
     const paths = result.files.map((f) => f.path)
     assert.ok(paths.includes('AGENTS.md'), 'should include AGENTS.md')
-    assert.ok(paths.includes('FWA.md'), 'should include FWA.md')
-    assert.ok(paths.includes('WORK.md'), 'should include WORK.md')
     assert.ok(paths.includes('docs/readme.md'), 'should include docs/readme.md')
     assert.ok(paths.includes('memories/context.md'), 'should include memories/context.md')
     assert.ok(paths.includes('projects/test/docs/api.md'), 'should include projects/test/docs/api.md')

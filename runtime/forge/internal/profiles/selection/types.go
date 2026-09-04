@@ -69,7 +69,6 @@ type Dependencies struct {
 	ResolveCredential   func(providerID string) (string, bool)
 	ResolveSecret       func(ref *string) (*string, error)
 	LoadManifest        func() (map[string]Profile, error)
-	CallLLM             func(model, prompt, system string, maxTokens int) (string, error)
 	ForgeDataDir        func() string
 	ClientInstalled     func(client string) bool
 	QuotaDisplayEnabled func(name string) bool

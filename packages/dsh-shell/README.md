@@ -44,9 +44,9 @@ continue to work.
 - MCP lists no usable tools → startup fails with `Wrenyard: MCP listed no usable tools`.
 - IPC unavailable → bounded warning only; the bridge continues in MCP-only mode.
 
-DSH-internal session/work plumbing (`sessions_list`, `session_send`,
-`work_send`, `work_transcript`) and all `workflow_*` tools are filtered out of
-the model-visible catalog. `task_run` waits by default (internal 100ms polling
+DSH-internal session plumbing (`sessions_list`, `session_send`) and all
+`workflow_*` compatibility tools are filtered out of the model-visible
+catalog. `task_run` waits by default (internal 100ms polling
 with cancellation and a 900s deadline); a synthesized `task_wait` is added when
 the catalog lacks one. Read-only tools are classified for concurrent execution;
 mutating tools are serialized.

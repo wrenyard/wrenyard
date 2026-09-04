@@ -9,7 +9,6 @@ func Module() schema.ProviderModule {
 		"MiniMax-M2.7-highspeed": {ID: "MiniMax-M2.7-highspeed", DisplayName: "MiniMax M2.7 Highspeed", ContextWindow: 204800},
 	}
 	const openAIEndpoint = "https://api.minimaxi.com/v1/chat/completions"
-	const anthropicEndpoint = "https://api.minimaxi.com/anthropic/v1/messages"
 	return schema.StaticModule{
 		ProviderID: "minimax-coding",
 		Provider: schema.Provider{
@@ -17,10 +16,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"}, DefaultModel: "MiniMax-M3",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: openAIEndpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM: []schema.RawLLMCapability{
-				{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: openAIEndpoint, AuthScheme: schema.AuthSchemeBearer},
-				{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: anthropicEndpoint, AuthScheme: schema.AuthSchemeBearer},
-			},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

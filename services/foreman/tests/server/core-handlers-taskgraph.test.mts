@@ -304,7 +304,7 @@ function cancelFailureGraph(): Record<string, Record<string, unknown>> {
     run: {
       id: 'run',
       name: 'run',
-      action: { type: 'llm', params: {} },
+      action: { type: 'shell', params: { command: 'echo test' } },
       deps: ['start'],
       input: [],
       input_schema: { type: 'object', properties: { seed: { type: 'string' } }, required: [] },

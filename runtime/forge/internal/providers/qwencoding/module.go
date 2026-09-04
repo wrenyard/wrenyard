@@ -4,7 +4,6 @@ import "github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 
 func Module() schema.ProviderModule {
 	const openAIEndpoint = "https://coding.dashscope.aliyuncs.com/v1/chat/completions"
-	const anthropicEndpoint = "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages"
 	models := schema.ProviderModels{
 		"qwen3.7-plus":     {ID: "qwen3.7-plus", DisplayName: "Qwen3.7 Plus", ContextWindow: 1000000},
 		"qwen3.6-plus":     {ID: "qwen3.6-plus", DisplayName: "Qwen3.6 Plus", ContextWindow: 1000000},
@@ -19,10 +18,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      []string{"qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus", "qwen3-coder-next", "qwen3-coder-plus"}, DefaultModel: "qwen3.7-plus",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: openAIEndpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM: []schema.RawLLMCapability{
-				{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: openAIEndpoint, AuthScheme: schema.AuthSchemeBearer},
-				{Protocol: schema.RawLLMProtocolAnthropic, BaseEndpoint: anthropicEndpoint, AuthScheme: schema.AuthSchemeBearer},
-			},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

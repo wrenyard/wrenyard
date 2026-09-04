@@ -40,6 +40,24 @@ import {
   type HealthPingResult,
 } from './methods/health.mts'
 import {
+  gatewayConnectionParamsSchema,
+  gatewayConnectionResultSchema,
+  type GatewayConnectionParams,
+  type GatewayConnectionResult,
+} from './methods/gateway.mts'
+export type { GatewayConnectionParams, GatewayConnectionResult } from './methods/gateway.mts'
+import {
+  providerConfigureParamsSchema,
+  providerConfigureResultSchema,
+  providerListParamsSchema,
+  providerListResultSchema,
+  type ProviderConfigureParams,
+  type ProviderConfigureResult,
+  type ProviderListParams,
+  type ProviderListResult,
+} from './methods/provider.mts'
+export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult } from './methods/provider.mts'
+import {
   messageSendParamsSchema,
   messageSendResultSchema,
   type MessageSendParams,
@@ -198,50 +216,6 @@ import {
   type TaskGraphSlipResult,
 } from './methods/taskgraph.mts'
 import {
-  fwaAssignParamsSchema,
-  fwaAssignResultSchema,
-  fwaListParamsSchema,
-  fwaListResultSchema,
-  fwaStatusParamsSchema,
-  fwaStatusResultSchema,
-  fwaTranscriptParamsSchema,
-  fwaTranscriptResultSchema,
-  type FwaAssignParams,
-  type FwaAssignResult,
-  type FwaListParams,
-  type FwaListResult,
-  type FwaStatusParams,
-  type FwaStatusResult,
-  type FwaTranscriptParams,
-  type FwaTranscriptResult,
-} from './methods/fwa.mts'
-import {
-  agentListParamsSchema,
-  agentListResultSchema,
-  agentSyncParamsSchema,
-  agentSyncResultSchema,
-  agentCompactParamsSchema,
-  agentCompactResultSchema,
-  agentGraphReviewParamsSchema,
-  agentGraphReviewResultSchema,
-  agentModelListParamsSchema,
-  agentModelListResultSchema,
-  agentModelSetParamsSchema,
-  agentModelSetResultSchema,
-  type AgentListParams,
-  type AgentListResult,
-  type AgentSyncParams,
-  type AgentSyncResult,
-  type AgentCompactParams,
-  type AgentCompactResult,
-  type AgentGraphReviewParams,
-  type AgentGraphReviewResult,
-  type AgentModelListParams,
-  type AgentModelListResult,
-  type AgentModelSetParams,
-  type AgentModelSetResult,
-} from './methods/agent.mts'
-import {
   workspaceDocListParamsSchema,
   workspaceDocListResultSchema,
   workspaceDocReadParamsSchema,
@@ -378,30 +352,6 @@ export type {
   TaskGraphSlipParams,
   TaskGraphSlipResult,
 } from './methods/taskgraph.mts'
-export type {
-  FwaAssignParams,
-  FwaAssignResult,
-  FwaListParams,
-  FwaListResult,
-  FwaStatusParams,
-  FwaStatusResult,
-  FwaTranscriptParams,
-  FwaTranscriptResult,
-} from './methods/fwa.mts'
-export type {
-  AgentListParams,
-  AgentListResult,
-  AgentSyncParams,
-  AgentSyncResult,
-  AgentCompactParams,
-  AgentCompactResult,
-  AgentGraphReviewParams,
-  AgentGraphReviewResult,
-  AgentModelListParams,
-  AgentModelListResult,
-  AgentModelSetParams,
-  AgentModelSetResult,
-} from './methods/agent.mts'
 
 export interface MethodSchema<TParams = unknown, TResult = unknown> {
   params: JsonSchema
@@ -411,12 +361,6 @@ export interface MethodSchema<TParams = unknown, TResult = unknown> {
 }
 
 export interface ForemanMethodParams {
-  'agent.list': AgentListParams
-  'agent.sync': AgentSyncParams
-  'agent.compact': AgentCompactParams
-  'agent.graph.review': AgentGraphReviewParams
-  'agent.model.list': AgentModelListParams
-  'agent.model.set': AgentModelSetParams
   'activity.snapshot': ActivitySnapshotParams
   'daemon.drain': DaemonDrainParams
   'daemon.freeze': DaemonFreezeParams
@@ -424,6 +368,9 @@ export interface ForemanMethodParams {
   'daemon.status': DaemonStatusParams
   'daemon.thaw': DaemonThawParams
   'health.ping': HealthPingParams
+  'gateway.connection': GatewayConnectionParams
+  'provider.list': ProviderListParams
+  'provider.configure': ProviderConfigureParams
   'event.list': EventListParams
   'stats.today': StatsTodayParams
   'stats.summary': StatsSummaryParams
@@ -465,19 +412,9 @@ export interface ForemanMethodParams {
   'workspace.doc.read': WorkspaceDocReadParams
   'workspace.doc.create': WorkspaceDocCreateParams
   'workspace.doc.update': WorkspaceDocUpdateParams
-  'fwa.assign': FwaAssignParams
-  'fwa.list': FwaListParams
-  'fwa.status': FwaStatusParams
-  'fwa.transcript': FwaTranscriptParams
 }
 
 export interface ForemanMethodResults {
-  'agent.list': AgentListResult
-  'agent.sync': AgentSyncResult
-  'agent.compact': AgentCompactResult
-  'agent.graph.review': AgentGraphReviewResult
-  'agent.model.list': AgentModelListResult
-  'agent.model.set': AgentModelSetResult
   'activity.snapshot': ActivitySnapshotV1
   'daemon.drain': DaemonDrainResult
   'daemon.freeze': DaemonFreezeResult
@@ -485,6 +422,9 @@ export interface ForemanMethodResults {
   'daemon.status': DaemonStatusResult
   'daemon.thaw': DaemonThawResult
   'health.ping': HealthPingResult
+  'gateway.connection': GatewayConnectionResult
+  'provider.list': ProviderListResult
+  'provider.configure': ProviderConfigureResult
   'event.list': EventListResult
   'stats.today': StatsTodayResult
   'stats.summary': StatsSummaryResult
@@ -526,10 +466,6 @@ export interface ForemanMethodResults {
   'workspace.doc.read': WorkspaceDocReadResult
   'workspace.doc.create': WorkspaceDocCreateResult
   'workspace.doc.update': WorkspaceDocUpdateResult
-  'fwa.assign': FwaAssignResult
-  'fwa.list': FwaListResult
-  'fwa.status': FwaStatusResult
-  'fwa.transcript': FwaTranscriptResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -539,30 +475,6 @@ export type MethodResult<TMethod extends ForemanMethod> = ForemanMethodResults[T
 export const methodRegistry: {
   readonly [TMethod in ForemanMethod]: MethodSchema<MethodParams<TMethod>, MethodResult<TMethod>>
 } = {
-  'agent.list': {
-    params: agentListParamsSchema,
-    result: agentListResultSchema,
-  },
-  'agent.sync': {
-    params: agentSyncParamsSchema,
-    result: agentSyncResultSchema,
-  },
-  'agent.compact': {
-    params: agentCompactParamsSchema,
-    result: agentCompactResultSchema,
-  },
-  'agent.graph.review': {
-    params: agentGraphReviewParamsSchema,
-    result: agentGraphReviewResultSchema,
-  },
-  'agent.model.list': {
-    params: agentModelListParamsSchema,
-    result: agentModelListResultSchema,
-  },
-  'agent.model.set': {
-    params: agentModelSetParamsSchema,
-    result: agentModelSetResultSchema,
-  },
   'activity.snapshot': {
     params: activitySnapshotParamsSchema,
     result: activitySnapshotResultSchema,
@@ -590,6 +502,18 @@ export const methodRegistry: {
   'health.ping': {
     params: healthPingParamsSchema,
     result: healthPingResultSchema,
+  },
+  'gateway.connection': {
+    params: gatewayConnectionParamsSchema,
+    result: gatewayConnectionResultSchema,
+  },
+  'provider.list': {
+    params: providerListParamsSchema,
+    result: providerListResultSchema,
+  },
+  'provider.configure': {
+    params: providerConfigureParamsSchema,
+    result: providerConfigureResultSchema,
   },
   'event.list': {
     params: eventListParamsSchema,
@@ -754,22 +678,6 @@ export const methodRegistry: {
   'workspace.doc.update': {
     params: workspaceDocUpdateParamsSchema,
     result: workspaceDocUpdateResultSchema,
-  },
-  'fwa.assign': {
-    params: fwaAssignParamsSchema,
-    result: fwaAssignResultSchema,
-  },
-  'fwa.list': {
-    params: fwaListParamsSchema,
-    result: fwaListResultSchema,
-  },
-  'fwa.status': {
-    params: fwaStatusParamsSchema,
-    result: fwaStatusResultSchema,
-  },
-  'fwa.transcript': {
-    params: fwaTranscriptParamsSchema,
-    result: fwaTranscriptResultSchema,
   },
 }
 

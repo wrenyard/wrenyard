@@ -53,7 +53,7 @@ func providerSources() map[string]string {
 	}
 	for _, module := range providers.Modules() {
 		prefix := providers.EnvPrefix(module.ID())
-		for _, suffix := range []string{"_OPENAI_BASE_URL", "_ANTHROPIC_BASE_URL", "_API_KEY"} {
+		for _, suffix := range []string{"_API_KEY"} {
 			if value, ok := os.LookupEnv(prefix + suffix); ok && value != "" {
 				sources[module.ID()] = "env"
 				break
@@ -67,10 +67,7 @@ func catalogRegistryForConfig(cfg ForgeConfig) (*catalog.Registry, error) {
 	reg := catalog.DefaultRegistry()
 	overrides := make(map[string]providers.Override, len(cfg.Providers))
 	for id, override := range cfg.Providers {
-		overrides[id] = providers.Override{
-			OpenAIBaseURL: override.OpenAIBaseURL, AnthropicBaseURL: override.AnthropicBaseURL,
-			APIKey: override.APIKey,
-		}
+		overrides[id] = providers.Override{APIKey: override.APIKey}
 	}
 	if err := providers.ApplyOverrides(reg, overrides, os.LookupEnv); err != nil {
 		return nil, err

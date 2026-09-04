@@ -71,8 +71,8 @@ func (r *Registry) LookupBinding(name string) (Provider, error) {
 	return provider, nil
 }
 
-// ResolveBinding returns the effective Provider for a client, using the
-// client's DefaultProvider when name is empty.
+// ResolveBinding only looks up native adapter records. Runtime routing is
+// already fixed by the daemon DispatchPlan and is never inferred here.
 func (r *Registry) ResolveBinding(clientName, providerName string) (Client, Provider, error) {
 	client, err := r.LookupDescriptor(clientName)
 	if err != nil {
@@ -84,12 +84,6 @@ func (r *Registry) ResolveBinding(clientName, providerName string) (Client, Prov
 	provider, err := r.LookupBinding(providerName)
 	if err != nil {
 		return Client{}, Provider{}, fmt.Errorf("%s: %w", clientName, err)
-	}
-	if !provider.SupportsDialect(client.Dialect) {
-		return Client{}, Provider{}, fmt.Errorf(
-			"provider binding %q is not compatible with dialect %q (client %q); supported dialects: %s",
-			providerName, client.Dialect, clientName, provider.DialectList(),
-		)
 	}
 	return client, provider, nil
 }

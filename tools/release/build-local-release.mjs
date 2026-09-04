@@ -267,30 +267,23 @@ function workspacePackageDirs(root) {
   return dirs;
 }
 
-// The release target currently has no workspace runtime dependencies, so a
-// deployed Foreman tree must never contain an @wrenyard self-link or a
-// virtual-store entry for a workspace package. Fail closed if one appears.
-// Entry-name checks use path.relative(root, file) so an ancestor/sibling path
-// (for example a parent @wrenyard scope) can never make every child a
-// violation while a real @wrenyard segment inside the inspected tree still
-// fails.
+// Gateway packages are production dependencies of Foreman and must be injected
+// as physical package snapshots. Reject only workspace symlinks: a packaged
+// runtime must never point back into the source checkout or pnpm store.
 function assertNoWorkspaceLinks(root) {
   const violations = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
       const rel = path.relative(root, file);
-      if (rel.includes('@wrenyard')) {
-        violations.push(`workspace entry staged: ${rel}`);
-        continue;
-      }
       if (entry.isDirectory()) {
         walk(file);
         continue;
       }
       if (!entry.isSymbolicLink()) continue;
-      const target = fs.readlinkSync(file);
-      if (target.includes('@wrenyard')) violations.push(`workspace self-link staged: ${rel} -> ${target}`);
+      if (rel.includes('@wrenyard')) {
+        violations.push(`workspace self-link staged: ${rel} -> ${fs.readlinkSync(file)}`);
+      }
     }
   };
   walk(root);
@@ -299,17 +292,59 @@ function assertNoWorkspaceLinks(root) {
   }
 }
 
-// A modern isolated pnpm deploy writes deploy-root pnpm-lock.yaml and
-// pnpm-workspace.yaml; those are deploy-only package-manager metadata, not part
-// of the portable runtime tree. Remove only those two root files (the
-// intentional product-root pnpm-workspace.yaml is copied into each stage
-// separately) and fail closed if either survives.
+// A modern isolated pnpm deploy writes package-manager metadata at the deploy
+// root and inside node_modules. Local workspace snapshots make those files
+// contain build-host paths, but the physical runtime dependency tree does not
+// need them. Remove only these known metadata files and fail closed if any
+// survives.
 function stripForemanDeployMetadata(deploy) {
-  for (const name of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+  for (const name of [
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    'node_modules/.modules.yaml',
+    'node_modules/.pnpm/lock.yaml',
+    'node_modules/.pnpm-workspace-state-v1.json',
+  ]) {
     const file = path.join(deploy, name);
     fs.rmSync(file, { force: true });
     if (fs.existsSync(file)) {
       throw new Error(`deployed Foreman tree still contains ${name}: ${file}`);
+    }
+  }
+}
+
+// pnpm deploy rewrites workspace dependencies to absolute file: URLs rooted in
+// its temporary workspace. The deployed tree already contains physical package
+// snapshots, so normalize only those known internal dependency specs to their
+// exact packaged versions before portability checks and staging.
+function normalizeForemanWorkspaceDependencySpecs(deploy) {
+  const internalNames = [
+    '@wrenyard/catalog',
+    '@wrenyard/gateway',
+    '@wrenyard/providers',
+  ];
+  const versions = new Map(internalNames.map((name) => {
+    const manifest = readJson(path.join(deploy, 'node_modules', ...name.split('/'), 'package.json'));
+    return [name, manifest.version];
+  }));
+  const manifests = [
+    path.join(deploy, 'package.json'),
+    ...internalNames.map((name) => path.join(deploy, 'node_modules', ...name.split('/'), 'package.json')),
+  ];
+  for (const manifestPath of manifests) {
+    const manifest = readJson(manifestPath);
+    let changed = false;
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      const dependencies = manifest[field];
+      if (!dependencies) continue;
+      for (const [name, version] of versions) {
+        if (!(name in dependencies) || dependencies[name] === version) continue;
+        dependencies[name] = version;
+        changed = true;
+      }
+    }
+    if (changed) {
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     }
   }
 }
@@ -322,7 +357,17 @@ function stripForemanDeployMetadata(deploy) {
 // dependency graph stays complete; the E2E repeats physical-directory
 // containment checks after extraction and after npm install.
 function assertPhysicalForemanDependencies(deploy) {
-  const direct = ['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core'];
+  const direct = [
+    'tsx',
+    'ajv',
+    'yaml',
+    'zod',
+    'better-sqlite3',
+    '@langchain/core',
+    '@wrenyard/catalog',
+    '@wrenyard/gateway',
+    '@wrenyard/providers',
+  ];
   const violations = [];
   for (const dep of direct) {
     const entry = path.join(deploy, 'node_modules', dep);
@@ -676,22 +721,27 @@ async function main() {
       path.join(ROOT, 'services', 'foreman'),
       path.join(deployWorkspace, 'services', 'foreman'),
     );
+    for (const name of ['catalog', 'gateway', 'providers']) {
+      copyDirWithoutNodeModules(
+        path.join(ROOT, 'packages', name),
+        path.join(deployWorkspace, 'packages', name),
+      );
+    }
     run('pnpm', [
       '--config.node-linker=hoisted',
       '--config.package-import-method=copy',
       '--filter', '@wrenyard/foreman',
       'deploy', '--prod', foremanDeploy,
     ], { cwd: deployWorkspace });
-    // Strip the deploy-only root pnpm-lock.yaml and pnpm-workspace.yaml a
-    // modern hoisted deploy generates before any CLI/suite copy, and fail
-    // closed if either remains: embedded services/foreman is a portable runtime
-    // tree, while the intentional product-root pnpm-workspace.yaml is copied
-    // into each stage separately.
+    normalizeForemanWorkspaceDependencySpecs(foremanDeploy);
+    // Strip deploy-only pnpm metadata before any CLI/suite copy. Embedded
+    // services/foreman is a portable runtime tree, while the intentional
+    // product-root pnpm-workspace.yaml is copied into each stage separately.
     stripForemanDeployMetadata(foremanDeploy);
     assertWorkspaceInstallStateUnchanged(ROOT, installSnapshot);
     assertPortableTree(foremanDeploy);
-    // The release target currently has no workspace runtime dependencies;
-    // reject any staged @wrenyard self-link or virtual-store entry.
+    // Gateway packages are expected as physical snapshots; reject workspace
+    // symlinks that would make the staged runtime depend on the source tree.
     assertNoWorkspaceLinks(foremanDeploy);
     removeForemanBinDir(foremanDeploy);
     // Prove the hoisted deploy is physical before any stage copy: npm keeps

@@ -45,6 +45,9 @@ func TestPrepareGrokRuntimeUsesProjectionSSOTWithoutTouchingShellHome(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	selectedProvider.GatewayRouted = true
+	selectedProvider.GatewayProtocol = catalog.GatewayProtocolOpenAIChat
+	selectedProvider.DefaultModel = "glm-5.3"
 	shellHome := filepath.Join(forgeDataDir(), "grok", "shell-grok")
 	if err := os.MkdirAll(shellHome, 0o700); err != nil {
 		t.Fatal(err)
@@ -57,7 +60,7 @@ func TestPrepareGrokRuntimeUsesProjectionSSOTWithoutTouchingShellHome(t *testing
 
 	prep, err := prepareClientRuntime(
 		execution.ProfileDefinition{Client: "grok", Provider: "zhipu-coding"},
-		profilepkg.ResolvedProfile{Provider: selectedProvider, Credential: profilepkg.CredentialPlan{Value: "zhipu-test-secret", Source: "provider"}},
+		profilepkg.ResolvedProfile{Provider: selectedProvider, Credential: profilepkg.CredentialPlan{Source: "gateway"}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +72,7 @@ func TestPrepareGrokRuntimeUsesProjectionSSOTWithoutTouchingShellHome(t *testing
 		t.Fatalf("prepared files = %+v", prep.Files)
 	}
 	config := string(prep.Files[0].Data)
-	for _, model := range []string{"forge-zhipu-coding--glm-5-3", "forge-zhipu-coding--glm-5-3-flash", "forge-kimi-coding--k3"} {
+	for _, model := range []string{"forge-zhipu-coding--glm-5-3", "zhipu-coding/glm-5.3"} {
 		if !strings.Contains(config, model) {
 			t.Fatalf("full eligible projection config missing %q:\n%s", model, config)
 		}
@@ -79,14 +82,14 @@ func TestPrepareGrokRuntimeUsesProjectionSSOTWithoutTouchingShellHome(t *testing
 			t.Fatal("prepared config leaked an API key value")
 		}
 	}
-	if len(prep.Env) != 1 || prep.Env["FORGE_GROK_ZHIPU_CODING_API_KEY"] != "zhipu-test-secret" {
-		t.Fatalf("canonical Grok env = %#v", prep.Env)
+	if len(prep.Env) != 2 || prep.Env["WRENYARD_GATEWAY_TOKEN"] != "test-gateway-token" {
+		t.Fatalf("Gateway Grok env = %#v", prep.Env)
 	}
-	if !reflect.DeepEqual(prep.SensitiveEnvKeys, []string{"FORGE_GROK_ZHIPU_CODING_API_KEY"}) {
+	if !reflect.DeepEqual(prep.SensitiveEnvKeys, []string{"WRENYARD_GATEWAY_TOKEN"}) {
 		t.Fatalf("selected sensitive env keys = %#v", prep.SensitiveEnvKeys)
 	}
-	if !reflect.DeepEqual(prep.SensitiveSources, []driver.PreparedSensitiveSource{{Path: authPath()}}) {
-		t.Fatalf("managed Grok sensitive sources = %#v", prep.SensitiveSources)
+	if len(prep.SensitiveSources) != 0 {
+		t.Fatalf("Gateway Grok must not read provider credential sources: %#v", prep.SensitiveSources)
 	}
 	current, _ := os.ReadFile(shellConfig)
 	if !bytes.Equal(current, original) {
@@ -106,6 +109,9 @@ func prepareSecretRefGrokPlan(t *testing.T, globalAuth map[string]AuthEntry, sel
 		t.Fatal(err)
 	}
 	setFakeClientsOnPath(t, "grok")
+	setTestDispatchPlan(t, "gk-secret-ref", profilepkg.DispatchPlan{
+		Client: "grok", Provider: "zhipu-coding", Model: "glm-5.3", Mode: "gateway", Protocol: catalog.GatewayProtocolOpenAIChat,
+	})
 	secretRef := "env:SELECTED_GROK_KEY"
 	deps := executionDependencies()
 	deps.LoadProfile = func(name string) (execution.ProfileDefinition, bool, error) {
@@ -132,22 +138,24 @@ func prepareSecretRefGrokPlan(t *testing.T, globalAuth map[string]AuthEntry, sel
 	return plan
 }
 
-func TestGrokSelectedSecretRefCredentialIncludesProviderWithoutGlobalAuth(t *testing.T) {
+func TestGrokGatewayIgnoresSelectedSecretRefAndGlobalProviderAuth(t *testing.T) {
 	plan := prepareSecretRefGrokPlan(t, map[string]AuthEntry{
 		"kimi-coding": {Type: "api", Key: "other-global-kimi"},
 	}, "selected-secret-only")
-	if plan.Env["FORGE_GROK_ZHIPU_CODING_API_KEY"] != "selected-secret-only" {
-		t.Fatalf("selected canonical Grok credential = %#v", plan.Env)
+	if plan.Env["WRENYARD_GATEWAY_TOKEN"] != "test-gateway-token" {
+		t.Fatalf("Gateway credential = %#v", plan.Env)
 	}
-	if _, present := plan.Env["FORGE_GROK_KIMI_CODING_API_KEY"]; present {
-		t.Fatalf("unrelated eligible provider credential reached child env: %#v", plan.Env)
+	for _, key := range []string{"FORGE_GROK_ZHIPU_CODING_API_KEY", "FORGE_GROK_KIMI_CODING_API_KEY"} {
+		if _, present := plan.Env[key]; present {
+			t.Fatalf("provider credential reached Gateway child env: %#v", plan.Env)
+		}
 	}
 	config, err := os.ReadFile(filepath.Join(plan.ConfigDir, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "forge-zhipu-coding--glm-5-3") || !strings.Contains(string(config), "forge-zhipu-coding--glm-5-3-flash") || !strings.Contains(string(config), "forge-kimi-coding--k3") {
-		t.Fatalf("selected/other projections missing from complete materialization:\n%s", config)
+	if !strings.Contains(string(config), "zhipu-coding/glm-5.3") {
+		t.Fatalf("selected Gateway model missing from materialization:\n%s", config)
 	}
 	if bytes.Contains(config, []byte("selected-secret-only")) || bytes.Contains(config, []byte("other-global-kimi")) {
 		t.Fatal("Grok materialized config leaked a credential")
@@ -167,16 +175,15 @@ func TestGrokSelectedSecretRefCredentialIncludesProviderWithoutGlobalAuth(t *tes
 	}
 }
 
-func TestGrokSelectedSecretRefCredentialOverridesDifferentGlobalCredential(t *testing.T) {
+func TestGrokGatewayNeverUsesSelectedOrGlobalProviderCredential(t *testing.T) {
 	plan := prepareSecretRefGrokPlan(t, map[string]AuthEntry{
 		"zhipu-coding": {Type: "api", Key: "wrong-global-zhipu"},
 		"kimi-coding":  {Type: "api", Key: "independent-global-kimi"},
 	}, "selected-profile-zhipu")
-	if got := plan.Env["FORGE_GROK_ZHIPU_CODING_API_KEY"]; got != "selected-profile-zhipu" {
-		t.Fatalf("selected profile credential precedence = %q", got)
-	}
-	if _, present := plan.Env["FORGE_GROK_KIMI_CODING_API_KEY"]; present {
-		t.Fatal("other provider global credential reached child env")
+	for _, key := range []string{"FORGE_GROK_ZHIPU_CODING_API_KEY", "FORGE_GROK_KIMI_CODING_API_KEY"} {
+		if _, present := plan.Env[key]; present {
+			t.Fatalf("provider credential reached Gateway child env: %#v", plan.Env)
+		}
 	}
 	for _, secret := range []string{"wrong-global-zhipu", "selected-profile-zhipu", "independent-global-kimi"} {
 		config, err := os.ReadFile(filepath.Join(plan.ConfigDir, "config.toml"))
@@ -551,7 +558,7 @@ func TestGrokOAuthMissingRejectsBeforeDispatchAndCopySourceIsOpaque(t *testing.T
 	if len(prep.Copies) != 1 || prep.Copies[0].SourcePath != defaultAuth || prep.Copies[0].RelativePath != "auth.json" || !prep.Copies[0].Sensitive {
 		t.Fatalf("OAuth prepared copy = %+v", prep.Copies)
 	}
-	wantSensitiveSources := []driver.PreparedSensitiveSource{{Path: authPath()}, {Path: defaultAuth}}
+	wantSensitiveSources := []driver.PreparedSensitiveSource{{Path: defaultAuth}}
 	if !reflect.DeepEqual(prep.SensitiveSources, wantSensitiveSources) {
 		t.Fatalf("OAuth sensitive sources = %#v", prep.SensitiveSources)
 	}
@@ -596,7 +603,7 @@ func TestPrepareGrokOAuthTracksEveryReadableSourceButCopiesOnlyWinner(t *testing
 	if len(prep.Copies) != 1 || prep.Copies[0].SourcePath != shellAuth {
 		t.Fatalf("OAuth winner copies = %#v", prep.Copies)
 	}
-	wantSources := []driver.PreparedSensitiveSource{{Path: authPath()}, {Path: shellAuth}, {Path: defaultAuth}}
+	wantSources := []driver.PreparedSensitiveSource{{Path: shellAuth}, {Path: defaultAuth}}
 	if !reflect.DeepEqual(prep.SensitiveSources, wantSources) {
 		t.Fatalf("OAuth protected sources = %#v, want %#v", prep.SensitiveSources, wantSources)
 	}

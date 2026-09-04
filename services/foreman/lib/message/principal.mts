@@ -8,7 +8,7 @@ import type { MessageRouteConfig } from './types.mts'
 export type PrincipalKind = 'human' | 'agent' | 'service'
 
 export interface PrincipalGrant {
-  name: string  // e.g. 'message.send', 'work.read'
+  name: string
 }
 
 export interface MessagePrincipal {
@@ -32,14 +32,14 @@ export const CANONICAL_PRINCIPALS: Record<string, MessagePrincipal> = {
     kind: 'agent',
     canSend: true,
     canReceive: false,
-    grants: [{ name: 'message.send' }, { name: 'work.read' }],
+    grants: [{ name: 'message.send' }],
   },
   opencode: {
     id: 'opencode',
     kind: 'agent',
     canSend: true,
     canReceive: false,
-    grants: [{ name: 'message.send' }, { name: 'work.read' }],
+    grants: [{ name: 'message.send' }],
   },
   pet: {
     id: 'pet',
@@ -47,13 +47,6 @@ export const CANONICAL_PRINCIPALS: Record<string, MessagePrincipal> = {
     canSend: false,
     canReceive: true,
     grants: [],
-  },
-  'foreman-work': {
-    id: 'foreman-work',
-    kind: 'service',
-    canSend: true,
-    canReceive: true,
-    grants: [{ name: 'message.send' }, { name: 'work.read' }],
   },
 }
 

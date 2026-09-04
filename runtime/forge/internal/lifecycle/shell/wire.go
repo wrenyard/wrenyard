@@ -16,27 +16,19 @@ func BuildInstallPlan(home, targetShell string, deps InstallDeps) (InstallPlan, 
 	funcNames := deps.FunctionNames()
 	m, _ := deps.LoadManifest()
 	profiles := profilesFromManifest(m.Profiles, deps)
-	// conflictNames extends funcNames with the fgrok entry point so that
-	// PlanZsh/PlanPowerShell can detect an existing user fgrok alias/function
-	// without treating fgrok as a profile.
-	conflictNames := make([]string, len(funcNames), len(funcNames)+1)
-	copy(conflictNames, funcNames)
-	conflictNames = append(conflictNames, grokFunctionName)
 	if targetShell == "powershell" {
-		// PowerShell and Grok output are built with the public Wrenyard
+		// PowerShell output is built with the public Wrenyard
 		// launcher name; the retired stable Forge launcher path is never
 		// resolved or embedded.
 		launcher := "wrenyard"
 		managed := RenderManagedPowerShell(profiles, funcNames, launcher, deps.ResolveCredential, deps.IsManagedProvider)
-		managed += "\n" + RenderGrokPowerShell(launcher)
-		return PlanPowerShell(home, managed, conflictNames)
+		return PlanPowerShell(home, managed, funcNames)
 	}
 	managed, err := RenderManagedZsh(profiles, funcNames, deps.ResolveCredential, deps.IsManagedProvider)
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	managed += "\n" + RenderGrokZsh()
-	return PlanZsh(home, managed, conflictNames)
+	return PlanZsh(home, managed, funcNames)
 }
 
 func RenderManagedShellFile(deps InstallDeps) (string, error) {

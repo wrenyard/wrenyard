@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -1114,33 +1113,11 @@ func TestCodebuddyNoInferenceBinding(t *testing.T) {
 	if codebuddy.Inference != nil {
 		t.Fatalf("codebuddy provider must not expose a public inference binding, got %#v", codebuddy.Inference)
 	}
-	if len(codebuddy.RawLLM) != 0 {
-		t.Fatalf("codebuddy provider must not expose raw LLM endpoints, got %#v", codebuddy.RawLLM)
-	}
 	if codebuddy.CredentialSource() != CredentialResolverCodeBuddy {
 		t.Fatalf("codebuddy credential source = %q, want native codebuddy", codebuddy.CredentialSource())
 	}
 	if !codebuddy.UsesClientBinary() {
 		t.Fatal("codebuddy provider must use the native client binary")
-	}
-}
-
-func TestCodebuddyNativeHasNoRawEndpoints(t *testing.T) {
-	r := defaultReg()
-	codebuddy, err := r.LookupBinding("codebuddy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(codebuddy.RawLLM) != 0 {
-		t.Fatalf("codebuddy raw llm count = %d, want 0 (native client)", len(codebuddy.RawLLM))
-	}
-	// Verify anthropic resolver remains claude.
-	anthropic, err := r.LookupBinding("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if anthropic.Inference == nil || anthropic.Inference.CredentialResolver != CredentialResolverClaude {
-		t.Fatal("anthropic credential resolver must remain claude")
 	}
 }
 
@@ -1254,72 +1231,6 @@ func TestDSHClientDescriptor(t *testing.T) {
 		if got := d.BuildPermissionArgs(mode); got != nil {
 			t.Fatalf("dsh must not emit permission flags for %s: %v", mode, got)
 		}
-	}
-}
-
-func TestProviderRawLLMCapabilities(t *testing.T) {
-	r := defaultReg()
-
-	prio := map[string]int{"openai": 0, "anthropic": 1}
-	sortRaw := func(ps []string) {
-		sort.Slice(ps, func(i, j int) bool { return prio[ps[i]] < prio[ps[j]] })
-	}
-
-	// Expected native raw protocols per canonical provider.
-	want := map[string][]string{
-		"codebuddy":       nil,
-		"codex":           nil,
-		"codex-spark":     nil,
-		"kimi-coding":     {"openai", "anthropic"},
-		"zhipu-coding":    {"openai", "anthropic"},
-		"anthropic":       {"anthropic"},
-		"opencode-native": nil,
-	}
-
-	for name, wantProtocols := range want {
-		b, err := r.LookupBinding(name)
-		if err != nil {
-			t.Fatalf("lookup %s: %v", name, err)
-		}
-		var got []string
-		for _, c := range b.RawLLM {
-			got = append(got, string(c.Protocol))
-		}
-		sortRaw(got)
-		if !reflect.DeepEqual(got, wantProtocols) {
-			t.Fatalf("%s raw protocols = %v, want %v", name, got, wantProtocols)
-		}
-		// Raw capabilities must NOT be derived from Inference.Protocol.
-		if b.Inference == nil {
-			continue
-		}
-		var wantInference string
-		switch name {
-		case "codex", "codex-spark":
-			wantInference = "openai-chat-completions"
-		case "kimi-coding", "zhipu-coding", "anthropic":
-			wantInference = "anthropic-messages"
-		}
-		if b.Inference.Protocol != wantInference {
-			t.Fatalf("%s Inference.Protocol = %q, want unchanged %q", name, b.Inference.Protocol, wantInference)
-		}
-	}
-
-	// Verify zhipu-coding OpenAI RawLLM endpoint uses the full chat completions URL.
-	zhipu, err := r.LookupBinding("zhipu-coding")
-	if err != nil {
-		t.Fatalf("lookup zhipu-coding: %v", err)
-	}
-	var gotOpenAIEndpoint string
-	for _, c := range zhipu.RawLLM {
-		if c.Protocol == RawLLMProtocolOpenAI {
-			gotOpenAIEndpoint = c.BaseEndpoint
-			break
-		}
-	}
-	wantOpenAIEndpoint := "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
-	if gotOpenAIEndpoint != wantOpenAIEndpoint {
-		t.Fatalf("zhipu-coding OpenAI RawLLM endpoint = %q, want %q", gotOpenAIEndpoint, wantOpenAIEndpoint)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
 )
 
@@ -36,6 +37,8 @@ func newFakeDeps(t *testing.T) *fakeDeps {
 				Name:          def.Name,
 				Client:        catalog.Client{},
 				Provider:      catalog.Provider{},
+				Env:           def.Env,
+				Settings:      def.Settings,
 				Compatibility: profile.CompatibilityClientUnregistered,
 				Credential:    profile.CredentialPlan{TargetEnv: "ANTHROPIC_AUTH_TOKEN"},
 			}, nil
@@ -268,6 +271,13 @@ func TestPrepare_ClaudeDeterministic(t *testing.T) {
 
 func TestPrepare_DSHDeterministic(t *testing.T) {
 	d := newFakeDeps(t)
+	d.Dependencies.PrepareRuntime = func(ProfileDefinition, profile.ResolvedProfile) (driver.RuntimePreparation, error) {
+		return driver.RuntimePreparation{
+			HomeParent: t.TempDir(),
+			HomeEnvVar: "DSH_HOME",
+			Files:      []driver.PreparedFile{{RelativePath: "patch.yaml", Data: []byte("providers: {}\n"), Mode: 0o600}},
+		}, nil
+	}
 	d.loadProfile = func(name string) (ProfileDefinition, bool, error) {
 		return ProfileDefinition{
 			Name:   name,

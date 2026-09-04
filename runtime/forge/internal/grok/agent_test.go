@@ -10,17 +10,21 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
-func TestAgentConfigFullyMaterializesEligibleProjectionsWithoutSecrets(t *testing.T) {
-	projections, _ := EligibleProjections(catalog.DefaultRegistry(), resolveSet("kimi-coding", "zhipu-coding"))
-	data, err := AgentConfigBytes(projections, "forge-kimi-coding--k3")
+func TestAgentConfigMaterializesGatewayProjectionWithoutSecrets(t *testing.T) {
+	projection := ProjectModel(
+		"kimi-coding",
+		"http://127.0.0.1:1234/gateway/openai-chat/v1/chat/completions",
+		catalog.ModelDef{ID: "k3", DisplayName: "Kimi K3", ContextWindow: 1048576},
+	)
+	projection.Model = "kimi-coding/k3"
+	projection.EnvKey = "WRENYARD_GATEWAY_TOKEN"
+	data, err := AgentConfigBytes([]Projection{projection}, projection.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, id := range []string{"forge-kimi-coding--k3", "forge-zhipu-coding--glm-5-3", "forge-zhipu-coding--glm-5-3-flash"} {
-		if !strings.Contains(text, id) {
-			t.Fatalf("agent config missing eligible projection %q:\n%s", id, text)
-		}
+	if !strings.Contains(text, projection.ID) {
+		t.Fatalf("agent config missing Gateway projection %q:\n%s", projection.ID, text)
 	}
 	if !strings.Contains(text, `default = 'forge-kimi-coding--k3'`) {
 		t.Fatalf("agent config does not select the profile model as default:\n%s", text)

@@ -24,7 +24,7 @@ func buildCodexPlan(req PlanRequest) (CommandPlan, error) {
 	}
 
 	adapter := CodexAdapter{
-		Model:           strings.TrimSpace(spec.Env["CODEX_MODEL"]),
+		Model:           gatewayPublicModel(spec, strings.TrimSpace(spec.Env["CODEX_MODEL"])),
 		ReasoningEffort: strings.TrimSpace(spec.Env["CODEX_REASONING_EFFORT"]),
 		Sandbox:         codexSandboxMode(spec),
 	}
@@ -48,6 +48,9 @@ func buildCodexPlan(req PlanRequest) (CommandPlan, error) {
 	}
 	env["FORGE_PROFILE"] = spec.Name
 	applyCredentialPlan(env, spec)
+	for key, value := range spec.Runtime.Env {
+		env[key] = value
+	}
 
 	plan := CommandPlan{
 		ProfileName: spec.Name,
@@ -60,6 +63,17 @@ func buildCodexPlan(req PlanRequest) (CommandPlan, error) {
 	}
 
 	plan.Command = insertBeforeCodexPromptMarker(plan.Command, buildCodexCapabilityArgs(capabilityResult.Tools.MCP))
+	if spec.Provider.GatewayRouted {
+		baseURL := spec.Runtime.Env["WRENYARD_GATEWAY_OPENAI_RESPONSES_URL"]
+		registration := []string{
+			"-c", "model_provider=\"wrenyard\"",
+			"-c", "model_providers.wrenyard.name=\"Wrenyard\"",
+			"-c", "model_providers.wrenyard.base_url=" + tomlLiteral(baseURL),
+			"-c", "model_providers.wrenyard.env_key=\"WRENYARD_GATEWAY_TOKEN\"",
+			"-c", "model_providers.wrenyard.wire_api=\"responses\"",
+		}
+		plan.Command = insertBeforeCodexPromptMarker(plan.Command, registration)
+	}
 	if req.Permission != catalog.PermissionYolo {
 		plan, err = configureCodexRestrictedBash(plan, spec, capabilityResult.BashGate.Cap)
 		if err != nil {

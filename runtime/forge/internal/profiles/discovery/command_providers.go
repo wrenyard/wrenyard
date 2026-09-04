@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
@@ -28,8 +27,6 @@ func ProvidersCommand(deps ProviderDeps, args []string) int {
 	switch args[0] {
 	case "list":
 		return providersList(deps, args)
-	case "describe":
-		return providersDescribe(deps, args[1:])
 	case "auth":
 		return providersAuth(deps, args[1:])
 	default:
@@ -176,45 +173,4 @@ func providersAuth(deps ProviderDeps, args []string) int {
 		fmt.Fprintf(os.Stderr, "forge providers auth: expected login or logout, got %s\n", op)
 		return 2
 	}
-}
-
-// providersDescribe reports every canonical provider and its native raw LLM
-// protocols derived from catalog capability metadata. JSON protocol values are
-// the canonical "openai"/"anthropic"; unsupported providers expose an empty
-// list rather than an inferred Inference.Protocol.
-func providersDescribe(deps ProviderDeps, args []string) int {
-	reg := deps.CatalogRegistry
-
-	prio := map[string]int{"openai": 0, "anthropic": 1}
-
-	type providerDesc struct {
-		ID     string   `json:"id"`
-		RawLLM []string `json:"raw_llm"`
-	}
-
-	public := canonicalProviderIDs(deps.CatalogRegistry)
-	descs := make([]providerDesc, 0, len(public))
-	for _, name := range public {
-		var raw []string
-		if binding, err := reg.LookupBinding(name); err == nil {
-			for _, c := range binding.RawLLM {
-				raw = append(raw, string(c.Protocol))
-			}
-		}
-		sort.Slice(raw, func(i, j int) bool { return prio[raw[i]] < prio[raw[j]] })
-		descs = append(descs, providerDesc{ID: name, RawLLM: raw})
-	}
-
-	if deps.HasFlag(args, "--json") {
-		return deps.PrintJSON(descs)
-	}
-
-	for _, d := range descs {
-		protocols := strings.Join(d.RawLLM, ", ")
-		if protocols == "" {
-			protocols = "none"
-		}
-		fmt.Printf("%-20s %s\n", d.ID, protocols)
-	}
-	return 0
 }

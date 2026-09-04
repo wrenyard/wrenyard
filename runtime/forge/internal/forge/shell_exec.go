@@ -11,9 +11,6 @@ import (
 )
 
 func shellCommand(args []string) int {
-	if len(args) > 0 && args[0] == "grok" {
-		return shellGrokCommand(args[1:])
-	}
 	if len(args) > 0 && args[0] == "dsh" {
 		return shellDSHCommand(args[1:])
 	}

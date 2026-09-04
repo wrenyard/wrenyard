@@ -53,7 +53,7 @@ import {
 } from './validator.mts'
 import type { TaskGraphAutoSchemaResolver } from './materialize.mts'
 import type { TaskGraphTaskContractResolver } from './task-contract-resolver.mts'
-import { isProjectInScope } from '../fwa/project-scope.mts'
+import { isProjectInScope } from './project-scope.mts'
 import { buildTaskNodeSlip, type TaskNodeSlip } from './task-slip.mts'
 
 export interface GraphRunnerOptions {

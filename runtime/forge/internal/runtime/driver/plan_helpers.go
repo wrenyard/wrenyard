@@ -112,6 +112,25 @@ func defaultCommand(spec ProfileSpec) string {
 	return "claude"
 }
 
+func gatewayPublicModel(spec ProfileSpec, model string) string {
+	model = strings.TrimSpace(model)
+	if !spec.Provider.GatewayRouted || model == "" || strings.HasPrefix(model, spec.Provider.Name+"/") {
+		return model
+	}
+	return spec.Provider.Name + "/" + model
+}
+
+func openCodeGatewayModel(spec ProfileSpec, model string) string {
+	if !spec.Provider.GatewayRouted {
+		return model
+	}
+	public := gatewayPublicModel(spec, strings.TrimPrefix(model, spec.Provider.Name+"/"))
+	if public == "" {
+		return ""
+	}
+	return "wrenyard/" + public
+}
+
 func modelFromArgs(args []string) string {
 	for i, a := range args {
 		if a == "--model" && i+1 < len(args) {

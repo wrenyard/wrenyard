@@ -16,7 +16,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      []string{"glm-5.2", "glm-5-turbo", "glm-4.7-flash"}, DefaultModel: "glm-5.2",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: endpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM:    []schema.RawLLMCapability{{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: endpoint, AuthScheme: schema.AuthSchemeBearer}},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

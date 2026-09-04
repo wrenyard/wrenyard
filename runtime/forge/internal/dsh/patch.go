@@ -93,6 +93,9 @@ func RenderPatch(in PatchInput) ([]byte, error) {
 		in.Version = ProtocolVersion
 	}
 	providers := cloneProviders(in.Providers)
+	if len(providers) != 1 || providers[0].ID != GatewayProviderID {
+		return nil, fmt.Errorf("dsh: exactly one Wrenyard Gateway provider is required")
+	}
 
 	for _, tool := range in.Tools {
 		if tool != ToolMCP {
@@ -135,12 +138,6 @@ func RenderPatch(in PatchInput) ([]byte, error) {
 				b.WriteString("            reasoningEfforts:\n")
 				b.WriteString("              off:\n")
 				b.WriteString("              high: high\n")
-			}
-		}
-		if headerNames := sortedNonAuthHeaders(p.Headers); len(headerNames) > 0 {
-			b.WriteString("        headers:\n")
-			for _, name := range headerNames {
-				b.WriteString("          " + yamlStr(name) + ": " + envRefTag(p.Headers[name]) + "\n")
 			}
 		}
 	}
@@ -211,11 +208,6 @@ func RenderInsertRows(bridgePluginPath string, servers []MCPServer) ([]byte, err
 	return []byte(b.String()), nil
 }
 
-// envRefTag is an unquoted YAML tag dereferencing an env var at load time.
-func envRefTag(envName string) string {
-	return "!!js process.env." + envName
-}
-
 // yamlValue renders a config value, passing through explicit !!js tags raw so
 // they stay unquoted.
 func yamlValue(v string) string {
@@ -237,35 +229,11 @@ func displayNameFor(routeKey string) string {
 	return strings.Join(words, " ")
 }
 
-// sortedNonAuthHeaders returns the sorted header names of p excluding
-// Authorization, which is handled solely by apiKeyEnv.
-func sortedNonAuthHeaders(headers map[string]string) []string {
-	names := make([]string, 0, len(headers))
-	for name := range headers {
-		if strings.EqualFold(name, "Authorization") {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func cloneProviders(src []Provider) []Provider {
-	if src == nil {
-		src = InjectedProviders
-	}
 	out := make([]Provider, 0, len(src))
 	for _, p := range src {
 		cp := p
 		cp.Models = append([]Model(nil), p.Models...)
-		if p.Headers != nil {
-			headers := make(map[string]string, len(p.Headers))
-			for k, v := range p.Headers {
-				headers[k] = v
-			}
-			cp.Headers = headers
-		}
 		out = append(out, cp)
 	}
 	return out

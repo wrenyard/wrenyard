@@ -212,7 +212,7 @@ export interface TaskGraphCreateParams {
   };
   /** Optional authoritative project scope for this TaskGraph.
    *  When set, the runner will reject task dispatch to projects
-   *  outside this scope. Existing non-FWA callers may omit it. */
+   *  outside this scope. Callers may omit it for unrestricted graphs. */
   project?: string;
   /** Immutable bounded KV context inherited by every task node. */
   tg_ctx?: import('../task/context.mts').TaskContext;

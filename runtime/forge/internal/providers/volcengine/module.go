@@ -14,7 +14,6 @@ func Module() schema.ProviderModule {
 			CompatibleDialects: []schema.Dialect{schema.DialectGrok, schema.DialectDSH},
 			AllowedModels:      []string{"doubao-seed-2-0-lite-260215"}, DefaultModel: "doubao-seed-2-0-lite-260215",
 			Inference: &schema.InferenceBinding{Protocol: "openai-chat-completions", Endpoint: endpoint, CredentialResolver: schema.CredentialResolverForgeManaged, AuthScheme: schema.AuthSchemeBearer},
-			RawLLM:    []schema.RawLLMCapability{{Protocol: schema.RawLLMProtocolOpenAI, BaseEndpoint: endpoint, AuthScheme: schema.AuthSchemeBearer}},
 		},
 		ModelSet: models, AuthInfo: schema.AuthMetadata{Login: true},
 	}

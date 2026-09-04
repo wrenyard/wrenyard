@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,11 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/apps/claudeapp"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/dsh"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/change"
-	shellpkg "github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/shell"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/discovery"
 	profilepolicy "github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/profilepolicy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/selection"
@@ -62,7 +61,6 @@ func selectionDeps() selection.Dependencies {
 			}
 			return out, nil
 		},
-		CallLLM:             callLLM,
 		ForgeDataDir:        forgeDataDir,
 		ClientInstalled:     clientInstalled,
 		QuotaDisplayEnabled: sl.QuotaDisplayEnabled,
@@ -487,12 +485,24 @@ func executionDependencies() execution.Dependencies {
 			return ClientUsability(client) == ClientOK
 		},
 		ResolveProfile: func(def execution.ProfileDefinition) (profilepkg.ResolvedProfile, error) {
+			plan, err := dispatchPlanForProfile(def.Name)
+			if err != nil {
+				return profilepkg.ResolvedProfile{}, err
+			}
 			input := profilepkg.InputProfile{
 				Name: def.Name, Client: def.Client, Provider: def.Provider,
 				SecretRef: def.SecretRef, Launcher: def.Launcher,
 				Env: def.Env, Settings: def.Settings,
 			}
-			return profilepkg.Resolve(input, catalogRegistryOrDefault(), wiredProfileCallbacks())
+			client, err := catalogRegistryOrDefault().LookupDescriptor(plan.Client)
+			if err != nil {
+				return profilepkg.ResolvedProfile{}, fmt.Errorf("dispatch plan for profile %q has no client adapter: %w", def.Name, err)
+			}
+			module, ok := providers.Lookup(plan.Provider)
+			if !ok {
+				return profilepkg.ResolvedProfile{}, fmt.Errorf("dispatch plan for profile %q has no provider adapter", def.Name)
+			}
+			return profilepkg.ResolveDispatch(input, plan, client, module.Binding(), wiredProfileCallbacks())
 		},
 		PrepareRuntime:      prepareClientRuntime,
 		DataDir:             forgeDataDir(),
@@ -501,8 +511,11 @@ func executionDependencies() execution.Dependencies {
 }
 
 func prepareClientRuntime(def execution.ProfileDefinition, resolved profilepkg.ResolvedProfile) (driver.RuntimePreparation, error) {
+	if resolved.Provider.GatewayRouted {
+		return prepareGatewayClientRuntime(def, resolved)
+	}
 	if def.Client == "dsh" {
-		return prepareDSHRuntime(def, resolved)
+		return driver.RuntimePreparation{}, fmt.Errorf("dsh requires a Model Gateway run combination")
 	}
 	if def.Client == "codex" {
 		prep := driver.RuntimePreparation{}
@@ -516,25 +529,11 @@ func prepareClientRuntime(def execution.ProfileDefinition, resolved profilepkg.R
 	if def.Client != "grok" {
 		return driver.RuntimePreparation{}, nil
 	}
-	reg := catalogRegistryOrDefault()
 	selectedProvider := strings.TrimSpace(resolved.Provider.Name)
-	selectedCredential := resolved.Credential.Value
-	selectedForgeManaged := false
-	provider := resolved.Provider
-	if provider.Name == "" && selectedProvider != "" {
-		provider, _ = reg.LookupBinding(selectedProvider)
+	if selectedProvider != providers.SpaceXAIProviderID {
+		return driver.RuntimePreparation{}, fmt.Errorf("non-native Grok provider %q requires a Model Gateway run combination", selectedProvider)
 	}
-	if provider.Inference != nil && provider.CredentialSource() == catalog.CredentialResolverForgeManaged {
-		selectedForgeManaged = true
-	}
-	projectionCredential := func(providerID string) (string, bool) {
-		if selectedForgeManaged && providerID == selectedProvider {
-			return selectedCredential, strings.TrimSpace(selectedCredential) != ""
-		}
-		return ResolveCredential(providerID)
-	}
-	projections, _ := grok.EligibleProjections(reg, projectionCredential)
-	configData, err := grok.AgentConfigBytes(projections, strings.TrimSpace(def.Env["GROK_MODEL"]))
+	configData, err := grok.AgentConfigBytes(nil, strings.TrimSpace(def.Env["GROK_MODEL"]))
 	if err != nil {
 		return driver.RuntimePreparation{}, err
 	}
@@ -546,141 +545,112 @@ func prepareClientRuntime(def execution.ProfileDefinition, resolved profilepkg.R
 			{RelativePath: "config.toml", Data: configData, Mode: 0o600},
 		},
 	}
-	// Projection evaluates the Forge store for every eligible managed provider,
-	// regardless of which credential ultimately wins. Protect that readable
-	// source even for SpaceXAI OAuth and profile secret_ref runs, and protect every
-	// readable native OAuth candidate without copying an unselected credential.
-	appendRuntimeSensitiveSource(&prep, authPath())
 	for _, path := range grok.ReadableOAuthSources(forgeDataDir(), userHome()) {
 		appendRuntimeSensitiveSource(&prep, path)
 	}
-	// The complete eligible projection remains secret-free in config.toml, but
-	// a fixed-model headless child receives only its selected Forge-managed
-	// provider credential. Other models retain env_key references without a
-	// corresponding secret in this process.
-	if selectedForgeManaged && strings.TrimSpace(selectedCredential) != "" {
-		for _, projection := range projections {
-			if projection.ProviderID != selectedProvider {
-				continue
-			}
-			prep.Env[projection.EnvKey] = selectedCredential
-			prep.SensitiveEnvKeys = []string{projection.EnvKey}
-			break
-		}
-	}
-	if selectedProvider == providers.SpaceXAIProviderID {
-		oauth, err := grok.PrepareOAuth(forgeDataDir(), userHome())
-		if err != nil {
-			return driver.RuntimePreparation{}, err
-		}
-		prep.Copies = append(prep.Copies, driver.PreparedCopy{SourcePath: oauth.SourcePath, RelativePath: "auth.json", Mode: 0o600, Sensitive: true})
-		for _, path := range oauth.ReadablePaths {
-			appendRuntimeSensitiveSource(&prep, path)
-		}
-	}
-	return prep, nil
-}
-
-// prepareDSHRuntime prepares the DSH background-agent runtime for a dsh
-// profile. It allocates the per-run DSH_HOME parent, resolves the selected
-// profile typed credential (token plus HTTP context headers) only at launch
-// (child env, never files), and renders the secret-free provider/runtime patch
-// plus the embedded bridge plugin into prepared assets. Provider routes always
-// stay visible; a missing credential only omits the child env value. MCP
-// capability projection stays at the driver planner where per-invocation
-// capabilities are resolved. Foreman is never exposed to the DSH child.
-func prepareDSHRuntime(def execution.ProfileDefinition, resolved profilepkg.ResolvedProfile) (driver.RuntimePreparation, error) {
-	prep := driver.RuntimePreparation{
-		HomeParent: filepath.Join(forgeDataDir(), "dsh"),
-		HomeEnvVar: "DSH_HOME",
-		Env:        map[string]string{},
-	}
-
-	// Selected profile credential wins and is resolved only at launch: the
-	// generated assets carry the scrubbed env name and unquoted !!js process.env
-	// refs, never the value. Only the selected provider's token/headers are
-	// injected; all routes stay visible.
-	selectedProvider := strings.TrimSpace(resolved.Provider.Name)
-	selected, ok := dshInjectedProvider(selectedProvider)
-
-	projections := make([]dsh.ProviderProjection, 0, len(dsh.InjectedProviders))
-	for _, p := range dsh.InjectedProviders {
-		typed := dsh.TypedCredential{}
-		if ok && p.ID == selected.ID {
-			forgeID := strings.TrimPrefix(p.ID, "llm-pi-ai.")
-			typed, _ = dshCredentialResolver(forgeID)
-			if strings.TrimSpace(typed.Token) == "" && strings.TrimSpace(resolved.Credential.Value) != "" {
-				typed.Token = resolved.Credential.Value
-			}
-		}
-		projections = append(projections, dsh.ProjectProvider(p, typed))
-	}
-	for _, proj := range projections {
-		for name, value := range proj.Env {
-			prep.Env[name] = value
-		}
-	}
-	if len(prep.Env) > 0 {
-		keys := make([]string, 0, len(prep.Env))
-		for name := range prep.Env {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		prep.SensitiveEnvKeys = keys
-	}
-
-	providers := make([]dsh.Provider, 0, len(projections))
-	for _, proj := range projections {
-		providers = append(providers, proj.Provider)
-	}
-	assets := dsh.DefaultRuntimePatchAssets()
-	patch, err := dsh.RenderPatch(dsh.PatchInput{
-		Providers:     providers,
-		SelectedModel: dshPatchModel(strings.TrimSpace(def.Env[catalog.EnvDSHModel])),
-		Version:       dsh.ProtocolVersion,
-	})
+	oauth, err := grok.PrepareOAuth(forgeDataDir(), userHome())
 	if err != nil {
 		return driver.RuntimePreparation{}, err
 	}
-	prep.Files = []driver.PreparedFile{
-		{RelativePath: assets.PatchPath, Data: patch, Mode: 0o600},
-		{RelativePath: assets.Plugin.Filename, Data: []byte(assets.Plugin.Source), Mode: 0o600},
+	prep.Copies = append(prep.Copies, driver.PreparedCopy{SourcePath: oauth.SourcePath, RelativePath: "auth.json", Mode: 0o600, Sensitive: true})
+	for _, path := range oauth.ReadablePaths {
+		appendRuntimeSensitiveSource(&prep, path)
 	}
-	// Protect readable credential stores so the child cannot inspect them.
-	appendRuntimeSensitiveSource(&prep, authPath())
 	return prep, nil
 }
 
-// dshInjectedProvider resolves a catalog provider name onto the injected
-// llm-pi-ai provider space used by DSH patch rendering. An already-injected id
-// is accepted directly; a bare injected name is tried with the llm-pi-ai
-// prefix.
-func dshInjectedProvider(name string) (dsh.Provider, bool) {
-	if p, ok := dsh.ProviderByID(name); ok {
-		return p, true
+func prepareGatewayClientRuntime(def execution.ProfileDefinition, resolved profilepkg.ResolvedProfile) (driver.RuntimePreparation, error) {
+	token := strings.TrimSpace(os.Getenv("WRENYARD_GATEWAY_TOKEN"))
+	if token == "" {
+		return driver.RuntimePreparation{}, fmt.Errorf("model Gateway connection is unavailable")
 	}
-	if strings.TrimSpace(name) != "" {
-		return dsh.ProviderByID("llm-pi-ai." + name)
+	urlEnv := map[catalog.GatewayProtocol]string{
+		catalog.GatewayProtocolOpenAIChat:      "WRENYARD_GATEWAY_OPENAI_CHAT_URL",
+		catalog.GatewayProtocolOpenAIResponses: "WRENYARD_GATEWAY_OPENAI_RESPONSES_URL",
+		catalog.GatewayProtocolAnthropic:       "WRENYARD_GATEWAY_ANTHROPIC_URL",
+	}[resolved.Provider.GatewayProtocol]
+	baseURL := strings.TrimSpace(os.Getenv(urlEnv))
+	if baseURL == "" {
+		return driver.RuntimePreparation{}, fmt.Errorf("model Gateway protocol %q is unavailable", resolved.Provider.GatewayProtocol)
 	}
-	return dsh.Provider{}, false
+	modelDef := catalog.ModelDef{ID: resolved.Provider.DefaultModel, DisplayName: resolved.Provider.DefaultModel}
+	publicModel := resolved.Provider.Name + "/" + resolved.Provider.DefaultModel
+	prep := driver.RuntimePreparation{
+		Env: map[string]string{
+			"WRENYARD_GATEWAY_TOKEN": token,
+			urlEnv:                   baseURL,
+		},
+		SensitiveEnvKeys: []string{"WRENYARD_GATEWAY_TOKEN"},
+	}
+	if def.Client == "dsh" {
+		prep.HomeParent = filepath.Join(forgeDataDir(), "dsh")
+		prep.HomeEnvVar = "DSH_HOME"
+		provider := dsh.GatewayProvider(baseURL, gatewayModelsFromEnvironment())
+		assets := dsh.DefaultRuntimePatchAssets()
+		patch, patchErr := dsh.RenderPatch(dsh.PatchInput{
+			Providers: []dsh.Provider{provider}, SelectedModel: dsh.GatewayProviderID + "/" + publicModel, Version: dsh.ProtocolVersion,
+		})
+		if patchErr != nil {
+			return driver.RuntimePreparation{}, patchErr
+		}
+		prep.Files = []driver.PreparedFile{
+			{RelativePath: assets.PatchPath, Data: patch, Mode: 0o600},
+			{RelativePath: assets.Plugin.Filename, Data: []byte(assets.Plugin.Source), Mode: 0o600},
+		}
+		return prep, nil
+	}
+	if def.Client == "grok" {
+		projection := grok.ProjectModel(resolved.Provider.Name, baseURL+"/chat/completions", modelDef)
+		projection.Model = publicModel
+		projection.EnvKey = "WRENYARD_GATEWAY_TOKEN"
+		configData, configErr := grok.AgentConfigBytes([]grok.Projection{projection}, projection.ID)
+		if configErr != nil {
+			return driver.RuntimePreparation{}, configErr
+		}
+		prep.HomeParent = grok.AgentHomeParent(forgeDataDir())
+		prep.HomeEnvVar = "GROK_HOME"
+		prep.Files = []driver.PreparedFile{{RelativePath: "config.toml", Data: configData, Mode: 0o600}}
+	}
+	return prep, nil
 }
 
-// dshPatchModel normalizes a DSH_MODEL value (provider/model) onto the
-// llm-pi-ai provider id space used by patch rendering. An already-injected id
-// passes through; a bare injected name is prefixed; anything else is returned
-// unchanged so RenderPatch rejects it loudly.
-func dshPatchModel(model string) string {
-	pid, mid, ok := strings.Cut(model, "/")
-	if !ok || strings.TrimSpace(pid) == "" || strings.TrimSpace(mid) == "" {
-		return strings.TrimSpace(model)
+func gatewayModelsFromEnvironment() []dsh.Model {
+	raw := strings.TrimSpace(os.Getenv("WRENYARD_GATEWAY_MODELS_JSON"))
+	if raw == "" {
+		return nil
 	}
-	if _, ok := dsh.ProviderByID(pid); ok {
-		return model
+	var available []struct {
+		PublicID      string `json:"publicId"`
+		Provider      string `json:"provider"`
+		ID            string `json:"id"`
+		DisplayName   string `json:"displayName"`
+		ContextWindow int    `json:"contextWindow"`
+		MaxTokens     int    `json:"maxTokens"`
 	}
-	if p, ok := dsh.ProviderByID("llm-pi-ai." + pid); ok {
-		return p.ID + "/" + mid
+	if json.Unmarshal([]byte(raw), &available) != nil {
+		return nil
 	}
-	return model
+	out := make([]dsh.Model, 0, len(available))
+	for _, model := range available {
+		out = append(out, dsh.Model{ID: model.PublicID, Label: model.DisplayName, ContextWindow: model.ContextWindow, MaxTokens: model.MaxTokens})
+	}
+	return out
+}
+
+func dispatchPlanForProfile(profileID string) (profilepkg.DispatchPlan, error) {
+	raw := strings.TrimSpace(os.Getenv("WRENYARD_DISPATCH_PLANS_JSON"))
+	if raw == "" {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("dispatch plan for profile %q is unavailable", profileID)
+	}
+	var plans map[string]profilepkg.DispatchPlan
+	if err := json.Unmarshal([]byte(raw), &plans); err != nil {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("dispatch plans are invalid: %w", err)
+	}
+	plan, ok := plans[profileID]
+	if !ok {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("dispatch plan for profile %q is unavailable", profileID)
+	}
+	return plan, nil
 }
 
 func appendRuntimeSensitiveSource(prep *driver.RuntimePreparation, path string) {
@@ -744,12 +714,24 @@ func wiredProfileCallbacks() profilepkg.Callbacks {
 }
 
 func resolveProfileSnapshot(p profile, reg *catalog.Registry) (profilepkg.ResolvedProfile, error) {
+	plan, err := dispatchPlanForProfile(p.Name)
+	if err != nil {
+		return profilepkg.ResolvedProfile{}, err
+	}
 	input := profilepkg.InputProfile{
 		Name: p.Name, Client: p.Client, Provider: p.Provider,
 		SecretRef: p.SecretRef, Launcher: p.Launcher,
 		Env: p.Env, Settings: p.Settings,
 	}
-	return profilepkg.Resolve(input, reg, wiredProfileCallbacks())
+	client, err := reg.LookupDescriptor(plan.Client)
+	if err != nil {
+		return profilepkg.ResolvedProfile{}, err
+	}
+	module, ok := providers.Lookup(plan.Provider)
+	if !ok {
+		return profilepkg.ResolvedProfile{}, fmt.Errorf("dispatch plan for profile %q has no provider adapter", p.Name)
+	}
+	return profilepkg.ResolveDispatch(input, plan, client, module.Binding(), wiredProfileCallbacks())
 }
 
 // --- apply.go ---
@@ -768,50 +750,6 @@ func planJournal(plan changePlan) map[string]interface{} {
 
 func backupRelativePath(path string) string {
 	return change.BackupRelativePath(path)
-}
-
-// --- claude_app.go ---
-
-func claudeAppCommand(args []string) int {
-	defaultPort := 18080
-	claudeapp.ConfigurePaths(currentForgePath, repoDir)
-	deps := claudeapp.Dependencies{
-		LoadManifest: func() (map[string]claudeapp.Profile, error) {
-			manifest, err := loadManifest()
-			if err != nil {
-				return nil, err
-			}
-			out := make(map[string]claudeapp.Profile, len(manifest.Profiles))
-			for name, p := range manifest.Profiles {
-				out[name] = claudeapp.ProfileFrom(p)
-			}
-			return out, nil
-		},
-		ResolveCredential: ResolveCredential,
-		UserHome:          userHome,
-		RepoDir:           repoDir,
-		CurrentForgePath:  currentForgePath,
-		ModelOverrides: func(p claudeapp.Profile) map[string]string {
-			return shellpkg.ModelOverridesFromManifest(claudeapp.ProfileToManifest(p))
-		},
-		ModelDisplayName: providerModelDisplayName,
-		ResolveProviderBinding: func(p claudeapp.Profile) (claudeapp.ProviderBinding, error) {
-			_, provider, err := catalogRegistryOrDefault().ResolveBinding(p.Client, p.Provider)
-			if err != nil {
-				return claudeapp.ProviderBinding{}, fmt.Errorf("forge app: profile %s has invalid client/provider binding: %v", p.Name, err)
-			}
-			if provider.Inference == nil {
-				return claudeapp.ProviderBinding{}, nil
-			}
-			return claudeapp.ProviderBinding{
-				Protocol:     provider.Inference.Protocol,
-				Endpoint:     provider.Inference.Endpoint,
-				DefaultModel: provider.DefaultModel,
-			}, nil
-		},
-		DefaultPort: defaultPort,
-	}
-	return claudeapp.Command(args, deps)
 }
 
 func providerModelDisplayName(providerID, modelID string) string {

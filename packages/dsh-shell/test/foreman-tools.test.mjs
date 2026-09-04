@@ -120,15 +120,13 @@ function testIpcPath(name) {
 
 const deadIpc = () => testIpcPath('missing');
 
-test('filters session/work/workflow_* tools and registers the remaining catalog', async () => {
+test('filters internal session and workflow_* tools and registers the remaining catalog', async () => {
   const server = await startMcp((msg) => {
     if (msg.method === 'tools/list') {
       return okReply(msg, {
         tools: [
           { name: 'sessions_list', description: 'blocked' },
           { name: 'session_send', description: 'blocked' },
-          { name: 'work_send', description: 'blocked' },
-          { name: 'work_transcript', description: 'blocked' },
           { name: 'workflow_run', description: 'blocked' },
           { name: 'task_run', description: 'Run a task', inputSchema: { type: 'object', properties: { task_id: { type: 'string' } } } },
           { name: 'task_status', description: 'Task status', inputSchema: { type: 'object' } },
@@ -144,7 +142,7 @@ test('filters session/work/workflow_* tools and registers the remaining catalog'
   server.close();
 
   const names = ctx.registered.map((definition) => definition.name).sort();
-  for (const blocked of ['sessions_list', 'session_send', 'work_send', 'work_transcript', 'workflow_run']) {
+  for (const blocked of ['sessions_list', 'session_send', 'workflow_run']) {
     assert.ok(!names.includes(blocked), `${blocked} must be filtered out`);
   }
   for (const kept of ['task_run', 'task_status', 'task_output', 'project_list', 'task_wait']) {
@@ -341,7 +339,7 @@ test('registers NDJSON IPC extras only when absent from the MCP catalog', async 
   await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const names = ctx.registered.map((definition) => definition.name);
-  for (const extra of ['project_list', 'project_describe', 'project_commit_log', 'worktree_list', 'agent_list', 'agent_model_list', 'workspace_doc_read']) {
+  for (const extra of ['project_list', 'project_describe', 'project_commit_log', 'worktree_list', 'workspace_doc_read']) {
     assert.ok(names.includes(extra), `${extra} registered via IPC`);
   }
   const docList = ctx.registered.find((d) => d.name === 'workspace_doc_list');

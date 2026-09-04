@@ -22,19 +22,6 @@ export type MessageConfigData = ConfigRecord & {
   }
 }
 
-export type FwaConfigData = ConfigRecord & {
-  workspace_root?: string
-  llm?: {
-    model?: string
-    turn_timeout_ms?: number
-    http_timeout_ms?: number
-    max_retries?: number
-    retry_backoff_ms?: number
-  }
-}
-
-export type WorkConfigData = FwaConfigData
-
 export type TaskAgentRuntimeOverrides = Record<string, string>
 
 export type TasksConfigData = ConfigRecord & {
@@ -47,8 +34,6 @@ export type TasksConfigData = ConfigRecord & {
 export type ForemanConfigData = {
   service?: ServiceConfigData
   workspace?: WorkspaceConfigData
-  fwa?: FwaConfigData
-  work?: WorkConfigData
   message?: MessageConfigData
   tasks?: TasksConfigData
 }
@@ -72,7 +57,7 @@ export function createDefaultForemanConfigData(
           kind: 'agent',
           can_send: true,
           can_receive: false,
-          grants: [{ name: 'message.send' }, { name: 'work.read' }],
+          grants: [{ name: 'message.send' }],
         },
       },
       delivery: {

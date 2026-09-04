@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { closeDb, getDb, initDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { MessageStore } from '../db/stores/message-store.mts'
-import { TaskRunStore } from '../db/stores/task-run-store.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
 import type { OperationHost } from '../core/operations/types.mts'
 import type { ForemanServiceConfig } from '../config/index.mts'
@@ -15,7 +14,7 @@ import { registerCoreHandlers } from '../server/handlers/core.mts'
 import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../transport/ipc-server.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
-import { AgentExecutionSupervisor, type SupervisorLogger, createDelegationResolver, type DelegationResourceResolver } from './execution/agent-supervisor.mts'
+import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
 import { handleRestApiRequest } from '../server/http/rest-api.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
@@ -24,23 +23,15 @@ import { PlannedRestartStore } from './planned-restart-store.mts'
 import { MessageDeliveryHub, type BackendFactory } from '../message/delivery/hub.mts'
 import { createBackend, createTransport, deliverToConnection, type BackendDeps, type McpConnection, type TransportFactory } from '../adapters/message/backends/index.mts'
 import type { ChannelConfig, MessageEnvelope, MessageDeliveryResult, MessageDeliveryRegistryConfig } from '../message/delivery/types.mts'
-import { sessionIdToAddress, FOREMAN_WORK_ADDRESS } from '../message/address.mts'
-import { FwaService } from './services/fwa/service.mts'
-import { createFwaRawExecutor } from './execution/fwa-raw-executor.mts'
-import { FwaSessionStore } from '../core/fwa/session-store.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
-import { TaskService } from '../core/task/service.mts'
 import { TaskGraphService } from '../core/taskgraph/index.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
-import type { FwaHandlerService } from '../server/handlers/fwa.mts'
-import { AgentEventStore } from '../core/agent/agent-event-store.mts'
-import { AgentHandlerService, type WorkCompactPort } from '../core/agent/agent-handler-service.mts'
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
-import { WorkService } from './services/work/service.mts'
-import { WorkspaceDocService } from './services/work/workspace-doc-service.mts'
-import { WorkAttachmentStore } from './services/work/attachment-store.mts'
-import { foremanStateRoot } from '../config/state.mts'
+import { WorkspaceDocService } from './services/workspace-doc-service.mts'
+import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinDispatchPlans } from '@wrenyard/providers'
+import { ForemanEventStore } from '../events/event-store.mts'
 
 export interface RunningForemanDaemon {
   db: ForemanDatabase
@@ -48,12 +39,11 @@ export interface RunningForemanDaemon {
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
   dispatchControl: DispatchControl
-  fwaService?: FwaService
-  workService?: WorkService
   mcpServer: ForemanMcpServer
   httpServer: Server
   ipcPath: string
   ipcServer: IpcServer
+  gateway: ModelGateway
   stop(): Promise<void>
 }
 
@@ -192,28 +182,13 @@ async function startForemanDaemonWithRuntime(
   deps: ForemanDaemonDeps,
   options: { configPath?: string; onShutdownRequest?: (reason: string) => void | Promise<void> },
 ): Promise<RunningForemanDaemon> {
-  // Construct FWA service based on backend selection
   const operations: OperationHost = {
     agent: runtime.supervisor,
     runner: runtime.runner,
   }
 
-  const rawExecutor = createFwaRawExecutor()
-
-  // Create agent event store for generic conversation/turn/event persistence
-  const agentEventStore = runtime.agentEventStore
-  // Recover any stale running turns from previous daemon instance
-  const staleTurns = agentEventStore.recoverStaleTurns()
-  if (staleTurns.length > 0) {
-    writeDaemonLog('info', `Recovered ${staleTurns.length} stale agent turn(s) on startup`)
-  }
-  // Create agent handler service for agent.* RPC methods
-  const agentHandlerService = new AgentHandlerService(agentEventStore)
-
-  // Single shared TaskGraphService — used by both FWA (native) and core RPC
-  // handlers so that taskgraph projected events reach the ForemanEventBus
-  // wake subscriber regardless of which code path created the graph.
-  const taskgraphWorkspaceRoot = config.fwa?.workspaceRoot ?? config.workspaceRoot
+  // Single shared TaskGraphService used by all RPC transports.
+  const taskgraphWorkspaceRoot = config.workspaceRoot
   const taskgraphService = createTaskGraphService({
     workspaceRoot: taskgraphWorkspaceRoot,
     operations,
@@ -245,49 +220,14 @@ async function startForemanDaemonWithRuntime(
       return getForemanEventBus().publish(foremanEvent)
     },
   })
-  agentHandlerService.setGraphReviewPort({
-    confirm: (graphId, patchId) => taskgraphService.patch({
-      taskgraph_id: graphId,
-      operation: { type: 'confirm_patch', patch_id: patchId },
-    }),
-    reject: (graphId, patchId) => taskgraphService.rejectPatch(graphId, patchId),
-  })
+  let messageService: MessageService
 
-  let fwaService: FwaService | undefined
-  let workService: WorkService | undefined
-  let messageService: MessageService | undefined
-
-  // Create MessageService always (regardless of FWA availability).
-  // Ports are bound after service construction for cyclic dependency resolution.
   const messageStore = new MessageStore(runtime.db)
   messageService = new MessageService({
     registry: config.message,
     store: messageStore,
   })
   messageService.setExternalDeliveryPort(createExternalDeliveryPort(config, deps, messageStore))
-
-  if (config.fwa) {
-    const taskService = new TaskService({
-      workspaceRoot: config.fwa.workspaceRoot,
-      operations,
-    })
-    fwaService = new FwaService({
-      config: config.fwa,
-      messageService,
-      taskgraphService,
-      taskService,
-      store: new FwaSessionStore(runtime.db),
-      rawExecutor,
-      workspaceRoot: config.fwa.workspaceRoot,
-      agentEventStore,
-    })
-    // Bind FwaSendPort
-    messageService.setFwaSendPort({
-      hasLiveSession: (sessionId: string) => fwaService!.hasLiveSession(sessionId),
-      sendToSession: (sessionId: string, text: string, from: string, messageId: string) =>
-        fwaService!.sendToSession(sessionId, text, from, messageId),
-    })
-  }
 
   // Construct the legacy event-delivery hub. Its config still says channels,
   // but the hub treats them as route ids internally.
@@ -307,6 +247,37 @@ async function startForemanDaemonWithRuntime(
   }
 
   const startedAt = Date.now()
+  let boundPort = config.service.port
+  const gatewayToken = randomBytes(32).toString('base64url')
+  const catalog = createBuiltinCatalog()
+  const dispatchPlans = resolveBuiltinDispatchPlans(catalog)
+  const providerRuntime = createBuiltinProviderRuntime()
+  const gatewayEventStore = new ForemanEventStore(runtime.db)
+  const gateway = createModelGateway({
+    catalog,
+    providers: providerRuntime,
+    onRequestCompleted: async (event) => {
+      const foremanEvent: ForemanEvent = {
+        id: `gateway_${randomBytes(12).toString('hex')}`,
+        kind: 'gateway.request.completed',
+        source: 'wrenyard.gateway',
+        severity: event.status >= 500 ? 'error' : event.status >= 400 ? 'warning' : 'info',
+        refs: {},
+        data: { ...event },
+        occurredAt: new Date().toISOString(),
+      }
+      gatewayEventStore.append(foremanEvent)
+      await getForemanEventBus().publish(foremanEvent)
+    },
+  })
+  // Recovered tasks can dispatch during startup reconciliation, before the
+  // HTTP listener and IPC transport are exposed. Install the exact daemon
+  // plan and provisional loopback connection first so Forge never falls back
+  // to resolving provider/model/protocol data itself.
+  let restoreGatewayEnvironment = installGatewayEnvironment({
+    ...await gateway.connection(gatewayOrigin(config.service.host, config.service.port)),
+    token: gatewayToken,
+  }, dispatchPlans)
   let stopFromShutdownRequest: ((reason: string) => Promise<void>) | undefined
   const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
   const rpcRouter = createDaemonRpcRouter({
@@ -315,32 +286,31 @@ async function startForemanDaemonWithRuntime(
     messageService,
     operations,
     dispatchControl: runtime.dispatchControl,
-    fwaService: fwaService ? {
-      assign: async (params, delegationAdmission) => {
-        const session = await fwaService!.assign(params, delegationAdmission)
-        return {
-          session: {
-            id: session.id,
-            message_address: sessionIdToAddress(session.id),
-            ticket_id: session.ticket_id,
-            project_id: session.project_id,
-            status: session.status,
-            queue_depth: session.queue_depth,
-            graph_refs: session.graph_refs,
-            task_refs: session.task_refs,
-          },
-        }
-      },
-      list: () => fwaService!.list(),
-      status: async (sessionId: string) => {
-        const status = await fwaService!.status(sessionId)
-        return { ...status, message_address: sessionIdToAddress(sessionId) }
-      },
-      transcript: (sessionId: string) => fwaService!.transcript(sessionId),
-    } : undefined,
     taskgraphService,
     workspaceDocService,
-    agentService: agentHandlerService,
+    gatewayConnection: async () => ({
+      ...await gateway.connection(gatewayOrigin(config.service.host, boundPort)),
+      token: gatewayToken,
+    }),
+    providerList: async () => ({
+      providers: await Promise.all(catalog.providers().map(async (provider) => ({
+        id: provider.id,
+        displayName: provider.displayName,
+        description: provider.description ?? '',
+        setupHint: provider.setupHint ?? '',
+        configured: (await providerRuntime.credential(provider)) !== undefined,
+        authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
+          : provider.credentialResolver ? 'native' as const : 'none' as const,
+        protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
+        models: provider.models.map((model) => ({ ...model })),
+      }))),
+    }),
+    providerConfigure: async ({ providerId, key }) => {
+      const provider = catalog.provider(providerId)
+      if (!provider) throw new Error(`unknown provider: ${providerId}`)
+      await providerRuntime.configureApiKey(provider, key)
+      return { ok: true as const }
+    },
     shutdown: async (reason) => {
       if (options.onShutdownRequest) {
         await options.onShutdownRequest(reason)
@@ -349,176 +319,6 @@ async function startForemanDaemonWithRuntime(
       await stopFromShutdownRequest?.(reason)
     },
   })
-
-  // Create WorkService if work config is present
-  if (config.work) {
-    const attachmentStore = new WorkAttachmentStore(foremanStateRoot())
-    workService = new WorkService(
-      {
-        workspaceRoot: config.work.workspaceRoot,
-        model: config.work.llm.model,
-        ...(config.work.llm.models ? { models: config.work.llm.models } : {}),
-        turnTimeoutMs: config.work.llm.turn_timeout_ms,
-        httpTimeoutMs: config.work.llm.http_timeout_ms,
-        maxRetries: config.work.llm.max_retries,
-        retryBackoffMs: config.work.llm.retry_backoff_ms,
-        maxConcurrentTurns: config.work.max_concurrent_turns,
-        agentEventStore,
-        rawExecutor,
-        attachmentStore,
-      },
-      { router: rpcRouter },
-    )
-
-    // Start the Work service (hydrates conversation, creates runtime, re-enqueues turns)
-    workService.start()
-
-    // Bind WorkSendPort to MessageService
-    messageService!.setWorkSendPort({
-      send: (text: string, from: string, messageId: string, attachments?: Array<{ path: string }>) => {
-        const result = workService!.send(from, text, messageId, attachments)
-        return Promise.resolve({
-          accepted: result.accepted,
-          target_seq: result.target_seq,
-          queue_depth: result.queue_depth,
-          ...(result.attachment_results ? { attachment_results: result.attachment_results } : {}),
-        })
-      },
-    })
-
-    // Bind WorkCompactPort to AgentHandlerService
-    agentHandlerService.setWorkPort({
-      compact: () => workService!.compact(),
-      getStatus: () => workService!.getStatus(),
-      getQueueDepth: () => workService!.getQueueDepth(),
-      modelList: () => workService!.modelList(),
-      modelSet: (address: string, model: string) => workService!.modelSet(address, model),
-    })
-
-    // Create DelegationResolver with authoritative task/FWA resource resolution
-    const delegationResourceResolver: DelegationResourceResolver = {
-      checkResourceStatus(resourceId: string) {
-        // Check task status first
-        const taskStatus = new TaskRunStore(runtime.db).readStatus(resourceId)
-        if (taskStatus) {
-          if (taskStatus === 'done' || taskStatus === 'failed' || taskStatus === 'cancelled' || taskStatus === 'interrupted') {
-            return 'terminal'
-          }
-          return 'active'
-        }
-
-        // Check FWA session status
-        const fwaStore = new FwaSessionStore(runtime.db)
-        const session = fwaStore.getSession(resourceId)
-        if (session) {
-          if (session.status === 'idle' || session.status === 'closed' || session.status === 'failed') {
-            return 'terminal'
-          }
-          return 'active'
-        }
-
-        return undefined // lost
-      },
-      getResourcePayload(resourceId: string) {
-        const task = runtime.db.prepare<[string], {
-          id: string
-          status: string
-          summary: string | null
-          output: string | null
-          error: string | null
-          failure_category: string | null
-          suggestion: string | null
-          error_message: string | null
-        }>(
-          `SELECT id, status, summary, output, error, failure_category, suggestion, error_message
-           FROM tasks WHERE id = ?`,
-        ).get(resourceId)
-        if (task) {
-          return JSON.stringify({
-            resource_type: 'task',
-            task_run_id: task.id,
-            status: task.status,
-            summary: task.summary,
-            output: parseStoredJsonValue(task.output),
-            error: task.error,
-            failure_category: task.failure_category,
-            suggestion: task.suggestion,
-            error_message: parseStoredJsonValue(task.error_message),
-          })
-        }
-
-        const session = new FwaSessionStore(runtime.db).getSession(resourceId)
-        if (!session) return undefined
-        const address = sessionIdToAddress(session.id)
-        const assistant = runtime.db.prepare<[string], { payload_json: string }>(
-          `SELECT payload_json FROM agent_event
-           WHERE address = ? AND kind = 'assistant'
-           ORDER BY seq DESC LIMIT 1`,
-        ).get(address)
-        const payload = parseStoredJsonValue(assistant?.payload_json ?? null)
-        const finalMessage = payload && typeof payload === 'object' && !Array.isArray(payload)
-          ? (payload as Record<string, unknown>).content
-          : undefined
-        return JSON.stringify({
-          resource_type: 'fwa',
-          session_id: session.id,
-          status: session.status,
-          final_message: finalMessage,
-          last_error: session.last_error,
-        })
-      },
-    }
-
-    const delegationResolver = createDelegationResolver(agentEventStore, delegationResourceResolver)
-
-    // Bind task terminal events to resolve by resource id
-    const taskEventCallback = () => {
-      // Check pending delegations
-      const pendingDelegations = agentEventStore.getPendingDelegationLedger(FOREMAN_WORK_ADDRESS)
-      for (const del of pendingDelegations) {
-        const result = delegationResolver.resolveDelegation(FOREMAN_WORK_ADDRESS, del.delegation_id)
-        if (result !== false && workService) {
-          workService.enqueueDurableTurn(result.turn_seq)
-        }
-      }
-    }
-
-    // Subscribe to foreman event bus for task terminal events
-    const tempEventBus = getForemanEventBus()
-    tempEventBus.subscribe({
-      handle: async (event: ForemanEvent) => {
-        if (event.source === 'foreman.taskgraph') {
-          const refs = event.refs as { taskgraphId?: string; taskRunId?: string } | undefined
-          if (refs?.taskRunId) {
-            taskEventCallback()
-          }
-        }
-        // Also check task terminal events directly
-        if (event.kind === 'task.run.completed'
-          || event.kind === 'task.run.failed'
-          || event.kind === 'task.run.cancelled'
-          || event.kind === 'fwa.turn.completed'
-          || event.kind === 'fwa.turn.failed') {
-          taskEventCallback()
-        }
-      },
-    })
-
-    // Run foreman-work startup reconciliation and enqueue callback turns
-    const reconcilationResult = delegationResolver.reconcileOnStartup(FOREMAN_WORK_ADDRESS)
-    if (reconcilationResult.resolved > 0 || reconcilationResult.lost > 0) {
-      writeDaemonLog('info', `Delegation startup reconciliation: ${reconcilationResult.resolved} resolved, ${reconcilationResult.active} active, ${reconcilationResult.lost} lost`)
-    }
-
-    // Enqueue newly created durable callback turns through WorkService after commit
-    const queuedCompletionTurns = agentEventStore.listQueuedTurns(FOREMAN_WORK_ADDRESS)
-      .filter(t => t.origin === 'system_completion')
-    for (const turn of queuedCompletionTurns) {
-      if (workService) {
-        workService.enqueueDurableTurn(turn.turn_seq)
-      }
-    }
-  }
 
   // Begin idempotent taskgraph startup reconciliation exactly once before any
   // IPC/HTTP/MCP handler or transport is exposed. Every persisted actionable
@@ -534,18 +334,32 @@ async function startForemanDaemonWithRuntime(
     workspaceRoot: config.workspaceRoot,
     operations,
     rpcRouter,
-    messageService,
-    ...(workService ? {
-      workTranscriptPort: {
-        transcript: (afterSeq?: number, limit?: number, includeArchived?: boolean) =>
-          workService!.transcript(afterSeq, limit, includeArchived),
-      },
-    } : {}),
   })
   mcpServer.injectConnections(connections)
   await mcpServer.initializeRuntime()
   const httpServer = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+    if (pathname.startsWith('/gateway/')) {
+      if (!gatewayRequestAuthorized(request, gatewayToken)) {
+        response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ error: { type: 'authentication_error', message: 'Invalid Wrenyard Gateway token' } }))
+        return
+      }
+      void gateway.handle(request, response).then((handled) => {
+        if (!handled && !response.headersSent) {
+          response.writeHead(404, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ ok: false, error: 'not_found' }))
+        }
+      }).catch(() => {
+        if (!response.headersSent) {
+          response.writeHead(500, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ ok: false, error: 'gateway_error' }))
+        } else {
+          response.destroy()
+        }
+      })
+      return
+    }
     if (pathname === '/mcp') {
       void handleMcpHttpRequest(request, response, mcpServer, {
         deliveryConfig,
@@ -608,7 +422,13 @@ async function startForemanDaemonWithRuntime(
     throw new Error(`failed to bind port ${config.service.port} after clearing conflict`)
   }
   const boundAddress = httpServer.address()
-  const boundPort = boundAddress && typeof boundAddress === 'object' ? boundAddress.port : config.service.port
+  boundPort = boundAddress && typeof boundAddress === 'object' ? boundAddress.port : config.service.port
+  const gatewayConnection = {
+    ...await gateway.connection(gatewayOrigin(config.service.host, boundPort)),
+    token: gatewayToken,
+  }
+  restoreGatewayEnvironment()
+  restoreGatewayEnvironment = installGatewayEnvironment(gatewayConnection, dispatchPlans)
   const ipcPath = resolveForemanServiceIpcPath({
     port: boundPort,
     path: config.service.ipc?.path,
@@ -626,6 +446,8 @@ async function startForemanDaemonWithRuntime(
       httpServer,
       ipcServer,
       mcpServer,
+      gateway,
+      restoreGatewayEnvironment,
     })
     throw error
   }
@@ -638,9 +460,8 @@ async function startForemanDaemonWithRuntime(
     supervisor: runtime.supervisor,
     runner: runtime.runner,
     dispatchControl: runtime.dispatchControl,
-    ...(fwaService ? { fwaService } : {}),
-    ...(workService ? { workService } : {}),
     mcpServer,
+    gateway,
     httpServer,
     ipcPath,
     ipcServer: runningIpcServer,
@@ -649,29 +470,14 @@ async function startForemanDaemonWithRuntime(
       stopped = true
       let ipcError: unknown
       let supervisorError: unknown
-      let fwaError: unknown
-      let workError: unknown
+      const httpClose = closeHttpServerIfListening(httpServer)
+      await gateway.close()
+      restoreGatewayEnvironment()
       try {
         await runningIpcServer.close()
       } catch (error) {
         ipcError = error
         writeDaemonLog('warn', 'IPC server shutdown failed', error)
-      }
-      try {
-        if (fwaService) {
-          await fwaService.close()
-        }
-      } catch (error) {
-        fwaError = error
-        writeDaemonLog('warn', 'FWA service shutdown failed', error)
-      }
-      try {
-        if (workService) {
-          await workService.close()
-        }
-      } catch (error) {
-        workError = error
-        writeDaemonLog('warn', 'Work service shutdown failed', error)
       }
       try {
         await runtime.supervisor.shutdown()
@@ -684,16 +490,12 @@ async function startForemanDaemonWithRuntime(
         mcpServer.close()
         // Close all active channel SSE streams and clear timers (Fix 2)
         closeActiveSseStreams(activeSseStreams, connections)
-        await new Promise<void>((resolve, reject) => {
-          httpServer.close((error) => (error ? reject(error) : resolve()))
-        })
+        await httpClose
       } finally {
         releaseDaemonDb()
       }
 
       if (ipcError) throw ipcError
-      if (fwaError) throw fwaError
-      if (workError) throw workError
       if (supervisorError) throw supervisorError
     },
   }
@@ -703,24 +505,19 @@ async function startForemanDaemonWithRuntime(
   return runningDaemon
 }
 
-function parseStoredJsonValue(value: string | null): unknown {
-  if (value === null) return null
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
-  }
-}
-
 interface FailedDaemonResourceCleanupOptions {
   activeSseStreams: Array<{ res: ServerResponse; timer: NodeJS.Timeout; connId: string; conn: McpConnection }>
   connections: Map<string, McpConnection>
   httpServer: Server
   ipcServer?: IpcServer
   mcpServer: ForemanMcpServer
+  gateway: ModelGateway
+  restoreGatewayEnvironment?: () => void
 }
 
 async function cleanupFailedDaemonResources(options: FailedDaemonResourceCleanupOptions): Promise<void> {
+  await options.gateway.close()
+  options.restoreGatewayEnvironment?.()
   if (options.ipcServer) {
     try {
       await options.ipcServer.close()
@@ -769,6 +566,54 @@ function closeHttpServerIfListening(httpServer: Server): Promise<void> {
   })
 }
 
+function gatewayOrigin(configuredHost: string, port: number): string {
+  const host = configuredHost === '0.0.0.0' || configuredHost === '::' ? '127.0.0.1' : configuredHost
+  const authority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return `http://${authority}:${port}`
+}
+
+type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & { token: string }
+
+function installGatewayEnvironment(
+  connection: DaemonGatewayConnection,
+  dispatchPlans: Readonly<Record<string, import('@wrenyard/catalog').DispatchPlan>>,
+): () => void {
+  const values: Record<string, string> = {
+    WRENYARD_GATEWAY_OPENAI_CHAT_URL: connection.openaiChatBaseUrl,
+    WRENYARD_GATEWAY_OPENAI_RESPONSES_URL: connection.openaiResponsesBaseUrl,
+    WRENYARD_GATEWAY_ANTHROPIC_URL: connection.anthropicBaseUrl,
+    WRENYARD_GATEWAY_TOKEN: connection.token,
+    WRENYARD_GATEWAY_MODELS_JSON: JSON.stringify(connection.models),
+    WRENYARD_DISPATCH_PLANS_JSON: JSON.stringify(dispatchPlans),
+  }
+  const previous = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key])
+    process.env[key] = value
+  }
+  return () => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+function gatewayRequestAuthorized(request: IncomingMessage, expectedToken: string): boolean {
+  const remoteAddress = request.socket.remoteAddress ?? ''
+  if (remoteAddress !== '127.0.0.1' && remoteAddress !== '::1' && remoteAddress !== '::ffff:127.0.0.1') return false
+  const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+  const provided = pathname.startsWith('/gateway/anthropic/')
+    ? request.headers['x-api-key']
+    : request.headers.authorization?.startsWith('Bearer ')
+      ? request.headers.authorization.slice('Bearer '.length)
+      : undefined
+  if (typeof provided !== 'string') return false
+  const providedBuf = Buffer.from(provided)
+  const expectedBuf = Buffer.from(expectedToken)
+  return providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf)
+}
+
 interface DaemonRpcRouterOptions {
   startedAt: number
   workspaceRoot: string
@@ -776,47 +621,21 @@ interface DaemonRpcRouterOptions {
   operations?: OperationHost
   shutdown?: (reason: string) => void | Promise<void>
   dispatchControl?: DispatchControl
-  fwaService?: FwaHandlerService
   taskgraphService?: TaskGraphService
-  agentService?: import('../server/handlers/core.mts').AgentHandlerService
   workspaceDocService?: WorkspaceDocService
+  gatewayConnection?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['gatewayConnection']
+  providerList?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerList']
+  providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
 }
 
 function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {
   const router = new RpcRouter()
-  registerCoreHandlers(router, { ...options, agentService: options.agentService, messageService: options.messageService, workspaceDocService: options.workspaceDocService })
+  registerCoreHandlers(router, { ...options, messageService: options.messageService, workspaceDocService: options.workspaceDocService })
   return router
-}
-
-function resolveForemanFwaService(
-  runningDaemon: RunningForemanDaemon,
-): FwaHandlerService | undefined {
-  if (!runningDaemon.fwaService) return undefined
-  return {
-    assign: async (params) => {
-      const session = await runningDaemon.fwaService!.assign(params)
-      return {
-        session: {
-          id: session.id,
-          message_address: session.message_address,
-          ticket_id: session.ticket_id,
-          project_id: session.project_id,
-          status: session.status,
-          queue_depth: session.queue_depth,
-          graph_refs: session.graph_refs,
-          task_refs: session.task_refs,
-        },
-      }
-    },
-    list: () => runningDaemon.fwaService!.list(),
-    status: (sessionId: string) => runningDaemon.fwaService!.status(sessionId),
-    transcript: (sessionId: string) => runningDaemon.fwaService!.transcript(sessionId),
-  }
 }
 
 interface ForemanDaemonRuntime {
   db: ForemanDatabase
-  agentEventStore: AgentEventStore
   repoWriteLocks: RepoWriteLocks
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
@@ -829,7 +648,6 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
 
   try {
     new WorkflowRunStore(db).markAllNonTerminalCancelled(new Date().toISOString())
-    const agentEventStore = new AgentEventStore(db)
     const repoWriteLocks = new RepoWriteLocks()
     const supervisor = new AgentExecutionSupervisor({
       db,
@@ -839,7 +657,6 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
     const runner = new TaskWorkflowRunner({
       db,
       agentExecutionHost: supervisor,
-      agentEventStore,
       logger: createDaemonSupervisorLogger(),
       admissionControl: () => dispatchControl.assertAccepting(),
     })
@@ -847,7 +664,7 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, agentEventStore, repoWriteLocks, supervisor, runner, dispatchControl }
+    return { db, repoWriteLocks, supervisor, runner, dispatchControl }
   } catch (error) {
     releaseDaemonDb()
     throw error

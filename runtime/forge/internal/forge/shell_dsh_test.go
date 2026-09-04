@@ -55,6 +55,9 @@ func fdshLauncherTestEnv(t *testing.T, home string) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data"))
 	t.Setenv("DSH_HOME", "")
+	t.Setenv("WRENYARD_GATEWAY_OPENAI_CHAT_URL", "http://127.0.0.1:8787/gateway/openai-chat/v1")
+	t.Setenv("WRENYARD_GATEWAY_TOKEN", "local-gateway-token")
+	t.Setenv("WRENYARD_GATEWAY_MODELS_JSON", `[{"id":"hy4-preview-ioa","publicId":"codebuddy/hy4-preview-ioa","provider":"codebuddy","displayName":"HY4 Preview"}]`)
 }
 
 func TestFDSHRequested(t *testing.T) {
@@ -256,27 +259,12 @@ func TestFDSHModelPatchCatalogAndOrder(t *testing.T) {
 	if patch == "" {
 		t.Fatal("model patch should not be empty")
 	}
-	if len(dsh.InjectedProviders) != 11 {
-		t.Fatalf("expected eleven injected llm-pi-ai providers, got %d", len(dsh.InjectedProviders))
-	}
 	if !strings.HasPrefix(patch, "# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n") {
 		t.Fatalf("patch must be a loader overlay array:\n%s", patch)
 	}
-	last := 0
-	for _, provider := range dsh.InjectedProviders {
-		routeKey := strings.TrimPrefix(provider.ID, "llm-pi-ai.")
-		idx := strings.Index(patch, "      "+routeKey+":")
-		if idx < 0 {
-			t.Fatalf("patch should reference route %s", routeKey)
-		}
-		if idx < last {
-			t.Fatalf("patch route order should match the catalog order for %s", routeKey)
-		}
-		last = idx
-		for _, model := range provider.Models {
-			if !strings.Contains(patch, model.ID) {
-				t.Fatalf("patch should reference model %s of provider %s", model.ID, provider.ID)
-			}
+	for _, expected := range []string{"      wrenyard:", "codebuddy/hy4-preview-ioa", "HY4 Preview"} {
+		if !strings.Contains(patch, expected) {
+			t.Fatalf("patch should reference %s", expected)
 		}
 	}
 }
@@ -289,19 +277,10 @@ func TestFDSHChildOnlyCredentials(t *testing.T) {
 
 	old := dshCredentialResolver
 	dshCredentialResolver = func(providerID string) (dsh.TypedCredential, bool) {
-		value := "sk-test-" + providerID
-		cred := dsh.TypedCredential{Token: value}
-		if providerID == "zhipu-coding" {
-			cred.Headers = map[string]string{
-				"Authorization":    "Bearer " + value,
-				"X-Domain":         "acme",
-				"X-User-Id":        "u-1",
-				"X-Tenant-Id":      "t-1",
-				"X-Product":        "p-1",
-				"X-Requested-With": "r-1",
-			}
+		if providerID != dsh.GatewayProviderID {
+			return dsh.TypedCredential{}, false
 		}
-		return cred, true
+		return dsh.TypedCredential{Token: "local-gateway-child"}, true
 	}
 	t.Cleanup(func() { dshCredentialResolver = old })
 
@@ -310,53 +289,28 @@ func TestFDSHChildOnlyCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch := readTextIfExists(plan.PatchPath)
-	for _, provider := range dsh.InjectedProviders {
-		value := "sk-test-" + strings.TrimPrefix(provider.ID, "llm-pi-ai.")
-		if strings.Contains(patch, value) {
-			t.Fatalf("credential value %s leaked into the model patch", value)
-		}
-		for _, kv := range os.Environ() {
-			if strings.Contains(kv, value) {
-				t.Fatalf("credential value %s leaked into the parent environment", value)
-			}
+	value := "local-gateway-child"
+	if strings.Contains(patch, value) {
+		t.Fatalf("credential value %s leaked into the model patch", value)
+	}
+	for _, kv := range os.Environ() {
+		if strings.Contains(kv, value) {
+			t.Fatalf("credential value %s leaked into the parent environment", value)
 		}
 	}
-	// The patch carries only unquoted env refs for the typed Zhipu headers.
-	for _, want := range []string{
-		"X-Domain: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_DOMAIN_SECRET",
-		"X-User-Id: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_USER_ID_SECRET",
-		"X-Tenant-Id: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_TENANT_ID_SECRET",
-		"X-Product: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_PRODUCT_SECRET",
-		"X-Requested-With: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_REQUESTED_WITH_SECRET",
-	} {
-		if !strings.Contains(patch, want) {
-			t.Fatalf("patch missing unquoted ref %q:\n%s", want, patch)
-		}
-	}
-	if strings.Contains(patch, "Authorization:") {
-		t.Fatalf("Authorization must be handled only by apiKeyEnv:\n%s", patch)
-	}
-	if strings.Contains(patch, "acme") || strings.Contains(patch, "Bearer ") {
-		t.Fatalf("typed header values must never be serialized:\n%s", patch)
+	if strings.Contains(patch, "headers:") {
+		t.Fatalf("Gateway provider must not project upstream headers:\n%s", patch)
 	}
 	if code := execDSHPlan(plan); code != 0 {
 		t.Fatalf("execDSHPlan exit = %d, want 0", code)
 	}
 	out := readTextIfExists(outFile)
-	for _, provider := range dsh.InjectedProviders {
-		value := "sk-test-" + strings.TrimPrefix(provider.ID, "llm-pi-ai.")
-		if !strings.Contains(out, value) {
-			t.Fatalf("child env should carry the credential for %s", provider.ID)
-		}
-	}
-	for _, want := range []string{"acme", "u-1", "t-1", "p-1", "r-1"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("child env should carry zhipu header value %s:\n%s", want, out)
-		}
+	if !strings.Contains(out, value) {
+		t.Fatalf("child env should carry the Gateway credential")
 	}
 }
 
-func TestFDSHWebTypedHeaderEnvPlan(t *testing.T) {
+func TestFDSHWebGatewayTokenEnvPlan(t *testing.T) {
 	home := t.TempDir()
 	fdshLauncherTestEnv(t, home)
 	dshBin, _ := writeFakeDSH(t, "@deepseek-ai/dsh@0.1.0-rc.6")
@@ -364,11 +318,8 @@ func TestFDSHWebTypedHeaderEnvPlan(t *testing.T) {
 
 	old := dshCredentialResolver
 	dshCredentialResolver = func(providerID string) (dsh.TypedCredential, bool) {
-		if providerID == "zhipu-coding" {
-			return dsh.TypedCredential{
-				Token:   "sk-zhipu-web",
-				Headers: map[string]string{"Authorization": "Bearer sk-zhipu-web", "X-Domain": "acme", "X-Envelope": "env-1"},
-			}, true
+		if providerID == dsh.GatewayProviderID {
+			return dsh.TypedCredential{Token: "local-gateway-web"}, true
 		}
 		return dsh.TypedCredential{}, false
 	}
@@ -386,27 +337,15 @@ func TestFDSHWebTypedHeaderEnvPlan(t *testing.T) {
 		k, _, _ := strings.Cut(kv, "=")
 		keys[k] = true
 	}
-	for _, want := range []string{
-		"FORGE_DSH_ZHIPU_CODING_API_KEY",
-		"FORGE_DSH_ZHIPU_CODING_X_DOMAIN_SECRET",
-		"FORGE_DSH_ZHIPU_CODING_X_ENVELOPE_SECRET",
-	} {
-		if !keys[want] {
-			t.Fatalf("web plan env missing %s (got %v)", want, plan.Env)
-		}
+	if !keys[dsh.GatewayAPIKeyEnv] {
+		t.Fatalf("web plan env missing %s (got %v)", dsh.GatewayAPIKeyEnv, plan.Env)
 	}
 	patch := readTextIfExists(plan.PatchPath)
-	if !strings.Contains(patch, "X-Envelope: !!js process.env.FORGE_DSH_ZHIPU_CODING_X_ENVELOPE_SECRET") {
-		t.Fatalf("patch must reference typed header env:\n%s", patch)
-	}
-	if strings.Contains(patch, "sk-zhipu-web") || strings.Contains(patch, "env-1") {
+	if strings.Contains(patch, "local-gateway-web") || strings.Contains(patch, "headers:") {
 		t.Fatalf("plan/patch must stay secret-free:\n%s", patch)
 	}
-	// Missing-credential routes stay visible.
-	for _, routeKey := range []string{"kimi-coding"} {
-		if !strings.Contains(patch, "      "+routeKey+":") {
-			t.Fatalf("route %s must stay visible", routeKey)
-		}
+	if !strings.Contains(patch, "      wrenyard:") {
+		t.Fatalf("Wrenyard Gateway route must stay visible:\n%s", patch)
 	}
 }
 
