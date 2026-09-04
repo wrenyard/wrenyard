@@ -43,12 +43,13 @@ const builtinProviders: readonly ProviderDefinition[] = [
     models: [
       model('deepseek-v4-flash', 'DeepSeek V4 Flash'),
       model('deepseek-v4-pro', 'DeepSeek V4 Pro'),
-      model('hy4-preview-ioa', 'HY4 Preview'),
+      model('hy4-preview', 'HY4 Preview'),
       model('minimax-m3', 'MiniMax M3'),
       model('kimi-k3', 'Kimi K3'),
       model('glm-5.3', 'GLM-5.3'),
       model('glm-5.3-flash', 'GLM-5.3 Flash'),
     ],
+    modelAliases: { 'hy4-preview-ioa': 'hy4-preview' },
     protocols: [openAI('https://copilot.tencent.com/v2/chat/completions')],
   },
   {
@@ -232,7 +233,7 @@ const BUILTIN_RUN_TARGETS = {
   'codex-terra': ['codex', 'codex', 'gpt-5.6-terra'],
   'codex-luna': ['codex', 'codex', 'gpt-5.6-luna'],
   'codex-spark': ['codex', 'codex-spark', 'gpt-5.3-codex-spark'],
-  'cb-hy': ['codebuddy', 'codebuddy', 'hy4-preview-ioa'],
+  'cb-hy': ['codebuddy', 'codebuddy', 'hy4-preview'],
   'cb-ds': ['codebuddy', 'codebuddy', 'deepseek-v4-pro'],
   'cb-dsf': ['codebuddy', 'codebuddy', 'deepseek-v4-flash'],
   'cb-minimax': ['codebuddy', 'codebuddy', 'minimax-m3'],

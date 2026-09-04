@@ -40,6 +40,7 @@ export interface ProviderDefinition {
   models: readonly ModelDefinition[];
   nativeClients?: readonly string[];
   protocols?: readonly ProtocolCapability[];
+  modelAliases?: Readonly<Record<string, string>>;
   credentialResolver: CredentialResolver;
   defaultModel?: string;
   quotaProvider?: string;
@@ -92,6 +93,11 @@ export class Catalog {
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
       modelIDs.add(model.id);
     }
+    for (const [alias, target] of Object.entries(provider.modelAliases ?? {})) {
+      if (!alias.trim()) throw new Error(`provider ${provider.id} has an empty model alias`);
+      if (modelIDs.has(alias)) throw new Error(`provider ${provider.id} model alias collides with model ${alias}`);
+      if (!modelIDs.has(target)) throw new Error(`provider ${provider.id} model alias ${alias} targets unknown model ${target}`);
+    }
     const protocols = new Set<GatewayProtocol>();
     for (const capability of provider.protocols ?? []) {
       if (protocols.has(capability.protocol)) {
@@ -141,9 +147,10 @@ export class Catalog {
       throw new Error(`model must use provider/model form: ${publicID}`);
     }
     const providerID = publicID.slice(0, separator);
-    const modelID = publicID.slice(separator + 1);
+    const requestedModelID = publicID.slice(separator + 1);
     const provider = this.providersByID.get(providerID);
     if (!provider) throw new Error(`unknown provider: ${providerID}`);
+    const modelID = provider.modelAliases?.[requestedModelID] ?? requestedModelID;
     const model = provider.models.find((entry) => entry.id === modelID && !entry.taskOnly);
     if (!model) throw new Error(`unknown model: ${publicID}`);
     const capability = provider.protocols?.find((entry) => entry.protocol === protocol);
@@ -152,7 +159,7 @@ export class Catalog {
       provider,
       model,
       capability,
-      publicId: publicID,
+      publicId: `${providerID}/${modelID}`,
       upstreamModel: capability.upstreamModels?.[modelID] ?? modelID,
     };
   }
@@ -162,6 +169,7 @@ export class Catalog {
     if (!client) throw new Error(`unknown client: ${clientID}`);
     const provider = this.providersByID.get(providerID);
     if (!provider) throw new Error(`unknown provider: ${providerID}`);
+    modelID = provider.modelAliases?.[modelID] ?? modelID;
     if (!provider.models.some((model) => model.id === modelID)) {
       throw new Error(`unknown model: ${providerID}/${modelID}`);
     }

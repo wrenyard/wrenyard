@@ -54,6 +54,7 @@ func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Clien
 	out.Provider = provider
 	out.Compatibility = CompatibilityNone
 	applyDispatchModel(out.Env, plan)
+	applyDispatchLauncherModel(&out.Launcher, plan)
 	if plan.Mode == "gateway" {
 		out.Credential.Value = ""
 		out.Credential.Source = "gateway"
@@ -67,6 +68,27 @@ func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Clien
 	}
 	out.Credential = credential
 	return out, nil
+}
+
+func applyDispatchLauncherModel(launcher *Launcher, plan DispatchPlan) {
+	if plan.Client != "codebuddy" {
+		return
+	}
+	model := plan.Model
+	if plan.Mode == "gateway" {
+		model = plan.Provider + "/" + plan.Model
+	}
+	for i, arg := range launcher.DefaultArgs {
+		if arg == "--model" && i+1 < len(launcher.DefaultArgs) {
+			launcher.DefaultArgs[i+1] = model
+			return
+		}
+		if strings.HasPrefix(arg, "--model=") {
+			launcher.DefaultArgs[i] = "--model=" + model
+			return
+		}
+	}
+	launcher.DefaultArgs = append(launcher.DefaultArgs, "--model", model)
 }
 
 func applyDispatchModel(env map[string]string, plan DispatchPlan) {

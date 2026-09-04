@@ -148,12 +148,16 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 	if resolvedProfile.Settings != nil {
 		resolvedSettings = resolvedProfile.Settings
 	}
+	resolvedLauncher := def.Launcher
+	if resolvedProfile.Launcher.DefaultArgs != nil {
+		resolvedLauncher = cloneLauncherWithDefaultArgs(def.Launcher, resolvedProfile.Launcher.DefaultArgs)
+	}
 
 	spec := driver.ProfileSpec{
 		Name:             def.Name,
 		Client:           def.Client,
 		ProviderName:     def.Provider,
-		Launcher:         def.Launcher,
+		Launcher:         resolvedLauncher,
 		Env:              resolvedEnv,
 		Settings:         resolvedSettings,
 		Supports1M:       def.Supports1M,
@@ -189,6 +193,19 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 	plan.ProfileName = def.Name
 	plan.TranscriptFamily = transcriptFamilyForClient(def)
 	return plan, clientFamily, nil
+}
+
+func cloneLauncherWithDefaultArgs(launcher map[string]interface{}, defaultArgs []string) map[string]interface{} {
+	out := make(map[string]interface{}, len(launcher)+1)
+	for key, value := range launcher {
+		out[key] = value
+	}
+	args := make([]interface{}, len(defaultArgs))
+	for i, arg := range defaultArgs {
+		args[i] = arg
+	}
+	out["default_args"] = args
+	return out
 }
 
 // transcriptFamilyForClient resolves the runner-only transcript normalization

@@ -740,7 +740,7 @@ func TestSameNameCBRecipeOverrideCarriesAnthropicModel(t *testing.T) {
 	path := writeTempConfig(t, `{
 		"clients": {"codebuddy": {"enabled": true}},
 		"profiles": {
-			"cb-hy": {"client": "codebuddy", "provider": "codebuddy", "model": "hy4-preview-ioa", "description": "CodeBuddy Hunyuan override"}
+			"cb-hy": {"client": "codebuddy", "provider": "codebuddy", "model": "hy4-preview", "description": "CodeBuddy Hunyuan override"}
 		}
 	}`)
 	cfg, _, err := config.LoadForgeConfig(path, config.EmbeddedData(), &strings.Builder{})
@@ -762,8 +762,8 @@ func TestSameNameCBRecipeOverrideCarriesAnthropicModel(t *testing.T) {
 	if p.Provider != "codebuddy" {
 		t.Fatalf("cb-hy provider = %q, want codebuddy", p.Provider)
 	}
-	if p.Env["ANTHROPIC_MODEL"] != "hy4-preview-ioa" {
-		t.Fatalf("cb-hy ANTHROPIC_MODEL = %q, want hy4-preview-ioa", p.Env["ANTHROPIC_MODEL"])
+	if p.Env["ANTHROPIC_MODEL"] != "hy4-preview" {
+		t.Fatalf("cb-hy ANTHROPIC_MODEL = %q, want hy4-preview", p.Env["ANTHROPIC_MODEL"])
 	}
 }
 

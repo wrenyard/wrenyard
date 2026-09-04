@@ -160,3 +160,28 @@ func TestDirectRunCBKimiSelectsCodeBuddyWithKimiK3(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectRunCBHYUsesDaemonResolvedUpstreamModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("FORGE_REPO_DIR", t.TempDir())
+	setFakeClientsOnPath(t, "codebuddy")
+
+	plan, err := buildDirectRunPlan(directPlanInput{Profile: "cb-hy", Prompt: "work", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for i, arg := range plan.Command {
+		if arg == "--model" && i+1 < len(plan.Command) && plan.Command[i+1] == "hy4-preview-ioa" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cb-hy command must consume the daemon-resolved upstream model: %#v", plan.Command)
+	}
+}

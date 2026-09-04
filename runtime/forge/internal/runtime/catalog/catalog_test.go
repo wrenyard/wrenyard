@@ -742,7 +742,7 @@ func TestModelWhitelistAccept(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, model := range []string{
-		"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+		"hy4-preview", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
 		"kimi-k3", "glm-5.3", "glm-5.3-flash",
 	} {
 		if err := b.ValidateModel(model); err != nil {
@@ -1129,7 +1129,7 @@ func TestProviderModelMap(t *testing.T) {
 
 	// codebuddy provider owns the public Hunyuan and DeepSeek models.
 	for _, model := range []string{
-		"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+		"hy4-preview", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
 		"kimi-k3", "glm-5.3", "glm-5.3-flash",
 	} {
 		canonical, ok := r.LookupProviderModel("codebuddy", model)

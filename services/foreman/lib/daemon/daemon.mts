@@ -32,7 +32,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
-import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinDispatchPlans } from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinRuntimeDispatchPlans } from '@wrenyard/providers'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { ClientConfigurationService } from '../client-configuration/service.mts'
@@ -266,8 +266,8 @@ async function startForemanDaemonWithRuntime(
   const stateRoot = foremanStateRoot()
   const gatewayToken = await loadOrCreateGatewayCredential(join(stateRoot, 'gateway', 'credential'))
   const catalog = createBuiltinCatalog()
-  const dispatchPlans = resolveBuiltinDispatchPlans(catalog)
   const providerRuntime = createBuiltinProviderRuntime()
+  const dispatchPlans = await resolveBuiltinRuntimeDispatchPlans(catalog, providerRuntime)
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,

@@ -57,7 +57,7 @@ func fdshLauncherTestEnv(t *testing.T, home string) {
 	t.Setenv("DSH_HOME", "")
 	t.Setenv("WRENYARD_GATEWAY_OPENAI_CHAT_URL", "http://127.0.0.1:8787/gateway/openai-chat/v1")
 	t.Setenv("WRENYARD_GATEWAY_TOKEN", "local-gateway-token")
-	t.Setenv("WRENYARD_GATEWAY_MODELS_JSON", `[{"id":"hy4-preview-ioa","publicId":"codebuddy/hy4-preview-ioa","provider":"codebuddy","displayName":"HY4 Preview"}]`)
+	t.Setenv("WRENYARD_GATEWAY_MODELS_JSON", `[{"id":"hy4-preview","publicId":"codebuddy/hy4-preview","provider":"codebuddy","displayName":"HY4 Preview"}]`)
 }
 
 func TestFDSHRequested(t *testing.T) {
@@ -262,7 +262,7 @@ func TestFDSHModelPatchCatalogAndOrder(t *testing.T) {
 	if !strings.HasPrefix(patch, "# forge dsh patch (generated; secret-free)\n- id: llm-pi-ai\n") {
 		t.Fatalf("patch must be a loader overlay array:\n%s", patch)
 	}
-	for _, expected := range []string{"      wrenyard:", "codebuddy/hy4-preview-ioa", "HY4 Preview"} {
+	for _, expected := range []string{"      wrenyard:", "codebuddy/hy4-preview", "HY4 Preview"} {
 		if !strings.Contains(patch, expected) {
 			t.Fatalf("patch should reference %s", expected)
 		}

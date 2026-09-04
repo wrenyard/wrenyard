@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 		"WRENYARD_GATEWAY_OPENAI_CHAT_URL":      "http://127.0.0.1:4312/gateway/openai-chat/v1",
 		"WRENYARD_GATEWAY_OPENAI_RESPONSES_URL": "http://127.0.0.1:4312/gateway/openai-responses/v1",
 		"WRENYARD_GATEWAY_ANTHROPIC_URL":        "http://127.0.0.1:4312/gateway/anthropic/v1",
-		"WRENYARD_GATEWAY_MODELS_JSON":          `[{"id":"hy4-preview-ioa","publicId":"codebuddy/hy4-preview-ioa","provider":"codebuddy","displayName":"HY4 Preview"},{"id":"glm-5.3","publicId":"zhipu-coding/glm-5.3","provider":"zhipu-coding","displayName":"GLM 5.3"}]`,
+		"WRENYARD_GATEWAY_MODELS_JSON":          `[{"id":"hy4-preview","publicId":"codebuddy/hy4-preview","provider":"codebuddy","displayName":"HY4 Preview"},{"id":"glm-5.3","publicId":"zhipu-coding/glm-5.3","provider":"zhipu-coding","displayName":"GLM 5.3"}]`,
 	} {
 		if os.Getenv(key) == "" {
 			_ = os.Setenv(key, value)
