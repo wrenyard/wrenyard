@@ -13,6 +13,7 @@ const connection: GatewayClientConnection = {
   openaiResponsesBaseUrl: 'http://127.0.0.1:8787/gateway/openai-responses/v1',
   anthropicBaseUrl: 'http://127.0.0.1:8787/gateway/anthropic/v1',
   credential: 'gateway-secret',
+  credentialHelperPath: '/opt/wrenyard/bin/gateway-credential',
   credentialHelperCommand: ['wrenyard', 'client', 'gateway-credential'],
   models: [
     { id: 'sol', publicId: 'openai/sol', provider: 'openai', displayName: 'Sol', protocols: ['openai_responses'], contextWindow: 1_000_000 },
