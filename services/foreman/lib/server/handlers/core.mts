@@ -191,25 +191,39 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
     }
+    const callClientConfiguration = async <T,>(operation: () => Promise<T>): Promise<T> => {
+      try {
+        return await operation()
+      } catch (error) {
+        if (error instanceof ProtocolError) throw error
+        throw new ProtocolError(
+          {
+            code: INVALID_PARAMS.code,
+            message: error instanceof Error ? error.message : 'Client configuration request rejected',
+          },
+          { code: 'client_configuration_rejected' },
+        )
+      }
+    }
     router.register('client.configuration.snapshot', async (_params, _message, context) => {
       requireClientConfigurationIpc(context, 'client.configuration.snapshot')
       return options.clientConfiguration!.snapshot()
     })
     router.register('client.configuration.plan', async (params, _message, context) => {
       requireClientConfigurationIpc(context, 'client.configuration.plan')
-      return options.clientConfiguration!.plan(params)
+      return callClientConfiguration(() => options.clientConfiguration!.plan(params))
     })
     router.register('client.configuration.apply', async (params, _message, context) => {
       requireClientConfigurationIpc(context, 'client.configuration.apply')
-      return options.clientConfiguration!.apply(params)
+      return callClientConfiguration(() => options.clientConfiguration!.apply(params))
     })
     router.register('client.configuration.plan-restore', async (params, _message, context) => {
       requireClientConfigurationIpc(context, 'client.configuration.plan-restore')
-      return options.clientConfiguration!.planRestore(params)
+      return callClientConfiguration(() => options.clientConfiguration!.planRestore(params))
     })
     router.register('client.configuration.restore', async (params, _message, context) => {
       requireClientConfigurationIpc(context, 'client.configuration.restore')
-      return options.clientConfiguration!.restore(params)
+      return callClientConfiguration(() => options.clientConfiguration!.restore(params))
     })
   }
   router.register('event.list', (params) => {
