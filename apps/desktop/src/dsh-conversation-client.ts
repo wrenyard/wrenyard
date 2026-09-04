@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers';
 import type {
   ConversationItemSnapshot,
   ConversationModelGroupSnapshot,
@@ -95,13 +96,19 @@ function catalogProviderForRoute(provider: string, model: string): string {
   return separator > 0 ? model.slice(0, separator) : provider;
 }
 
+function canonicalConversationModel(provider: string, model: string): string {
+  if (provider === 'wrenyard') return canonicalizeBuiltinPublicModelId(model);
+  const canonical = canonicalizeBuiltinPublicModelId(`${provider}/${model}`);
+  return canonical.startsWith(`${provider}/`) ? canonical.slice(provider.length + 1) : model;
+}
+
 function modelSelectionSnapshot(
   selection: Record<string, unknown>,
   groups: ConversationModelGroupSnapshot[],
   configuredProviderIds?: ReadonlySet<string>,
 ): ConversationModelSelectionSnapshot {
   const provider = requiredString(selection.provider, 'current.provider');
-  const model = requiredString(selection.model, 'current.model');
+  const model = canonicalConversationModel(provider, requiredString(selection.model, 'current.model'));
   const group = groups.find((candidate) => candidate.provider === provider);
   const option = group?.models.find((candidate) => candidate.model === model);
   return {

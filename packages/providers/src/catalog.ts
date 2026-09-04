@@ -260,6 +260,16 @@ export function createBuiltinCatalog(): Catalog {
   return catalog;
 }
 
+export function canonicalizeBuiltinPublicModelId(publicId: string): string {
+  const separator = publicId.indexOf('/');
+  if (separator <= 0 || separator === publicId.length - 1) return publicId;
+  const providerId = publicId.slice(0, separator);
+  const modelId = publicId.slice(separator + 1);
+  const provider = BUILTIN_PROVIDERS.find((candidate) => candidate.id === providerId);
+  const canonicalModelId = provider?.modelAliases?.[modelId];
+  return canonicalModelId ? `${providerId}/${canonicalModelId}` : publicId;
+}
+
 export function resolveBuiltinDispatchPlans(catalog: Catalog): Readonly<Record<string, DispatchPlan>> {
   return Object.fromEntries(Object.entries(BUILTIN_RUN_TARGETS).map(([profile, [client, provider, model]]) =>
     [profile, catalog.resolveRun(client, provider, model)]));
