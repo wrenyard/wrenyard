@@ -152,14 +152,13 @@ Electron product shell
   filters sessions to the fixed workspace, and sends only a bounded
   conversation projection through preload IPC. The conversation header reads
   the selected session's advisory model directory through `session.models` and
-  changes its next-request route through `session.selectModel`; models remain
-  grouped by their DSH provider. The conversation model picker lists only
-  providers whose credentials were actually passed to the DSH child — injected
-  routes when their `FORGE_DSH_*_API_KEY` value is present, and the native
-  `deepseek-official` route (mapped to the product id `deepseek`) only when
-  `DEEPSEEK_API_KEY` is inherited. Unconfigured providers keep their setup rows
-  on the Providers page (模型供应), so configuration stays reachable even though
-  their models never appear in the picker. The header keeps the model picker unlabeled and
+  changes its next-request route through `session.selectModel`; the single DSH
+  Gateway transport is regrouped by the Catalog Provider carried in each
+  public `provider/model` id. The picker consumes the daemon-provided Gateway
+  directory and never receives upstream credentials. Unconfigured providers
+  keep their setup rows on the Providers page (模型供应), so configuration stays
+  reachable even though their models never appear in the picker. The header
+  keeps the model picker unlabeled and
   shows only one Wrenyard daemon status lamp beside it; hovering or focusing the
   lamp refreshes public health and shows online state plus the start time derived
   from daemon uptime. The product projection exposes one canonical
@@ -169,7 +168,12 @@ Electron product shell
   `DeepSeek V4 Pro` while preserving DSH route ids; the native
   `deepseek-official` catalog also advertises the image-capable experimental
   `DeepSeek V4 Flash Vision` route. Desktop does not persist a
-  parallel model preference. MCP defaults to
+  parallel model preference. The model control is a Desktop-themed listbox,
+  not a native select: every choice shows its Catalog Provider under the model
+  name, and the existing Desktop quota snapshot is projected into quiet
+  provider-level status marks with accessible tooltips. Percentage windows and
+  monetary balances remain distinct; this view neither polls quota separately
+  nor infers a subscription tier. MCP defaults to
   `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
   under LaunchServices.
   Startup resolves only after the exact loopback URL line is parsed and

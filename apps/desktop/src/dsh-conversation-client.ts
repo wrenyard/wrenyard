@@ -89,6 +89,12 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function catalogProviderForRoute(provider: string, model: string): string {
+  if (provider !== 'wrenyard') return provider;
+  const separator = model.indexOf('/');
+  return separator > 0 ? model.slice(0, separator) : provider;
+}
+
 function modelSelectionSnapshot(
   selection: Record<string, unknown>,
   groups: ConversationModelGroupSnapshot[],
@@ -100,6 +106,7 @@ function modelSelectionSnapshot(
   const option = group?.models.find((candidate) => candidate.model === model);
   return {
     provider,
+    catalogProvider: option?.catalogProvider ?? catalogProviderForRoute(provider, model),
     model,
     label: option?.label ?? model,
     providerLabel: group?.label ?? provider,
@@ -141,6 +148,7 @@ export function projectConversationModels(
         const reasoning = isObject(rawModel.reasoning) ? rawModel.reasoning : undefined;
         return [{
           provider,
+          catalogProvider: catalogProviderForRoute(provider, model),
           providerLabel,
           model,
           label: sourceLabel,

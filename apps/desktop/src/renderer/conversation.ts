@@ -1,8 +1,14 @@
 import type {
   ConversationItemSnapshot,
+  ConversationModelOptionSnapshot,
   ConversationSnapshot,
+  QuotaSnapshot,
   WrenyardShellApi,
 } from '../shell-contract.js';
+import {
+  conversationProviderPresentation,
+  type ConversationProviderPresentation,
+} from './conversation-provider-status.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -180,6 +186,20 @@ export function shouldFollowConversationTail(options: { sessionChanged: boolean;
   return options.sessionChanged || options.wasPinned;
 }
 
+interface ModelPickerEntry extends ConversationModelOptionSnapshot {
+  value: string;
+  current: boolean;
+  advertised: boolean;
+}
+
+interface ProviderBinding {
+  providerId: string;
+  label: HTMLElement;
+  signal: HTMLElement;
+  host: HTMLElement;
+  baseTitle?: string;
+}
+
 function appendInlineMarkdown(target: HTMLElement, text: string): void {
   const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
   for (const part of parts) {
@@ -315,7 +335,13 @@ export class ConversationView {
   private readonly input = element<HTMLTextAreaElement>('conversation-input');
   private readonly sendButton = element<HTMLButtonElement>('conversation-send');
   private readonly stopButton = element<HTMLButtonElement>('conversation-stop');
-  private readonly modelSelect = element<HTMLSelectElement>('conversation-model-select');
+  private readonly modelPicker = element<HTMLElement>('conversation-model-picker');
+  private readonly modelTrigger = element<HTMLButtonElement>('conversation-model-trigger');
+  private readonly modelName = element<HTMLElement>('conversation-model-name');
+  private readonly modelProvider = element<HTMLElement>('conversation-model-provider');
+  private readonly modelTriggerSignal = element<HTMLElement>('conversation-model-trigger-signal');
+  private readonly modelPopover = element<HTMLElement>('conversation-model-popover');
+  private readonly modelList = element<HTMLElement>('conversation-model-list');
   private readonly error = element<HTMLElement>('conversation-error');
   private readonly gate = element<HTMLElement>('workspace-gate');
   private readonly gateInput = element<HTMLInputElement>('workspace-gate-input');
@@ -325,6 +351,11 @@ export class ConversationView {
   private refreshing = false;
   private refreshQueued = false;
   private busy = false;
+  private quotaSnapshot: QuotaSnapshot | undefined;
+  private modelOptions: HTMLButtonElement[] = [];
+  private providerBindings: ProviderBinding[] = [];
+  private modelPickerOpen = false;
+  private activeModelIndex = -1;
 
   constructor(api: WrenyardShellApi, openSettings: () => void) {
     this.api = api;
@@ -332,7 +363,29 @@ export class ConversationView {
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
     this.stopButton.addEventListener('click', () => void this.cancel());
-    this.modelSelect.addEventListener('change', () => void this.selectModel());
+    this.modelTrigger.addEventListener('click', () => {
+      if (this.modelPickerOpen) this.closeModelPicker(false);
+      else this.openModelPicker('selected');
+    });
+    this.modelTrigger.addEventListener('keydown', (event) => this.onModelTriggerKeyDown(event));
+    this.modelList.addEventListener('keydown', (event) => this.onModelListKeyDown(event));
+    this.modelList.addEventListener('click', (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('button[data-model-value]')
+        : null;
+      if (!target || target.disabled) return;
+      void this.selectModel(target.dataset.modelValue ?? '');
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (this.modelPickerOpen && event.target instanceof Node && !this.modelPicker.contains(event.target)) {
+        this.closeModelPicker(false);
+      }
+    });
+    document.addEventListener('focusin', (event) => {
+      if (this.modelPickerOpen && event.target instanceof Node && !this.modelPicker.contains(event.target)) {
+        this.closeModelPicker(false);
+      }
+    });
     element('workspace-open-settings').addEventListener('click', openSettings);
     element('workspace-quick-save').addEventListener('click', () => void this.saveWorkspace());
     this.input.addEventListener('input', () => this.resizeComposer());
@@ -347,6 +400,11 @@ export class ConversationView {
 
   start(): void {
     void this.refresh();
+  }
+
+  setQuotaSnapshot(snapshot: QuotaSnapshot): void {
+    this.quotaSnapshot = snapshot;
+    this.updateProviderBindings();
   }
 
   async refresh(): Promise<void> {
@@ -413,53 +471,240 @@ export class ConversationView {
   }
 
   private renderModels(snapshot: ConversationSnapshot): void {
+    this.closeModelPicker(false);
     const directory = snapshot.models;
     const currentValue = directory.current
       ? conversationModelValue(directory.current.provider, directory.current.model)
       : '';
-    const options: HTMLOptionElement[] = [];
-    const nodes: Array<HTMLOptionElement | HTMLOptGroupElement> = [];
+    const providerGroups = new Map<string, ModelPickerEntry[]>();
+    const appendEntry = (entry: ModelPickerEntry): void => {
+      const group = providerGroups.get(entry.catalogProvider) ?? [];
+      group.push(entry);
+      providerGroups.set(entry.catalogProvider, group);
+    };
 
-    if (directory.current && !directory.current.advertised && directory.current.configured) {
-      const current = document.createElement('option');
-      current.value = currentValue;
-      current.textContent = `${directory.current.label}（当前）`;
-      current.disabled = true;
-      nodes.push(current);
-      options.push(current);
+    if (directory.current && !directory.current.advertised) {
+      appendEntry({
+        provider: directory.current.provider,
+        catalogProvider: directory.current.catalogProvider,
+        providerLabel: directory.current.providerLabel,
+        model: directory.current.model,
+        label: directory.current.label,
+        value: currentValue,
+        current: true,
+        advertised: false,
+        description: '当前会话模型未出现在最新模型目录中',
+      });
     }
     for (const group of directory.groups) {
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = group.label;
       for (const model of group.models) {
-        const option = document.createElement('option');
-        option.value = conversationModelValue(model.provider, model.model);
-        option.textContent = model.label;
-        option.title = model.description ?? `${model.providerLabel} / ${model.model}`;
-        optgroup.append(option);
-        options.push(option);
+        const value = conversationModelValue(model.provider, model.model);
+        appendEntry({
+          ...model,
+          value,
+          current: value === currentValue,
+          advertised: true,
+        });
       }
-      nodes.push(optgroup);
     }
-    if (nodes.length === 0) {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = snapshot.selectedSessionId
+
+    this.providerBindings = [];
+    this.modelOptions = [];
+    const groupNodes: HTMLElement[] = [];
+    let groupIndex = 0;
+    let optionIndex = 0;
+    for (const [providerId, entries] of providerGroups) {
+      const section = document.createElement('section');
+      section.className = 'conversation-model-group';
+      section.setAttribute('role', 'group');
+      const heading = document.createElement('div');
+      heading.className = 'conversation-model-group-heading';
+      heading.id = `conversation-model-group-${groupIndex}`;
+      section.setAttribute('aria-labelledby', heading.id);
+      const headingLabel = document.createElement('span');
+      const headingSignal = document.createElement('span');
+      headingSignal.className = 'conversation-provider-signal';
+      heading.append(headingLabel, headingSignal);
+      this.providerBindings.push({
+        providerId,
+        label: headingLabel,
+        signal: headingSignal,
+        host: heading,
+      });
+
+      for (const entry of entries) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = `conversation-model-option${entry.current ? ' is-selected' : ''}${entry.advertised ? '' : ' is-unadvertised'}`;
+        option.id = `conversation-model-option-${optionIndex}`;
+        option.dataset.modelValue = entry.value;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(entry.current));
+        option.tabIndex = -1;
+        option.disabled = !entry.advertised;
+        if (!entry.advertised) option.setAttribute('aria-disabled', 'true');
+        const name = document.createElement('strong');
+        name.textContent = entry.advertised ? entry.label : `${entry.label}（当前）`;
+        const provider = document.createElement('small');
+        provider.className = 'conversation-model-option-provider';
+        const providerLabel = document.createElement('span');
+        const providerSignal = document.createElement('span');
+        providerSignal.className = 'conversation-provider-signal';
+        provider.append(providerLabel, providerSignal);
+        option.append(name, provider);
+        this.providerBindings.push({
+          providerId,
+          label: providerLabel,
+          signal: providerSignal,
+          host: option,
+          baseTitle: entry.description ?? entry.model,
+        });
+        if (entry.advertised) this.modelOptions.push(option);
+        section.append(option);
+        optionIndex += 1;
+      }
+      groupNodes.push(section);
+      groupIndex += 1;
+    }
+
+    if (groupNodes.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'conversation-model-empty';
+      empty.textContent = snapshot.selectedSessionId
         ? directory.status === 'loading' ? '读取模型…' : '暂无可选模型'
         : '新建会话后选择模型';
-      nodes.push(placeholder);
+      groupNodes.push(empty);
     }
-    this.modelSelect.replaceChildren(...nodes);
-    if (currentValue && options.some((option) => option.value === currentValue)) this.modelSelect.value = currentValue;
-    this.modelSelect.disabled = this.busy
+    this.modelList.replaceChildren(...groupNodes);
+    const disabled = this.busy
       || snapshot.status !== 'ready'
       || !snapshot.selectedSessionId
       || directory.status === 'loading'
-      || directory.groups.every((group) => group.models.length === 0);
+      || this.modelOptions.length === 0;
+    this.modelTrigger.disabled = disabled;
     const current = directory.current;
-    this.modelSelect.title = current
-      ? `${current.providerLabel} / ${current.label}${current.reasoningEffort ? ` · ${current.reasoningEffort}` : ''}`
-      : directory.message ?? '当前会话模型';
+    const placeholder = snapshot.selectedSessionId
+      ? directory.status === 'loading' ? '读取模型…' : '选择模型'
+      : '新建会话后选择模型';
+    this.modelName.textContent = current?.label ?? placeholder;
+    this.modelProvider.hidden = !current;
+    this.modelTriggerSignal.hidden = !current;
+    this.modelTrigger.setAttribute('aria-label', current ? `当前会话模型：${current.label}` : placeholder);
+    if (current) {
+      this.providerBindings.push({
+        providerId: current.catalogProvider,
+        label: this.modelProvider,
+        signal: this.modelTriggerSignal,
+        host: this.modelTrigger,
+        baseTitle: `${current.label}${current.reasoningEffort ? ` · ${current.reasoningEffort}` : ''}${current.advertised ? '' : ' · 当前目录未提供'}`,
+      });
+    } else {
+      this.modelTrigger.title = directory.message ?? '当前会话模型';
+      this.modelTriggerSignal.replaceChildren();
+      this.modelTriggerSignal.removeAttribute('role');
+      this.modelTriggerSignal.removeAttribute('aria-label');
+    }
+    this.updateProviderBindings();
+  }
+
+  private updateProviderBindings(): void {
+    for (const binding of this.providerBindings) {
+      const presentation = conversationProviderPresentation(binding.providerId, this.quotaSnapshot);
+      binding.label.textContent = presentation.label;
+      this.renderProviderSignal(binding.signal, presentation);
+      binding.host.title = [binding.baseTitle, presentation.tooltip].filter(Boolean).join(' · ');
+    }
+  }
+
+  private renderProviderSignal(target: HTMLElement, presentation: ConversationProviderPresentation): void {
+    target.replaceChildren(...presentation.indicators.map((indicator) => {
+      const dot = document.createElement('i');
+      dot.className = `is-${indicator.kind}`;
+      dot.dataset.kind = indicator.kind;
+      dot.setAttribute('aria-hidden', 'true');
+      return dot;
+    }));
+    target.hidden = presentation.indicators.length === 0;
+    if (presentation.indicators.length > 0) {
+      target.setAttribute('role', 'img');
+      target.setAttribute('aria-label', presentation.tooltip);
+    } else {
+      target.removeAttribute('role');
+      target.removeAttribute('aria-label');
+    }
+  }
+
+  private openModelPicker(preferred: 'first' | 'last' | 'selected'): void {
+    if (this.modelTrigger.disabled || this.modelOptions.length === 0) return;
+    this.modelPickerOpen = true;
+    this.modelPopover.hidden = false;
+    this.modelTrigger.setAttribute('aria-expanded', 'true');
+    const selected = this.modelOptions.findIndex((option) => option.getAttribute('aria-selected') === 'true');
+    const index = preferred === 'first'
+      ? 0
+      : preferred === 'last'
+        ? this.modelOptions.length - 1
+        : selected >= 0 ? selected : 0;
+    this.focusModelOption(index);
+  }
+
+  private closeModelPicker(restoreTriggerFocus: boolean): void {
+    this.modelPickerOpen = false;
+    this.modelPopover.hidden = true;
+    this.modelTrigger.setAttribute('aria-expanded', 'false');
+    this.activeModelIndex = -1;
+    for (const option of this.modelOptions) option.tabIndex = -1;
+    if (restoreTriggerFocus && !this.modelTrigger.disabled) this.modelTrigger.focus();
+  }
+
+  private focusModelOption(index: number): void {
+    if (this.modelOptions.length === 0) return;
+    const normalized = (index + this.modelOptions.length) % this.modelOptions.length;
+    for (const option of this.modelOptions) option.tabIndex = -1;
+    const option = this.modelOptions[normalized];
+    if (!option) return;
+    option.tabIndex = 0;
+    this.activeModelIndex = normalized;
+    option.focus();
+  }
+
+  private onModelTriggerKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && this.modelPickerOpen) {
+      event.preventDefault();
+      this.closeModelPicker(true);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    if (!this.modelPickerOpen) {
+      this.openModelPicker(event.key === 'ArrowUp' ? 'last' : 'selected');
+      return;
+    }
+    if (event.key === 'ArrowDown') this.focusModelOption(this.activeModelIndex + 1);
+    if (event.key === 'ArrowUp') this.focusModelOption(this.activeModelIndex - 1);
+  }
+
+  private onModelListKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closeModelPicker(true);
+      return;
+    }
+    if (event.key === 'Tab') {
+      this.closeModelPicker(false);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      if (event.key === 'Home') this.focusModelOption(0);
+      else if (event.key === 'End') this.focusModelOption(this.modelOptions.length - 1);
+      else this.focusModelOption(this.activeModelIndex + (event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof HTMLButtonElement) {
+      event.preventDefault();
+      void this.selectModel(event.target.dataset.modelValue ?? '');
+    }
   }
 
   private renderSessions(snapshot: ConversationSnapshot): void {
@@ -645,6 +890,7 @@ export class ConversationView {
   private async select(sessionId: string): Promise<void> {
     if (this.busy || sessionId === this.snapshot?.selectedSessionId) return;
     this.busy = true;
+    if (this.snapshot) this.renderModels(this.snapshot);
     try {
       this.render(await this.api.selectConversation(sessionId));
     } catch (error) {
@@ -658,6 +904,7 @@ export class ConversationView {
   private async create(): Promise<void> {
     if (this.busy || this.snapshot?.status !== 'ready') return;
     this.busy = true;
+    if (this.snapshot) this.renderModels(this.snapshot);
     try {
       this.render(await this.api.createConversation());
       this.rotateConversationPlaceholder();
@@ -674,22 +921,26 @@ export class ConversationView {
     this.input.placeholder = nextConversationPlaceholder();
   }
 
-  private async selectModel(): Promise<void> {
-    const selection = parseConversationModelValue(this.modelSelect.value);
+  private async selectModel(value: string): Promise<void> {
+    const selection = parseConversationModelValue(value);
     if (!selection || this.busy || this.snapshot?.status !== 'ready') {
       if (this.snapshot) this.renderModels(this.snapshot);
       return;
     }
+    const previousSnapshot = this.snapshot;
     this.busy = true;
-    this.modelSelect.disabled = true;
+    this.closeModelPicker(false);
+    this.renderModels(previousSnapshot);
     try {
       this.render(await this.api.selectConversationModel(selection.provider, selection.model));
     } catch (error) {
+      this.snapshot = previousSnapshot;
+      this.renderModels(previousSnapshot);
       this.showError(errorMessage(error));
     } finally {
       this.busy = false;
-      if (this.snapshot) this.render(this.snapshot);
-      this.input.focus();
+      if (this.snapshot) this.renderModels(this.snapshot);
+      if (!this.modelTrigger.disabled) this.modelTrigger.focus();
     }
   }
 
@@ -697,6 +948,7 @@ export class ConversationView {
     const text = this.input.value.trim();
     if (!text || this.busy || this.snapshot?.status !== 'ready') return;
     this.busy = true;
+    if (this.snapshot) this.renderModels(this.snapshot);
     this.input.value = '';
     this.resizeComposer();
     try {
@@ -715,6 +967,7 @@ export class ConversationView {
   private async cancel(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    if (this.snapshot) this.renderModels(this.snapshot);
     try {
       this.render(await this.api.cancelConversation());
     } catch (error) {

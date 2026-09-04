@@ -90,6 +90,7 @@ let providerOrderSaving = false;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
 let pendingClientPlan: ClientConfigurationPlanDto | null = null;
+const conversationView = new ConversationView(window.wrenyardShell, () => void navigate('settings'));
 
 function requireElement<T extends HTMLElement = HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -401,6 +402,7 @@ function renderStats(snapshot: StatsSnapshot): void {
 
 function renderQuota(snapshot: QuotaSnapshot): void {
   currentQuota = snapshot;
+  conversationView.setQuotaSnapshot(snapshot);
   const available = snapshot.status === 'available';
   const status = requireElement('quota-status');
   status.textContent = available ? '模型供应已同步' : '暂不可用';
@@ -1176,7 +1178,13 @@ window.wrenyardShell.onViewChanged((page) => {
   if (page === 'settings') void window.wrenyardShell.getSettings().then(renderSnapshot);
 });
 window.wrenyardShell.onQuotaChanged(() => {
-  if (currentPage === 'quota') void refreshQuota(false);
+  void window.wrenyardShell.getQuota(false).then((snapshot) => {
+    if (currentPage === 'quota') renderQuota(snapshot);
+    else {
+      currentQuota = snapshot;
+      conversationView.setQuotaSnapshot(snapshot);
+    }
+  });
 });
 window.wrenyardShell.onUpdateChanged(() => {
   void window.wrenyardShell.getUpdate().then(renderUpdate);
@@ -1192,5 +1200,8 @@ daemonStatus.addEventListener('focus', refreshDaemonStatus);
 void window.wrenyardShell.getSettings()
   .then(renderSnapshot)
   .catch(() => renderDaemonStatus({ status: 'unavailable' }));
-const conversationView = new ConversationView(window.wrenyardShell, () => void navigate('settings'));
 conversationView.start();
+void window.wrenyardShell.getQuota(false).then((snapshot) => {
+  currentQuota = snapshot;
+  conversationView.setQuotaSnapshot(snapshot);
+});

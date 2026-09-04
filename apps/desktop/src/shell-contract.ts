@@ -274,6 +274,8 @@ export interface ConversationItemSnapshot {
 
 export interface ConversationModelSelectionSnapshot {
   provider: string;
+  /** Catalog Provider behind the DSH transport route. */
+  catalogProvider: string;
   model: string;
   label: string;
   providerLabel: string;
@@ -285,6 +287,8 @@ export interface ConversationModelSelectionSnapshot {
 
 export interface ConversationModelOptionSnapshot {
   provider: string;
+  /** Catalog Provider behind the DSH transport route. */
+  catalogProvider: string;
   providerLabel: string;
   model: string;
   label: string;
