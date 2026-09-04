@@ -52,3 +52,50 @@ test('client page markup exposes cards and escapes paths, models and details', (
   assert.match(preview, /anthropic\/&lt;opus&gt;/);
   assert.doesNotMatch(preview, /secret-digest/);
 });
+
+test('client model availability is determined only by protocol intersection', () => {
+  const model = buildClientPageModel({
+    surfaces: [],
+    configurations: [],
+    models: [
+      {
+        id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3',
+        protocols: ['anthropic_messages'], claudeFamily: false,
+      },
+      {
+        id: 'glm', publicId: 'zhipu-coding/glm-5.3', provider: 'zhipu-coding', displayName: 'GLM-5.3',
+        protocols: ['openai_chat', 'anthropic_messages'],
+      },
+      {
+        id: 'deepseek', publicId: 'codebuddy/deepseek-v4-flash', provider: 'codebuddy', displayName: 'DeepSeek V4 Flash',
+        protocols: ['openai_chat'],
+      },
+      {
+        id: 'sol', publicId: 'openai/sol', provider: 'openai', displayName: 'Sol',
+        protocols: ['openai_responses'],
+      },
+    ],
+  });
+
+  for (const clientId of ['claude-app', 'claude-code'] as const) {
+    assert.deepEqual(
+      model.cards.find((card) => card.id === clientId)?.availableModels.map((entry) => entry.publicId),
+      ['kimi-coding/k3', 'zhipu-coding/glm-5.3'],
+    );
+  }
+  assert.deepEqual(
+    model.cards.find((card) => card.id === 'codex-shared')?.availableModels.map((entry) => entry.publicId),
+    ['openai/sol'],
+  );
+  assert.deepEqual(
+    model.cards.find((card) => card.id === 'grok-build')?.availableModels.map((entry) => entry.publicId),
+    ['kimi-coding/k3', 'zhipu-coding/glm-5.3', 'codebuddy/deepseek-v4-flash', 'openai/sol'],
+  );
+});
+
+test('Codex empty state names the missing Responses capability', () => {
+  const markup = renderClientPageMarkup(buildClientPageModel({ surfaces: [], configurations: [], models: [] }));
+  const codexMarkup = markup.match(/<article class="client-card" data-client-id="codex-shared">([\s\S]*?)<\/article>/)?.[1] ?? '';
+  assert.match(codexMarkup, /当前没有已配置的 Responses 模型。/);
+  assert.doesNotMatch(codexMarkup, /当前没有可用于此客户端的已配置 Gateway 模型。/);
+});
