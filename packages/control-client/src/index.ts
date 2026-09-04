@@ -63,6 +63,67 @@ export interface WrenyardGatewayConnection {
   models: WrenyardGatewayModel[];
 }
 
+export type WrenyardClientConfigurationId = 'claude-app' | 'claude-code' | 'codex-shared' | 'grok-build';
+export type WrenyardClientSurfaceId = 'claude-app' | 'claude-code' | 'codex-app' | 'codex-cli' | 'grok-build';
+export type WrenyardClientCompatibility = 'not-installed' | 'supported' | 'needs-verification' | 'needs-upgrade' | 'externally-managed';
+export type WrenyardClientConfigurationState = 'not-configured' | 'connected' | 'drifted' | 'conflict' | 'needs-restart';
+export type WrenyardGatewayProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
+
+export interface WrenyardClientSurface {
+  id: WrenyardClientSurfaceId;
+  label: string;
+  installed: boolean;
+  compatibility: WrenyardClientCompatibility;
+  source?: string;
+  version?: string;
+  detail?: string;
+}
+
+export interface WrenyardClientGatewayModel extends WrenyardGatewayModel {
+  protocols: WrenyardGatewayProtocol[];
+  claudeFamily?: boolean;
+  claudeTier?: 'haiku' | 'sonnet' | 'opus';
+  supports1MContext?: boolean;
+}
+
+export interface WrenyardClientConfigurationStatus {
+  clientId: WrenyardClientConfigurationId;
+  state: WrenyardClientConfigurationState;
+  configuredModels: string[];
+  detail?: string;
+}
+
+export interface WrenyardClientConfigurationSnapshot {
+  surfaces: WrenyardClientSurface[];
+  configurations: WrenyardClientConfigurationStatus[];
+  models: WrenyardClientGatewayModel[];
+}
+
+export interface WrenyardClientModelSelection {
+  models: string[];
+  defaultModel: string;
+  protocols?: Partial<Record<string, WrenyardGatewayProtocol>>;
+}
+
+export interface WrenyardClientPlanFile {
+  path: string;
+  digest: string;
+  existed: boolean;
+  changes: string[];
+}
+
+export interface WrenyardClientConfigurationPlan {
+  clientId: WrenyardClientConfigurationId;
+  operation: 'apply' | 'restore';
+  files: WrenyardClientPlanFile[];
+  models: string[];
+  defaultModel?: string;
+  protocols?: Partial<Record<string, WrenyardGatewayProtocol>>;
+  connectionMode: 'additive' | 'switching';
+  effects: string[];
+  requiresRestart: WrenyardClientSurfaceId[];
+}
+
 export interface WrenyardProviderStatus {
   id: string;
   displayName: string;
@@ -193,6 +254,44 @@ export class WrenyardIpcClient {
   /** Store a managed provider API key through the daemon's local IPC channel. */
   providerConfigure(providerId: string, key: string, options?: WrenyardIpcRequestOptions): Promise<{ ok: true }> {
     return this.request('provider.configure', { providerId, key }, options);
+  }
+
+  /** Discover supported local Agent clients and their redacted Gateway model catalog. */
+  clientConfigurationSnapshot(options?: WrenyardIpcRequestOptions): Promise<WrenyardClientConfigurationSnapshot> {
+    return this.request('client.configuration.snapshot', {}, options);
+  }
+
+  /** Build a read-only, digest-bound client configuration preview. */
+  clientConfigurationPlan(
+    clientId: WrenyardClientConfigurationId,
+    selection: WrenyardClientModelSelection,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<WrenyardClientConfigurationPlan> {
+    return this.request('client.configuration.plan', { clientId, selection }, options);
+  }
+
+  /** Apply a previously previewed client configuration plan. */
+  clientConfigurationApply(
+    plan: WrenyardClientConfigurationPlan,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<WrenyardClientConfigurationStatus> {
+    return this.request('client.configuration.apply', { plan }, options);
+  }
+
+  /** Build a read-only restore preview for one managed client configuration. */
+  clientConfigurationPlanRestore(
+    clientId: WrenyardClientConfigurationId,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<WrenyardClientConfigurationPlan> {
+    return this.request('client.configuration.plan-restore', { clientId }, options);
+  }
+
+  /** Restore only Wrenyard-owned fields using a digest-bound preview. */
+  clientConfigurationRestore(
+    plan: WrenyardClientConfigurationPlan,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<WrenyardClientConfigurationStatus> {
+    return this.request('client.configuration.restore', { plan }, options);
   }
 
   /** Destroy the socket and reject every request still awaiting a reply. */

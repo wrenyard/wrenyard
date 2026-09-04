@@ -4,6 +4,7 @@ import type {
   ClientConfigurationPlanDto,
   ClientConfigurationSnapshotDto,
   ClientConfigurationState,
+  ClientGatewayModelDto,
   ClientSurfaceDto,
   ClientSurfaceId,
 } from '../client-configuration/contract.js';
@@ -23,12 +24,21 @@ export interface ClientCardModel {
   detail: string;
   surfaces: ClientSurfaceRowModel[];
   models: string[];
+  availableModels: ClientGatewayModelDto[];
   primaryAction: '连接到 Wrenyard' | '调整模型' | '重新应用' | '查看冲突';
   canRestore: boolean;
 }
 
 export interface ClientPageModel {
   cards: ClientCardModel[];
+}
+
+function modelsForClient(clientId: ClientConfigurationId, models: readonly ClientGatewayModelDto[]): ClientGatewayModelDto[] {
+  if (clientId === 'claude-app' || clientId === 'claude-code') {
+    return models.filter((model) => model.claudeFamily === true && model.protocols.includes('anthropic_messages'));
+  }
+  if (clientId === 'codex-shared') return models.filter((model) => model.protocols.includes('openai_responses'));
+  return models.filter((model) => model.protocols.length > 0);
 }
 
 const CARD_DEFINITIONS: ReadonlyArray<{
@@ -95,6 +105,7 @@ export function buildClientPageModel(snapshot: ClientConfigurationSnapshotDto): 
         detail: configuration.detail ?? '',
         surfaces: definition.surfaces.map((id) => surfaceRow(surfaces.get(id), id)),
         models: [...configuration.configuredModels],
+        availableModels: modelsForClient(definition.id, snapshot.models),
         primaryAction: action(configuration.state),
         canRestore: configuration.state !== 'not-configured',
       };
@@ -109,18 +120,22 @@ function escapeHtml(value: string): string {
 }
 
 export function renderClientPageMarkup(model: ClientPageModel): string {
-  return `<section class="client-page" aria-labelledby="client-page-title">
-  <header class="client-page__header">
-    <p class="eyebrow">Agent Clients</p>
-    <h1 id="client-page-title">客户端</h1>
-    <p>把真实客户端连接到本机 Wrenyard Model Gateway。</p>
-  </header>
+  return `<section class="client-page" aria-label="客户端配置">
   <div class="client-page__grid">
 ${model.cards.map((card) => `    <article class="client-card" data-client-id="${card.id}">
       <header><h2>${escapeHtml(card.title)}</h2><span>${card.connectionMode}</span></header>
       <p class="client-card__status">${escapeHtml(card.status)}</p>
       ${card.surfaces.map((surface) => `<div class="client-surface" data-surface-id="${surface.id}"><strong>${escapeHtml(surface.label)}</strong><span>${escapeHtml(surface.status)}</span><small>${escapeHtml(surface.detail)}</small></div>`).join('')}
-      <p class="client-card__models">${card.models.length > 0 ? card.models.map(escapeHtml).join(' · ') : '尚未选择模型'}</p>
+      <div class="client-card__model-list" aria-label="${escapeHtml(card.title)} 模型">
+        ${card.availableModels.length > 0 ? card.availableModels.map((model, index) => {
+          const selected = card.models.includes(model.publicId) || (card.models.length === 0 && index === 0);
+          const defaultModel = card.models[0] === model.publicId || (card.models.length === 0 && index === 0);
+          const protocolOptions = card.id === 'grok-build' && model.protocols.length > 1
+            ? `<select data-client-protocol="${escapeHtml(model.publicId)}" aria-label="${escapeHtml(model.displayName)} 协议">${model.protocols.map((protocol) => `<option value="${protocol}">${escapeHtml(protocol)}</option>`).join('')}</select>`
+            : '';
+          return `<label class="client-model-option"><input type="checkbox" data-client-model="${escapeHtml(model.publicId)}"${selected ? ' checked' : ''} /><span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.publicId)}</small></span><input type="radio" name="${card.id}-default-model" data-client-default="${escapeHtml(model.publicId)}" aria-label="设为默认模型"${defaultModel ? ' checked' : ''} />${protocolOptions}</label>`;
+        }).join('') : '<p class="client-card__empty">当前没有可用于此客户端的已配置 Gateway 模型。</p>'}
+      </div>
       <div class="client-card__actions"><button type="button" data-client-action="primary">${card.primaryAction}</button>${card.canRestore ? '<button type="button" data-client-action="restore">恢复原配置</button>' : ''}</div>
     </article>`).join('\n')}
   </div>

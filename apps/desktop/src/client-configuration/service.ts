@@ -5,6 +5,7 @@ import type {
   ClientConfigurationSnapshotDto,
   ClientModelSelectionDto,
 } from './contract.js';
+import { WrenyardIpcClient } from '@wrenyard/control-client';
 
 const CLIENT_IDS = new Set<ClientConfigurationId>(['claude-app', 'claude-code', 'codex-shared', 'grok-build']);
 const MAX_MODELS = 128;
@@ -20,7 +21,7 @@ export interface ClientConfigurationControlClient {
 
 export interface ClientConfigurationDesktopServiceOptions {
   ipcPath: string;
-  clientFactory: (path: string) => ClientConfigurationControlClient;
+  clientFactory?: (path: string) => ClientConfigurationControlClient;
 }
 
 function clientId(value: string): ClientConfigurationId {
@@ -66,7 +67,11 @@ function copyPlan(plan: ClientConfigurationPlanDto): ClientConfigurationPlanDto 
 
 /** Main-process facade. It returns only the daemon's redacted client DTOs. */
 export class ClientConfigurationDesktopService {
-  constructor(private readonly options: ClientConfigurationDesktopServiceOptions) {}
+  private readonly clientFactory: (path: string) => ClientConfigurationControlClient;
+
+  constructor(private readonly options: ClientConfigurationDesktopServiceOptions) {
+    this.clientFactory = options.clientFactory ?? ((path) => new WrenyardIpcClient({ path }));
+  }
 
   async snapshot(): Promise<ClientConfigurationSnapshotDto> {
     return this.withClient((client) => client.clientConfigurationSnapshot());
@@ -96,7 +101,7 @@ export class ClientConfigurationDesktopService {
   }
 
   private async withClient<T>(operation: (client: ClientConfigurationControlClient) => Promise<T>): Promise<T> {
-    const client = this.options.clientFactory(this.options.ipcPath);
+    const client = this.clientFactory(this.options.ipcPath);
     try {
       return await operation(client);
     } finally {

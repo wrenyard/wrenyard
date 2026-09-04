@@ -312,6 +312,40 @@ describe('ForemanClient', () => {
     assert.deepEqual(rpc.requests[1]?.params, {})
   })
 
+  it('client configuration wrappers delegate to the matching IPC methods', async () => {
+    const result = { ok: true }
+    const rpc = new FakeRpc(result)
+    const client = new ForemanClient(rpc)
+    const selection = { models: ['provider/model'], defaultModel: 'provider/model' }
+    const plan = {
+      clientId: 'codex-shared' as const,
+      operation: 'apply' as const,
+      files: [],
+      models: ['provider/model'],
+      defaultModel: 'provider/model',
+      connectionMode: 'additive' as const,
+      effects: [],
+      requiresRestart: [],
+    }
+    const planParams = { clientId: 'codex-shared' as const, selection }
+    const applyParams = { plan }
+    const planRestoreParams = { clientId: 'codex-shared' as const }
+    const restoreParams = { plan }
+
+    assert.equal(await client.clientConfiguration.snapshot(), result)
+    assert.equal(await client.clientConfiguration.plan(planParams), result)
+    assert.equal(await client.clientConfiguration.apply(applyParams), result)
+    assert.equal(await client.clientConfiguration.planRestore(planRestoreParams), result)
+    assert.equal(await client.clientConfiguration.restore(restoreParams), result)
+
+    assert.equal(rpc.requests[0]?.method, 'client.configuration.snapshot')
+    assert.deepEqual(rpc.requests[0]?.params, {})
+    assertRequest(rpc, 1, 'client.configuration.plan', planParams)
+    assertRequest(rpc, 2, 'client.configuration.apply', applyParams)
+    assertRequest(rpc, 3, 'client.configuration.plan-restore', planRestoreParams)
+    assertRequest(rpc, 4, 'client.configuration.restore', restoreParams)
+  })
+
   it('connectIpcForemanClient connects health.ping over IPC to RpcRouter', async () => {
     const endpoint = createTestIpcEndpoint('health')
     const server = await createHealthServer(endpoint)

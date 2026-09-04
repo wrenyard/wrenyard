@@ -24,6 +24,20 @@ export interface ClientConfigurationDto {
 export interface ClientConfigurationSnapshotDto {
   surfaces: ClientSurfaceDto[];
   configurations: ClientConfigurationDto[];
+  models: ClientGatewayModelDto[];
+}
+
+export interface ClientGatewayModelDto {
+  id: string;
+  publicId: string;
+  provider: string;
+  displayName: string;
+  protocols: GatewayProtocol[];
+  contextWindow?: number;
+  maxTokens?: number;
+  claudeFamily?: boolean;
+  claudeTier?: 'haiku' | 'sonnet' | 'opus';
+  supports1MContext?: boolean;
 }
 
 export interface ClientPlanFileDto {

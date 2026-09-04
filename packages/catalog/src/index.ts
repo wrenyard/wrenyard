@@ -20,6 +20,9 @@ export interface ModelDefinition {
   contextWindow?: number;
   maxTokens?: number;
   taskOnly?: boolean;
+  family?: 'claude';
+  claudeTier?: 'haiku' | 'sonnet' | 'opus';
+  supports1MContext?: boolean;
 }
 
 export interface ProtocolCapability {

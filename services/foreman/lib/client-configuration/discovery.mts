@@ -58,7 +58,7 @@ function versionFromOutput(output: string): string | undefined {
   return /\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?/.exec(output)?.[0]
 }
 
-async function findExecutable(name: string, env: NodeJS.ProcessEnv, exists: ClientDiscoveryOptions['pathExists']): Promise<string | undefined> {
+export async function findExecutable(name: string, env: NodeJS.ProcessEnv, exists: ClientDiscoveryOptions['pathExists']): Promise<string | undefined> {
   for (const root of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
     const candidate = join(root, process.platform === 'win32' ? `${name}.exe` : name)
     if (await exists!(candidate, true)) return candidate
@@ -94,6 +94,7 @@ async function readBundle(
   label: string,
   candidates: readonly string[],
   exists: ClientDiscoveryOptions['pathExists'],
+  runner: CommandRunner,
 ): Promise<ClientSurfaceDiscovery> {
   const root = await firstExisting(candidates, exists)
   if (!root) return { id, label, installed: false, compatibility: 'not-installed' }
@@ -103,7 +104,11 @@ async function readBundle(
     const raw = await readFile(plist, 'utf8')
     version = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(raw)?.[1]
   } catch {
-    // Binary plists are common; the path is still a valid installation probe.
+    // Binary plists are common.
+  }
+  if (!version && process.platform === 'darwin') {
+    const result = await runner('/usr/bin/plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plist])
+    if (result.exitCode === 0) version = result.stdout.trim() || undefined
   }
   return {
     id,
@@ -144,18 +149,82 @@ export class InstalledClientDiscovery implements ClientDiscovery {
       ? this.appRoots.flatMap((root) => [join(root, 'ChatGPT.app'), join(root, 'Codex.app')])
       : []
     const surfaces = await Promise.all([
-      readBundle('claude-app', 'Claude App', claudeAppCandidates, this.exists),
+      readBundle('claude-app', 'Claude App', claudeAppCandidates, this.exists, this.runner),
       cliSurface('claude-code', 'Claude Code', 'claude', this.env, this.exists, this.runner),
-      readBundle('codex-app', 'Codex App', codexAppCandidates, this.exists),
+      readBundle('codex-app', 'Codex App', codexAppCandidates, this.exists, this.runner),
       cliSurface('codex-cli', 'Codex CLI', 'codex', this.env, this.exists, this.runner),
       cliSurface('grok-build', 'Grok Build', 'grok', this.env, this.exists, this.runner),
     ])
     return Promise.all(surfaces.map(async (surface) => {
       if (!surface.installed) return surface
-      const probe = this.options.capabilityProbes?.[surface.id]
+      const probe = this.options.capabilityProbes?.[surface.id] ?? this.defaultCapabilityProbe(surface.id)
       if (!probe) return surface
       const result = await probe(surface)
       return { ...surface, ...result }
     }))
   }
+
+  private defaultCapabilityProbe(id: ClientSurfaceId): ((surface: ClientSurfaceDiscovery) => Promise<ClientCapabilityResult>) | undefined {
+    if (id === 'claude-code') return (surface) => probeClaudeCodeSurface(surface)
+    if (id === 'claude-app') return (surface) => probeClaudeAppSurface(surface, this.exists)
+    if (id === 'codex-app') return (surface) => probeCodexAppSurface(surface, this.exists, this.runner)
+    return undefined
+  }
+}
+
+function versionTuple(value: string | undefined): [number, number, number] | undefined {
+  if (!value) return undefined
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value)
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined
+}
+
+function versionAtLeast(value: string | undefined, minimum: [number, number, number]): boolean {
+  const actual = versionTuple(value)
+  if (!actual) return false
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] > minimum[index]) return true
+    if (actual[index] < minimum[index]) return false
+  }
+  return true
+}
+
+export async function probeClaudeCodeSurface(surface: ClientSurfaceDiscovery): Promise<ClientCapabilityResult> {
+  if (!versionAtLeast(surface.version, [2, 1, 129])) {
+    return { compatibility: 'needs-upgrade', detail: '当前版本不支持 Gateway 模型发现，请升级 Claude Code' }
+  }
+  return { compatibility: 'supported', detail: '支持 Gateway /v1/models 与 apiKeyHelper' }
+}
+
+export async function probeClaudeAppSurface(
+  surface: ClientSurfaceDiscovery,
+  exists: NonNullable<ClientDiscoveryOptions['pathExists']> = defaultPathExists,
+): Promise<ClientCapabilityResult> {
+  if (process.platform !== 'darwin') return { compatibility: 'needs-verification', detail: '当前仅完成 macOS 3P Gateway 验证' }
+  for (const path of [
+    '/Library/Managed Preferences/com.anthropic.claudefordesktop.plist',
+    '/Library/Managed Preferences/com.anthropic.claude.plist',
+  ]) {
+    if (await exists(path)) return { compatibility: 'externally-managed', detail: `检测到受管理配置：${path}` }
+  }
+  return { compatibility: 'supported', detail: '支持 Claude-3p configLibrary' }
+}
+
+export async function probeCodexAppSurface(
+  surface: ClientSurfaceDiscovery,
+  exists: NonNullable<ClientDiscoveryOptions['pathExists']> = defaultPathExists,
+  runner: CommandRunner = runCommand,
+): Promise<ClientCapabilityResult> {
+  if (process.platform !== 'darwin' || !surface.source) {
+    return { compatibility: 'needs-verification', detail: '当前仅完成 macOS Codex App 验证' }
+  }
+  const plist = join(surface.source, 'Contents', 'Info.plist')
+  const bundle = await runner('/usr/bin/plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plist])
+  if (bundle.exitCode !== 0 || bundle.stdout.trim() !== 'com.openai.codex') {
+    return { compatibility: 'needs-verification', detail: '应用 bundle id 不是 com.openai.codex' }
+  }
+  const runtime = join(surface.source, 'Contents', 'Resources', 'codex')
+  if (!await exists(runtime, true)) return { compatibility: 'needs-upgrade', detail: '未找到 Codex App 内置 runtime' }
+  const version = await runner(runtime, ['--version'])
+  if (version.exitCode !== 0) return { compatibility: 'needs-verification', detail: 'Codex App 内置 runtime 无法执行' }
+  return { compatibility: 'supported', detail: `内置 runtime ${versionFromOutput(version.stdout) ?? '可用'}，需独立重启验收` }
 }

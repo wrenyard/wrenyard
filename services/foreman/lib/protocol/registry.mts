@@ -47,6 +47,40 @@ import {
 } from './methods/gateway.mts'
 export type { GatewayConnectionParams, GatewayConnectionResult } from './methods/gateway.mts'
 import {
+  clientConfigurationApplyParamsSchema,
+  clientConfigurationApplyResultSchema,
+  clientConfigurationPlanParamsSchema,
+  clientConfigurationPlanRestoreParamsSchema,
+  clientConfigurationPlanRestoreResultSchema,
+  clientConfigurationPlanResultSchema,
+  clientConfigurationRestoreParamsSchema,
+  clientConfigurationRestoreResultSchema,
+  clientConfigurationSnapshotParamsSchema,
+  clientConfigurationSnapshotResultSchema,
+  type ClientConfigurationApplyParams,
+  type ClientConfigurationApplyResult,
+  type ClientConfigurationPlanParams,
+  type ClientConfigurationPlanRestoreParams,
+  type ClientConfigurationPlanRestoreResult,
+  type ClientConfigurationPlanResult,
+  type ClientConfigurationRestoreParams,
+  type ClientConfigurationRestoreResult,
+  type ClientConfigurationSnapshotParams,
+  type ClientConfigurationSnapshotResult,
+} from './methods/client-configuration.mts'
+export type {
+  ClientConfigurationApplyParams,
+  ClientConfigurationApplyResult,
+  ClientConfigurationPlanParams,
+  ClientConfigurationPlanRestoreParams,
+  ClientConfigurationPlanRestoreResult,
+  ClientConfigurationPlanResult,
+  ClientConfigurationRestoreParams,
+  ClientConfigurationRestoreResult,
+  ClientConfigurationSnapshotParams,
+  ClientConfigurationSnapshotResult,
+} from './methods/client-configuration.mts'
+import {
   providerConfigureParamsSchema,
   providerConfigureResultSchema,
   providerListParamsSchema,
@@ -369,6 +403,11 @@ export interface ForemanMethodParams {
   'daemon.thaw': DaemonThawParams
   'health.ping': HealthPingParams
   'gateway.connection': GatewayConnectionParams
+  'client.configuration.snapshot': ClientConfigurationSnapshotParams
+  'client.configuration.plan': ClientConfigurationPlanParams
+  'client.configuration.apply': ClientConfigurationApplyParams
+  'client.configuration.plan-restore': ClientConfigurationPlanRestoreParams
+  'client.configuration.restore': ClientConfigurationRestoreParams
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
   'event.list': EventListParams
@@ -423,6 +462,11 @@ export interface ForemanMethodResults {
   'daemon.thaw': DaemonThawResult
   'health.ping': HealthPingResult
   'gateway.connection': GatewayConnectionResult
+  'client.configuration.snapshot': ClientConfigurationSnapshotResult
+  'client.configuration.plan': ClientConfigurationPlanResult
+  'client.configuration.apply': ClientConfigurationApplyResult
+  'client.configuration.plan-restore': ClientConfigurationPlanRestoreResult
+  'client.configuration.restore': ClientConfigurationRestoreResult
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
   'event.list': EventListResult
@@ -506,6 +550,26 @@ export const methodRegistry: {
   'gateway.connection': {
     params: gatewayConnectionParamsSchema,
     result: gatewayConnectionResultSchema,
+  },
+  'client.configuration.snapshot': {
+    params: clientConfigurationSnapshotParamsSchema,
+    result: clientConfigurationSnapshotResultSchema,
+  },
+  'client.configuration.plan': {
+    params: clientConfigurationPlanParamsSchema,
+    result: clientConfigurationPlanResultSchema,
+  },
+  'client.configuration.apply': {
+    params: clientConfigurationApplyParamsSchema,
+    result: clientConfigurationApplyResultSchema,
+  },
+  'client.configuration.plan-restore': {
+    params: clientConfigurationPlanRestoreParamsSchema,
+    result: clientConfigurationPlanRestoreResultSchema,
+  },
+  'client.configuration.restore': {
+    params: clientConfigurationRestoreParamsSchema,
+    result: clientConfigurationRestoreResultSchema,
   },
   'provider.list': {
     params: providerListParamsSchema,

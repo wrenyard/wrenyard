@@ -1,5 +1,7 @@
 import { timingSafeEqual, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { closeDb, getDb, initDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { MessageStore } from '../db/stores/message-store.mts'
@@ -32,6 +34,19 @@ import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
 import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinDispatchPlans } from '@wrenyard/providers'
 import { ForemanEventStore } from '../events/event-store.mts'
+import { foremanStateRoot } from '../config/state.mts'
+import { ClientConfigurationService } from '../client-configuration/service.mts'
+import { InstalledClientDiscovery } from '../client-configuration/discovery.mts'
+import { JsonClientOwnershipStore } from '../client-configuration/ownership-store.mts'
+import { ClaudeAppAdapter, WRENYARD_CLAUDE_PROFILE_ID } from '../client-configuration/adapters/claude-app.mts'
+import { ClaudeCodeAdapter } from '../client-configuration/adapters/claude-code.mts'
+import { CodexSharedAdapter } from '../client-configuration/adapters/codex-shared.mts'
+import { GrokBuildAdapter } from '../client-configuration/adapters/grok-build.mts'
+import {
+  DaemonGatewayClientSource,
+  ensureGatewayCredentialHelper,
+  loadOrCreateGatewayCredential,
+} from '../client-configuration/gateway-source.mts'
 
 export interface RunningForemanDaemon {
   db: ForemanDatabase
@@ -248,7 +263,8 @@ async function startForemanDaemonWithRuntime(
 
   const startedAt = Date.now()
   let boundPort = config.service.port
-  const gatewayToken = randomBytes(32).toString('base64url')
+  const stateRoot = foremanStateRoot()
+  const gatewayToken = await loadOrCreateGatewayCredential(join(stateRoot, 'gateway', 'credential'))
   const catalog = createBuiltinCatalog()
   const dispatchPlans = resolveBuiltinDispatchPlans(catalog)
   const providerRuntime = createBuiltinProviderRuntime()
@@ -280,6 +296,60 @@ async function startForemanDaemonWithRuntime(
   }, dispatchPlans)
   let stopFromShutdownRequest: ((reason: string) => Promise<void>) | undefined
   const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
+  const clientDiscovery = new InstalledClientDiscovery()
+  const clientOwnership = new JsonClientOwnershipStore(join(stateRoot, 'client-configuration', 'ownership.json'))
+  const credentialHelperPath = join(stateRoot, 'client-configuration', 'gateway-credential-helper')
+  let activeIpcPath = resolveForemanServiceIpcPath({
+    port: config.service.port,
+    path: config.service.ipc?.path,
+  })
+  const clientGateway = new DaemonGatewayClientSource({
+    catalog,
+    providers: providerRuntime,
+    connection: async () => {
+      const connection = await gateway.connection(gatewayOrigin(config.service.host, boundPort))
+      return {
+        openaiChatBaseUrl: connection.openaiChatBaseUrl,
+        openaiResponsesBaseUrl: connection.openaiResponsesBaseUrl,
+        anthropicBaseUrl: connection.anthropicBaseUrl,
+      }
+    },
+    credential: () => gatewayToken,
+    credentialHelperPath,
+  })
+  const home = homedir()
+  const claudeLibrary = join(home, 'Library', 'Application Support', 'Claude-3p', 'configLibrary')
+  const capability = async (surfaceId: 'claude-app' | 'claude-code') => {
+    const surface = (await clientDiscovery.list()).find((entry) => entry.id === surfaceId)
+    return {
+      supported: surface?.installed === true && surface.compatibility === 'supported',
+      ...(surface?.compatibility === 'externally-managed' ? { externallyManaged: true } : {}),
+      ...(surface?.detail ? { detail: surface.detail } : {}),
+    }
+  }
+  const clientConfigurationService = new ClientConfigurationService(
+    clientDiscovery,
+    [
+      new ClaudeAppAdapter({
+        metaPath: join(claudeLibrary, '_meta.json'),
+        profilePath: join(claudeLibrary, `${WRENYARD_CLAUDE_PROFILE_ID}.json`),
+        store: clientOwnership,
+        capabilityProbe: () => capability('claude-app'),
+      }),
+      new ClaudeCodeAdapter({
+        settingsPath: join(home, '.claude', 'settings.json'),
+        store: clientOwnership,
+        capabilityProbe: () => capability('claude-code'),
+      }),
+      new CodexSharedAdapter({
+        configPath: join(home, '.codex', 'config.toml'),
+        catalogPath: join(stateRoot, 'client-configuration', 'codex-models.json'),
+        store: clientOwnership,
+      }),
+      new GrokBuildAdapter({ configPath: join(home, '.grok', 'config.toml'), store: clientOwnership }),
+    ],
+    clientGateway,
+  )
   const rpcRouter = createDaemonRpcRouter({
     startedAt,
     workspaceRoot: config.workspaceRoot,
@@ -310,6 +380,13 @@ async function startForemanDaemonWithRuntime(
       if (!provider) throw new Error(`unknown provider: ${providerId}`)
       await providerRuntime.configureApiKey(provider, key)
       return { ok: true as const }
+    },
+    clientConfiguration: {
+      snapshot: () => clientConfigurationService.snapshot(),
+      plan: ({ clientId, selection }) => clientConfigurationService.plan(clientId, selection),
+      apply: ({ plan }) => clientConfigurationService.apply(plan),
+      planRestore: ({ clientId }) => clientConfigurationService.planRestore(clientId),
+      restore: ({ plan }) => clientConfigurationService.restore(plan),
     },
     shutdown: async (reason) => {
       if (options.onShutdownRequest) {
@@ -433,6 +510,8 @@ async function startForemanDaemonWithRuntime(
     port: boundPort,
     path: config.service.ipc?.path,
   })
+  activeIpcPath = ipcPath
+  await ensureGatewayCredentialHelper(credentialHelperPath, activeIpcPath)
   let ipcServer: IpcServer | undefined
   try {
     ipcServer = await createIpcServer({
@@ -626,6 +705,7 @@ interface DaemonRpcRouterOptions {
   gatewayConnection?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['gatewayConnection']
   providerList?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerList']
   providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
+  clientConfiguration?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['clientConfiguration']
 }
 
 function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {
