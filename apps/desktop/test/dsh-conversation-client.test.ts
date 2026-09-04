@@ -190,6 +190,29 @@ test('model projection keeps catalog-provided labels without a Desktop model mir
   });
 });
 
+test('model projection migrates the retired CodeBuddy iOA selection to its advertised logical id', () => {
+  const models = projectConversationModels({
+    current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview-ioa' },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [{ id: 'codebuddy/hy4-preview', name: 'HY4 Preview' }],
+    }],
+    failures: [],
+  });
+
+  assert.deepEqual(models.current, {
+    provider: 'wrenyard',
+    catalogProvider: 'codebuddy',
+    model: 'codebuddy/hy4-preview',
+    label: 'HY4 Preview',
+    providerLabel: 'Wrenyard',
+    advertised: true,
+    configured: true,
+  });
+});
+
 test('model projection keeps a routable unadvertised current selection visible', () => {
   const models = projectConversationModels({
     current: { provider: 'legacy-provider', model: 'legacy-model' },
