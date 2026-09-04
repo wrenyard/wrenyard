@@ -56,7 +56,7 @@ function modelBlock(model: ClientGatewayModel, protocol: GatewayProtocol, connec
     : protocol === 'openai_chat'
       ? connection.openaiChatBaseUrl
       : connection.anthropicBaseUrl
-  const backend = protocol === 'openai_responses' ? 'openai-responses' : protocol === 'openai_chat' ? 'openai-chat' : 'anthropic'
+  const backend = protocol === 'openai_responses' ? 'responses' : protocol === 'openai_chat' ? 'chat_completions' : 'messages'
   const lines = [
     header(model.publicId),
     `model = ${tomlString(model.publicId)}`,
