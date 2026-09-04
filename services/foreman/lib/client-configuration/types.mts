@@ -46,6 +46,7 @@ export interface GatewayClientConnection {
   openaiResponsesBaseUrl: string
   anthropicBaseUrl: string
   credential: string
+  credentialHelperPath: string
   credentialHelperCommand: readonly string[]
   models: readonly ClientGatewayModel[]
 }

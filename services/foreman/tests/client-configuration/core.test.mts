@@ -100,6 +100,7 @@ test('service keeps read-only plan separate from apply and restore', async () =>
     openaiResponsesBaseUrl: 'http://127.0.0.1/gateway/openai-responses/v1',
     anthropicBaseUrl: 'http://127.0.0.1/gateway/anthropic/v1',
     credential: 'secret',
+    credentialHelperPath: '/opt/wrenyard/bin/gateway-credential',
     credentialHelperCommand: ['wrenyard', 'gateway', 'credential'],
     models: [],
   }
