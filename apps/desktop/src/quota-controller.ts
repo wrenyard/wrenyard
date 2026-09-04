@@ -238,8 +238,10 @@ function projectCatalog(
       ? false
       : projectedQuota?.code === 'quota_query_failed'
         ? true
-        : discoveredStatus?.configured
-          ?? (quota !== undefined && quota.status !== 'unavailable');
+        : projectedQuota?.status === 'ok'
+          ? true
+          : discoveredStatus?.configured
+            ?? (quota !== undefined && quota.status !== 'unavailable');
     if (projectedQuota && isQuotaUnavailable(projectedQuota.status)) {
       // CodeBuddy never advertises a quota lookup source: only the locally
       // observed exhaustion is ever projected, so a connected-but-unobserved
