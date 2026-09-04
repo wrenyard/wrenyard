@@ -146,7 +146,7 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 		t.Fatalf("codebuddy credential source = %q, want codebuddy", source)
 	}
 	wantModels := []string{
-		"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview-ioa", "minimax-m3",
+		"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview", "minimax-m3",
 		"kimi-k3", "glm-5.3", "glm-5.3-flash",
 	}
 	models := module.Models()

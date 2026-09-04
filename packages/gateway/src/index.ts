@@ -143,13 +143,14 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         return true;
       }
 
-      const publicModel = body.model;
+      let publicModel = body.model;
       let resolved;
       try { resolved = options.catalog.resolveGatewayModel(route.protocol, publicModel); } catch (error) {
         json(response, 404, { error: { type: 'not_found_error', message: error instanceof Error ? error.message : 'Unknown model' } });
         await emit({ protocol: route.protocol, publicModel, status: 404, durationMs: Date.now() - startedAt });
         return true;
       }
+      publicModel = resolved.publicId;
       const credential = await options.providers.credential(resolved.provider);
       if (!credential) {
         json(response, 503, { error: { type: 'credential_unavailable', message: `Provider ${resolved.provider.id} is not configured` } });
@@ -159,7 +160,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
 
       const headers = upstreamHeaders(request.headers);
       upstreamAuthHeaders(resolved.provider, credential, route.protocol).forEach((value, name) => headers.set(name, value));
-      body.model = resolved.upstreamModel;
+      body.model = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();

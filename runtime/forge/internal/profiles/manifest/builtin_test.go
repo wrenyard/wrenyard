@@ -103,7 +103,7 @@ func TestCodebuddyProfiles(t *testing.T) {
 		id        string
 		wantModel string
 	}{
-		{"cb-hy", "hy4-preview-ioa"},
+		{"cb-hy", "hy4-preview"},
 		{"cb-ds", "deepseek-v4-pro"},
 		{"cb-dsf", "deepseek-v4-flash"},
 		{"cb-minimax", "minimax-m3"},

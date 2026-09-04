@@ -354,7 +354,7 @@ func TestCbModelWhitelistCheckLocalCustomProviderUsesOwnBinding(t *testing.T) {
 	reg.RegisterBinding(catalog.Provider{
 		Name: "codebuddy", Kind: "builtin",
 		AllowedModels: []string{
-			"hy4-preview-ioa", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
+			"hy4-preview", "deepseek-v4-pro", "deepseek-v4-flash", "minimax-m3",
 			"kimi-k3", "glm-5.3", "glm-5.3-flash",
 		},
 	})
@@ -386,7 +386,7 @@ func TestCbModelWhitelistCheckLocalCustomProviderUsesOwnBinding(t *testing.T) {
 		t.Fatalf("local codebuddy-local profile must validate against its own model set, got %#v", check)
 	}
 	// Public codebuddy profile validates against the public model set.
-	if check := doctor.CBModelWhitelistCheck(depsFor(manifestFor("codebuddy", "hy4-preview-ioa"))); check["status"] != "ok" {
+	if check := doctor.CBModelWhitelistCheck(depsFor(manifestFor("codebuddy", "hy4-preview"))); check["status"] != "ok" {
 		t.Fatalf("public codebuddy profile must validate against public models, got %#v", check)
 	}
 	// A model outside the custom provider's registered set must warn.
@@ -569,10 +569,10 @@ func TestCodebuddyProfileModelExtraction(t *testing.T) {
 			profile: profile{
 				Launcher: map[string]interface{}{
 					"command":      "codebuddy",
-					"default_args": []interface{}{"--model=hy4-preview-ioa"},
+					"default_args": []interface{}{"--model=hy4-preview"},
 				},
 			},
-			want: "hy4-preview-ioa",
+			want: "hy4-preview",
 		},
 		{
 			name: "ANTHROPIC_MODEL env fallback",

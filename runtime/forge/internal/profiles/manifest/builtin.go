@@ -68,7 +68,7 @@ var builtinProfiles = []Profile{
 		Description: "CodeBuddy (Hunyuan HY4 Preview)",
 		Launcher: map[string]any{
 			"command":      "codebuddy",
-			"default_args": []any{"--model", "hy4-preview-ioa"},
+			"default_args": []any{"--model", "hy4-preview"},
 		},
 		Env:      map[string]string{},
 		Settings: map[string]any{},

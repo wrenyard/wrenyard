@@ -9,18 +9,18 @@ import (
 func testGatewayProvider() Provider {
 	return GatewayProvider("http://127.0.0.1:9000/gateway/openai-chat/v1/", []Model{
 		{ID: "zhipu-coding/glm-5.3", Label: "GLM 5.3", ContextWindow: 1048576, MaxTokens: 32768},
-		{ID: "codebuddy/hy4-preview-ioa", Label: "HY4 Preview"},
+		{ID: "codebuddy/hy4-preview", Label: "HY4 Preview"},
 	})
 }
 
 func TestRenderPatchContainsOneSecretFreeGatewayProvider(t *testing.T) {
 	provider := testGatewayProvider()
-	patch, err := RenderPatch(PatchInput{Providers: []Provider{provider}, SelectedModel: GatewayProviderID + "/codebuddy/hy4-preview-ioa", Version: ProtocolVersion})
+	patch, err := RenderPatch(PatchInput{Providers: []Provider{provider}, SelectedModel: GatewayProviderID + "/codebuddy/hy4-preview", Version: ProtocolVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw := string(patch)
-	for _, expected := range []string{"wrenyard:\n", "apiKeyEnv: WRENYARD_GATEWAY_TOKEN\n", "id: codebuddy/hy4-preview-ioa\n", "name: \"HY4 Preview\"\n"} {
+	for _, expected := range []string{"wrenyard:\n", "apiKeyEnv: WRENYARD_GATEWAY_TOKEN\n", "id: codebuddy/hy4-preview\n", "name: \"HY4 Preview\"\n"} {
 		if !strings.Contains(raw, expected) {
 			t.Fatalf("patch missing %q:\n%s", expected, raw)
 		}

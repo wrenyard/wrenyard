@@ -58,6 +58,38 @@ func TestResolveDispatchResolvesNativeCredential(t *testing.T) {
 	}
 }
 
+func TestResolveDispatchUsesDaemonResolvedCodeBuddyUpstreamModel(t *testing.T) {
+	resolved, err := ResolveDispatch(
+		InputProfile{
+			Name: "cb-hy", Client: "codebuddy", Provider: "codebuddy",
+			Launcher: map[string]interface{}{"default_args": []interface{}{"--model", "hy4-preview"}},
+		},
+		DispatchPlan{Client: "codebuddy", Provider: "codebuddy", Model: "hy4-preview-ioa", Mode: "native"},
+		catalog.Client{Name: "codebuddy", Dialect: catalog.DialectCodeBuddy},
+		schema.Provider{Name: "codebuddy", CredentialResolver: schema.CredentialResolverCodeBuddy},
+		Callbacks{Credential: CredentialCallbacks{
+			ResolveSecret:             func(*string) (*string, bool, error) { return nil, false, nil },
+			ResolveProviderCredential: func(string) (string, bool) { return "native-token", true },
+			IsManagedProvider:         func(string) bool { return false },
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--model", "hy4-preview-ioa"}
+	if len(resolved.Launcher.DefaultArgs) != len(want) {
+		t.Fatalf("default args = %#v, want %#v", resolved.Launcher.DefaultArgs, want)
+	}
+	for i := range want {
+		if resolved.Launcher.DefaultArgs[i] != want[i] {
+			t.Fatalf("default args = %#v, want %#v", resolved.Launcher.DefaultArgs, want)
+		}
+	}
+	if resolved.Provider.DefaultModel != "hy4-preview-ioa" {
+		t.Fatalf("provider model = %q, want final upstream model", resolved.Provider.DefaultModel)
+	}
+}
+
 func TestResolveDispatchRejectsIncompletePlan(t *testing.T) {
 	_, err := ResolveDispatch(InputProfile{Name: "broken"}, DispatchPlan{}, catalog.Client{}, schema.Provider{}, Callbacks{})
 	if err == nil {
