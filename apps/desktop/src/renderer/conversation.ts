@@ -531,6 +531,7 @@ export class ConversationView {
         signal: headingSignal,
         host: heading,
       });
+      section.append(heading);
 
       for (const entry of entries) {
         const option = document.createElement('button');
