@@ -40,6 +40,7 @@ const CARD_DEFINITIONS: ReadonlyArray<{
   mode: ClientCardModel['connectionMode'];
   surfaces: readonly ClientSurfaceId[];
   protocols: readonly GatewayProtocol[];
+  excludedProviders?: readonly string[];
   emptyMessage: string;
 }> = [
   {
@@ -57,6 +58,7 @@ const CARD_DEFINITIONS: ReadonlyArray<{
   {
     id: 'grok-build', title: 'Grok Build', mode: '加法式', surfaces: ['grok-build'],
     protocols: ['openai_chat', 'openai_responses', 'anthropic_messages'],
+    excludedProviders: ['codebuddy'],
     emptyMessage: '当前没有可用于此客户端的已配置 Gateway 模型。',
   },
 ];
@@ -64,9 +66,11 @@ const CARD_DEFINITIONS: ReadonlyArray<{
 function modelsForProtocols(
   protocols: readonly GatewayProtocol[],
   models: readonly ClientGatewayModelDto[],
+  excludedProviders: readonly string[] = [],
 ): ClientGatewayModelDto[] {
   const supported = new Set(protocols);
-  return models.filter((model) => model.protocols.some((protocol) => supported.has(protocol)));
+  const excluded = new Set(excludedProviders);
+  return models.filter((model) => !excluded.has(model.provider) && model.protocols.some((protocol) => supported.has(protocol)));
 }
 
 const COMPATIBILITY_LABELS: Record<ClientCompatibility, string> = {
@@ -121,7 +125,7 @@ export function buildClientPageModel(snapshot: ClientConfigurationSnapshotDto): 
         detail: configuration.detail ?? '',
         surfaces: definition.surfaces.map((id) => surfaceRow(surfaces.get(id), id)),
         models: [...configuration.configuredModels],
-        availableModels: modelsForProtocols(definition.protocols, snapshot.models),
+        availableModels: modelsForProtocols(definition.protocols, snapshot.models, definition.excludedProviders),
         primaryAction: action(configuration.state),
         canRestore: configuration.state !== 'not-configured',
       };

@@ -7,9 +7,7 @@ import { listDbEvents } from '../../events/event-query.mts'
 import { readTodayStats, readStatsSummary } from '../../events/stats-query.mts'
 import type { StatsSummaryResult } from '../../protocol/registry.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../../protocol/methods/stats.mts'
-import { createPmTicketCommandsForWorkspace } from '../../daemon/services/pm-ticket-service.mts'
 import { createTaskGraphService } from '../../daemon/services/taskgraph-service.mts'
-import { PmError } from '../../core/pm/index.mts'
 import {
   TaskGraphService,
   TaskGraphServiceError,
@@ -57,13 +55,6 @@ import type {
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
-import type {
-  PmTicketCreateResult,
-  PmTicketGetResult,
-  PmTicketListResult,
-  PmTicketUpdateResult,
-  PmTicketDeleteResult,
-} from '../../protocol/registry.mts'
 import {
   DAEMON_DRAIN_DEFAULT_TIMEOUT_MS,
 } from '../../protocol/methods/daemon.mts'
@@ -457,63 +448,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       ...(result.queue_depth !== undefined ? { queue_depth: result.queue_depth } : {}),
       ...(result.delivery ? { delivery: result.delivery } : {}),
     } satisfies MessageSendResult
-  })
-
-  // --- PM ticket commands ---
-  let pmCommands: ReturnType<typeof createPmTicketCommandsForWorkspace> | undefined
-  const getPmCommands = (): ReturnType<typeof createPmTicketCommandsForWorkspace> => {
-    pmCommands ??= createPmTicketCommandsForWorkspace(options.workspaceRoot)
-    return pmCommands
-  }
-
-  async function pmJsonResult<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation()
-    } catch (error) {
-      if (error instanceof PmError) {
-        throw new ProtocolError(
-          { code: INVALID_PARAMS.code, message: error.message },
-          {
-            service: 'pm',
-            code: error.code,
-            statusCode: error.statusCode,
-            details: error.details,
-          },
-        )
-      }
-      throw error
-    }
-  }
-
-  router.register('pm.ticket.create', async (params) => {
-    return pmJsonResult<PmTicketCreateResult>(async () => {
-      const ticket = await getPmCommands().create(params)
-      return { ticket }
-    })
-  })
-  router.register('pm.ticket.get', async (params) => {
-    return pmJsonResult<PmTicketGetResult>(async () => {
-      const ticket = await getPmCommands().get(params)
-      return { ticket }
-    })
-  })
-  router.register('pm.ticket.list', async (params) => {
-    return pmJsonResult<PmTicketListResult>(async () => {
-      const tickets = await getPmCommands().list(params)
-      return { tickets, count: tickets.length }
-    })
-  })
-  router.register('pm.ticket.update', async (params) => {
-    return pmJsonResult<PmTicketUpdateResult>(async () => {
-      const ticket = await getPmCommands().update(params)
-      return { ticket }
-    })
-  })
-  router.register('pm.ticket.delete', async (params) => {
-    return pmJsonResult<PmTicketDeleteResult>(async () => {
-      const { deleted, id } = await getPmCommands().delete(params)
-      return { deleted: true as const, id }
-    })
   })
 
   router.register('taskgraph.create', async (params) => {

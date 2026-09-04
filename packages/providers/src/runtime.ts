@@ -11,6 +11,7 @@ export interface ProviderCredential {
 export interface ProviderRuntime {
   credential(provider: ProviderDefinition): Promise<ProviderCredential | undefined>;
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
+  publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
 }
 
@@ -182,6 +183,12 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
     resolveUpstreamModel(provider, model, credential) {
       if (provider.id !== 'codebuddy' || !credential || codeBuddyEnvironments.get(credential) !== 'ioa') return model;
       return CODEBUDDY_IOA_UPSTREAM_MODELS[model] ?? model;
+    },
+    publicResponseModel(provider, model, upstreamModel, publicModel) {
+      const logicalModel = publicModel.startsWith(`${provider.id}/`)
+        ? publicModel.slice(provider.id.length + 1)
+        : publicModel;
+      return model === upstreamModel || model === logicalModel ? publicModel : model;
     },
     async configureApiKey(provider, key) {
       if (provider.credentialResolver !== 'forge-managed') {

@@ -88,6 +88,18 @@ test('CodeBuddy iOA routing uses the bundled domain matcher and only the four co
   for (const model of ['kimi-k3', 'glm-5.3', 'glm-5.3-flash']) {
     assert.equal(runtime.resolveUpstreamModel(provider, model, credential), model);
   }
+  assert.equal(
+    runtime.publicResponseModel(provider, 'hy4-preview-ioa', 'hy4-preview-ioa', 'codebuddy/hy4-preview'),
+    'codebuddy/hy4-preview',
+  );
+  assert.equal(
+    runtime.publicResponseModel(provider, 'hy4-preview', 'hy4-preview-ioa', 'codebuddy/hy4-preview'),
+    'codebuddy/hy4-preview',
+  );
+  assert.equal(
+    runtime.publicResponseModel(provider, 'provider-changed-model', 'hy4-preview-ioa', 'codebuddy/hy4-preview'),
+    'provider-changed-model',
+  );
 });
 
 test('CodeBuddy non-iOA, unknown, missing configuration, and official priority keep logical ids', async () => {

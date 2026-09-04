@@ -18,6 +18,7 @@ const connection: GatewayClientConnection = {
   models: [
     { id: 'sol', publicId: 'openai/sol', provider: 'openai', displayName: 'Sol', protocols: ['openai_responses'], contextWindow: 1_000_000 },
     { id: 'glm', publicId: 'zhipu/glm', provider: 'zhipu', displayName: 'GLM', protocols: ['openai_chat', 'anthropic_messages'], contextWindow: 200_000 },
+    { id: 'hy4-preview', publicId: 'codebuddy/hy4-preview', provider: 'codebuddy', displayName: 'HY 4 Preview', protocols: ['openai_chat'], contextWindow: 200_000 },
   ],
 }
 
@@ -131,4 +132,19 @@ test('Grok model updates remove only previous Wrenyard tables and stop on owned 
   await writeFile(configPath, updated.replace('Wrenyard · zhipu · GLM', 'Foreign name'))
   const drifted = await adapter.plan(connection, { models: ['zhipu/glm'], defaultModel: 'zhipu/glm' })
   await assert.rejects(() => adapter.apply(drifted, connection), /outside Wrenyard/)
+})
+
+test('Grok rejects CodeBuddy models because Grok Build 1.0.5 requires strict SSE', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-grok-'))
+  const adapter = new GrokBuildAdapter({
+    configPath: join(root, 'config.toml'),
+    store: new MemoryClientOwnershipStore(),
+  })
+  await assert.rejects(
+    () => adapter.plan(connection, {
+      models: ['codebuddy/hy4-preview'],
+      defaultModel: 'codebuddy/hy4-preview',
+    }),
+    /model is not available/u,
+  )
 })

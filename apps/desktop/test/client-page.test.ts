@@ -53,7 +53,7 @@ test('client page markup exposes cards and escapes paths, models and details', (
   assert.doesNotMatch(preview, /secret-digest/);
 });
 
-test('client model availability is determined only by protocol intersection', () => {
+test('client model availability follows protocol intersection and Grok compatibility exclusions', () => {
   const model = buildClientPageModel({
     surfaces: [],
     configurations: [],
@@ -89,7 +89,7 @@ test('client model availability is determined only by protocol intersection', ()
   );
   assert.deepEqual(
     model.cards.find((card) => card.id === 'grok-build')?.availableModels.map((entry) => entry.publicId),
-    ['kimi-coding/k3', 'zhipu-coding/glm-5.3', 'codebuddy/deepseek-v4-flash', 'openai/sol'],
+    ['kimi-coding/k3', 'zhipu-coding/glm-5.3', 'openai/sol'],
   );
 });
 

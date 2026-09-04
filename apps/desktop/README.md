@@ -22,7 +22,7 @@ Electron product shell
   └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
-            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (expanded public llm-pi-ai provider catalog)
+            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (one Wrenyard Gateway provider)
             ├─ cwd + Host workspace registry pinned to Wrenyard `workspace.root`
             ├─ agent preset `wrenyard` at $DSH_HOME/.agent-presets/wrenyard (display name 啾啾工坊模式; hero dropdown disabled)
             └─ talks to Wrenyard through the public MCP/IPC contract
@@ -141,10 +141,10 @@ Electron product shell
   child must also receive `--expose-internals` *before* the DSH script path:
   `dsh-base` constructs `cordis-plugin-hmr` before `dsh-web-app` can disable
   it, and missing the flag exits the child with code 1 (same flash-quit). The overlay injects
-  the expanded public Forge llm-pi-ai provider catalog without
-  replacing native `deepseek-official` routes. Credential values are read from
-  Wrenyard runtime `auth.json` and passed only as child env
-  (`FORGE_DSH_*_API_KEY`); the patch file is secret-free. `DSH_HOME` points at
+  exactly one `wrenyard` provider backed by the local Model Gateway. The daemon
+  supplies only the loopback Gateway URL and per-run local token through
+  `WRENYARD_GATEWAY_TOKEN`; upstream provider credentials never enter the DSH
+  process or generated patch. `DSH_HOME` points at
   an isolated profile. Child cwd and the Host workspace registry are pinned to
   Wrenyard `workspace.root` (`WRENYARD_DESKTOP_WORKSPACE` can override). The
   directory picker and DSH Web renderer are not product surfaces. Desktop uses
@@ -165,9 +165,7 @@ Electron product shell
   Kimi K3 route (the
   default route already has the 1M context window), collapses the Claude-oriented
   `k3[1m]` alias, and uses concise product labels such as `GLM 5.3` and
-  `DeepSeek V4 Pro` while preserving DSH route ids; the native
-  `deepseek-official` catalog also advertises the image-capable experimental
-  `DeepSeek V4 Flash Vision` route. Desktop does not persist a
+  `DeepSeek V4 Pro` while preserving public Gateway route ids. Desktop does not persist a
   parallel model preference. The model control is a Desktop-themed listbox,
   not a native select: every choice shows its Catalog Provider under the model
   name, and the existing Desktop quota snapshot is projected into quiet
@@ -198,7 +196,7 @@ data directory (`app.getPath('userData')`):
 
 ```
 <userData>/dsh/
-  forge-model-patch.yaml              # secret-free public llm-pi-ai overlay
+  forge-model-patch.yaml              # secret-free single-Gateway-provider overlay
   profiles/web/
     node_modules/@wrenyard/dsh-shell/   # managed copy, replaced atomically each launch
     node_modules/@deepseek-ai -> ...    # link to packaged DSH runtime modules

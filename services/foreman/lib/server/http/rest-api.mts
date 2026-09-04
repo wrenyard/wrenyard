@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { handleEventsApiRequest } from './events.mts'
 import { handleHealthApiRequest } from './health.mts'
-import { handlePmApiRequest } from './pm.mts'
 import { handleStatsApiRequest } from './stats.mts'
 import { handleTaskApiRequest, handleTasksApiRequest } from './task.mts'
 import { handleTaskgraphApiRequest } from './taskgraph.mts'
@@ -55,16 +54,6 @@ export function handleRestApiRequest(req: IncomingMessage, res: ServerResponse, 
     void handleTaskApiRequest(req, res, segments, method, context).catch((error: unknown) => {
       sendJson(res, isDbUnavailable(error) ? 503 : 500, {
         error: 'task request failed',
-        message: errorMessage(error),
-      })
-    })
-    return true
-  }
-
-  if (segments[0] === 'pm') {
-    void handlePmApiRequest(req, res, segments, method, context).catch((error: unknown) => {
-      sendJson(res, isDbUnavailable(error) ? 503 : 500, {
-        error: 'pm ticket request failed',
         message: errorMessage(error),
       })
     })
@@ -133,6 +122,5 @@ function isRestPath(segments: string[]): boolean {
     root === 'worktrees' ||
     root === 'stats' ||
     root === 'task' ||
-    root === 'pm' ||
     root === 'taskgraph'
 }

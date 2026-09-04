@@ -186,28 +186,6 @@ import {
   type TaskRunStatusResult,
 } from './methods/task.mts'
 import {
-  pmTicketCreateParamsSchema,
-  pmTicketCreateResultSchema,
-  pmTicketGetParamsSchema,
-  pmTicketGetResultSchema,
-  pmTicketListParamsSchema,
-  pmTicketListResultSchema,
-  pmTicketUpdateParamsSchema,
-  pmTicketUpdateResultSchema,
-  pmTicketDeleteParamsSchema,
-  pmTicketDeleteResultSchema,
-  type PmTicketCreateParams,
-  type PmTicketCreateResult,
-  type PmTicketGetParams,
-  type PmTicketGetResult,
-  type PmTicketListParams,
-  type PmTicketListResult,
-  type PmTicketUpdateParams,
-  type PmTicketUpdateResult,
-  type PmTicketDeleteParams,
-  type PmTicketDeleteResult,
-} from './methods/pm.mts'
-import {
   taskgraphCreateParamsSchema,
   taskgraphCreateResultSchema,
   taskgraphListParamsSchema,
@@ -353,18 +331,6 @@ export type {
   TaskRunStatusResult,
 } from './methods/task.mts'
 export type {
-  PmTicketCreateParams,
-  PmTicketCreateResult,
-  PmTicketGetParams,
-  PmTicketGetResult,
-  PmTicketListParams,
-  PmTicketListResult,
-  PmTicketUpdateParams,
-  PmTicketUpdateResult,
-  PmTicketDeleteParams,
-  PmTicketDeleteResult,
-} from './methods/pm.mts'
-export type {
   TaskGraphCreateParams,
   TaskGraphCreateResult,
   TaskGraphListParams,
@@ -432,11 +398,6 @@ export interface ForemanMethodParams {
   'project.worktree.merge': ProjectWorktreeMergeParams
   'project.commitLog': ProjectCommitLogParams
   'message.send': MessageSendParams
-  'pm.ticket.create': PmTicketCreateParams
-  'pm.ticket.get': PmTicketGetParams
-  'pm.ticket.list': PmTicketListParams
-  'pm.ticket.update': PmTicketUpdateParams
-  'pm.ticket.delete': PmTicketDeleteParams
   'taskgraph.create': TaskGraphCreateParams
   'taskgraph.patch': TaskGraphPatchParams
   'taskgraph.status': TaskGraphStatusParams
@@ -491,11 +452,6 @@ export interface ForemanMethodResults {
   'project.worktree.merge': ProjectWorktreeMergeResult
   'project.commitLog': ProjectCommitLogResult
   'message.send': MessageSendResult
-  'pm.ticket.create': PmTicketCreateResult
-  'pm.ticket.get': PmTicketGetResult
-  'pm.ticket.list': PmTicketListResult
-  'pm.ticket.update': PmTicketUpdateResult
-  'pm.ticket.delete': PmTicketDeleteResult
   'taskgraph.create': TaskGraphCreateResult
   'taskgraph.patch': TaskGraphPatchResult
   'taskgraph.status': TaskGraphStatusResult
@@ -666,26 +622,6 @@ export const methodRegistry: {
   'message.send': {
     params: messageSendParamsSchema,
     result: messageSendResultSchema,
-  },
-  'pm.ticket.create': {
-    params: pmTicketCreateParamsSchema,
-    result: pmTicketCreateResultSchema,
-  },
-  'pm.ticket.get': {
-    params: pmTicketGetParamsSchema,
-    result: pmTicketGetResultSchema,
-  },
-  'pm.ticket.list': {
-    params: pmTicketListParamsSchema,
-    result: pmTicketListResultSchema,
-  },
-  'pm.ticket.update': {
-    params: pmTicketUpdateParamsSchema,
-    result: pmTicketUpdateResultSchema,
-  },
-  'pm.ticket.delete': {
-    params: pmTicketDeleteParamsSchema,
-    result: pmTicketDeleteResultSchema,
   },
   'taskgraph.create': {
     params: taskgraphCreateParamsSchema,

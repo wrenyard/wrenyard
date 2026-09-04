@@ -55,16 +55,6 @@ import type {
   TaskRunOutputResult,
   TaskRunStatusParams,
   TaskRunStatusResult,
-  PmTicketCreateParams,
-  PmTicketCreateResult,
-  PmTicketGetParams,
-  PmTicketGetResult,
-  PmTicketListParams,
-  PmTicketListResult,
-  PmTicketUpdateParams,
-  PmTicketUpdateResult,
-  PmTicketDeleteParams,
-  PmTicketDeleteResult,
   TaskGraphCreateParams,
   TaskGraphCreateResult,
   TaskGraphListParams,
@@ -272,26 +262,6 @@ export class ForemanClient {
       },
       merge: (params: ProjectWorktreeMergeParams): Promise<ProjectWorktreeMergeResult> => {
         return this.rpc.request<ProjectWorktreeMergeResult>('project.worktree.merge', params)
-      },
-    },
-  }
-
-  readonly pm = {
-    ticket: {
-      create: (params: PmTicketCreateParams): Promise<PmTicketCreateResult> => {
-        return this.rpc.request<PmTicketCreateResult>('pm.ticket.create', params)
-      },
-      get: (params: PmTicketGetParams): Promise<PmTicketGetResult> => {
-        return this.rpc.request<PmTicketGetResult>('pm.ticket.get', params)
-      },
-      list: (params: PmTicketListParams): Promise<PmTicketListResult> => {
-        return this.rpc.request<PmTicketListResult>('pm.ticket.list', params)
-      },
-      update: (params: PmTicketUpdateParams): Promise<PmTicketUpdateResult> => {
-        return this.rpc.request<PmTicketUpdateResult>('pm.ticket.update', params)
-      },
-      delete: (params: PmTicketDeleteParams): Promise<PmTicketDeleteResult> => {
-        return this.rpc.request<PmTicketDeleteResult>('pm.ticket.delete', params)
       },
     },
   }

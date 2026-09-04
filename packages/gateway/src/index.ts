@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
-import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/catalog';
+import type { Catalog, GatewayProtocol, ProviderDefinition, PublicGatewayModel } from '@wrenyard/catalog';
 import { upstreamAuthHeaders, type ProviderRuntime } from '@wrenyard/providers';
 
 export interface GatewayRequestCompletedEvent {
@@ -85,6 +85,122 @@ function upstreamHeaders(headers: IncomingHttpHeaders): Headers {
   return out;
 }
 
+interface ResponseModelContext {
+  protocol: GatewayProtocol;
+  provider: ProviderDefinition;
+  upstreamModel: string;
+  publicModel: string;
+}
+
+function normalizeModelField(
+  value: Record<string, unknown>,
+  key: string,
+  providers: ProviderRuntime,
+  context: ResponseModelContext,
+): void {
+  const model = value[key];
+  if (typeof model !== 'string') return;
+  value[key] = providers.publicResponseModel(
+    context.provider,
+    model,
+    context.upstreamModel,
+    context.publicModel,
+  );
+}
+
+function responseObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function normalizeResponsePayload(
+  payload: unknown,
+  providers: ProviderRuntime,
+  context: ResponseModelContext,
+): unknown {
+  const root = responseObject(payload);
+  if (!root) return payload;
+  normalizeModelField(root, 'model', providers, context);
+  if (context.protocol === 'openai_responses') {
+    const nested = responseObject(root.response);
+    if (nested) normalizeModelField(nested, 'model', providers, context);
+  }
+  if (context.protocol === 'anthropic_messages') {
+    const nested = responseObject(root.message);
+    if (nested) normalizeModelField(nested, 'model', providers, context);
+  }
+  return payload;
+}
+
+function normalizeSseLine(
+  line: string,
+  providers: ProviderRuntime,
+  context: ResponseModelContext,
+): string {
+  const match = /^(data:\s*)(.*?)(\r?)$/u.exec(line);
+  if (!match || match[2] === '[DONE]') return line;
+  try {
+    const payload = normalizeResponsePayload(JSON.parse(match[2]!), providers, context);
+    return `${match[1]}${JSON.stringify(payload)}${match[3]}`;
+  } catch {
+    return line;
+  }
+}
+
+async function writeNormalizedResponse(
+  upstream: Response,
+  response: ServerResponse,
+  providers: ProviderRuntime,
+  context: ResponseModelContext,
+): Promise<void> {
+  if (!upstream.body) return;
+  const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
+  if (contentType.includes('application/json')) {
+    const text = await upstream.text();
+    try {
+      response.write(JSON.stringify(normalizeResponsePayload(JSON.parse(text), providers, context)));
+    } catch {
+      response.write(text);
+    }
+    return;
+  }
+  if (!contentType.includes('text/event-stream')) {
+    const reader = upstream.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        response.write(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return;
+  }
+
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true });
+      let newline = pending.indexOf('\n');
+      while (newline >= 0) {
+        response.write(`${normalizeSseLine(pending.slice(0, newline), providers, context)}\n`);
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf('\n');
+      }
+    }
+    pending += decoder.decode();
+    if (pending) response.write(normalizeSseLine(pending, providers, context));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function availableModels(catalog: Catalog, providers: ProviderRuntime, protocol: GatewayProtocol): Promise<PublicGatewayModel[]> {
   const available = new Set<string>();
   await Promise.all(catalog.providers().map(async (provider) => {
@@ -160,7 +276,8 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
 
       const headers = upstreamHeaders(request.headers);
       upstreamAuthHeaders(resolved.provider, credential, route.protocol).forEach((value, name) => headers.set(name, value));
-      body.model = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
+      const upstreamModel = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
+      body.model = upstreamModel;
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();
@@ -174,18 +291,12 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           if (RESPONSE_HEADER_ALLOWLIST.has(name)) responseHeaders[name] = value;
         });
         response.writeHead(upstream.status, responseHeaders);
-        if (upstream.body) {
-          const reader = upstream.body.getReader();
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              response.write(Buffer.from(value));
-            }
-          } finally {
-            reader.releaseLock();
-          }
-        }
+        await writeNormalizedResponse(upstream, response, options.providers, {
+          protocol: route.protocol,
+          provider: resolved.provider,
+          upstreamModel,
+          publicModel,
+        });
         response.end();
         await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: upstream.status, durationMs: Date.now() - startedAt });
       } catch (error) {
