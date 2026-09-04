@@ -79,31 +79,6 @@ export const mcpProtocolTools: ProtocolToolSpec[] = [
     description: 'Send a plain text message to a configured Foreman message role. This is always asynchronous.',
   },
   {
-    name: 'pm_ticket_create',
-    method: 'pm.ticket.create',
-    description: 'Create a project management ticket (main or sub). Main tickets can have an assignee; sub-tickets require a parent main ticket and cannot have an assignee.',
-  },
-  {
-    name: 'pm_ticket_get',
-    method: 'pm.ticket.get',
-    description: 'Get a PM ticket by id.',
-  },
-  {
-    name: 'pm_ticket_list',
-    method: 'pm.ticket.list',
-    description: 'List PM tickets filtered by project_id with optional kind/status/parent_id/assignee_session_id.',
-  },
-  {
-    name: 'pm_ticket_update',
-    method: 'pm.ticket.update',
-    description: 'Update a PM ticket: edit title/description/assignee or set_status with transition validation.',
-  },
-  {
-    name: 'pm_ticket_delete',
-    method: 'pm.ticket.delete',
-    description: 'Delete a PM ticket. Main tickets with children cannot be deleted.',
-  },
-  {
     name: 'taskgraph_create',
     method: 'taskgraph.create',
     description: 'Create a TaskGraph from a named template (default, parallel-explore, parallel-edit, change-test, implement, closeout). Use taskgraph_patch to add or replace nodes. Full IR is not accepted on create.',

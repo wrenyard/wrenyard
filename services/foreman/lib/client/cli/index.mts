@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url'
 import { handleDaemonDispatchStatus, handleDaemonDrain, handleDaemonFreeze, handleDaemonRestart, handleDaemonStart, handleDaemonStop, handleDaemonThaw } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleMessage } from './commands/message.mts'
-import { handlePm } from './commands/pm.mts'
 import { handleProject } from './commands/project.mts'
 import { handleStatus } from './commands/status.mts'
 import { handleUpdate } from './commands/update.mts'
@@ -61,8 +60,6 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return await handleDoctor(args.slice(1))
       case 'message':
         return handleMessage(args.slice(1))
-      case 'pm':
-        return handlePm(args.slice(1))
       case 'taskgraph':
         return handleTaskgraph(args.slice(1))
       default:
@@ -101,13 +98,6 @@ Usage:
   wrenyard project worktree create <project> <worktree_id> [--config path]
   wrenyard project worktree remove <worktree_id> [--config path]
   wrenyard project worktree merge <project> <worktree_id> [--config path]
-  wrenyard pm ticket create --kind <main|sub> -p <project> --title <title> [--description text] [--parent id] [--assignee session] [--config path]
-  wrenyard pm ticket get <ticket_id> [--config path]
-  wrenyard pm ticket list -p <project> [--kind main|sub] [--status todo|in_progress|done|blocked] [--parent id] [--assignee session] [--config path]
-  wrenyard pm ticket update <ticket_id> [--title text] [--description text|--clear-description] [--assignee session|--clear-assignee] [--config path]
-  wrenyard pm ticket status <ticket_id> <todo|in_progress|done|blocked> [--config path]
-  wrenyard pm ticket delete <ticket_id> [--config path]
-  wrenyard pm ticket delete <ticket_id> [--config path]
   wrenyard message send -m "<message>" --sender <role-id> --to <role-id> [--config path]
   wrenyard taskgraph create <json-params> [--config path]
   wrenyard taskgraph patch <json-params> [--config path]

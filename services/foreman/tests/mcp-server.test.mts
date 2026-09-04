@@ -691,69 +691,9 @@ describe('ForemanMcpServer v2 tools', () => {
     ])
   })
 
-  it('dispatches pm.ticket MCP tools through the RpcRouter protocol layer', async () => {
-    const workspace = makeTempDir('foreman-mcp-workspace-')
-    const router = new RpcRouter()
-    const calls: Array<{ method: string; params: unknown }> = []
-    router.register('pm.ticket.create', async (params) => {
-      calls.push({ method: 'pm.ticket.create', params })
-      return { ticket: { id: 'pm_abc', kind: 'main', project_id: 'foreman', title: 'Test', status: 'todo', created_at: '2024-01-01T00:00:00.000Z', updated_at: '2024-01-01T00:00:00.000Z' } }
-    })
-    router.register('pm.ticket.get', async (params) => {
-      calls.push({ method: 'pm.ticket.get', params })
-      return { ticket: { id: params.id, kind: 'main', project_id: 'foreman', title: 'Test', status: 'todo', created_at: '2024-01-01T00:00:00.000Z', updated_at: '2024-01-01T00:00:00.000Z' } }
-    })
-    router.register('pm.ticket.list', async (params) => {
-      calls.push({ method: 'pm.ticket.list', params })
-      return { tickets: [], count: 0 }
-    })
-    router.register('pm.ticket.update', async (params) => {
-      calls.push({ method: 'pm.ticket.update', params })
-      return { ticket: { id: 'pm_abc', kind: 'main', project_id: 'foreman', title: 'Updated', status: 'in_progress', created_at: '2024-01-01T00:00:00.000Z', updated_at: '2024-01-01T00:00:00.000Z' } }
-    })
-    router.register('pm.ticket.delete', async (params) => {
-      calls.push({ method: 'pm.ticket.delete', params })
-      return { deleted: true, id: params.id }
-    })
-    const server = new ForemanMcpServer({ workspaceRoot: workspace, rpcRouter: router }) as unknown as TestServer
-
-    const createResult = await server.handleToolCall('pm_ticket_create', {
-      kind: 'main',
-      project_id: 'foreman',
-      title: 'Test ticket',
-    }) as { ticket?: { id?: string } }
-    assert.ok(createResult.ticket?.id)
-
-    const getResult = await server.handleToolCall('pm_ticket_get', { id: 'pm_abc' }) as { ticket?: { id?: string } }
-    assert.equal(getResult.ticket?.id, 'pm_abc')
-
-    const listResult = await server.handleToolCall('pm_ticket_list', { project_id: 'foreman' }) as { tickets?: unknown[]; count?: number }
-    assert.deepEqual(listResult.tickets, [])
-    assert.equal(listResult.count, 0)
-
-    const updateResult = await server.handleToolCall('pm_ticket_update', { id: 'pm_abc', action: 'set_status', status: 'in_progress' }) as { ticket?: { title?: string; status?: string } }
-    assert.equal(updateResult.ticket?.status, 'in_progress')
-
-    const deleteResult = await server.handleToolCall('pm_ticket_delete', { id: 'pm_abc' }) as { deleted?: boolean; id?: string }
-    assert.equal(deleteResult.deleted, true)
-    assert.equal(deleteResult.id, 'pm_abc')
-
-    assert.deepEqual(calls, [
-      { method: 'pm.ticket.create', params: { kind: 'main', project_id: 'foreman', title: 'Test ticket' } },
-      { method: 'pm.ticket.get', params: { id: 'pm_abc' } },
-      { method: 'pm.ticket.list', params: { project_id: 'foreman' } },
-      { method: 'pm.ticket.update', params: { id: 'pm_abc', action: 'set_status', status: 'in_progress' } },
-      { method: 'pm.ticket.delete', params: { id: 'pm_abc' } },
-    ])
-
-    // schema exposes required project_id/title fields for create
-    const defs = server.toolDefinitions()
-    const createTool = defs.find((t) => t.name === 'pm_ticket_create')
-    assert.ok(createTool?.inputSchema?.required?.includes('project_id'))
-    assert.ok(createTool?.inputSchema?.required?.includes('title'))
-
-    const listTool = defs.find((t) => t.name === 'pm_ticket_list')
-    assert.ok(listTool?.inputSchema?.required?.includes('project_id'))
+  it('does not expose retired PM ticket MCP tools', () => {
+    const server = makeServer(makeTempDir('foreman-mcp-workspace-'))
+    assert.equal(server.toolDefinitions().some((tool) => tool.name.startsWith('pm_ticket_')), false)
   })
 
   it('validates project names before MCP tool processing and suggests close matches', async () => {

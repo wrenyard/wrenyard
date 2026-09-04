@@ -32,7 +32,7 @@ server.listen(0, '127.0.0.1', () => {
     WRENYARD_IPC_PATH: process.env.WRENYARD_IPC_PATH || null,
     WRENYARD_MCP_URL: process.env.WRENYARD_MCP_URL || null,
     WRENYARD_MCP_SENDER: process.env.WRENYARD_MCP_SENDER || null,
-    FORGE_DSH_KIMI_CODING_API_KEY: process.env.FORGE_DSH_KIMI_CODING_API_KEY || null,
+    WRENYARD_GATEWAY_TOKEN: process.env.WRENYARD_GATEWAY_TOKEN || null,
     argv: process.argv.slice(2),
     execArgv: process.execArgv,
   }));
@@ -262,7 +262,7 @@ test('startDshWeb explicit wrenyardEnv overrides values derived from process.env
   });
 });
 
-test('startDshWeb puts --patch before web flags and injects extraEnv without dropping it', async () => {
+test('startDshWeb puts --patch before web flags and injects the Gateway token without dropping it', async () => {
   await withTemp(async (dir) => {
     const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
     const patchPath = join(dir, 'forge-model-patch.yaml');
@@ -270,7 +270,7 @@ test('startDshWeb puts --patch before web flags and injects extraEnv without dro
     const handle = await startDshWeb({
       ...baseOptions(dir, bin),
       patchPath,
-      extraEnv: { FORGE_DSH_KIMI_CODING_API_KEY: 'sk-test-not-for-logs' },
+      extraEnv: { WRENYARD_GATEWAY_TOKEN: 'gateway-test-not-for-logs' },
     });
     await handle.stop();
 
@@ -281,7 +281,7 @@ test('startDshWeb puts --patch before web flags and injects extraEnv without dro
     assert.equal(argv[patchAt + 1], patchPath);
     assert.ok(patchAt < argv.indexOf('--host'), '--patch must precede --host');
     assert.ok(patchAt < argv.indexOf('--port'), '--patch must precede --port');
-    assert.equal(childEnv.FORGE_DSH_KIMI_CODING_API_KEY, 'sk-test-not-for-logs');
+    assert.equal(childEnv.WRENYARD_GATEWAY_TOKEN, 'gateway-test-not-for-logs');
   });
 });
 

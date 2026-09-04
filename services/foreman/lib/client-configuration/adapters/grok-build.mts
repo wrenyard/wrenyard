@@ -15,6 +15,7 @@ import type {
 } from '../types.mts'
 
 const PROTOCOL_PRIORITY: readonly GatewayProtocol[] = ['openai_responses', 'openai_chat', 'anthropic_messages']
+const GROK_MODEL_COMPATIBLE = (model: ClientGatewayModel): boolean => model.provider !== 'codebuddy'
 
 interface GrokOwnedState {
   configExists: boolean
@@ -102,7 +103,7 @@ export class GrokBuildAdapter implements ClientAdapter {
   }
 
   async plan(connection: GatewayClientConnection, selection: ClientModelSelection): Promise<ClientConfigurationPlan> {
-    const models = selectModels(connection, selection, PROTOCOL_PRIORITY)
+    const models = selectModels(connection, selection, PROTOCOL_PRIORITY, GROK_MODEL_COMPATIBLE)
     const protocols = Object.fromEntries(models.map((model) => [
       model.publicId,
       protocolFor(model, selection.protocols?.[model.publicId]),
@@ -136,7 +137,7 @@ export class GrokBuildAdapter implements ClientAdapter {
       defaultModel: plan.defaultModel ?? '',
       protocols: plan.protocols,
     }
-    const models = selectModels(connection, selection, PROTOCOL_PRIORITY)
+    const models = selectModels(connection, selection, PROTOCOL_PRIORITY, GROK_MODEL_COMPATIBLE)
     const snapshot = await readFileSnapshot(this.options.configPath)
     assertPlanDigest(snapshot, plan.files[0]?.digest ?? '')
     const record = await this.options.store.get(this.id)

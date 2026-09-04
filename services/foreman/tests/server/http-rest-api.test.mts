@@ -220,79 +220,12 @@ describe('Foreman HTTP status API', () => {
     }
   })
 
-  it('serves PM ticket CRUD through the preferred REST API', async () => {
+  it('does not expose the retired PM ticket REST API', async () => {
     const workspace = makeTempDir('foreman-http-pm-workspace-')
-    writeFmproj(workspace, 'foreman')
     const running = await startTestApi(workspace)
     try {
-      const createdMain = await postJson(`${running.url}/api/v1/pm/tickets`, {
-        kind: 'main',
-        project_id: 'foreman',
-        title: 'Main ticket',
-        assignee: { session_id: 'session_main' },
-      }) as {
-        status: number
-        body: { ticket?: { id?: string; kind?: string; title?: string; assignee?: { session_id?: string } } }
-      }
-      assert.equal(createdMain.status, 201)
-      assert.match(createdMain.body.ticket?.id ?? '', /^pm_/u)
-      assert.equal(createdMain.body.ticket?.kind, 'main')
-      assert.equal(createdMain.body.ticket?.assignee?.session_id, 'session_main')
-
-      const mainTicketId = createdMain.body.ticket?.id ?? ''
-      const createdSub = await postJson(`${running.url}/api/v1/pm/tickets`, {
-        kind: 'sub',
-        project_id: 'foreman',
-        title: 'Sub ticket',
-        parent_id: mainTicketId,
-      }) as {
-        status: number
-        body: { ticket?: { id?: string; kind?: string; parent_id?: string } }
-      }
-      assert.equal(createdSub.status, 201)
-      assert.match(createdSub.body.ticket?.id ?? '', /^pm_/u)
-      assert.equal(createdSub.body.ticket?.kind, 'sub')
-      assert.equal(createdSub.body.ticket?.parent_id, mainTicketId)
-
-      const list = await getJson(`${running.url}/api/v1/pm/tickets?project_id=foreman`) as {
-        count: number
-        tickets: Array<{ id?: string }>
-      }
-      assert.equal(list.count, 2)
-      assert.equal(list.tickets.some((ticket) => ticket.id === mainTicketId), true)
-
-      const subTicketId = createdSub.body.ticket?.id ?? ''
-      const updatedSub = await patchJson(`${running.url}/api/v1/pm/tickets/${subTicketId}`, {
-        action: 'set_status',
-        status: 'in_progress',
-      }) as {
-        status: number
-        body: { ticket?: { id?: string; status?: string } }
-      }
-      assert.equal(updatedSub.status, 200)
-      assert.equal(updatedSub.body.ticket?.id, subTicketId)
-      assert.equal(updatedSub.body.ticket?.status, 'in_progress')
-
-      const mismatchedPatch = await patchJson(`${running.url}/api/v1/pm/tickets/${subTicketId}`, {
-        id: mainTicketId,
-        action: 'set_status',
-        status: 'blocked',
-      }) as { status: number; body: { error?: string } }
-      assert.equal(mismatchedPatch.status, 400)
-      assert.equal(mismatchedPatch.body.error, 'id in path and body must match')
-
-      const deleted = await deleteJson(`${running.url}/api/v1/pm/tickets/${subTicketId}`) as {
-        status: number
-        body: { deleted?: boolean; id?: string }
-      }
-      assert.equal(deleted.status, 200)
-      assert.equal(deleted.body.deleted, true)
-      assert.equal(deleted.body.id, subTicketId)
-
-      const missing = await fetch(`${running.url}/api/v1/pm/tickets/${subTicketId}`)
-      const missingBody = await missing.json() as { error?: string }
-      assert.equal(missing.status, 404)
-      assert.equal(missingBody.error, 'ticket_not_found')
+      const response = await fetch(`${running.url}/api/v1/pm/tickets`)
+      assert.equal(response.status, 404)
     } finally {
       await running.close()
     }
@@ -818,4 +751,3 @@ function taskOutputText(output: unknown): string {
 function isTerminalTaskStatus(status: string): boolean {
   return status !== 'queued' && status !== 'running'
 }
-
