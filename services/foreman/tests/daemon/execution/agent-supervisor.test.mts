@@ -9,6 +9,7 @@ import { AgentExecutionSupervisor, ExecutionTerminationFailure } from '../../../
 import { redactEvent } from '../../../lib/daemon/execution/redaction.mts'
 import { RepoWriteLocks } from '../../../lib/daemon/execution/repo-write-locks.mts'
 import { closeTestDb, initTestDb } from '../../helpers/test-db.mts'
+import type { TaskResolvedDispatch } from '../../../lib/protocol/task-run-metadata.mts'
 
 interface RawResultRow {
   raw_result: string | null
@@ -1763,6 +1764,190 @@ setInterval(() => {}, 1000)
       `SELECT COUNT(*) AS c FROM events WHERE execution_id = ?`,
     ).get(execId)?.c ?? 0
     assert.equal(eventCount, 0, 'no terminal event may be inserted for an uncontrolled process')
+  })
+
+  it('attempt timeout converges at the deadline even when a descendant holds stdio after child close, and cannot be overwritten', {
+    timeout: 15_000,
+  }, async () => {
+    // The fake Forge parent spawns a detached keeper that inherits the parent
+    // stdout pipe, records its pid, writes the started marker, then exits
+    // immediately. The keeper keeps the pipe write-end open forever, so the
+    // supervisor's stream consumer never sees EOF and the child 'close' event
+    // never fires: child close has claimed an unpersisted exit intent (or
+    // never fires) while streamDone remains unsettled. The attempt deadline
+    // must override that provisional state and durably terminalize as timeout.
+    const cwd = makeTempDir('foreman-agent-supervisor-timeout-race-')
+    const startedPath = join(cwd, 'started')
+    const keeperPidPath = join(cwd, 'keeper-pid')
+    installStalledObserverFakeForge(cwd, startedPath, keeperPidPath)
+
+    const repoWriteLocks = new RepoWriteLocks()
+    // Short attempt deadline plus a short cancellation-settlement bound so the
+    // bounded timeout reconcile cannot postpone the durable timeout state
+    // beyond the test's own window.
+    const supervisor = new AgentExecutionSupervisor({
+      db,
+      repoWriteLocks,
+      cancelSettlementTimeoutMs: 200,
+    })
+    supervisors.push(supervisor)
+
+    const taskId = 'task_timeout_race'
+    const now = new Date().toISOString()
+    db.prepare<unknown[]>(
+      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
+      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
+    ).run(taskId, now, now)
+
+    const handle = await supervisor.startExecution({
+      profile: 'test',
+      permission: 'edit',
+      cwd,
+      prompt: 'timeout race',
+      taskId,
+      timeoutMs: 150,
+    })
+    await waitForFile(startedPath)
+
+    const keeperPid = Number(readFileSync(keeperPidPath, 'utf-8').trim())
+    assert.ok(keeperPid, 'expected stalled stream keeper child pid')
+
+    // The execution must settle as timeout at the deadline, not hang on the
+    // held stdio pipe.
+    const result = await handle.wait()
+    assert.equal(result.status, 'timeout', 'attempt timeout must converge at the deadline as timeout')
+    assert.equal(result.killReason, 'timeout')
+
+    const execRow = db.prepare<unknown[], { status: string }>(
+      `SELECT status FROM executions WHERE id = ?`,
+    ).get(handle.executionId)
+    assert.ok(execRow, 'expected execution row')
+    assert.equal(execRow.status, 'timeout', 'execution row must be durably timed out exactly once')
+
+    const terminalEventCount = db.prepare<unknown[], { c: number }>(
+      `SELECT COUNT(*) AS c FROM events WHERE execution_id = ? AND type = 'terminal'`,
+    ).get(handle.executionId)?.c ?? 0
+    assert.equal(terminalEventCount, 1, 'exactly one terminal execution event must be emitted for the timeout')
+
+    // Releasing the stream keeper lets any late observer (child close + stream
+    // completion) finish and re-enter the terminalize path. It must be a no-op:
+    // terminal generation and the authoritative terminal row guard it, so the
+    // committed timeout state cannot be overwritten as done/failed.
+    try {
+      process.kill(keeperPid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
+    await sleep(200)
+
+    await supervisor.cancelExecution(handle.executionId)
+    await supervisor.cancelExecution(handle.executionId)
+
+    const afterRow = db.prepare<unknown[], { status: string }>(
+      `SELECT status FROM executions WHERE id = ?`,
+    ).get(handle.executionId)
+    assert.equal(afterRow?.status, 'timeout', 'late delivery must not overwrite the committed timeout state')
+  })
+
+  it('startExecution persists one dispatch snapshot row per attempt keyed by each execution', async () => {
+    const cwd = makeTempDir('foreman-agent-supervisor-dispatch-')
+    const taskId = 'task_dispatch_snapshots'
+    const now = new Date().toISOString()
+    // A running task row so attachExecution succeeds for both attempts.
+    db.prepare<unknown[]>(
+      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
+      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
+    ).run(taskId, now, now)
+
+    const supervisor = makeSupervisor()
+
+    const snapshotA: TaskResolvedDispatch = {
+      requested_agent_runtime: 'forge/test',
+      profile: 'test',
+      client: 'claude',
+      provider: 'anthropic',
+      model: 'model-a',
+      model_id: 'model-a-id',
+      mode: 'native',
+      speed: { effective_tps: 12, source: 'local_31d', sample_count: 3, checked_at: now, expected_tps_met: true },
+      intelligence: 'high',
+      reference_pricing: {
+        input_usd_per_million: 1,
+        output_usd_per_million: 2,
+        cached_input_usd_per_million: 0.5,
+        cache_write_input_usd_per_million: 0.25,
+        source: 'catalog',
+        checked_at: now,
+      },
+    }
+    const snapshotB: TaskResolvedDispatch = {
+      requested_agent_runtime: 'forge/test',
+      profile: 'test',
+      client: 'codex',
+      provider: 'openai',
+      model: 'model-b',
+      model_id: 'model-b-id',
+      mode: 'gateway',
+      speed: { effective_tps: 24, source: 'catalog_default', sample_count: 7, checked_at: now, expected_tps_met: false, degradation_reason: 'low samples' },
+      intelligence: 'medium',
+      reference_pricing: {
+        input_usd_per_million: 3,
+        output_usd_per_million: 20,
+        cached_input_usd_per_million: 1.5,
+        cache_write_input_usd_per_million: 0.75,
+        source: 'catalog',
+        checked_at: now,
+      },
+    }
+
+    installFakeForgeLines(cwd, [
+      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'a' }),
+    ])
+
+    const handleA = await supervisor.startExecution({
+      profile: 'test',
+      permission: 'readonly',
+      cwd,
+      prompt: 'attempt A',
+      taskId,
+      dispatchSnapshot: snapshotA,
+    })
+    // Re-point the fake Forge output for the second attempt.
+    installFakeForgeLines(cwd, [
+      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'b' }),
+    ])
+    const handleB = await supervisor.startExecution({
+      profile: 'test',
+      permission: 'readonly',
+      cwd,
+      prompt: 'attempt B',
+      taskId,
+      dispatchSnapshot: snapshotB,
+    })
+
+    // The snapshot INSERT happens synchronously inside startExecution before
+    // launch, so both rows exist even before the executions complete.
+    const rows = db.prepare<unknown[], { execution_id: string; model: string; reference_pricing_output: number }>(
+      `SELECT execution_id, model, reference_pricing_output
+       FROM task_run_attempt_dispatch WHERE task_run_id = ?`,
+    ).all(taskId)
+    assert.equal(rows.length, 2, 'two attempts must create two task_run_attempt_dispatch rows')
+
+    const byExecution = new Map(rows.map((row) => [row.execution_id, row]))
+    const rowA = byExecution.get(handleA.executionId)
+    const rowB = byExecution.get(handleB.executionId)
+    assert.ok(rowA, 'attempt A must have its own dispatch snapshot row')
+    assert.ok(rowB, 'attempt B must have its own dispatch snapshot row')
+    assert.equal(rowA.execution_id, handleA.executionId)
+    assert.equal(rowB.execution_id, handleB.executionId)
+    assert.equal(rowA.model, 'model-a', 'first attempt snapshot keeps its canonical model')
+    assert.equal(rowB.model, 'model-b', 'second attempt snapshot keeps its canonical model')
+    assert.equal(rowA.reference_pricing_output, 2, 'first attempt keeps its own output price')
+    assert.equal(rowB.reference_pricing_output, 20, 'second attempt keeps its own output price')
+
+    // Let both executions complete so their child processes are reaped.
+    await handleA.wait()
+    await handleB.wait()
   })
 })
 

@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 
 const conformReviewIssueSchema = z
@@ -57,6 +58,7 @@ const definition = {
   config: {
     description: 'Conformance review - verify changes match the intended spec, plan, or architecture direction',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     input: inputSchema,
     output: reviewOutputSchema,

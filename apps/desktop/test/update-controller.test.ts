@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DesktopUpdateController,
   compareSemver,
@@ -7,6 +10,9 @@ import {
   releaseTarget,
   selectUpdateCandidate,
   type GithubRelease,
+  type PreparedUpdate,
+  type UpdateCandidate,
+  type UpdateScheduler,
 } from '../src/update-controller.js';
 
 function release(version: string, prerelease: boolean, target = 'darwin-arm64'): GithubRelease {
@@ -232,4 +238,246 @@ test('startup check is scheduled at 5s and rechecks every hour via the injected 
 
   controller.stop();
   assert.deepEqual(cleared, [recurring.handle]);
+});
+
+function isolatedScheduler(): UpdateScheduler & { scheduled: Array<{ id: number; callback: () => void }> } {
+  const scheduled: Array<{ id: number; callback: () => void }> = [];
+  let id = 0;
+  return {
+    scheduled,
+    setTimeout: (callback: () => void) => { id += 1; const handle = id; scheduled.push({ id: handle, callback }); return handle; },
+    clearTimeout: (handle: unknown) => {
+      const index = scheduled.findIndex((entry) => entry.id === handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+    setInterval: (callback: () => void) => { id += 1; const handle = id; scheduled.push({ id: handle, callback }); return handle; },
+    clearInterval: (handle: unknown) => {
+      const index = scheduled.findIndex((entry) => entry.id === handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+  };
+}
+
+function fakeUpdateRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-update-test-'));
+  writeFileSync(join(root, 'update-helper.cjs'), '');
+  return root;
+}
+
+test('explicit request prepares once while busy, waits without launching, then installs when idle', async () => {
+  let busy = true;
+  let preparedCount = 0;
+  let launched = 0;
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: join(root, 'data'),
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: join(root, 'update-helper.cjs'),
+    helperRuntimePath: '/suite/node',
+    desktopPath: join(root, 'app'),
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    isBusy: async () => busy,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => {
+      preparedCount += 1;
+      return { candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root] };
+    },
+    spawnDetached: () => { launched += 1; },
+    onInstall: () => undefined,
+    scheduler: isolatedScheduler(),
+  });
+
+  const waiting = await controller.requestInstall();
+  assert.equal(waiting.state, 'waiting');
+  assert.equal(preparedCount, 1, 'prepared exactly once even while busy');
+  assert.equal(launched, 0, 'must not launch while busy');
+
+  // A second authorization while still busy must reuse the staged artifact.
+  await controller.requestInstall();
+  assert.equal(preparedCount, 1, 'preparation is never repeated');
+
+  busy = false;
+  controller.wake();
+  await new Promise((resolve) => setImmediate(resolve));
+  const installed = controller.snapshot();
+  assert.equal(launched, 1, 'idle recheck launches exactly once');
+  assert.equal(installed.state, 'installing');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('cancelPendingInstall clears intent and prevents a later launch without reporting success', async () => {
+  let busy = true;
+  let launched = 0;
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: join(root, 'data'),
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: join(root, 'update-helper.cjs'),
+    helperRuntimePath: '/suite/node',
+    desktopPath: join(root, 'app'),
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    isBusy: async () => busy,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => ({
+      candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root],
+    }),
+    spawnDetached: () => { launched += 1; },
+    scheduler: isolatedScheduler(),
+  });
+
+  const waiting = await controller.requestInstall();
+  assert.equal(waiting.state, 'waiting');
+  const cancelled = controller.cancelPendingInstall();
+  assert.equal(cancelled.state, 'available', 'returns to available, retaining staged artifact');
+  assert.notEqual(cancelled.state, 'up-to-date', 'must not report success');
+
+  busy = false;
+  controller.wake();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(launched, 0, 'cancellation prevents launch');
+  assert.notEqual(controller.snapshot().state, 'installing');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('automatic check discovers the candidate but never installs', async () => {
+  let launched = 0;
+  const scheduler = isolatedScheduler();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: '/tmp/wrenyard-update-controller-automatic',
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: '/app/update-helper.cjs',
+    helperRuntimePath: '/suite/node',
+    desktopPath: '/app',
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    spawnDetached: () => { launched += 1; },
+    scheduler,
+  });
+
+  const snapshot = await controller.check(false);
+  assert.equal(snapshot.state, 'available');
+  assert.equal(snapshot.availableVersion, '1.0.0-dev.16');
+  assert.equal(launched, 0);
+  assert.equal(controller.snapshot().state, 'available');
+});
+
+test('preparation failure preserves the current version and reports a friendly error', async () => {
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: join(root, 'data'),
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: join(root, 'update-helper.cjs'),
+    helperRuntimePath: '/suite/node',
+    desktopPath: join(root, 'app'),
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    isBusy: async () => false,
+    prepareCandidate: async () => { throw new Error('checksum mismatch internal token'); },
+    scheduler: isolatedScheduler(),
+  });
+
+  await controller.check(true);
+  const failed = await controller.requestInstall();
+  assert.equal(failed.state, 'install-failed');
+  assert.equal(failed.currentVersion, '1.0.0-dev.15');
+  assert.equal(JSON.stringify(failed).includes('token'), false);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('direct launchPreparedUpdate cannot bypass the busy safety gate', async () => {
+  let launched = 0;
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: join(root, 'data'),
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: join(root, 'update-helper.cjs'),
+    helperRuntimePath: '/suite/node',
+    desktopPath: join(root, 'app'),
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    isBusy: async () => true,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => ({
+      candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root],
+    }),
+    spawnDetached: () => { launched += 1; },
+    scheduler: isolatedScheduler(),
+  });
+
+  await controller.requestInstall(); // busy -> waiting, prepares the artifact
+  const ok = await controller.launchPreparedUpdate();
+  assert.equal(ok, false);
+  assert.equal(launched, 0, 'busy gate blocks the launch entirely');
+  assert.equal(controller.snapshot().state, 'install-blocked');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('stop clears the pending idle timer and install intent', async () => {
+  let busy = true;
+  const scheduler = isolatedScheduler();
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController({
+    currentVersion: '1.0.0-dev.15',
+    userDataPath: join(root, 'data'),
+    platform: 'darwin',
+    arch: 'arm64',
+    cliPath: '/suite/wrenyard',
+    helperPath: join(root, 'update-helper.cjs'),
+    helperRuntimePath: '/suite/node',
+    desktopPath: join(root, 'app'),
+    settings: { loadUpdateChannel: () => 'dev', saveUpdateChannel: () => undefined },
+    fetcher: async () => new Response(JSON.stringify([release('1.0.0-dev.16', true)]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    isBusy: async () => busy,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => ({
+      candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root],
+    }),
+    scheduler,
+  });
+
+  await controller.requestInstall();
+  assert.equal(scheduler.scheduled.length, 1, 'idle retry timer is scheduled while waiting');
+  controller.stop();
+  assert.equal(scheduler.scheduled.length, 0, 'stop clears pending timers');
+  busy = false;
+  controller.wake();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.snapshot().state, 'waiting', 'intent cleared, no install after stop');
+
+  rmSync(root, { recursive: true, force: true });
 });

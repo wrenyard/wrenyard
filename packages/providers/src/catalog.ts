@@ -1,4 +1,17 @@
-import { Catalog, type ClientDefinition, type DispatchPlan, type ModelDefinition, type ProviderDefinition } from '@wrenyard/catalog';
+import { Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition } from '@wrenyard/catalog';
+
+const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
+const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
+const SRC_OPENAI = 'https://developers.openai.com';
+const SRC_AA_DEEPSEEK = 'https://artificialanalysis.ai/models/deepseek-v4-flash/';
+const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
+const SRC_AA_KIMI = 'https://artificialanalysis.ai/models/kimi-k3/';
+const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
+const SRC_AA_GLMF = 'https://artificialanalysis.ai/models/glm-5-3-flash/';
+const SRC_CONSERVATIVE = 'conservative estimate; public benchmark basis';
+const SRC_AA_LUNA = 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna';
+const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol/';
+const DEFAULT_CHECKED_AT = '2026-09-05';
 
 const clients: readonly ClientDefinition[] = [
   { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'] },
@@ -59,9 +72,11 @@ const builtinProviders: readonly ProviderDefinition[] = [
       model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072),
       model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072),
       model('gpt-5.6-luna', 'GPT-5.6 Luna', 1_050_000, 131_072),
+      model('gpt-6-astra', 'GPT-6 Astra', 1_050_000, 128_000),
       model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark'),
       model('gpt-5.5', 'GPT-5.5'), model('gpt-5.4', 'GPT-5.4'), model('gpt-5.4-mini', 'GPT-5.4 Mini'),
     ],
+    modelAliases: { 'codex-astra': 'gpt-6-astra' },
   },
   {
     id: 'codex-spark', displayName: 'Codex Spark', credentialResolver: 'codex',
@@ -223,15 +238,109 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
   },
 };
 
+type ModelMeta = {
+  intelligence?: IntelligenceTier;
+  capabilities: readonly ModelCapability[];
+  speed?: ModelSpeedMeta;
+  maxOutputTokens?: number;
+  pricing?: ModelPricing;
+};
+
+const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
+  'deepseek-v4-flash': {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    speed: { tps: 140, source: SRC_AA_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
+    pricing: { inputUsdPerMillion: 0.44, cachedInputUsdPerMillion: 0.014, outputUsdPerMillion: 1.32, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'deepseek-v4-pro': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    speed: { tps: 35, source: SRC_CONSERVATIVE, checkedAt: DEFAULT_CHECKED_AT, conservative: true },
+    pricing: { inputUsdPerMillion: 1.32, cachedInputUsdPerMillion: 0.044, outputUsdPerMillion: 3.96, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'hy4-preview': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 0.834, cachedInputUsdPerMillion: 0.042, outputUsdPerMillion: 2.501, source: SRC_TENCENT_HY, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'gpt-6-astra': {
+    intelligence: 'premium',
+    capabilities: ['text', 'image'],
+    maxOutputTokens: 128_000,
+    pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'gpt-5.6-sol': {
+    intelligence: 'frontier',
+    capabilities: ['text', 'image'],
+    // External decode default from Artificial Analysis; superseded by a local agent_turn_v1 measured profile when present.
+    speed: { tps: 74.4, source: SRC_AA_SOL, checkedAt: DEFAULT_CHECKED_AT, basis: 'external decode catalog default; distinct from local agent_turn_v1, which overrides' },
+    pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'gpt-5.6-terra': {
+    intelligence: 'frontier',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'gpt-5.6-luna': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    // External decode default from Artificial Analysis (minimum of current listed effort speeds); superseded by a local agent_turn_v1 measured profile when present.
+    speed: { tps: 107, source: SRC_AA_LUNA, checkedAt: DEFAULT_CHECKED_AT, basis: 'external decode catalog default (minimum of current listed effort speeds); distinct from local agent_turn_v1, which overrides' },
+    pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'kimi-k3': {
+    intelligence: 'frontier',
+    capabilities: ['text', 'image'],
+    speed: { tps: 39.2, source: SRC_AA_KIMI, checkedAt: DEFAULT_CHECKED_AT },
+    pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'k3': {
+    intelligence: 'frontier',
+    capabilities: ['text', 'image'],
+    speed: { tps: 39.2, source: SRC_AA_KIMI, checkedAt: DEFAULT_CHECKED_AT },
+    pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'glm-5.3': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    speed: { tps: 35, source: SRC_CONSERVATIVE, checkedAt: DEFAULT_CHECKED_AT, conservative: true },
+    pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'glm-5.3-flash': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    speed: { tps: 47.4, source: SRC_AA_GLMF, checkedAt: DEFAULT_CHECKED_AT },
+    pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.03, outputUsdPerMillion: 0.50, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+};
+
+function withMeta(def: ModelDefinition): ModelDefinition {
+  const meta = MODEL_METADATA[def.id];
+  if (!meta) {
+    return { ...def, capabilities: def.capabilities ?? ['text'] };
+  }
+  return {
+    ...def,
+    ...(meta.intelligence ? { intelligence: meta.intelligence } : {}),
+    capabilities: meta.capabilities,
+    ...(meta.speed ? { speed: meta.speed } : {}),
+    ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
+    ...(meta.pricing ? { pricing: meta.pricing } : {}),
+  };
+}
+
 export const BUILTIN_PROVIDERS: readonly ProviderDefinition[] = builtinProviders.map((provider) => ({
   ...provider,
   ...PROVIDER_PRESENTATION[provider.id],
+  models: provider.models.map(withMeta),
 }));
 
 const BUILTIN_RUN_TARGETS = {
   'codex-sol': ['codex', 'codex', 'gpt-5.6-sol'],
   'codex-terra': ['codex', 'codex', 'gpt-5.6-terra'],
   'codex-luna': ['codex', 'codex', 'gpt-5.6-luna'],
+  'codex-astra': ['codex', 'codex', 'gpt-6-astra'],
   'codex-spark': ['codex', 'codex-spark', 'gpt-5.3-codex-spark'],
   'cb-hy': ['codebuddy', 'codebuddy', 'hy4-preview'],
   'cb-ds': ['codebuddy', 'codebuddy', 'deepseek-v4-pro'],

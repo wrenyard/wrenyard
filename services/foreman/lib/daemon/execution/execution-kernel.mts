@@ -25,7 +25,7 @@ import {
   resolveTaskTarget,
 } from '../../workspace/task-loader.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
-import { applyTaskAgentRuntimeOverride } from '../../config/task-runtime-override.mts'
+import { applyTaskAgentRuntimeOverride, taskRuntimeOverridePreference } from '../../config/task-runtime-override.mts'
 import { installRuntimeGlobals } from './runtime-globals.mts'
 import {
   compileSchema,
@@ -265,12 +265,14 @@ function gateShellFn(cwd: string): GateContextType['shell'] {
 
 async function recordTaskRunEvent(
   record: TaskRecord,
-  kind: 'task.run.started' | 'task.run.completed' | 'task.run.failed',
+  kind: 'task.run.started' | 'task.run.completed' | 'task.run.failed' | 'task.run.cancelled' | 'task.run.interrupted',
   options: ExecutionOptions,
 ): Promise<void> {
   const suffix = kind === 'task.run.started' ? 'started'
     : kind === 'task.run.completed' ? 'done'
-    : 'failed'
+    : kind === 'task.run.failed' ? 'failed'
+    : kind === 'task.run.cancelled' ? 'cancelled'
+    : 'interrupted'
   await recordDaemonExecutionEvent({
     id: `foreman:${record.task_id}:${suffix}`,
     kind,
@@ -348,8 +350,41 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     const declaredAgentRuntime = config.agentRuntime
       ? parseAgentRuntime(config.agentRuntime).toString()
       : `forge/${taskProfile}`
-    const requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
-    parseAgentRuntime(requestedAgentRuntime)
+    // Soft runtime override preference is read separately from the exact declared
+    // runtime; it influences the resolver's preferredRuntime only and can never
+    // relax, skip, or bypass a hard dispatch requirement.
+    const runtimeOverridePreference = taskRuntimeOverridePreference(target.name)
+
+    // Resolve the deterministic constrained dispatch plan before the first agent
+    // attempt. Constrained production definitions MUST supply a resolver.
+    let requestedAgentRuntime = declaredAgentRuntime
+    let exactAgentRuntime: string = declaredAgentRuntime
+    let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
+    if (config.dispatch) {
+      if (!options.taskDispatchResolver) {
+        throw new Error(
+          `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
+        )
+      }
+      const resolution = options.taskDispatchResolver.resolve({
+        taskName: target.name,
+        requirements: config.dispatch,
+        declaredRuntime: declaredAgentRuntime,
+        machinePreference: runtimeOverridePreference,
+      })
+      if (!resolution.ok) throw resolution.error
+      exactAgentRuntime = resolution.exactAgentRuntime
+      dispatchSnapshot = resolution.resolved
+    } else if (options.taskDispatchResolver && config.scheduling !== 'legacy') {
+      throw new Error(
+        `Active task '${target.name}' must declare explicit dispatch requirements before model execution.`,
+      )
+    } else {
+      // Legacy: preserve declared exact/policy runtime behavior, applying any soft
+      // runtime override. The exact approved profile remains the chosen runtime.
+      requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
+      exactAgentRuntime = requestedAgentRuntime
+    }
     const executionOptions = options
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
     // Resolve selected capabilities from config before spawning Forge.
@@ -424,7 +459,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         })
       }
       const structuredOptions: Parameters<typeof collectStructuredOutput>[0] = {
-        profile: requestedAgentRuntime,
+        profile: exactAgentRuntime,
         instructions: prompt,
         outputSchema,
         runAgent,
@@ -435,6 +470,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         timeoutMs: config.timeoutMs,
         capabilities: selectedCapabilities,
         writePaths,
+        requestedAgentRuntime: requestedAgentRuntime,
+        dispatchSnapshot,
         onDelivery: (delivery) => {
           structuredSummary = delivery.summary
         },
@@ -516,9 +553,17 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         record.error_message,
       )
       if (terminalUpdated) {
+        // Publish exactly one final task lifecycle event matching the terminal
+        // status. The successful CAS guarantees a losing late terminal update
+        // (already-terminal row) emits nothing. done/failed keep their
+        // historical kinds; cancelled/interrupted publish their own kinds.
         if (record.status === 'failed') {
           insertTaskLifecycleEvent(record, 'task.failed')
           await recordTaskRunEvent(record, 'task.run.failed', options)
+        } else if (record.status === 'cancelled') {
+          await recordTaskRunEvent(record, 'task.run.cancelled', options)
+        } else if (record.status === 'interrupted') {
+          await recordTaskRunEvent(record, 'task.run.interrupted', options)
         }
       } else {
         record.status = readTaskStatus(record.task_id) ?? record.status
@@ -526,6 +571,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     } else {
       if (record.status === 'failed') {
         await recordTaskRunEvent(record, 'task.run.failed', options)
+      } else if (record.status === 'cancelled') {
+        await recordTaskRunEvent(record, 'task.run.cancelled', options)
+      } else if (record.status === 'interrupted') {
+        await recordTaskRunEvent(record, 'task.run.interrupted', options)
       }
     }
     throw error

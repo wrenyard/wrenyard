@@ -8,6 +8,12 @@
  * NDJSON IPC surfaces, whose wire protocols are stable. It never imports Forge
  * or Wrenyard source, never logs credentials or raw environment values, and
  * bundles no internal provider.
+ *
+ * Exactly three Desktop/DSH model-visible tools are exposed, each mapped to a
+ * canonical MCP definition and surfaced under a stable alias:
+ *   - list_task     -> task_list
+ *   - describe_task -> task_describe
+ *   - run_task      -> task_run (+ IPC task.run.wait)
  */
 
 import net from 'node:net';
@@ -19,49 +25,16 @@ export const inject = ['tools'];
 const DEFAULT_MCP_URL = 'http://127.0.0.1:8787/mcp';
 const CATALOG_TIMEOUT_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 180_000;
-const TASK_TIMEOUT_MS = 900_000;
-const TASK_POLL_MS = 100;
 const IPC_TIMEOUT_MS = 5_000;
 
-const TERMINAL_TASK_STATUSES = new Set([
-  'done',
-  'failed',
-  'cancelled',
-  'interrupted',
-]);
-
-// DSH-internal session plumbing and workflow_* compatibility tools are never
-// exposed to the model.
-const BLOCKED_TOOLS = new Set([
-  'sessions_list',
-  'session_send',
-]);
-
-// Read-only tools may run concurrently; everything else is serialized.
-const READONLY_TOOLS = new Set([
-  'project_list',
-  'project_describe',
-  'project_commit_log',
-  'worktree_list',
-  'workspace_doc_list',
-  'workspace_doc_read',
-  'task_status',
-  'task_output',
-  'task_wait',
-]);
-
-// Canonical public RPC methods for the owner-only Wrenyard NDJSON IPC surface.
-// The wire protocol is stable; only the product naming changed.
-const CANONICAL_RPC = {
-  project_list: 'project.list',
-  project_describe: 'project.describe',
-  project_commit_log: 'project.commitLog',
-  worktree_list: 'project.worktree.list',
-  workspace_doc_list: 'workspace.doc.list',
-  workspace_doc_read: 'workspace.doc.read',
+const TASK_CANONICAL = {
+  list_task: 'task_list',
+  describe_task: 'task_describe',
+  run_task: 'task_run',
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const IPC_WAIT_METHOD = 'task.run.wait';
+const IPC_CANCEL_METHOD = 'task.run.cancel';
 
 function abortError() {
   const err = new Error('Aborted');
@@ -71,10 +44,6 @@ function abortError() {
 
 function boundedMessage(err) {
   return err instanceof Error ? err.message : String(err);
-}
-
-function isBlockedTool(toolName) {
-  return BLOCKED_TOOLS.has(toolName) || toolName.startsWith('workflow_');
 }
 
 const SCHEMA_KEEP = new Set([
@@ -250,14 +219,14 @@ function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, sign
     const finish = (err, value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onOuterAbort);
       sock.destroy();
       if (err) reject(err);
       else resolve(value);
     };
     const onOuterAbort = () => finish(abortError());
-    const timer = setTimeout(() => finish(new Error('Wrenyard IPC timeout')), timeout);
+    const timer = timeout == null ? null : setTimeout(() => finish(new Error('Wrenyard IPC timeout')), timeout);
 
     if (signal) {
       if (signal.aborted) return finish(abortError());
@@ -291,79 +260,100 @@ function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, sign
       }
     });
     sock.on('error', (err) => finish(err));
-  });
-}
-
-async function waitForTask(mcpUrl, sender, taskRunId, signal) {
-  const deadline = Date.now() + TASK_TIMEOUT_MS;
-  let status;
-  for (;;) {
-    if (signal && signal.aborted) throw abortError();
-    if (Date.now() >= deadline) {
-      throw new Error(`Wrenyard: task ${taskRunId} exceeded ${TASK_TIMEOUT_MS}ms deadline`);
-    }
-    const statusResult = await callTool(mcpUrl, sender, 'task_status', { task_run_id: taskRunId }, { signal });
-    status = pick(statusResult, ['status', 'state']) || 'running';
-    if (TERMINAL_TASK_STATUSES.has(status)) {
-      const outputResult = await callTool(mcpUrl, sender, 'task_output', { task_run_id: taskRunId }, { signal });
-      return { task_run_id: taskRunId, status, ...outputResult };
-    }
-    await sleep(TASK_POLL_MS);
-  }
-}
-
-function makeExecute(mcpUrl, sender, toolName) {
-  return async function execute(input, { signal } = {}) {
-    const result = await callTool(mcpUrl, sender, toolName, input || {}, { signal });
-    return canonicalOutput(result);
-  };
-}
-
-function makeTaskRunExecute(mcpUrl, sender) {
-  return async function execute(input, { signal } = {}) {
-    const launch = await callTool(mcpUrl, sender, 'task_run', input || {}, { signal });
-    const taskRunId = pick(launch, ['task_run_id', 'task_id', 'taskRunId', 'id']);
-    if (taskRunId === undefined) return canonicalOutput(launch);
-    return canonicalOutput(await waitForTask(mcpUrl, sender, taskRunId, signal));
-  };
-}
-
-function makeTaskWaitExecute(mcpUrl, sender) {
-  return async function execute(input, { signal } = {}) {
-    const taskRunId = pick(input || {}, ['task_run_id', 'task_id', 'taskRunId', 'id']);
-    if (taskRunId === undefined) throw new Error('task_wait requires task_run_id');
-    return canonicalOutput(await waitForTask(mcpUrl, sender, taskRunId, signal));
-  };
-}
-
-function makeIpcExecute(socketPath, method) {
-  return async function execute(input, { signal } = {}) {
-    const result = await ipcRequest(socketPath, method, input || {}, {
-      timeout: DEFAULT_TIMEOUT_MS,
-      signal,
+    // An incidental daemon/socket disconnect (close without a settled response)
+    // must reject the caller promptly. finish() is idempotent, so a normal
+    // reply followed by the local destroy() in finish() also emits 'close'
+    // without double-settling. We do NOT treat this as an AbortError and do NOT
+    // trigger owned-task cancellation: only the caller AbortSignal cancels.
+    sock.on('close', () => {
+      if (!settled) finish(new Error('Wrenyard IPC connection closed before response'));
     });
+  });
+}
+
+function makeExecute(mcpUrl, sender, canonicalName) {
+  return async function execute(input, { signal } = {}) {
+    const result = await callTool(mcpUrl, sender, canonicalName, input || {}, { signal });
     return canonicalOutput(result);
   };
 }
 
-function registerTool(tools, tool, execute) {
-  const readonly = READONLY_TOOLS.has(tool.name);
-  tools.register({
-    name: tool.name,
-    description: typeof tool.description === 'string' ? tool.description : '',
-    parameters: sanitizeSchema(tool.inputSchema || tool.schema),
-    timeoutMs: tool.name === 'task_run' || tool.name === 'task_wait' || tool.name === 'taskgraph_wait'
-      ? TASK_TIMEOUT_MS
-      : DEFAULT_TIMEOUT_MS,
+/**
+ * Owned-run cancellation: once this wrapper has created a task_run_id it owns
+ * that backend run and must cancel it exactly once if the caller aborts. The
+ * caller AbortSignal is deliberately kept out of the create request so an abort
+ * mid-create cannot discard a successfully returned id, and the wait request
+ * keeps the signal so Stop closes the wait socket promptly. Cancellation is
+ * idempotent (attempted-flag set before the await) and its failure is swallowed
+ * so the original abort stays authoritative. No fourth model-visible tool is
+ * added; IPC_CANCEL_METHOD is exercised only through this private helper.
+ */
+function makeRunTaskExecute(mcpUrl, sender, socketPath) {
+  return async function execute(input, { signal } = {}) {
+    if (signal && signal.aborted) throw abortError();
+
+    let taskRunId;
+    let cancelAttempted = false;
+    const cancelOwned = async () => {
+      if (taskRunId === undefined || cancelAttempted) return;
+      cancelAttempted = true;
+      try {
+        await ipcRequest(
+          socketPath,
+          IPC_CANCEL_METHOD,
+          { task_run_id: taskRunId },
+          { timeout: IPC_TIMEOUT_MS },
+        );
+      } catch {
+        // Cancellation cleanup failure must not override the original abort.
+      }
+    };
+
+    // The caller signal is not passed here: an abort during create must not
+    // discard a successfully created task_run_id. The bounded MCP timeout is
+    // preserved via the existing callTool default.
+    const launch = await callTool(mcpUrl, sender, TASK_CANONICAL.run_task, input || {}, {});
+    taskRunId = pick(launch, ['task_run_id', 'task_id', 'taskRunId', 'id']);
+    if (taskRunId === undefined) return canonicalOutput(launch);
+
+    if (signal && signal.aborted) {
+      await cancelOwned();
+      throw abortError();
+    }
+
+    try {
+      const waitPayload = await ipcRequest(
+        socketPath,
+        IPC_WAIT_METHOD,
+        { task_run_id: taskRunId },
+        { timeout: null, signal },
+      );
+      return canonicalOutput(waitPayload);
+    } catch (err) {
+      if (signal && signal.aborted) {
+        await cancelOwned();
+        throw abortError();
+      }
+      throw err;
+    }
+  };
+}
+
+function registerTool(tools, aliasName, canonicalTool, execute) {
+  const definition = {
+    name: aliasName,
+    description: typeof canonicalTool.description === 'string' ? canonicalTool.description : '',
+    parameters: sanitizeSchema(canonicalTool.inputSchema || canonicalTool.schema),
     output: dshOutput(),
-    isConcurrencySafe: () => readonly,
+    isConcurrencySafe: () => true,
     execute,
-  });
+  };
+  if (aliasName !== 'run_task') definition.timeoutMs = DEFAULT_TIMEOUT_MS;
+  tools.register(definition);
 }
 
 export async function apply(ctx) {
   const { tools } = ctx;
-  const warn = (...args) => ctx.logger && ctx.logger.warn(...args);
   if (typeof ctx.on === 'function') ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }));
 
   const mcpUrl = process.env.WRENYARD_MCP_URL || process.env.FOREMAN_MCP_URL || DEFAULT_MCP_URL;
@@ -376,56 +366,20 @@ export async function apply(ctx) {
     throw new Error(`Wrenyard: MCP is unavailable: ${boundedMessage(err)}`);
   }
 
-  const filtered = catalog.filter(
-    (tool) => tool && typeof tool.name === 'string' && !isBlockedTool(tool.name),
+  const byName = new Map(
+    catalog.filter((tool) => tool && typeof tool.name === 'string').map((tool) => [tool.name, tool]),
   );
-  if (filtered.length === 0) {
-    throw new Error('Wrenyard: MCP listed no usable tools');
+
+  const taskList = byName.get(TASK_CANONICAL.list_task);
+  const taskDescribe = byName.get(TASK_CANONICAL.describe_task);
+  const taskRun = byName.get(TASK_CANONICAL.run_task);
+  if (!taskList || !taskDescribe || !taskRun) {
+    throw new Error('Wrenyard: MCP catalog missing required task tool (task_list/task_describe/task_run)');
   }
 
-  const byName = new Map(filtered.map((tool) => [tool.name, tool]));
-
-  for (const tool of filtered) {
-    if (tool.name === 'task_run') continue; // wrapped below
-    registerTool(tools, tool, makeExecute(mcpUrl, sender, tool.name));
-  }
-  if (byName.has('task_run')) {
-    registerTool(tools, byName.get('task_run'), makeTaskRunExecute(mcpUrl, sender));
-  }
-  if (!byName.has('task_wait')) {
-    registerTool(tools, {
-      name: 'task_wait',
-      description:
-        'Wait for a Wrenyard task run until it reaches a terminal status. One call; do not poll.',
-      inputSchema: {
-        type: 'object',
-        properties: { task_run_id: { type: 'string' } },
-        required: ['task_run_id'],
-        additionalProperties: false,
-      },
-    }, makeTaskWaitExecute(mcpUrl, sender));
-  }
-
-  // Owner-only NDJSON IPC: bounded and non-fatal. When reachable it registers
-  // public extras the MCP catalog did not already provide.
-  let ipcAvailable = false;
-  const activeIpcPath = wrenyardIpcPath();
-  try {
-    const health = await ipcRequest(activeIpcPath, 'health.ping', {});
-    ipcAvailable = Boolean(health && health.ok !== false);
-  } catch (err) {
-    warn(`Wrenyard: IPC unavailable (${boundedMessage(err)}); continuing in MCP-only mode`);
-  }
-  if (ipcAvailable) {
-    for (const [toolName, method] of Object.entries(CANONICAL_RPC)) {
-      if (byName.has(toolName)) continue;
-      registerTool(tools, {
-        name: toolName,
-        description: `Wrenyard ${method} (owner NDJSON IPC)`,
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      }, makeIpcExecute(activeIpcPath, method));
-    }
-  }
+  registerTool(tools, 'list_task', taskList, makeExecute(mcpUrl, sender, TASK_CANONICAL.list_task));
+  registerTool(tools, 'describe_task', taskDescribe, makeExecute(mcpUrl, sender, TASK_CANONICAL.describe_task));
+  registerTool(tools, 'run_task', taskRun, makeRunTaskExecute(mcpUrl, sender, wrenyardIpcPath()));
 }
 
 export default { name, inject, apply };

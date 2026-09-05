@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { INVALID_PARAMS, TASK_NOT_FOUND } from '../lib/protocol/errors.mts'
 import { ExecutionEventStore } from '../lib/db/stores/execution-event-store.mts'
+import { getForemanEventBus, resetForemanEventBusForTest } from '../lib/events/event-bus.mts'
 import { registerCoreHandlers } from '../lib/server/handlers/core.mts'
 import { RpcRouter } from '../lib/server/rpc-router.mts'
 import { closeTestDb, initTestDb } from './helpers/test-db.mts'
 import type { ForemanDatabase } from '../lib/db/types.mts'
+import type { ForemanEvent } from '../lib/events/event-types.mts'
 import type { JsonRecord } from '../lib/server/http/shared.mts'
 
 let db: ForemanDatabase
@@ -22,6 +24,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Clear the singleton ForemanEventBus so a leaked wait() sink from a prior
+  // test cannot observe events in a later test.
+  resetForemanEventBusForTest()
   closeTestDb()
 })
 
@@ -476,6 +481,204 @@ describe('task.run.events', () => {
 
     assert.ok(response.error)
     assert.equal(response.error.code, INVALID_PARAMS.code)
+  })
+})
+
+/**
+ * Insert a task row directly, bypassing the execution lifecycle. `executionId`
+ * may be null to model a run that has no backing execution row yet (still
+ * pending on the authoritative task row).
+ */
+function insertTaskRow(
+  taskRunId: string,
+  opts: { status: string; executionId: string | null; output?: string; error?: string | null },
+): void {
+  db.prepare(
+    `INSERT INTO tasks (id, template, project, status, execution_id, output, error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    taskRunId,
+    `template-${taskRunId}`,
+    'test-project',
+    opts.status,
+    opts.executionId,
+    opts.output ?? null,
+    opts.error ?? null,
+    '2026-07-01T00:00:00.000Z',
+    '2026-07-01T01:00:00.000Z',
+  )
+}
+
+function setTaskStatus(taskRunId: string, status: string): void {
+  db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`).run(
+    status,
+    new Date().toISOString(),
+    taskRunId,
+  )
+}
+
+function makeCompletedEvent(taskRunId: string): ForemanEvent {
+  return {
+    id: `evt_${taskRunId}_${Math.random().toString(36).slice(2)}`,
+    kind: 'task.run.completed',
+    source: 'test',
+    severity: 'info',
+    refs: { taskId: taskRunId },
+    occurredAt: new Date().toISOString(),
+  }
+}
+
+async function callRaw(method: string, params: unknown): Promise<unknown> {
+  return router.handleMessage({
+    jsonrpc: '2.0',
+    method,
+    params,
+    id: `test-${method}-${Math.random().toString(36).slice(2)}`,
+  })
+}
+
+describe('task.run.wait', () => {
+  it('resolves immediately for already-terminal rows with full output/error fields', async () => {
+    const terminalStatuses = ['done', 'failed', 'cancelled', 'interrupted']
+    for (const status of terminalStatuses) {
+      const runId = `tr_wait_term_${status}`
+      insertTaskRow(runId, {
+        status,
+        executionId: null,
+        output: status === 'done' ? JSON.stringify({ ok: true }) : '',
+        error: status === 'done' ? null : `boom-${status}`,
+      })
+
+      const response = await callRaw('task.run.wait', { task_run_id: runId }) as {
+        result?: {
+          task_run_id: string
+          task_id: string
+          status: string
+          output: unknown
+          error: unknown
+          usage: { attempt_count: number; usage_event_count: number; completeness: string; reference_cost_complete: boolean }
+        }
+        error?: unknown
+      }
+
+      assert.ok(response.result, `expected immediate result for terminal status ${status}`)
+      assert.equal(response.result!.task_run_id, runId)
+      assert.equal(response.result!.status, status)
+      assert.equal(response.result!.task_id, `template-${runId}`, 'task_id must equal the persisted tasks.template')
+      assert.ok('output' in response.result!, 'output field must be projected')
+      assert.ok('error' in response.result!, 'error field must be projected')
+      const usage = response.result!.usage
+      assert.ok(usage, 'usage field must be projected')
+      assert.equal(usage.attempt_count, 0, 'rows without executions report zero attempts')
+      assert.equal(usage.usage_event_count, 0, 'rows without executions report zero usage events')
+      assert.equal(usage.completeness, 'unavailable', 'rows without executions report unavailable usage')
+      assert.equal(usage.reference_cost_complete, false, 'rows without executions report incomplete reference cost')
+      if (status !== 'done') assert.equal(response.result!.error, `boom-${status}`)
+    }
+  })
+
+  it('waits event-driven (no poll) and settles exactly once even on duplicate events', async () => {
+    const runId = 'tr_wait_evt'
+    // Running row with execution_id NULL: no backing execution row.
+    insertTaskRow(runId, { status: 'running', executionId: null })
+
+    let settleCount = 0
+    const waitPromise = callRaw('task.run.wait', { task_run_id: runId }).then((response) => {
+      settleCount++
+      return response as { result?: { status: string }; error?: unknown }
+    })
+
+    // Let the subscribe + post-subscribe re-read run a tick; row is still running
+    // and no event published, so the waiter must remain pending.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(settleCount, 0, 'waiter must stay pending while running with no event')
+
+    // Terminalize the authoritative task row, then publish a matching event.
+    setTaskStatus(runId, 'done')
+    await getForemanEventBus().publish(makeCompletedEvent(runId))
+
+    const response = await waitPromise
+    assert.equal(settleCount, 1, 'waiter must settle exactly once')
+    assert.ok(response.result, 'waiter must resolve to the authoritative output')
+    assert.equal(response.result!.status, 'done')
+
+    // Re-publish the identical matching event; must not re-settle the promise.
+    await getForemanEventBus().publish(makeCompletedEvent(runId))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(settleCount, 1, 'duplicate matching events must not cause duplicate settlement')
+  })
+
+  it('does not poll: terminal DB without an event stays pending, then an event resolves', async () => {
+    const runId = 'tr_wait_nopol'
+    insertTaskRow(runId, { status: 'running', executionId: null })
+
+    const waitPromise = callRaw('task.run.wait', { task_run_id: runId })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Transition the authoritative row to terminal WITHOUT publishing any event.
+    setTaskStatus(runId, 'failed')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    // A short race proves the promise is still unresolved (no polling).
+    const outcome = await Promise.race([
+      waitPromise.then(() => 'settled' as const),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 25)),
+    ])
+    assert.equal(outcome, 'pending', 'terminal DB without an event must not resolve (no polling)')
+
+    await getForemanEventBus().publish(makeCompletedEvent(runId))
+    const response = await waitPromise as { result?: { status: string }; error?: unknown }
+    assert.ok(response.result, 'publishing the event must resolve the waiter')
+    assert.equal(response.result!.status, 'failed')
+  })
+
+  it('closes the read/subscribe race: terminal transition during subscribe resolves via re-read', async () => {
+    const runId = 'tr_wait_race'
+    insertTaskRow(runId, { status: 'running', executionId: null })
+
+    const bus = getForemanEventBus()
+    const originalSubscribe = bus.subscribe
+    try {
+      // Make the task row terminal between the initial read and the subscribe
+      // taking effect, then let TaskService's post-subscribe re-read observe it.
+      bus.subscribe = function raceSubscribe(sink) {
+        const unsubscribe = originalSubscribe.call(bus, sink)
+        setTaskStatus(runId, 'done')
+        return unsubscribe
+      } as typeof bus.subscribe
+
+      const response = await callRaw('task.run.wait', { task_run_id: runId }) as {
+        result?: { status: string }
+        error?: unknown
+      }
+      assert.ok(response.result, 'post-subscribe re-read must resolve the race')
+      assert.equal(response.result!.status, 'done')
+    } finally {
+      bus.subscribe = originalSubscribe
+    }
+  })
+
+  it('returns a distinct task_wait_timeout control error on an explicit small timeout', async () => {
+    const runId = 'tr_wait_timeout'
+    insertTaskRow(runId, { status: 'running', executionId: null })
+
+    const response = await callRaw('task.run.wait', { task_run_id: runId, timeout_ms: 30 }) as {
+      result?: unknown
+      error?: { code: number; message: string; data?: { code?: string; service?: string } }
+    }
+
+    assert.ok(response.error, 'explicit timeout must be a control error, never a nonterminal success')
+    assert.equal(response.error!.data?.code, 'task_wait_timeout')
+    assert.equal(response.error!.data?.service, 'task')
+  })
+
+  it('returns TASK_NOT_FOUND for an unknown task run', async () => {
+    const response = await callRaw('task.run.wait', { task_run_id: 'tr_wait_unknown' }) as {
+      error?: { code: number; data?: { code?: string } }
+    }
+
+    assert.ok(response.error)
+    assert.equal(response.error!.code, TASK_NOT_FOUND.code)
   })
 })
 

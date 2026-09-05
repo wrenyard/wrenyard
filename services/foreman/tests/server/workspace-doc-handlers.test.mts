@@ -100,18 +100,43 @@ describe('workspace.doc handlers', () => {
 
   it('updates an existing doc file', async () => {
     const { workspace, router } = makeWorkspace()
-    const result = await callHandler(router, 'workspace.doc.update', { path: 'docs/readme.md', content: '# Updated\n' }) as { path: string }
-    assert.equal(result.path, 'docs/readme.md')
     const readResult = await callHandler(router, 'workspace.doc.read', { path: 'docs/readme.md' }) as { content: string }
-    assert.equal(readResult.content, '# Updated\n')
+    const result = await callHandler(router, 'workspace.doc.update', { path: 'docs/readme.md', content: '# Updated\n', expectedContent: readResult.content }) as { path: string }
+    assert.equal(result.path, 'docs/readme.md')
+    const reread = await callHandler(router, 'workspace.doc.read', { path: 'docs/readme.md' }) as { content: string }
+    assert.equal(reread.content, '# Updated\n')
   })
 
   it('rejects update for a non-existing file', async () => {
     const { workspace, router } = makeWorkspace()
     await assert.rejects(
-      () => callHandler(router, 'workspace.doc.update', { path: 'docs/nonexistent.md', content: '# Nope\n' }),
+      () => callHandler(router, 'workspace.doc.update', { path: 'docs/nonexistent.md', content: '# Nope\n', expectedContent: '' }),
       /not found/,
     )
+  })
+
+  it('succeeds update when expectedContent matches original content', async () => {
+    const { workspace, router } = makeWorkspace()
+    const readResult = await callHandler(router, 'workspace.doc.read', { path: 'docs/guide.md' }) as { content: string }
+    assert.equal(readResult.content, '# Guide\n')
+    const result = await callHandler(router, 'workspace.doc.update', { path: 'docs/guide.md', content: '# Edited\n', expectedContent: readResult.content }) as { path: string }
+    assert.equal(result.path, 'docs/guide.md')
+    const reread = await callHandler(router, 'workspace.doc.read', { path: 'docs/guide.md' }) as { content: string }
+    assert.equal(reread.content, '# Edited\n')
+  })
+
+  it('rejects update when expectedContent is stale after external change', async () => {
+    const { workspace, router } = makeWorkspace()
+    const readResult = await callHandler(router, 'workspace.doc.read', { path: 'docs/guide.md' }) as { content: string }
+    // External disk change made outside the CAS token
+    writeFileSync(join(workspace, 'docs', 'guide.md'), '# External change\n', 'utf-8')
+    await assert.rejects(
+      () => callHandler(router, 'workspace.doc.update', { path: 'docs/guide.md', content: '# Lost update\n', expectedContent: readResult.content }),
+      /content conflict/i,
+    )
+    // External content must be preserved, not overwritten
+    const reread = await callHandler(router, 'workspace.doc.read', { path: 'docs/guide.md' }) as { content: string }
+    assert.equal(reread.content, '# External change\n')
   })
 
   it('rejects absolute paths', async () => {

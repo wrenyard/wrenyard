@@ -9,8 +9,11 @@ import type {
   StatsPeriod,
   StatsSnapshot,
   StatsWindowSnapshot,
+  TaskRunSnapshot,
   UpdateChannel,
   UpdateSnapshot,
+  WorkspaceDocContent,
+  WorkspaceDocEntry,
   WrenyardShellApi,
 } from '../shell-contract.js';
 import type {
@@ -54,6 +57,23 @@ const quotaRefreshLabel = requireElement<HTMLElement>('quota-refresh-label');
 const clientsRefreshButton = requireElement<HTMLButtonElement>('clients-refresh-button');
 const clientsRefreshLabel = requireElement<HTMLElement>('clients-refresh-label');
 const clientsContent = requireElement<HTMLElement>('clients-content');
+const docsNav = requireElement<HTMLButtonElement>('docs-nav');
+const docsPage = requireElement<HTMLElement>('docs-page');
+const docsRefreshButton = requireElement<HTMLButtonElement>('docs-refresh-button');
+const docsRefreshLabel = requireElement<HTMLElement>('docs-refresh-label');
+const docsStatus = requireElement<HTMLElement>('docs-status');
+const docsCategorySwitcher = requireElement<HTMLElement>('docs-category-switcher');
+const docsProjectFilter = requireElement<HTMLSelectElement>('docs-project-filter');
+const docsFileList = requireElement<HTMLElement>('docs-file-list');
+const docsCurrentPath = requireElement<HTMLElement>('docs-current-path');
+const docsSaveButton = requireElement<HTMLButtonElement>('docs-save-button');
+const docsEditor = requireElement<HTMLTextAreaElement>('docs-editor');
+const docsConflict = requireElement<HTMLElement>('docs-conflict');
+const docsPreview = requireElement<HTMLElement>('docs-preview');
+const docsUnsavedDialog = requireElement<HTMLElement>('docs-unsaved-dialog');
+const docsUnsavedSave = requireElement<HTMLButtonElement>('docs-unsaved-save');
+const docsUnsavedDiscard = requireElement<HTMLButtonElement>('docs-unsaved-discard');
+const docsUnsavedCancel = requireElement<HTMLButtonElement>('docs-unsaved-cancel');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
 const clientPlanError = requireElement<HTMLElement>('client-plan-error');
@@ -90,6 +110,12 @@ let providerOrderSaving = false;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
 let pendingClientPlan: ClientConfigurationPlanDto | null = null;
+let docsEntries: WorkspaceDocEntry[] = [];
+let docsBaseline: string | null = null;
+let docsSelectedPath: string | null = null;
+let docsDirty = false;
+let docsBusy = false;
+let currentDocsCategory: 'specs' | 'memory' = 'specs';
 const conversationView = new ConversationView(window.wrenyardShell, () => void navigate('settings'));
 
 function requireElement<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -198,7 +224,8 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
 
   const channelLocked = snapshot.state === 'checking'
     || snapshot.state === 'preparing'
-    || snapshot.state === 'restart-required';
+    || snapshot.state === 'waiting'
+    || snapshot.state === 'installing';
   for (const button of Array.from(updateChannelSwitcher.querySelectorAll<HTMLButtonElement>('button[data-update-channel]'))) {
     const selected = button.dataset.updateChannel === snapshot.channel;
     button.classList.toggle('is-selected', selected);
@@ -230,7 +257,7 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
     statusLabel = '有新版本';
     statusClass = 'is-preview';
     description = `发现新版本 v${snapshot.availableVersion ?? '—'}（当前 v${snapshot.currentVersion}），将一次升级整个啾啾工坊套件。`;
-    action = snapshot.installSupported ? '安装更新' : '暂不支持应用内安装';
+    action = snapshot.installSupported ? `安装更新 v${snapshot.availableVersion ?? ''}` : '暂不支持应用内安装';
     primary = snapshot.installSupported;
     disabled ||= !snapshot.installSupported;
   } else if (snapshot.state === 'preparing') {
@@ -238,12 +265,19 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
     description = snapshot.message ?? '正在下载并校验更新…';
     action = '正在准备…';
     disabled = true;
-  } else if (snapshot.state === 'restart-required') {
-    statusLabel = '更新就绪';
+  } else if (snapshot.state === 'waiting') {
+    statusLabel = '等待空闲安装';
+    statusClass = 'is-preview';
+    description = snapshot.message ?? '更新已准备，将在你空闲且保存文档后自动安装；不会丢失你的草稿。';
+    action = '取消更新';
+    primary = false;
+    disabled = updateActionBusy;
+  } else if (snapshot.state === 'installing') {
+    statusLabel = '正在安装';
     statusClass = 'is-connected';
-    description = snapshot.message ?? '更新已就绪，重启啾啾工坊后完成安装。';
-    action = '重启并安装';
-    primary = true;
+    description = snapshot.message ?? '正在安装更新，完成后会自动重启。';
+    action = '正在安装…';
+    disabled = true;
   } else if (snapshot.state === 'install-blocked') {
     statusLabel = '等待任务结束';
     statusClass = 'is-preview';
@@ -276,14 +310,17 @@ async function runUpdateAction(): Promise<void> {
   updateActionBusy = true;
   renderUpdate(currentUpdate);
   try {
-    if (currentUpdate.state === 'restart-required') {
-      await window.wrenyardShell.restartUpdate();
+    // One-click authorization: a waiting update is cancelled; anything else that
+    // can be authorized prepares (staged even while busy) and auto-installs when idle.
+    if (currentUpdate.state === 'waiting') {
+      renderUpdate(await window.wrenyardShell.cancelPendingInstall());
       return;
     }
-    const prepareStates: UpdateSnapshot['state'][] = ['available', 'install-blocked', 'install-failed'];
-    renderUpdate(prepareStates.includes(currentUpdate.state)
-      ? await window.wrenyardShell.prepareUpdate()
-      : await window.wrenyardShell.checkUpdate());
+    if (currentUpdate.state === 'available' || currentUpdate.state === 'install-blocked' || currentUpdate.state === 'install-failed') {
+      renderUpdate(await window.wrenyardShell.requestInstall());
+      return;
+    }
+    renderUpdate(await window.wrenyardShell.checkUpdate());
   } finally {
     updateActionBusy = false;
     if (currentUpdate) renderUpdate(currentUpdate);
@@ -398,6 +435,7 @@ function renderStats(snapshot: StatsSnapshot): void {
   status.className = `status-pill ${available ? 'is-connected' : 'is-unavailable'}`;
   renderDaily(snapshot);
   renderPeriod(snapshot);
+  renderTaskRuns(snapshot);
 }
 
 function renderQuota(snapshot: QuotaSnapshot): void {
@@ -876,6 +914,58 @@ function sourceLabel(source: StatsWindowSnapshot['byTask'][number]['source']): s
   return '未知';
 }
 
+function taskRunStatusLabel(status: TaskRunSnapshot['status'] | undefined): string {
+  if (status === 'done') return '完成';
+  if (status === 'failed') return '失败';
+  if (status === 'cancelled') return '取消';
+  if (status === 'running') return '运行中';
+  return '未知';
+}
+
+function renderTaskRuns(snapshot: StatsSnapshot): void {
+  const list = requireElement('stats-task-runs-list');
+  const runs = snapshot.recentTaskRuns;
+  if (!runs || runs.length === 0) {
+    list.replaceChildren(emptyRow('暂无近期 Task 运行记录'));
+    return;
+  }
+  list.replaceChildren(
+    tableHeader(['Task', '状态', '模型', 'Token', '选择速度', '实测 TPS', '参考费用（估算）', '尝试 / 完整']),
+    ...runs.slice(0, 50).map((run) => {
+      const usage = run.usage;
+      const tokenLabel = usage.totalTokens === undefined
+        ? '未知'
+        : `总量 ${formatCompactTokenCount(usage.totalTokens)}`
+          + (usage.inputTokens !== undefined ? ` · 入 ${formatCompactTokenCount(usage.inputTokens)}` : '')
+          + (usage.outputTokens !== undefined ? ` · 出 ${formatCompactTokenCount(usage.outputTokens)}` : '');
+      const speedLabel = run.speed === undefined
+        ? '未知'
+        : `${run.speed.effectiveTps.toFixed(1)} · ${run.speed.source === 'local_31d' ? '本机 31 天' : run.speed.source === 'catalog_default' ? '目录默认' : '未知来源'}`
+          + (run.speed.expectedTpsMet === false ? '（低于预期）' : run.speed.degradationReason ? '（已降级）' : '');
+      const actualTpsLabel = usage.outputTps === undefined ? '未知' : usage.outputTps.toFixed(2);
+      const costLabel = usage.referenceCostUsd === undefined ? '未知' : `$${usage.referenceCostUsd.toFixed(4)}`;
+      const completenessLabel = usage.completeness === 'complete'
+        ? '完整'
+        : usage.completeness === 'partial'
+          ? '部分'
+          : '未知';
+      const modelLabel = run.resolvedProfile === undefined && run.resolvedModel === undefined
+        ? '未知'
+        : [run.resolvedProfile, run.resolvedModel].filter((value): value is string => value !== undefined).join(' / ');
+      return tableRow([
+        run.taskName ?? run.taskId,
+        taskRunStatusLabel(run.status),
+        modelLabel,
+        tokenLabel,
+        speedLabel,
+        actualTpsLabel,
+        costLabel,
+        `尝试 ${usage.attemptCount} · ${completenessLabel}`,
+      ], `task-run-row${run.status === 'failed' ? ' is-failed' : ''}`);
+    }),
+  );
+}
+
 function emptyRow(label: string): HTMLElement {
   const row = document.createElement('div');
   row.className = 'empty-row';
@@ -900,6 +990,7 @@ function renderPage(page: ShellPage): void {
     ['stats', statsNav, statsPage],
     ['quota', quotaNav, quotaPage],
     ['clients', clientsNav, clientsPage],
+    ['docs', docsNav, docsPage],
     ['settings', settingsNav, settingsPage],
   ];
   for (const [candidate, nav, section] of pages) {
@@ -909,16 +1000,18 @@ function renderPage(page: ShellPage): void {
     if (selected) nav.setAttribute('aria-current', 'page');
     else nav.removeAttribute('aria-current');
   }
-  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '模型供应' : page === 'clients' ? '客户端' : '设置';
+  const pageTitle = page === 'stats' ? '工房台账' : page === 'quota' ? '模型供应' : page === 'clients' ? '客户端' : page === 'docs' ? '文档' : '设置';
   document.title = page === 'workbench' ? '啾啾工坊' : `${pageTitle} — 啾啾工坊`;
 }
 
 async function navigate(page: ShellPage): Promise<void> {
+  if (await mustGuardDocsLeave(page)) return;
   renderPage(page);
   await window.wrenyardShell.navigate(page);
   if (page === 'stats') await refreshStats();
   if (page === 'quota') await refreshQuota(false);
   if (page === 'clients') await refreshClients();
+  if (page === 'docs') await loadDocsList();
   if (page === 'settings') renderSnapshot(await window.wrenyardShell.getSettings());
 }
 
@@ -973,6 +1066,274 @@ async function refreshClients(): Promise<void> {
   }
 }
 
+function docsErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+  return String(error);
+}
+
+function docsCategoryOf(path: string): 'specs' | 'memory' {
+  if (path.startsWith('memories/') || path === 'AGENTS.md') return 'memory';
+  return 'specs';
+}
+
+function docsProjectOf(path: string): string | null {
+  const match = /^projects\/([^/]+)\//u.exec(path);
+  return match ? match[1] : null;
+}
+
+function setDocsStatus(label: string, kind: 'is-connected' | 'is-unavailable' | 'is-pending'): void {
+  docsStatus.textContent = label;
+  docsStatus.className = `status-pill ${kind}`;
+}
+
+function setDocsDirtyState(dirty: boolean): void {
+  if (docsDirty === dirty) return;
+  docsDirty = dirty;
+  docsSaveButton.disabled = !dirty || !docsSelectedPath;
+  void window.wrenyardShell.setDocsDirty(dirty);
+}
+
+function discardDocsDraft(): void {
+  if (docsBaseline !== null) {
+    docsEditor.value = docsBaseline;
+    renderDocsPreview(docsBaseline);
+  }
+  docsConflict.hidden = true;
+  setDocsDirtyState(false);
+  docsSaveButton.disabled = true;
+}
+
+/** Promise-based Save/Discard/Cancel gate shown before losing a dirty docs draft. */
+function showDocsUnsaved(): Promise<'save' | 'discard' | 'cancel'> {
+  return new Promise((resolve) => {
+    const finish = (decision: 'save' | 'discard' | 'cancel'): void => {
+      docsUnsavedDialog.hidden = true;
+      docsUnsavedDialog.setAttribute('aria-hidden', 'true');
+      docsUnsavedSave.removeEventListener('click', onSave);
+      docsUnsavedDiscard.removeEventListener('click', onDiscard);
+      docsUnsavedCancel.removeEventListener('click', onCancel);
+      resolve(decision);
+    };
+    const onSave = (): void => finish('save');
+    const onDiscard = (): void => finish('discard');
+    const onCancel = (): void => finish('cancel');
+    docsUnsavedSave.addEventListener('click', onSave);
+    docsUnsavedDiscard.addEventListener('click', onDiscard);
+    docsUnsavedCancel.addEventListener('click', onCancel);
+    docsUnsavedDialog.hidden = false;
+    docsUnsavedDialog.setAttribute('aria-hidden', 'false');
+    docsUnsavedSave.focus();
+  });
+}
+
+/** Returns true when navigation must be aborted because the user cancelled the unsaved gate. */
+async function mustGuardDocsLeave(target: ShellPage): Promise<boolean> {
+  if (currentPage !== 'docs' || target === 'docs' || !docsDirty) return false;
+  const decision = await showDocsUnsaved();
+  if (decision === 'cancel') return true;
+  if (decision === 'save') {
+    const ok = await saveDocs();
+    if (!ok) return true;
+  } else {
+    discardDocsDraft();
+  }
+  return false;
+}
+
+function renderDocsMarkdown(markdown: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const blocks = markdown.split(/```[\s\S]*?```/g);
+  const fences = markdown.match(/```[\s\S]*?```/g) ?? [];
+  blocks.forEach((block, index) => {
+    if (index > 0) {
+      const fence = fences[index - 1] ?? '';
+      const firstNewline = fence.indexOf('\n');
+      const code = firstNewline === -1 ? fence.slice(3, -3) : fence.slice(firstNewline + 1, -3);
+      const pre = document.createElement('pre');
+      const codeEl = document.createElement('code');
+      codeEl.textContent = code.trimEnd();
+      pre.append(codeEl);
+      fragment.append(pre);
+    }
+    const lines = block.split('\n');
+    let paragraph: HTMLParagraphElement | undefined;
+    let list: HTMLUListElement | HTMLOListElement | undefined;
+    const flush = (): void => { paragraph = undefined; list = undefined; };
+    for (const line of lines) {
+      if (!line.trim()) { flush(); continue; }
+      const rule = /^(?:-{3,}|\*{3,})$/.exec(line);
+      if (rule) { fragment.append(document.createElement('hr')); flush(); continue; }
+      const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+      if (heading) {
+        const h = document.createElement(heading[1].length === 1 ? 'h2' : 'h3');
+        h.textContent = heading[2];
+        fragment.append(h);
+        flush();
+        continue;
+      }
+      const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+      if (bullet) {
+        if (!list || list.tagName !== 'UL') { list = document.createElement('ul'); fragment.append(list); }
+        const item = document.createElement('li');
+        item.textContent = bullet[1];
+        list.append(item);
+        paragraph = undefined;
+        continue;
+      }
+      const numbered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+      if (numbered) {
+        if (!list || list.tagName !== 'OL') { list = document.createElement('ol'); fragment.append(list); }
+        const item = document.createElement('li');
+        item.textContent = numbered[1];
+        list.append(item);
+        paragraph = undefined;
+        continue;
+      }
+      const quote = /^\s*>\s?(.*)$/.exec(line);
+      if (quote) {
+        const bq = document.createElement('blockquote');
+        bq.textContent = quote[1];
+        fragment.append(bq);
+        flush();
+        continue;
+      }
+      if (!paragraph) { paragraph = document.createElement('p'); fragment.append(paragraph); }
+      paragraph.append(document.createTextNode((paragraph.childNodes.length === 0 ? '' : ' ') + line.trim()));
+    }
+  });
+  return fragment;
+}
+
+function renderDocsPreview(markdown: string): void {
+  docsPreview.replaceChildren();
+  if (!markdown.trim()) { docsPreview.append(emptyRow('无内容预览')); return; }
+  docsPreview.append(renderDocsMarkdown(markdown));
+}
+
+function syncDocsProjectOptions(): void {
+  const projects = Array.from(new Set(docsEntries.map((entry) => docsProjectOf(entry.path)).filter((p): p is string => Boolean(p)))).sort();
+  const current = docsProjectFilter.value;
+  const options = [''];
+  options.push(...projects);
+  docsProjectFilter.replaceChildren(...options.map((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value === '' ? '全部项目' : value;
+    return option;
+  }));
+  if (options.includes(current)) docsProjectFilter.value = current;
+}
+
+function renderDocsFileList(): void {
+  const category = currentDocsCategory;
+  const project = docsProjectFilter.value;
+  const items = docsEntries.filter((entry) => {
+    if (docsCategoryOf(entry.path) !== category) return false;
+    if (category === 'specs' && project && docsProjectOf(entry.path) !== project) return false;
+    return true;
+  });
+  docsFileList.replaceChildren();
+  if (items.length === 0) {
+    docsFileList.append(emptyRow(category === 'specs' ? '该类别暂无规范文档' : '该类别暂无记忆文档'));
+    return;
+  }
+  for (const entry of items) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `docs-file-row${entry.path === docsSelectedPath ? ' is-selected' : ''}`;
+    row.setAttribute('role', 'listitem');
+    const name = document.createElement('strong');
+    name.textContent = entry.path.split('/').pop() ?? entry.path;
+    const sub = document.createElement('small');
+    sub.textContent = entry.path;
+    row.append(name, sub);
+    row.addEventListener('click', () => void selectDocsFile(entry.path));
+    docsFileList.append(row);
+  }
+}
+
+async function loadDocsList(): Promise<void> {
+  docsBusy = true;
+  docsRefreshButton.disabled = true;
+  docsRefreshLabel.textContent = '读取中…';
+  setDocsStatus('读取中', 'is-pending');
+  try {
+    docsEntries = await window.wrenyardShell.listDocs();
+  } catch (error) {
+    docsEntries = [];
+    setDocsStatus(`读取失败：${docsErrorMessage(error)}`, 'is-unavailable');
+    return;
+  } finally {
+    docsBusy = false;
+    docsRefreshButton.disabled = false;
+    docsRefreshLabel.textContent = '刷新';
+  }
+  syncDocsProjectOptions();
+  renderDocsFileList();
+}
+
+async function selectDocsFile(path: string): Promise<void> {
+  if (docsDirty && docsSelectedPath && path !== docsSelectedPath) {
+    const decision = await showDocsUnsaved();
+    if (decision === 'cancel') return;
+    if (decision === 'save') {
+      const ok = await saveDocs();
+      if (!ok) return;
+    } else {
+      discardDocsDraft();
+    }
+  }
+  docsSelectedPath = path;
+  docsCurrentPath.textContent = path;
+  docsConflict.hidden = true;
+  setDocsStatus('读取中', 'is-pending');
+  try {
+    const doc: WorkspaceDocContent = await window.wrenyardShell.readDoc(path);
+    docsBaseline = doc.content;
+    docsEditor.value = doc.content;
+    renderDocsPreview(doc.content);
+    setDocsStatus('已载入', 'is-connected');
+  } catch (error) {
+    docsBaseline = null;
+    docsEditor.value = '';
+    renderDocsPreview('');
+    setDocsStatus(`读取失败：${docsErrorMessage(error)}`, 'is-unavailable');
+  }
+  setDocsDirtyState(false);
+  docsSaveButton.disabled = true;
+  renderDocsFileList();
+}
+
+async function saveDocs(): Promise<boolean> {
+  if (!docsSelectedPath || docsBaseline === null) return false;
+  const path = docsSelectedPath;
+  const content = docsEditor.value;
+  const expectedContent = docsBaseline;
+  docsSaveButton.disabled = true;
+  docsConflict.hidden = true;
+  try {
+    await window.wrenyardShell.saveDoc(path, content, expectedContent);
+    docsBaseline = content;
+    setDocsDirtyState(false);
+    docsSaveButton.disabled = true;
+    setDocsStatus('已保存', 'is-connected');
+    return true;
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code === 'content_conflict') {
+      docsConflict.hidden = false;
+      docsConflict.textContent = '文档已被外部修改，保存冲突：请先重新读取该文档，再粘贴你的草稿保存。';
+      setDocsStatus('保存冲突', 'is-unavailable');
+    } else {
+      docsConflict.hidden = false;
+      docsConflict.textContent = `保存失败：${docsErrorMessage(error)}`;
+      setDocsStatus('保存失败', 'is-unavailable');
+    }
+    docsSaveButton.disabled = false;
+    return false;
+  }
+}
+
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
   const models = Array.from(card.querySelectorAll<HTMLInputElement>('input[data-client-model]:checked')).map((input) => input.dataset.clientModel ?? '').filter(Boolean);
   if (models.length === 0) throw new Error('请至少选择一个模型');
@@ -1019,6 +1380,7 @@ workbenchNav.addEventListener('click', () => void navigate('workbench'));
 statsNav.addEventListener('click', () => void navigate('stats'));
 quotaNav.addEventListener('click', () => void navigate('quota'));
 clientsNav.addEventListener('click', () => void navigate('clients'));
+docsNav.addEventListener('click', () => void navigate('docs'));
 settingsNav.addEventListener('click', () => void navigate('settings'));
 refreshButton.addEventListener('click', () => {
   refreshButton.disabled = true;
@@ -1162,19 +1524,46 @@ window.addEventListener('keydown', (event) => {
     closeClientPlan();
     return;
   }
+  if (event.key === 'Escape' && !docsUnsavedDialog.hidden) {
+    event.preventDefault();
+    docsUnsavedCancel.click();
+    return;
+  }
   if (event.key === 'Escape' && currentPage !== 'workbench') {
     event.preventDefault();
     void navigate('workbench');
   }
 });
 
-window.wrenyardShell.onViewChanged((page) => {
+docsRefreshButton.addEventListener('click', () => void loadDocsList());
+docsSaveButton.addEventListener('click', () => void saveDocs());
+docsEditor.addEventListener('input', () => {
+  renderDocsPreview(docsEditor.value);
+  setDocsDirtyState(docsEditor.value !== (docsBaseline ?? '') && docsSelectedPath !== null);
+});
+docsCategorySwitcher.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-docs-category]');
+  if (!button) return;
+  currentDocsCategory = button.dataset.docsCategory === 'memory' ? 'memory' : 'specs';
+  for (const candidate of Array.from(docsCategorySwitcher.querySelectorAll<HTMLButtonElement>('button[data-docs-category]'))) {
+    const selected = candidate === button;
+    candidate.classList.toggle('is-selected', selected);
+    candidate.setAttribute('aria-selected', String(selected));
+  }
+  if (currentDocsCategory === 'memory') docsProjectFilter.value = '';
+  renderDocsFileList();
+});
+docsProjectFilter.addEventListener('change', renderDocsFileList);
+
+window.wrenyardShell.onViewChanged(async (page) => {
   const changed = page !== currentPage;
+  if (await mustGuardDocsLeave(page)) { void navigate('docs'); return; }
   renderPage(page);
   if (!changed) return;
   if (page === 'stats') void refreshStats();
   if (page === 'quota') void refreshQuota(false);
   if (page === 'clients') void refreshClients();
+  if (page === 'docs') void loadDocsList();
   if (page === 'settings') void window.wrenyardShell.getSettings().then(renderSnapshot);
 });
 window.wrenyardShell.onQuotaChanged(() => {

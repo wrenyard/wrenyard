@@ -444,6 +444,107 @@ describe('core task structured-output', () => {
     assert.match(caughtErr.message, /concrete resolved profile/)
   })
 
+  it('maps transient_provider Forge failure class to transport failure category', async () => {
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => ({
+        output: 'partial output',
+        status: 'failed',
+        executionId: 'exec_transient',
+        failureClass: 'transient_provider',
+        error: 'provider unavailable',
+      } as StructuredOutputAgentResult & { executionId: string; failureClass: string; error: string }), { maxResumeAttempts: 0 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.ok(caughtErr instanceof Error)
+    const failed = caughtErr as Error & { failure_category?: string; error_message?: string }
+    assert.equal(failed.failure_category, 'transport',
+      'transient_provider must map to transport, not agent_failed')
+    const payload = JSON.parse(failed.error_message ?? '{}') as Record<string, unknown>
+    assert.equal(payload.type, 'transport')
+    assert.equal(payload.forge_failure_class, 'transient_provider')
+  })
+
+  it('maps profile_specific_limit to runtime_status', async () => {
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => ({
+        output: 'partial output',
+        status: 'failed',
+        executionId: 'exec_profile_limit',
+        failureClass: 'profile_specific_limit',
+        error: 'no eligible profile for cap',
+      } as StructuredOutputAgentResult & { executionId: string; failureClass: string; error: string }), { maxResumeAttempts: 0 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.ok(caughtErr instanceof Error)
+    const failed = caughtErr as Error & { failure_category?: string }
+    assert.equal(failed.failure_category, 'runtime_status')
+  })
+
+  it('maps policy_exhausted to runtime_status', async () => {
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => ({
+        output: 'partial output',
+        status: 'failed',
+        executionId: 'exec_policy_exhausted',
+        failureClass: 'policy_exhausted',
+        error: 'all plans exhausted',
+      } as StructuredOutputAgentResult & { executionId: string; failureClass: string; error: string }), { maxResumeAttempts: 0 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.ok(caughtErr instanceof Error)
+    const failed = caughtErr as Error & { failure_category?: string }
+    assert.equal(failed.failure_category, 'runtime_status')
+  })
+
+  it('maps non_retryable to agent_failed', async () => {
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => ({
+        output: 'partial output',
+        status: 'failed',
+        executionId: 'exec_non_retryable',
+        failureClass: 'non_retryable',
+        error: 'hard agent error',
+      } as StructuredOutputAgentResult & { executionId: string; failureClass: string; error: string }), { maxResumeAttempts: 0 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.ok(caughtErr instanceof Error)
+    const failed = caughtErr as Error & { failure_category?: string }
+    assert.equal(failed.failure_category, 'agent_failed')
+  })
+
+  it('defaults an unknown/missing failure class to agent_failed without collapsing runtime_status', async () => {
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => ({
+        output: 'partial output',
+        status: 'failed',
+        executionId: 'exec_unknown_fc',
+        error: 'mystery failure',
+      } as StructuredOutputAgentResult & { executionId: string; error: string }), { maxResumeAttempts: 0 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.ok(caughtErr instanceof Error)
+    const failed = caughtErr as Error & { failure_category?: string }
+    assert.equal(failed.failure_category, 'agent_failed')
+    const payload = JSON.parse((failed as Error & { error_message?: string }).error_message ?? '{}') as Record<string, unknown>
+    assert.equal(payload.type, 'agent_failed')
+    assert.equal('forge_failure_class' in payload, false)
+  })
+
   it('preserves the first runtime failure for policy without a resolved profile', async () => {
     let calls = 0
     let caughtErr: unknown

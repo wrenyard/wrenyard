@@ -15,6 +15,7 @@ import {
 import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
 import type { DispatchControl } from '../dispatch-control.mts'
+import type { TaskDispatchResolver } from '../../core/task/dispatch-resolver.mts'
 import { appendForemanEvent } from '../../events/event-store.mts'
 
 export interface TaskWorkflowRunnerOptions {
@@ -31,6 +32,9 @@ export interface TaskWorkflowRunnerOptions {
    * continuation of already-accepted execution must not call it.
    */
   admissionControl?: DispatchControl['assertAccepting']
+  /** Daemon-side deterministic task dispatch resolver. Optional only for isolated
+   *  runner construction in tests; constrained production definitions require it. */
+  taskDispatchResolver?: TaskDispatchResolver
 }
 
 export class TaskWorkflowRunner implements TaskWorkflowRunHost {
@@ -39,12 +43,14 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly logger?: SupervisorLogger
   private readonly taskRunner: DaemonTaskRunner
   private readonly admissionControl?: () => void
+  private readonly taskDispatchResolver?: TaskDispatchResolver
 
   constructor(options: TaskWorkflowRunnerOptions) {
     this.db = options.db
     this.agentExecutionHost = options.agentExecutionHost
     this.logger = options.logger
     this.admissionControl = options.admissionControl
+    this.taskDispatchResolver = options.taskDispatchResolver
     this.taskRunner = new DaemonTaskRunner()
   }
 
@@ -71,6 +77,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       connectingId: opts.connectingId,
       taskContext: opts.taskContext,
       primitives: this.agentPrimitives(),
+      taskDispatchResolver: this.taskDispatchResolver,
     }).catch((error: unknown) => {
       const message = errorMessage(error)
       this.log('error', `[foreman] task ${taskRunId} unhandled error: ${message}`, error)

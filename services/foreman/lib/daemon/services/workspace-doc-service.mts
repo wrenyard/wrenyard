@@ -108,7 +108,7 @@ export class WorkspaceDocService {
     return { path: params.path } satisfies WorkspaceDocCreateResult
   }
 
-  async update(params: { path: string; content: string }): Promise<WorkspaceDocUpdateResult> {
+  async update(params: { path: string; content: string; expectedContent: string }): Promise<WorkspaceDocUpdateResult> {
     const safePath = this.resolveSafeDocPath(params.path)
     // Verify every existing parent component is within workspace
     this.validatePathInWorkspace(safePath)
@@ -131,6 +131,15 @@ export class WorkspaceDocService {
       throw new ProtocolError(
         { code: INVALID_PARAMS.code, message: `Symlink escape detected: ${params.path}` },
         { service: 'workspace.doc', code: 'symlink_escape' },
+      )
+    }
+    // Compare-and-swap: the content originally read is the optimistic
+    // concurrency token. Reject stale saves without modifying the file.
+    const currentContent = readFileSync(resolved, 'utf-8')
+    if (currentContent !== params.expectedContent) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `Content conflict: document changed since read for ${params.path}` },
+        { service: 'workspace.doc', code: 'content_conflict' },
       )
     }
     writeFileSync(safePath, params.content, 'utf-8')

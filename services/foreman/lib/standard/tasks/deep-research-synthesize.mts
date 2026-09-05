@@ -1,3 +1,4 @@
+import { ULTRA_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'
 
@@ -16,6 +17,7 @@ const definition = {
     description:
       'Synthesize verified claims into a comprehensive cited research report with confidence scoring',
     agentRuntime: 'forge/ultra',
+    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: inputSchema,

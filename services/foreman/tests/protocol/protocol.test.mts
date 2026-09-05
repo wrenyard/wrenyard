@@ -50,6 +50,7 @@ const expectedMethods = [
   'task.run.list',
   'task.run.status',
   'task.run.output',
+  'task.run.wait',
   'task.run.cancel',
   'task.run.events',
   'project.list',
@@ -556,23 +557,94 @@ describe('lib/protocol JSON-RPC contract', () => {
 
     assert.deepEqual(parseMethodResult('task.run.status', {
       task_run_id: 'task_1234',
+      task_id: 'commit',
       status: 'done',
       has_output: true,
+      usage: { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false },
     }), {
       task_run_id: 'task_1234',
+      task_id: 'commit',
       status: 'done',
       has_output: true,
+      usage: { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false },
     })
+
+    const minimalUsage = { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false }
 
     assert.deepEqual(parseMethodResult('task.run.output', {
       task_run_id: 'task_1234',
+      task_id: 'commit',
       status: 'done',
       output: { result: 'ok' },
+      usage: { ...minimalUsage },
     }), {
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      output: { result: 'ok' },
+      usage: { ...minimalUsage },
+    })
+
+    // task.run.wait shares the exact same enriched OutputResult envelope.
+    assert.deepEqual(parseMethodResult('task.run.wait', {
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      output: { result: 'ok' },
+      usage: { ...minimalUsage },
+    }), {
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      output: { result: 'ok' },
+      usage: { ...minimalUsage },
+    })
+
+    // status / output / wait reject results missing the required task_id or usage.
+    const statusNoTaskId = {
+      task_run_id: 'task_1234',
+      status: 'done',
+      has_output: true,
+      usage: { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false },
+    }
+    const statusNoUsage = {
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      has_output: true,
+    }
+    const outputNoTaskId = {
       task_run_id: 'task_1234',
       status: 'done',
       output: { result: 'ok' },
-    })
+      usage: { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false },
+    }
+    const outputNoUsage = {
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      output: { result: 'ok' },
+    }
+    for (const [method, missingTaskId, missingUsage] of [
+      ['task.run.status', statusNoTaskId, statusNoUsage],
+      ['task.run.output', outputNoTaskId, outputNoUsage],
+      ['task.run.wait', outputNoTaskId, outputNoUsage],
+    ] as const) {
+      assert.throws(
+        () => parseMethodResult(method, missingTaskId),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+      assert.throws(
+        () => parseMethodResult(method, missingUsage),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
 
     assert.deepEqual(parseMethodResult('task.run.cancel', {
       ok: false,

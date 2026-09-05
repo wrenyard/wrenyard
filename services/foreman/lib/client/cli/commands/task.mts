@@ -9,10 +9,8 @@ import {
   parseJsonInput,
   printTaskInputRequiredHint,
   servicePayload,
-  taskFinalStatusPayload,
   taskListRows,
   taskRunIdFromPayload,
-  waitForTaskCompletionViaIpc,
   writeServicePayload,
   workspaceRootForRuntime,
   errorMessage,
@@ -138,9 +136,9 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       return isTaskRunRejectionPayload(accepted.value) ? 1 : 0
     }
 
-    const status = servicePayload(await waitForTaskCompletionViaIpc(client, taskRunId))
-    writeServicePayload(taskFinalStatusPayload(taskRunId, status))
-    return isTaskRunSuccess(status.value) ? 0 : 1
+    const result = servicePayload(await client.task.run.wait({ task_run_id: taskRunId }))
+    writeServicePayload(result)
+    return isTaskRunSuccess(result.value) ? 0 : 1
   } finally {
     client.close()
   }

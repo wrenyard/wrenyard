@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'
 
@@ -17,6 +18,7 @@ const definition = {
     description:
       'Fetch and extract falsifiable claims from web sources, deduplicating URLs across search results',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: inputSchema,

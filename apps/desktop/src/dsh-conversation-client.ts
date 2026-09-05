@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers';
+import { parseTaskRunSnapshot } from './stats-snapshot.js';
 import type {
   ConversationItemSnapshot,
   ConversationModelGroupSnapshot,
@@ -73,6 +74,49 @@ function contentText(content: unknown, type = 'text'): string {
     .map((block) => block.text as string)
     .join('\n\n')
     .trim();
+}
+
+const MAX_TOOL_RESULT_TEXT = 16_000;
+
+/**
+ * Bounded raw text for a DSH tool/result message: the joined text of every
+ * nested `tool-result` block, including text blocks inside each block's
+ * `content`. Capped so escaped terminal payloads stay within renderer limits.
+ */
+function extractToolResultText(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!isObject(block) || block.type !== 'tool-result') continue;
+    const inner = block.content;
+    if (typeof inner === 'string') {
+      if (inner) parts.push(inner);
+    } else if (Array.isArray(inner)) {
+      for (const innerBlock of inner) {
+        if (isObject(innerBlock) && typeof innerBlock.text === 'string' && innerBlock.text) {
+          parts.push(innerBlock.text);
+        }
+      }
+    }
+  }
+  const joined = parts.join('\n\n').trim();
+  return joined.length > MAX_TOOL_RESULT_TEXT ? joined.slice(0, MAX_TOOL_RESULT_TEXT) : joined;
+}
+
+/** Parse a JSON string into a plain object, or undefined when it is not one. */
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Best-effort parse of a tool/call `arguments` string into its object form. */
+function parseToolCallArguments(value: unknown): Record<string, unknown> | undefined {
+  return parseJsonObject(value);
 }
 
 function titleFromSummary(summary: RawSessionSummary): string {
@@ -190,6 +234,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
   const drafts = new Map<string, ConversationItemSnapshot & { order: number }>();
   const finalizedSteps = new Set<string>();
   const tools = new Map<string, ConversationItemSnapshot & { order: number }>();
+  const toolArguments = new Map<string, Record<string, unknown> | undefined>();
   let activeTurnId: string | undefined;
 
   for (const [order, entry] of entries.entries()) {
@@ -275,6 +320,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         order,
       };
       tools.set(callId, item);
+      toolArguments.set(callId, parseToolCallArguments(args));
       items.push(item);
       continue;
     }
@@ -289,6 +335,21 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         const blocks = Array.isArray(message.content) ? message.content : [];
         const failed = blocks.some((block) => isObject(block) && block.isError === true) || isObject(data.error);
         tool.toolState = failed ? 'failed' : 'done';
+        const rawText = extractToolResultText(blocks);
+        if (rawText) tool.toolResultText = rawText;
+        if (tool.toolName === 'run_task') {
+          const resultObject = parseJsonObject(rawText);
+          if (resultObject) {
+            let candidate: Record<string, unknown> = resultObject;
+            if (!asString(candidate.task_id)) {
+              const argTaskId = toolArguments.get(callId);
+              const fallbackTaskId = argTaskId ? asString(argTaskId.task_id) : undefined;
+              if (fallbackTaskId) candidate = { ...candidate, task_id: fallbackTaskId };
+            }
+            const taskRun = parseTaskRunSnapshot(candidate);
+            if (taskRun) tool.taskRun = taskRun;
+          }
+        }
       }
     }
   }

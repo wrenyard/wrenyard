@@ -7,8 +7,10 @@ import { describeTask, discoverTasks, listTasks, resetRegistry } from '../../lib
 import { isGateError } from '../../lib/core/task/failure.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
 import type { AgentResult, ExecutionOptions, TaskExecutionResult } from '../../lib/types.mts'
-import { closeDb, get as dbGet, initDb } from '../../lib/db/connection.mts'
+import { closeDb, get as dbGet, initDb, run as dbRun } from '../../lib/db/connection.mts'
 import { DaemonTaskRunner } from '../../lib/daemon/execution/task-runner.mts'
+import { getForemanEventBus, resetForemanEventBusForTest } from '../../lib/events/event-bus.mts'
+import type { ForemanEvent } from '../../lib/events/event-types.mts'
 
 let tempDirs: string[] = []
 
@@ -46,6 +48,7 @@ afterEach(() => {
   resetRegistry()
   invalidateProjectCache()
   closeDb()
+  resetForemanEventBusForTest()
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
   tempDirs = []
 })
@@ -59,6 +62,17 @@ type TaskRow = {
 
 function readOnlyTaskRow(): TaskRow | undefined {
   return dbGet<TaskRow>('SELECT status, failure_category, error_message FROM tasks ORDER BY created_at LIMIT 1')
+}
+
+function captureTaskRunEvents(taskRunId: string): { events: ForemanEvent[]; stop: () => void } {
+  const events: ForemanEvent[] = []
+  const stop = getForemanEventBus().subscribe({
+    handle(event: ForemanEvent) {
+      const refId = (event.refs as { taskId?: string } | undefined)?.taskId
+      if (refId === taskRunId) events.push(event)
+    },
+  })
+  return { events, stop }
 }
 
 
@@ -83,6 +97,40 @@ ${JSON.stringify(data)}
   }
 
   const mockAgent = async (_profile: string, prompt: string): Promise<AgentResult> => ({ output: textOutput(prompt), status: 'done' })
+
+  it('fails an active task without dispatch requirements before invoking a model', async () => {
+    const workspace = makeTempDir('foreman-v2-dispatch-required-')
+    const projectDir = join(workspace, 'projects', 'app')
+    writeFileSync(join(projectDir, 'missing-dispatch.task.ts'), `export default defineTask({
+  agentRuntime: 'forge/codex-luna',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: () => 'must-not-run',
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+    let modelCalls = 0
+
+    await assert.rejects(
+      executeTask('missing-dispatch', {}, {
+        workspaceRoot: workspace,
+        taskDispatchResolver: {
+          resolve() {
+            throw new Error('resolver must not run without requirements')
+          },
+        },
+        primitives: {
+          agent: async () => {
+            modelCalls += 1
+            return { output: textOutput('unexpected'), status: 'done' }
+          },
+        },
+      }),
+      /must declare explicit dispatch requirements/u,
+    )
+
+    assert.equal(modelCalls, 0)
+  })
 
   it('passes when all pre-gates and post-gates pass', async () => {
     const workspace = makeTempDir('foreman-v2-gate-')
@@ -417,5 +465,180 @@ ${JSON.stringify(data)}
     assert.ok(listed, 'task should appear in listTasks')
     assert.equal(listed?.gates?.pre?.[0].id, 'check-setup')
     assert.equal(listed?.gates?.post?.[0].id, 'validate-output')
+  })
+
+  it('publishes exactly one task.run.failed event with matching refs.taskId', async () => {
+    const workspace = makeTempDir('foreman-v2-gate-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
+  profile: 'test',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: ({ text }) => 'result:' + text,
+  gates: {
+    post: [
+      {
+        id: 'post-fail',
+        run: (ctx) => ({
+          ok: false,
+          expected: 'output matching pattern',
+          actual: String(ctx.output),
+          remediation: 'Try again',
+        }),
+      },
+    ],
+  },
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+
+    const taskId = 'evt_failed'
+    const captured = captureTaskRunEvents(taskId)
+    let caught: any
+    try {
+      await executeTask('gated', { text: 'hello' }, {
+        workspaceRoot: workspace,
+        taskId,
+        primitives: { agent: mockAgent },
+      })
+      assert.fail('expected executeTask to throw')
+    } catch (err) {
+      caught = err
+    }
+    captured.stop()
+
+    assert.ok(isGateError(caught))
+    const finals = captured.events.filter((e) => e.kind === 'task.run.failed')
+    assert.equal(finals.length, 1, 'exactly one terminal task.run.failed event must be published')
+    assert.equal((finals[0].refs as { taskId?: string }).taskId, taskId, 'refs.taskId must equal the task run id')
+  })
+
+  it('publishes exactly one task.run.cancelled event with matching refs.taskId', async () => {
+    const workspace = makeTempDir('foreman-v2-gate-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
+  profile: 'test',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: ({ text }) => 'echo:' + text,
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+
+    const taskId = 'evt_cancelled'
+    const cancelledAgent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+      const error = new Error('task cancelled')
+      ;(error as { failure_category?: string }).failure_category = 'task_cancelled'
+      ;(error as { error_message?: string }).error_message = JSON.stringify({
+        type: 'task_cancelled',
+        task_run_id: taskId,
+        status: 'cancelled',
+      })
+      throw error
+    }
+
+    const captured = captureTaskRunEvents(taskId)
+    let caught: any
+    try {
+      await executeTask('echo', { text: 'hello' }, {
+        workspaceRoot: workspace,
+        taskId,
+        primitives: { agent: cancelledAgent },
+      })
+      assert.fail('expected executeTask to throw')
+    } catch (err) {
+      caught = err
+    }
+    captured.stop()
+
+    assert.ok(caught)
+    const finals = captured.events.filter((e) => e.kind === 'task.run.cancelled')
+    assert.equal(finals.length, 1, 'exactly one terminal task.run.cancelled event must be published')
+    assert.equal((finals[0].refs as { taskId?: string }).taskId, taskId, 'refs.taskId must equal the task run id')
+  })
+
+  it('publishes exactly one task.run.interrupted event with matching refs.taskId', async () => {
+    const workspace = makeTempDir('foreman-v2-gate-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
+  profile: 'test',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: ({ text }) => 'echo:' + text,
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+
+    const taskId = 'evt_interrupted'
+    const interruptedAgent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+      const error = new Error('task interrupted')
+      ;(error as { failure_category?: string }).failure_category = 'task_interrupted'
+      ;(error as { error_message?: string }).error_message = JSON.stringify({
+        type: 'task_interrupted',
+        task_run_id: taskId,
+        status: 'interrupted',
+      })
+      throw error
+    }
+
+    const captured = captureTaskRunEvents(taskId)
+    let caught: any
+    try {
+      await executeTask('echo', { text: 'hello' }, {
+        workspaceRoot: workspace,
+        taskId,
+        primitives: { agent: interruptedAgent },
+      })
+      assert.fail('expected executeTask to throw')
+    } catch (err) {
+      caught = err
+    }
+    captured.stop()
+
+    assert.ok(caught)
+    const finals = captured.events.filter((e) => e.kind === 'task.run.interrupted')
+    assert.equal(finals.length, 1, 'exactly one terminal task.run.interrupted event must be published')
+    assert.equal((finals[0].refs as { taskId?: string }).taskId, taskId, 'refs.taskId must equal the task run id')
+  })
+
+  it('emits no final task lifecycle event on a losing late terminal update', async () => {
+    const workspace = makeTempDir('foreman-v2-gate-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
+  profile: 'test',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: ({ text }) => 'echo:' + text,
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+
+    // Pre-commit the task row as cancelled so a late run attempt loses the
+    // terminal compare-and-set and must emit nothing.
+    const taskId = 'evt_late_cas'
+    const now = new Date().toISOString()
+    dbRun(
+      `INSERT INTO tasks (id, template, project, status, retry_policy, created_at, updated_at)
+       VALUES (?, 'echo', 'app', 'cancelled', 'side-effects', ?, ?)`,
+      taskId,
+      now,
+      now,
+    )
+
+    const captured = captureTaskRunEvents(taskId)
+    const result = await executeTask('echo', { text: 'hello' }, {
+      workspaceRoot: workspace,
+      taskId,
+      primitives: { agent: mockAgent },
+    })
+    captured.stop()
+
+    assert.equal(result.status, 'cancelled', 'late attempt must observe the already-terminal status')
+    const finals = captured.events.filter((e) => e.kind?.startsWith('task.run.'))
+    assert.equal(finals.length, 0, 'a losing late terminal update must emit no task lifecycle event')
   })
 })

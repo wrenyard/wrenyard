@@ -7,7 +7,7 @@ import type {
   ExecutionStatus,
 } from '../types.mts'
 import type { PermissionMode } from '../../../types.mts'
-import type { AgentRuntimePermission } from './types.mts'
+import type { AgentRuntimePermission, TaskDispatchSnapshot } from '../types.mts'
 
 export type AgentStatus = 'done' | 'failed' | 'cancelled'
 
@@ -21,6 +21,13 @@ export interface AgentOpts {
   clientFamily?: ClientFamily
   capabilities?: readonly string[]
   writePaths?: readonly string[]
+  /** Original requested agent runtime, carried separately from the exact
+   *  approved execution profile chosen by the daemon dispatch resolver. */
+  requestedAgentRuntime?: string
+  /** Full per-attempt dispatch snapshot produced by the daemon resolver. */
+  dispatchSnapshot?: import('../types.mts').TaskDispatchSnapshot | null
+  /** Canonical Forge failure class supplied by the resolver. */
+  failureClass?: string | null
 }
 
 export interface AgentResult {
@@ -35,6 +42,12 @@ export interface AgentResult {
   exitCode?: number | null
   killReason?: string | null
   resolvedProfile?: string
+  /** Original requested agent runtime, distinct from the exact execution profile. */
+  requestedAgentRuntime?: string
+  /** Per-attempt dispatch snapshot produced by the daemon resolver. */
+  dispatchSnapshot?: TaskDispatchSnapshot | null
+  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  failureClass?: string | null
 }
 
 let agentExecutionHost: AgentExecutionHost | undefined
@@ -74,6 +87,10 @@ async function runAgentWithHost(
   prompt: string,
   opts: AgentOpts,
 ): Promise<AgentResult> {
+  // The exact execution profile is `profile` (resolved by the daemon dispatch
+  // resolver); the original requested runtime is carried separately so it is
+  // never confused with the approved plan.
+  const requestedAgentRuntime = opts.requestedAgentRuntime ?? profile
   const handle = await host.startExecution({
     taskId: opts.taskId,
     profile,
@@ -83,13 +100,23 @@ async function runAgentWithHost(
     resume: opts.resume,
     timeoutMs: opts.timeoutMs,
     clientFamily: opts.clientFamily,
-    requestedAgentRuntime: profile,
+    requestedAgentRuntime,
     capabilities: opts.capabilities,
     writePaths: opts.writePaths,
+    dispatchSnapshot: opts.dispatchSnapshot ?? null,
+    failureClass: opts.failureClass ?? null,
   })
 
   const result = await handle.wait()
-  return toAgentResult(result, host.getExecution(result.executionId))
+  const base = toAgentResult(result, host.getExecution(result.executionId))
+  return {
+    ...base,
+    // Preserve the original requested runtime and per-attempt dispatch metadata
+    // on every result, independent of the concrete resolved profile.
+    requestedAgentRuntime: base.requestedAgentRuntime ?? requestedAgentRuntime,
+    dispatchSnapshot: opts.dispatchSnapshot ?? null,
+    failureClass: result.failureClass ?? null,
+  }
 }
 
 function normalizePermission(permission: AgentOpts['permission']): AgentRuntimePermission {
@@ -122,6 +149,7 @@ function toAgentResult(result: ExecutionResult, record: ExecutionRecord | undefi
     exitCode: result.exitCode ?? null,
     killReason: result.killReason ?? null,
     resolvedProfile: record?.resolved_profile ?? undefined,
+    requestedAgentRuntime: record?.requested_agent_runtime ?? undefined,
   }
 }
 

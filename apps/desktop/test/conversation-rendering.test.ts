@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  buildTaskRunSummaryLines,
   groupConversationItems,
   isMarkdownHorizontalRule,
   parseMarkdownTable,
   shouldFollowConversationTail,
 } from '../src/renderer/conversation.js';
-import type { ConversationItemSnapshot } from '../src/shell-contract.js';
+import type { ConversationItemSnapshot, TaskRunSnapshot } from '../src/shell-contract.js';
 
 test('Markdown tables are parsed as headers and body rows', () => {
   assert.deepEqual(
@@ -52,4 +53,85 @@ test('conversation follows the tail only on initial/session navigation or while 
   assert.equal(shouldFollowConversationTail({ sessionChanged: true, wasPinned: false }), true);
   assert.equal(shouldFollowConversationTail({ sessionChanged: false, wasPinned: true }), true);
   assert.equal(shouldFollowConversationTail({ sessionChanged: false, wasPinned: false }), false);
+});
+
+function toLineMap(taskRun: TaskRunSnapshot): Record<string, string> {
+  return Object.fromEntries(buildTaskRunSummaryLines(taskRun).map((line) => [line.label, line.value]));
+}
+
+test('run_task terminal summary exposes truthful model, token, TPS, cost and selection speed', () => {
+  const terminal: TaskRunSnapshot = {
+    taskRunId: 'run-1',
+    taskId: 'edit',
+    resolvedProfile: 'kimi',
+    resolvedModel: 'kimi-k2',
+    speed: { effectiveTps: 18.5, source: 'local_31d', sampleCount: 31, expectedTpsMet: true },
+    usage: {
+      completeness: 'complete',
+      attemptCount: 1,
+      usageEventCount: 2,
+      inputTokens: 0,
+      outputTokens: 900,
+      totalTokens: 900,
+      outputTps: 18.75,
+      referenceCostUsd: 0.0123,
+      referenceCostComplete: true,
+    },
+  };
+
+  const map = toLineMap(terminal);
+  assert.equal(map['模型 / 配置'], 'kimi-k2');
+  assert.equal(map['消耗 TOKEN'], '900（输入 0 / 输出 900）');
+  // numeric zero input token is preserved, not hidden as missing
+  assert.ok(map['消耗 TOKEN'].includes('输入 0'));
+  assert.equal(map['实际 TPS'], '18.75');
+  assert.equal(map['参考费用（估算）'], '$0.0123');
+  assert.equal(map['尝试次数'], '1');
+  // selection speed is labeled distinctly from the measured TPS, with its source
+  assert.equal(map['选择速度（估算）'], '18.5（来源：本机 31 天）');
+});
+
+test('run_task summary shows 未知 for missing values and exposes partial/unavailable', () => {
+  const partial: TaskRunSnapshot = {
+    taskRunId: 'run-2',
+    taskId: 'build',
+    usage: {
+      completeness: 'partial',
+      attemptCount: 3,
+      usageEventCount: 1,
+      outputTokens: 120,
+      totalTokens: 220,
+      referenceCostComplete: false,
+    },
+  };
+
+  const map = toLineMap(partial);
+  assert.equal(map['模型 / 配置'], '模型未知');
+  assert.equal(map['消耗 TOKEN'], '220（输入 未知 / 输出 120）');
+  assert.equal(map['实际 TPS'], '未知');
+  assert.equal(map['参考费用（估算）'], '未知');
+  assert.equal(map['成本完整性'], '部分');
+
+  const unavailable: TaskRunSnapshot = {
+    taskRunId: 'run-3',
+    taskId: 'legacy',
+    usage: { completeness: 'unavailable', attemptCount: 1, usageEventCount: 0, referenceCostComplete: false },
+  };
+
+  const uMap = toLineMap(unavailable);
+  assert.equal(uMap['成本完整性'], '不可用');
+  assert.equal(uMap['参考费用（估算）'], '未知');
+});
+
+test('run_task summary labels catalog-default selection speed', () => {
+  const run: TaskRunSnapshot = {
+    taskRunId: 'run-4',
+    taskId: 'edit',
+    speed: { effectiveTps: 7, source: 'catalog_default', sampleCount: null, expectedTpsMet: null },
+    usage: { completeness: 'complete', attemptCount: 1, usageEventCount: 1, referenceCostUsd: 0.5, referenceCostComplete: true },
+  };
+
+  const map = toLineMap(run);
+  assert.equal(map['选择速度（估算）'], '7（来源：目录默认）');
+  assert.equal(map['参考费用（估算）'], '$0.5000');
 });

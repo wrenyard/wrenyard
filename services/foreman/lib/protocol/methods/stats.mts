@@ -1,4 +1,10 @@
 import type { JsonSchema } from '../jsonrpc.mts'
+import {
+  taskResolvedDispatchSchema,
+  taskUsageSchema,
+  type TaskResolvedDispatch,
+  type TaskUsage,
+} from '../task-run-metadata.mts'
 
 export interface StatsTodayParams {}
 
@@ -119,6 +125,18 @@ export interface StatsWindowSummary {
   taskStats: StatsWindowTaskStats
 }
 
+export interface TaskRunLedgerRow {
+  task_run_id: string
+  task: string
+  source: 'builtin' | 'project' | 'unknown'
+  status: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  resolved?: TaskResolvedDispatch
+  usage: TaskUsage
+}
+
 export interface StatsSummaryResult {
   source: 'sqlite'
   today: StatsTodayItem
@@ -128,6 +146,7 @@ export interface StatsSummaryResult {
   totalTaskDurationMs?: number
   byTaskDuration?: Array<{ taskName: string; durationMs: number }>
   windows?: StatsWindowSummary[]
+  recentRuns?: TaskRunLedgerRow[]
 }
 
 export const MAX_STATS_SUMMARY_DAYS = 366
@@ -295,6 +314,25 @@ export const statsSummaryResultSchema = {
       minItems: 3,
       maxItems: 3,
       items: statsWindowSummarySchema,
+    },
+    recentRuns: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['task_run_id', 'task', 'source', 'status', 'created_at', 'usage'],
+        properties: {
+          task_run_id: { type: 'string' },
+          task: { type: 'string' },
+          source: { enum: ['builtin', 'project', 'unknown'] },
+          status: { type: 'string' },
+          created_at: { type: 'string' },
+          started_at: { type: 'string' },
+          finished_at: { type: 'string' },
+          resolved: taskResolvedDispatchSchema,
+          usage: taskUsageSchema,
+        },
+        additionalProperties: true,
+      },
     },
   },
   additionalProperties: true,

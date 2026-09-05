@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WrenyardIpcClient, resolveWrenyardIpcPath, type WrenyardGatewayConnection } from '@wrenyard/control-client';
+import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { DesktopPetRuntime, QuotaService } from '@wrenyard/pet/runtime';
 import { startDshWeb } from './dsh-process.js';
 import { DshConversationClient } from './dsh-conversation-client.js';
@@ -24,7 +24,7 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type WorkspaceDocContent, type WorkspaceDocEntry, type WorkspaceDocSaveResult } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
@@ -339,6 +339,12 @@ let updateController: DesktopUpdateController | null = null;
 let quitting = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
+let docsDirty = false;
+
+/** Whether the renderer currently holds an unsaved docs draft (no persistence, no file writes). */
+function getDocsDirty(): boolean {
+  return docsDirty;
+}
 
 function showDesktop(page: ShellPage = 'workbench'): void {
   if (!shellWindow || shellWindow.window.isDestroyed()) {
@@ -358,85 +364,52 @@ function showUpdateMessage(options: MessageBoxOptions) {
     : dialog.showMessageBox(options);
 }
 
-async function promptForPreparedUpdate(version: string): Promise<void> {
-  const decision = await showUpdateMessage({
-    type: 'info',
-    title: '软件更新',
-    message: `啾啾工坊 v${version} 已准备好`,
-    detail: '重启后将原子替换啾啾工坊与 Wrenyard suite；失败时会自动恢复当前版本。',
-    buttons: ['重启并安装', '稍后'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (decision.response !== 0 || !updateController) return;
-  if (await updateController.launchPreparedUpdate()) {
-    setImmediate(() => app.quit());
-    return;
-  }
-  const failed = updateController.snapshot();
-  await showUpdateMessage({
-    type: 'error',
-    title: '软件更新',
-    message: '暂时无法开始安装',
-    detail: failed.message ?? '更新仍已保留，可稍后重试。',
-    buttons: ['好'],
-    noLink: true,
-  });
-}
-
-async function checkForUpdatesFromMenu(): Promise<void> {
+async function requestInstallFromMenu(): Promise<void> {
   if (!updateController || updateDialogActive) return;
   updateDialogActive = true;
   try {
     const snapshot = await updateController.check(true);
-    if (snapshot.state === 'restart-required' && snapshot.availableVersion) {
-      await promptForPreparedUpdate(snapshot.availableVersion);
-      return;
-    }
-    if (snapshot.state === 'available' && snapshot.availableVersion) {
-      const decision = await showUpdateMessage({
-        type: 'info',
-        title: '软件更新',
-        message: `啾啾工坊 v${snapshot.availableVersion} 可用`,
-        detail: `当前版本为 v${snapshot.currentVersion}。下载完成后，你可以选择何时重启安装。`,
-        buttons: ['下载更新', '稍后'],
-        defaultId: 0,
-        cancelId: 1,
-        noLink: true,
-      });
-      if (decision.response !== 0) return;
-      const prepared = await updateController.prepareUpdate();
-      if (prepared.state === 'restart-required' && prepared.availableVersion) {
-        await promptForPreparedUpdate(prepared.availableVersion);
-        return;
-      }
+    const actionable = snapshot.state === 'available'
+      || snapshot.state === 'waiting'
+      || snapshot.state === 'install-blocked'
+      || snapshot.state === 'install-failed';
+    if (!actionable) {
+      const message = snapshot.state === 'stable-unavailable'
+        ? '正式版尚未发布'
+        : snapshot.state === 'up-to-date'
+          ? '啾啾工坊已是最新版本'
+          : '暂时无法检查更新';
       await showUpdateMessage({
-        type: 'error',
+        type: snapshot.state === 'check-failed' ? 'error' : 'info',
         title: '软件更新',
-        message: '更新未能准备完成',
-        detail: prepared.message ?? '当前版本未受影响，请稍后重试。',
+        message,
+        detail: snapshot.message ?? `当前版本为 v${snapshot.currentVersion}。`,
         buttons: ['好'],
         noLink: true,
       });
       return;
     }
-    const message = snapshot.state === 'stable-unavailable'
-      ? '正式版尚未发布'
-      : snapshot.state === 'up-to-date'
-        ? '啾啾工坊已是最新版本'
-        : '暂时无法检查更新';
-    await showUpdateMessage({
-      type: snapshot.state === 'check-failed' ? 'error' : 'info',
-      title: '软件更新',
-      message,
-      detail: snapshot.message ?? `当前版本为 v${snapshot.currentVersion}。`,
-      buttons: ['好'],
-      noLink: true,
-    });
+    // One click authorizes the whole remaining flow: prepare (staged even while
+    // busy), then automatically install once idle and no unsaved docs remain.
+    await updateController.requestInstall(() => setImmediate(() => app.quit()));
   } finally {
     updateDialogActive = false;
   }
+}
+
+/**
+ * Desktop exposes only the documentation subset that the spec allows editing:
+ * docs/specs/**, projects/<qualified>/docs/specs/**, memories/*.md, and the root
+ * AGENTS.md. Every read/save path is validated against exactly these prefixes;
+ * the backend's generic workspace.doc.* surface is never reached for other paths.
+ */
+function isDocsAllowedPath(rawPath: string): boolean {
+  const path = rawPath.replace(/\\/g, '/');
+  if (path === 'AGENTS.md') return true;
+  if (/^memories\/[^/]+\.md$/u.test(path)) return true;
+  if (/^docs\/specs(\/[^/]+)*\/[^/]+\.md$/u.test(path)) return true;
+  if (/^projects\/[^/]+\/(?:[^/]+\/)*docs\/specs(\/[^/]+)*\/[^/]+\.md$/u.test(path)) return true;
+  return false;
 }
 
 async function bootstrap(): Promise<void> {
@@ -447,6 +420,39 @@ async function bootstrap(): Promise<void> {
   });
   const ipcPath = resolveWrenyardIpcPath();
   const workspaceConfiguration = await inspectProductWorkspace();
+
+  const requestForeman = async (method: string, params: unknown): Promise<unknown> => {
+    const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: FOREMAN_HEALTH_TIMEOUT_MS });
+    try {
+      return await client.request(method, params);
+    } finally {
+      await client.close?.();
+    }
+  };
+  const listWorkspaceDocs = async (): Promise<WorkspaceDocEntry[]> => {
+    const result = await requestForeman('workspace.doc.list', {}) as { files?: WorkspaceDocEntry[] };
+    return (result.files ?? []).filter((entry) => isDocsAllowedPath(entry.path));
+  };
+  const readWorkspaceDoc = async (path: string): Promise<WorkspaceDocContent> => {
+    if (!isDocsAllowedPath(path)) throw new Error('文档路径不在允许范围内');
+    return (await requestForeman('workspace.doc.read', { path })) as WorkspaceDocContent;
+  };
+  const saveWorkspaceDoc = async (path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult> => {
+    if (!isDocsAllowedPath(path)) throw new Error('文档路径不在允许范围内');
+    try {
+      return (await requestForeman('workspace.doc.update', { path, content, expectedContent })) as WorkspaceDocSaveResult;
+    } catch (error) {
+      if (error instanceof WrenyardRpcError) {
+        const code = (error.data as { code?: string } | undefined)?.code;
+        if (code === 'content_conflict') {
+          const conflict = new Error('文档已被外部修改，保存冲突');
+          (conflict as { code?: string }).code = 'content_conflict';
+          throw conflict;
+        }
+      }
+      throw error;
+    }
+  };
 
   await assertForemanHealthy().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] Wrenyard service is unavailable; Desktop settings remain accessible:', error);
@@ -478,9 +484,10 @@ async function bootstrap(): Promise<void> {
     helperRuntimePath: wrenyardNode,
     desktopPath: installedDesktopPath(),
     userDataPath: app.getPath('userData'),
+    onInstall: () => setImmediate(() => app.quit()),
     isBusy: async () => {
       const conversationBusy = conversationController?.snapshot().sessions.some((item) => item.running) === true;
-      return conversationBusy || await wrenyardIsBusy(wrenyardCli);
+      return conversationBusy || docsDirty || await wrenyardIsBusy(wrenyardCli);
     },
     onChanged: () => shellWindow?.notifyUpdateChanged(),
   });
@@ -559,10 +566,8 @@ async function bootstrap(): Promise<void> {
     getUpdate: async () => updateController!.snapshot(),
     checkUpdate: () => updateController!.check(true),
     setUpdateChannel: (channel) => updateController!.setChannel(channel),
-    prepareUpdate: () => updateController!.prepareUpdate(),
-    restartUpdate: async () => {
-      if (await updateController!.launchPreparedUpdate()) setImmediate(() => app.quit());
-    },
+    requestInstall: (onInstall) => updateController!.requestInstall(onInstall),
+    cancelPendingInstall: async () => updateController!.cancelPendingInstall(),
     savePetSettings: async (settings: PetCompanionSettings) => {
       // Provider order has one mutation surface: the Provider page. A stale
       // settings draft must never overwrite that order when Pet settings save.
@@ -585,10 +590,18 @@ async function bootstrap(): Promise<void> {
     selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
+    listDocs: () => listWorkspaceDocs(),
+    readDoc: (path: string) => readWorkspaceDoc(path),
+    saveDoc: (path: string, content: string, expectedContent: string) => saveWorkspaceDoc(path, content, expectedContent),
+    setDocsDirty: async (dirty: boolean) => {
+      const previous = docsDirty;
+      docsDirty = dirty;
+      if (previous && !dirty) updateController?.wake();
+    },
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
-    () => { void checkForUpdatesFromMenu(); },
+    () => { void requestInstallFromMenu(); },
   )));
   if (!SMOKE) updateController.start();
 

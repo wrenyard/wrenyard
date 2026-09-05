@@ -80,6 +80,38 @@ export function synthesizeAgentRuntime(profile: string): AgentRuntime {
   return freezeAgentRuntime('forge', profile.trim())
 }
 
+/**
+ * Resolve the Forge policy tier of an `agentRuntime` string, or `null` when it
+ * names an exact (non-policy) profile. The daemon resolver uses this to tell a
+ * soft policy *preference* (fast/general/ultra) apart from an exact profile
+ * identity that can be matched against a concrete dispatch plan. This is a
+ * read-only classification helper only — it adds no implicit policy routing.
+ */
+export function preferredRuntimeTier(raw: string): 'fast' | 'general' | 'ultra' | null {
+  try {
+    const parsed = parseAgentRuntime(raw)
+    if (parsed.isPolicy && FORGE_POLICY_IDS.has(parsed.configId)) {
+      return parsed.configId as 'fast' | 'general' | 'ultra'
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when `raw` parses to an exact (non-policy) profile identity rather than a
+ * Forge policy preference. Lets the resolver know whether a preference can be
+ * matched directly to a plan profile.
+ */
+export function isExactProfilePreference(raw: string): boolean {
+  try {
+    return !parseAgentRuntime(raw).isPolicy
+  } catch {
+    return false
+  }
+}
+
 export class AgentRuntimeParseError extends Error {
   constructor(message: string) {
     super(message)

@@ -1,3 +1,4 @@
+import { ULTRA_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { FunctionalUnitSchema } from '../../core/task/schemas/functional-unit.mts'
 import { FeaturePointSchema } from '../../core/task/schemas/feature-point.mts'
@@ -29,6 +30,7 @@ const definition = {
     description:
       'Architect - map one confirmed FunctionalUnit to executable ImplementationUnits with edit instructions and local verification',
     agentRuntime: 'forge/ultra',
+    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [editOperationUnits],
     input: inputSchema,

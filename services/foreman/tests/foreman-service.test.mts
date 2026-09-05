@@ -211,7 +211,8 @@ test('service IPC task run can target a managed worktree', async () => {
   writeFileSync(
     join(projectDir, 'echo.task.ts'),
     `export default defineTask({
-  profile: 'test-profile',
+  agentRuntime: 'forge/codex-luna',
+  dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ cwd: foremanSchemas.z.string() }).strict(),

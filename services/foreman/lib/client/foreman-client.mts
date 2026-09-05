@@ -88,8 +88,8 @@ import type {
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
-  /** Per-request deadline override for long-lived calls such as taskgraph.wait. */
-  timeoutMs?: number
+  /** Per-request deadline override in ms, or null to disable the client timer. */
+  timeoutMs?: number | null
 }
 
 export interface ForemanClientRpc {
@@ -128,6 +128,15 @@ function normalizeWaitTimeout(value: number | undefined): number {
     return Math.min(Math.floor(value), WAIT_REQUEST_MAX_TIMEOUT_MS)
   }
   return WAIT_REQUEST_DEFAULT_TIMEOUT_MS
+}
+
+/** Params for the event-driven `task.run.wait` RPC. Mirrors the shared server
+ * contract: await one task run until it reaches a terminal status and return
+ * the full TaskRunOutputResult. */
+export interface TaskRunWaitParams {
+  task_run_id: string
+  /** Optional server-side bounded wait ceiling in milliseconds. */
+  timeout_ms?: number
 }
 
 export class ForemanClient {
@@ -224,6 +233,21 @@ export class ForemanClient {
       },
       events: (params: TaskRunEventsParams): Promise<TaskRunEventsResult> => {
         return this.rpc.request<TaskRunEventsResult>('task.run.events', params)
+      },
+      wait: (params: TaskRunWaitParams): Promise<TaskRunOutputResult> => {
+        // When the caller omits a server timeout, pass timeoutMs:null so a
+        // legitimate long task has no transport deadline (it crosses the
+        // normal 30s/10min RPC boundaries). When explicit, set the transport
+        // deadline to the server timeout plus the margin so it is never
+        // truncated, and preserve the server timeout param unchanged.
+        const options = params.timeout_ms === undefined
+          ? { timeoutMs: null }
+          : { timeoutMs: params.timeout_ms + WAIT_REQUEST_TIMEOUT_MARGIN_MS }
+        return this.rpc.request<TaskRunOutputResult>(
+          'task.run.wait',
+          params,
+          options,
+        )
       },
     },
   }

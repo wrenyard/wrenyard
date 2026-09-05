@@ -6,7 +6,7 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
 } from '../../task-timeouts.mts'
-import { GateFailureError } from './failure.mts'
+import { GateFailureError, mapForgeFailureClass } from './failure.mts'
 import {
   DELIVERY_END,
   DELIVERY_START,
@@ -81,6 +81,12 @@ export interface StructuredOutputOptions {
   beforeAttempt?: () => void | Promise<void>
   capabilities?: readonly string[]
   writePaths?: readonly string[]
+  /** Original requested agent runtime, carried separately from the exact
+   *  approved forge profile passed as `profile`. */
+  requestedAgentRuntime?: string
+  /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded
+   *  unchanged on the initial attempt and on every structured retry. */
+  dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -93,6 +99,10 @@ export interface StructuredOutputAgentOptions {
   taskId?: string
   capabilities?: readonly string[]
   writePaths?: readonly string[]
+  /** Original requested agent runtime, carried separately from the exact approved forge profile passed as `profile`. */
+  requestedAgentRuntime?: string
+  /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded unchanged on every structured retry. */
+  dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
 }
 
 export interface StructuredOutputAgentResult {
@@ -105,6 +115,8 @@ export interface StructuredOutputAgentResult {
   exitCode?: number | null
   killReason?: string | null
   resolvedProfile?: string
+  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  failureClass?: string | null
 }
 
 export type StructuredOutputAgent = (
@@ -135,20 +147,22 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       : resumePrompt(attempt, schema, lastValidationErrors)
     const attemptTimeoutMs = attempt === 0 ? timeoutMs : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
     await opts.beforeAttempt?.()
-    const terminal = await runStructuredAttempt(
-      opts.runAgent,
-      attemptProfile,
-      attemptPrompt,
-      {
-        workingDirectory: opts.workingDirectory,
-        timeoutMs: attemptTimeoutMs,
-        resume,
-        permission: opts.permission,
-        taskId: opts.taskId,
-        capabilities: opts.capabilities,
-        writePaths: opts.writePaths,
-      },
-    )
+      const terminal = await runStructuredAttempt(
+        opts.runAgent,
+        attemptProfile,
+        attemptPrompt,
+        {
+          workingDirectory: opts.workingDirectory,
+          timeoutMs: attemptTimeoutMs,
+          resume,
+          permission: opts.permission,
+          taskId: opts.taskId,
+          capabilities: opts.capabilities,
+          writePaths: opts.writePaths,
+          requestedAgentRuntime: opts.requestedAgentRuntime,
+          dispatchSnapshot: opts.dispatchSnapshot,
+        },
+      )
     lastExecutionId = terminal.executionId ?? lastExecutionId
     resume = terminal.nativeSessionId ?? resume
     if (terminal.resolvedProfile) {
@@ -176,6 +190,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,
+        terminal.failureClass,
       )
     }
 
@@ -230,6 +245,7 @@ interface StructuredExecutionTerminal {
   error?: string | null
   nativeSessionId?: string
   resolvedProfile?: string
+  failureClass?: string | null
 }
 
 async function runStructuredAttempt(
@@ -246,6 +262,7 @@ async function runStructuredAttempt(
     error: result.error,
     nativeSessionId: result.nativeSessionId,
     resolvedProfile: result.resolvedProfile,
+    failureClass: result.failureClass ?? null,
   }
 }
 
@@ -271,15 +288,22 @@ function agentStoppedError(
 function agentFailedError(
   executionId: string,
   detail?: string | null,
+  failureClass?: string | null,
 ): Error & { failure_category: string; error_message: string } {
+  // Map a canonical Forge FailureClass onto a stable task failure category so a
+  // profile/policy exhaustion is reported as runtime_status/transport rather
+  // than collapsed into the generic agent_failed bucket. Missing/unknown class
+  // defaults to agent_failed.
+  const category = mapForgeFailureClass(failureClass) ?? 'agent_failed'
   return Object.assign(
     new Error(`Agent execution failed: ${executionId}`),
     {
-      failure_category: 'agent_failed',
+      failure_category: category,
       error_message: JSON.stringify({
-        type: 'agent_failed',
+        type: category,
         execution_id: executionId,
         status: 'failed',
+        ...(failureClass ? { forge_failure_class: failureClass } : {}),
         ...(detail ? { detail: detail.slice(0, 2000) } : {}),
       }),
     },

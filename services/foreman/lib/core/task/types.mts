@@ -17,6 +17,26 @@ export interface TaskCapabilityConfig {
   select?(input: unknown): readonly string[]
 }
 
+/**
+ * TaskDispatchRequirements is the single source of truth (SSOT) for a task's
+ * hard dispatch constraints. It is owned by `@wrenyard/catalog` and re-exported
+ * here so the task domain shares exactly one definition with the daemon-side
+ * resolver and with list/describe surfaces. Do NOT redefine it locally — the
+ * catalog shape (expectedTps, minimumTps, ordered closed intelligence tiers
+ * {minimum,maximum}, maximumOutputUsdPerMillion, per-axis model/client/provider/
+ * profile exclusions, and required model capabilities) is authoritative.
+ *
+ * The `dispatch` field on `TaskConfig` is exactly this contract. A task's
+ * concrete `agentRuntime` profile is an exact pin that must satisfy these
+ * requirements; the legacy fast/general/ultra selectors open the constrained
+ * candidate pool. Machine overlays are only soft preferences that can never
+ * relax or bypass a requirement. Required
+ * model capabilities live in the dispatch requirements themselves — distinct
+ * from the Forge capability packs declared on `TaskConfig.capabilities`.
+ */
+import type { TaskDispatchRequirements } from '@wrenyard/catalog'
+export type { TaskDispatchRequirements }
+
 export interface TaskConfig {
   /** Scheduling lifecycle for this definition. `legacy` definitions remain
    *  resolvable so persisted runs can recover, but are omitted from task lists
@@ -32,9 +52,15 @@ export interface TaskConfig {
     id: string
     displayLabel: string
   }
-  /** Preferred runtime selector: '<runtime>/<config-id>' (e.g. 'forge/codex-luna').
-   *  When absent the legacy `profile` field is used as 'forge/<profile>'. */
+  /** Declared runtime selector: '<runtime>/<config-id>' (e.g. 'forge/codex-luna').
+   *  Concrete profiles are hard pins; fast/general/ultra select dynamically
+   *  within `dispatch`. When absent, the legacy `profile` field is synthesized. */
   agentRuntime?: string
+  /** Explicit hard dispatch requirements (catalog SSOT). Concrete profile pins
+   *  must satisfy these; policy selectors and machine preferences can never
+   *  bypass them. Required model capabilities are part of this
+   *  contract, distinct from Forge capability packs. */
+  dispatch?: TaskDispatchRequirements
   /** Declared Forge capability packs this task can select.
    *  Capabilities are mounted when the task runs; absent means no capability
    *  gate. Generic — does not know about specific capability names. */

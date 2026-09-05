@@ -1,5 +1,6 @@
 import { get as dbGet, query as dbQuery } from '../db/connection.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
+import { readTaskRunMetadata } from '../core/task/run-metadata.mts'
 import type {
   StatsTodayItem,
   ProfileRankingItem,
@@ -12,6 +13,7 @@ import type {
   StatsWindowTaskStats,
   TaskWindowRow,
 } from '../protocol/methods/stats.mts'
+import type { TaskResolvedDispatch, TaskUsage } from '../protocol/task-run-metadata.mts'
 
 export type JsonRecord = Record<string, unknown>
 
@@ -50,6 +52,25 @@ export interface DailyStatsResponse {
   totalTokens: number
   source: 'sqlite'
 }
+
+export interface TaskRunLedgerRow {
+  task_run_id: string
+  task: string
+  source: 'builtin' | 'project' | 'unknown'
+  status: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  resolved?: TaskResolvedDispatch
+  usage: TaskUsage
+}
+
+/**
+ * Conservative upper bound on the additive recent-run ledger so the stats
+ * summary keeps exposing individual runs for Desktop without ever scanning an
+ * unbounded number of task rows.
+ */
+const RECENT_RUNS_CAP = 25
 
 export function readTodayStats(now = new Date()): DailyStatsResponse {
   const window = localDayWindow(now)
@@ -323,7 +344,54 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
     totalTaskDurationMs,
     byTaskDuration,
     windows,
+    recentRuns: readRecentTaskRunLedger(Math.min(limit, RECENT_RUNS_CAP)),
   }
+}
+
+/**
+ * Bounded recent per-run ledger for the stats summary. Reuses the shared
+ * run-metadata helper so each row's resolved dispatch and exact TaskUsage are
+ * projected by the canonical DB-backed projection rather than recomputed here.
+ * Ordering follows the existing indexed task recency (ended_at then created_at)
+ * and the result is capped by RECENT_RUNS_CAP.
+ */
+function readRecentTaskRunLedger(recentLimit: number): TaskRunLedgerRow[] {
+  const rows = dbQuery<{
+    id: string
+    template: string | null
+    project: string | null
+    status: string
+    created_at: string
+    ended_at: string | null
+    definition_source: string | null
+    started_at: string | null
+  }>(
+    `SELECT t.id AS id, t.template AS template, t.project AS project, t.status AS status,
+            t.created_at AS created_at, t.ended_at AS ended_at, t.definition_source AS definition_source,
+            ex.started_at AS started_at
+     FROM tasks t
+     LEFT JOIN (SELECT task_id, MIN(started_at) AS started_at FROM executions GROUP BY task_id) ex
+       ON ex.task_id = t.id
+     ORDER BY COALESCE(t.ended_at, t.created_at) DESC, t.created_at DESC
+     LIMIT ?`,
+    recentLimit,
+  )
+
+  return rows.map((row) => {
+    const meta = readTaskRunMetadata(row.id)
+    const ledger: TaskRunLedgerRow = {
+      task_run_id: row.id,
+      task: normalizeTaskName(row.template),
+      source: taskSourceOf(row.definition_source),
+      status: row.status,
+      created_at: row.created_at,
+      usage: meta.usage,
+    }
+    if (row.started_at) ledger.started_at = row.started_at
+    if (row.ended_at) ledger.finished_at = row.ended_at
+    if (meta.resolved) ledger.resolved = meta.resolved
+    return ledger
+  })
 }
 
 function localDayWindow(now: Date): { dayKey: string; startAt: string; endAt: string } {
@@ -625,4 +693,60 @@ function rankTaskDuration(durationByTask: Map<string, number>, limit: number): A
       return a.taskName.localeCompare(b.taskName)
     })
     .slice(0, limit)
+}
+
+export interface TrustedSpeedSample {
+  /** Resolved profile the samples were observed under. */
+  resolvedProfile: string
+  /** Number of valid trusted `agent_turn_v1` usage samples (NOT dispatch count). */
+  sampleCount: number
+  /** Average turns-per-second over the trusted usage samples. */
+  tps: number
+  /** ISO timestamp of the latest real trusted sample; never synthesized. */
+  checkedAt: string
+}
+
+/**
+ * Rolling 31-day trusted `agent_turn_v1` speed samples grouped by resolved
+ * profile. Only `turn_usage` events whose exact three-field contract is
+ * `agent_turn_v1` (reusing `parseAgentTurnUsage`) count as samples; plain
+ * `dispatch` events and legacy/unversioned usage are excluded, so `sampleCount`
+ * is the count of valid usage samples rather than dispatches. `checkedAt` is the
+ * latest real sample timestamp, never fabricated. Existing stats (recentRuns,
+ * windows, rankings) are untouched.
+ */
+export function readTrustedSpeedSamples31d(now = new Date()): TrustedSpeedSample[] {
+  const window = localDayWindow(now)
+  const startIso = localDayOffsetStartIso(now, -(31 - 1))
+  const endIso = window.endAt
+  const rows = dbQuery<StatsEventRow>(
+    `SELECT e.type, e.data, e.created_at, ex.resolved_profile
+     FROM events e INDEXED BY idx_event_created_at
+     LEFT JOIN executions ex ON e.execution_id = ex.id
+     WHERE e.type = 'turn_usage'
+       AND e.created_at >= ? AND e.created_at < ?`,
+    startIso,
+    endIso,
+  )
+  const byProfile = new Map<string, { samples: number; outputTokens: number; durationMs: number; latestAt: string }>()
+  for (const row of rows) {
+    const data = parseJsonValue(row.data)
+    if (!data || typeof data !== 'object' || Array.isArray(data)) continue
+    const usage = parseAgentTurnUsage(data as JsonRecord)
+    if (!usage) continue
+    const profile = normalizeResolvedProfile(row.resolved_profile)
+    if (!profile) continue
+    const g = byProfile.get(profile) ?? { samples: 0, outputTokens: 0, durationMs: 0, latestAt: '' }
+    g.samples++
+    g.outputTokens += usage.outputTokens
+    g.durationMs += usage.durationMs
+    if (row.created_at > g.latestAt) g.latestAt = row.created_at
+    byProfile.set(profile, g)
+  }
+  return [...byProfile.entries()].map(([resolvedProfile, g]) => ({
+    resolvedProfile,
+    sampleCount: g.samples,
+    tps: g.durationMs > 0 ? (1000 * g.outputTokens) / g.durationMs : 0,
+    checkedAt: g.latestAt,
+  }))
 }

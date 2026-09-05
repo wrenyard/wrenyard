@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   FunctionalUnitSetSchema,
@@ -18,6 +19,7 @@ const definition = {
   config: {
     description: 'Review FunctionalUnitSet contract completeness and implementation-batch readiness before user confirmation',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: inputSchema,

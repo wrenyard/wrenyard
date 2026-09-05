@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { FeaturePointSetSchema } from '../../core/task/schemas/feature-point.mts'
 import { FunctionalUnitSetSchema } from '../../core/task/schemas/functional-unit.mts'
@@ -23,6 +24,7 @@ const definition = {
   config: {
     description: 'Break down a design-complete FeaturePointSet into implementation-ready FunctionalUnit contracts',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],
     input: InputSchema,

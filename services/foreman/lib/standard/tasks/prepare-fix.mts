@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { ChangeSchema } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -71,6 +72,7 @@ const definition = {
     description:
       'Analyze failed verification evidence and produce precise edit instructions only when the failure is credible and code repair is required.',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: PrepareFixInputSchema,

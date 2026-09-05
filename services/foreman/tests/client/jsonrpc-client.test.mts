@@ -159,6 +159,27 @@ describe('JsonRpcClient', () => {
     assert.equal(client.pendingCount, 0)
   })
 
+  it('request() honors timeoutMs:null and stays pending past the default boundary', async () => {
+    const transport = new FakeTransport()
+    const client = new JsonRpcClient({
+      transport,
+      timeoutMs: 10,
+      idFactory: () => 'no-deadline',
+    })
+
+    const promise = client.request('task.run.wait', {}, { timeoutMs: null })
+    assert.equal(client.pendingCount, 1)
+
+    // The client's short default boundary (10ms) elapses without a timer
+    // rejecting the request because timeoutMs:null disables the client timer.
+    await delay(25)
+    assert.equal(client.pendingCount, 1)
+
+    client.handleIncoming(encodeFrame(createSuccessResponse('no-deadline', { ok: true })))
+    assert.deepEqual(await promise, { ok: true })
+    assert.equal(client.pendingCount, 0)
+  })
+
   it('close() rejects pending requests and clears state', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({

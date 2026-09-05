@@ -364,6 +364,19 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       throw error
     }
   })
+  router.register('task.run.wait', async (params, _message, context) => {
+    // Pass through TaskService.wait: it resolves only on the authoritative task
+    // terminal and never returns a nonterminal TaskRunOutputResult. Explicit
+    // timeout/abort/service failures surface as TaskServiceError control errors
+    // (re-thrown by serviceJsonResult) rather than being normalized into success.
+    // If the transport exposes a disconnect/abort signal it is forwarded below.
+    const signal = context && typeof context === 'object' && 'signal' in context
+      ? (context as { signal?: AbortSignal }).signal
+      : undefined
+    return serviceJsonResult<TaskRunOutputResult>(() =>
+      taskService.wait(params.task_run_id, params.timeout_ms, signal),
+    )
+  })
   router.register('task.run.events', async (params) => {
     return serviceJsonResult<TaskRunEventsResult>(
       () => taskService.taskRunEvents({

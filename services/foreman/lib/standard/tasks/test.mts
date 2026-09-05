@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import type { TaskCapabilityConfig } from '../../core/task/types.mts'
 import {
@@ -169,6 +170,7 @@ const definition = {
     description:
       'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via capability packs.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     capabilities: testCapabilityConfig,
     instructions: [shellUsage],

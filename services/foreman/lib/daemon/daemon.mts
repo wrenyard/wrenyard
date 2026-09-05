@@ -33,6 +33,8 @@ import { MessageService, type ExternalDeliveryPort } from '../message/message-se
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
 import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinRuntimeDispatchPlans } from '@wrenyard/providers'
+import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
+import { readTrustedSpeedSamples31d } from '../events/stats-query.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { ClientConfigurationService } from '../client-configuration/service.mts'
@@ -59,6 +61,9 @@ export interface RunningForemanDaemon {
   ipcPath: string
   ipcServer: IpcServer
   gateway: ModelGateway
+  /** Deterministic daemon-side task dispatch resolver. Supplies exact constrained
+   *  plans to the execution kernel; it performs no service lifecycle mutation. */
+  taskDispatchResolver: TaskDispatchResolver
   stop(): Promise<void>
 }
 
@@ -265,9 +270,11 @@ async function startForemanDaemonWithRuntime(
   let boundPort = config.service.port
   const stateRoot = foremanStateRoot()
   const gatewayToken = await loadOrCreateGatewayCredential(join(stateRoot, 'gateway', 'credential'))
-  const catalog = createBuiltinCatalog()
-  const providerRuntime = createBuiltinProviderRuntime()
-  const dispatchPlans = await resolveBuiltinRuntimeDispatchPlans(catalog, providerRuntime)
+  // Catalog / provider runtime / builtin dispatch plans / deterministic resolver
+  // are constructed once in bootstrap (see bootstrapForemanDaemonRuntime) and
+  // reused here so the gateway, client configuration, RPC surface, and the
+  // running daemon all share the identical resolver instance.
+  const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -550,6 +557,7 @@ async function startForemanDaemonWithRuntime(
     httpServer,
     ipcPath,
     ipcServer: runningIpcServer,
+    taskDispatchResolver,
     stop: async () => {
       if (stopped) return
       stopped = true
@@ -726,11 +734,36 @@ interface ForemanDaemonRuntime {
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
   dispatchControl: DispatchControl
+  catalog: import('@wrenyard/catalog').Catalog
+  providerRuntime: import('@wrenyard/providers').ProviderRuntime
+  dispatchPlans: Readonly<Record<string, import('@wrenyard/catalog').DispatchPlan>>
+  taskDispatchResolver: TaskDispatchResolver
 }
 
 async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): Promise<ForemanDaemonRuntime> {
   const db = initDb(process.env.FOREMAN_DB_PATH)
   retainDaemonDb()
+
+  // Catalog + provider runtime are the single source of truth for the daemon.
+  // Builtin exact dispatch plans and the deterministic resolver are derived here
+  // (not in the runtime bootstrap) so the runner is wired with a fully
+  // constructed resolver, and the gateway/RPC surfaces reuse the same instances.
+  const catalog = createBuiltinCatalog()
+  const providerRuntime = createBuiltinProviderRuntime()
+  const dispatchPlans = await resolveBuiltinRuntimeDispatchPlans(catalog, providerRuntime)
+  const taskDispatchResolver = await createTaskDispatchResolver({
+    catalog,
+    runtime: providerRuntime,
+    // Lazy per-profile trusted local agent_turn_v1 speed evidence. The stats
+    // query reports samples keyed by `forge/<profile>`; the resolver's
+    // LocalSpeedSample expects a bare profileId, so strip the prefix here.
+    localSpeed: () => readTrustedSpeedSamples31d().map((sample) => ({
+      profileId: sample.resolvedProfile.replace(/^forge\//u, ''),
+      tps: sample.tps,
+      sampleCount: sample.sampleCount,
+      checkedAt: sample.checkedAt,
+    })),
+  })
 
   try {
     new WorkflowRunStore(db).markAllNonTerminalCancelled(new Date().toISOString())
@@ -745,12 +778,13 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
       agentExecutionHost: supervisor,
       logger: createDaemonSupervisorLogger(),
       admissionControl: () => dispatchControl.assertAccepting(),
+      taskDispatchResolver,
     })
     await supervisor.markInterruptedOnStartup()
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, dispatchControl }
+    return { db, repoWriteLocks, supervisor, runner, dispatchControl, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error

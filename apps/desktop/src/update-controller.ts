@@ -25,6 +25,7 @@ const DEFAULT_REPOSITORY = 'wrenyard/wrenyard';
 const CHECK_DELAY_MS = 5_000;
 const CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 const CHECK_TIMEOUT_MS = 10_000;
+const CHECK_IDLE_RETRY_MS = 60_000;
 const MAC_APP_NAME = '啾啾工坊.app';
 const WINDOWS_APP_DIR = 'Wrenyard Desktop';
 const WINDOWS_EXE_NAME = 'wrenyard-desktop.exe';
@@ -80,7 +81,7 @@ type CommandRunner = (
   options?: SpawnOptions,
 ) => Promise<CommandResult>;
 
-interface PreparedUpdate {
+export interface PreparedUpdate {
   candidate: UpdateCandidate;
   stagedDesktop: string;
   cleanupRoots: string[];
@@ -113,6 +114,8 @@ export interface DesktopUpdateControllerOptions {
   commandRunner?: CommandRunner;
   isBusy?: () => Promise<boolean>;
   onChanged?: (snapshot: UpdateSnapshot) => void;
+  onInstall?: () => void;
+  prepareCandidate?: (candidate: UpdateCandidate) => Promise<PreparedUpdate>;
   now?: () => number;
   homePath?: string;
   spawnDetached?: (command: string, args: string[], options: SpawnOptions) => void;
@@ -328,6 +331,12 @@ export class DesktopUpdateController {
   private readonly homePath: string;
   private readonly spawnDetached: (command: string, args: string[], options: SpawnOptions) => void;
   private readonly scheduler: UpdateScheduler;
+  private readonly prepareCandidate: (candidate: UpdateCandidate) => Promise<PreparedUpdate>;
+  private readonly onInstall: () => void;
+  private installIntent = false;
+  private installing = false;
+  private launched = false;
+  private pendingTimer?: unknown;
   private readonly target: string | null;
   private readonly resultPath: string;
   private snapshotValue: UpdateSnapshot;
@@ -356,6 +365,8 @@ export class DesktopUpdateController {
     this.homePath = options.homePath ?? homedir();
     this.spawnDetached = options.spawnDetached ?? defaultSpawnDetached;
     this.scheduler = options.scheduler ?? defaultUpdateScheduler;
+    this.prepareCandidate = options.prepareCandidate ?? this.prepareDesktop.bind(this);
+    this.onInstall = options.onInstall ?? (() => undefined);
     this.target = releaseTarget(this.platform, this.arch);
     const localAppData = process.env.LOCALAPPDATA ?? join(this.homePath, 'AppData', 'Local');
     this.desktopPath = options.desktopPath ?? (this.platform === 'win32'
@@ -388,6 +399,10 @@ export class DesktopUpdateController {
   }
 
   stop(): void {
+    this.clearPendingTimer();
+    this.installIntent = false;
+    this.launched = false;
+    this.installing = false;
     if (this.delayTimer) this.scheduler.clearTimeout(this.delayTimer);
     if (this.intervalTimer) this.scheduler.clearInterval(this.intervalTimer);
     this.delayTimer = undefined;
@@ -395,11 +410,14 @@ export class DesktopUpdateController {
   }
 
   async setChannel(channel: UpdateChannel): Promise<UpdateSnapshot> {
-    if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'restart-required') {
+    if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'waiting' || this.snapshotValue.state === 'installing') {
       return this.snapshot();
     }
     this.settings.saveUpdateChannel(channel);
     this.candidate = undefined;
+    this.installIntent = false;
+    this.launched = false;
+    this.clearPendingTimer();
     this.cleanupPrepared();
     this.setSnapshot({
       channel,
@@ -421,7 +439,8 @@ export class DesktopUpdateController {
   }
 
   private async performCheck(manual: boolean): Promise<UpdateSnapshot> {
-    if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'restart-required') {
+    if (this.installIntent && this.prepared) return this.snapshot();
+    if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'waiting' || this.snapshotValue.state === 'installing') {
       return this.snapshot();
     }
     const previous = this.snapshot();
@@ -501,8 +520,23 @@ export class DesktopUpdateController {
     return releases;
   }
 
-  async prepareUpdate(): Promise<UpdateSnapshot> {
+  async requestInstall(onInstall?: () => void): Promise<UpdateSnapshot> {
+    this.installIntent = true;
+    this.clearPendingTimer();
+    return this.advanceInstall(onInstall ?? this.onInstall);
+  }
+
+  /**
+   * Drives a single authorized install: download+verify+stage (once, even while
+   * busy), then install only once the runtime is genuinely idle and no unsaved
+   * docs remain. Busy/dirty never blocks preparation or interrupts work; it only
+   * defers the launch into a distinct waiting-for-idle state.
+   */
+  private async advanceInstall(onInstall: () => void): Promise<UpdateSnapshot> {
+    if (!this.installIntent || this.launched) return this.snapshot();
     if (!this.snapshotValue.installSupported) {
+      this.installIntent = false;
+      this.cleanupPrepared();
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'install-failed',
@@ -510,46 +544,107 @@ export class DesktopUpdateController {
       });
       return this.snapshot();
     }
+    if (!this.prepared) {
+      if (!this.candidate) await this.check(true);
+      if (!this.candidate) {
+        this.installIntent = false;
+        return this.snapshot();
+      }
+      this.setSnapshot({
+        ...this.snapshotValue,
+        state: 'preparing',
+        message: '正在下载并校验更新…',
+      });
+      try {
+        this.prepared = await this.prepareCandidate(this.candidate);
+      } catch {
+        this.installIntent = false;
+        this.cleanupPrepared();
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'install-failed',
+          message: '更新下载或校验未完成，当前版本未受影响。',
+        });
+        return this.snapshot();
+      }
+    }
     if (await this.isBusy()) {
       this.setSnapshot({
         ...this.snapshotValue,
-        state: 'install-blocked',
-        message: '当前仍有任务运行，请完成或停止后再安装更新。',
-      });
-      return this.snapshot();
-    }
-    if (this.prepared) {
-      this.setSnapshot({
-        ...this.snapshotValue,
-        state: 'restart-required',
+        state: 'waiting',
         availableVersion: this.prepared.candidate.version,
-        message: '更新已就绪，重启啾啾工坊后完成安装。',
+        message: '更新已准备，将在你空闲且保存文档后自动安装。',
       });
+      this.scheduleIdleCheck();
       return this.snapshot();
     }
-    if (!this.candidate) return this.check(true);
-    this.setSnapshot({
-      ...this.snapshotValue,
-      state: 'preparing',
-      message: '正在下载并校验更新…',
-    });
+    if (this.installing) return this.snapshot();
+    this.installing = true;
+    this.clearPendingTimer();
     try {
-      this.prepared = await this.prepareDesktop(this.candidate);
-      this.setSnapshot({
-        ...this.snapshotValue,
-        state: 'restart-required',
-        availableVersion: this.candidate.version,
-        message: '更新已就绪，重启啾啾工坊后完成安装。',
-      });
-    } catch {
-      this.cleanupPrepared();
-      this.setSnapshot({
-        ...this.snapshotValue,
-        state: 'install-failed',
-        message: '更新下载或校验未完成，当前版本未受影响。',
-      });
+      const launched = await this.launchPreparedUpdate();
+      if (launched) {
+        this.launched = true;
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'installing',
+          availableVersion: this.prepared.candidate.version,
+          message: '正在安装更新，完成后会自动重启。',
+        });
+        this.clearPendingTimer();
+        onInstall();
+      } else if (await this.isBusy()) {
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'waiting',
+          availableVersion: this.prepared.candidate.version,
+          message: '更新已准备，将在你空闲且保存文档后自动安装。',
+        });
+        this.scheduleIdleCheck();
+      } else {
+        this.installIntent = false;
+      }
+    } finally {
+      this.installing = false;
     }
     return this.snapshot();
+  }
+
+  cancelPendingInstall(): UpdateSnapshot {
+    this.installIntent = false;
+    this.launched = false;
+    this.installing = false;
+    this.clearPendingTimer();
+    const version = this.prepared?.candidate.version;
+    this.setSnapshot({
+      ...this.snapshotValue,
+      state: version ? 'available' : (this.candidate ? 'available' : this.snapshotValue.state),
+      ...(version ? { availableVersion: version } : {}),
+    });
+    return this.snapshot();
+  }
+
+  /** Triggered by main when docsDirty flips to false or the runtime becomes idle. */
+  wake(): void {
+    if (!this.installIntent || this.launched) return;
+    if (this.snapshotValue.state === 'waiting' || this.snapshotValue.state === 'install-blocked') {
+      void this.advanceInstall(this.onInstall);
+    }
+  }
+
+  private scheduleIdleCheck(): void {
+    this.clearPendingTimer();
+    this.pendingTimer = this.scheduler.setTimeout(() => {
+      this.pendingTimer = undefined;
+      void this.advanceInstall(this.onInstall);
+    }, CHECK_IDLE_RETRY_MS);
+  }
+
+  private clearPendingTimer(): void {
+    if (this.pendingTimer) {
+      this.scheduler.clearTimeout(this.pendingTimer);
+      this.pendingTimer = undefined;
+    }
   }
 
   async launchPreparedUpdate(): Promise<boolean> {

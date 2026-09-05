@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   ConstraintSchema,
@@ -148,6 +149,7 @@ const definition: TaskDefinition = {
     description:
       'Problem-driven read-only exploration. Investigates targets against a goal and questions, pooling evidences and findings, and answers each question as answered/unanswered/blocked.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],
     input: ExploreInputSchema,

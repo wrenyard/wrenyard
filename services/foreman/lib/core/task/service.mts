@@ -1,4 +1,5 @@
 import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
+import { getForemanEventBus } from '../../events/event-bus.mts'
 import { ProjectManager } from '../project/manager.mts'
 import { discoverProjects } from '../project/loader.mts'
 import type { OperationHost, TaskWorkflowRunHost } from '../operations/types.mts'
@@ -9,6 +10,7 @@ import {
 import { ForemanWorkspace } from '../../workspace/workspace.mts'
 import { validateAnyJsonValue } from '../../workspace/schema-loader.mts'
 import type { ListedDefinition } from '../../workspace/definition-registry.mts'
+import { readTaskRunMetadata } from './run-metadata.mts'
 import {
   TaskContextError,
   splitTaskInputContext,
@@ -18,6 +20,8 @@ import {
 type JsonRecord = Record<string, unknown>
 
 type TaskRunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+
+const TERMINAL_STATUSES = new Set<TaskRunStatus>(['done', 'failed', 'cancelled', 'interrupted'])
 
 interface DbTaskEventRow {
   id: number
@@ -370,16 +374,129 @@ export class TaskService {
 
     const output = row.output ?? row.execution_output ?? ''
     const parsedOutput = row.status === 'done' ? parseJsonValue(output) : undefined
+    const metadata = readTaskRunMetadata(row.id)
     return {
       task_run_id: row.id,
+      task_id: row.template,
       status: row.status,
       ...(row.summary ? { summary: row.summary } : {}),
       output: parsedOutput === undefined ? output : parsedOutput,
       error: row.error ?? row.execution_error ?? null,
       ...taskFailureFields(row),
+      ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
+      usage: metadata.usage,
       ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
       _meta: taskRowMeta(row),
     }
+  }
+
+  /**
+   * Wait for one existing task run, resolving only to the authoritative complete
+   * TaskRunOutputResult used by output(). The completion authority is the
+   * persisted Task row status, decided by an authoritative re-read of the
+   * correlated task_run_id row after a matching Foreman event is observed (never
+   * the underlying execution terminal, and never a guessed terminal before the
+   * persisted row reflects it). Resolves immediately for an already-terminal run
+   * and rejects immediately when the signal is already aborted. Otherwise it
+   * subscribes a single sink to the global ForemanEventBus; the sink ignores all
+   * events except those whose refs.taskRunId or refs.taskId equal this
+   * task_run_id, and on a match re-reads the authoritative task row to decide
+   * terminal from a re-read (so a transition is never missed and a nonterminal
+   * result is never returned). An immediate re-read after subscribe closes the
+   * read/subscribe race. timeout_ms, when supplied and positive, is an explicit
+   * deadline that expires into a distinct task_wait_timeout control error; its
+   * absence means wait for the actual terminal with no implicit cap. finish runs
+   * exactly once on terminal, timeout, or abort. No DB writes and no polling
+   * occur; the task lifecycle is unaffected.
+   */
+  async wait(
+    taskRunId: string,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<JsonRecord> {
+    const row = readTaskStatusRow(taskRunId)
+    if (!row) {
+      throw new TaskServiceError('task_not_found', `Task run '${taskRunId}' not found`, 404)
+    }
+    if (TERMINAL_STATUSES.has(row.status)) {
+      return this.output(taskRunId) as JsonRecord
+    }
+    if (signal?.aborted) {
+      throw new TaskServiceError(
+        'task_wait_aborted',
+        `Wait for task run '${taskRunId}' was aborted`,
+        499,
+        { task_run_id: taskRunId, waited_ms: 0 },
+      )
+    }
+
+    const startedAt = Date.now()
+    let settled = false
+    let unsubscribe: () => void = () => {}
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    let abortListener: (() => void) | undefined
+
+    const finish = (action: () => void): void => {
+      if (settled) return
+      settled = true
+      unsubscribe()
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
+      if (abortListener && signal) signal.removeEventListener('abort', abortListener)
+      action()
+    }
+
+    return new Promise<JsonRecord>((resolve, reject) => {
+      const checkTerminal = (): void => {
+        const current = readTaskStatusRow(taskRunId)
+        if (!current) {
+          finish(() => reject(
+            new TaskServiceError('task_not_found', `Task run '${taskRunId}' not found`, 404),
+          ))
+          return
+        }
+        if (TERMINAL_STATUSES.has(current.status)) {
+          finish(() => resolve(this.output(taskRunId) as JsonRecord))
+        }
+      }
+
+      unsubscribe = getForemanEventBus().subscribe({
+        handle(event) {
+          if (event.refs.taskRunId === taskRunId || event.refs.taskId === taskRunId) {
+            checkTerminal()
+          }
+        },
+      })
+
+      if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutHandle = setTimeout(() => {
+          const current = readTaskStatusRow(taskRunId)
+          finish(() => reject(new TaskServiceError(
+            'task_wait_timeout',
+            `Timed out after ${timeoutMs}ms waiting for task run '${taskRunId}' to reach a terminal state`,
+            408,
+            {
+              task_run_id: taskRunId,
+              waited_ms: Date.now() - startedAt,
+              status: current?.status,
+            },
+          )))
+        }, timeoutMs)
+      }
+
+      abortListener = () => {
+        finish(() => reject(new TaskServiceError(
+          'task_wait_aborted',
+          `Wait for task run '${taskRunId}' was aborted`,
+          499,
+          { task_run_id: taskRunId, waited_ms: Date.now() - startedAt },
+        )))
+      }
+      if (signal) signal.addEventListener('abort', abortListener)
+
+      // Close the read/subscribe race: re-read now so a terminal transition
+      // that landed between the initial read and the subscription is observed.
+      checkTerminal()
+    })
   }
 
   private normalizeTaskInput(input: unknown): unknown {
@@ -473,14 +590,18 @@ function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {
 
 function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
   const output = row.output ?? row.execution_output
+  const metadata = readTaskRunMetadata(row.id)
   return {
     task_run_id: row.id,
+    task_id: row.template,
     status: row.status,
     ...(row.worktree ? { worktree: row.worktree } : {}),
     ...(row.summary ? { summary: row.summary } : {}),
     error: row.error ?? row.execution_error ?? null,
     ...taskFailureFields(row),
     has_output: output !== null && output !== undefined && output !== '',
+    ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
+    usage: metadata.usage,
     ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
     _meta: taskRowMeta(row),
   }

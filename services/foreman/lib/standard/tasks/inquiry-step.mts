@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { InquiryStepResultSchema } from '../../core/task/schemas/inquiry.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -15,6 +16,7 @@ const definition = {
   config: {
     description: 'Reusable inquiry step: ask one question, request optional targeted exploration, converge, or block',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: InputSchema,

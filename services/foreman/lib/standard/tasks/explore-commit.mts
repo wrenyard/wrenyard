@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { GitCommitTargetSchema } from '../../core/task/targets/git-commit.mts'
 import {
@@ -68,6 +69,7 @@ const definition: TaskDefinition = {
     description:
       'Read recent git commits and identify change trends and active development areas. Read-only git history analysis.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     capabilities: commitCapabilityConfig,
     instructions: [shellUsage],

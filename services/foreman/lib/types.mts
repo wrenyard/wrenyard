@@ -13,6 +13,13 @@ export interface AgentOpts {
   capabilities?: readonly string[]
   /** Canonical exact file paths used only for Foreman's edit-lock admission. */
   writePaths?: readonly string[]
+  /** Original requested agent runtime carried separately from the exact
+   *  execution profile chosen by the daemon dispatch resolver. */
+  requestedAgentRuntime?: string
+  /** Per-attempt dispatch snapshot produced by the daemon resolver. */
+  dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
+  /** Canonical Forge failure class, when classified by the runtime. */
+  failureClass?: import('./core/task/failure.mts').ForgeFailureClass | string | null
 }
 
 export interface AgentResult {
@@ -23,6 +30,12 @@ export interface AgentResult {
    *  Set when run_started.profile is detected; undefined for initial runs,
    *  legacy unmigrated executions, and non-Forge runtimes. */
   resolvedProfile?: string
+  /** Original requested agent runtime, distinct from the exact execution profile. */
+  requestedAgentRuntime?: string
+  /** Per-attempt dispatch snapshot produced by the daemon resolver. */
+  dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
+  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  failureClass?: import('./core/task/failure.mts').ForgeFailureClass | string | null
 }
 
 export interface ShellOpts {
@@ -82,6 +95,10 @@ export interface ExecutionOptions {
   connectingId?: string
   /** Bounded JSON-safe context inherited from a direct run or TaskGraph. */
   taskContext?: import('./core/task/context.mts').TaskContext
+  /** Daemon-side deterministic task dispatch resolver. Optional only for isolated
+   *  legacy tests; constrained production definitions require it to resolve an
+   *  exact approved plan before the first agent attempt. */
+  taskDispatchResolver?: import('./core/task/dispatch-resolver.mts').TaskDispatchResolver
 }
 
 // ── Task-domain types re-export shim ─────────────────────────────────
@@ -103,6 +120,7 @@ import type {
   TaskConfig,
   TaskDefinition,
 } from './core/task/types.mts'
+import type { TaskDispatchResolver } from './core/task/dispatch-resolver.mts'
 import type { ForemanSchemas } from './core/task/schemas/index.mts'
 import type { ForemanInstructions } from './standard/instructions/index.mts'
 
@@ -114,6 +132,7 @@ export type {
   TaskExecutionResult,
   TaskRunResult,
   TaskListEntry,
+  TaskDispatchRequirements,
   GatePass,
   GateFail,
   GateContext,

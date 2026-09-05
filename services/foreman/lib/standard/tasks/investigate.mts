@@ -1,3 +1,4 @@
+import { ULTRA_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   TargetSchema,
@@ -103,6 +104,7 @@ const definition = {
     description:
       'Mini systematic debugging investigation. Read-only in behavior, but yolo permission allows repro commands and tests; outputs root cause plus edit/test schemas.',
     agentRuntime: 'forge/ultra',
+    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],
     input: InputSchema,

@@ -10,6 +10,7 @@ import type {
   ResolvedTarget,
   TaskConfig,
   TaskDefinition,
+  TaskDispatchRequirements,
 } from '../types.mts'
 import {
   STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
@@ -25,6 +26,7 @@ import {
   applyTaskAgentRuntimeOverride,
   readTaskAgentRuntimeOverrides,
 } from '../config/task-runtime-override.mts'
+import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/catalog'
 import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
@@ -126,6 +128,8 @@ export interface ListedDefinition {
   /** `legacy` definitions remain exactly describable/resolvable for persisted
    *  work, but are omitted from new-work list surfaces. */
   scheduling?: 'active' | 'legacy'
+  /** Validated explicit dispatch requirements, projected from the task config. */
+  dispatch?: TaskDispatchRequirements
 }
 
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'out', 'build', 'coverage', '.nyc_output'])
@@ -176,6 +180,126 @@ function validateAgentRuntimeSelector(config: TaskConfig, sourcePath: string): v
       throw error
     }
   }
+}
+
+/**
+ * Validate the optional explicit dispatch requirements against the catalog-shaped
+ * contract (single SSOT, `@wrenyard/catalog` TaskDispatchRequirements). Every
+ * field is individually optional, but a dispatch block must declare at least one
+ * recognized hard requirement or it is meaningless. Malformed TPS, price,
+ * intelligence tiers, per-axis exclusions, or required capabilities fail
+ * definition validation so a bad range can never reach execution. Legacy
+ * definitions without a `dispatch` block are preserved untouched. Legacy alias
+ * keys (intelligence, maximumOutputUsdPerMillion, exclusions) are rejected
+ * explicitly rather than silently accepted so stale shapes fail clearly.
+ * Validation never synthesizes a wider profile pool — exact declared profiles
+ * remain exact, and resolver behavior is unchanged.
+ */
+function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
+  const raw = config.dispatch as Record<string, unknown> | undefined
+  if (raw === undefined) return
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${sourcePath} task config dispatch must be an object when present`)
+  }
+
+  // Reject legacy alias keys explicitly rather than silently accepting them.
+  for (const legacyKey of ['intelligence', 'maximumOutputUsdPerMillion', 'exclusions'] as const) {
+    if (legacyKey in raw) {
+      throw new Error(
+        `${sourcePath} task config dispatch.${legacyKey} is no longer supported; use the current TaskDispatchRequirements shape (expectedTps/minimumTps, intelligenceMin/intelligenceMax, maxOutputUsdPerMillion, excludeModelIds/excludeProfileIds/excludeClientIds/excludeProviderIds, requiredCapabilities)`,
+      )
+    }
+  }
+
+  const {
+    expectedTps,
+    minimumTps,
+    intelligenceMin,
+    intelligenceMax,
+    maxOutputUsdPerMillion,
+    requiredCapabilities,
+    excludeModelIds,
+    excludeProfileIds,
+    excludeClientIds,
+    excludeProviderIds,
+  } = raw
+
+  // The dispatch object must contain at least one recognized hard requirement.
+  const hasRecognizedHardRequirement = [
+    expectedTps,
+    minimumTps,
+    intelligenceMin,
+    intelligenceMax,
+    maxOutputUsdPerMillion,
+    requiredCapabilities,
+    excludeModelIds,
+    excludeProfileIds,
+    excludeClientIds,
+    excludeProviderIds,
+  ].some((value) => value !== undefined)
+  if (!hasRecognizedHardRequirement) {
+    throw new Error(
+      `${sourcePath} task config dispatch must declare at least one hard requirement (expectedTps/minimumTps, intelligenceMin/intelligenceMax, maxOutputUsdPerMillion, requiredCapabilities, or an exclude* axis)`,
+    )
+  }
+
+  if (expectedTps !== undefined) {
+    if (typeof expectedTps !== 'number' || !Number.isFinite(expectedTps) || expectedTps <= 0) {
+      throw new Error(`${sourcePath} task config dispatch.expectedTps must be a positive number`)
+    }
+  }
+  if (minimumTps !== undefined) {
+    if (typeof minimumTps !== 'number' || !Number.isFinite(minimumTps) || minimumTps <= 0) {
+      throw new Error(`${sourcePath} task config dispatch.minimumTps must be a positive number`)
+    }
+  }
+  if (expectedTps !== undefined && minimumTps !== undefined && expectedTps < minimumTps) {
+    throw new Error(
+      `${sourcePath} task config dispatch.expectedTps (${expectedTps}) must be >= minimumTps (${minimumTps})`,
+    )
+  }
+
+  if (intelligenceMin !== undefined) {
+    if (!isIntelligenceTier(intelligenceMin)) {
+      throw new Error(`${sourcePath} task config dispatch.intelligenceMin must be a valid IntelligenceTier (low|mid|high|frontier|premium)`)
+    }
+  }
+  if (intelligenceMax !== undefined) {
+    if (!isIntelligenceTier(intelligenceMax)) {
+      throw new Error(`${sourcePath} task config dispatch.intelligenceMax must be a valid IntelligenceTier (low|mid|high|frontier|premium)`)
+    }
+  }
+  if (isIntelligenceTier(intelligenceMin) && isIntelligenceTier(intelligenceMax)
+    && INTELLIGENCE_ORDER[intelligenceMin] > INTELLIGENCE_ORDER[intelligenceMax]) {
+    throw new Error(
+      `${sourcePath} task config dispatch.intelligenceMin (${intelligenceMin}) must be <= intelligenceMax (${intelligenceMax})`,
+    )
+  }
+
+  if (maxOutputUsdPerMillion !== undefined) {
+    if (typeof maxOutputUsdPerMillion !== 'number' || !Number.isFinite(maxOutputUsdPerMillion) || maxOutputUsdPerMillion <= 0) {
+      throw new Error(`${sourcePath} task config dispatch.maxOutputUsdPerMillion must be a positive number`)
+    }
+  }
+
+  if (requiredCapabilities !== undefined && requiredCapabilities !== null) {
+    if (!Array.isArray(requiredCapabilities) || !requiredCapabilities.every((entry) => typeof entry === 'string' && entry.length > 0)) {
+      throw new Error(`${sourcePath} task config dispatch.requiredCapabilities must be an array of non-empty strings`)
+    }
+  }
+
+  for (const axis of ['excludeModelIds', 'excludeProfileIds', 'excludeClientIds', 'excludeProviderIds'] as const) {
+    const value = raw[axis]
+    if (value !== undefined && value !== null) {
+      if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string' && entry.length > 0)) {
+        throw new Error(`${sourcePath} task config dispatch.${axis} must be an array of non-empty strings`)
+      }
+    }
+  }
+}
+
+function isIntelligenceTier(value: unknown): value is IntelligenceTier {
+  return value === 'low' || value === 'mid' || value === 'high' || value === 'frontier' || value === 'premium'
 }
 
 const CATEGORY_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u
@@ -386,6 +510,7 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
     throw new Error(`writeTargets in ${absolutePath} requires permission 'edit'`)
   }
   validateAgentRuntimeSelector(definition.config, absolutePath)
+  validateTaskDispatch(definition.config, absolutePath)
   resolveTaskCategory(definition.config, absolutePath)
 
   const duplicate = findDuplicateInScope(registry.tasks, name, scope, absolutePath)
@@ -696,6 +821,7 @@ function taskToListed(entry: RegisteredTask, overrides?: Record<string, string>)
     ...(entry.definition.config.scheduling
       ? { scheduling: entry.definition.config.scheduling }
       : {}),
+    ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
   }
 }
 
