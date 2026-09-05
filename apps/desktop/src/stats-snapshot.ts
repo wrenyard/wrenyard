@@ -84,7 +84,7 @@ function parseSummary(value: unknown): StatsSnapshot | null {
     byProfile: parseArray(record.byProfile, parseProfileRanking, MAX_RANKING_ROWS),
     byTask: parseArray(record.byTask, parseTaskRanking, MAX_RANKING_ROWS),
     windows: parseArray(record.windows, parseWindow, 3),
-    recentTaskRuns: parseArray(record.recentTaskRuns, parseTaskRunSnapshot, MAX_TASK_RUN_ROWS),
+    recentTaskRuns: parseArray(record.recentRuns, parseTaskRunSnapshot, MAX_TASK_RUN_ROWS),
   };
 }
 
@@ -201,7 +201,7 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
   const record = asRecord(value);
   if (!record) return null;
   const taskRunId = readTaskRunId(record.task_run_id);
-  const taskId = readTaskId(record.task_id);
+  const taskId = readTaskId(record.task) ?? readTaskId(record.task_id);
   if (taskRunId === null || taskId === null) return null;
 
   const sourceValue = record.source;

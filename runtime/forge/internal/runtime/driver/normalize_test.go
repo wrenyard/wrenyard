@@ -33,9 +33,10 @@ func TestCodexNormalizerFixture(t *testing.T) {
 			"text": "Understood. I have the workspace context and I’m ready to proceed.",
 		}},
 		{Type: "turn_usage", Data: map[string]any{
-			"input_tokens":  13406,
-			"output_tokens": 234,
-			"duration_ms":   0,
+			"input_tokens":        13406,
+			"cached_input_tokens": 3584,
+			"output_tokens":       234,
+			"duration_ms":         0,
 		}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -451,12 +452,13 @@ func TestCodexTurnTimingFillsMeasuredDuration(t *testing.T) {
 		t.Fatalf("turn_usage count = %d, want 1; events=%#v", count, events)
 	}
 	want := map[string]any{
-		"input_tokens":   13406,
-		"output_tokens":  234,
-		"duration_ms":    2500,
-		"token_scope":    "agent_turn",
-		"duration_scope": "agent_turn",
-		"tps_contract":   "agent_turn_v1",
+		"input_tokens":        13406,
+		"cached_input_tokens": 3584,
+		"output_tokens":       234,
+		"duration_ms":         2500,
+		"token_scope":         "agent_turn",
+		"duration_scope":      "agent_turn",
+		"tps_contract":        "agent_turn_v1",
 	}
 	if !reflect.DeepEqual(usage.Data, want) {
 		t.Fatalf("turn_usage data mismatch\nwant: %#v\n got: %#v", want, usage.Data)

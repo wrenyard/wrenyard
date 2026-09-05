@@ -2164,6 +2164,9 @@ func codexNormalizer(line []byte) []protocol.Event {
 			"output_tokens": intValue(usage["output_tokens"]),
 			"duration_ms":   durationMs,
 		}
+		if cachedInput, ok := nonnegativeInt(usage["cached_input_tokens"]); ok {
+			data["cached_input_tokens"] = cachedInput
+		}
 		// Codex's turn.completed duration is the client-reported end-to-end
 		// agent turn/session wall duration and may include tool and waiting
 		// time. It is NOT provider generation time. The trusted agent_turn_v1
