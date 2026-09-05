@@ -349,7 +349,17 @@ describe('RpcRouter', () => {
         assertAcceptingMapped(dc)
         return { id: 'task-1', task_run_id: 'task-1', hint: 'ok' }
       })
-      router.register('task.run.status', async () => ({ task_run_id: 'task-0', status: 'done' }))
+      router.register('task.run.status', async () => ({
+        task_run_id: 'task-0',
+        task_id: 'test-task',
+        status: 'done',
+        usage: {
+          completeness: 'unavailable',
+          attempt_count: 0,
+          usage_event_count: 0,
+          reference_cost_complete: false,
+        },
+      }))
 
       const blocked: Array<[string, Record<string, unknown>]> = [
         ['task.run.create', { task_id: 't', project: 'p', input: {} }],
@@ -384,7 +394,17 @@ describe('RpcRouter', () => {
       })
 
       const taskStatus = await router.handleMessage({ jsonrpc: '2.0', method: 'task.run.status', params: { task_run_id: 'task-0' }, id: 'ts' })
-      assert.deepEqual((taskStatus as { result: unknown }).result, { task_run_id: 'task-0', status: 'done' })
+      assert.deepEqual((taskStatus as { result: unknown }).result, {
+        task_run_id: 'task-0',
+        task_id: 'test-task',
+        status: 'done',
+        usage: {
+          completeness: 'unavailable',
+          attempt_count: 0,
+          usage_event_count: 0,
+          reference_cost_complete: false,
+        },
+      })
     })
 
     it('thaw cannot make an active planned_restart plan accepting', async () => {
@@ -430,7 +450,17 @@ describe('RpcRouter', () => {
           throw new ProtocolError(INVALID_PARAMS, { code: (e as { code?: string }).code })
         }
       })
-      router.register('task.run.status', async () => ({ task_run_id: 'task-0', status: 'done' }))
+      router.register('task.run.status', async () => ({
+        task_run_id: 'task-0',
+        task_id: 'test-task',
+        status: 'done',
+        usage: {
+          completeness: 'unavailable',
+          attempt_count: 0,
+          usage_event_count: 0,
+          reference_cost_complete: false,
+        },
+      }))
 
       // Freeze
       await router.handleMessage({ jsonrpc: '2.0', method: 'daemon.freeze', params: {}, id: 'freeze' })
@@ -441,7 +471,17 @@ describe('RpcRouter', () => {
 
       // task.run.status should still work
       const taskStatus = await router.handleMessage({ jsonrpc: '2.0', method: 'task.run.status', params: { task_run_id: 'task-0' }, id: 'ts' })
-      assert.deepEqual((taskStatus as { result: unknown }).result, { task_run_id: 'task-0', status: 'done' })
+      assert.deepEqual((taskStatus as { result: unknown }).result, {
+        task_run_id: 'task-0',
+        task_id: 'test-task',
+        status: 'done',
+        usage: {
+          completeness: 'unavailable',
+          attempt_count: 0,
+          usage_event_count: 0,
+          reference_cost_complete: false,
+        },
+      })
 
       // Thaw
       await router.handleMessage({ jsonrpc: '2.0', method: 'daemon.thaw', params: {}, id: 'thaw' })

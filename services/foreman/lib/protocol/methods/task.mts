@@ -1,4 +1,10 @@
 import type { JsonRecord, JsonSchema } from '../jsonrpc.mts'
+import {
+  type TaskResolvedDispatch,
+  type TaskUsage,
+  taskResolvedDispatchSchema,
+  taskUsageSchema,
+} from '../task-run-metadata.mts'
 
 const recordSchema = {
   type: 'object',
@@ -124,8 +130,11 @@ export interface TaskRunStatusParams {
 
 export interface TaskRunStatusResult {
   task_run_id: string
+  task_id: string
   status: TaskRunStatus
   summary?: string
+  resolved?: TaskResolvedDispatch
+  usage: TaskUsage
   error?: string | null
   failure_category?: string
   suggestion?: string
@@ -141,8 +150,11 @@ export interface TaskRunOutputParams {
 
 export interface TaskRunOutputResult {
   task_run_id: string
+  task_id: string
   status: TaskRunStatus
   summary?: string
+  resolved?: TaskResolvedDispatch
+  usage: TaskUsage
   output: unknown
   error?: string | null
   failure_category?: string
@@ -151,6 +163,20 @@ export interface TaskRunOutputResult {
   pid?: number
   _meta?: JsonRecord
 }
+
+export interface TaskRunWaitParams {
+  task_run_id: string
+  /**
+   * Optional explicit wait deadline (ms). When omitted, task.run.wait waits for
+   * the authoritative task terminal with no task-duration deadline. Terminal is
+   * defined as done/failed/cancelled/interrupted; a nonterminal result is never
+   * returned even when an execution reports terminal first.
+   */
+  timeout_ms?: number
+}
+
+/** Reuses the authoritative complete task run output returned by task.run.output. */
+export type TaskRunWaitResult = TaskRunOutputResult
 
 export interface TaskRunCancelParams {
   task_run_id: string
@@ -357,11 +383,14 @@ export const taskRunStatusParamsSchema = {
 
 export const taskRunStatusResultSchema = {
   type: 'object',
-  required: ['task_run_id', 'status'],
+  required: ['task_run_id', 'task_id', 'status', 'usage'],
   properties: {
     task_run_id: { type: 'string', minLength: 1 },
+    task_id: { type: 'string', minLength: 1 },
     status: { enum: taskRunStatusValues },
     summary: { type: 'string' },
+    resolved: taskResolvedDispatchSchema,
+    usage: taskUsageSchema,
     error: nullableStringSchema,
     failure_category: { type: 'string' },
     suggestion: { type: 'string' },
@@ -377,11 +406,14 @@ export const taskRunOutputParamsSchema = taskRunStatusParamsSchema
 
 export const taskRunOutputResultSchema = {
   type: 'object',
-  required: ['task_run_id', 'status', 'output'],
+  required: ['task_run_id', 'task_id', 'status', 'output', 'usage'],
   properties: {
     task_run_id: { type: 'string', minLength: 1 },
+    task_id: { type: 'string', minLength: 1 },
     status: { enum: taskRunStatusValues },
     summary: { type: 'string' },
+    resolved: taskResolvedDispatchSchema,
+    usage: taskUsageSchema,
     output: {},
     error: nullableStringSchema,
     failure_category: { type: 'string' },
@@ -406,6 +438,18 @@ export const taskRunCancelResultSchema = {
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
+
+export const taskRunWaitParamsSchema = {
+  type: 'object',
+  required: ['task_run_id'],
+  properties: {
+    task_run_id: { type: 'string', minLength: 1 },
+    timeout_ms: { type: 'number', minimum: 1 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskRunWaitResultSchema = taskRunOutputResultSchema
 
 // ─── task.run.events ──────────────────────────────────────────────────────────
 

@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   ConstraintSchema,
@@ -66,6 +67,7 @@ const definition = {
     description:
       'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and returns structured findings and evidences. Read-only; never fabricates or mutates files.',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: LibrarianInputSchema,

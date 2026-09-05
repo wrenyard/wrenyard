@@ -1,3 +1,4 @@
+import { VISION_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   evidenceWith,
@@ -60,6 +61,7 @@ const definition = {
     description:
       'Multimodal visual inspection. Opens and looks at an image, then answers a question about it from what is visible. Read-only; never fabricates details beyond the image.',
     agentRuntime: 'forge/gk-kimi',
+    dispatch: VISION_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],
     input: LookAtInputSchema,

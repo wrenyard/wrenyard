@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { AcceptanceCriterionSchema } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -60,6 +61,7 @@ const definition = {
       'LEGACY RECOVERY ONLY. New work must compose atomic edit and test tasks in a TaskGraph; this merged implementation task remains resolvable only for persisted runs.',
     scheduling: 'legacy',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     timeoutMs: 1_800_000,
     instructions: [shellUsage],

@@ -1,3 +1,4 @@
+import { ULTRA_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   ConstraintSchema,
@@ -71,6 +72,7 @@ const definition = {
     description:
       'Read-only strategic advisor for architecture decisions, self-review, hard debugging, and complex trade-offs. Returns findings, decisions, and any unresolved questions to escalate. Advises only; never executes or mutates.',
     agentRuntime: 'forge/ultra',
+    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],
     input: OracleInputSchema,

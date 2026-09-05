@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/catalog",
-  "version": "1.0.0-dev.22",
+  "version": "1.0.0-dev.23",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -16,5 +16,7 @@
     "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

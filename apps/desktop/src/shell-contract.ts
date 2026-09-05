@@ -32,15 +32,19 @@ export const SHELL_CHANNELS = {
   updateSnapshot: 'wrenyard-shell:update-snapshot',
   checkUpdate: 'wrenyard-shell:check-update',
   setUpdateChannel: 'wrenyard-shell:set-update-channel',
-  prepareUpdate: 'wrenyard-shell:prepare-update',
-  restartUpdate: 'wrenyard-shell:restart-update',
+  requestInstall: 'wrenyard-shell:request-install',
+  cancelPendingInstall: 'wrenyard-shell:cancel-pending-install',
   conversationChanged: 'wrenyard-shell:conversation-changed',
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
   viewChanged: 'wrenyard-shell:view-changed',
+  docsList: 'wrenyard-shell:docs-list',
+  docsRead: 'wrenyard-shell:docs-read',
+  docsSave: 'wrenyard-shell:docs-save',
+  docsDirty: 'wrenyard-shell:docs-dirty',
 } as const;
 
-export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings';
+export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'docs';
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -73,7 +77,8 @@ export type UpdateState =
   | 'stable-unavailable'
   | 'available'
   | 'preparing'
-  | 'restart-required'
+  | 'waiting'
+  | 'installing'
   | 'install-blocked'
   | 'check-failed'
   | 'install-failed';
@@ -189,6 +194,69 @@ export interface StatsSnapshot {
   byProfile: StatsRankingSnapshot[];
   byTask: StatsRankingSnapshot[];
   windows: StatsWindowSnapshot[];
+  recentTaskRuns: TaskRunSnapshot[];
+}
+
+/**
+ * Selection-time speed evidence from the resolved speed contract. This is the
+ * estimate chosen before the run started; it is distinct from the actual
+ * measured `usage.outputTps` captured after the run completed.
+ */
+export interface TaskRunSpeedEvidence {
+  /** Selection-time expected throughput (tokens per second). */
+  effectiveTps: number;
+  /** Where the selection estimate came from. Invalid evidence is omitted as a whole. */
+  source: 'local_31d' | 'catalog_default';
+  /** Number of local samples behind the selection estimate, when known. */
+  sampleCount: number | null;
+  /** Whether actual throughput is expected to meet the selection estimate, when known. */
+  expectedTpsMet: boolean | null;
+  /** Reason the selection estimate is considered degraded, when known. */
+  degradationReason?: string;
+}
+
+/**
+ * Per-run usage projection. Completeness reflects the CORE `reference_cost_complete`
+ * flag: only `true` marks a run fully costed. Partial runs keep unknown optional
+ * numbers absent rather than substituting zero; `unavailable` runs carry identity
+ * only. `referenceCostUsd` is an estimate, never a billed amount.
+ */
+export interface TaskRunUsage {
+  completeness: 'complete' | 'partial' | 'unavailable';
+  attemptCount: number;
+  usageEventCount: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  agentTurnMs?: number;
+  outputTps?: number;
+  tpsContract?: 'agent_turn_v1';
+  /** Estimated reference cost in USD. Absent (`undefined`) when CORE omits the numeric; never a fabricated value. */
+  referenceCostUsd?: number;
+  /** True when CORE fully costed this run; partial runs omit the cost. */
+  referenceCostComplete: boolean;
+  referenceCostBasis?: string;
+}
+
+/** A single recent Task run, projected from CORE's frozen TaskRunOutputResult metadata. */
+export interface TaskRunSnapshot {
+  taskRunId: string;
+  taskId: string;
+  taskName?: string;
+  source?: 'builtin' | 'project' | 'unknown';
+  status?: 'done' | 'failed' | 'cancelled' | 'running';
+  startedAt?: string;
+  finishedAt?: string;
+  resolvedClient?: string;
+  resolvedProvider?: string;
+  resolvedProfile?: string;
+  resolvedModel?: string;
+  resolvedModelId?: string;
+  speed?: TaskRunSpeedEvidence;
+  usage: TaskRunUsage;
 }
 
 export interface QuotaWindowSnapshot {
@@ -270,6 +338,10 @@ export interface ConversationItemSnapshot {
   reasoning?: string;
   toolName?: string;
   toolState?: 'running' | 'done' | 'failed';
+  /** Bounded raw result text for the tool call, when CORE supplies one. */
+  toolResultText?: string;
+  /** Terminal run_task metadata, present only after the task run resolves. */
+  taskRun?: TaskRunSnapshot;
 }
 
 export interface ConversationModelSelectionSnapshot {
@@ -323,6 +395,19 @@ export interface ConversationSnapshot {
   message?: string;
 }
 
+export interface WorkspaceDocEntry {
+  path: string;
+}
+
+export interface WorkspaceDocContent {
+  path: string;
+  content: string;
+}
+
+export interface WorkspaceDocSaveResult {
+  path: string;
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   navigate(page: ShellPage): Promise<void>;
@@ -339,8 +424,8 @@ export interface WrenyardShellApi {
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
-  prepareUpdate(): Promise<UpdateSnapshot>;
-  restartUpdate(): Promise<void>;
+  requestInstall(): Promise<UpdateSnapshot>;
+  cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
@@ -353,10 +438,14 @@ export interface WrenyardShellApi {
   onQuotaChanged(listener: () => void): () => void;
   onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
+  listDocs(): Promise<WorkspaceDocEntry[]>;
+  readDoc(path: string): Promise<WorkspaceDocContent>;
+  saveDoc(path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult>;
+  setDocsDirty(dirty: boolean): Promise<void>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings';
+  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings' || value === 'docs';
 }
 
 export function isSettingsLaunchRequest(value: string): boolean {

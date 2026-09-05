@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   ConstraintSchema,
@@ -47,6 +48,7 @@ const definition: TaskDefinition = {
     description:
       'Confirm implementation facts against requirements and the doc-first context baseline. Read-only code search that prefers rg and traces entry/data flow.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],
     input,

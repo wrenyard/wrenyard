@@ -6,6 +6,7 @@ import {
   isSettingsLaunchRequest,
   isShellPage,
   type QuotaSnapshot,
+  type UpdateSnapshot,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
 
@@ -55,9 +56,18 @@ test('update IPC channels expose bounded Desktop update operations', () => {
   assert.equal(SHELL_CHANNELS.updateSnapshot, 'wrenyard-shell:update-snapshot');
   assert.equal(SHELL_CHANNELS.checkUpdate, 'wrenyard-shell:check-update');
   assert.equal(SHELL_CHANNELS.setUpdateChannel, 'wrenyard-shell:set-update-channel');
-  assert.equal(SHELL_CHANNELS.prepareUpdate, 'wrenyard-shell:prepare-update');
-  assert.equal(SHELL_CHANNELS.restartUpdate, 'wrenyard-shell:restart-update');
+  assert.equal(SHELL_CHANNELS.requestInstall, 'wrenyard-shell:request-install');
+  assert.equal(SHELL_CHANNELS.cancelPendingInstall, 'wrenyard-shell:cancel-pending-install');
   assert.equal(SHELL_CHANNELS.updateChanged, 'wrenyard-shell:update-changed');
+  // The old two-click prepare/restart channels no longer exist.
+  assert.equal('prepareUpdate' in SHELL_CHANNELS, false);
+  assert.equal('restartUpdate' in SHELL_CHANNELS, false);
+  const api: Pick<WrenyardShellApi, 'requestInstall' | 'cancelPendingInstall'> = {
+    requestInstall: async () => null as unknown as UpdateSnapshot,
+    cancelPendingInstall: async () => null as unknown as UpdateSnapshot,
+  };
+  assert.equal(typeof api.requestInstall, 'function');
+  assert.equal(typeof api.cancelPendingInstall, 'function');
 });
 
 test('QuotaSnapshot carries a provider catalog without secrets', () => {

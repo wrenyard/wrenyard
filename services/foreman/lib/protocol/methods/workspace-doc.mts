@@ -113,6 +113,8 @@ export const workspaceDocCreateResultSchema = {
 export interface WorkspaceDocUpdateParams {
   path: string
   content: string
+  /** Original UTF-8 content read via workspace.doc.read; the optimistic concurrency token. */
+  expectedContent: string
 }
 
 export interface WorkspaceDocUpdateResult {
@@ -121,10 +123,11 @@ export interface WorkspaceDocUpdateResult {
 
 export const workspaceDocUpdateParamsSchema = {
   type: 'object',
-  required: ['path', 'content'],
+  required: ['path', 'content', 'expectedContent'],
   properties: {
     path: { type: 'string', minLength: 1 },
     content: { type: 'string' },
+    expectedContent: { type: 'string' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema

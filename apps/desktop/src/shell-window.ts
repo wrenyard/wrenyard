@@ -19,6 +19,9 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateChannel,
   type UpdateSnapshot,
+  type WorkspaceDocContent,
+  type WorkspaceDocEntry,
+  type WorkspaceDocSaveResult,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -49,8 +52,8 @@ export interface ShellWindowOptions {
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
-  prepareUpdate(): Promise<UpdateSnapshot>;
-  restartUpdate(): Promise<void>;
+  requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
+  cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
@@ -59,6 +62,10 @@ export interface ShellWindowOptions {
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
+  listDocs(): Promise<WorkspaceDocEntry[]>;
+  readDoc(path: string): Promise<WorkspaceDocContent>;
+  saveDoc(path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult>;
+  setDocsDirty(dirty: boolean): Promise<void>;
 }
 
 export class ShellWindowController {
@@ -204,13 +211,13 @@ export class ShellWindowController {
       if (channel !== 'stable' && channel !== 'dev') throw new Error('更新通道无效');
       return options.setUpdateChannel(channel);
     });
-    ipcMain.handle(SHELL_CHANNELS.prepareUpdate, async (event) => {
+    ipcMain.handle(SHELL_CHANNELS.requestInstall, async (event) => {
       assertShellSender(event.sender);
-      return options.prepareUpdate();
+      return options.requestInstall();
     });
-    ipcMain.handle(SHELL_CHANNELS.restartUpdate, async (event) => {
+    ipcMain.handle(SHELL_CHANNELS.cancelPendingInstall, async (event) => {
       assertShellSender(event.sender);
-      return options.restartUpdate();
+      return options.cancelPendingInstall();
     });
     ipcMain.handle(SHELL_CHANNELS.savePetSettings, async (event, settings: PetCompanionSettings) => {
       assertShellSender(event.sender);
@@ -250,6 +257,27 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.cancelConversation();
     });
+    ipcMain.handle(SHELL_CHANNELS.docsList, async (event) => {
+      assertShellSender(event.sender);
+      return options.listDocs();
+    });
+    ipcMain.handle(SHELL_CHANNELS.docsRead, async (event, path: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof path !== 'string' || !path || path.length > 4_096) throw new Error('文档路径无效');
+      return options.readDoc(path);
+    });
+    ipcMain.handle(SHELL_CHANNELS.docsSave, async (event, path: unknown, content: unknown, expectedContent: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof path !== 'string' || !path || path.length > 4_096) throw new Error('文档路径无效');
+      if (typeof content !== 'string') throw new Error('文档内容无效');
+      if (typeof expectedContent !== 'string') throw new Error('文档基线内容无效');
+      return options.saveDoc(path, content, expectedContent);
+    });
+    ipcMain.handle(SHELL_CHANNELS.docsDirty, async (event, dirty: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof dirty !== 'boolean') throw new Error('文档脏状态无效');
+      return options.setDocsDirty(dirty);
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -268,8 +296,8 @@ export class ShellWindowController {
       SHELL_CHANNELS.updateSnapshot,
       SHELL_CHANNELS.checkUpdate,
       SHELL_CHANNELS.setUpdateChannel,
-      SHELL_CHANNELS.prepareUpdate,
-      SHELL_CHANNELS.restartUpdate,
+      SHELL_CHANNELS.requestInstall,
+      SHELL_CHANNELS.cancelPendingInstall,
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
       SHELL_CHANNELS.conversationSnapshot,
@@ -278,6 +306,10 @@ export class ShellWindowController {
       SHELL_CHANNELS.conversationSelectModel,
       SHELL_CHANNELS.conversationSend,
       SHELL_CHANNELS.conversationCancel,
+      SHELL_CHANNELS.docsList,
+      SHELL_CHANNELS.docsRead,
+      SHELL_CHANNELS.docsSave,
+      SHELL_CHANNELS.docsDirty,
     ]) ipcMain.removeHandler(channel);
   }
 

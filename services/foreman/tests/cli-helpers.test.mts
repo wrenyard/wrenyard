@@ -2,15 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parsePositiveIntegerFlag, requireNoPositionals, requireSinglePositional } from '../lib/client/cli/helpers.mts'
 import {
-  type IpcForemanClient,
   errorMessage,
-  waitForTaskCompletionViaIpc,
 } from '../lib/client/cli/shared.mts'
+import { readFileSync } from 'node:fs'
 import { INVALID_PARAMS, ProtocolError } from '../lib/protocol/errors.mts'
-
-function smallDelay(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 1))
-}
 
 test('parsePositiveIntegerFlag accepts missing and positive integer values', () => {
   assert.equal(parsePositiveIntegerFlag(undefined, '--lines', 80), 80)
@@ -102,37 +97,29 @@ test('errorMessage preserves the ordinary Error message path', () => {
   assert.equal(errorMessage(null), 'null')
 })
 
-test('waitForTaskCompletionViaIpc keeps polling through nonterminal task statuses', { timeout: 2_000 }, async () => {
-  const statuses = [
-    { status: 'queued', task_run_id: 'task-run-1' },
-    { status: 'running', task_run_id: 'task-run-1' },
-    { status: 'done', task_run_id: 'task-run-1', has_output: true },
-  ]
-  let statusCalls = 0
-  let currentTime = 0
-  const originalDateNow = Date.now
-  Date.now = () => currentTime
-  const client = {
-    task: {
-      run: {
-        status: async ({ task_run_id }: { task_run_id: string }) => {
-          assert.equal(task_run_id, 'task-run-1')
-          if (statusCalls >= statuses.length) throw new Error('status called beyond supplied sequence')
-          const status = statuses[statusCalls++]
-          if (statusCalls === 2) currentTime = 30_001
-          await smallDelay()
-          return status
-        },
-      },
-    },
-  } as unknown as IpcForemanClient
+test('CLI task run waits for the terminal result without status polling or follow-up hints', () => {
+  const taskSource = readFileSync(new URL('../lib/client/cli/commands/task.mts', import.meta.url), 'utf8')
+  const sharedSource = readFileSync(new URL('../lib/client/cli/shared.mts', import.meta.url), 'utf8')
 
-  try {
-    const status = await waitForTaskCompletionViaIpc(client, 'task-run-1')
+  // handleTaskRun invokes client.task.run.wait after creating the run.
+  const runStart = taskSource.indexOf('export async function handleTaskRun')
+  const runEnd = taskSource.indexOf('export async function handleTaskCancel')
+  assert.ok(runStart >= 0 && runEnd > runStart, 'handleTaskRun must be present in the task command')
+  const runBody = taskSource.slice(runStart, runEnd)
+  const createIndex = runBody.indexOf('client.task.run.create')
+  const waitIndex = runBody.indexOf('client.task.run.wait')
+  assert.ok(createIndex >= 0, 'handleTaskRun must create the task run')
+  assert.ok(waitIndex > createIndex, 'handleTaskRun must wait on the server after creating the run')
 
-    assert.deepEqual(status, statuses[2])
-    assert.equal(statusCalls, 3)
-  } finally {
-    Date.now = originalDateNow
-  }
+  // It prints the terminal result.
+  assert.ok(runBody.includes('writeServicePayload(result)'), 'handleTaskRun must print the terminal result')
+
+  // No leftover client-side 100ms status polling inside handleTaskRun.
+  assert.ok(!runBody.includes('task.run.status'), 'handleTaskRun must not poll task status')
+
+  // Neither file defines/references the removed polling helper, polling, or follow-up hint.
+  assert.ok(!sharedSource.includes('waitForTaskCompletionViaIpc'), 'shared must not define waitForTaskCompletionViaIpc')
+  assert.ok(!taskSource.includes('waitForTaskCompletionViaIpc'), 'task command must not reference waitForTaskCompletionViaIpc')
+  assert.ok(!taskSource.includes('Use wrenyard task output'), 'task run must not emit the follow-up output hint')
+  assert.ok(!taskSource.includes('to fetch the task result'), 'task run must not reference fetching the result')
 })

@@ -26,13 +26,14 @@ export interface JsonRpcClientOptions {
 }
 
 export interface JsonRpcRequestOptions {
-  timeoutMs?: number
+  /** Per-request deadline in ms, or null to disable the client timer entirely. */
+  timeoutMs?: number | null
 }
 
 interface PendingRequest {
   readonly id: string | number
   readonly method: string
-  readonly timeout: ReturnType<typeof setTimeout>
+  readonly timeout?: ReturnType<typeof setTimeout>
   readonly resolve: (result: unknown) => void
   readonly reject: (error: Error) => void
 }
@@ -112,10 +113,15 @@ export class JsonRpcClient {
     }
 
     return new Promise<TResult>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (!this.pending.delete(pendingKey(id))) return
-        reject(new ProtocolError(OPERATION_TIMEOUT, { id, method, timeoutMs }))
-      }, timeoutMs)
+      // An explicit null timeout means "no client timer": long-lived calls
+      // such as task.run.wait opt out of the short JSON-RPC deadline. Any
+      // other value (including undefined) uses the numeric or default timeout.
+      const timeout = options.timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+          if (!this.pending.delete(pendingKey(id))) return
+          reject(new ProtocolError(OPERATION_TIMEOUT, { id, method, timeoutMs }))
+        }, timeoutMs)
 
       this.pending.set(pendingKey(id), {
         id,
@@ -151,7 +157,7 @@ export class JsonRpcClient {
 
   clearPending(error = new Error('JsonRpcClient closed')): void {
     for (const request of this.pending.values()) {
-      clearTimeout(request.timeout)
+      if (request.timeout !== undefined) clearTimeout(request.timeout)
       request.reject(error)
     }
     this.pending.clear()
@@ -174,7 +180,7 @@ export class JsonRpcClient {
     const request = this.pending.get(pendingKey(message.id))
     if (!request) return
 
-    clearTimeout(request.timeout)
+    if (request.timeout !== undefined) clearTimeout(request.timeout)
     this.pending.delete(pendingKey(message.id))
 
     if ('error' in message && isRecord(message.error)
@@ -195,7 +201,7 @@ export class JsonRpcClient {
   private rejectPending(id: string | number, error: Error): void {
     const request = this.pending.get(pendingKey(id))
     if (!request) return
-    clearTimeout(request.timeout)
+    if (request.timeout !== undefined) clearTimeout(request.timeout)
     this.pending.delete(pendingKey(id))
     request.reject(error)
   }

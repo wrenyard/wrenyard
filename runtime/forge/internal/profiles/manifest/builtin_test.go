@@ -13,6 +13,7 @@ func TestBuiltinProfileSet(t *testing.T) {
 		"codex-terra":  true,
 		"codex-luna":   true,
 		"codex-spark":  true,
+		"codex-astra":  true,
 		"cb-hy":        true,
 		"cb-ds":        true,
 		"cb-dsf":       true,
@@ -70,6 +71,31 @@ func TestBuiltinProfileSet(t *testing.T) {
 		if !wantActive[id] {
 			t.Errorf("unknown profile %q in builtins", id)
 		}
+	}
+}
+
+func TestCodexAstraProfile(t *testing.T) {
+	p := Get("codex-astra")
+	if p == nil {
+		t.Fatal("Get(codex-astra) returned nil")
+	}
+	if p.Name != "codex-astra" {
+		t.Fatalf("codex-astra name = %q, want codex-astra", p.Name)
+	}
+	if p.Client != "codex" {
+		t.Errorf("codex-astra client = %q, want codex", p.Client)
+	}
+	if p.Provider != "codex" {
+		t.Errorf("codex-astra provider = %q, want codex", p.Provider)
+	}
+	if p.Env["CODEX_MODEL"] != "gpt-6-astra" {
+		t.Errorf("codex-astra CODEX_MODEL = %q, want gpt-6-astra", p.Env["CODEX_MODEL"])
+	}
+	if p.Env["CODEX_REASONING_EFFORT"] != "xhigh" {
+		t.Errorf("codex-astra CODEX_REASONING_EFFORT = %q, want xhigh", p.Env["CODEX_REASONING_EFFORT"])
+	}
+	if p.Launcher["command"] != "codex" {
+		t.Errorf("codex-astra launcher command = %v, want codex", p.Launcher["command"])
 	}
 }
 
@@ -305,7 +331,7 @@ func TestRemovedProfilesNotFound(t *testing.T) {
 }
 
 func TestActiveProfilesNotDeprecated(t *testing.T) {
-	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "cb-hy", "cb-ds", "cb-dsf", "cb-minimax", "cb-kimi", "cb-glm", "cb-glmf", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
+	for _, id := range []string{"codex-sol", "codex-terra", "codex-luna", "codex-spark", "codex-astra", "cb-hy", "cb-ds", "cb-dsf", "cb-minimax", "cb-kimi", "cb-glm", "cb-glmf", "cc-kimi", "cc-glm", "cc-glmf", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok", "cur-composer", "cur-grok", "cur-kimi", "cur-opus"} {
 		p := Get(id)
 		if p == nil {
 			t.Fatalf("Get(%q) returned nil", id)

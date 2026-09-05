@@ -75,6 +75,34 @@ func TestPolicyCandidateMembership(t *testing.T) {
 	}
 }
 
+func TestFastCandidatesExcludePremiumAndExcludedModels(t *testing.T) {
+	// Foreman passes exact approved profiles; static fast routing must not
+	// silently select prohibited premium/excluded models (Astra, Sol, GLM 5.3,
+	// and the Kimi/K3 variants).
+	reg := NewRegistry()
+	fast, err := reg.Lookup("fast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded := map[string]bool{
+		"codex-astra": true,
+		"codex-sol":   true,
+		"cb-glm":      true,
+		"cb-glmf":     true,
+		"cb-kimi":     true,
+		"cc-glm":      true,
+		"cc-glmf":     true,
+		"cc-kimi":     true,
+		"gk-glm":      true,
+		"gk-kimi":     true,
+	}
+	for _, c := range fast.Candidates {
+		if excluded[c.ProfileID] {
+			t.Fatalf("fast policy candidate set must not include prohibited profile %q", c.ProfileID)
+		}
+	}
+}
+
 func TestResolverCandidateOrdering(t *testing.T) {
 	reg := NewRegistry()
 	p, err := reg.Lookup("fast")

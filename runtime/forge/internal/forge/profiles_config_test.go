@@ -292,6 +292,26 @@ func TestNewCodexSolTerraLunaProfilesExist(t *testing.T) {
 	}
 }
 
+func TestCodexAstraProfileIsInEmbeddedSet(t *testing.T) {
+	manifest := *manifest.BuiltinManifest()
+	p, ok := manifest.Profiles["codex-astra"]
+	if !ok {
+		t.Fatal("codex-astra should be in embedded profiles")
+	}
+	if p.Client != "codex" || p.Provider != "codex" {
+		t.Fatalf("codex-astra client/provider = %s/%s, want codex/codex", p.Client, p.Provider)
+	}
+	if p.Env["CODEX_MODEL"] != "gpt-6-astra" {
+		t.Fatalf("codex-astra CODEX_MODEL = %q, want gpt-6-astra", p.Env["CODEX_MODEL"])
+	}
+	if p.Env["CODEX_REASONING_EFFORT"] != "xhigh" {
+		t.Fatalf("codex-astra CODEX_REASONING_EFFORT = %q, want xhigh", p.Env["CODEX_REASONING_EFFORT"])
+	}
+	if p.Deprecated {
+		t.Fatal("codex-astra must not be deprecated")
+	}
+}
+
 func TestCodeBuddyCurrentModelProfilesAreEmbedded(t *testing.T) {
 	manifest := *manifest.BuiltinManifest()
 	want := map[string]string{

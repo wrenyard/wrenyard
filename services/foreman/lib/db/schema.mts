@@ -23,6 +23,9 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   createAgentDelegationTable(database)
   createAgentMemoryTable(database)
   createTaskRunTelemetryTable(database)
+  reconcileTaskRunTelemetryTokenColumns(database)
+  createTaskRunAttemptDispatchTable(database)
+  reconcileTaskRunAttemptDispatchCacheWriteColumn(database)
   recreateTaskIndexes(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
@@ -610,11 +613,53 @@ const TASK_RUN_TELEMETRY_TABLE_SQL = `CREATE TABLE task_run_telemetry (
   task_run_id       TEXT PRIMARY KEY REFERENCES tasks(id),
   tool_call_count   INTEGER NOT NULL DEFAULT 0 CHECK(tool_call_count >= 0),
   usage_event_count INTEGER NOT NULL DEFAULT 0 CHECK(usage_event_count >= 0),
+  input_tokens      INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0),
+  cached_input_tokens      INTEGER NOT NULL DEFAULT 0 CHECK(cached_input_tokens >= 0),
+  cache_read_input_tokens  INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_input_tokens >= 0),
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_creation_input_tokens >= 0),
   output_tokens     INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0),
+  total_tokens      INTEGER NOT NULL DEFAULT 0 CHECK(total_tokens >= 0),
   agent_turn_ms     INTEGER NOT NULL DEFAULT 0 CHECK(agent_turn_ms >= 0),
   tps_complete      INTEGER NOT NULL DEFAULT 1 CHECK(tps_complete IN (0,1)),
+  completeness      TEXT NOT NULL DEFAULT 'complete' CHECK(completeness IN ('complete','partial','unavailable')),
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
+)`
+
+/**
+ * Per-execution/attempt resolved dispatch snapshot. Each (fallback) attempt of
+ * a task run keeps its own exact resolved dispatch and real reference
+ * price/speed snapshot, keyed by the execution id, so a task that retries on a
+ * different model/price is priced per attempt rather than from a single final
+ * profile. The table is created fresh (IF NOT EXISTS) and is absent for legacy
+ * databases until a run captures a snapshot.
+ */
+const TASK_RUN_ATTEMPT_DISPATCH_TABLE_SQL = `CREATE TABLE task_run_attempt_dispatch (
+  execution_id        TEXT PRIMARY KEY REFERENCES executions(id),
+  task_run_id         TEXT NOT NULL REFERENCES tasks(id),
+  requested_agent_runtime TEXT,
+  profile             TEXT,
+  client              TEXT,
+  provider            TEXT,
+  model               TEXT,
+  model_id            TEXT,
+  mode                TEXT,
+  protocol            TEXT,
+  speed_effective_tps REAL,
+  speed_source        TEXT,
+  speed_sample_count  INTEGER,
+  speed_checked_at    TEXT,
+  speed_expected_tps_met INTEGER,
+  speed_degradation_reason TEXT,
+  intelligence        TEXT,
+  reference_pricing_input     REAL,
+  reference_pricing_output    REAL,
+  reference_pricing_cache     REAL,
+  reference_pricing_cache_write REAL,
+  reference_pricing_source    TEXT,
+  reference_pricing_checked_at TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
 )`
 
 const FWA_INDEX_STATEMENTS = [
@@ -993,6 +1038,64 @@ function createTaskRunTelemetryTable(database: ForemanDatabase): void {
   database.prepare(TASK_RUN_TELEMETRY_TABLE_SQL.replace(
     'CREATE TABLE task_run_telemetry', 'CREATE TABLE IF NOT EXISTS task_run_telemetry',
   )).run()
+}
+
+/**
+ * Idempotent migration for the token-aggregate and completeness columns added
+ * to task_run_telemetry. Only adds columns when absent, so databases already
+ * carrying them are a no-op and historical rows keep their captured values.
+ */
+function reconcileTaskRunTelemetryTokenColumns(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
+    .all()
+    .map((column) => column.name))
+  const addColumn = (name: string, definition: string) => {
+    if (!columns.has(name)) {
+      database.prepare(`ALTER TABLE task_run_telemetry ADD COLUMN ${name} ${definition}`).run()
+    }
+  }
+  addColumn('input_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0)')
+  addColumn('cached_input_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(cached_input_tokens >= 0)')
+  addColumn('cache_read_input_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_input_tokens >= 0)')
+  addColumn('cache_creation_input_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(cache_creation_input_tokens >= 0)')
+  addColumn('total_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(total_tokens >= 0)')
+  addColumn('completeness', "TEXT NOT NULL DEFAULT 'complete' CHECK(completeness IN ('complete','partial','unavailable'))")
+}
+
+/**
+ * Create the per-execution/attempt resolved dispatch snapshot table. Safe for
+ * existing databases (IF NOT EXISTS); legacy rows are unaffected because the
+ * table is keyed by execution id and only populated when a run captures a
+ * dispatch snapshot. A secondary index on task_run_id lets the run-metadata
+ * helper aggregate every attempt for a task run efficiently.
+ */
+function createTaskRunAttemptDispatchTable(database: ForemanDatabase): void {
+  database.prepare(TASK_RUN_ATTEMPT_DISPATCH_TABLE_SQL.replace(
+    'CREATE TABLE task_run_attempt_dispatch', 'CREATE TABLE IF NOT EXISTS task_run_attempt_dispatch',
+  )).run()
+  database.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_task_run_attempt_dispatch_task ON task_run_attempt_dispatch(task_run_id)',
+  ).run()
+}
+
+/**
+ * Idempotent migration adding the cache-write reference price column to
+ * task_run_attempt_dispatch so the per-attempt snapshot can carry both cache
+ * read (reference_pricing_cache) and cache write (reference_pricing_cache_write)
+ * reference prices, matching the exact DTO semantics. Only adds the column when
+ * absent; legacy rows keep their captured cache-read price and a null write
+ * price, which the run-metadata helper treats as a partial (non-complete)
+ * reference cost rather than coercing it to zero.
+ */
+function reconcileTaskRunAttemptDispatchCacheWriteColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_attempt_dispatch)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('reference_pricing_cache_write')) {
+    database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN reference_pricing_cache_write REAL').run()
+  }
 }
 
 const SCHEMA_STATEMENTS = [

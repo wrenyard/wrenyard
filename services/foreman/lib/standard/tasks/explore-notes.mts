@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 
 const inputSchema = z.object({
@@ -30,6 +31,7 @@ const definition = {
   config: {
     description: 'Explore Obsidian notes through notesmd-cli only — strictly read-only, multi-direction note investigation',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],
     input: inputSchema,

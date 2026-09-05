@@ -42,8 +42,8 @@ export interface WrenyardIpcClientOptions {
 }
 
 export interface WrenyardIpcRequestOptions {
-  /** Timeout in milliseconds for this request, overriding the client default. */
-  timeoutMs?: number;
+  /** Timeout in milliseconds for this request, overriding the client default. Pass null to disable the transport deadline. */
+  timeoutMs?: number | null;
 }
 
 export interface WrenyardGatewayModel {
@@ -61,6 +61,86 @@ export interface WrenyardGatewayConnection {
   anthropicBaseUrl: string;
   token: string;
   models: WrenyardGatewayModel[];
+}
+
+/**
+ * Terminal result returned by `task.run.wait`. This reuses the same completion
+ * envelope as the Foreman `TaskRunOutputResult` protocol type; do not invent a
+ * second envelope. Desktop and other control-client consumers read this shape
+ * directly, with `output`/`error`/`failure_category` carrying the full
+ * terminal metadata for done/failed/cancelled/interrupted runs.
+ *
+ * `task_id` (the persisted definition template) and `usage` are required;
+ * `resolved` is present only when the run has a schema-valid dispatch snapshot.
+ */
+export interface WrenyardTaskRunOutputResult {
+  task_run_id: string;
+  task_id: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+  summary?: string;
+  output: unknown;
+  error?: string | null;
+  failure_category?: string;
+  suggestion?: string;
+  error_message?: string;
+  pid?: number;
+  resolved?: WrenyardTaskResolvedDispatch;
+  usage: WrenyardTaskUsage;
+  _meta?: Record<string, unknown>;
+}
+
+/** Mirrors the frozen snake_case wire DTO `TaskReferencePricing`. */
+export interface WrenyardTaskReferencePricing {
+  input_usd_per_million?: number;
+  output_usd_per_million?: number;
+  cached_input_usd_per_million?: number;
+  cache_write_input_usd_per_million?: number;
+  source: string;
+  checked_at: string;
+}
+
+/** Mirrors the frozen snake_case wire DTO `TaskResolvedSpeed`. */
+export interface WrenyardTaskResolvedSpeed {
+  effective_tps: number;
+  source: 'local_31d' | 'catalog_default';
+  sample_count: number;
+  checked_at: string;
+  expected_tps_met: boolean;
+  degradation_reason?: string;
+}
+
+/** Mirrors the frozen snake_case wire DTO `TaskResolvedDispatch`. */
+export interface WrenyardTaskResolvedDispatch {
+  requested_agent_runtime: string;
+  profile: string;
+  client: string;
+  provider: string;
+  model: string;
+  model_id: string;
+  mode: 'native' | 'gateway';
+  speed: WrenyardTaskResolvedSpeed;
+  intelligence: string;
+  reference_pricing: WrenyardTaskReferencePricing;
+  protocol?: string;
+}
+
+/** Mirrors the frozen snake_case wire DTO `TaskUsage`. Unknown numerics are optional. */
+export interface WrenyardTaskUsage {
+  completeness: 'complete' | 'partial' | 'unavailable';
+  attempt_count: number;
+  usage_event_count: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  agent_turn_ms?: number;
+  output_tps?: number;
+  tps_contract?: 'agent_turn_v1';
+  reference_cost_usd?: number;
+  reference_cost_complete: boolean;
+  reference_cost_basis?: 'catalog_reference';
 }
 
 export type WrenyardClientConfigurationId = 'claude-app' | 'claude-code' | 'codex-shared' | 'grok-build';
@@ -144,7 +224,7 @@ export interface WrenyardProviderStatus {
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (error: unknown) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 }
 
 interface JsonRpcResponse {
@@ -222,14 +302,18 @@ export class WrenyardIpcClient {
 
     return new Promise<TResult>((resolve, reject) => {
       const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(
-          new Error(
-            `Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`,
-          ),
-        );
-      }, timeoutMs);
+      // An explicit null timeout disables the transport deadline (e.g. for a
+      // long task.run.wait); any other value falls back to the client default.
+      const timer = options?.timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+          this.pending.delete(id);
+          reject(
+            new Error(
+              `Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`,
+            ),
+          );
+        }, timeoutMs);
 
       this.pending.set(id, {
         resolve: (result) => resolve(result as TResult),
@@ -254,6 +338,38 @@ export class WrenyardIpcClient {
   /** Store a managed provider API key through the daemon's local IPC channel. */
   providerConfigure(providerId: string, key: string, options?: WrenyardIpcRequestOptions): Promise<{ ok: true }> {
     return this.request('provider.configure', { providerId, key }, options);
+  }
+
+  /**
+   * Block until a single task run reaches a terminal status and return its
+   * full result. Available over IPC only. Projects the Foreman `task.run.wait`
+   * protocol.
+   *
+   * With no `timeoutMs`, the server timeout param is omitted and the transport
+   * deadline is disabled (timeoutMs:null) so a legitimate long task is not cut
+   * off by the ordinary 30s RPC timeout. With an explicit `timeoutMs`, it is
+   * sent as `timeout_ms` and the transport timer is set to `timeoutMs + 5000`
+   * so the request cannot be truncated before the server's bounded wait ends.
+   */
+  taskRunWait(
+    taskRunId: string,
+    options?: WrenyardIpcRequestOptions & { timeoutMs?: number },
+  ): Promise<WrenyardTaskRunOutputResult> {
+    const { timeoutMs, ...requestOptions } = options ?? {};
+
+    if (timeoutMs === undefined) {
+      return this.request<WrenyardTaskRunOutputResult>(
+        'task.run.wait',
+        { task_run_id: taskRunId },
+        { ...requestOptions, timeoutMs: null },
+      );
+    }
+
+    return this.request<WrenyardTaskRunOutputResult>(
+      'task.run.wait',
+      { task_run_id: taskRunId, timeout_ms: timeoutMs },
+      { ...requestOptions, timeoutMs: timeoutMs + 5_000 },
+    );
   }
 
   /** Discover supported local Agent clients and their redacted Gateway model catalog. */

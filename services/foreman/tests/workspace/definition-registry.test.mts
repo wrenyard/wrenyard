@@ -570,4 +570,133 @@ describe('workspace definition registry', () => {
     assert.equal(found.source, 'project')
     assert.equal(found.project, 'app')
   })
+
+  it('loads a current-shape dispatch block with only minimumTps', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'min-tps.task.ts'), taskSource("'min-tps'",
+      '  dispatch: { minimumTps: 5 },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('min-tps', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.minimumTps, 5)
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('loads a full current-shape dispatch with exclusions, intelligence, and pricing', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-full-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'full-dispatch.task.ts'), taskSource("'full-dispatch'", `  dispatch: {
+    minimumTps: 5,
+    expectedTps: 10,
+    intelligenceMin: 'mid',
+    intelligenceMax: 'frontier',
+    maxOutputUsdPerMillion: 4.5,
+    requiredCapabilities: ['text'],
+    excludeModelIds: ['m1'],
+    excludeProfileIds: ['p1'],
+    excludeClientIds: ['c1'],
+    excludeProviderIds: ['pr1'],
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('full-dispatch', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.expectedTps, 10)
+    assert.equal(target.definition.config.dispatch?.intelligenceMin, 'mid')
+    assert.equal(target.definition.config.dispatch?.intelligenceMax, 'frontier')
+    assert.equal(target.definition.config.dispatch?.maxOutputUsdPerMillion, 4.5)
+    assert.deepEqual([...target.definition.config.dispatch?.excludeModelIds ?? []], ['m1'])
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects an empty dispatch object with no recognized hard requirement', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-empty-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'empty-dispatch.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'empty-dispatch'", '  dispatch: {},\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('empty-dispatch', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('at least one hard requirement')), errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects invalid intelligence tier ordering', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-order-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'bad-order.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'bad-order'", '  dispatch: { intelligenceMin: \'high\', intelligenceMax: \'low\' },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('bad-order', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('intelligenceMin')), errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects invalid exclusion entries', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-excl-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'bad-excl.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'bad-excl'", '  dispatch: { excludeModelIds: [\'ok\', \'\'] },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('bad-excl', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('excludeModelIds')), errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects legacy intelligence alias key', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-legacy-intel-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'legacy-intel.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'legacy-intel'", '  dispatch: { intelligence: { minimum: 1, maximum: 2 } },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('legacy-intel', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('no longer supported')), errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects legacy maximumOutputUsdPerMillion alias key', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-legacy-max-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'legacy-max.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'legacy-max'", '  dispatch: { maximumOutputUsdPerMillion: 5 },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('legacy-max', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('no longer supported')), errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects legacy exclusions alias key', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-legacy-excl-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'legacy-excl.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'legacy-excl'", '  dispatch: { exclusions: { model: [\'x\'] } },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('legacy-excl', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('no longer supported')), errors.map((e) => e.load_error).join('; '))
+  })
 })

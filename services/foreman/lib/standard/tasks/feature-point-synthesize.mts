@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { DesignDecisionSchema, FeaturePointSetSchema } from '../../core/task/schemas/feature-point.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -29,6 +30,7 @@ const definition = {
   config: {
     description: 'Synthesize a design-complete FeaturePointSet from brainstorm context and selected design decision',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],
     input: inputSchema,

@@ -62,6 +62,20 @@ var builtinProfiles = []Profile{
 		Settings: map[string]any{},
 	},
 	{
+		Name:        "codex-astra",
+		Client:      "codex",
+		Provider:    "codex",
+		Description: "Codex Astra",
+		Launcher: map[string]any{
+			"command": "codex",
+		},
+		Env: map[string]string{
+			"CODEX_MODEL":            "gpt-6-astra",
+			"CODEX_REASONING_EFFORT": "xhigh",
+		},
+		Settings: map[string]any{},
+	},
+	{
 		Name:        "cb-hy",
 		Client:      "codebuddy",
 		Provider:    "codebuddy",

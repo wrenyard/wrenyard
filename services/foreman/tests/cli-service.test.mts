@@ -934,7 +934,8 @@ test('foreman task commands reach the running service over IPC', async () => {
   writeFileSync(
     join(appRepo, 'echo.task.ts'),
     `export default defineTask({
-  profile: 'test-profile',
+  agentRuntime: 'forge/codex-luna',
+  dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.object({
     text: foremanSchemas.z.string(),
@@ -950,7 +951,8 @@ test('foreman task commands reach the running service over IPC', async () => {
   writeFileSync(
     join(appRepo, 'items.task.ts'),
     `export default defineTask({
-  profile: 'test-profile',
+  agentRuntime: 'forge/codex-luna',
+  dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.array(foremanSchemas.z.string()),
   output: foremanSchemas.z.any(),
@@ -1039,10 +1041,10 @@ test('foreman task commands reach the running service over IPC', async () => {
     assert.ifError(runResult.error)
     assert.equal(runResult.status, 0, `stdout:\n${runResult.stdout}\nstderr:\n${runResult.stderr}`)
 
-    const runPayload = JSON.parse(runResult.stdout) as { task_run_id?: string; status?: string; has_output?: boolean }
+    const runPayload = JSON.parse(runResult.stdout) as { task_run_id?: string; status?: string; output?: unknown }
     assert.match(runPayload.task_run_id ?? '', /^task_/u)
     assert.equal(runPayload.status, 'done')
-    assert.equal(runPayload.has_output, true)
+    assert.deepEqual(runPayload.output, { result: 'hello from ipc task' })
 
     const statusResult = await runForeman(repoRoot, binary, [
       'task',

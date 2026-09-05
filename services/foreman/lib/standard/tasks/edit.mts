@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   ChangeSchema,
@@ -48,6 +49,7 @@ const definition = {
     description:
       'File-level edit executor - apply precise create/update/remove instructions and report changes as evidence.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'edit',
     writeTargets: (input: unknown): readonly string[] => {
       const editInput = input as EditInput

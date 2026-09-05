@@ -8,6 +8,7 @@ func Module() schema.ProviderModule {
 		"gpt-5.6-terra":       {ID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra"},
 		"gpt-5.6-luna":        {ID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna"},
 		"gpt-5.3-codex-spark": {ID: "gpt-5.3-codex-spark", DisplayName: "GPT-5.3 Codex Spark"},
+		"gpt-6-astra":         {ID: "gpt-6-astra", DisplayName: "GPT-6 Astra"},
 		"gpt-5.5":             {ID: "gpt-5.5", DisplayName: "GPT-5.5"},
 		"gpt-5.4":             {ID: "gpt-5.4", DisplayName: "GPT-5.4"},
 		"gpt-5.4-mini":        {ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini"},

@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { ImplementationPlanSchema } from '../../core/task/schemas/implementation-plan.mts'
 import { FunctionalUnitSetSchema } from '../../core/task/schemas/functional-unit.mts'
@@ -80,6 +81,7 @@ const definition = {
     description:
       'Implementation plan review — verify one-FP/FU-node plan coverage, edit/test traceability, and implement workflow readiness',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: InputSchema,

@@ -29,6 +29,7 @@ export interface DesktopTrayHandle {
 export function createDesktopTray(options: DesktopTrayOptions): DesktopTrayHandle {
   const tray = new Tray(createDesktopTrayIcon());
   tray.setToolTip('啾啾工坊');
+  tray.on('click', () => options.openDesktop());
 
   const run = (operation: () => Promise<void>): void => {
     void operation()

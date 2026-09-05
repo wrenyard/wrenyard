@@ -28,12 +28,13 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.doesNotMatch(main, /app\.relaunch\(/);
   assert.match(tray, /new Tray\(/);
   assert.match(tray, /label: '打开'/);
-  assert.doesNotMatch(tray, /tray\.on\(['"]click['"]/);
+  assert.match(tray, /tray\.on\(['"]click['"],?\s*\(?[^)]*\)?\s*=>\s*options\.openDesktop/);
   assert.match(tray, /桌宠/);
   assert.match(tray, /label: '额度'/);
   assert.match(tray, /暂无可展示额度/);
   assert.doesNotMatch(tray, /未启用额度来源/);
   assert.match(tray, /label: '退出'/);
+  assert.match(tray, /app\.quit\(\)/);
   assert.match(quotaMenuIcon, /nativeImage\.createFromBuffer/);
   assert.match(quotaMenuIcon, /setTemplateImage\(true\)/);
   assert.doesNotMatch(quotaMenuIcon, /createFromDataURL|<svg/);

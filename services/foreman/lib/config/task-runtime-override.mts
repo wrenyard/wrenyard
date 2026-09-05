@@ -13,6 +13,35 @@ export function readTaskAgentRuntimeOverrides(
   return normalizeTaskAgentRuntimeOverrides(data.tasks?.agentRuntime)
 }
 
+/**
+ * The ONLY execution override seam. Returns the machine-configured runtime
+ * override for a task as a *preference* only. Unlike `applyTaskAgentRuntimeOverride`,
+ * this does NOT fall back to the task's declared runtime and does NOT authorize any
+ * profile: it is purely the operator's soft preference for the daemon-side dispatch
+ * resolver to honor when it does not conflict with a task's hard `dispatch`
+ * requirements. A task's exact declared `agentRuntime` (and any dispatch
+ * requirements) always win; this preference can never replace or relax them.
+ * Returns `undefined` when no machine override is configured for the task.
+ */
+export function taskRuntimeOverridePreference(
+  taskName: string,
+  overrides?: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const map = overrides ?? readTaskAgentRuntimeOverrides(env)
+  const value = map[taskName]
+  return value && value.trim() ? value.trim() : undefined
+}
+
+/**
+ * @deprecated Execution must NOT use this to replace a task's exact declared
+ * runtime. It is retained ONLY for `list`/`describe` backward-compatible display
+ * (showing the operator's soft override preference when present). The daemon
+ * dispatch resolver treats any returned value as a soft preference that can never
+ * bypass a task's hard `dispatch` requirements or replace the exact declared
+ * `agentRuntime`. Parser compatibility is preserved via
+ * `normalizeTaskAgentRuntimeOverrides`.
+ */
 export function applyTaskAgentRuntimeOverride(
   taskName: string,
   declared: string,
@@ -20,6 +49,10 @@ export function applyTaskAgentRuntimeOverride(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const map = overrides ?? readTaskAgentRuntimeOverrides(env)
+  // Returns the override when present, otherwise the declared runtime. This
+  // value is a *preference* for list/describe display and never bypasses a
+  // task's hard dispatch requirements — the daemon resolver treats it as a
+  // soft preference only.
   return map[taskName] ?? declared
 }
 

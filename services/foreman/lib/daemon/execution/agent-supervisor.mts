@@ -133,6 +133,12 @@ interface RegistryEntry {
   sawErrorResult: boolean
   pendingNativeSessionId?: string
   pendingClientFamily?: ClientFamily
+  pendingFailureClass?: string
+  /** Resolved by the attempt-deadline (timeout) handler so a bounded
+   *  stream-drain await converges at the deadline instead of hanging on a
+   *  held stdio pipe after an early child close. */
+  attemptDeadlinePromise?: Promise<void>
+  attemptDeadlineResolve?: () => void
 }
 
 type TerminalStatus = 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -208,6 +214,51 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           createdAt,
           createdAt,
         )
+
+        // Persist the full per-attempt dispatch snapshot (client/provider/model/
+        // model_id/mode/protocol + speed evidence + intelligence + reference
+        // pricing) keyed by the generated execution id and the task id. Each
+        // execution attempt stores its own row; an absent snapshot or task id
+        // writes nothing.
+        if (opts.taskId && opts.dispatchSnapshot) {
+          const snap = opts.dispatchSnapshot
+          this.run(
+            `INSERT INTO task_run_attempt_dispatch (
+              execution_id, task_run_id, requested_agent_runtime,
+              profile, client, provider, model, model_id, mode, protocol,
+              speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
+              speed_expected_tps_met, speed_degradation_reason, intelligence,
+              reference_pricing_input, reference_pricing_output, reference_pricing_cache,
+              reference_pricing_cache_write, reference_pricing_source, reference_pricing_checked_at,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            executionId,
+            opts.taskId,
+            snap.requested_agent_runtime ?? null,
+            snap.profile ?? null,
+            snap.client ?? null,
+            snap.provider ?? null,
+            snap.model ?? null,
+            snap.model_id ?? null,
+            snap.mode ?? null,
+            snap.protocol ?? null,
+            snap.speed.effective_tps ?? null,
+            snap.speed.source ?? null,
+            snap.speed.sample_count ?? null,
+            snap.speed.checked_at ?? null,
+            snap.speed.expected_tps_met ? 1 : 0,
+            snap.speed.degradation_reason ?? null,
+            snap.intelligence ?? null,
+            snap.reference_pricing.input_usd_per_million ?? null,
+            snap.reference_pricing.output_usd_per_million ?? null,
+            snap.reference_pricing.cached_input_usd_per_million ?? null,
+            snap.reference_pricing.cache_write_input_usd_per_million ?? null,
+            snap.reference_pricing.source ?? null,
+            snap.reference_pricing.checked_at ?? null,
+            createdAt,
+            createdAt,
+          )
+        }
 
         if (opts.taskId) {
           const attached = this.taskRuns().attachExecution(opts.taskId, executionId, createdAt)
@@ -585,13 +636,23 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     })
 
     if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
+      let resolveDeadline!: () => void
+      const deadline = new Promise<void>((resolve) => { resolveDeadline = resolve })
+      entry.attemptDeadlinePromise = deadline
+      entry.attemptDeadlineResolve = resolveDeadline
       entry.timeoutTimer = setTimeout(() => {
-        if (this.claimTerminalIntent(entry, { kind: 'timeout' })) {
-          entry.timedOut = true
-          void this.requestKillOnce(entry).catch((error: unknown) => {
-            this.log('warn', `[foreman] Timeout kill failed for ${entry.executionId}: ${errorMessage(error)}`)
-          })
-        }
+        if (entry.terminalGeneration > 0) return
+        // The attempt deadline overrides any provisional exit intent claimed by
+        // an early child close whose stdio stream is still draining, so the
+        // execution converges as timeout instead of hanging on held stdio. A
+        // committed terminal state is never overridden.
+        entry.terminalIntent = { kind: 'timeout' }
+        entry.timedOut = true
+        resolveDeadline()
+        void this.requestKillOnce(entry).catch((error: unknown) => {
+          this.log('warn', `[foreman] Timeout kill failed for ${entry.executionId}: ${errorMessage(error)}`)
+        })
+        void this.settleAttemptTimeout(entry)
       }, opts.timeoutMs)
     }
 
@@ -644,6 +705,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.captureResolvedProfileOnce(entry.executionId, detectedProfile, nowIso())
       }
 
+      const detectedFailureClass = detectFailureClass(event)
+      if (detectedFailureClass) {
+        entry.pendingFailureClass = detectedFailureClass
+      }
+
       const final = extractFinalResult(event)
       if (final) {
         entry.rawResult = redactJsonString(stableStringify(rawEvent))
@@ -681,7 +747,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private async handleChildClose(entry: RegistryEntry, exitCode: number | null, signal: NodeJS.Signals | null): Promise<void> {
     this.claimTerminalIntent(entry, { kind: 'exit', exitCode, signal })
     const intent = entry.terminalIntent
-    await entry.streamDone
+    await this.drainStreamAtDeadline(entry)
     const status = this.determineTerminalStatus(entry, intent)
     const killReason = this.determineKillReason(entry, status, intent)
     const output = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
@@ -694,6 +760,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       killReason,
       output,
       error,
+      failureClass: entry.pendingFailureClass ?? null,
     })
   }
 
@@ -730,14 +797,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   private terminalizeRunning(
     entry: RegistryEntry,
-    terminal: {
-      status: TerminalStatus
-      exitCode: number | null
-      signal: NodeJS.Signals | null
-      killReason: KillReason
-      output: string | null
-      error: string | null
-    },
+  terminal: {
+    status: TerminalStatus
+    exitCode: number | null
+    signal: NodeJS.Signals | null
+    killReason: KillReason
+    output: string | null
+    error: string | null
+    failureClass?: string | null
+  },
   ): void {
     if (entry.terminalGeneration > 0) return
 
@@ -818,6 +886,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           error: terminal.error,
           exitCode: terminal.exitCode,
           killReason: terminal.killReason,
+          failureClass: terminal.failureClass ?? null,
         }
       } else {
         const row = this.getExecution(entry.executionId)
@@ -1083,6 +1152,100 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       entry.terminalGeneration += 1
       this.resolveAndForget(entry, result)
     }
+  }
+
+  /**
+   * Await the stdio stream drain, but never past the attempt deadline. If the
+   * attempt deadline fired (e.g. a held stdio pipe after an early child close),
+   * the deadline signal resolves this race so terminalization converges at the
+   * deadline instead of hanging on an unsettled stream consumer.
+   */
+  private async drainStreamAtDeadline(entry: RegistryEntry): Promise<void> {
+    const streamDone = entry.streamDone
+    if (!streamDone) return
+    const deadline = entry.attemptDeadlinePromise
+    if (!deadline) {
+      await streamDone
+      return
+    }
+    await Promise.race([streamDone, deadline])
+  }
+
+  /**
+   * Durably terminalize a registered active execution whose observer is stalled
+   * past the attempt deadline, using the shared compare-and-set reconciler so
+   * the registered and no-registry timeout paths cannot drift. Reuses the
+   * cancellation settlement bound: if the close/stream observer commits a
+   * terminal row first, this is a no-op; otherwise it reconciles the execution
+   * as timeout. A committed terminal state is never overwritten.
+   */
+  private async settleAttemptTimeout(entry: RegistryEntry): Promise<void> {
+    if (entry.terminalGeneration > 0) return
+    const settled = await this.raceCancellationSettlement(entry)
+    if (settled === 'wait' || entry.terminalGeneration > 0) return
+    const won = this.reconcileTimeout(entry.executionId, nowIso())
+    let result: ExecutionResult | undefined
+    if (won) {
+      result = {
+        executionId: entry.executionId,
+        status: 'timeout',
+        output: (entry.finalOutput ?? entry.outputParts.join('')).trim() || null,
+        error: 'timeout',
+        exitCode: null,
+        killReason: 'timeout',
+      }
+    } else {
+      const row = this.getExecution(entry.executionId)
+      if (row && isTerminalStatus(row.status)) result = resultFromRow(row)
+    }
+    if (result) {
+      entry.terminalGeneration += 1
+      this.resolveAndForget(entry, result)
+    }
+  }
+
+  /**
+   * Shared transactional compare-and-set reconciler for attempt timeouts. Marks
+   * the execution timed out, inserts exactly one terminal execution event, and
+   * releases the repo write lock — but only when the compare-and-set transition
+   * from a non-terminal status wins. Returns true when this call won the
+   * transition; a losing call leaves the authoritative terminal row (and its
+   * events) untouched. The linked task is reconciled by the kernel, not here,
+   * matching the normal terminalizeRunning timeout path.
+   */
+  private reconcileTimeout(executionId: string, endedAt: string): boolean {
+    let won = false
+    this.tx(() => {
+      const row = this.get<{ task_id: string | null }>(
+        `SELECT task_id FROM executions WHERE id = ?`,
+        executionId,
+      )
+      if (!row) return
+      const result = this.run(
+        `UPDATE executions
+        SET status = 'timeout', ended_at = ?, error = 'timeout', kill_reason = 'timeout',
+          updated_at = ?
+        WHERE id = ? AND status IN ('queued', 'starting', 'running')`,
+        endedAt,
+        endedAt,
+        executionId,
+      )
+      if (result.changes !== 1) return
+      won = true
+      this.insertEvent({
+        executionId,
+        taskId: row.task_id ?? undefined,
+        seq: this.maxSeq(executionId) + 1,
+        type: 'terminal',
+        data: {},
+        status: 'failed',
+        exitCode: null,
+        isError: 1,
+        timestamp: endedAt,
+      })
+      this.repoWriteLocks.releaseByExecution(executionId)
+    })
+    return won
   }
 
   /**
@@ -1485,6 +1648,14 @@ function detectResolvedProfile(event: StreamEventRecord): string | undefined {
   }
   const profile = stringProp(event, 'profile')
   return profile ? profile.trim() : undefined
+}
+
+function detectFailureClass(event: StreamEventRecord): string | undefined {
+  if (stringProp(event, 'type') !== 'run_finished' || !isForgeAgentStreamV1(event)) {
+    return undefined
+  }
+  const fc = stringProp(event, 'failure_class')
+  return fc ? fc.trim() : undefined
 }
 
 function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {

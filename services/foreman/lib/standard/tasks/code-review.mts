@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   AcceptanceCriterionSchema,
@@ -111,6 +112,7 @@ const definition = {
     description:
       'Code quality reviewer - inspects current changes, reports only blocking must-fix issues, and emits file-targeted repair changes when needed. Read-only; never edits.',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: CodeReviewInputSchema,

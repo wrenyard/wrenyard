@@ -1,3 +1,4 @@
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'
 
@@ -33,6 +34,7 @@ const definition = {
     description:
       'Temporarily instrument component boundaries once, gather evidence, then revert instrumentation',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],
     input: InputSchema,

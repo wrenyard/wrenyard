@@ -298,6 +298,26 @@ describe('ForemanClient', () => {
     assert.deepEqual(rpc.requests[2]?.options, { timeoutMs: 605_000 })
   })
 
+  it('task.run.wait disables the client deadline by default and honors explicit timeouts', async () => {
+    const result = { ok: true }
+    const rpc = new FakeRpc(result)
+    const client = new ForemanClient(rpc)
+
+    // Omitted timeout_ms => no transport deadline (timeoutMs:null) so a
+    // legitimate long task is not cut off by the short RPC default.
+    const omittedParams = { task_run_id: 'run_omitted' }
+    await client.task.run.wait(omittedParams)
+    assertRequest(rpc, 0, 'task.run.wait', omittedParams)
+    assert.deepEqual(rpc.requests[0]?.options, { timeoutMs: null })
+
+    // Explicit timeout_ms => server param preserved, transport deadline is the
+    // server timeout plus the 5s margin (120000 + 5000).
+    const explicitParams = { task_run_id: 'run_explicit', timeout_ms: 120_000 }
+    await client.task.run.wait(explicitParams)
+    assertRequest(rpc, 1, 'task.run.wait', explicitParams)
+    assert.deepEqual(rpc.requests[1]?.options, { timeoutMs: 125_000 })
+  })
+
   it('activity.snapshot delegates to activity.snapshot JSON-RPC method', async () => {
     const result = { schema_version: 'foreman.activity.snapshot.v1', sampled_at: '2026-08-05T00:00:00.000Z', tasks: [], taskgraphs: [] }
     const rpc = new FakeRpc(result)

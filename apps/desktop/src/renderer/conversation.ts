@@ -3,6 +3,7 @@ import type {
   ConversationModelOptionSnapshot,
   ConversationSnapshot,
   QuotaSnapshot,
+  TaskRunSnapshot,
   WrenyardShellApi,
 } from '../shell-contract.js';
 import {
@@ -325,6 +326,50 @@ function renderRichText(text: string): DocumentFragment {
     }
   }
   return fragment;
+}
+
+export interface TaskRunSummaryLine {
+  label: string;
+  value: string;
+}
+
+/**
+ * Builds the truthful terminal consumption summary for a resolved run_task card.
+ * Missing numerics render as 未知; a real numeric zero is preserved so it still
+ * shows. The selection speed (when present) is labeled distinctly from the
+ * measured output TPS.
+ */
+export function buildTaskRunSummaryLines(taskRun: TaskRunSnapshot): TaskRunSummaryLine[] {
+  const lines: TaskRunSummaryLine[] = [];
+  const model = taskRun.resolvedModel ?? taskRun.resolvedProfile ?? '模型未知';
+  lines.push({ label: '模型 / 配置', value: model });
+
+  const usage = taskRun.usage;
+  if (usage.totalTokens !== undefined) {
+    const detail = usage.inputTokens !== undefined || usage.outputTokens !== undefined
+      ? `（输入 ${usage.inputTokens ?? '未知'} / 输出 ${usage.outputTokens ?? '未知'}）`
+      : '';
+    lines.push({ label: '消耗 TOKEN', value: `${usage.totalTokens}${detail}` });
+  } else {
+    lines.push({ label: '消耗 TOKEN', value: '未知' });
+  }
+
+  lines.push({ label: '实际 TPS', value: usage.outputTps !== undefined ? String(usage.outputTps) : '未知' });
+  lines.push({
+    label: '参考费用（估算）',
+    value: usage.referenceCostUsd !== undefined ? `$${usage.referenceCostUsd.toFixed(4)}` : '未知',
+  });
+  lines.push({ label: '尝试次数', value: String(usage.attemptCount) });
+
+  if (usage.completeness === 'partial') lines.push({ label: '成本完整性', value: '部分' });
+  else if (usage.completeness === 'unavailable') lines.push({ label: '成本完整性', value: '不可用' });
+
+  if (taskRun.speed) {
+    const source = taskRun.speed.source === 'local_31d' ? '本机 31 天' : '目录默认';
+    lines.push({ label: '选择速度（估算）', value: `${taskRun.speed.effectiveTps}（来源：${source}）` });
+  }
+
+  return lines;
 }
 
 export class ConversationView {
@@ -869,6 +914,47 @@ export class ConversationView {
     const code = document.createElement('pre');
     code.textContent = item.text || '无参数';
     tool.append(summary, code);
+
+    // run_task items carry terminal metadata once resolved, or a pending hint
+    // while the model is still being selected. Pending items never poll.
+    if (item.toolName === 'run_task') {
+      if (item.taskRun) {
+        const box = document.createElement('div');
+        box.className = 'task-run-summary';
+        for (const line of buildTaskRunSummaryLines(item.taskRun)) {
+          const row = document.createElement('div');
+          row.className = 'task-run-row';
+          const label = document.createElement('span');
+          label.className = 'task-run-label';
+          label.textContent = line.label;
+          const value = document.createElement('span');
+          value.className = 'task-run-value';
+          value.textContent = line.value;
+          row.append(label, value);
+          box.append(row);
+        }
+        tool.append(box);
+      } else {
+        const pending = document.createElement('div');
+        pending.className = 'task-run-pending';
+        pending.textContent = '运行中 · 模型待解析';
+        tool.append(pending);
+      }
+    }
+
+    // Bounded raw result, rendered as escaped text in its own expandable body.
+    if (item.toolResultText) {
+      const result = document.createElement('details');
+      result.className = 'tool-result';
+      const resultSummary = document.createElement('summary');
+      resultSummary.textContent = '原始结果';
+      const resultBody = document.createElement('div');
+      resultBody.className = 'tool-result-body';
+      resultBody.textContent = item.toolResultText;
+      result.append(resultSummary, resultBody);
+      tool.append(result);
+    }
+
     return tool;
   }
 

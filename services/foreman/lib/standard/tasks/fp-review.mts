@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { FeaturePointSetSchema } from '../../core/task/schemas/feature-point.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -68,6 +69,7 @@ const definition = {
   config: {
     description: 'Review FeaturePointSet design-contract completeness before user confirmation and breakdown',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],
     input: inputSchema,

@@ -15,8 +15,6 @@ export const whichCmd = process.platform === 'win32' ? 'where' : 'which'
 
 export type JsonRecord = Record<string, unknown>
 
-export const TASK_TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled', 'interrupted'])
-export const TASK_IPC_POLL_INTERVAL_MS = 100
 export const POWERSHELL_COMMAND_LINE_ENV = 'WRENYARD_POWERSHELL_COMMAND_LINE'
 
 export type IpcForemanClient = Awaited<ReturnType<typeof connectIpcForemanClient>>
@@ -206,31 +204,6 @@ export function taskRunIdFromPayload(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const taskRunId = (value as JsonRecord).task_run_id
   return typeof taskRunId === 'string' && taskRunId.trim() ? taskRunId : null
-}
-
-export async function waitForTaskCompletionViaIpc(client: IpcForemanClient, taskRunId: string): Promise<unknown> {
-  while (true) {
-    const status = await client.task.run.status({ task_run_id: taskRunId })
-    if (status && typeof status === 'object' && !Array.isArray(status)) {
-      const runStatus = (status as unknown as JsonRecord).status
-      if (typeof runStatus === 'string' && TASK_TERMINAL_STATUSES.has(runStatus)) return status
-    }
-    await sleep(TASK_IPC_POLL_INTERVAL_MS)
-  }
-}
-
-export function taskFinalStatusPayload(taskRunId: string, status: ServicePayload): ServicePayload {
-  if (!status.hasJson || !status.value || typeof status.value !== 'object' || Array.isArray(status.value)) return status
-  const value = status.value as JsonRecord
-  const hasOutput = value.has_output === true
-  return {
-    text: '',
-    hasJson: true,
-    value: {
-      ...value,
-      ...(hasOutput ? { hint: `Task finished. Use wrenyard task output ${taskRunId} to get the result.` } : {}),
-    },
-  }
 }
 
 export function isTaskRunSuccess(value: unknown): boolean {

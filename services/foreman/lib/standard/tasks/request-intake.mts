@@ -1,3 +1,4 @@
+import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { RequestIntakeResultSchema } from '../../core/task/schemas/inquiry.mts'
 import shellUsage from '../instructions/shell-usage.mts'
@@ -30,6 +31,7 @@ const definition = {
   config: {
     description: 'Reusable request intake: classify scope, decide whether targeted exploration is needed, then assess scope',
     agentRuntime: 'forge/general',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: InputSchema,

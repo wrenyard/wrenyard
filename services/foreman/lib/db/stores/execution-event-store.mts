@@ -151,25 +151,48 @@ export class ExecutionEventStore {
     if (write.type !== 'turn_usage') return
     const usage = parseAgentTurnUsage(write.data)
     if (usage) {
+      // total_tokens is the additive input (uncached) + cached (full cached
+      // partition, counted exactly once) + output sum, so cached_read/
+      // cache_creation splits never double count the cached partition.
+      const totalIncrement = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens
       this.db.prepare(
         `UPDATE task_run_telemetry
          SET usage_event_count = usage_event_count + 1,
+             input_tokens = input_tokens + ?,
+             cached_input_tokens = cached_input_tokens + ?,
+             cache_read_input_tokens = cache_read_input_tokens + ?,
+             cache_creation_input_tokens = cache_creation_input_tokens + ?,
              output_tokens = output_tokens + ?,
+             total_tokens = total_tokens + ?,
              agent_turn_ms = agent_turn_ms + ?,
              updated_at = ?
          WHERE task_run_id = ?`,
-      ).run(usage.outputTokens, usage.durationMs, write.timestamp, taskRunId)
+      ).run(
+        usage.inputTokens,
+        usage.cachedInputTokens,
+        usage.cacheReadInputTokens,
+        usage.cacheCreationInputTokens,
+        usage.outputTokens,
+        totalIncrement,
+        usage.durationMs,
+        write.timestamp,
+        taskRunId,
+      )
       return
     }
     this.db.prepare(
       `UPDATE task_run_telemetry
-       SET tps_complete = 0, updated_at = ?
+       SET tps_complete = 0, completeness = 'partial', updated_at = ?
        WHERE task_run_id = ?`,
     ).run(write.timestamp, taskRunId)
   }
 }
 
 interface AgentTurnUsage {
+  inputTokens: number
+  cachedInputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
   outputTokens: number
   durationMs: number
 }
@@ -183,6 +206,15 @@ interface AgentTurnUsage {
  * well as any unversioned or wrong-scope/contract value (for example
  * 'model_output' or a missing tps_contract) disqualify the event, which
  * permanently disables TPS for the task run.
+ *
+ * Token partitions are carried on the same trusted event: input_tokens is the
+ * uncached input partition, cached_input_tokens is the full cached partition
+ * (cache_read_input_tokens / cache_creation_input_tokens are the optional
+ * read/write split). All partition values are non-negative integers. The cached
+ * partition is counted exactly once: when the full cached partition is absent
+ * but the read/write split is present, the cached total is derived from the
+ * split rather than coerced to semantic zero, so a missing partition is never
+ * silently collapsed into a fabricated count.
  */
 function parseAgentTurnUsage(data: unknown): AgentTurnUsage | undefined {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined
@@ -195,5 +227,22 @@ function parseAgentTurnUsage(data: unknown): AgentTurnUsage | undefined {
     && record.duration_scope === 'agent_turn'
     && record.tps_contract === 'agent_turn_v1'
   if (!validOutputTokens || !validDurationMs || !validContract) return undefined
-  return { outputTokens, durationMs }
+  const fullCached = nonNegativeInt(record.cached_input_tokens)
+  const cacheRead = nonNegativeInt(record.cache_read_input_tokens)
+  const cacheCreation = nonNegativeInt(record.cache_creation_input_tokens)
+  // Count the cached input partition exactly once; fall back to the read/write
+  // split only when the full cached partition is genuinely absent.
+  const cachedInputTokens = fullCached > 0 ? fullCached : cacheRead + cacheCreation
+  return {
+    inputTokens: nonNegativeInt(record.input_tokens),
+    cachedInputTokens,
+    cacheReadInputTokens: cacheRead,
+    cacheCreationInputTokens: cacheCreation,
+    outputTokens,
+    durationMs,
+  }
+}
+
+function nonNegativeInt(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
 }

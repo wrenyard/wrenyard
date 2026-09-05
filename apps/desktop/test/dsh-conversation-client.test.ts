@@ -267,3 +267,199 @@ test('model projection rejects malformed DSH directory responses', () => {
     /current\.provider/,
   );
 });
+
+test('run_task card stays pending and without taskRun before the terminal result', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-run-1', name: 'run_task', arguments: '{"task_id":"task-abc"}' }),
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'tool');
+  assert.equal(items[0].toolName, 'run_task');
+  assert.equal(items[0].toolState, 'running');
+  assert.equal(items[0].taskRun, undefined);
+});
+
+test('run_task result updates the same single card with raw text and parsed taskRun', () => {
+  const payload = {
+    task_run_id: 'run-001',
+    task_id: 'task-abc',
+    task_name: 'nightly-build',
+    source: 'project',
+    status: 'done',
+    started_at: '2026-01-01T00:00:00Z',
+    finished_at: '2026-01-01T00:05:00Z',
+    resolved: {
+      requested_agent_runtime: 'forge/fast',
+      profile: 'profile-a',
+      client: 'codebuddy',
+      provider: 'zhipu-coding',
+      model: 'glm-5.3',
+      model_id: 'zhipu-coding/glm-5.3',
+      mode: 'native',
+      speed: {
+        effective_tps: 12.5,
+        source: 'local_31d',
+        sample_count: 3,
+        checked_at: '2026-01-01T00:00:00Z',
+        expected_tps_met: true,
+      },
+      intelligence: 'high',
+      reference_pricing: { source: 'catalog_reference', checked_at: '2026-01-01T00:00:00Z' },
+    },
+    usage: {
+      attempt_count: 1,
+      usage_event_count: 4,
+      input_tokens: 1200,
+      output_tokens: 800,
+      total_tokens: 2000,
+      agent_turn_ms: 300000,
+      output_tps: 2.7,
+      tps_contract: 'agent_turn_v1',
+      completeness: 'complete',
+      reference_cost_usd: 0.0123,
+      reference_cost_complete: true,
+      reference_cost_basis: 'catalog:glm-5.3',
+    },
+  };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-run-1', name: 'run_task', arguments: '{"task_id":"task-abc"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-run-1' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-run-1',
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.equal(items.length, 1);
+  const tool = items[0];
+  assert.equal(tool.toolState, 'done');
+  assert.equal(tool.toolResultText, JSON.stringify(payload));
+  assert.ok(tool.taskRun);
+  assert.equal(tool.taskRun?.taskRunId, 'run-001');
+  assert.equal(tool.taskRun?.taskId, 'task-abc');
+  assert.equal(tool.taskRun?.resolvedClient, 'codebuddy');
+  assert.equal(tool.taskRun?.resolvedProvider, 'zhipu-coding');
+  assert.equal(tool.taskRun?.resolvedModel, 'glm-5.3');
+  assert.equal(tool.taskRun?.resolvedModelId, 'zhipu-coding/glm-5.3');
+  assert.equal(tool.taskRun?.resolvedProfile, 'profile-a');
+  assert.equal(tool.taskRun?.speed?.effectiveTps, 12.5);
+  assert.equal(tool.taskRun?.usage.completeness, 'complete');
+  assert.equal(tool.taskRun?.usage.inputTokens, 1200);
+  assert.equal(tool.taskRun?.usage.referenceCostUsd, 0.0123);
+  assert.equal(tool.taskRun?.usage.referenceCostComplete, true);
+});
+
+test('run_task result missing task_id is supplied only from the original call arguments', () => {
+  const payload = {
+    task_run_id: 'run-002',
+    usage: { attempt_count: 1, usage_event_count: 2 },
+  };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-run-2', name: 'run_task', arguments: '{"task_id":"task-from-args"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-run-2' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-run-2',
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.ok(items[0].taskRun);
+  assert.equal(items[0].taskRun?.taskId, 'task-from-args');
+  assert.equal(items[0].taskRun?.taskRunId, 'run-002');
+});
+
+test('malformed run_task result stays raw-only without a taskRun', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-run-3', name: 'run_task', arguments: '{"task_id":"task-x"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-run-3' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-run-3',
+          content: [{ type: 'text', text: 'not json at all' }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolResultText, 'not json at all');
+  assert.equal(items[0].taskRun, undefined);
+});
+
+test('incomplete run_task result without usage stays raw-only', () => {
+  const payload = { task_run_id: 'run-004', task_id: 'task-y' };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-run-4', name: 'run_task', arguments: '{"task_id":"task-y"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-run-4' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-run-4',
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.ok(items[0].toolResultText);
+  assert.equal(items[0].taskRun, undefined);
+});
+
+test('unrelated tool result may expose raw text but never a taskRun', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-read', name: 'Read', arguments: '{"path":"README.md"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-read' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-read',
+          content: [{ type: 'text', text: '# README contents' }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolName, 'Read');
+  assert.equal(items[0].toolResultText, '# README contents');
+  assert.equal(items[0].taskRun, undefined);
+});
+
+test('raw run_task result text is capped at 16000 characters', () => {
+  const big = 'x'.repeat(20_000);
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-read-big', name: 'Read', arguments: '{}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-read-big' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-read-big',
+          content: [{ type: 'text', text: big }],
+          isError: false,
+        }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolResultText?.length, 16_000);
+  assert.equal(items[0].toolResultText, big.slice(0, 16_000));
+  assert.equal(items[0].taskRun, undefined);
+});

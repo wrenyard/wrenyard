@@ -954,4 +954,30 @@ describe('ForemanMcpServer v2 tools', () => {
       .map((event) => event.type)
       .filter((type) => type === 'task.started'), ['task.started'])
   })
+
+  it('keeps task.run.wait out of the MCP model tool surface while preserving existing tools', () => {
+    initTestDb()
+    const workspace = makeTempDir('foreman-mcp-workspace-')
+    writeProjectDefinitions(workspace)
+    const server = makeServer(workspace)
+    const toolNames = server.toolDefinitions().map((tool) => tool.name)
+
+    // The new public control protocol method must NOT appear as a model-visible tool.
+    assert.equal(toolNames.includes('task_run_wait'), false)
+    assert.equal(toolNames.includes('task_wait'), false)
+    assert.equal(toolNames.includes('wait'), false)
+
+    // Regression guard: the existing TaskGraph model tool surface is intact (9 tools).
+    const taskgraphTools = toolNames.filter((name) => name.startsWith('taskgraph_'))
+    assert.equal(taskgraphTools.length, 9)
+    assert.ok(taskgraphTools.includes('taskgraph_wait'))
+
+    // Existing task model tools remain exposed.
+    for (const name of ['task_list', 'task_run', 'task_status', 'task_output', 'task_cancel']) {
+      assert.ok(toolNames.includes(name), `expected model tool ${name} to remain`)
+    }
+
+    // Control protocol registry exposes task.run.wait without it becoming a model tool.
+    assert.ok(methodRegistry['task.run.wait'])
+  })
 })

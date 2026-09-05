@@ -31,6 +31,10 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H5V5Z" /><path d="M9 19h6M12 15v4" /><path d="M8 9h8" /></svg>
         <span class="tooltip" role="tooltip">客户端</span>
       </button>
+      <button class="activity-item" id="docs-nav" type="button" aria-label="文档" data-page="docs">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Z" /><path d="M14 3v4h4M9 12h6M9 15h6M9 18h4" /></svg>
+        <span class="tooltip" role="tooltip">文档</span>
+      </button>
       <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z" />
@@ -187,6 +191,14 @@
             <div class="ledger-table" id="stats-task-list"></div>
           </section>
         </div>
+
+        <section class="ledger-panel task-runs-panel" aria-labelledby="task-runs-title">
+          <div class="panel-heading">
+            <h2 id="task-runs-title">近期 Task 消耗</h2>
+            <span class="panel-legend">参考费用为估算，非账单</span>
+          </div>
+          <div class="ledger-table task-runs-table" id="stats-task-runs-list"></div>
+        </section>
       </section>
 
       <section class="product-page quota-page" id="quota-page" aria-labelledby="quota-title" hidden>
@@ -321,6 +333,45 @@
         </div>
       </section>
 
+      <section class="product-page docs-page" id="docs-page" aria-labelledby="docs-title" hidden>
+        <header class="page-hero">
+          <div>
+            <p class="eyebrow">WORKSHOP DOCUMENTS</p>
+            <h1 id="docs-title">文档</h1>
+            <p>编辑工坊规范与记忆；只暴露既有 Markdown，按显式保存落地，外部改动会触发保存冲突。</p>
+          </div>
+          <button class="secondary-button" id="docs-refresh-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            <span id="docs-refresh-label">刷新</span>
+          </button>
+        </header>
+
+        <div class="docs-meta">
+          <span class="status-pill is-pending" id="docs-status">读取中</span>
+          <div class="docs-category-switch" id="docs-category-switcher" role="tablist" aria-label="文档类别">
+            <button type="button" role="tab" aria-selected="true" class="is-selected" data-docs-category="specs">规范</button>
+            <button type="button" role="tab" aria-selected="false" data-docs-category="memory">记忆</button>
+          </div>
+          <label class="docs-project-filter" for="docs-project-filter"><span>项目</span></label>
+          <select id="docs-project-filter"><option value="">全部项目</option></select>
+        </div>
+
+        <div class="docs-layout">
+          <aside class="docs-sidebar" aria-label="文档列表">
+            <div class="docs-file-list" id="docs-file-list" role="list"></div>
+          </aside>
+          <section class="docs-editor-pane" aria-label="文档编辑">
+            <div class="docs-editor-head">
+              <code id="docs-current-path">未选择文档</code>
+              <button class="primary-button" id="docs-save-button" type="button" disabled>保存</button>
+            </div>
+            <textarea id="docs-editor" class="docs-editor" spellcheck="false" placeholder="选择左侧文档开始编辑…" aria-label="Markdown 编辑"></textarea>
+            <div class="docs-conflict" id="docs-conflict" role="alert" hidden></div>
+            <div class="docs-preview" id="docs-preview" aria-label="预览"></div>
+          </section>
+        </div>
+      </section>
+
       <div class="provider-dialog-backdrop" id="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" aria-hidden="true" hidden>
         <div class="provider-dialog-card">
           <p class="eyebrow">PROVIDER CONFIGURATION</p>
@@ -347,6 +398,19 @@
           <div class="client-plan-actions">
             <button class="secondary-button" id="client-plan-cancel" type="button">取消</button>
             <button class="primary-button" id="client-plan-confirm" type="button">确认应用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="docs-unsaved-backdrop" id="docs-unsaved-dialog" role="dialog" aria-modal="true" aria-labelledby="docs-unsaved-title" aria-hidden="true" hidden>
+        <div class="docs-unsaved-card">
+          <p class="eyebrow">未保存的改动</p>
+          <h2 id="docs-unsaved-title">文档有未保存的改动</h2>
+          <p id="docs-unsaved-message">离开前要保存还是丢弃这些改动？</p>
+          <div class="docs-unsaved-actions">
+            <button class="secondary-button" id="docs-unsaved-cancel" type="button">取消</button>
+            <button class="secondary-button" id="docs-unsaved-discard" type="button">丢弃</button>
+            <button class="primary-button" id="docs-unsaved-save" type="button">保存</button>
           </div>
         </div>
       </div>

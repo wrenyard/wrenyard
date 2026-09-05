@@ -6,6 +6,7 @@ import {
 import type { GateContext, GateFail, GatePass } from '../../core/task/types.mts'
 import commitRules from '../instructions/commit-rules.mts'
 import shellUsage from '../instructions/shell-usage.mts'
+import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 
 /** Re-export the `CommitRequest` TS type so downstream tests can import it
  *  from this module without reaching into the commit domain schemas. */
@@ -108,6 +109,7 @@ const definition = {
     description:
       'Structured git commit agent. Stages only declared file changes and creates verified local commits. NEVER pushes — outbound push happens only via `wrenyard project push <project>`.',
     agentRuntime: 'forge/fast',
+    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [commitRules, shellUsage],
     input: CommitRequestSchema,
