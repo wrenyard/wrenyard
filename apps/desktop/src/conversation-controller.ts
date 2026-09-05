@@ -17,6 +17,11 @@ export interface DesktopConversationSession {
   send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancel(): Promise<ConversationSnapshot>;
   stop(): void | Promise<void>;
+  /**
+   * Live pid of the backing DSH child process while a session backend is active.
+   * Internal smoke observability only; never exposed to renderer IPC.
+   */
+  backendProcessId?: number;
 }
 
 export interface DesktopConversationControllerOptions {
@@ -45,6 +50,15 @@ export class DesktopConversationController {
 
   get workspace(): WorkspaceConfigurationSnapshot {
     return this.workspaceValue;
+  }
+
+  /**
+   * Live pid of the active session's DSH backend child; internal smoke
+   * observability only (never exposed to renderer IPC). Clears naturally when
+   * the session is replaced, stopped, or exits unexpectedly.
+   */
+  get backendProcessId(): number | undefined {
+    return this.session?.backendProcessId;
   }
 
   start(): Promise<void> {

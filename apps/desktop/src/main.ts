@@ -260,6 +260,48 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
   ]);
 }
 
+/** Smoke-only probe: whether the DSH backend child process is still live. */
+function isDshChildAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Smoke-only lifecycle observability (never exposed to renderer IPC): exercise
+ * the production close-to-background and tray-restore paths and verify they
+ * preserve the exact same live DSH backend child.
+ */
+async function runSmokeWindowLifecycle(shell: ShellWindowController): Promise<void> {
+  const originalPid = conversationController?.backendProcessId;
+  if (!originalPid) {
+    throw new Error('smoke failed: active conversation session has no DSH backend pid');
+  }
+  const window = shell.window;
+  window.show();
+  window.focus();
+  window.close();
+  if (window.isDestroyed() || window.isVisible()) {
+    throw new Error('smoke failed: close did not hide the shell window to the tray');
+  }
+  if (!isDshChildAlive(originalPid) || conversationController?.backendProcessId !== originalPid) {
+    throw new Error('smoke failed: DSH backend pid changed or exited after hide');
+  }
+  if (!desktopTray) {
+    throw new Error('smoke failed: tray is unavailable for the restore check');
+  }
+  desktopTray.tray.emit('click');
+  if (window.isDestroyed() || !window.isVisible()) {
+    throw new Error('smoke failed: tray primary click did not restore the shell window');
+  }
+  if (!isDshChildAlive(originalPid) || conversationController?.backendProcessId !== originalPid) {
+    throw new Error('smoke failed: DSH backend pid changed or exited after tray restore');
+  }
+}
+
 async function createConversationSession(
   workspace: ConfiguredWorkspace,
   ipcPath: string,
@@ -315,7 +357,9 @@ async function createConversationSession(
     throw error;
   }
 
+  // Internal smoke observability only; never exposed to renderer IPC.
   return {
+    backendProcessId: dsh.child.pid,
     snapshot: () => client.snapshot(),
     select: (sessionId) => client.select(sessionId),
     create: () => client.create(),
@@ -631,14 +675,10 @@ async function bootstrap(): Promise<void> {
       throw new Error('smoke requires a configured workspace and DSH backend');
     }
     await runSmoke(shellWindow);
-    await petController.stop();
-    petController = null;
-    quotaController.stop();
-    quotaController = null;
-    await conversationController.stop();
-    conversationController = null;
+    await runSmokeWindowLifecycle(shellWindow);
     console.log('[wrenyard-desktop] smoke ok');
-    app.exit(0);
+    // Real explicit quit: the production before-quit handler owns all teardown.
+    app.quit();
   }
 }
 
