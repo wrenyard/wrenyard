@@ -103,7 +103,7 @@ test('stats snapshot rejects malformed projections and caps renderer arrays', as
   });
 });
 
-test('stats snapshot maps recentTaskRuns without inventing calculations', async () => {
+test('stats snapshot maps recentRuns without inventing calculations', async () => {
   const snapshot = await buildStatsSnapshot(async (method) => {
     if (method === 'stats.today') throw new Error('method unavailable');
     return {
@@ -113,11 +113,10 @@ test('stats snapshot maps recentTaskRuns without inventing calculations', async 
       byProfile: [],
       byTask: [],
       windows: [],
-      recentTaskRuns: [
+      recentRuns: [
         {
           task_run_id: 'run-1',
-          task_id: 'edit',
-          task_name: 'edit',
+          task: 'edit',
           source: 'builtin',
           status: 'done',
           started_at: '2026-08-28T10:00:00.000Z',
@@ -150,7 +149,7 @@ test('stats snapshot maps recentTaskRuns without inventing calculations', async 
         },
         {
           task_run_id: 'run-2',
-          task_id: 'build',
+          task: 'build',
           source: 'project',
           status: 'failed',
           resolved_profile: 'unknown',
@@ -168,7 +167,7 @@ test('stats snapshot maps recentTaskRuns without inventing calculations', async 
         },
         {
           task_run_id: 'run-3',
-          task_id: 'legacy',
+          task: 'legacy',
           source: 'unknown',
           status: 'done',
           usage: {
@@ -188,7 +187,8 @@ test('stats snapshot maps recentTaskRuns without inventing calculations', async 
 
   const complete = snapshot.recentTaskRuns[0];
   assert.equal(complete.taskRunId, 'run-1');
-  assert.equal(complete.taskName, 'edit');
+  assert.equal(complete.taskId, 'edit');
+  assert.equal(complete.taskName, undefined);
   assert.equal(complete.source, 'builtin');
   assert.equal(complete.status, 'done');
   assert.equal(complete.resolvedProfile, 'kimi');
@@ -243,10 +243,10 @@ test('stats snapshot retains runs with unknown cost and never fabricates a speed
       byProfile: [],
       byTask: [],
       windows: [],
-      recentTaskRuns: [
+      recentRuns: [
         {
           task_run_id: 'run-missing-cost',
-          task_id: 'edit',
+          task: 'edit',
           usage: {
             completeness: 'partial',
             attempt_count: 2,
@@ -258,7 +258,7 @@ test('stats snapshot retains runs with unknown cost and never fabricates a speed
         },
         {
           task_run_id: 'run-zero-and-bad-source',
-          task_id: 'build',
+          task: 'build',
           usage: {
             completeness: 'complete',
             attempt_count: 1,
@@ -290,7 +290,7 @@ test('stats snapshot retains runs with unknown cost and never fabricates a speed
   assert.equal(zeroAndBad.speed, undefined);
 });
 
-test('stats snapshot tolerates missing recentTaskRuns and malformed rows', async () => {
+test('stats snapshot tolerates missing recentRuns and malformed rows', async () => {
   const snapshot = await buildStatsSnapshot(async (method) => {
     if (method === 'stats.today') throw new Error('method unavailable');
     return {
@@ -300,11 +300,11 @@ test('stats snapshot tolerates missing recentTaskRuns and malformed rows', async
       byProfile: [],
       byTask: [],
       windows: [],
-      recentTaskRuns: [
-        { task_run_id: 'good', task_id: 'edit', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0.001, reference_cost_complete: true } },
-        { task_id: 'missing-run-id', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0.001, reference_cost_complete: true } },
+      recentRuns: [
+        { task_run_id: 'good', task: 'edit', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0.001, reference_cost_complete: true } },
+        { task: 'missing-run-id', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0.001, reference_cost_complete: true } },
         { task_run_id: 'missing-usage' },
-        { task_run_id: 'bad-cost', task_id: 'x', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_complete: true } },
+        { task_run_id: 'bad-cost', task: 'x', usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_complete: true } },
       ],
     };
   });
