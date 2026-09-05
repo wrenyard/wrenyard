@@ -933,11 +933,13 @@ function renderTaskRuns(snapshot: StatsSnapshot): void {
     tableHeader(['Task', '状态', '模型', 'Token', '选择速度', '实测 TPS', '参考费用（估算）', '尝试 / 完整']),
     ...runs.slice(0, 50).map((run) => {
       const usage = run.usage;
-      const tokenLabel = usage.totalTokens === undefined
+      const knownTokenDetails = [
+        usage.inputTokens !== undefined ? `入 ${formatCompactTokenCount(usage.inputTokens)}` : null,
+        usage.outputTokens !== undefined ? `出 ${formatCompactTokenCount(usage.outputTokens)}` : null,
+      ].filter((value): value is string => value !== null);
+      const tokenLabel = usage.totalTokens === undefined && knownTokenDetails.length === 0
         ? '未知'
-        : `总量 ${formatCompactTokenCount(usage.totalTokens)}`
-          + (usage.inputTokens !== undefined ? ` · 入 ${formatCompactTokenCount(usage.inputTokens)}` : '')
-          + (usage.outputTokens !== undefined ? ` · 出 ${formatCompactTokenCount(usage.outputTokens)}` : '');
+        : [`总量 ${usage.totalTokens === undefined ? '未知' : formatCompactTokenCount(usage.totalTokens)}`, ...knownTokenDetails].join(' · ');
       const speedLabel = run.speed === undefined
         ? '未知'
         : `${run.speed.effectiveTps.toFixed(1)} · ${run.speed.source === 'local_31d' ? '本机 31 天' : run.speed.source === 'catalog_default' ? '目录默认' : '未知来源'}`

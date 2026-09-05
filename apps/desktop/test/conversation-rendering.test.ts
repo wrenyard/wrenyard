@@ -123,6 +123,26 @@ test('run_task summary shows 未知 for missing values and exposes partial/unava
   assert.equal(uMap['参考费用（估算）'], '未知');
 });
 
+test('run_task summary keeps known partial token counts when total is unavailable', () => {
+  const partial: TaskRunSnapshot = {
+    taskRunId: 'run-partial-known-tokens',
+    taskId: 'edit',
+    usage: {
+      completeness: 'partial',
+      attemptCount: 1,
+      usageEventCount: 1,
+      inputTokens: 1_693_645,
+      outputTokens: 21_336,
+      referenceCostComplete: false,
+    },
+  };
+
+  const map = toLineMap(partial);
+  assert.equal(map['消耗 TOKEN'], '未知（输入 1693645 / 输出 21336）');
+  assert.equal(map['参考费用（估算）'], '未知');
+  assert.equal(map['成本完整性'], '部分');
+});
+
 test('run_task summary labels catalog-default selection speed', () => {
   const run: TaskRunSnapshot = {
     taskRunId: 'run-4',
