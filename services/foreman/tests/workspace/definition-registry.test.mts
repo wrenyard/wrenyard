@@ -22,6 +22,7 @@ import {
   resolveTaskTarget,
   discoverTasks,
 } from '../../lib/workspace/task-loader.mts'
+import { listTaskDefinitions } from '../../lib/workspace/definition-registry.mts'
 import { foremanStateRoot } from '../../lib/config/state.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
 import type { ResolvedTarget, TaskDefinition } from '../../lib/types.mts'
@@ -391,6 +392,14 @@ describe('workspace definition registry', () => {
     writeFileSync(join(projectDir, 'modern.task.ts'), `export default defineTask({
   permission: 'readonly',
   agentRuntime: 'forge/codex-luna',
+  dispatch: {
+    expectedTps: 20,
+    minimumTps: 10,
+    intelligenceMin: 'high',
+    maxOutputUsdPerMillion: 5,
+    requiredCapabilities: ['text'],
+    preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+  },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: () => 'modern',
@@ -409,6 +418,19 @@ describe('workspace definition registry', () => {
     assert.ok(modern, 'modern task should be listed')
     assert.equal(modern.agentRuntime, 'forge/codex-luna')
     assert.equal('profile' in modern, false, 'profile must not appear in public metadata')
+
+    const summaries = listTaskDefinitions(workspace, 'app')
+    const modernSummary = summaries.find((task) => task.name === 'modern')
+    assert.ok(modernSummary, 'modern task summary should be listed')
+    assert.equal(modernSummary.agentRuntime, 'forge/codex-luna')
+    assert.deepEqual(modernSummary.dispatch, {
+      expectedTps: 20,
+      minimumTps: 10,
+      intelligenceMin: 'high',
+      maxOutputUsdPerMillion: 5,
+      requiredCapabilities: ['text'],
+      preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+    })
 
     const described = describeTask('modern', workspace, 'app')
     assert.ok(described, 'modern task should be describable')

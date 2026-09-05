@@ -46,6 +46,22 @@ export interface WrenyardIpcRequestOptions {
   timeoutMs?: number | null;
 }
 
+export interface WrenyardGatewayModelSpeed {
+  tps: number;
+  source: string;
+  checkedAt: string;
+  conservative?: boolean;
+  basis?: string;
+}
+
+export interface WrenyardGatewayModelPricing {
+  inputUsdPerMillion: number;
+  cachedInputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  source: string;
+  checkedAt: string;
+}
+
 export interface WrenyardGatewayModel {
   id: string;
   publicId: string;
@@ -53,6 +69,15 @@ export interface WrenyardGatewayModel {
   displayName: string;
   contextWindow?: number;
   maxTokens?: number;
+  taskOnly?: boolean;
+  family?: 'claude';
+  claudeTier?: 'haiku' | 'sonnet' | 'opus';
+  supports1MContext?: boolean;
+  intelligence?: 'low' | 'mid' | 'high' | 'frontier' | 'premium';
+  maxOutputTokens?: number;
+  capabilities?: readonly ('text' | 'image')[];
+  speed?: WrenyardGatewayModelSpeed;
+  pricing?: WrenyardGatewayModelPricing;
 }
 
 export interface WrenyardGatewayConnection {

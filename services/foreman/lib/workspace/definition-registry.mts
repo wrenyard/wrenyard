@@ -222,6 +222,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeProfileIds,
     excludeClientIds,
     excludeProviderIds,
+    preferredRuntime,
   } = raw
 
   // The dispatch object must contain at least one recognized hard requirement.
@@ -279,6 +280,20 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   if (maxOutputUsdPerMillion !== undefined) {
     if (typeof maxOutputUsdPerMillion !== 'number' || !Number.isFinite(maxOutputUsdPerMillion) || maxOutputUsdPerMillion <= 0) {
       throw new Error(`${sourcePath} task config dispatch.maxOutputUsdPerMillion must be a positive number`)
+    }
+  }
+
+  if (preferredRuntime !== undefined) {
+    if (preferredRuntime === null || typeof preferredRuntime !== 'object' || Array.isArray(preferredRuntime)) {
+      throw new Error(`${sourcePath} task config dispatch.preferredRuntime must be an object { client, provider, model }`)
+    }
+    const preferred = preferredRuntime as Record<string, unknown>
+    const keys = Object.keys(preferred)
+    if (keys.length !== 3 || !keys.every((key) => key === 'client' || key === 'provider' || key === 'model')
+      || typeof preferred.client !== 'string' || preferred.client.length === 0
+      || typeof preferred.provider !== 'string' || preferred.provider.length === 0
+      || typeof preferred.model !== 'string' || preferred.model.length === 0) {
+      throw new Error(`${sourcePath} task config dispatch.preferredRuntime must contain only non-empty client, provider, and model strings`)
     }
   }
 
@@ -552,7 +567,7 @@ export function resolveRunTarget(name: string, workspaceRoot: string, currentPro
 export function describeTask(name: string, workspaceRoot: string, currentProject?: string): ListedDefinition | null {
   const registry = registryFor(workspaceRoot)
   const entry = resolveEntry(registry.tasks, name, currentProject)
-  return entry ? taskToListed(entry) : null
+  return entry ? taskToListed(entry, readTaskAgentRuntimeOverrides()) : null
 }
 
 export function listTasks(workspaceRoot: string, currentProject?: string): ListedDefinition[] {
@@ -576,8 +591,12 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
   effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
   timeoutScope?: TaskTimeoutScope
+  scheduling?: 'active' | 'legacy'
+  agentRuntime?: string
+  dispatch?: TaskDispatchRequirements
 }> {
   const registry = registryFor(workspaceRoot)
+  const overrides = readTaskAgentRuntimeOverrides()
   return effectiveEntries(registry.tasks, currentProject)
     .filter((entry) => entry.definition.config.scheduling !== 'legacy')
     .map((entry) => {
@@ -588,7 +607,12 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.definition.config.description ? { description: entry.definition.config.description } : {}),
       ...(category ? { category } : {}),
+      ...(entry.definition.config.scheduling
+        ? { scheduling: entry.definition.config.scheduling }
+        : {}),
+      agentRuntime: resolveTaskAgentRuntime(entry.definition.config, entry.name, overrides),
       ...timeoutMetadata(entry.definition.config),
+      ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
     }
     })
 }

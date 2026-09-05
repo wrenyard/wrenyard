@@ -535,6 +535,73 @@ describe('lib/protocol JSON-RPC contract', () => {
       timeoutScope: TASK_TIMEOUT_SCOPE,
     }])
 
+    const enrichedGatewayResult = {
+      openaiChatBaseUrl: 'http://127.0.0.1:4000/v1',
+      openaiResponsesBaseUrl: 'http://127.0.0.1:4000/v1',
+      anthropicBaseUrl: 'http://127.0.0.1:4000',
+      token: 'gateway-token',
+      models: [{
+        id: 'claude-sonnet-4-5',
+        publicId: 'claude-sonnet-4-5',
+        provider: 'anthropic',
+        displayName: 'Claude Sonnet 4.5',
+        contextWindow: 200000,
+        maxTokens: 8192,
+        taskOnly: false,
+        family: 'claude',
+        claudeTier: 'sonnet',
+        supports1MContext: true,
+        intelligence: 'frontier',
+        maxOutputTokens: 8192,
+        capabilities: ['text', 'image'],
+        speed: {
+          tps: 40,
+          source: 'catalog',
+          checkedAt: '2026-09-05T00:00:00.000Z',
+          conservative: true,
+          basis: 'rolling benchmark',
+        },
+        pricing: {
+          inputUsdPerMillion: 3,
+          cachedInputUsdPerMillion: 0.3,
+          outputUsdPerMillion: 15,
+          source: 'catalog',
+          checkedAt: '2026-09-05T00:00:00.000Z',
+        },
+      }],
+    }
+    assert.deepEqual(parseMethodResult('gateway.connection', enrichedGatewayResult), enrichedGatewayResult)
+
+    const dispatchSummary = {
+      name: 'dispatch-task',
+      source: 'workspace',
+      agentRuntime: 'forge/codex-luna',
+      dispatch: {
+        expectedTps: 20,
+        minimumTps: 10,
+        intelligenceMin: 'high',
+        intelligenceMax: 'premium',
+        maxOutputUsdPerMillion: 5,
+        requiredCapabilities: ['text'],
+        excludeModelIds: ['model-old'],
+        excludeProfileIds: ['profile-old'],
+        excludeClientIds: ['client-old'],
+        excludeProviderIds: ['provider-old'],
+        preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      },
+    }
+    assert.deepEqual(parseMethodResult('task.definition.list', [dispatchSummary]), [dispatchSummary])
+    assert.throws(
+      () => parseMethodResult('task.definition.list', [{
+        ...dispatchSummary,
+        dispatch: { ...dispatchSummary.dispatch, unsupported: true },
+      }]),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
     assert.deepEqual(parseMethodResult('task.definition.describe', {
       name: 'commit',
       source: 'workspace',
