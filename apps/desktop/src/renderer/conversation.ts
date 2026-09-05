@@ -345,11 +345,11 @@ export function buildTaskRunSummaryLines(taskRun: TaskRunSnapshot): TaskRunSumma
   lines.push({ label: '模型 / 配置', value: model });
 
   const usage = taskRun.usage;
-  if (usage.totalTokens !== undefined) {
+  if (usage.totalTokens !== undefined || usage.inputTokens !== undefined || usage.outputTokens !== undefined) {
     const detail = usage.inputTokens !== undefined || usage.outputTokens !== undefined
       ? `（输入 ${usage.inputTokens ?? '未知'} / 输出 ${usage.outputTokens ?? '未知'}）`
       : '';
-    lines.push({ label: '消耗 TOKEN', value: `${usage.totalTokens}${detail}` });
+    lines.push({ label: '消耗 TOKEN', value: `${usage.totalTokens ?? '未知'}${detail}` });
   } else {
     lines.push({ label: '消耗 TOKEN', value: '未知' });
   }
