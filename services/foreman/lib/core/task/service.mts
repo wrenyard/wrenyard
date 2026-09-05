@@ -137,10 +137,17 @@ export class TaskService {
     source: string
     project?: string
     description?: string
+    category?: {
+      id: string
+      displayLabel: string
+    }
+    agentRuntime?: string
     timeoutMs?: number
     effectiveTimeoutMs?: number
     structuredRetryTimeoutMs?: number
     timeoutScope?: 'agent_attempt'
+    scheduling?: 'active' | 'legacy'
+    dispatch?: ListedDefinition['dispatch']
   }>> {
     await this.workspace.ensureDiscovered()
     if (project) this.requireRegisteredProject(project)

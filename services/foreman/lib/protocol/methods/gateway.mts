@@ -14,6 +14,27 @@ export interface GatewayConnectionResult {
     displayName: string
     contextWindow?: number
     maxTokens?: number
+    taskOnly?: boolean
+    family?: 'claude'
+    claudeTier?: 'haiku' | 'sonnet' | 'opus'
+    supports1MContext?: boolean
+    intelligence?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+    maxOutputTokens?: number
+    capabilities?: readonly ('text' | 'image')[]
+    speed?: {
+      tps: number
+      source: string
+      checkedAt: string
+      conservative?: boolean
+      basis?: string
+    }
+    pricing?: {
+      inputUsdPerMillion: number
+      cachedInputUsdPerMillion: number
+      outputUsdPerMillion: number
+      source: string
+      checkedAt: string
+    }
   }>
 }
 
@@ -37,6 +58,29 @@ export const gatewayConnectionResultSchema = {
         properties: {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
+          taskOnly: { type: 'boolean' }, family: { const: 'claude' },
+          claudeTier: { enum: ['haiku', 'sonnet', 'opus'] }, supports1MContext: { type: 'boolean' },
+          intelligence: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
+          maxOutputTokens: { type: 'integer', minimum: 1 },
+          capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
+          speed: {
+            type: 'object',
+            required: ['tps', 'source', 'checkedAt'],
+            properties: {
+              tps: { type: 'number', minimum: 0 }, source: { type: 'string', minLength: 1 }, checkedAt: { type: 'string', minLength: 1 },
+              conservative: { type: 'boolean' }, basis: { type: 'string', minLength: 1 },
+            },
+            additionalProperties: false,
+          },
+          pricing: {
+            type: 'object',
+            required: ['inputUsdPerMillion', 'cachedInputUsdPerMillion', 'outputUsdPerMillion', 'source', 'checkedAt'],
+            properties: {
+              inputUsdPerMillion: { type: 'number', minimum: 0 }, cachedInputUsdPerMillion: { type: 'number', minimum: 0 },
+              outputUsdPerMillion: { type: 'number', minimum: 0 }, source: { type: 'string', minLength: 1 }, checkedAt: { type: 'string', minLength: 1 },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },

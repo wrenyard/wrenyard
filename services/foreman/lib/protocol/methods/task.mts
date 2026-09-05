@@ -29,6 +29,24 @@ export const taskRunStatusValues = [
 
 export type TaskRunStatus = typeof taskRunStatusValues[number]
 
+export interface TaskDispatchRequirements {
+  expectedTps?: number
+  minimumTps?: number
+  intelligenceMin?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+  intelligenceMax?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+  maxOutputUsdPerMillion?: number
+  requiredCapabilities?: readonly ('text' | 'image')[]
+  excludeModelIds?: readonly string[]
+  excludeProfileIds?: readonly string[]
+  excludeClientIds?: readonly string[]
+  excludeProviderIds?: readonly string[]
+  preferredRuntime?: {
+    client: string
+    provider: string
+    model: string
+  }
+}
+
 export interface TaskDefinitionSummary {
   name: string
   source: string
@@ -44,6 +62,7 @@ export interface TaskDefinitionSummary {
   structuredRetryTimeoutMs?: number
   timeoutScope?: 'agent_attempt'
   scheduling?: 'active' | 'legacy'
+  dispatch?: TaskDispatchRequirements
 }
 
 export interface TaskDefinitionDetail extends TaskDefinitionSummary {
@@ -209,6 +228,33 @@ const taskCategorySchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskDispatchRequirementsSchema = {
+  type: 'object',
+  properties: {
+    expectedTps: { type: 'number', exclusiveMinimum: 0 },
+    minimumTps: { type: 'number', exclusiveMinimum: 0 },
+    intelligenceMin: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
+    intelligenceMax: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
+    maxOutputUsdPerMillion: { type: 'number', exclusiveMinimum: 0 },
+    requiredCapabilities: { type: 'array', items: { enum: ['text', 'image'] } },
+    excludeModelIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    excludeProfileIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    excludeClientIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    excludeProviderIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    preferredRuntime: {
+      type: 'object',
+      required: ['client', 'provider', 'model'],
+      properties: {
+        client: { type: 'string', minLength: 1 },
+        provider: { type: 'string', minLength: 1 },
+        model: { type: 'string', minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 export const taskDefinitionSummarySchema = {
   type: 'object',
   required: ['name', 'source'],
@@ -224,6 +270,7 @@ export const taskDefinitionSummarySchema = {
     structuredRetryTimeoutMs: { type: 'number' },
     timeoutScope: { enum: ['agent_attempt'] },
     scheduling: { enum: ['active', 'legacy'] },
+    dispatch: taskDispatchRequirementsSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
