@@ -18,3 +18,31 @@ test('macOS keeps the native app menu while Windows keeps the native file menu',
   assert.equal(desktopMenuTemplate('darwin', () => undefined)[0]?.role, 'appMenu');
   assert.equal(desktopMenuTemplate('win32', () => undefined)[0]?.role, 'fileMenu');
 });
+
+test('macOS menu binds a native Close Window command to Cmd+W', () => {
+  const template = desktopMenuTemplate('darwin', () => undefined);
+  const closeItems = template
+    .flatMap((item) => (Array.isArray(item.submenu) ? item.submenu : []))
+    .filter((item) => item.role === 'close');
+  assert.equal(closeItems.length, 1);
+  assert.equal(closeItems[0].label, '关闭窗口');
+  assert.equal(closeItems[0].accelerator, 'CmdOrCtrl+W');
+});
+
+test('Cmd+W close binding is macOS-only and existing menus stay intact', () => {
+  const mac = desktopMenuTemplate('darwin', () => undefined);
+  const win = desktopMenuTemplate('win32', () => undefined);
+
+  assert.equal(mac[0]?.role, 'appMenu');
+  assert.equal(win[0]?.role, 'fileMenu');
+  assert.deepEqual(
+    mac.slice(2).map((item) => item.role),
+    ['editMenu', 'viewMenu', 'windowMenu', 'help'],
+  );
+  assert.ok(!win.some((item) => item.role === 'close'), 'Windows must not get the macOS-only close binding');
+
+  const help = mac.find((item) => item.role === 'help');
+  assert.ok(help && Array.isArray(help.submenu));
+  assert.equal(help.submenu.length, 1);
+  assert.equal(help.submenu[0].accelerator, 'CmdOrCtrl+Shift+U');
+});
