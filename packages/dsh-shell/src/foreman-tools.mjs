@@ -9,11 +9,17 @@
  * or Wrenyard source, never logs credentials or raw environment values, and
  * bundles no internal provider.
  *
- * Exactly three Desktop/DSH model-visible tools are exposed, each mapped to a
- * canonical MCP definition and surfaced under a stable alias:
- *   - list_task     -> task_list
- *   - describe_task -> task_describe
- *   - run_task      -> task_run (+ IPC task.run.wait)
+ * Exactly seven Desktop/DSH model-visible tools are exposed under stable
+ * aliases. The three task tools are mapped to canonical MCP definitions; the
+ * four workspace-document tools talk only to the owner-only NDJSON IPC
+ * surface:
+ *   - list_task            -> task_list (MCP)
+ *   - describe_task        -> task_describe (MCP)
+ *   - run_task             -> task_run (MCP) + IPC task.run.wait / task.run.cancel
+ *   - list_workspace_docs  -> workspace.doc.list (owner-only IPC)
+ *   - read_workspace_doc   -> workspace.doc.read (owner-only IPC)
+ *   - create_workspace_doc -> workspace.doc.create (owner-only IPC)
+ *   - update_workspace_doc -> workspace.doc.update (owner-only IPC; expectedContent CAS)
  */
 
 import net from 'node:net';
@@ -35,6 +41,67 @@ const TASK_CANONICAL = {
 
 const IPC_WAIT_METHOD = 'task.run.wait';
 const IPC_CANCEL_METHOD = 'task.run.cancel';
+
+const DOC_ALIAS_TO_IPC = {
+  list_workspace_docs: 'workspace.doc.list',
+  read_workspace_doc: 'workspace.doc.read',
+  create_workspace_doc: 'workspace.doc.create',
+  update_workspace_doc: 'workspace.doc.update',
+};
+
+// The seven model-visible aliases keep their execution authority in the
+// Wrenyard backend. Only these names may short-circuit the pre-execute
+// waterfall; every other native tool must keep flowing through DSH policy.
+const WRENYARD_ALIAS_NAMES = new Set([...Object.keys(TASK_CANONICAL), ...Object.keys(DOC_ALIAS_TO_IPC)]);
+
+const DOC_DEFINITIONS = {
+  list_workspace_docs: {
+    description: 'List Wrenyard workspace documents, optionally under a workspace directory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Optional workspace directory whose documents should be listed.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  read_workspace_doc: {
+    description: 'Read a single Wrenyard workspace document by workspace-relative path.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative document path.' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  create_workspace_doc: {
+    description: 'Create a Wrenyard workspace document at the given path with the given full content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative document path.' },
+        content: { type: 'string', description: 'Full document content.' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+  },
+  update_workspace_doc: {
+    description: 'Update a Wrenyard workspace document at the given path only when its current content still matches expectedContent (compare-and-set).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative document path.' },
+        content: { type: 'string', description: 'New full document content.' },
+        expectedContent: { type: 'string', description: 'Expected current content; the backend rejects on CAS mismatch.' },
+      },
+      required: ['path', 'content', 'expectedContent'],
+      additionalProperties: false,
+    },
+  },
+};
 
 function abortError() {
   const err = new Error('Aborted');
@@ -285,8 +352,10 @@ function makeExecute(mcpUrl, sender, canonicalName) {
  * mid-create cannot discard a successfully returned id, and the wait request
  * keeps the signal so Stop closes the wait socket promptly. Cancellation is
  * idempotent (attempted-flag set before the await) and its failure is swallowed
- * so the original abort stays authoritative. No fourth model-visible tool is
- * added; IPC_CANCEL_METHOD is exercised only through this private helper.
+ * so the original abort stays authoritative. No cancel/status tool is exposed
+ * to the model; IPC_CANCEL_METHOD is exercised only through this private
+ * helper, and the four workspace-doc aliases route only to their own
+ * owner-only workspace.doc.* IPC methods.
  */
 function makeRunTaskExecute(mcpUrl, sender, socketPath) {
   return async function execute(input, { signal } = {}) {
@@ -339,6 +408,21 @@ function makeRunTaskExecute(mcpUrl, sender, socketPath) {
   };
 }
 
+/**
+ * Workspace-document aliases route straight to the owner-only NDJSON IPC
+ * surface: params are forwarded unchanged to the canonical workspace.doc.*
+ * method and the daemon applies its workspace-root path restriction and
+ * expectedContent CAS. There is no MCP fallback and no generic filesystem or
+ * delete/rename surface; backend IPC errors surface as bounded rejections.
+ */
+function makeDocExecute(socketPath, ipcMethod) {
+  return async function execute(input, { signal } = {}) {
+    const result = await ipcRequest(socketPath, ipcMethod, input || {}, { signal });
+    if (typeof result === 'string') return result;
+    return JSON.stringify(result === undefined ? null : result, null, 2);
+  };
+}
+
 function registerTool(tools, aliasName, canonicalTool, execute) {
   const definition = {
     name: aliasName,
@@ -354,7 +438,18 @@ function registerTool(tools, aliasName, canonicalTool, execute) {
 
 export async function apply(ctx) {
   const { tools } = ctx;
-  if (typeof ctx.on === 'function') ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }));
+  if (typeof ctx.on === 'function') {
+    ctx.on('tools/pre-execute', async (exec, next) => {
+      // Authority for the seven Wrenyard aliases lives in the Wrenyard backend,
+      // so those are allowed here. Every other native tool (bash, fs, browser,
+      // ...) must continue through DSH's own approval/sandbox policy via next()
+      // and is never short-circuited.
+      if (exec && typeof exec.name === 'string' && WRENYARD_ALIAS_NAMES.has(exec.name)) {
+        return { kind: 'allow' };
+      }
+      return next();
+    });
+  }
 
   const mcpUrl = process.env.WRENYARD_MCP_URL || process.env.FOREMAN_MCP_URL || DEFAULT_MCP_URL;
   const sender = process.env.WRENYARD_MCP_SENDER || process.env.FOREMAN_MCP_SENDER || undefined;
@@ -379,7 +474,15 @@ export async function apply(ctx) {
 
   registerTool(tools, 'list_task', taskList, makeExecute(mcpUrl, sender, TASK_CANONICAL.list_task));
   registerTool(tools, 'describe_task', taskDescribe, makeExecute(mcpUrl, sender, TASK_CANONICAL.describe_task));
-  registerTool(tools, 'run_task', taskRun, makeRunTaskExecute(mcpUrl, sender, wrenyardIpcPath()));
+
+  const socketPath = wrenyardIpcPath();
+  registerTool(tools, 'run_task', taskRun, makeRunTaskExecute(mcpUrl, sender, socketPath));
+
+  // The four workspace-doc aliases depend only on the owner-only IPC socket,
+  // not on the MCP task catalog, and inherit the same bounded-error path.
+  for (const alias of Object.keys(DOC_ALIAS_TO_IPC)) {
+    registerTool(tools, alias, DOC_DEFINITIONS[alias], makeDocExecute(socketPath, DOC_ALIAS_TO_IPC[alias]));
+  }
 }
 
 export default { name, inject, apply };
