@@ -7,6 +7,7 @@
   "license": "MIT",
   "files": [
     "src/foreman-tools.mjs",
+    "src/tool-boundary.mjs",
     "src/directory-picker.mjs",
     "cordis.patch.yml",
     "presets/wrenyard/agent.cordis.yml",
@@ -15,6 +16,7 @@
   ],
   "exports": {
     ".": "./src/foreman-tools.mjs",
+    "./tool-boundary": "./src/tool-boundary.mjs",
     "./directory-picker": "./src/directory-picker.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },

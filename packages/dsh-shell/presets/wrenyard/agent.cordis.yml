@@ -1,12 +1,13 @@
-# Wrenyard agent preset: Code Mode presentation over the host Foreman bridge.
-# Host composition already inserts `@wrenyard/dsh-shell` and sets tools.mode
-# code. This roster row is what the Web 模式 dropdown lists; DSH overwrites
+# Wrenyard agent preset: native tool presentation over the host Foreman bridge,
+# with an agent-scoped denial of competing DSH orchestration tools. Host
+# composition already inserts `@wrenyard/dsh-shell` and sets tools.mode native.
+# This roster row is what the Web 模式 dropdown lists; DSH overwrites
 # agent-presets.roots with its shipped standard/ptc/minimal/cordis directory,
 # so Desktop installs this copy under $DSH_HOME/.agent-presets/wrenyard.
 
 # Keep the harness lean (minimal-like): short identity, no calling-form
 # recipes, includeRuntimeContext false. Do not set `complete: true` on
-# mode:code — that assemble waterfall drops tools:sdk and can also drop
+# mode:native — that assemble waterfall drops tools:sdk and can also drop
 # workspace AGENTS.md. Tool params and orchestration live in workspace
 # AGENTS.md, shared with CLI/MCP coding agents.
 - id: persona
@@ -16,10 +17,18 @@
     text: >-
       你是啾啾工坊的编排者。面向用户使用中文。编排协议与工具参数见工作区
       AGENTS.md。权限、写锁与持久状态由 Wrenyard 持有，不得伪造、猜测或绕过。
-      禁止 sleep 或 status 轮询等待任务图。Wrenyard 不可用时停止派发并修它，
-      不得回退到 shell、文件系统、浏览器或子代理。
+      禁止 sleep 或 status 轮询等待任务图。任务编排只能经由 Wrenyard 的
+      list_task/describe_task/run_task；Wrenyard 不可用时停止派发并修复它，
+      不得回退到子代理或其它工作流编排工具。受保护的 shell、文件系统与浏览器
+      工具仍按既有沙箱/审批策略可用。
 
 - id: tool-presentation
   name: '@deepseek-ai/dsh-agent-tool-presentation'
   config:
-    mode: code
+    mode: native
+
+# Agent-scoped boundary loaded after tool presentation: hide competing DSH
+# orchestration/subagent tools while keeping the seven Wrenyard aliases and
+# legitimate guarded native non-orchestration tools visible.
+- id: tool-boundary
+  name: '@wrenyard/dsh-shell/tool-boundary'

@@ -103,15 +103,41 @@ function sseUrl(server) {
 
 function makeCtx() {
   const registered = [];
+  const events = new Map();
   return {
     tools: {
       register(definition) {
         registered.push(definition);
       },
     },
+    on(event, listener) {
+      if (!events.has(event)) events.set(event, []);
+      events.get(event).push(listener);
+    },
     logger: { info() {}, warn() {}, error() {} },
     registered,
+    events,
   };
+}
+
+// Runs the captured tools/pre-execute waterfall in registration order. Once the
+// listeners are exhausted, `terminal` stands in for DSH's own downstream
+// approval/sandbox decision, so tests can tell allow short-circuits from
+// forwarded calls.
+async function runPreExecute(ctx, exec, terminal) {
+  const listeners = ctx.events.get('tools/pre-execute') || [];
+  let index = 0;
+  let downstream = false;
+  const next = async () => {
+    const listener = listeners[index++];
+    if (!listener) {
+      downstream = true;
+      return terminal;
+    }
+    return listener(exec, next);
+  };
+  const decision = await next();
+  return { decision, downstream };
 }
 
 function testIpcPath(name) {
@@ -143,14 +169,22 @@ function canonicalListFixture(msg) {
   return okReply(msg, { content: [{ type: 'text', text: '{}' }] });
 }
 
-test('registers exactly the three canonical task aliases with the correct contract', async () => {
+test('registers exactly the seven canonical task and workspace-doc aliases with the correct contract', async () => {
   const server = await startMcp(canonicalListFixture);
   const ctx = makeCtx();
   await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
   server.close();
 
   const names = ctx.registered.map((definition) => definition.name).sort();
-  assert.deepEqual(names, ['describe_task', 'list_task', 'run_task']);
+  assert.deepEqual(names, [
+    'create_workspace_doc',
+    'describe_task',
+    'list_task',
+    'list_workspace_docs',
+    'read_workspace_doc',
+    'run_task',
+    'update_workspace_doc',
+  ]);
 
   for (const definition of ctx.registered) {
     assert.equal(definition.isConcurrencySafe(), true, `${definition.name} is concurrency safe`);
@@ -166,6 +200,129 @@ test('registers exactly the three canonical task aliases with the correct contra
   assert.equal(runTask.timeoutMs, undefined, 'run_task omits timeoutMs so DSH enforces no deadline');
 
   assert.equal(runTask.parameters.type, 'object', 'run_task schema is sanitized to an object');
+
+  const listDocs = ctx.registered.find((d) => d.name === 'list_workspace_docs');
+  const readDoc = ctx.registered.find((d) => d.name === 'read_workspace_doc');
+  const createDoc = ctx.registered.find((d) => d.name === 'create_workspace_doc');
+  const updateDoc = ctx.registered.find((d) => d.name === 'update_workspace_doc');
+
+  assert.equal(listDocs.parameters.type, 'object');
+  assert.equal(listDocs.parameters.required, undefined, 'list_workspace_docs takes an optional directory, nothing is required');
+  assert.equal(listDocs.parameters.properties.directory.type, 'string');
+
+  assert.deepEqual(readDoc.parameters.required, ['path']);
+  assert.deepEqual(createDoc.parameters.required, ['path', 'content']);
+  assert.deepEqual(updateDoc.parameters.required, ['path', 'content', 'expectedContent']);
+  assert.equal(updateDoc.parameters.properties.expectedContent.type, 'string');
+});
+
+test('pre-execute waterfall allows the seven Wrenyard aliases only; bash/read/web_search flow to the downstream ask/deny policy', async () => {
+  const server = await startMcp(canonicalListFixture);
+  const ctx = makeCtx();
+  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
+  server.close();
+
+  assert.equal((ctx.events.get('tools/pre-execute') || []).length, 1, 'the bridge registers exactly one pre-execute listener');
+
+  const aliases = [
+    'list_task',
+    'describe_task',
+    'run_task',
+    'list_workspace_docs',
+    'read_workspace_doc',
+    'create_workspace_doc',
+    'update_workspace_doc',
+  ];
+  for (const name of aliases) {
+    const { decision, downstream } = await runPreExecute(ctx, { name, input: {} }, { kind: 'deny' });
+    assert.deepEqual(decision, { kind: 'allow' }, `${name} is allowed at the bridge`);
+    assert.equal(downstream, false, `${name} must not reach the downstream policy`);
+  }
+
+  for (const name of ['bash', 'read', 'web_search']) {
+    const ask = await runPreExecute(ctx, { name, input: {} }, { kind: 'ask' });
+    assert.equal(ask.downstream, true, `${name} flows through to the downstream policy`);
+    assert.deepEqual(ask.decision, { kind: 'ask' }, `${name} keeps the downstream ask decision unchanged`);
+
+    const deny = await runPreExecute(ctx, { name, input: {} }, { kind: 'deny' });
+    assert.equal(deny.downstream, true, `${name} flows through to the downstream policy`);
+    assert.deepEqual(deny.decision, { kind: 'deny' }, `${name} keeps the downstream deny decision unchanged`);
+  }
+});
+
+test('workspace-doc aliases route unchanged params to exactly one owner-only IPC method each, with no MCP fallback', async () => {
+  const ipcCalls = [];
+  const ipcSocket = testIpcPath('doc-routing');
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    ipcCalls.push(msg);
+    return { ok: true, method: msg.method };
+  });
+  const mcpCallNames = [];
+  const server = await startMcp((msg) => {
+    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
+    if (msg.method === 'tools/call') {
+      mcpCallNames.push(msg.params.name);
+      return okReply(msg, { content: [{ type: 'text', text: 'unexpected MCP fallback' }] });
+    }
+    return okReply(msg, {});
+  });
+  const ctx = makeCtx();
+  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+
+  const cases = [
+    { alias: 'list_workspace_docs', args: { directory: 'guide' }, method: 'workspace.doc.list', params: { directory: 'guide' } },
+    { alias: 'read_workspace_doc', args: { path: 'guide/start.md' }, method: 'workspace.doc.read', params: { path: 'guide/start.md' } },
+    { alias: 'create_workspace_doc', args: { path: 'guide/new.md', content: 'hello' }, method: 'workspace.doc.create', params: { path: 'guide/new.md', content: 'hello' } },
+    { alias: 'update_workspace_doc', args: { path: 'guide/new.md', content: 'hello v2', expectedContent: 'hello' }, method: 'workspace.doc.update', params: { path: 'guide/new.md', content: 'hello v2', expectedContent: 'hello' } },
+  ];
+
+  for (const c of cases) {
+    const tool = ctx.registered.find((d) => d.name === c.alias);
+    const output = await tool.execute(c.args, {});
+    assert.ok(typeof output === 'string' && output.includes('ok'), `${c.alias} returns the IPC result`);
+  }
+
+  assert.deepEqual(ipcCalls.map((m) => m.method), cases.map((c) => c.method), 'each alias calls exactly its own IPC method');
+  assert.deepEqual(ipcCalls.map((m) => m.params), cases.map((c) => c.params), 'IPC params are forwarded unchanged, including update expectedContent CAS');
+  assert.deepEqual(mcpCallNames, [], 'doc aliases never fall back to MCP tools/call');
+
+  server.close();
+  ipcServer.close();
+});
+
+test('workspace-doc IPC errors (e.g. expectedContent CAS conflict) propagate as bounded rejections', async () => {
+  const ipcCalls = [];
+  const ipcSocket = testIpcPath('doc-error');
+  const ipcServer = net.createServer((sock) => {
+    sock.on('data', (chunk) => {
+      const line = chunk.toString().trim();
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      ipcCalls.push(msg);
+      sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'CAS conflict: content no longer matches expectedContent' } })}\n`);
+    });
+  });
+  await new Promise((resolve) => ipcServer.listen(ipcSocket, resolve));
+
+  const server = await startMcp(canonicalListFixture);
+  const ctx = makeCtx();
+  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+
+  const updateDoc = ctx.registered.find((d) => d.name === 'update_workspace_doc');
+  await assert.rejects(
+    () => updateDoc.execute({ path: 'guide/new.md', content: 'v2', expectedContent: 'stale' }, {}),
+    /Wrenyard IPC error:.*CAS conflict/,
+  );
+  assert.equal(ipcCalls.length, 1, 'exactly one workspace.doc.update call');
+  assert.equal(ipcCalls[0].method, 'workspace.doc.update');
+  assert.deepEqual(ipcCalls[0].params, { path: 'guide/new.md', content: 'v2', expectedContent: 'stale' });
+
+  server.close();
+  ipcServer.close();
 });
 
 test('tools/call unwraps structuredContent/content and surfaces isError', async () => {
