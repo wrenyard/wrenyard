@@ -26,9 +26,12 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(main, /new DesktopPetRuntime/);
   assert.match(main, /app\.on\(['"]activate['"]/);
   assert.doesNotMatch(main, /app\.relaunch\(/);
+  assert.match(main, /createMacQuitConfirmationGate\(\{ windowMs: 3_000 \}\)/);
+  assert.match(main, /macQuitGate\(['"]accelerator['"]\)/);
+  assert.match(main, /createDesktopTray\(\{[\s\S]*\},\s*process\.platform\)/);
   assert.match(tray, /new Tray\(/);
   assert.match(tray, /label: '打开'/);
-  assert.match(tray, /tray\.on\(['"]click['"],?\s*\(?[^)]*\)?\s*=>\s*options\.openDesktop/);
+  assert.match(tray, /if\s*\(\s*trayPrimaryClickOpensDesktop\(platform\)\s*\)\s*\{\s*tray\.on\(['"]click['"]/);
   assert.match(tray, /桌宠/);
   assert.match(tray, /label: '额度'/);
   assert.match(tray, /暂无可展示额度/);
@@ -113,6 +116,11 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(renderer, /id="workbench-nav"[^>]+aria-label="会话"/);
   assert.doesNotMatch(renderer, /<button class="activity-brand"/);
   assert.doesNotMatch(shellWindow, /WebContentsView/);
+  assert.match(renderer, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
+  assert.match(renderer, /id="tasks-page"/);
+  assert.doesNotMatch(renderer, /id="docs-nav"|id="docs-page"|id="docs-editor"|id="docs-file-list"|id="docs-unsaved-dialog"/);
+  assert.doesNotMatch(preload, /listDocs|readDoc|saveDoc|setDocsDirty|WorkspaceDoc/);
+  assert.doesNotMatch(shellWindow, /docsList|docsRead|docsSave|docsDirty|WorkspaceDoc/);
 });
 
 test('Pet entrypoint remains a headless companion without product UI ownership', async () => {

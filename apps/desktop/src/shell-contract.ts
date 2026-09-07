@@ -38,13 +38,11 @@ export const SHELL_CHANNELS = {
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
   viewChanged: 'wrenyard-shell:view-changed',
-  docsList: 'wrenyard-shell:docs-list',
-  docsRead: 'wrenyard-shell:docs-read',
-  docsSave: 'wrenyard-shell:docs-save',
-  docsDirty: 'wrenyard-shell:docs-dirty',
+  taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
+  taskSettingsSave: 'wrenyard-shell:task-settings-save',
 } as const;
 
-export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'docs';
+export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -395,17 +393,69 @@ export interface ConversationSnapshot {
   message?: string;
 }
 
-export interface WorkspaceDocEntry {
-  path: string;
+/**
+ * Daemon Task-settings projection. Preferences are machine-global and keyed by
+ * the bare task name, so every workspace that declares the same task shares one
+ * preference. The desktop surface only reads the snapshot and saves one bounded
+ * model-preference CAS; every other field is read-only display.
+ */
+export interface TaskSettingsEligibleChoice {
+  exactAgentRuntime: string;
+  requested_agent_runtime: string;
+  profile: string;
+  client: string;
+  provider: string;
+  model: string;
+  model_id: string;
+  mode: 'native' | 'gateway';
+  protocol?: string;
+  speed: {
+    effective_tps: number;
+    source: 'local_31d' | 'catalog_default';
+    sample_count: number;
+    checked_at: string;
+    expected_tps_met: boolean;
+    degradation_reason?: string;
+  };
+  intelligence: string;
+  reference_pricing: {
+    input_usd_per_million?: number;
+    output_usd_per_million?: number;
+    cached_input_usd_per_million?: number;
+    cache_write_input_usd_per_million?: number;
+    source: string;
+    checked_at: string;
+  };
 }
 
-export interface WorkspaceDocContent {
-  path: string;
-  content: string;
+export interface TaskSettingsTaskRow {
+  /** Bare task name; the machine-global preference key. */
+  task_id: string;
+  project: string;
+  /** Read-only task definition source, independent of preference source. */
+  source: string;
+  permission?: 'readonly' | 'edit' | 'yolo';
+  input_schema?: unknown;
+  output_schema?: unknown;
+  dispatch?: unknown;
+  declared_agent_runtime: string | null;
+  machine_preference: string | null;
+  selection: {
+    agent_runtime: string | null;
+    source: 'automatic' | 'machine';
+  };
+  /** Exact choices eligible for this task; the UI builds options only from here. */
+  eligible: TaskSettingsEligibleChoice[];
 }
 
-export interface WorkspaceDocSaveResult {
-  path: string;
+export interface TaskSettingsSnapshot {
+  config_path: string;
+  /** Compare-and-swap token for task.settings.save. */
+  revision: string;
+  scope: 'machine_global';
+  keyed_by: 'bare_task_name';
+  project?: string;
+  tasks: TaskSettingsTaskRow[];
 }
 
 export interface WrenyardShellApi {
@@ -438,14 +488,12 @@ export interface WrenyardShellApi {
   onQuotaChanged(listener: () => void): () => void;
   onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
-  listDocs(): Promise<WorkspaceDocEntry[]>;
-  readDoc(path: string): Promise<WorkspaceDocContent>;
-  saveDoc(path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult>;
-  setDocsDirty(dirty: boolean): Promise<void>;
+  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot>;
+  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings' || value === 'docs';
+  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings' || value === 'tasks';
 }
 
 export function isSettingsLaunchRequest(value: string): boolean {

@@ -46,3 +46,35 @@ test('Cmd+W close binding is macOS-only and existing menus stay intact', () => {
   assert.equal(help.submenu.length, 1);
   assert.equal(help.submenu[0].accelerator, 'CmdOrCtrl+Shift+U');
 });
+
+test('macOS Quit command reports accelerator-vs-direct origin through requestQuit', () => {
+  const origins: string[] = [];
+  const requestQuit = (origin: 'accelerator' | 'direct') => { origins.push(origin); };
+  const quitTemplate = desktopMenuTemplate as unknown as (
+    platform: string,
+    onInvoke: () => void,
+    requestQuit: (origin: 'accelerator' | 'direct') => void,
+  ) => ReturnType<typeof desktopMenuTemplate>;
+  const template = quitTemplate('darwin', () => undefined, requestQuit);
+
+  const quitItems = template
+    .flatMap((item) => (Array.isArray(item.submenu) ? item.submenu : []))
+    .filter((item) => item.accelerator === 'CmdOrCtrl+Q');
+  assert.equal(quitItems.length, 1, 'macOS app menu must wire exactly one Quit item through requestQuit');
+
+  const quit = quitItems[0];
+  assert.ok(quit, 'Quit item must be present in the macOS app menu');
+  assert.equal(quit?.role, undefined, 'a native quit role would bypass the custom Cmd+Q gate');
+  assert.equal(quit?.label, '退出啾啾工坊');
+  if (quit && 'click' in quit && typeof quit.click === 'function') {
+    quit.click({} as never, {} as never, { triggeredByAccelerator: true } as never);
+    quit.click({} as never, {} as never, { triggeredByAccelerator: false } as never);
+  }
+  assert.deepEqual(origins, ['accelerator', 'direct'], 'Cmd+Q accelerators report accelerator; menu/mouse Quit reports direct');
+
+  const closeItems = template
+    .flatMap((item) => (Array.isArray(item.submenu) ? item.submenu : []))
+    .filter((item) => item.role === 'close');
+  assert.equal(closeItems.length, 1, 'Cmd+W close binding must stay intact alongside the quit wiring');
+  assert.equal(closeItems[0].accelerator, 'CmdOrCtrl+W');
+});

@@ -528,9 +528,9 @@ export class DesktopUpdateController {
 
   /**
    * Drives a single authorized install: download+verify+stage (once, even while
-   * busy), then install only once the runtime is genuinely idle and no unsaved
-   * docs remain. Busy/dirty never blocks preparation or interrupts work; it only
-   * defers the launch into a distinct waiting-for-idle state.
+   * busy), then install only once the runtime is genuinely idle. Busy never
+   * blocks preparation or interrupts work; it only defers the launch into a
+   * distinct waiting-for-idle state.
    */
   private async advanceInstall(onInstall: () => void): Promise<UpdateSnapshot> {
     if (!this.installIntent || this.launched) return this.snapshot();
@@ -573,7 +573,7 @@ export class DesktopUpdateController {
         ...this.snapshotValue,
         state: 'waiting',
         availableVersion: this.prepared.candidate.version,
-        message: '更新已准备，将在你空闲且保存文档后自动安装。',
+        message: '更新已准备，将在你空闲后自动安装。',
       });
       this.scheduleIdleCheck();
       return this.snapshot();
@@ -598,7 +598,7 @@ export class DesktopUpdateController {
           ...this.snapshotValue,
           state: 'waiting',
           availableVersion: this.prepared.candidate.version,
-          message: '更新已准备，将在你空闲且保存文档后自动安装。',
+          message: '更新已准备，将在你空闲后自动安装。',
         });
         this.scheduleIdleCheck();
       } else {
@@ -624,7 +624,7 @@ export class DesktopUpdateController {
     return this.snapshot();
   }
 
-  /** Triggered by main when docsDirty flips to false or the runtime becomes idle. */
+  /** Triggered by main when the runtime becomes idle. */
   wake(): void {
     if (!this.installIntent || this.launched) return;
     if (this.snapshotValue.state === 'waiting' || this.snapshotValue.state === 'install-blocked') {
