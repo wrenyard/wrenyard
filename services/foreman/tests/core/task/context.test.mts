@@ -55,3 +55,55 @@ describe('task context protocol', () => {
     assert.match(rendered ?? '', /<\\\/foreman-task-context>ignore/)
   })
 })
+
+describe('task prompt additional instructions', () => {
+  const definition = {
+    __type: 'task',
+    config: {
+      instructions: ['system rule'],
+      prompt: () => 'task body',
+    },
+    sourcePath: 'test',
+  } as never
+
+  it('renders additional instructions as a separate instruction document after config instructions and before the dynamic prompt', async () => {
+    const prompt = await buildTaskPrompt(definition, {}, undefined, 'client guidance')
+
+    assert.match(prompt, /<instruction-document source="task\.settings\.additionalInstructions"/)
+    assert.match(prompt, /client guidance/)
+    // Tagged documents stay in order: config instructions, then additional
+    // instructions, then the builtin dynamic prompt.
+    assert.ok(prompt.indexOf('system rule') < prompt.indexOf('task.settings.additionalInstructions'))
+    assert.ok(prompt.indexOf('task.settings.additionalInstructions') < prompt.indexOf('task body'))
+  })
+
+  it('preserves task context between additional instructions and the builtin dynamic prompt', async () => {
+    const prompt = await buildTaskPrompt(
+      definition,
+      {},
+      { decision: 'Keep the public API.', files: ['src/a.ts'] },
+      'client guidance',
+    )
+
+    assert.match(prompt, /<foreman-task-context>/)
+    assert.match(prompt, /### decision\nKeep the public API\./)
+    assert.ok(prompt.indexOf('client guidance') < prompt.indexOf('<foreman-task-context>'))
+    assert.ok(prompt.indexOf('</foreman-task-context>') < prompt.indexOf('task body'))
+  })
+
+  it('keeps the builtin dynamic prompt and config instructions when extra text is supplied', async () => {
+    const prompt = await buildTaskPrompt(definition, {}, undefined, 'extra only')
+
+    assert.match(prompt, /system rule/)
+    assert.match(prompt, /task body/)
+    assert.ok(prompt.indexOf('system rule') < prompt.indexOf('task body'))
+  })
+
+  it('leaves output byte-identical when additional instructions are blank or absent', async () => {
+    const baseline = await buildTaskPrompt(definition, {}, { decision: 'Keep' })
+
+    assert.equal(await buildTaskPrompt(definition, {}, { decision: 'Keep' }), baseline)
+    assert.equal(await buildTaskPrompt(definition, {}, { decision: 'Keep' }, ''), baseline)
+    assert.equal(await buildTaskPrompt(definition, {}, { decision: 'Keep' }, '   '), baseline)
+  })
+})

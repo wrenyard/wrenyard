@@ -388,6 +388,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         input: params.input,
         ctx: params.ctx as import('../../core/task/context.mts').TaskContext | undefined,
         connectingId: rpcContext.connectingId,
+        invocationSettings: params.invocation_settings,
       }),
     )
   })

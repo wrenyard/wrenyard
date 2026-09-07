@@ -165,6 +165,71 @@ describe('lib/protocol JSON-RPC contract', () => {
     )
   })
 
+  it('accepts a valid invocation_settings layer on task.run.create params', () => {
+    const invocation_settings = {
+      mode: 'explicit',
+      explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      timeout_ms: 42_000,
+      additional_instructions: 'Keep changes additive.',
+      automatic: { expected_tps: 20, minimum_tps: 10, intelligence_min: 'high' },
+    }
+    assert.deepEqual(parseMethodParams('task.run.create', {
+      task_id: 'commit',
+      project: 'foreman',
+      input: { changes_to_commit: { 'src/x.ts': 'all' } },
+      invocation_settings,
+    }), {
+      task_id: 'commit',
+      project: 'foreman',
+      input: { changes_to_commit: { 'src/x.ts': 'all' } },
+      invocation_settings,
+    })
+
+    // Automatic mode with dispatch constraints round-trips too.
+    const automaticLayer = {
+      mode: 'automatic',
+      timeout_ms: 120_000,
+      automatic: {
+        expected_tps: 30,
+        intelligence_min: 'mid',
+        intelligence_max: 'premium',
+        preferred_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      },
+    }
+    assert.deepEqual(parseMethodParams('task.run.create', {
+      task_id: 'commit',
+      project: 'foreman',
+      invocation_settings: automaticLayer,
+    }), {
+      task_id: 'commit',
+      project: 'foreman',
+      invocation_settings: automaticLayer,
+    })
+  })
+
+  it('rejects malformed mode, explicit_runtime, and timeout_ms in invocation_settings', () => {
+    const base = { task_id: 'commit', project: 'foreman', input: {} }
+    const malformedLayers: unknown[] = [
+      { mode: 'manual' },
+      { mode: 'explicit', explicit_runtime: { client: 'codex', provider: 'codex' } },
+      { mode: 'explicit', explicit_runtime: 'codex' },
+      { mode: 'explicit', explicit_runtime: { client: '', provider: 'codex', model: 'gpt-5.6-luna' } },
+      { timeout_ms: 0 },
+      { timeout_ms: -5 },
+      { timeout_ms: '42000' },
+      { mode: 'automatic', automatic: { intelligence_min: 'extreme' } },
+    ]
+    for (const invocation_settings of malformedLayers) {
+      assert.throws(
+        () => parseMethodParams('task.run.create', { ...base, invocation_settings }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+  })
+
   it('parses task definition/query/cancel params', () => {
     assert.deepEqual(parseMethodParams('task.definition.list', { project: 'workspace' }), { project: 'workspace' })
     assert.deepEqual(parseMethodParams('task.definition.describe', { task_id: 'commit', project: 'workspace' }), {

@@ -355,35 +355,44 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // relax, skip, or bypass a hard dispatch requirement.
     const runtimeOverridePreference = taskRuntimeOverridePreference(target.name)
 
-    // Resolve the deterministic constrained dispatch plan before the first agent
-    // attempt. Constrained production definitions MUST supply a resolver.
+    // Effective runtime/timeout placeholders. Production execution resolves them
+    // through the daemon TaskSettingsService exactly once, after pre-gates and
+    // before the first agent attempt. The dispatch-resolver/legacy path below is
+    // preserved only when no settings resolver was supplied (isolated/legacy
+    // tests) and never runs alongside task settings resolution.
     let requestedAgentRuntime = declaredAgentRuntime
     let exactAgentRuntime: string = declaredAgentRuntime
     let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
-    if (config.dispatch) {
-      if (!options.taskDispatchResolver) {
+    let resolvedTimeoutMs: number | undefined
+    let resolvedAdditionalInstructions: string | undefined
+    if (!options.taskSettingsResolver) {
+      // Resolve the deterministic constrained dispatch plan before the first agent
+      // attempt. Constrained production definitions MUST supply a resolver.
+      if (config.dispatch) {
+        if (!options.taskDispatchResolver) {
+          throw new Error(
+            `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
+          )
+        }
+        const resolution = options.taskDispatchResolver.resolve({
+          taskName: target.name,
+          requirements: config.dispatch,
+          declaredRuntime: declaredAgentRuntime,
+          machinePreference: runtimeOverridePreference,
+        })
+        if (!resolution.ok) throw resolution.error
+        exactAgentRuntime = resolution.exactAgentRuntime
+        dispatchSnapshot = resolution.resolved
+      } else if (options.taskDispatchResolver && config.scheduling !== 'legacy') {
         throw new Error(
-          `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
+          `Active task '${target.name}' must declare explicit dispatch requirements before model execution.`,
         )
+      } else {
+        // Legacy: preserve declared exact/policy runtime behavior, applying any soft
+        // runtime override. The exact approved profile remains the chosen runtime.
+        requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
+        exactAgentRuntime = requestedAgentRuntime
       }
-      const resolution = options.taskDispatchResolver.resolve({
-        taskName: target.name,
-        requirements: config.dispatch,
-        declaredRuntime: declaredAgentRuntime,
-        machinePreference: runtimeOverridePreference,
-      })
-      if (!resolution.ok) throw resolution.error
-      exactAgentRuntime = resolution.exactAgentRuntime
-      dispatchSnapshot = resolution.resolved
-    } else if (options.taskDispatchResolver && config.scheduling !== 'legacy') {
-      throw new Error(
-        `Active task '${target.name}' must declare explicit dispatch requirements before model execution.`,
-      )
-    } else {
-      // Legacy: preserve declared exact/policy runtime behavior, applying any soft
-      // runtime override. The exact approved profile remains the chosen runtime.
-      requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
-      exactAgentRuntime = requestedAgentRuntime
     }
     const executionOptions = options
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
@@ -446,7 +455,46 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       await recordProgressEvent(`Pre-gates passed for ${target.name}`, { taskId, project: record.project }, options)
     }
 
-    const prompt = await buildTaskPrompt(definition, effectiveInput, taskInputContext.ctx)
+    // Resolve task settings exactly once, after pre-gates and before the
+    // prompt/first agent attempt. The daemon TaskSettingsService owns field
+    // merging and readiness; its result is authoritative: the exact runtime is
+    // the only launched profile, the dispatch snapshot feeds telemetry, and the
+    // effective timeout is the single total task_execution deadline. An explicit
+    // resolution failure terminates the run here, with no fallback.
+    if (options.taskSettingsResolver) {
+      const settingsResolution = await options.taskSettingsResolver({
+        taskName: target.name,
+        kind: target.source,
+        project: record.project || undefined,
+        defaults: {
+          agentRuntime: declaredAgentRuntime,
+          timeoutMs: config.timeoutMs,
+          ...(config.dispatch ? { dispatch: config.dispatch as unknown as Record<string, unknown> } : {}),
+        },
+        ...(options.invocationSettings ? { invocation: options.invocationSettings } : {}),
+      })
+      if (!settingsResolution.exactAgentRuntime) {
+        throw new Error(
+          `Task settings resolution for '${target.name}' returned no exact runtime; refusing to launch a fallback profile.`,
+        )
+      }
+      exactAgentRuntime = settingsResolution.exactAgentRuntime
+      requestedAgentRuntime = settingsResolution.exactAgentRuntime
+      dispatchSnapshot = settingsResolution.dispatch
+      if (settingsResolution.timeoutMs !== undefined && settingsResolution.timeoutMs !== null) {
+        resolvedTimeoutMs = settingsResolution.timeoutMs
+      }
+      if (settingsResolution.additionalInstructions !== undefined && settingsResolution.additionalInstructions !== null) {
+        resolvedAdditionalInstructions = settingsResolution.additionalInstructions
+      }
+    }
+
+    const prompt = await buildTaskPrompt(
+      definition,
+      effectiveInput,
+      taskInputContext.ctx,
+      resolvedAdditionalInstructions,
+    )
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
 
@@ -467,7 +515,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         taskName: target.name,
         taskId,
         permission: definition.config.permission,
-        timeoutMs: config.timeoutMs,
+        timeoutMs: resolvedTimeoutMs ?? config.timeoutMs,
         capabilities: selectedCapabilities,
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,
