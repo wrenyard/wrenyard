@@ -628,6 +628,22 @@ export class TaskSettingsService {
 
     let explicitRow: TaskSettingsExplicitRow | undefined
     const runtimeId = effective.runtime
+    const capabilities = effective.dispatch.requiredCapabilities
+    // Authoritative explicit-mode picker input: exact existing runtimes the
+    // resolver can select for this task's required capabilities. Enumerated once
+    // regardless of the effective mode so an automatic row can offer explicit
+    // selection without fabricating a current explicit runtime. Only available
+    // items with truthful resolved metadata are projected; no paid probe is
+    // issued and no default explicit runtime is selected.
+    const listed = this.resolver.listExactRuntimes({
+      taskName: summary.name,
+      ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+    })
+    const runtimeChoices = listed.ok
+      ? listed.items
+        .filter((item) => item.available && item.resolved !== undefined)
+        .map((item) => ({ ...item.resolved!, exactAgentRuntime: item.exactAgentRuntime }))
+      : []
     if (effective.mode === 'explicit') {
       if (runtimeId === undefined) {
         issues.push({
@@ -635,21 +651,11 @@ export class TaskSettingsService {
           message: 'explicit mode is selected but no exact runtime is available',
         })
       } else {
-        const capabilities = effective.dispatch.requiredCapabilities
         const explicitResolution = this.resolver.resolveExplicit({
           taskName: summary.name,
           exactRuntime: runtimeId,
           ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
         })
-        const listed = this.resolver.listExactRuntimes({
-          taskName: summary.name,
-          ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
-        })
-        const choices = listed.ok
-          ? listed.items
-            .filter((item) => item.available && item.resolved !== undefined)
-            .map((item) => ({ ...item.resolved!, exactAgentRuntime: item.exactAgentRuntime }))
-          : []
         if (explicitResolution.ok) {
           const resolved = { ...explicitResolution.resolved, exactAgentRuntime: explicitResolution.exactAgentRuntime }
           const triple = {
@@ -662,7 +668,7 @@ export class TaskSettingsService {
             explicitResolution.exactAgentRuntime,
             triple,
           )
-          explicitRow = { runtime: triple, choices, resolved, readiness }
+          explicitRow = { runtime: triple, choices: runtimeChoices, resolved, readiness }
         } else {
           issues.push({
             code: 'explicit_runtime_unavailable',
@@ -670,7 +676,7 @@ export class TaskSettingsService {
           })
           const fallbackTriple = this.exactRuntimeTriple(runtimeId)
           if (fallbackTriple !== null) {
-            explicitRow = { runtime: fallbackTriple, choices, resolved: null, readiness: null }
+            explicitRow = { runtime: fallbackTriple, choices: runtimeChoices, resolved: null, readiness: null }
           }
         }
       }
@@ -716,6 +722,7 @@ export class TaskSettingsService {
         },
         automatic,
       },
+      runtime_choices: runtimeChoices,
       ...(explicitRow !== undefined ? { explicit: explicitRow } : {}),
       issues,
     }

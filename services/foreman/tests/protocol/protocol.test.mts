@@ -1156,6 +1156,14 @@ describe('lib/protocol JSON-RPC contract', () => {
         explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
       },
     })
+    // Nested null deletes only that automatic field at the selected layer.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1',
+      patch: { automatic: { expected_tps: null, intelligence_min: null } },
+    }), {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1',
+      patch: { automatic: { expected_tps: null, intelligence_min: null } },
+    })
 
     // Missing required fields are rejected.
     assert.throws(
@@ -1275,6 +1283,10 @@ describe('lib/protocol JSON-RPC contract', () => {
           },
         },
         issues: [],
+        // Authoritative exact runtime picker choices exist even on an
+        // automatic-mode row so the UI can switch to explicit mode without a
+        // fabricated current selection.
+        runtime_choices: [eligibleChoice],
       }],
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', snapshotResult), snapshotResult)
@@ -1293,6 +1305,37 @@ describe('lib/protocol JSON-RPC contract', () => {
       }],
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', overriddenResult), overriddenResult)
+
+    // Every row must carry truthful exact runtime choices; an automatic row
+    // missing runtime_choices is rejected.
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        rows: [{
+          ...snapshotResult.rows[0],
+          runtime_choices: undefined,
+        }],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // A runtime_choices entry missing its resolved dispatch fields is rejected.
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        rows: [{
+          ...snapshotResult.rows[0],
+          runtime_choices: [{ exactAgentRuntime: 'forge/codex-luna' }],
+        }],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
 
     // Result must describe config_path/revision/global layer and rows.
     assert.throws(

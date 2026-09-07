@@ -116,7 +116,7 @@ function validateExplicitRuntimeValue(explicitRuntime: unknown): void {
   }
 }
 
-function validateAutomaticDispatch(automatic: unknown): void {
+function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false): void {
   if (automatic === undefined || automatic === null) return;
   if (!isBoundedPlainObject(automatic)) throw new Error('自动约束无效');
   for (const key of Object.keys(automatic)) {
@@ -124,31 +124,38 @@ function validateAutomaticDispatch(automatic: unknown): void {
   }
   for (const field of ['expected_tps', 'minimum_tps', 'max_output_usd_per_million'] as const) {
     const value = automatic[field];
+    if (allowFieldReset && value === null) continue;
     if (value !== undefined && !isFinitePositiveNumber(value)) throw new Error('自动约束无效');
   }
   for (const field of ['intelligence_min', 'intelligence_max'] as const) {
     const value = automatic[field];
+    if (allowFieldReset && value === null) continue;
     if (value !== undefined && (typeof value !== 'string' || !TASK_SETTINGS_INTELLIGENCE_VALUES.has(value))) {
       throw new Error('自动约束无效');
     }
   }
   const requiredCapabilities = automatic.required_capabilities;
   if (requiredCapabilities !== undefined) {
+    if (allowFieldReset && requiredCapabilities === null) {
+      // A null nested patch deletes only this field from the current layer.
+    } else {
     if (!Array.isArray(requiredCapabilities) || requiredCapabilities.length > 16) throw new Error('自动约束无效');
     for (const value of requiredCapabilities) {
       if (typeof value !== 'string' || !TASK_SETTINGS_CAPABILITY_VALUES.has(value)) throw new Error('自动约束无效');
+    }
     }
   }
   for (const field of ['exclude_model_ids', 'exclude_profile_ids', 'exclude_client_ids', 'exclude_provider_ids'] as const) {
     const value = automatic[field];
     if (value !== undefined) {
+      if (allowFieldReset && value === null) continue;
       if (!Array.isArray(value) || value.length > TASK_SETTINGS_STRING_ARRAY_MAX) throw new Error('自动约束无效');
       for (const item of value) {
         if (typeof item !== 'string' || !item || item.length > TASK_SETTINGS_STRING_MAX) throw new Error('自动约束无效');
       }
     }
   }
-  if (automatic.preferred_runtime !== undefined) validateExplicitRuntimeValue(automatic.preferred_runtime);
+  if (automatic.preferred_runtime !== undefined && !(allowFieldReset && automatic.preferred_runtime === null)) validateExplicitRuntimeValue(automatic.preferred_runtime);
 }
 
 /**
@@ -190,7 +197,7 @@ function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSaveReques
       throw new Error('附加说明无效');
     }
   }
-  validateAutomaticDispatch(patch.automatic);
+  validateAutomaticDispatch(patch.automatic, true);
   const request: TaskSettingsSaveRequest = {
     scope,
     expected_revision: expectedRevision,

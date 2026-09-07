@@ -95,25 +95,56 @@ test('snapshot models the global layer, stable rows, and sourced effective value
           preferred_runtime: { value: null, source: 'builtin' },
         },
       },
+      // An automatic row still carries the authoritative exact runtime picker
+      // options so the UI can offer explicit selection without fabricating a
+      // current explicit runtime.
+      runtime_choices: [{
+        exactAgentRuntime: 'forge/codex-luna',
+        client: 'codex',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        model_id: 'codex/gpt-5.6-luna',
+        mode: 'native',
+        intelligence: 'mid',
+        speed: {
+          effective_tps: 107,
+          source: 'catalog_default',
+          sample_count: 0,
+          checked_at: '2026-09-05T00:00:00.000Z',
+          expected_tps_met: true,
+        },
+        reference_pricing: {
+          input_usd_per_million: 0.2,
+          output_usd_per_million: 1.2,
+          source: 'catalog',
+          checked_at: '2026-09-05T00:00:00.000Z',
+        },
+      }],
       issues: [],
     }],
   };
   const taskRow = snapshot.rows[0]!;
   assert.equal(snapshot.config_path, '/Users/me/.wrenyard/tasks/config.json');
   assert.equal(snapshot.revision, 'global-rev');
-  // The row is exactly the stable identity/name/builtin/user_task/effective/issues fields.
+  // The row is exactly the stable identity/name/builtin/user_task/effective/
+  // runtime_choices/issues fields.
   assert.equal(taskRow.identity, 'builtin:build');
   assert.equal(taskRow.name, 'build');
   assert.equal(taskRow.builtin.name, 'build');
   assert.deepEqual(
     Object.keys(taskRow).sort(),
-    ['builtin', 'effective', 'identity', 'issues', 'name', 'user_task'],
+    ['builtin', 'effective', 'identity', 'issues', 'name', 'runtime_choices', 'user_task'],
   );
   // No invented per-row wrapper fields exist.
   assert.equal('task_id' in taskRow, false);
   assert.equal('revision' in taskRow, false);
   assert.equal('readiness' in taskRow, false);
   assert.equal('source' in taskRow, false);
+  // Automatic rows expose exact runtime picker options without an explicit row;
+  // the renderer must source the explicit picker from runtime_choices only.
+  assert.equal(taskRow.explicit, undefined);
+  assert.equal(taskRow.runtime_choices.length, 1);
+  assert.equal(taskRow.runtime_choices[0]!.exactAgentRuntime, 'forge/codex-luna');
   // The user-global layer is the writable settings fields directly — no revision/layer wrapper.
   const globalLayer = snapshot.user_global as unknown as Record<string, unknown>;
   assert.equal('revision' in globalLayer, false);
@@ -242,32 +273,40 @@ test('shell-window validates the bounded task settings DTO at the IPC boundary',
   assert.doesNotMatch(win, /permission|input_schema|output_schema/);
 });
 
-test('HTML offers the Tasks list/detail/Automatic save flow with no docs editor', async () => {
+test('HTML offers layered global/task settings with progressive details and no docs editor', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
   assert.match(html, /id="tasks-page"/);
   assert.match(html, /id="tasks-list"/);
   assert.match(html, /id="tasks-detail"/);
   assert.match(html, /id="tasks-refresh"/);
+  assert.match(html, /id="tasks-global-editor"/);
+  assert.match(html, /id="tasks-global-mode"/);
+  assert.match(html, /id="tasks-mode"/);
   assert.match(html, /id="tasks-model-select"/);
-  assert.match(html, /<option value="">自动选择<\/option>/);
-  assert.match(html, /id="tasks-save"[^>]*>保存偏好</);
+  assert.match(html, /<option value="automatic">自动选择<\/option>/);
+  assert.match(html, /<option value="explicit">指定运行时<\/option>/);
+  assert.match(html, /id="tasks-instructions"[^>]+maxlength="4000"/);
+  assert.match(html, /id="tasks-automatic-details"/);
+  assert.match(html, /id="tasks-reset"[^>]*>重置本层</);
+  assert.match(html, /id="tasks-save"[^>]*>保存任务设置</);
   assert.match(html, /id="tasks-status"/);
   assert.match(html, /id="tasks-error"/);
-  assert.match(html, /本机全局/);
-  assert.match(html, /bare task name/);
-  assert.match(html, /同名 Task 共享/);
+  assert.match(html, /系统 → 内置 → 全局默认 → 当前任务 → 单次运行/);
   assert.doesNotMatch(html, /id="docs-nav"|id="docs-page"|id="docs-editor"|id="docs-file-list"|id="docs-save-button"|id="docs-unsaved-save"/);
 });
 
-test('renderer builds options only from row.eligible, renders contract read-only, and reloads on conflict', async () => {
+test('renderer uses runtime_choices, saves layered patches, and preserves drafts on conflict', async () => {
   const [app, main, update] = await Promise.all([
     readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
     Promise.resolve(mainSource()),
     readFile(join(desktopRoot, 'src', 'update-controller.ts'), 'utf8'),
   ]);
-  // The model select is populated exclusively from the authoritative eligible list.
-  assert.match(app, /for \(const choice of row\.eligible\)/);
+  // The explicit picker options are sourced exclusively from the authoritative
+  // runtime_choices carried by every task row (automatic or explicit), never
+  // from an invented per-row eligible alias or a fabricated explicit selection.
+  assert.match(app, /renderTasksChoiceOptions\(tasksModelSelect, row\.runtime_choices\)/);
+  assert.match(app, /for \(const choice of choices\)/);
   assert.match(app, /option\.value = choice\.exactAgentRuntime/);
   // Option labels surface the actual client/provider/model and any evidence.
   assert.match(app, /\[choice\.client, choice\.provider, choice\.model\]/);
@@ -276,16 +315,23 @@ test('renderer builds options only from row.eligible, renders contract read-only
   assert.match(app, /choice\.reference_pricing\.output_usd_per_million/);
   // No legacy forge/fast/general/ultra policy strategy names appear as options.
   assert.doesNotMatch(app, /forge|fast|general|ultra/);
-  // Contract details are read-only display, never editable controls.
-  assert.match(app, /tasksReadonlyRow\('权限（Permission）'/);
-  assert.match(app, /tasksReadonlyRow\('调度（Dispatch）'/);
-  assert.match(app, /tasksReadonlyRow\('输入 Schema'/);
-  assert.match(app, /tasksReadonlyRow\('输出 Schema'/);
+  // Low-frequency metadata stays read-only and progressive.
+  assert.match(app, /tasksReadonlyRow\('低频自动约束'/);
+  assert.match(app, /tasksReadonlyRow\('内置动态提示'/);
+  assert.match(app, /tasksReadonlyRow\('配置文件'/);
   assert.doesNotMatch(app, /contentEditable|docsEditor/);
-  // Save is an explicit CAS with conflict reload; stale revisions are never overwritten.
-  assert.match(app, /saveTaskPreference\(/);
-  assert.match(app, /expectedRevision/);
+  // Saves are bounded layered CAS patches; automatic mode clears only this
+  // layer's explicit pin and reset deletes only current-layer fields.
+  assert.match(app, /saveTaskSettings\(\{ scope: 'task'/);
+  assert.match(app, /saveTaskSettings\(\{ scope: 'global'/);
+  assert.match(app, /patch\.explicit_runtime = null/);
+  assert.match(app, /function resetPatch/);
+  // A conflict reloads authoritative revision but restores both task/global drafts.
   assert.match(app, /reloadTasksAuthoritative\(\)/);
+  assert.match(app, /applyTaskDraft\(draft\)/);
+  assert.match(app, /配置已刷新，草稿仍保留/);
+  assert.match(app, /额度未知/);
+  assert.doesNotMatch(app, /saveTaskPreference|row\.eligible|row\.selection|taskSettings\.tasks/);
   assert.doesNotMatch(app, /mustGuardDocsLeave|showDocsUnsaved|docsDirty/);
   // Update UX and update-controller carry no removed docs-draft wording.
   assert.doesNotMatch(update, /docsDirty|保存文档/);
