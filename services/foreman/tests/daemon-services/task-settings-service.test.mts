@@ -3,127 +3,251 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import type {
-  TaskDispatchChoice,
-  TaskDispatchResolver,
+import {
+  ExplicitRuntimeUnavailableError,
+  NoEligiblePlanError,
+  type TaskDispatchResolver,
 } from '../../lib/core/task/dispatch-resolver.mts'
+import type { TaskResolvedDispatch } from '../../lib/task-run-metadata-types.mts'
 import {
   TaskSettingsContentConflictError,
-  TaskSettingsIneligibleRuntimeError,
+  TaskSettingsRuntimeUnavailableError,
   TaskSettingsService,
   TaskSettingsTaskNotFoundError,
+  type TaskSettingsDaemonAvailabilityCallback,
   type TaskSettingsDefinitionSource,
+  type TaskSettingsRuntimeAvailabilityCallback,
 } from '../../lib/daemon/services/task-settings-service.mts'
-import {
-  bindTaskRuntimeOverrideConfigPath,
-  resetTaskRuntimeOverrideConfigPathBinding,
-} from '../../lib/config/task-runtime-override.mts'
 
 const CATALOG_CHECKED_AT = '2026-09-05'
 
-function resolvedChoice(exactAgentRuntime: string, profile: string): TaskDispatchChoice {
-  return {
-    exactAgentRuntime,
-    requested_agent_runtime: exactAgentRuntime,
-    profile,
+interface ProfileFixture {
+  exactAgentRuntime: string
+  profile: string
+  client: string
+  provider: string
+  model: string
+  intelligence: string
+  tps: number
+  inputUsd: number
+  outputUsd: number
+}
+
+const PROFILES: ProfileFixture[] = [
+  {
+    exactAgentRuntime: 'forge/cb-dsf',
+    profile: 'cb-dsf',
     client: 'codex',
     provider: 'codex',
     model: 'gpt-5.6-luna',
-    model_id: 'codex/gpt-5.6-luna',
+    intelligence: 'mid',
+    tps: 107,
+    inputUsd: 0.2,
+    outputUsd: 1.2,
+  },
+  {
+    exactAgentRuntime: 'forge/codex-luna',
+    profile: 'codex-luna',
+    client: 'codex',
+    provider: 'codex',
+    model: 'gpt-6.0-nova',
+    intelligence: 'high',
+    tps: 120,
+    inputUsd: 0.5,
+    outputUsd: 2.0,
+  },
+  {
+    exactAgentRuntime: 'forge/codex-sol',
+    profile: 'codex-sol',
+    client: 'claude',
+    provider: 'claude',
+    model: 'claude-opus-4',
+    intelligence: 'frontier',
+    tps: 60,
+    inputUsd: 5,
+    outputUsd: 15,
+  },
+]
+
+function resolvedChoice(profile: ProfileFixture): TaskResolvedDispatch {
+  return {
+    requested_agent_runtime: profile.exactAgentRuntime,
+    profile: profile.profile,
+    client: profile.client,
+    provider: profile.provider,
+    model: profile.model,
+    model_id: `${profile.provider}/${profile.model}`,
     mode: 'native',
     speed: {
-      effective_tps: 107,
+      effective_tps: profile.tps,
       source: 'catalog_default',
       sample_count: 0,
       checked_at: CATALOG_CHECKED_AT,
       expected_tps_met: true,
     },
-    intelligence: 'mid',
+    intelligence: profile.intelligence,
     reference_pricing: {
-      input_usd_per_million: 0.2,
-      output_usd_per_million: 1.2,
+      input_usd_per_million: profile.inputUsd,
+      output_usd_per_million: profile.outputUsd,
       source: 'catalog',
       checked_at: CATALOG_CHECKED_AT,
     },
   }
 }
 
-/**
- * Deterministic resolver fixture. Eligibility is driven by the task's declared
- * runtime exactly like the real resolver: commit declares a policy runtime so
- * every exact candidate is eligible; review declares an exact pin so only that
- * pinned profile can be selected. Policy aliases are never choices.
- */
-function createResolverFixture(): TaskDispatchResolver {
+function resolveTriple(profile: ProfileFixture): { client: string; provider: string; model: string } {
+  return { client: profile.client, provider: profile.provider, model: profile.model }
+}
+
+function exactRuntimeIdForTriple(triple: { client: string; provider: string; model: string }): string | null {
+  const profile = PROFILES.find(
+    (p) => p.client === triple.client && p.provider === triple.provider && p.model === triple.model,
+  )
+  return profile?.exactAgentRuntime ?? null
+}
+
+interface ResolverFixtureOptions {
+  /** exact runtimes intentionally unavailable per task name. */
+  unavailable?: Record<string, string>
+  /** tasks whose automatic `resolve` must fail deterministically. */
+  autoFailTasks?: string[]
+}
+
+function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispatchResolver {
+  const unavailable = options.unavailable ?? {}
+  const autoFailTasks = options.autoFailTasks ?? []
+  const blocked = (taskName: string, exactAgentRuntime: string): boolean =>
+    unavailable[taskName] === exactAgentRuntime
   return {
-    resolve(): never {
-      throw new Error('resolve is not exercised by task-settings tests')
-    },
-    resolveExplicit(): never {
-      throw new Error('resolveExplicit is not exercised by legacy task-settings tests')
-    },
-    listExactRuntimes(): never {
-      throw new Error('listExactRuntimes is not exercised by legacy task-settings tests')
+    resolve(input) {
+      if (autoFailTasks.includes(input.taskName)) {
+        return { ok: false as const, error: new NoEligiblePlanError(input.taskName, [], input.requirements) }
+      }
+      const profile = PROFILES[0]!
+      return { ok: true as const, exactAgentRuntime: profile.exactAgentRuntime, resolved: resolvedChoice(profile) }
     },
     eligible(input) {
-      if (input.declaredRuntime === 'forge/codex-sol') {
-        return { ok: true as const, choices: [resolvedChoice('forge/codex-sol', 'codex-sol')] }
-      }
-      if (input.declaredRuntime === 'forge/fast' || input.declaredRuntime === undefined) {
+      const choices = PROFILES
+        .filter((profile) => !blocked(input.taskName, profile.exactAgentRuntime))
+        .map((profile) => ({ ...resolvedChoice(profile), exactAgentRuntime: profile.exactAgentRuntime }))
+      return { ok: true as const, choices }
+    },
+    resolveExplicit(input) {
+      const profile = PROFILES.find((p) => p.exactAgentRuntime === input.exactRuntime)
+      if (!profile) {
         return {
-          ok: true as const,
-          choices: [
-            resolvedChoice('forge/cb-dsf', 'cb-dsf'),
-            resolvedChoice('forge/codex-luna', 'codex-luna'),
-            resolvedChoice('forge/cb-hy', 'cb-hy'),
-          ],
+          ok: false as const,
+          error: new ExplicitRuntimeUnavailableError(
+            input.taskName,
+            input.exactRuntime,
+            'runtime does not exist',
+          ),
         }
       }
-      return { ok: true as const, choices: [] }
+      if (blocked(input.taskName, profile.exactAgentRuntime)) {
+        return {
+          ok: false as const,
+          error: new ExplicitRuntimeUnavailableError(
+            input.taskName,
+            input.exactRuntime,
+            'runtime is unavailable',
+          ),
+        }
+      }
+      return { ok: true as const, exactAgentRuntime: profile.exactAgentRuntime, resolved: resolvedChoice(profile) }
+    },
+    listExactRuntimes(input) {
+      return {
+        ok: true as const,
+        items: PROFILES.map((profile) => {
+          const isAvailable = !blocked(input.taskName, profile.exactAgentRuntime)
+          return isAvailable
+            ? { exactAgentRuntime: profile.exactAgentRuntime, available: true as const, resolved: resolvedChoice(profile) }
+            : {
+              exactAgentRuntime: profile.exactAgentRuntime,
+              available: false as const,
+              unavailableReason: 'fixture-blocked',
+            }
+        }),
+      }
     },
   }
 }
 
-interface FixtureEntry {
+interface DefEntry {
   name: string
-  project?: string
-  source: string
   agentRuntime: string
-  dispatch: Record<string, unknown>
+  dispatch?: Record<string, unknown>
+  timeoutMs?: number
+  description?: string
+  source?: string
+}
+
+const BUILTIN_DEFS: DefEntry[] = [
+  {
+    name: 'commit',
+    agentRuntime: 'forge/fast',
+    dispatch: { expectedTps: 80, minimumTps: 60 },
+    timeoutMs: 120_000,
+    description: 'Commit message helper',
+    source: 'workspace',
+  },
+  {
+    name: 'review',
+    agentRuntime: 'forge/codex-sol',
+    dispatch: { maxOutputUsdPerMillion: 15 },
+    timeoutMs: 180_000,
+    description: 'Code review',
+    source: 'workspace',
+  },
+  {
+    name: 'unavailable',
+    agentRuntime: 'forge/codex-sol',
+    dispatch: { maxOutputUsdPerMillion: 15 },
+    timeoutMs: 180_000,
+    description: 'Review task whose pinned runtime is blocked',
+    source: 'workspace',
+  },
+  {
+    name: 'auto-fail',
+    agentRuntime: 'forge/fast',
+    dispatch: { expectedTps: 1000 },
+    timeoutMs: 120_000,
+    description: 'Automatic dispatch that fails preflight',
+    source: 'workspace',
+  },
+]
+
+function defToSummary(entry: DefEntry, project?: string) {
+  return {
+    name: entry.name,
+    ...(project !== undefined ? { kind: 'project' as const, project } : { kind: 'builtin' as const }),
+    source: entry.source ?? 'workspace',
+    description: entry.description,
+    agentRuntime: entry.agentRuntime,
+    ...(entry.timeoutMs !== undefined ? { timeoutMs: entry.timeoutMs } : {}),
+    ...(entry.dispatch !== undefined ? { dispatch: entry.dispatch } : {}),
+  }
 }
 
 function createDefinitionsFixture(): TaskSettingsDefinitionSource {
-  const listEntries = (project?: string): FixtureEntry[] => [
-    {
-      name: 'commit',
-      ...(project !== undefined ? { project } : {}),
-      source: 'workspace',
-      agentRuntime: 'forge/fast',
-      dispatch: { expectedTps: 80, minimumTps: 60 },
-    },
-    {
-      name: 'review',
-      ...(project !== undefined ? { project } : {}),
-      source: 'workspace',
-      agentRuntime: 'forge/codex-sol',
-      dispatch: { maxOutputUsdPerMillion: 15 },
-    },
-  ]
-  const findEntry = (taskId: string, project?: string): FixtureEntry | undefined => {
-    return listEntries(project).find((entry) => entry.name === taskId)
-  }
+  const findEntry = (name: string): DefEntry | undefined =>
+    BUILTIN_DEFS.find((entry) => entry.name === name)
   return {
     async list(project) {
-      return listEntries(project)
+      if (project === undefined) return BUILTIN_DEFS.map((entry) => defToSummary(entry))
+      const entries = BUILTIN_DEFS.filter(
+        (entry) => entry.name === 'commit' || entry.name === 'review',
+      )
+      return entries.map((entry) => defToSummary(entry, project))
     },
     async describe(taskId, project) {
-      const summary = findEntry(taskId, project)
-      if (!summary) throw new Error(`task '${taskId}' not found`)
-      const { dispatch, ...rest } = summary
+      const entry = findEntry(taskId)
+      if (!entry) throw new Error(`task '${taskId}' not found`)
+      const summary = defToSummary(entry, project)
       return {
-        ...rest,
-        dispatch,
-        permission: 'readonly' as const,
+        ...summary,
+        permission: 'readonly',
         input_schema: { note: taskId },
         output_schema: { done: true },
       }
@@ -134,8 +258,16 @@ function createDefinitionsFixture(): TaskSettingsDefinitionSource {
 interface TestContext {
   dir: string
   configPath: string
-  service: TaskSettingsService
+  makeService: (overrides?: Partial<ConstructorParameters<typeof TaskSettingsService>[0]>) => TaskSettingsService
 }
+
+const defaultDaemonAvailability: TaskSettingsDaemonAvailabilityCallback = () => ({ accepting: true, known: true })
+const defaultRuntimeAvailability: TaskSettingsRuntimeAvailabilityCallback = () => ({
+  providerCredential: 'available',
+  providerLive: 'unknown',
+  quota: 'unknown',
+  available: true,
+})
 
 describe('daemon task-settings-service (no-model)', () => {
   let context: TestContext | undefined
@@ -146,17 +278,23 @@ describe('daemon task-settings-service (no-model)', () => {
     context = {
       dir,
       configPath,
-      service: new TaskSettingsService({
-        workspaceRoot: dir,
-        configPath,
-        resolver: createResolverFixture(),
-        definitions: createDefinitionsFixture(),
-      }),
+      makeService: (overrides = {}) =>
+        new TaskSettingsService({
+          workspaceRoot: dir,
+          configPath,
+          resolver: createResolverFixture({
+            unavailable: { unavailable: 'forge/codex-sol' },
+            autoFailTasks: ['auto-fail'],
+          }),
+          definitions: createDefinitionsFixture(),
+          daemonAvailability: defaultDaemonAvailability,
+          runtimeAvailability: defaultRuntimeAvailability,
+          ...overrides,
+        }),
     }
   })
 
   afterEach(() => {
-    resetTaskRuntimeOverrideConfigPathBinding()
     if (context) {
       rmSync(context.dir, { recursive: true, force: true })
       context = undefined
@@ -173,244 +311,478 @@ describe('daemon task-settings-service (no-model)', () => {
 
   const tempResidue = (): string[] => readdirSync(context!.dir).filter((entry) => entry.includes('.tmp'))
 
-  it('snapshot reports the authoritative config path, revision, selection source and machine-global scope', async () => {
-    writeConfig({ tasks: { agentRuntime: { review: 'forge/codex-sol' } } })
+  it('reports the authoritative path, revision and layered effective settings with per-field sources', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { selectionMode: 'automatic', timeoutMs: 900_000, dispatch: { expectedTps: 100 } },
+          byTask: {
+            'builtin:commit': { additionalInstructions: 'be terse', dispatch: { minimumTps: 90 } },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({})
 
-    const snapshot = await context!.service.snapshot({})
-
-    // Authoritative path and deterministic content revision are reported.
     assert.equal(snapshot.config_path, context!.configPath)
     assert.equal(snapshot.revision.length > 0, true)
-    assert.equal(snapshot.scope, 'machine_global')
-    assert.equal(snapshot.keyed_by, 'bare_task_name')
+    // user-global layer surfaced as JSON-safe snake_case layer.
+    assert.deepEqual(snapshot.user_global, {
+      mode: 'automatic',
+      timeout_ms: 900_000,
+      automatic: { expected_tps: 100 },
+    })
 
-    const commit = snapshot.tasks.find((row) => row.task_id === 'commit')
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
     assert.ok(commit)
-    // commit declares a policy runtime: automatic, no machine preference yet.
-    assert.equal(commit.declared_agent_runtime, 'forge/fast')
-    assert.equal(commit.machine_preference, null)
-    assert.deepEqual(commit.selection, { agent_runtime: null, source: 'automatic' })
-    // Read-only contract metadata is present.
-    assert.equal(commit.source, 'workspace')
-    assert.equal(commit.permission, 'readonly')
-    assert.deepEqual(commit.eligible.map((c) => c.exactAgentRuntime), [
-      'forge/cb-dsf',
-      'forge/codex-luna',
-      'forge/cb-hy',
-    ])
-    // Each eligible row carries the resolved dispatch fields.
-    for (const choice of commit.eligible) {
-      assert.equal(choice.client, 'codex')
-      assert.equal(typeof choice.model, 'string')
-      assert.equal(typeof choice.speed.effective_tps, 'number')
-    }
+    // Builtin metadata is read-only: source/description and a dynamic template marker.
+    assert.equal(commit.builtin.name, 'commit')
+    assert.equal(commit.builtin.source, 'workspace')
+    assert.equal(commit.builtin.prompt_template, 'dynamic')
+    assert.equal('additional_instructions' in commit.builtin, false)
+    assert.equal(commit.builtin.declared_runtime, null)
 
-    const review = snapshot.tasks.find((row) => row.task_id === 'review')
+    // Per-task persisted layer is exactly the byTask entry (snake_case DTO).
+    assert.deepEqual(commit.user_task, {
+      additional_instructions: 'be terse',
+      automatic: { minimum_tps: 90 },
+    })
+
+    // Field-level right-wins precedence with the winning source reported.
+    assert.deepEqual(commit.effective.mode, { value: 'automatic', source: 'user_global' })
+    assert.deepEqual(commit.effective.timeout_ms, { value: 900_000, source: 'user_global' })
+    assert.deepEqual(commit.effective.additional_instructions, { value: 'be terse', source: 'user_task' })
+    assert.deepEqual(commit.effective.explicit_runtime, { value: null, source: 'system' })
+    assert.deepEqual(commit.effective.automatic.expected_tps, { value: 100, source: 'user_global' })
+    // Builtin minimumTps (60) overridden by the per-task minimumTps (90).
+    assert.deepEqual(commit.effective.automatic.minimum_tps, { value: 90, source: 'user_task' })
+    assert.deepEqual(commit.effective.automatic.intelligence_min, { value: null, source: 'system' })
+    // No validation issues for a clean automatic row.
+    assert.deepEqual(commit.issues, [])
+  })
+
+  it('keys project rows by stable project identity', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { timeoutMs: 60_000 },
+          byTask: { 'project:alpha:review': { timeoutMs: 222_000 } },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({ project: 'alpha' })
+
+    assert.equal(snapshot.project, 'alpha')
+    const review = snapshot.rows.find((row) => row.identity === 'project:alpha:review')
     assert.ok(review)
-    // Machine preference exists: current selection is machine-sourced.
-    assert.equal(review.declared_agent_runtime, 'forge/codex-sol')
-    assert.equal(review.machine_preference, 'forge/codex-sol')
-    assert.deepEqual(review.selection, { agent_runtime: 'forge/codex-sol', source: 'machine' })
-    // Exact declared pin exposes at most one eligible choice.
-    assert.deepEqual(review.eligible.map((c) => c.exactAgentRuntime), ['forge/codex-sol'])
+    assert.equal(review.project, 'alpha')
+    assert.deepEqual(review.effective.timeout_ms, { value: 222_000, source: 'user_task' })
+    assert.equal(review.builtin.identity, 'project:alpha:review')
+    // No legacy agentRuntime is consulted for project rows.
+    assert.equal(review.builtin.declared_runtime, 'forge/codex-sol')
   })
 
-  it('keeps the builtin declaration separate from a machine preference in the default definition source', async () => {
-    writeConfig({ tasks: { agentRuntime: { edit: 'forge/codex-luna' } } })
-    const release = bindTaskRuntimeOverrideConfigPath(context!.configPath)
-    const service = new TaskSettingsService({
-      workspaceRoot: context!.dir,
-      configPath: context!.configPath,
-      resolver: createResolverFixture(),
-    })
-    const snapshot = await service.snapshot({})
-    release()
-
-    const edit = snapshot.tasks.find((row) => row.task_id === 'edit')
-    assert.ok(edit)
-    assert.equal(edit.declared_agent_runtime, 'forge/fast')
-    assert.equal(edit.machine_preference, 'forge/codex-luna')
-    assert.deepEqual(edit.selection, { agent_runtime: 'forge/codex-luna', source: 'machine' })
-    assert.deepEqual(edit.eligible.map((choice) => choice.exactAgentRuntime), [
-      'forge/cb-dsf',
-      'forge/codex-luna',
-      'forge/cb-hy',
-    ])
-  })
-
-  it('save persists one exact eligible preference under the bare task name', async () => {
-    writeConfig({ tasks: {} })
-    const before = await context!.service.snapshot({})
-    const revision = before.revision
-
-    const after = await context!.service.save({
-      task_id: 'commit',
-      agent_runtime: 'forge/cb-dsf',
-      expected_revision: revision,
-    })
-
-    assert.equal(after.config_path, context!.configPath)
-    assert.notEqual(after.revision, revision)
-    const commit = after.tasks.find((row) => row.task_id === 'commit')
-    assert.ok(commit)
-    assert.equal(commit.machine_preference, 'forge/cb-dsf')
-    assert.deepEqual(commit.selection, { agent_runtime: 'forge/cb-dsf', source: 'machine' })
-
-    const onDisk = readConfig()
-    const agentRuntime = (onDisk.tasks as Record<string, unknown>).agentRuntime as Record<string, string>
-    assert.deepEqual(agentRuntime, { commit: 'forge/cb-dsf' })
-    assert.equal(tempResidue().length, 0)
-  })
-
-  it('null reset deletes only the bare task preference key', async () => {
+  it('reset deletes only the current-layer field and cleans empty containers', async () => {
     writeConfig({
       top_level: { keep: true },
-      tasks: { agentRuntime: { commit: 'forge/cb-dsf', review: 'forge/codex-sol' } },
+      tasks: {
+        settings: {
+          global: { timeoutMs: 800_000 },
+          byTask: { 'builtin:commit': { timeoutMs: 123_456, additionalInstructions: 'keep me' } },
+        },
+      },
     })
-    const before = await context!.service.snapshot({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
 
-    const after = await context!.service.save({
+    const after = await service.save({
+      scope: 'task',
       task_id: 'commit',
-      agent_runtime: null,
       expected_revision: before.revision,
+      patch: { timeout_ms: null },
     })
 
-    const commit = after.tasks.find((row) => row.task_id === 'commit')
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
     assert.ok(commit)
-    assert.equal(commit.machine_preference, null)
-    assert.deepEqual(commit.selection, { agent_runtime: null, source: 'automatic' })
+    // timeout_ms deleted at the per-task layer only; the sibling field survives.
+    assert.deepEqual(commit.user_task, { additional_instructions: 'keep me' })
+    // Global timeout inherited again.
+    assert.deepEqual(commit.effective.timeout_ms, { value: 800_000, source: 'user_global' })
 
-    const onDisk = readConfig()
-    assert.deepEqual(
-      (onDisk.tasks as Record<string, unknown>).agentRuntime as Record<string, unknown>,
-      { review: 'forge/codex-sol' },
-    )
-    // Unrelated keys survive the reset.
+    let onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    assert.deepEqual(byTask['builtin:commit'], { additionalInstructions: 'keep me' })
     assert.deepEqual(onDisk.top_level, { keep: true })
     assert.equal(tempResidue().length, 0)
-  })
 
-  it('save rejects ineligible exact runtimes and legacy policy aliases', async () => {
-    writeConfig({ tasks: {} })
-    const before = await context!.service.snapshot({})
-    const revision = before.revision
-
-    // commit is eligible for cb-dsf/codex-luna/cb-hy only — a different exact
-    // profile is ineligible even though it is valid for review.
-    await assert.rejects(
-      context!.service.save({
-        task_id: 'commit',
-        agent_runtime: 'forge/codex-sol',
-        expected_revision: revision,
-      }),
-      (error) => error instanceof TaskSettingsIneligibleRuntimeError,
-    )
-    // Legacy policy aliases are never eligible choices.
-    for (const alias of ['forge/fast', 'forge/general', 'forge/ultra']) {
-      await assert.rejects(
-        context!.service.save({
-          task_id: 'commit',
-          agent_runtime: alias,
-          expected_revision: revision,
-        }),
-        (error) => error instanceof TaskSettingsIneligibleRuntimeError,
-      )
-    }
-    // Nothing was written by the rejected saves.
-    assert.deepEqual(readConfig(), { tasks: {} })
+    // Resetting the final field removes the byTask entry and empty containers.
+    const secondBefore = await service.snapshot({})
+    await service.save({
+      scope: 'task',
+      task_id: 'commit',
+      expected_revision: secondBefore.revision,
+      patch: { additional_instructions: null },
+    })
+    onDisk = readConfig()
+    const afterTasks = onDisk.tasks as Record<string, unknown>
+    const afterSettings = afterTasks.settings as Record<string, unknown>
+    assert.equal((afterSettings as { byTask?: unknown }).byTask, undefined)
+    assert.deepEqual(afterSettings.global, { timeoutMs: 800_000 })
     assert.equal(tempResidue().length, 0)
   })
 
-  it('save preserves unknown top-level and tasks sibling keys', async () => {
+  it('save persists a validated explicit selection under the stable identity', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const after = await service.save({
+      scope: 'task',
+      task_id: 'commit',
+      expected_revision: before.revision,
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: resolveTriple(PROFILES[0]!),
+      },
+    })
+
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.effective.mode, { value: 'explicit', source: 'user_task' })
+    assert.deepEqual(commit.effective.explicit_runtime, {
+      value: resolveTriple(PROFILES[0]!),
+      source: 'user_task',
+    })
+    assert.ok(commit.explicit)
+    assert.equal(commit.explicit.runtime.client, PROFILES[0]!.client)
+    assert.equal(commit.explicit.resolved?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(commit.explicit.resolved?.model, PROFILES[0]!.model)
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    assert.deepEqual(byTask['builtin:commit'], {
+      selectionMode: 'explicit',
+      agentRuntime: 'forge/cb-dsf',
+    })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('rejects an explicit save when the live provider is unavailable and writes nothing', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      runtimeAvailability: () => ({
+        providerCredential: 'missing',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: false,
+      }),
+    })
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: {
+          mode: 'explicit',
+          explicit_runtime: resolveTriple(PROFILES[0]!),
+        },
+      }),
+      (error) => error instanceof TaskSettingsRuntimeUnavailableError,
+    )
+    assert.deepEqual(readConfig(), {})
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('rejects an explicit save when the daemon is not accepting and writes nothing', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      daemonAvailability: () => ({ accepting: false, known: true }),
+    })
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: {
+          mode: 'explicit',
+          explicit_runtime: resolveTriple(PROFILES[0]!),
+        },
+      }),
+      (error) => error instanceof TaskSettingsRuntimeUnavailableError,
+    )
+    assert.deepEqual(readConfig(), {})
+  })
+
+  it('stale expected_revision raises typed content_conflict and preserves the external edit', async () => {
+    writeConfig({
+      external: 'edited-out-of-band',
+      tasks: { settings: { global: { timeoutMs: 800_000 } } },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    writeConfig({
+      external: 'edited-out-of-band-v2',
+      tasks: { settings: { global: { timeoutMs: 800_000 }, byTask: { 'builtin:commit': { timeoutMs: 1_000 } } } },
+    })
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: { additional_instructions: 'never written' },
+      }),
+      (error) => error instanceof TaskSettingsContentConflictError,
+    )
+
+    const onDisk = readConfig()
+    assert.equal(onDisk.external, 'edited-out-of-band-v2')
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    assert.deepEqual(byTask['builtin:commit'], { timeoutMs: 1_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('unknown top-level and sibling keys survive a save', async () => {
     writeConfig({
       unknown_top: { nested: [1, 2, 3] },
       tasks: {
-        agentRuntime: { review: 'forge/codex-sol' },
+        settings: {
+          global: { timeoutMs: 60_000 },
+        },
         sibling_flag: true,
-        unknown_sibling: { kept: true },
       },
     })
-    const before = await context!.service.snapshot({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
 
-    await context!.service.save({
+    await service.save({
+      scope: 'task',
       task_id: 'commit',
-      agent_runtime: 'forge/cb-hy',
       expected_revision: before.revision,
+      patch: { additional_instructions: 'hello' },
     })
 
     const onDisk = readConfig()
     assert.deepEqual(onDisk.unknown_top, { nested: [1, 2, 3] })
     const tasks = onDisk.tasks as Record<string, unknown>
     assert.equal(tasks.sibling_flag, true)
-    assert.deepEqual(tasks.unknown_sibling, { kept: true })
-    assert.deepEqual(tasks.agentRuntime, { review: 'forge/codex-sol', commit: 'forge/cb-hy' })
+    assert.equal(tempResidue().length, 0)
   })
 
-  it('stale expected_revision raises a typed content_conflict and preserves the external edit', async () => {
-    writeConfig({ tasks: { agentRuntime: { review: 'forge/codex-sol' } } })
-    const before = await context!.service.snapshot({})
+  it('automatic preflight runs through resolver.resolve and reports structured issues on failure', async () => {
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({})
 
-    // External edit: someone (a CLI/user/other tool) modifies the same config.
-    writeConfig({
-      external: 'edited-out-of-band',
-      tasks: { agentRuntime: { review: 'forge/codex-sol', commit: 'forge/codex-luna' } },
+    // commit resolves automatically without issues.
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.effective.mode.value, 'automatic')
+    assert.deepEqual(commit.issues, [])
+
+    // auto-fail resolves through the same resolver path and stays as a row with
+    // a structured unavailable issue (never dropped).
+    const autoFail = snapshot.rows.find((row) => row.identity === 'builtin:auto-fail')
+    assert.ok(autoFail)
+    assert.equal(autoFail.effective.mode.value, 'automatic')
+    assert.ok(autoFail.issues.some((issue) => issue.code === 'automatic_dispatch_unavailable'))
+  })
+
+  it('explicit preflight runs through resolveExplicit/listExactRuntimes with no fallback', async () => {
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({})
+
+    // review declares an exact builtin runtime; explicit resolution succeeds.
+    const review = snapshot.rows.find((row) => row.identity === 'builtin:review')
+    assert.ok(review)
+    assert.deepEqual(review.effective.mode, { value: 'explicit', source: 'builtin' })
+    assert.deepEqual(review.effective.explicit_runtime, {
+      value: resolveTriple(PROFILES[2]!),
+      source: 'builtin',
     })
-
-    await assert.rejects(
-      context!.service.save({
-        task_id: 'commit',
-        agent_runtime: 'forge/cb-dsf',
-        expected_revision: before.revision,
-      }),
-      (error) => error instanceof TaskSettingsContentConflictError,
+    assert.ok(review.explicit)
+    // Pickers surface every currently available exact runtime.
+    assert.deepEqual(
+      review.explicit.choices.map((choice) => choice.exactAgentRuntime).sort(),
+      ['forge/cb-dsf', 'forge/codex-luna', 'forge/codex-sol'].sort(),
     )
+    assert.equal(review.explicit.resolved?.exactAgentRuntime, 'forge/codex-sol')
+    // Readiness from injected non-billable availability callbacks.
+    assert.ok(review.explicit.readiness)
+    assert.equal(review.explicit.readiness.daemon, 'accepting')
+    assert.equal(review.explicit.readiness.quota, 'unknown')
+    assert.equal(review.explicit.readiness.available, true)
+    assert.equal(review.explicit.readiness.runtime, 'forge/codex-sol')
 
-    // The failed save never wrote: the external edit is still on disk.
-    const onDisk = readConfig()
-    assert.equal(onDisk.external, 'edited-out-of-band')
-    const agentRuntime = (onDisk.tasks as Record<string, unknown>).agentRuntime as Record<string, string>
-    assert.deepEqual(agentRuntime, { review: 'forge/codex-sol', commit: 'forge/codex-luna' })
-    assert.equal(tempResidue().length, 0)
+    // unavailable declares the same exact runtime but its resolveExplicit fails
+    // deterministically. The mode stays explicit and the row reports the issue:
+    // automatic mode is never used as a fallback.
+    const unavailable = snapshot.rows.find((row) => row.identity === 'builtin:unavailable')
+    assert.ok(unavailable)
+    assert.equal(unavailable.effective.mode.value, 'explicit')
+    assert.ok(unavailable.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
+    if (unavailable.explicit) {
+      assert.equal(unavailable.explicit.resolved, null)
+      assert.equal(unavailable.explicit.readiness, null)
+    }
   })
 
-  it('same-named tasks in any project share the machine-global bare-name key', async () => {
-    writeConfig({ tasks: { agentRuntime: { commit: 'forge/cb-dsf' } } })
+  it('snapshot readiness reflects a non-accepting daemon and unknown quota', async () => {
+    const service = context!.makeService({
+      daemonAvailability: () => ({ accepting: false, known: true }),
+      runtimeAvailability: () => ({
+        providerCredential: 'available',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: true,
+      }),
+    })
+    const snapshot = await service.snapshot({})
 
-    const alpha = await context!.service.snapshot({ project: 'alpha' })
-    const alphaCommit = alpha.tasks.find((row) => row.task_id === 'commit')
-    assert.ok(alphaCommit)
-    assert.equal(alphaCommit.project, 'alpha')
-    assert.equal(alphaCommit.machine_preference, 'forge/cb-dsf')
-    assert.deepEqual(alphaCommit.selection, { agent_runtime: 'forge/cb-dsf', source: 'machine' })
+    const review = snapshot.rows.find((row) => row.identity === 'builtin:review')
+    assert.ok(review)
+    assert.ok(review.explicit?.readiness)
+    assert.equal(review.explicit.readiness.daemon, 'unavailable')
+    assert.equal(review.explicit.readiness.available, false)
+    assert.equal(review.explicit.readiness.quota, 'unknown')
+    assert.ok(review.explicit.readiness.issues.some((issue) => issue.code === 'daemon_not_accepting'))
+  })
 
-    // A save issued while another project is selected still writes the bare key.
-    const betaBefore = await context!.service.snapshot({ project: 'beta' })
-    await context!.service.save({
+  it('reads legacy tasks.agentRuntime pins as builtin compatibility but never writes them', async () => {
+    writeConfig({ tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const commit = before.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.user_task, {
+      mode: 'explicit',
+      explicit_runtime: resolveTriple(PROFILES[2]!),
+    })
+    assert.deepEqual(commit.effective.mode, { value: 'explicit', source: 'user_task' })
+    assert.deepEqual(commit.effective.explicit_runtime, {
+      value: resolveTriple(PROFILES[2]!),
+      source: 'user_task',
+    })
+
+    // Editing a different field migrates the selection into tasks.settings but
+    // never rewrites the legacy agentRuntime map.
+    await service.save({
+      scope: 'task',
       task_id: 'commit',
-      project: 'beta',
-      agent_runtime: 'forge/codex-luna',
-      expected_revision: betaBefore.revision,
+      expected_revision: before.revision,
+      patch: { timeout_ms: 777_000 },
     })
 
     const onDisk = readConfig()
-    const agentRuntime = (onDisk.tasks as Record<string, unknown>).agentRuntime as Record<string, unknown>
-    // Key is the bare task name 'commit', not a project-qualified key.
-    assert.equal(agentRuntime.commit, 'forge/codex-luna')
-    assert.equal('beta/commit' in agentRuntime, false)
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    assert.deepEqual(tasks.agentRuntime, { commit: 'forge/codex-sol' })
+    assert.deepEqual(byTask['builtin:commit'], {
+      selectionMode: 'explicit',
+      agentRuntime: 'forge/codex-sol',
+      timeoutMs: 777_000,
+    })
     assert.equal(tempResidue().length, 0)
   })
 
-  it('task existence is required before any save or reset', async () => {
-    writeConfig({ tasks: {} })
-    const before = await context!.service.snapshot({})
+  it('prompt customization is a plain additional_instructions field; the builtin template stays read-only', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const after = await service.save({
+      scope: 'task',
+      task_id: 'review',
+      expected_revision: before.revision,
+      patch: { additional_instructions: 'always cite line numbers' },
+    })
+
+    const review = after.rows.find((row) => row.identity === 'builtin:review')
+    assert.ok(review)
+    assert.equal(review.builtin.prompt_template, 'dynamic')
+    assert.deepEqual(review.builtin, {
+      ...review.builtin,
+      prompt_template: 'dynamic',
+      source: 'workspace',
+      description: 'Code review',
+      identity: 'builtin:review',
+      name: 'review',
+      declared_runtime: 'forge/codex-sol',
+      timeout_ms: 180_000,
+      dispatch: { max_output_usd_per_million: 15 },
+    })
+    assert.equal(review.effective.additional_instructions.value, 'always cite line numbers')
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    // Only the editable plain-instruction override is stored for the builtin.
+    assert.deepEqual(byTask['builtin:review'], { additionalInstructions: 'always cite line numbers' })
+  })
+
+  it('task existence is required before any task-scope save', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
     await assert.rejects(
-      context!.service.save({
+      service.save({
+        scope: 'task',
         task_id: 'does-not-exist',
-        agent_runtime: null,
         expected_revision: before.revision,
+        patch: { additional_instructions: 'x' },
       }),
       (error) => error instanceof TaskSettingsTaskNotFoundError,
     )
+    assert.deepEqual(readConfig(), {})
     assert.equal(tempResidue().length, 0)
+  })
+
+  it('a malformed explicit runtime triple is rejected as invalid settings', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: {
+          mode: 'explicit',
+          explicit_runtime: { client: 'nope', provider: 'nope', model: 'nope' },
+        },
+      }),
+      (error) => error instanceof Error && error.message.includes('invalid task settings'),
+    )
+    assert.deepEqual(readConfig(), {})
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('exact runtime identity mapping is stable across triple and id forms', () => {
+    for (const profile of PROFILES) {
+      const triple = resolveTriple(profile)
+      const id = exactRuntimeIdForTriple(triple)
+      assert.equal(id, profile.exactAgentRuntime)
+    }
+    assert.equal(
+      exactRuntimeIdForTriple({ client: 'x', provider: 'y', model: 'z' }),
+      null,
+    )
   })
 })

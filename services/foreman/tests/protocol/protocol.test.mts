@@ -1060,53 +1060,65 @@ describe('lib/protocol JSON-RPC contract', () => {
     assert.deepEqual(parseMethodParams('task.settings.snapshot', {}), {})
     assert.deepEqual(parseMethodParams('task.settings.snapshot', { project: 'workspace' }), { project: 'workspace' })
 
-    // Save params: nullable reset is accepted, exact runtime accepted.
+    // Save params: field-level reset and exact runtime selection are accepted.
     assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task',
       task_id: 'commit',
       expected_revision: 'rev-1',
-      agent_runtime: null,
+      patch: { timeout_ms: null },
     }), {
+      scope: 'task',
       task_id: 'commit',
       expected_revision: 'rev-1',
-      agent_runtime: null,
+      patch: { timeout_ms: null },
     })
     assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task',
       task_id: 'commit',
       project: 'workspace',
       expected_revision: 'rev-1',
-      agent_runtime: 'forge/codex-luna',
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      },
     }), {
+      scope: 'task',
       task_id: 'commit',
       project: 'workspace',
       expected_revision: 'rev-1',
-      agent_runtime: 'forge/codex-luna',
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      },
     })
 
     // Missing required fields are rejected.
     assert.throws(
-      () => parseMethodParams('task.settings.save', { task_id: 'commit', agent_runtime: null }),
+      () => parseMethodParams('task.settings.save', { scope: 'task', task_id: 'commit', patch: {} }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
       },
     )
     assert.throws(
-      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: 'rev-1' }),
+      () => parseMethodParams('task.settings.save', { scope: 'task', task_id: 'commit', expected_revision: 'rev-1' }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
       },
     )
     assert.throws(
-      () => parseMethodParams('task.settings.save', { task_id: 'commit' }),
+      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: 'rev-1', patch: {} }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
       },
     )
-    // agent_runtime must be a string or null (never a number or object).
+    // explicit_runtime must be a complete client/provider/model triple.
     assert.throws(
-      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: 'rev-1', agent_runtime: 3 }),
+      () => parseMethodParams('task.settings.save', {
+        scope: 'task', task_id: 'commit', expected_revision: 'rev-1', patch: { explicit_runtime: 3 },
+      }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
@@ -1114,9 +1126,9 @@ describe('lib/protocol JSON-RPC contract', () => {
     )
     assert.throws(
       () => parseMethodParams('task.settings.save', {
-        task_id: 'commit',
+        scope: 'task', task_id: 'commit',
         expected_revision: 'rev-1',
-        agent_runtime: {},
+        patch: { explicit_runtime: {} },
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
@@ -1125,7 +1137,9 @@ describe('lib/protocol JSON-RPC contract', () => {
     )
     // Blank expected_revision is rejected.
     assert.throws(
-      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: '', agent_runtime: null }),
+      () => parseMethodParams('task.settings.save', {
+        scope: 'task', task_id: 'commit', expected_revision: '', patch: { timeout_ms: null },
+      }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
@@ -1159,42 +1173,68 @@ describe('lib/protocol JSON-RPC contract', () => {
     const snapshotResult = {
       config_path: '/tmp/wrenyard/config.json',
       revision: 'rev-1',
-      scope: 'machine_global',
-      keyed_by: 'bare_task_name',
       project: 'workspace',
-      tasks: [{
-        task_id: 'commit',
+      user_global: {},
+      rows: [{
+        identity: 'project:workspace:commit',
+        name: 'commit',
         project: 'workspace',
-        source: 'workspace',
-        permission: 'readonly',
-        dispatch: { expectedTps: 20, minimumTps: 10 },
-        declared_agent_runtime: 'forge/fast',
-        machine_preference: null,
-        selection: { agent_runtime: null, source: 'automatic' },
-        eligible: [eligibleChoice],
+        builtin: {
+          identity: 'project:workspace:commit',
+          name: 'commit',
+          project: 'workspace',
+          source: 'workspace',
+          prompt_template: 'dynamic',
+          declared_runtime: 'forge/fast',
+          timeout_ms: 900000,
+          dispatch: { expected_tps: 20, minimum_tps: 10 },
+        },
+        user_task: {},
+        effective: {
+          mode: { value: 'automatic', source: 'builtin' },
+          explicit_runtime: { value: null, source: 'system' },
+          timeout_ms: { value: 900000, source: 'builtin' },
+          additional_instructions: { value: null, source: 'system' },
+          automatic: {
+            expected_tps: { value: 20, source: 'builtin' },
+            minimum_tps: { value: 10, source: 'builtin' },
+            intelligence_min: { value: null, source: 'system' },
+            intelligence_max: { value: null, source: 'system' },
+            max_output_usd_per_million: { value: null, source: 'system' },
+            required_capabilities: { value: null, source: 'system' },
+            exclude_model_ids: { value: null, source: 'system' },
+            exclude_profile_ids: { value: null, source: 'system' },
+            exclude_client_ids: { value: null, source: 'system' },
+            exclude_provider_ids: { value: null, source: 'system' },
+            preferred_runtime: { value: null, source: 'system' },
+          },
+        },
+        issues: [],
       }],
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', snapshotResult), snapshotResult)
     assert.deepEqual(parseMethodResult('task.settings.save', snapshotResult), snapshotResult)
 
-    // A machine selection round-trips with a machine source.
-    const machineResult = {
+    // A persisted user-task override round-trips with its source.
+    const overriddenResult = {
       ...snapshotResult,
-      tasks: [{
-        ...snapshotResult.tasks[0],
-        machine_preference: 'forge/codex-luna',
-        selection: { agent_runtime: 'forge/codex-luna', source: 'machine' },
+      rows: [{
+        ...snapshotResult.rows[0],
+        user_task: { timeout_ms: 120000 },
+        effective: {
+          ...snapshotResult.rows[0].effective,
+          timeout_ms: { value: 120000, source: 'user_task' },
+        },
       }],
     }
-    assert.deepEqual(parseMethodResult('task.settings.snapshot', machineResult), machineResult)
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', overriddenResult), overriddenResult)
 
-    // Result must describe config_path/revision/scope/keyed_by and a tasks array.
+    // Result must describe config_path/revision/global layer and rows.
     assert.throws(
       () => parseMethodResult('task.settings.snapshot', {
         config_path: '/tmp/wrenyard/config.json',
         revision: 'rev-1',
-        scope: 'machine_global',
-        keyed_by: 'bare_task_name',
+        user_global: {},
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
@@ -1205,21 +1245,25 @@ describe('lib/protocol JSON-RPC contract', () => {
       () => parseMethodResult('task.settings.snapshot', {
         config_path: '/tmp/wrenyard/config.json',
         revision: 'rev-1',
-        keyed_by: 'bare_task_name',
-        tasks: [],
+        rows: [],
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
       },
     )
-    // An eligible row must carry an exact pin plus the resolved dispatch fields.
+    // An explicit choice must carry the full resolved dispatch fields.
     assert.throws(
       () => parseMethodResult('task.settings.snapshot', {
         ...snapshotResult,
-        tasks: [{
-          ...snapshotResult.tasks[0],
-          eligible: [{ exactAgentRuntime: 'forge/fast' }],
+        rows: [{
+          ...snapshotResult.rows[0],
+          explicit: {
+            runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+            choices: [{ exactAgentRuntime: 'forge/fast' }],
+            resolved: eligibleChoice,
+            readiness: null,
+          },
         }],
       }),
       (error) => {

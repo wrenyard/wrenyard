@@ -61,7 +61,8 @@ import {
 import { DispatchControl, DispatchControlError, type DispatchStatus } from '../../daemon/dispatch-control.mts'
 import {
   TaskSettingsContentConflictError,
-  TaskSettingsIneligibleRuntimeError,
+  TaskSettingsInvalidSettingsError,
+  TaskSettingsRuntimeUnavailableError,
   TaskSettingsService,
   TaskSettingsTaskNotFoundError,
 } from '../../daemon/services/task-settings-service.mts'
@@ -368,7 +369,8 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       if (
         error instanceof TaskSettingsContentConflictError
         || error instanceof TaskSettingsTaskNotFoundError
-        || error instanceof TaskSettingsIneligibleRuntimeError
+        || error instanceof TaskSettingsInvalidSettingsError
+        || error instanceof TaskSettingsRuntimeUnavailableError
       ) {
         throw protocolErrorFromTaskSettingsError(error)
       }
@@ -713,7 +715,8 @@ function protocolErrorFromTaskSettingsError(
   error:
     | TaskSettingsContentConflictError
     | TaskSettingsTaskNotFoundError
-    | TaskSettingsIneligibleRuntimeError,
+    | TaskSettingsInvalidSettingsError
+    | TaskSettingsRuntimeUnavailableError,
 ): ProtocolError {
   if (error instanceof TaskSettingsTaskNotFoundError) {
     return new ProtocolError(
@@ -725,9 +728,12 @@ function protocolErrorFromTaskSettingsError(
   if (error instanceof TaskSettingsContentConflictError) {
     detail.expected_revision = error.expectedRevision
     detail.actual_revision = error.actualRevision
-  } else {
+  } else if (error instanceof TaskSettingsRuntimeUnavailableError) {
     detail.task_id = error.taskId
-    detail.agent_runtime = error.agentRuntime
+    detail.runtime = error.runtime
+    detail.reason = error.reason
+  } else {
+    detail.detail = error.detail
   }
   return new ProtocolError(
     { code: INVALID_PARAMS.code, message: error.message },
