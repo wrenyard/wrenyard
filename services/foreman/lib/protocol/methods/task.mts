@@ -602,6 +602,10 @@ export interface TaskSettingsAutomaticDispatch {
   preferred_runtime?: TaskSettingsExplicitRuntime
 }
 
+export type TaskSettingsAutomaticPatch = {
+  [K in keyof TaskSettingsAutomaticDispatch]?: TaskSettingsAutomaticDispatch[K] | null
+}
+
 /** JSON-safe view of one editable settings layer (user global, user per-task, or invocation). */
 export interface TaskSettingsLayer {
   mode?: TaskSettingsMode
@@ -617,7 +621,7 @@ export interface TaskSettingsPatch {
   explicit_runtime?: TaskSettingsExplicitRuntime | null
   timeout_ms?: number | null
   additional_instructions?: string | null
-  automatic?: Partial<TaskSettingsAutomaticDispatch> | null
+  automatic?: TaskSettingsAutomaticPatch | null
 }
 
 /** An effective value plus the layer it came from. */
@@ -705,6 +709,13 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
   effective: TaskSettingsEffective
+  /**
+   * Authoritative list of exact existing runtimes currently resolvable for
+   * selecting explicit mode. Present regardless of the effective mode so an
+   * automatic row can offer the explicit-mode picker without fabricating a
+   * selected explicit runtime.
+   */
+  runtime_choices: TaskSettingsEligibleChoice[]
   explicit?: TaskSettingsExplicitRow
   issues: TaskSettingsValidationIssue[]
 }
@@ -788,6 +799,24 @@ const taskSettingsNullableAutomaticSchema = {
   anyOf: [taskSettingsAutomaticDispatchSchema, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsAutomaticPatchSchema = {
+  type: 'object',
+  properties: {
+    expected_tps: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
+    minimum_tps: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
+    intelligence_min: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
+    intelligence_max: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
+    max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
+    required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
+    exclude_model_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
+    exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
+    exclude_client_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
+    exclude_provider_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
+    preferred_runtime: { anyOf: [taskSettingsExplicitRuntimeSchema, { type: 'null' }] },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskSettingsNullableNumberSchema = {
   anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }],
 } as const satisfies JsonSchema
@@ -811,7 +840,7 @@ export const taskSettingsPatchSchema = {
     explicit_runtime: taskSettingsNullableExplicitRuntimeSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     additional_instructions: nullableStringSchema,
-    automatic: taskSettingsNullableAutomaticSchema,
+    automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -1057,7 +1086,7 @@ const taskSettingsExplicitRowSchema = {
 
 const taskSettingsTaskRowSchema = {
   type: 'object',
-  required: ['identity', 'name', 'builtin', 'user_task', 'effective', 'issues'],
+  required: ['identity', 'name', 'builtin', 'user_task', 'effective', 'runtime_choices', 'issues'],
   properties: {
     identity: { type: 'string', minLength: 1 },
     name: { type: 'string', minLength: 1 },
@@ -1065,6 +1094,7 @@ const taskSettingsTaskRowSchema = {
     builtin: taskSettingsBuiltinMetadataSchema,
     user_task: taskSettingsLayerSchema,
     effective: taskSettingsEffectiveSchema,
+    runtime_choices: { type: 'array', items: taskSettingsEligibleChoiceSchema },
     explicit: taskSettingsExplicitRowSchema,
     issues: { type: 'array', items: taskSettingsValidationIssueSchema },
   },

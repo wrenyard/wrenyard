@@ -13,6 +13,8 @@ import type {
   UpdateChannel,
   UpdateSnapshot,
   TaskSettingsEligibleChoice,
+  TaskSettingsLayer,
+  TaskSettingsPatch,
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
   WrenyardShellApi,
@@ -70,9 +72,27 @@ const tasksDetailName = requireElement<HTMLElement>('tasks-detail-name');
 const tasksDetailProject = requireElement<HTMLElement>('tasks-detail-project');
 const tasksDetailSource = requireElement<HTMLElement>('tasks-detail-source');
 const tasksDetailCard = requireElement<HTMLElement>('tasks-detail-card');
+const tasksModeSelect = requireElement<HTMLSelectElement>('tasks-mode');
 const tasksModelSelect = requireElement<HTMLSelectElement>('tasks-model-select');
+const tasksRuntimeField = requireElement<HTMLElement>('tasks-runtime-field');
+const tasksTimeoutInput = requireElement<HTMLInputElement>('tasks-timeout');
+const tasksInstructionsInput = requireElement<HTMLTextAreaElement>('tasks-instructions');
+const tasksExpectedTpsInput = requireElement<HTMLInputElement>('tasks-expected-tps');
+const tasksMinimumTpsInput = requireElement<HTMLInputElement>('tasks-minimum-tps');
+const tasksIntelligenceMin = requireElement<HTMLSelectElement>('tasks-intelligence-min');
+const tasksIntelligenceMax = requireElement<HTMLSelectElement>('tasks-intelligence-max');
+const tasksMaxOutputPriceInput = requireElement<HTMLInputElement>('tasks-max-output-price');
+const tasksAutomaticDetails = requireElement<HTMLDetailsElement>('tasks-automatic-details');
 const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
+const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
+const tasksGlobalMode = requireElement<HTMLSelectElement>('tasks-global-mode');
+const tasksGlobalRuntime = requireElement<HTMLSelectElement>('tasks-global-runtime');
+const tasksGlobalRuntimeField = requireElement<HTMLElement>('tasks-global-runtime-field');
+const tasksGlobalTimeout = requireElement<HTMLInputElement>('tasks-global-timeout');
+const tasksGlobalInstructions = requireElement<HTMLTextAreaElement>('tasks-global-instructions');
+const tasksGlobalSave = requireElement<HTMLButtonElement>('tasks-global-save');
+const tasksGlobalReset = requireElement<HTMLButtonElement>('tasks-global-reset');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
 const clientPlanError = requireElement<HTMLElement>('client-plan-error');
@@ -1093,15 +1113,27 @@ function setTasksError(message: string): void {
 
 function tasksSelectedRow(): TaskSettingsTaskRow | null {
   if (!taskSettings) return null;
-  return taskSettings.tasks.find((row) => row.task_id === tasksSelectedTaskId) ?? null;
+  return taskSettings.rows.find((row) => row.identity === tasksSelectedTaskId) ?? null;
 }
 
-function taskSourceLabel(source: TaskSettingsTaskRow['selection']['source']): string {
-  return source === 'machine' ? '本机偏好' : '自动';
+function taskSourceLabel(source: TaskSettingsTaskRow['effective']['mode']['source']): string {
+  return ({
+    system: '系统', builtin: '内置', user_global: '全局默认', user_task: '当前任务', invocation: '单次运行',
+  } as const)[source];
+}
+
+function taskModeLabel(mode: 'automatic' | 'explicit'): string {
+  return mode === 'explicit' ? '指定运行时' : '自动选择';
+}
+
+function taskIssues(row: TaskSettingsTaskRow): string[] {
+  const issues = [...row.issues, ...(row.explicit?.readiness?.issues ?? [])].map((issue) => issue.message);
+  if (row.explicit?.readiness?.quota === 'unknown') issues.push('额度未知');
+  return [...new Set(issues)];
 }
 
 function renderTasksList(): void {
-  const rows = taskSettings?.tasks ?? [];
+  const rows = taskSettings?.rows ?? [];
   tasksList.replaceChildren();
   if (rows.length === 0) {
     tasksList.append(emptyRow('暂无任务设置'));
@@ -1110,19 +1142,29 @@ function renderTasksList(): void {
   for (const row of rows) {
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = `tasks-list-row${row.task_id === tasksSelectedTaskId ? ' is-selected' : ''}`;
+    item.className = `tasks-list-row${row.identity === tasksSelectedTaskId ? ' is-selected' : ''}`;
     item.setAttribute('role', 'listitem');
     const copy = document.createElement('span');
     const name = document.createElement('strong');
-    name.textContent = row.task_id;
+    name.textContent = row.name;
     const sub = document.createElement('small');
-    sub.textContent = row.project ? `${row.source} · ${row.project}` : row.source;
+    sub.textContent = row.project ? `${row.identity} · ${row.project}` : row.identity;
     copy.append(name, sub);
     const pill = document.createElement('span');
-    pill.className = `tasks-source-pill${row.selection.source === 'machine' ? ' is-machine' : ''}`;
-    pill.textContent = taskSourceLabel(row.selection.source);
+    pill.className = `tasks-source-pill${row.effective.mode.source === 'user_task' ? ' is-machine' : ''}`;
+    pill.textContent = taskModeLabel(row.effective.mode.value);
+    const issues = taskIssues(row);
+    if (issues.length > 0) {
+      const warning = document.createElement('span');
+      warning.className = 'tasks-issue-indicator';
+      warning.textContent = '!';
+      warning.tabIndex = 0;
+      warning.title = issues.join('\n');
+      warning.setAttribute('aria-label', `需要处理：${issues.join('；')}`);
+      pill.append(warning);
+    }
     item.append(copy, pill);
-    item.addEventListener('click', () => selectTasksFile(row.task_id));
+    item.addEventListener('click', () => selectTasksFile(row.identity));
     tasksList.append(item);
   }
 }
@@ -1157,75 +1199,172 @@ function renderTasksDetail(): void {
     return;
   }
   tasksDetail.hidden = false;
-  tasksDetailName.textContent = row.task_id;
-  tasksDetailProject.textContent = `TASK ${row.task_id}${row.project ? ` · PROJECT ${row.project}` : ''}`;
-  tasksDetailSource.textContent = taskSourceLabel(row.selection.source);
-  tasksDetailSource.className = `status-pill ${row.selection.source === 'machine' ? 'is-connected' : 'is-pending'}`;
-  tasksDetailSource.setAttribute('aria-label', `偏好来源：${taskSourceLabel(row.selection.source)}`);
+  tasksDetailName.textContent = row.name;
+  tasksDetailProject.textContent = `${row.identity}${row.project ? ` · PROJECT ${row.project}` : ''}`;
+  tasksDetailSource.textContent = taskModeLabel(row.effective.mode.value);
+  tasksDetailSource.className = `status-pill ${taskIssues(row).length > 0 ? 'is-unavailable' : 'is-connected'}`;
+  tasksDetailSource.setAttribute('aria-label', `生效方式：${taskModeLabel(row.effective.mode.value)}，来源：${taskSourceLabel(row.effective.mode.source)}`);
 
   const card = tasksDetailCard;
   card.replaceChildren();
-  const note = document.createElement('p');
-  note.className = 'tasks-readonly-note';
-  note.textContent = '来源、权限、Dispatch 与输入/输出 Schema 均由任务定义决定，桌面端只读展示。';
-  card.append(note);
+  const issueMessages = taskIssues(row);
+  if (issueMessages.length > 0) {
+    const issue = document.createElement('p');
+    issue.className = 'tasks-readonly-note is-warning';
+    issue.textContent = `需要处理：${issueMessages.join('；')}`;
+    card.append(issue);
+  }
   const readonlyRows = [
-    tasksReadonlyRow('定义来源（Source）', row.source),
-    tasksReadonlyRow('偏好来源', taskSourceLabel(row.selection.source)),
-    tasksReadonlyRow('权限（Permission）', row.permission),
-    tasksReadonlyRow('声明运行时（Declared Runtime）', row.declared_agent_runtime),
-    tasksReadonlyRow('调度（Dispatch）', row.dispatch),
-    tasksReadonlyRow('输入 Schema', row.input_schema),
-    tasksReadonlyRow('输出 Schema', row.output_schema),
+    tasksReadonlyRow('生效来源', {
+      mode: taskSourceLabel(row.effective.mode.source),
+      runtime: taskSourceLabel(row.effective.explicit_runtime.source),
+      timeout: taskSourceLabel(row.effective.timeout_ms.source),
+      instructions: taskSourceLabel(row.effective.additional_instructions.source),
+    }),
+    tasksReadonlyRow('任务说明', row.builtin.description),
+    tasksReadonlyRow('低频自动约束', {
+      required_capabilities: row.effective.automatic.required_capabilities,
+      exclude_model_ids: row.effective.automatic.exclude_model_ids,
+      exclude_profile_ids: row.effective.automatic.exclude_profile_ids,
+      exclude_client_ids: row.effective.automatic.exclude_client_ids,
+      exclude_provider_ids: row.effective.automatic.exclude_provider_ids,
+      preferred_runtime: row.effective.automatic.preferred_runtime,
+    }),
+    tasksReadonlyRow('内置动态提示', row.builtin.prompt_template === 'dynamic' ? '是（只读）' : '否（只读）'),
+    tasksReadonlyRow('配置文件', taskSettings?.config_path),
   ];
   for (const element of readonlyRows) {
     if (element) card.append(element);
   }
-  renderTasksChoiceOptions(row);
+  renderTasksChoiceOptions(tasksModelSelect, row.runtime_choices);
+  populateTaskForm(row);
 }
 
 function tasksChoiceLabel(choice: TaskSettingsEligibleChoice): string {
   const identity = [choice.client, choice.provider, choice.model].filter(Boolean).join(' / ');
   const hints = [
-    `速度 ${choice.speed.effective_tps.toFixed(1)} TPS（${choice.speed.source}）`,
+    typeof choice.speed.effective_tps === 'number' ? `速度 ${choice.speed.effective_tps.toFixed(1)} TPS` : null,
     `智能 ${choice.intelligence}`,
-    choice.reference_pricing.output_usd_per_million === undefined
+    typeof choice.reference_pricing.output_usd_per_million !== 'number'
       ? null
       : `输出参考价 $${choice.reference_pricing.output_usd_per_million}/M`,
   ].filter((hint): hint is string => hint !== null);
   return `${identity}${hints.length > 0 ? ` · ${hints.join(' · ')}` : ''}`;
 }
 
-function renderTasksChoiceOptions(row: TaskSettingsTaskRow): void {
-  for (const option of Array.from(tasksModelSelect.querySelectorAll('option'))) {
+function renderTasksChoiceOptions(select: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[]): void {
+  for (const option of Array.from(select.querySelectorAll('option'))) {
     if (option.value === '') continue;
     option.remove();
   }
-  // Options come exclusively from the authoritative per-task eligible list.
-  // There is deliberately no second model catalog on this page.
-  for (const choice of row.eligible) {
+  for (const choice of choices) {
     const option = document.createElement('option');
     option.value = choice.exactAgentRuntime;
     option.textContent = tasksChoiceLabel(choice);
-    tasksModelSelect.append(option);
+    select.append(option);
   }
-  tasksModelSelect.value = row.selection.source === 'machine' && row.selection.agent_runtime
-    ? row.selection.agent_runtime
-    : '';
-  updateTasksSaveState();
 }
 
-function tasksPreferenceChanged(row: TaskSettingsTaskRow): boolean {
-  const persisted = row.selection.source === 'machine' && row.selection.agent_runtime
-    ? row.selection.agent_runtime
-    : null;
-  const selected = tasksModelSelect.value === '' ? null : tasksModelSelect.value;
-  return persisted !== selected;
+function exactRuntimeValue(choices: readonly TaskSettingsEligibleChoice[], runtime: TaskSettingsLayer['explicit_runtime']): string {
+  if (!runtime) return '';
+  return choices.find((choice) => choice.client === runtime.client && choice.provider === runtime.provider && choice.model === runtime.model)?.exactAgentRuntime ?? '';
 }
 
-function updateTasksSaveState(): void {
-  const row = tasksSelectedRow();
-  tasksSaveButton.disabled = tasksSaveBusy || !row || !tasksPreferenceChanged(row);
+function setSourceText(id: string, label: string, source: TaskSettingsTaskRow['effective']['mode']['source']): void {
+  setText(id, `${label} · 来源：${taskSourceLabel(source)}`);
+}
+
+function populateTaskForm(row: TaskSettingsTaskRow): void {
+  tasksModeSelect.value = row.user_task.mode ?? '';
+  tasksModelSelect.value = exactRuntimeValue(row.runtime_choices, row.user_task.explicit_runtime);
+  tasksTimeoutInput.value = row.user_task.timeout_ms?.toString() ?? '';
+  tasksInstructionsInput.value = row.user_task.additional_instructions ?? '';
+  tasksExpectedTpsInput.value = row.user_task.automatic?.expected_tps?.toString() ?? '';
+  tasksMinimumTpsInput.value = row.user_task.automatic?.minimum_tps?.toString() ?? '';
+  tasksIntelligenceMin.value = row.user_task.automatic?.intelligence_min ?? '';
+  tasksIntelligenceMax.value = row.user_task.automatic?.intelligence_max ?? '';
+  tasksMaxOutputPriceInput.value = row.user_task.automatic?.max_output_usd_per_million?.toString() ?? '';
+  setSourceText('tasks-mode-source', taskModeLabel(row.effective.mode.value), row.effective.mode.source);
+  const effectiveRuntime = row.effective.explicit_runtime.value;
+  setSourceText('tasks-runtime-source', effectiveRuntime ? `${effectiveRuntime.client}/${effectiveRuntime.provider}/${effectiveRuntime.model}` : '未指定', row.effective.explicit_runtime.source);
+  setSourceText('tasks-timeout-source', row.effective.timeout_ms.value === null ? '未设置' : `${row.effective.timeout_ms.value} ms`, row.effective.timeout_ms.source);
+  setSourceText('tasks-instructions-source', row.effective.additional_instructions.value ? '已有附加指令' : '无附加指令', row.effective.additional_instructions.source);
+  updateTasksModeVisibility(row.effective.mode.value);
+  tasksSaveButton.disabled = tasksSaveBusy;
+  tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
+}
+
+function updateTasksModeVisibility(inheritedMode?: 'automatic' | 'explicit'): void {
+  const mode = tasksModeSelect.value || inheritedMode || 'automatic';
+  tasksRuntimeField.hidden = mode !== 'explicit';
+  tasksAutomaticDetails.hidden = mode === 'explicit';
+}
+
+function populateGlobalForm(): void {
+  if (!taskSettings) return;
+  const layer = taskSettings.user_global;
+  tasksGlobalMode.value = layer.mode ?? '';
+  const choices = [...new Map(taskSettings.rows.flatMap((row) => row.runtime_choices).map((choice) => [choice.exactAgentRuntime, choice])).values()];
+  renderTasksChoiceOptions(tasksGlobalRuntime, choices);
+  tasksGlobalRuntime.value = exactRuntimeValue(choices, layer.explicit_runtime);
+  tasksGlobalTimeout.value = layer.timeout_ms?.toString() ?? '';
+  tasksGlobalInstructions.value = layer.additional_instructions ?? '';
+  tasksGlobalRuntimeField.hidden = tasksGlobalMode.value !== 'explicit';
+  tasksGlobalReset.disabled = tasksSaveBusy || Object.keys(layer).length === 0;
+  tasksGlobalSave.disabled = tasksSaveBusy;
+}
+
+function positiveNumber(value: string, label: string): number | null {
+  if (value.trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label}必须是正数`);
+  return parsed;
+}
+
+function selectedRuntime(select: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[]): TaskSettingsPatch['explicit_runtime'] {
+  const choice = choices.find((candidate) => candidate.exactAgentRuntime === select.value);
+  if (!choice) throw new Error('请选择一个当前可用的运行时');
+  return { client: choice.client, provider: choice.provider, model: choice.model };
+}
+
+function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeSelect: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[], timeoutValue: string, instructionsValue: string, includeAutomatic: boolean): TaskSettingsPatch {
+  const patch: TaskSettingsPatch = {};
+  const mode = modeValue as '' | 'automatic' | 'explicit';
+  if ((layer.mode ?? '') !== mode) patch.mode = mode === '' ? null : mode;
+  if (mode === 'explicit') {
+    const runtime = selectedRuntime(runtimeSelect, choices);
+    if (JSON.stringify(layer.explicit_runtime ?? null) !== JSON.stringify(runtime)) patch.explicit_runtime = runtime;
+  } else if (layer.explicit_runtime) {
+    patch.explicit_runtime = null;
+  }
+  const timeout = positiveNumber(timeoutValue, '总执行时限');
+  if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
+  const instructions = instructionsValue.trim() === '' ? null : instructionsValue;
+  if ((layer.additional_instructions ?? null) !== instructions) patch.additional_instructions = instructions;
+  if (includeAutomatic) {
+    const values = {
+      expected_tps: positiveNumber(tasksExpectedTpsInput.value, '期望速度'),
+      minimum_tps: positiveNumber(tasksMinimumTpsInput.value, '最低速度'),
+      intelligence_min: tasksIntelligenceMin.value || null,
+      intelligence_max: tasksIntelligenceMax.value || null,
+      max_output_usd_per_million: positiveNumber(tasksMaxOutputPriceInput.value, '输出参考价上限'),
+    };
+    const automatic: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(values)) {
+      const previous = layer.automatic?.[field as keyof NonNullable<TaskSettingsLayer['automatic']>] ?? null;
+      if (previous !== value) automatic[field] = value;
+    }
+    if (Object.keys(automatic).length > 0) patch.automatic = automatic as TaskSettingsPatch['automatic'];
+  }
+  return patch;
+}
+
+function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
+  const patch: TaskSettingsPatch = {};
+  for (const field of ['mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic'] as const) {
+    if (layer[field] !== undefined) patch[field] = null as never;
+  }
+  return patch;
 }
 
 async function selectTasksFile(taskId: string): Promise<void> {
@@ -1243,9 +1382,10 @@ async function loadTasks(): Promise<void> {
   setTasksStatus('读取中', 'is-pending');
   try {
     taskSettings = await window.wrenyardShell.getTaskSettings();
-    if (!taskSettings.tasks.some((row) => row.task_id === tasksSelectedTaskId)) {
-      tasksSelectedTaskId = taskSettings.tasks[0]?.task_id ?? null;
+    if (!taskSettings.rows.some((row) => row.identity === tasksSelectedTaskId)) {
+      tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
     }
+    populateGlobalForm();
     renderTasksList();
     if (tasksSelectedTaskId) renderTasksDetail();
     else tasksDetail.hidden = true;
@@ -1270,45 +1410,77 @@ async function reloadTasksAuthoritative(): Promise<void> {
   } catch (error) {
     taskSettings = null;
   }
-  if (!taskSettings || !taskSettings.tasks.some((row) => row.task_id === tasksSelectedTaskId)) {
-    tasksSelectedTaskId = taskSettings?.tasks[0]?.task_id ?? null;
+  if (!taskSettings || !taskSettings.rows.some((row) => row.identity === tasksSelectedTaskId)) {
+    tasksSelectedTaskId = taskSettings?.rows[0]?.identity ?? null;
   }
+  if (taskSettings) populateGlobalForm();
   renderTasksList();
   if (tasksSelectedTaskId) renderTasksDetail();
   else tasksDetail.hidden = true;
 }
 
-async function saveTasksPreference(): Promise<void> {
+async function saveTaskLayer(reset = false): Promise<void> {
   const row = tasksSelectedRow();
   if (!taskSettings || !row || tasksSaveBusy) return;
   tasksSaveBusy = true;
   tasksSaveButton.disabled = true;
   setTasksError('');
-  const agentRuntime = tasksModelSelect.value === '' ? null : tasksModelSelect.value;
-  const expectedRevision = taskSettings.revision;
   try {
-    taskSettings = await window.wrenyardShell.saveTaskPreference(
-      row.task_id,
-      agentRuntime,
-      expectedRevision,
-      row.project || undefined,
-    );
-    if (!taskSettings.tasks.some((candidate) => candidate.task_id === row.task_id)) {
-      tasksSelectedTaskId = taskSettings.tasks[0]?.task_id ?? null;
-    }
+    const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksModelSelect, row.runtime_choices, tasksTimeoutInput.value, tasksInstructionsInput.value, true);
+    if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
+    taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'task', task_id: row.identity, ...(row.project ? { project: row.project } : {}), expected_revision: taskSettings.revision, patch });
+    if (!taskSettings.rows.some((candidate) => candidate.identity === row.identity)) tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
+    populateGlobalForm();
     renderTasksList();
     renderTasksDetail();
-    setTasksStatus(agentRuntime === null ? '已重置为自动选择' : '已保存本机偏好', 'is-connected');
+    setTasksStatus(reset ? '已重置当前任务层' : '已保存任务设置', 'is-connected');
   } catch (error) {
-    // A conflict (or any failure) must never overwrite stale data: surface the
-    // error, then re-read the authoritative snapshot before re-enabling the form.
     setTasksError(`保存失败：${tasksErrorMessage(error)}`);
     setTasksStatus('保存未生效', 'is-unavailable');
-    await reloadTasksAuthoritative();
-    setTasksStatus('已重新载入', 'is-pending');
+    if (tasksErrorMessage(error).includes('冲突')) {
+      const draft = readTaskDraft();
+      await reloadTasksAuthoritative();
+      applyTaskDraft(draft);
+      setTasksStatus('配置已刷新，草稿仍保留', 'is-pending');
+    }
   } finally {
     tasksSaveBusy = false;
-    updateTasksSaveState();
+    tasksSaveButton.disabled = false;
+    tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
+    tasksGlobalSave.disabled = false;
+  }
+}
+
+interface TaskFormDraft { mode: string; runtime: string; timeout: string; instructions: string; expected: string; minimum: string; intelligenceMin: string; intelligenceMax: string; price: string }
+function readTaskDraft(): TaskFormDraft { return { mode: tasksModeSelect.value, runtime: tasksModelSelect.value, timeout: tasksTimeoutInput.value, instructions: tasksInstructionsInput.value, expected: tasksExpectedTpsInput.value, minimum: tasksMinimumTpsInput.value, intelligenceMin: tasksIntelligenceMin.value, intelligenceMax: tasksIntelligenceMax.value, price: tasksMaxOutputPriceInput.value }; }
+function applyTaskDraft(draft: TaskFormDraft): void { tasksModeSelect.value = draft.mode; tasksModelSelect.value = draft.runtime; tasksTimeoutInput.value = draft.timeout; tasksInstructionsInput.value = draft.instructions; tasksExpectedTpsInput.value = draft.expected; tasksMinimumTpsInput.value = draft.minimum; tasksIntelligenceMin.value = draft.intelligenceMin; tasksIntelligenceMax.value = draft.intelligenceMax; tasksMaxOutputPriceInput.value = draft.price; updateTasksModeVisibility(tasksSelectedRow()?.effective.mode.value); }
+
+async function saveGlobalLayer(reset = false): Promise<void> {
+  if (!taskSettings || tasksSaveBusy) return;
+  const snapshot = taskSettings;
+  const draft = { mode: tasksGlobalMode.value, runtime: tasksGlobalRuntime.value, timeout: tasksGlobalTimeout.value, instructions: tasksGlobalInstructions.value };
+  tasksSaveBusy = true;
+  tasksGlobalSave.disabled = true;
+  setTasksError('');
+  try {
+    const choices = [...new Map(snapshot.rows.flatMap((row) => row.runtime_choices).map((choice) => [choice.exactAgentRuntime, choice])).values()];
+    const patch = reset ? resetPatch(snapshot.user_global) : buildLayerPatch(snapshot.user_global, draft.mode, tasksGlobalRuntime, choices, draft.timeout, draft.instructions, false);
+    if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
+    taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'global', expected_revision: snapshot.revision, patch });
+    renderTasksList(); populateGlobalForm(); renderTasksDetail();
+    setTasksStatus(reset ? '已重置全局默认层' : '已保存全局默认', 'is-connected');
+  } catch (error) {
+    setTasksError(`保存失败：${tasksErrorMessage(error)}`);
+    setTasksStatus('保存未生效', 'is-unavailable');
+    if (tasksErrorMessage(error).includes('冲突')) {
+      await reloadTasksAuthoritative();
+      tasksGlobalMode.value = draft.mode; tasksGlobalRuntime.value = draft.runtime; tasksGlobalTimeout.value = draft.timeout; tasksGlobalInstructions.value = draft.instructions;
+      tasksGlobalRuntimeField.hidden = draft.mode !== 'explicit';
+      setTasksStatus('配置已刷新，草稿仍保留', 'is-pending');
+    }
+  } finally {
+    tasksSaveBusy = false;
+    tasksGlobalSave.disabled = false;
   }
 }
 
@@ -1531,8 +1703,12 @@ window.addEventListener('keydown', (event) => {
 });
 
 tasksRefresh.addEventListener('click', () => void loadTasks());
-tasksModelSelect.addEventListener('change', updateTasksSaveState);
-tasksSaveButton.addEventListener('click', () => void saveTasksPreference());
+tasksModeSelect.addEventListener('change', () => updateTasksModeVisibility(tasksSelectedRow()?.effective.mode.value));
+tasksGlobalMode.addEventListener('change', () => { tasksGlobalRuntimeField.hidden = tasksGlobalMode.value !== 'explicit'; });
+tasksSaveButton.addEventListener('click', () => void saveTaskLayer());
+tasksResetButton.addEventListener('click', () => void saveTaskLayer(true));
+tasksGlobalSave.addEventListener('click', () => void saveGlobalLayer());
+tasksGlobalReset.addEventListener('click', () => void saveGlobalLayer(true));
 
 window.wrenyardShell.onViewChanged(async (page) => {
   const changed = page !== currentPage;

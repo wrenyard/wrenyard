@@ -639,6 +639,54 @@ describe('daemon task-settings-service (no-model)', () => {
     }
   })
 
+  it('exposes authoritative runtime_choices on automatic rows and reuses them for explicit rows', async () => {
+    // Block forge/codex-sol for both the automatic 'commit' row and the
+    // explicit 'unavailable' row so exclusion and reuse are observable.
+    const service = context!.makeService({
+      resolver: createResolverFixture({
+        unavailable: { commit: 'forge/codex-sol', unavailable: 'forge/codex-sol' },
+      }),
+    })
+    const snapshot = await service.snapshot({})
+
+    // Automatic row: runtime_choices come straight from listExactRuntimes, the
+    // blocked runtime is excluded, and no explicit current selection is invented.
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.effective.mode.value, 'automatic')
+    assert.equal(commit.explicit, undefined)
+    assert.equal(commit.effective.explicit_runtime.value, null)
+    assert.deepEqual(
+      commit.runtime_choices.map((choice) => choice.exactAgentRuntime).sort(),
+      ['forge/cb-dsf', 'forge/codex-luna'].sort(),
+    )
+    assert.equal(commit.runtime_choices.some((choice) => choice.exactAgentRuntime === 'forge/codex-sol'), false)
+    // Only available items with truthful resolved metadata are projected.
+    assert.ok(
+      commit.runtime_choices.every(
+        (choice) =>
+          choice.client !== ''
+          && choice.provider !== ''
+          && choice.model !== ''
+          && choice.model_id !== ''
+          && choice.mode === 'native',
+      ),
+    )
+
+    // Explicit row: explicit.choices is the same authoritative array, still
+    // excluding the blocked runtime while keeping the mode explicit.
+    const unavailable = snapshot.rows.find((row) => row.identity === 'builtin:unavailable')
+    assert.ok(unavailable)
+    assert.equal(unavailable.effective.mode.value, 'explicit')
+    assert.deepEqual(
+      unavailable.runtime_choices.map((choice) => choice.exactAgentRuntime).sort(),
+      ['forge/cb-dsf', 'forge/codex-luna'].sort(),
+    )
+    assert.ok(unavailable.explicit)
+    assert.deepEqual(unavailable.explicit.choices, unavailable.runtime_choices)
+    assert.equal(unavailable.explicit.resolved, null)
+  })
+
   it('snapshot readiness reflects a non-accepting daemon and unknown quota', async () => {
     const service = context!.makeService({
       daemonAvailability: () => ({ accepting: false, known: true }),

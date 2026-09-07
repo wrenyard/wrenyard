@@ -434,6 +434,10 @@ export interface TaskSettingsAutomaticDispatch {
   preferred_runtime?: TaskSettingsExplicitRuntime;
 }
 
+export type TaskSettingsAutomaticPatch = {
+  [K in keyof TaskSettingsAutomaticDispatch]?: TaskSettingsAutomaticDispatch[K] | null;
+};
+
 /** Source layer that supplied an effective settings field; higher index wins. */
 export type TaskSettingsSourceLayer =
   | 'system'
@@ -467,7 +471,7 @@ export interface TaskSettingsPatch {
   explicit_runtime?: TaskSettingsExplicitRuntime | null;
   timeout_ms?: number | null;
   additional_instructions?: string | null;
-  automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
+  automatic?: TaskSettingsAutomaticPatch | null;
 }
 
 /** Effective automatic dispatch: every field carries its own source layer. */
@@ -563,6 +567,13 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer;
   effective: TaskSettingsEffective;
+  /**
+   * Authoritative list of exact existing runtimes currently resolvable for
+   * selecting explicit mode. Present regardless of the effective mode so an
+   * automatic row can offer the explicit-mode picker without fabricating a
+   * selected explicit runtime.
+   */
+  runtime_choices: TaskSettingsEligibleChoice[];
   explicit?: TaskSettingsExplicitRow;
   issues: TaskSettingsValidationIssue[];
 }

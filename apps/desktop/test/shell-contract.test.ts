@@ -116,6 +116,31 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
           preferred_runtime: { value: null, source: 'builtin' },
         },
       },
+      // An automatic row still carries the authoritative exact runtime picker
+      // options so the UI can offer explicit selection without fabricating a
+      // current explicit runtime.
+      runtime_choices: [{
+        exactAgentRuntime: 'forge/codex-luna',
+        client: 'codex',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        model_id: 'codex/gpt-5.6-luna',
+        mode: 'native',
+        intelligence: 'mid',
+        speed: {
+          effective_tps: 107,
+          source: 'catalog_default',
+          sample_count: 0,
+          checked_at: '2026-09-05T00:00:00.000Z',
+          expected_tps_met: true,
+        },
+        reference_pricing: {
+          input_usd_per_million: 0.2,
+          output_usd_per_million: 1.2,
+          source: 'catalog',
+          checked_at: '2026-09-05T00:00:00.000Z',
+        },
+      }],
       issues: [],
     }],
   };
@@ -129,12 +154,16 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
   // Row top-level keys are exactly the stable wire fields; no invented wrappers.
   assert.deepEqual(
     Object.keys(taskRow).sort(),
-    ['builtin', 'effective', 'identity', 'issues', 'name', 'user_task'],
+    ['builtin', 'effective', 'identity', 'issues', 'name', 'runtime_choices', 'user_task'],
   );
   assert.equal('task_id' in taskRow, false);
   assert.equal('revision' in taskRow, false);
   assert.equal('readiness' in taskRow, false);
   assert.equal('source' in taskRow, false);
+  // The automatic row exposes exact runtime picker choices without an explicit row.
+  assert.equal(taskRow.explicit, undefined);
+  assert.equal(taskRow.runtime_choices.length, 1);
+  assert.equal(taskRow.runtime_choices[0]!.exactAgentRuntime, 'forge/codex-luna');
   // Mode is 'automatic', never the invented 'auto', and the runtime triple is
   // client/provider/model — never agent_runtime.
   assert.equal(taskRow.effective.mode.value, 'automatic');

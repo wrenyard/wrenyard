@@ -336,9 +336,9 @@
       <section class="product-page tasks-page" id="tasks-page" aria-labelledby="tasks-title" hidden>
         <header class="page-hero">
           <div>
-            <p class="eyebrow">TASK MODEL PREFERENCES</p>
+            <p class="eyebrow">TASK SETTINGS</p>
             <h1 id="tasks-title">任务</h1>
-            <p>查看任务定义与来源；为同名任务选择本机偏好的模型运行时，未设置偏好时由 Wrenyard 自动选择。</p>
+            <p>设置任务的运行方式、附加指令和执行约束；未覆盖的字段会继承下一层设置。</p>
           </div>
           <button class="secondary-button" id="tasks-refresh" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
@@ -348,8 +348,19 @@
 
         <div class="tasks-meta">
           <span class="status-pill is-pending" id="tasks-status">读取中</span>
-          <span class="tasks-global-note">模型偏好按任务名称在本机全局生效（同名 Task 共享），不在界面里区分项目策略目录。</span>
+          <span class="tasks-global-note">优先级：系统 → 内置 → 全局默认 → 当前任务 → 单次运行。</span>
         </div>
+
+        <details class="tasks-global-editor" id="tasks-global-editor">
+          <summary><span><strong>全局默认</strong><small>所有任务继承；任务层和单次运行可以逐字段覆盖。</small></span></summary>
+          <div class="tasks-form-grid">
+            <label><span>选择方式</span><select id="tasks-global-mode"><option value="">继承</option><option value="automatic">自动选择</option><option value="explicit">指定运行时</option></select></label>
+            <label id="tasks-global-runtime-field" hidden><span>指定运行时</span><select id="tasks-global-runtime"><option value="">请选择</option></select></label>
+            <label><span>总执行时限（毫秒）</span><input id="tasks-global-timeout" type="number" min="1" step="1000" placeholder="继承" /></label>
+            <label class="tasks-form-wide"><span>附加指令</span><textarea id="tasks-global-instructions" maxlength="4000" rows="3" placeholder="继承；这里的纯文本会追加到内置提示后"></textarea></label>
+          </div>
+          <div class="tasks-form-actions"><button class="secondary-button" id="tasks-global-reset" type="button">重置本层</button><button class="primary-button" id="tasks-global-save" type="button">保存全局默认</button></div>
+        </details>
 
         <div class="tasks-layout">
           <aside class="tasks-list-pane" aria-label="任务列表">
@@ -366,20 +377,27 @@
               <span class="status-pill is-pending" id="tasks-detail-source">—</span>
             </header>
 
-            <div class="tasks-detail-card" id="tasks-detail-card"></div>
+            <div class="tasks-form-grid">
+              <label><span>选择方式</span><select id="tasks-mode"><option value="">继承</option><option value="automatic">自动选择</option><option value="explicit">指定运行时</option></select><small id="tasks-mode-source"></small></label>
+              <label id="tasks-runtime-field" hidden><span>指定运行时</span><select id="tasks-model-select"><option value="">请选择</option></select><small id="tasks-runtime-source"></small></label>
+              <label><span>总执行时限（毫秒）</span><input id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承" /><small id="tasks-timeout-source"></small></label>
+              <label class="tasks-form-wide"><span>附加指令</span><textarea id="tasks-instructions" maxlength="4000" rows="4" placeholder="继承；纯文本会追加到内置提示后"></textarea><small id="tasks-instructions-source"></small></label>
+            </div>
 
-            <footer class="tasks-detail-actions">
-              <label class="tasks-model-field" for="tasks-model-select">
-                <span><strong>模型运行时偏好</strong><small>选择 自动选择 保存即清除本机偏好（重置）；选择具体项则本机固定使用该运行时。</small></span>
-                <select id="tasks-model-select">
-                  <option value="">自动选择</option>
-                </select>
-              </label>
-              <div class="tasks-detail-save-row">
-                <span class="tasks-detail-note" id="tasks-note">偏好为本机全局设置，同一裸任务名（bare task name）的所有 Task 共享。</span>
-                <button class="primary-button" id="tasks-save" type="button" disabled>保存偏好</button>
+            <details class="tasks-automatic-details" id="tasks-automatic-details">
+              <summary>自动选择约束</summary>
+              <div class="tasks-form-grid">
+                <label><span>期望速度（TPS）</span><input id="tasks-expected-tps" type="number" min="0.01" step="0.01" placeholder="继承" /></label>
+                <label><span>最低速度（TPS）</span><input id="tasks-minimum-tps" type="number" min="0.01" step="0.01" placeholder="继承" /></label>
+                <label><span>最低智能等级</span><select id="tasks-intelligence-min"><option value="">继承</option><option value="low">low</option><option value="mid">mid</option><option value="high">high</option><option value="frontier">frontier</option><option value="premium">premium</option></select></label>
+                <label><span>最高智能等级</span><select id="tasks-intelligence-max"><option value="">继承</option><option value="low">low</option><option value="mid">mid</option><option value="high">high</option><option value="frontier">frontier</option><option value="premium">premium</option></select></label>
+                <label><span>输出参考价上限（$/M）</span><input id="tasks-max-output-price" type="number" min="0.0001" step="0.0001" placeholder="继承" /></label>
               </div>
-            </footer>
+            </details>
+
+            <details class="tasks-detail-card"><summary>继承来源与任务元数据</summary><div id="tasks-detail-card"></div></details>
+
+            <footer class="tasks-detail-actions"><span class="tasks-detail-note">“自动选择”会清除本层显式运行时，但不会改写其他层；“重置本层”只删除当前任务覆盖。</span><div class="tasks-form-actions"><button class="secondary-button" id="tasks-reset" type="button">重置本层</button><button class="primary-button" id="tasks-save" type="button">保存任务设置</button></div></footer>
 
             <span class="tasks-error" id="tasks-error" role="alert"></span>
           </section>
