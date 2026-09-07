@@ -1,4 +1,5 @@
 import type { ZodTypeAny } from 'zod'
+import type { TaskSettingsLayer } from './protocol/methods/task.mts'
 
 export type JsonSchema = boolean | Record<string, unknown>
 
@@ -99,7 +100,63 @@ export interface ExecutionOptions {
    *  legacy tests; constrained production definitions require it to resolve an
    *  exact approved plan before the first agent attempt. */
   taskDispatchResolver?: import('./core/task/dispatch-resolver.mts').TaskDispatchResolver
+  /** Daemon-owned authoritative settings resolver for task runs. Optional only
+   *  for isolated legacy tests; daemon bootstrap attaches the single
+   *  TaskSettingsService resolver after constructing the workflow runner. */
+  taskSettingsResolver?: TaskRunSettingsResolver
+  /** Non-persistent invocation-layer settings carried to execution-time
+   *  settings resolution. Never persisted by the daemon. */
+  invocationSettings?: TaskSettingsLayer
 }
+
+/**
+ * Task-run settings resolution shared between the daemon TaskSettingsService
+ * (`resolveForRun`) and the execution kernel. Types are JSON-safe and
+ * type-only; the daemon layer implements the resolver callback while core
+ * execution only carries it. Invocation settings follow the public snake_case
+ * `TaskSettingsLayer` DTO and are never persisted.
+ */
+export type TaskRunSettingsLayerName = 'system' | 'builtin' | 'user_global' | 'user_task' | 'invocation'
+
+export interface TaskRunSettingsParams {
+  taskName: string
+  /** Builtin/project identity of the task being run. */
+  kind?: 'builtin' | 'project'
+  /** Project name required to isolate a stable per-task identity for project tasks. */
+  project?: string
+  /** TaskConfig-declared defaults (declared runtime/timeout/dispatch). */
+  defaults?: {
+    agentRuntime?: string
+    timeoutMs?: number
+    dispatch?: Record<string, unknown>
+  }
+  /** Optional public snake_case invocation settings layer. */
+  invocation?: TaskSettingsLayer
+}
+
+export interface TaskRunSettingsResolution {
+  mode: 'automatic' | 'explicit'
+  /** The single exact runtime id the execution must launch ('forge/<profile>'). */
+  exactAgentRuntime: string | null
+  /** Resolved dispatch snapshot produced by the daemon resolver for this run. */
+  dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null
+  /** Effective total task timeout after all layer merges. */
+  timeoutMs: number | null
+  /** Effective additional instructions, when any layer contributes them. */
+  additionalInstructions?: string | null
+  /** Per-field winning source layer. */
+  sources: {
+    selectionMode: TaskRunSettingsLayerName
+    agentRuntime: TaskRunSettingsLayerName
+    timeoutMs: TaskRunSettingsLayerName
+    additionalInstructions: TaskRunSettingsLayerName
+    automatic: Partial<Record<string, TaskRunSettingsLayerName>>
+  }
+}
+
+export type TaskRunSettingsResolver = (
+  params: TaskRunSettingsParams,
+) => Promise<TaskRunSettingsResolution> | TaskRunSettingsResolution
 
 // ── Task-domain types re-export shim ─────────────────────────────────
 //

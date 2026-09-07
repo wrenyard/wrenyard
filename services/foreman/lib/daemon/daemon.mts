@@ -327,6 +327,10 @@ async function startForemanDaemonWithRuntime(
       }
     },
   })
+  // The running task runner resolves execution-time settings through this same
+  // service instance (no duplicate service/resolver/provider objects, no paid
+  // probes): daemon bootstrap attaches resolveForRun as the runner's resolver.
+  runtime.runner.setTaskSettingsResolver((params) => taskSettingsService.resolveForRun(params))
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,

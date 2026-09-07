@@ -132,6 +132,10 @@ export interface StartTaskRunOptions {
   /** Authoritative resolved definition provenance. Absent for legacy/direct
    *  callers that predate source threading; never guessed from project/id. */
   source?: 'builtin' | 'project'
+  /** Non-persistent public snake_case invocation settings layer for this run
+   *  only. Sits at the top of the field precedence chain and is never
+   *  persisted by the daemon. */
+  invocationSettings?: import('../../protocol/methods/task.mts').TaskSettingsLayer
 }
 
 export interface TaskWorkflowRunHost {
