@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { discoverTasks, resetRegistry } from '../../lib/workspace/task-loader.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
-import type { AgentOpts, AgentResult, ExecutionOptions, TaskExecutionResult } from '../../lib/types.mts'
+import type { AgentOpts, AgentResult, ExecutionOptions, TaskExecutionResult, TaskRunSettingsResolver } from '../../lib/types.mts'
 import { closeDb, get as dbGet, getDb, initDb } from '../../lib/db/connection.mts'
 import { setAgentExecutionSupervisor } from '../../lib/core/operations/primitives/agent.mts'
 import { AgentExecutionSupervisor } from '../../lib/daemon/execution/agent-supervisor.mts'
@@ -1001,4 +1001,70 @@ describe('TaskService _meta execution fields', { concurrency: false }, () => {
   })
 
 
+})
+
+// ── Task settings resolver threading ────────────────────────────────────
+
+describe('task run settings threading', { concurrency: false }, () => {
+  it('forwards the attached TaskRunSettingsResolver and invocationSettings to daemon execution options once', async () => {
+    const workspace = makeTempDir('foreman-settings-thread-')
+    const invocationSettings = { mode: 'automatic', timeout_ms: 42_000 } as const
+
+    const resolver: TaskRunSettingsResolver = async () => ({
+      mode: 'automatic',
+      exactAgentRuntime: 'forge/test',
+      dispatch: null,
+      timeoutMs: 42_000,
+      sources: {
+        selectionMode: 'invocation',
+        agentRuntime: 'system',
+        timeoutMs: 'invocation',
+        additionalInstructions: 'system',
+        automatic: {},
+      },
+    })
+
+    const originalExecute = DaemonTaskRunner.prototype.execute
+    let executeCalls = 0
+    let capturedOptions: ExecutionOptions | undefined
+    try {
+      DaemonTaskRunner.prototype.execute = (function (
+        this: unknown,
+        _definitionName: string,
+        _input: unknown,
+        options?: ExecutionOptions,
+      ): Promise<TaskExecutionResult> {
+        executeCalls += 1
+        capturedOptions = options
+        return Promise.resolve({ status: 'done', output: '' }) as unknown as Promise<TaskExecutionResult>
+      }) as unknown as typeof DaemonTaskRunner.prototype.execute
+
+      const runner = new TaskWorkflowRunner({
+        db: getDb(),
+        agentExecutionHost: fakeExecutionHost(async () => ({ output: '', status: 'done' })),
+      })
+      // Daemon bootstrap attaches the TaskSettingsService resolver via this setter.
+      runner.setTaskSettingsResolver(resolver)
+
+      const handle = await runner.startTaskRun({
+        taskName: 'echo',
+        definitionName: 'echo',
+        project: 'app',
+        executionProject: 'app',
+        input: {},
+        workspaceRoot: workspace,
+        workingDirectory: workspace,
+        invocationSettings,
+      })
+
+      assert.ok(handle.task_run_id)
+      // Exactly one execution options construction forwards both the daemon
+      // settings resolver and the non-persistent invocation settings layer.
+      assert.equal(executeCalls, 1)
+      assert.equal(capturedOptions?.taskSettingsResolver, resolver)
+      assert.deepEqual(capturedOptions?.invocationSettings, invocationSettings)
+    } finally {
+      DaemonTaskRunner.prototype.execute = originalExecute
+    }
+  })
 })

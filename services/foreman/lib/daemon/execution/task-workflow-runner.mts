@@ -11,6 +11,7 @@ import type {
 } from '../../core/operations/types.mts'
 import {
   type PrimitiveSet,
+  type TaskRunSettingsResolver,
 } from '../../types.mts'
 import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
@@ -35,6 +36,10 @@ export interface TaskWorkflowRunnerOptions {
   /** Daemon-side deterministic task dispatch resolver. Optional only for isolated
    *  runner construction in tests; constrained production definitions require it. */
   taskDispatchResolver?: TaskDispatchResolver
+  /** Daemon-side authoritative task settings resolver. Optional only for isolated
+   *  runner construction; daemon bootstrap attaches the single TaskSettingsService
+   *  resolver after constructing the runner and the service. */
+  taskSettingsResolver?: TaskRunSettingsResolver
 }
 
 export class TaskWorkflowRunner implements TaskWorkflowRunHost {
@@ -44,6 +49,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly taskRunner: DaemonTaskRunner
   private readonly admissionControl?: () => void
   private readonly taskDispatchResolver?: TaskDispatchResolver
+  private taskSettingsResolver?: TaskRunSettingsResolver
 
   constructor(options: TaskWorkflowRunnerOptions) {
     this.db = options.db
@@ -51,7 +57,16 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     this.logger = options.logger
     this.admissionControl = options.admissionControl
     this.taskDispatchResolver = options.taskDispatchResolver
+    this.taskSettingsResolver = options.taskSettingsResolver
     this.taskRunner = new DaemonTaskRunner()
+  }
+
+  /** Attaches the daemon's authoritative task-settings resolver. Daemon
+   *  bootstrap calls this after constructing both the workflow runner and the
+   *  TaskSettingsService so execution-time settings resolution reuses the same
+   *  service wired into snapshot/preflight. */
+  setTaskSettingsResolver(resolver: TaskRunSettingsResolver): void {
+    this.taskSettingsResolver = resolver
   }
 
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
@@ -78,6 +93,8 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       taskContext: opts.taskContext,
       primitives: this.agentPrimitives(),
       taskDispatchResolver: this.taskDispatchResolver,
+      taskSettingsResolver: this.taskSettingsResolver,
+      ...(opts.invocationSettings !== undefined ? { invocationSettings: opts.invocationSettings } : {}),
     }).catch((error: unknown) => {
       const message = errorMessage(error)
       this.log('error', `[foreman] task ${taskRunId} unhandled error: ${message}`, error)

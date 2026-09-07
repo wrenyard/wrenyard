@@ -35,6 +35,17 @@ import type {
   TaskSettingsTaskRow,
   TaskSettingsValidationIssue,
 } from '../../protocol/methods/task.mts'
+import type {
+  TaskRunSettingsParams,
+  TaskRunSettingsResolution,
+} from '../../types.mts'
+
+export type {
+  TaskRunSettingsLayerName,
+  TaskRunSettingsParams,
+  TaskRunSettingsResolution,
+  TaskRunSettingsResolver,
+} from '../../types.mts'
 
 /**
  * Daemon-owned TaskSettingsService backing `task.settings.snapshot` /
@@ -278,6 +289,141 @@ export class TaskSettingsService {
     )
     if (matches.length !== 1) return null
     return matches[0]!.exactAgentRuntime
+  }
+
+  /** Maps a non-persistent public snake_case invocation layer into the canonical
+   *  config layer. An explicit_runtime triple is converted back to the one exact
+   *  runtime id, rejecting triples that identify no single currently-available
+   *  exact runtime. The invocation layer is never written to config. */
+  private invocationLayerToCanonical(
+    invocation: TaskSettingsLayerDto,
+  ): ConfigTaskSettingsLayer {
+    const raw: Record<string, unknown> = {}
+    if (invocation.mode !== undefined && invocation.mode !== null) {
+      raw.selectionMode = invocation.mode
+    }
+    if (invocation.explicit_runtime !== undefined && invocation.explicit_runtime !== null) {
+      const runtimeId = this.exactRuntimeIdForTriple(invocation.explicit_runtime)
+      if (runtimeId === null) {
+        throw new TaskSettingsInvalidSettingsError(
+          `explicit_runtime ${JSON.stringify(invocation.explicit_runtime)} does not map to exactly one available exact runtime`,
+        )
+      }
+      raw.agentRuntime = runtimeId
+    }
+    if (invocation.timeout_ms !== undefined && invocation.timeout_ms !== null) {
+      raw.timeoutMs = invocation.timeout_ms
+    }
+    if (
+      invocation.additional_instructions !== undefined
+      && invocation.additional_instructions !== null
+    ) {
+      raw.additionalInstructions = invocation.additional_instructions
+    }
+    if (invocation.automatic !== undefined && invocation.automatic !== null) {
+      raw.dispatch = invocation.automatic
+    }
+    return normalizeTaskSettingsLayer(raw, { scope: 'invocation settings' })
+  }
+
+  /** Resolves the authoritative settings for one task run at execution time.
+   *  The authoritative config is read here at call time and the five layers
+   *  (system defaults -> builtin Task defaults supplied by the kernel ->
+   *  user global -> stable per-task incl. legacy builtin compatibility ->
+   *  invocation) merge right-wins through the config/task-settings.mts
+   *  resolver — no second merge algorithm. The invocation layer is
+   *  non-persistent. Automatic mode resolves with the effective dispatch only
+   *  (never a stale inherited exact runtime as a pin); explicit mode calls
+   *  resolveExplicit with only required capabilities and then runs the same
+   *  non-billable daemon/provider readiness checks, failing without fallback. */
+  async resolveForRun(params: TaskRunSettingsParams): Promise<TaskRunSettingsResolution> {
+    const { record } = this.readConfigRecord()
+    const tasks = tasksSectionOf(record)
+    const kind: 'builtin' | 'project' = params.kind ?? 'builtin'
+    const project = kind === 'project' ? params.project : undefined
+    const identity = taskSettingsIdentity({
+      kind,
+      name: params.taskName,
+      ...(project !== undefined ? { project } : {}),
+    })
+
+    const builtinLayer = taskDefaultsToSettingsLayer(
+      {
+        ...(params.defaults?.agentRuntime !== undefined ? { runtime: params.defaults.agentRuntime } : {}),
+        ...(params.defaults?.timeoutMs !== undefined ? { timeoutMs: params.defaults.timeoutMs } : {}),
+        dispatch: rawDefinitionDispatch(params.defaults?.dispatch),
+      },
+      { exactRuntimeIds: this.exactRuntimeIds() },
+    )
+
+    const userTaskLayer = kind === 'builtin'
+      ? readBuiltinSettingsSelection(tasks, params.taskName).layer
+      : readPerTaskSettings(tasks, identity)
+
+    const invocationLayer = params.invocation === undefined
+      ? undefined
+      : this.invocationLayerToCanonical(params.invocation)
+
+    let effective: ReturnType<typeof resolveEffectiveTaskSettings>
+    try {
+      effective = resolveEffectiveTaskSettings({
+        builtin: builtinLayer,
+        userGlobal: readGlobalTaskSettings(tasks) ?? undefined,
+        userTask: userTaskLayer,
+        ...(invocationLayer !== undefined ? { invocation: invocationLayer } : {}),
+      })
+    } catch (error) {
+      throw new TaskSettingsInvalidSettingsError(undefined, messageOf(error))
+    }
+
+    if (effective.mode === 'explicit') {
+      const runtimeId = effective.runtime
+      if (runtimeId === undefined) {
+        throw new TaskSettingsInvalidSettingsError('explicit mode requires an exact runtime selection')
+      }
+      const capabilities = effective.dispatch.requiredCapabilities
+      const explicitResolution = this.resolver.resolveExplicit({
+        taskName: params.taskName,
+        exactRuntime: runtimeId,
+        ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+      })
+      if (!explicitResolution.ok) {
+        // Explicit mode bypasses automatic ranking and never falls back.
+        throw explicitResolution.error
+      }
+      // Same non-billable daemon admission and live provider credential/route
+      // readiness checks shared by snapshot/save preflight.
+      await this.assertExplicitPreflight(params.taskName, runtimeId, capabilities)
+      return {
+        mode: 'explicit',
+        exactAgentRuntime: runtimeId,
+        dispatch: explicitResolution.resolved,
+        timeoutMs: effective.timeoutMs,
+        ...(effective.additionalInstructions !== undefined
+          ? { additionalInstructions: effective.additionalInstructions }
+          : {}),
+        sources: toRunSources(effective.sources),
+      }
+    }
+
+    // Automatic mode: pass only the effective dispatch to resolver.resolve; any
+    // inherited exact runtime declaration is a stale pin and is deliberately
+    // never forwarded as an exactRuntime constraint.
+    const resolution = this.resolver.resolve({
+      taskName: params.taskName,
+      requirements: effective.dispatch as ConfigTaskDispatchRequirements,
+    })
+    if (!resolution.ok) throw resolution.error
+    return {
+      mode: 'automatic',
+      exactAgentRuntime: resolution.exactAgentRuntime,
+      dispatch: resolution.resolved,
+      timeoutMs: effective.timeoutMs,
+      ...(effective.additionalInstructions !== undefined
+        ? { additionalInstructions: effective.additionalInstructions }
+        : {}),
+      sources: toRunSources(effective.sources),
+    }
   }
 
   async snapshot(params: TaskSettingsSnapshotParams = {}): Promise<TaskSettingsSnapshotResult> {
@@ -803,6 +949,28 @@ function toEffectiveAutomatic(
     }
   }
   return out as unknown as TaskSettingsEffectiveAutomaticDto
+}
+
+/** Maps the config resolver's per-field source tags into the bounded run
+ *  resolution source shape (JSON-safe layer names, snake dispatch keys). */
+function toRunSources(
+  sources: ReturnType<typeof resolveEffectiveTaskSettings>['sources'],
+): TaskRunSettingsResolution['sources'] {
+  const automatic: Record<string, TaskSettingsSourceLayer> = {}
+  const dispatchSources = sources.dispatch
+  if (dispatchSources !== undefined) {
+    for (const field of TASK_DISPATCH_FIELDS) {
+      const tag = dispatchSources[field]
+      if (tag !== undefined) automatic[snakeKey(field)] = toSourceLayer(tag)
+    }
+  }
+  return {
+    selectionMode: toSourceLayer(sources.selectionMode),
+    agentRuntime: toSourceLayer(sources.agentRuntime),
+    timeoutMs: toSourceLayer(sources.timeoutMs),
+    additionalInstructions: toSourceLayer(sources.additionalInstructions),
+    automatic,
+  }
 }
 
 function ensureByTaskMap(settings: Record<string, unknown>): Record<string, unknown> {

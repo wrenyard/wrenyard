@@ -785,4 +785,184 @@ describe('daemon task-settings-service (no-model)', () => {
       null,
     )
   })
+
+  it('resolveForRun merges five layers right-wins including invocation and never persists it', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            agentRuntime: 'forge/codex-luna',
+            timeoutMs: 900_000,
+            additionalInstructions: 'global note',
+          },
+          byTask: {
+            'builtin:commit': {
+              selectionMode: 'explicit',
+              agentRuntime: 'forge/codex-sol',
+              timeoutMs: 700_000,
+            },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const resolution = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { agentRuntime: 'forge/codex-sol', timeoutMs: 200_000 },
+      invocation: {
+        mode: 'automatic',
+        timeout_ms: 111_000,
+        additional_instructions: 'invocation note',
+        automatic: { expected_tps: 250 },
+      },
+    })
+    // Invocation is the top layer: its automatic mode, timeout, additional
+    // instructions and automatic dispatch field each win right-wins.
+    assert.equal(resolution.mode, 'automatic')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(resolution.timeoutMs, 111_000)
+    assert.equal(resolution.additionalInstructions, 'invocation note')
+    assert.equal(resolution.sources.selectionMode, 'invocation')
+    assert.equal(resolution.sources.timeoutMs, 'invocation')
+    assert.equal(resolution.sources.additionalInstructions, 'invocation')
+    assert.deepEqual(resolution.sources.automatic.expected_tps, 'invocation')
+    // The inherited exact runtime pin is dropped in automatic mode.
+    assert.equal(resolution.sources.agentRuntime, 'system')
+    assert.ok(resolution.dispatch)
+    assert.equal(resolution.dispatch.profile, PROFILES[0]!.profile)
+    assert.equal(resolution.dispatch.model, PROFILES[0]!.model)
+
+    // The invocation layer is never written to the authoritative config.
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    assert.deepEqual(settings.byTask, {
+      'builtin:commit': { selectionMode: 'explicit', agentRuntime: 'forge/codex-sol', timeoutMs: 700_000 },
+    })
+    assert.equal((settings as { invocation?: unknown }).invocation, undefined)
+  })
+
+  it('resolveForRun converts an invocation explicit_runtime triple to the one exact runtime id', async () => {
+    writeConfig({
+      tasks: { settings: { global: { selectionMode: 'explicit', agentRuntime: 'forge/codex-luna' } } },
+    })
+    const service = context!.makeService()
+    const resolution = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { agentRuntime: 'forge/codex-sol' },
+      invocation: { mode: 'explicit', explicit_runtime: resolveTriple(PROFILES[0]!) },
+    })
+    assert.equal(resolution.mode, 'explicit')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(resolution.sources.agentRuntime, 'invocation')
+    assert.ok(resolution.dispatch)
+    assert.equal(resolution.dispatch.client, PROFILES[0]!.client)
+    // Config unchanged: triple conversion never persisted an agentRuntime id.
+    assert.deepEqual(readConfig(), {
+      tasks: { settings: { global: { selectionMode: 'explicit', agentRuntime: 'forge/codex-luna' } } },
+    })
+  })
+
+  it('resolveForRun automatic mode ignores a stale inherited exact runtime pin', async () => {
+    // 'unavailable' declares an exact runtime the resolver blocks, but
+    // user-global automatic mode must ignore that stale pin and resolve.
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService()
+    const resolution = await service.resolveForRun({
+      taskName: 'unavailable',
+      kind: 'builtin',
+      defaults: { agentRuntime: 'forge/codex-sol' },
+    })
+    assert.equal(resolution.mode, 'automatic')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(resolution.timeoutMs, 900_000)
+  })
+
+  it('resolveForRun explicit mode fails without automatic fallback when the exact runtime is unavailable', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    await assert.rejects(
+      service.resolveForRun({
+        taskName: 'unavailable',
+        kind: 'builtin',
+        defaults: { agentRuntime: 'forge/codex-sol' },
+      }),
+      (error) => error instanceof ExplicitRuntimeUnavailableError,
+    )
+    assert.deepEqual(readConfig(), {})
+  })
+
+  it('resolveForRun explicit mode fails when the live provider credential is unavailable', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      runtimeAvailability: () => ({
+        providerCredential: 'missing',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: false,
+      }),
+    })
+    await assert.rejects(
+      service.resolveForRun({
+        taskName: 'review',
+        kind: 'builtin',
+        defaults: { agentRuntime: 'forge/codex-sol' },
+      }),
+      (error) => error instanceof TaskSettingsRuntimeUnavailableError,
+    )
+    assert.deepEqual(readConfig(), {})
+  })
+
+  it('resolveForRun reads legacy builtin agentRuntime pins when no per-task entry exists and never writes them', async () => {
+    writeConfig({ tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
+    const service = context!.makeService()
+    const resolution = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { agentRuntime: 'forge/cb-dsf' },
+    })
+    assert.equal(resolution.mode, 'explicit')
+    assert.equal(resolution.exactAgentRuntime, 'forge/codex-sol')
+    assert.equal(resolution.sources.agentRuntime, 'user_task')
+    assert.deepEqual(readConfig(), { tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
+  })
+
+  it('resolveForRun isolates stable per-task settings by project identity and reports effective timeout and instructions', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { timeoutMs: 60_000 },
+          byTask: {
+            'project:alpha:review': { timeoutMs: 222_000, additionalInstructions: 'alpha review terse' },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const alpha = await service.resolveForRun({
+      taskName: 'review',
+      kind: 'project',
+      project: 'alpha',
+      defaults: { agentRuntime: 'forge/codex-sol' },
+    })
+    assert.equal(alpha.timeoutMs, 222_000)
+    assert.equal(alpha.additionalInstructions, 'alpha review terse')
+    assert.equal(alpha.sources.timeoutMs, 'user_task')
+    assert.equal(alpha.sources.additionalInstructions, 'user_task')
+
+    // 'beta' shares the name but not the stable identity: no alpha settings leak.
+    const beta = await service.resolveForRun({
+      taskName: 'review',
+      kind: 'project',
+      project: 'beta',
+      defaults: { agentRuntime: 'forge/codex-sol' },
+    })
+    assert.equal(beta.timeoutMs, 60_000)
+    assert.equal(beta.additionalInstructions, undefined)
+    assert.equal(beta.sources.timeoutMs, 'user_global')
+    assert.equal(beta.sources.additionalInstructions, 'system')
+  })
 })
