@@ -59,6 +59,12 @@ function createResolverFixture(): TaskDispatchResolver {
     resolve(): never {
       throw new Error('resolve is not exercised by task-settings tests')
     },
+    resolveExplicit(): never {
+      throw new Error('resolveExplicit is not exercised by legacy task-settings tests')
+    },
+    listExactRuntimes(): never {
+      throw new Error('listExactRuntimes is not exercised by legacy task-settings tests')
+    },
     eligible(input) {
       if (input.declaredRuntime === 'forge/codex-sol') {
         return { ok: true as const, choices: [resolvedChoice('forge/codex-sol', 'codex-sol')] }

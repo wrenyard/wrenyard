@@ -48,6 +48,26 @@ export class NoEligiblePlanError extends Error {
   }
 }
 
+/**
+ * Explicit-mode failure. Resolving an exact existing runtime is a hard pin:
+ * when the requested profile is not parseable/non-policy, does not exist,
+ * lacks a compiled runtime plan/credential route, is capability-incompatible,
+ * or cannot produce truthful resolved dispatch metadata, the resolution fails
+ * with this error and a concrete reason. No other candidate is evaluated and
+ * no automatic selection rule can substitute a different profile.
+ */
+export class ExplicitRuntimeUnavailableError extends Error {
+  readonly code = 'EXPLICIT_RUNTIME_UNAVAILABLE' as const
+  constructor(
+    readonly taskName: string,
+    readonly exactAgentRuntime: string,
+    readonly reason: string,
+  ) {
+    super(`explicit runtime '${exactAgentRuntime}' is unavailable for task '${taskName}': ${reason}`)
+    this.name = 'ExplicitRuntimeUnavailableError'
+  }
+}
+
 export interface TaskDispatchResolverDeps {
   catalog: Catalog
   runtime: ProviderRuntime
@@ -93,6 +113,49 @@ export type TaskDispatchEligibleResult =
   | { ok: true; choices: TaskDispatchChoice[] }
   | { ok: false; error: NoEligiblePlanError }
 
+/**
+ * Explicit-resolution input: an EXACT existing configuration pin. Unlike
+ * automatic resolution there is no machine preference, no automatic
+ * speed/intelligence/reference-price/exclude requirement surface, and no
+ * ranking: the caller names the exact profile, and the only further
+ * eligibility constraint is the optional required model capabilities.
+ */
+export interface ResolveExplicitDispatchInput {
+  taskName: string
+  /** Exact existing configuration pin, e.g. `forge/cb-dsf`. Never a policy alias. */
+  exactRuntime: string
+  /** Sole eligibility constraint beyond intrinsic availability. */
+  requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities']
+}
+
+export type TaskDispatchExplicitResolution =
+  | { ok: true; exactAgentRuntime: string; resolved: TaskResolvedDispatch }
+  | { ok: false; error: ExplicitRuntimeUnavailableError }
+
+/** Input for the synchronous `listExactRuntimes` enumeration. */
+export interface TaskDispatchExactRuntimeListInput {
+  taskName: string
+  requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities']
+}
+
+/**
+ * One exact existing configuration with truthful explicit-mode availability.
+ * Policy aliases are never listed and evidence is never fabricated: `resolved`
+ * is present exactly when the profile can serve the task, otherwise
+ * `unavailableReason` states the concrete cause.
+ */
+export interface TaskDispatchExactRuntimeListItem {
+  exactAgentRuntime: string
+  available: boolean
+  /** Full truthful resolved-dispatch snapshot when available. */
+  resolved?: TaskResolvedDispatch
+  /** Concrete reason when unavailable; absent when available. */
+  unavailableReason?: string
+}
+
+/** Synchronous enumeration result; always `ok: true`. */
+export type TaskDispatchExactRuntimeListResult = { ok: true; items: TaskDispatchExactRuntimeListItem[] }
+
 export interface TaskDispatchResolver {
   resolve(input: ResolveTaskDispatchInput): TaskDispatchResolution
   /**
@@ -103,6 +166,25 @@ export interface TaskDispatchResolver {
    * relaxed against resolve admission.
    */
   eligible(input: TaskDispatchEligibleInput): TaskDispatchEligibleResult
+
+  /**
+   * Resolves one EXACT existing configuration, bypassing every automatic
+   * selection constraint (expected/minimum speed, intelligence range,
+   * reference-price ceiling, automatic exclusion lists, preferredRuntime,
+   * machine preference, and ranking) and applying only intrinsic availability
+   * plus optional required capabilities. Failure is terminal: an unavailable,
+   * unknown, policy, capability-incompatible, or non-truthful profile returns
+   * `ExplicitRuntimeUnavailableError` and never falls back to another
+   * candidate.
+   */
+  resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution
+  /**
+   * Enumerates every existing exact profile (`forge/<profile>`) with its
+   * explicit-mode availability, attaching resolved metadata only when it can be
+   * produced truthfully. Synchronous and side-effect free: no inference and no
+   * network.
+   */
+  listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult
 }
 
 function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['reference_pricing'] {
@@ -275,6 +357,88 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     return { ok: true, exactAgentRuntime: `forge/${profileId}`, resolved }
   }
 
+  // Explicit (existing exact configuration) resolution is a separate, narrower
+  // admission path from automatic `resolve`/`eligible`. The exact profile is
+  // validated only for intrinsic availability (it exists, has a compiled
+  // runtime plan/credential route, and can yield truthful resolved dispatch
+  // metadata) plus the caller's required capabilities. None of the automatic
+  // selection machinery runs here: no expected/minimum speed, no intelligence
+  // range, no reference-price ceiling, no exclusion lists, no preferredRuntime,
+  // no machine preference, and no ranking. A failure is terminal — the explicit
+  // error is returned and no other candidate is ever evaluated as a fallback.
+  const evaluateExplicitProfile = (
+    taskName: string,
+    exactAgentRuntime: string,
+    profileId: string,
+    requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
+  ): TaskDispatchExplicitResolution => {
+    const catalogPlan = catalogPlans[profileId]
+    if (!catalogPlan) {
+      return {
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(
+          taskName,
+          exactAgentRuntime,
+          `no catalog profile '${profileId}'`,
+        ),
+      }
+    }
+    const runtimePlan = runtimePlans[profileId]
+    if (!runtimePlan) {
+      return {
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(
+          taskName,
+          exactAgentRuntime,
+          `profile '${profileId}' has no compiled runtime plan or credential route`,
+        ),
+      }
+    }
+
+    const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
+      { taskName, requirements, declaredRuntime: exactAgentRuntime },
+      [
+        {
+          profileId,
+          client: catalogPlan.client,
+          provider: catalogPlan.provider,
+          model: catalogPlan.model,
+        },
+      ],
+    )
+
+    // Availability-only probe. The pool is exactly this candidate and the
+    // requirements carry no automatic constraint, so admission here means the
+    // profile can produce a truthful resolved snapshot — never a fabricated one.
+    const availability = probe({})
+    if (!availability.ok) {
+      return {
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(
+          taskName,
+          exactAgentRuntime,
+          `profile '${profileId}' cannot produce truthful resolved dispatch metadata (speed/intelligence/reference-pricing evidence)`,
+        ),
+      }
+    }
+
+    if (!requiredCapabilities || requiredCapabilities.length === 0) return availability
+
+    // Capability compatibility is the only remaining eligibility constraint.
+    const capable = probe({ requiredCapabilities })
+    if (!capable.ok) {
+      return {
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(
+          taskName,
+          exactAgentRuntime,
+          `profile '${profileId}' is incompatible with required capabilities: ${requiredCapabilities.join(', ')}`,
+        ),
+      }
+    }
+    return capable
+  }
+
   return {
     resolve(input): TaskDispatchResolution {
       const pool = selectCandidatePool(input)
@@ -301,6 +465,44 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         }
       }
       return { ok: true, choices }
+    },
+
+    resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
+      const { taskName, exactRuntime, requiredCapabilities } = input
+      const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
+      })
+
+      // Require a parseable non-policy `forge/<profile>` exact runtime. Anything
+      // else is a concrete failure, not an implicit request for another profile.
+      if (!/^forge\/[^/]+$/u.test(exactRuntime)) {
+        return unavailable(`'${exactRuntime}' is not a parseable non-policy forge/<profile> exact runtime`)
+      }
+      let parsed: ReturnType<typeof parseAgentRuntime>
+      try {
+        parsed = parseAgentRuntime(exactRuntime)
+      } catch {
+        return unavailable(`'${exactRuntime}' does not parse as an agent runtime`)
+      }
+      if (parsed.isPolicy) {
+        return unavailable(`policy alias '${exactRuntime}' is not an exact configuration; resolveExplicit requires forge/<profile>`)
+      }
+      return evaluateExplicitProfile(taskName, exactRuntime, parsed.configId, requiredCapabilities)
+    },
+
+    listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
+      const items: TaskDispatchExactRuntimeListItem[] = []
+      for (const profileId of Object.keys(catalogPlans)) {
+        const exactAgentRuntime = `forge/${profileId}`
+        const outcome = evaluateExplicitProfile(input.taskName, exactAgentRuntime, profileId, input.requiredCapabilities)
+        if (outcome.ok) {
+          items.push({ exactAgentRuntime, available: true, resolved: outcome.resolved })
+        } else {
+          items.push({ exactAgentRuntime, available: false, unavailableReason: outcome.error.reason })
+        }
+      }
+      return { ok: true, items }
     },
   }
 }
