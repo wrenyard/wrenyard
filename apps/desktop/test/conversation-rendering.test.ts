@@ -5,6 +5,7 @@ import {
   groupConversationItems,
   isMarkdownHorizontalRule,
   parseMarkdownTable,
+  restoreConversationScrollTop,
   shouldFollowConversationTail,
 } from '../src/renderer/conversation.js';
 import type { ConversationItemSnapshot, TaskRunSnapshot } from '../src/shell-contract.js';
@@ -53,6 +54,54 @@ test('conversation follows the tail only on initial/session navigation or while 
   assert.equal(shouldFollowConversationTail({ sessionChanged: true, wasPinned: false }), true);
   assert.equal(shouldFollowConversationTail({ sessionChanged: false, wasPinned: true }), true);
   assert.equal(shouldFollowConversationTail({ sessionChanged: false, wasPinned: false }), false);
+});
+
+test('restoreConversationScrollTop keeps an unpinned captured anchor stable and never passes the maximum', () => {
+  // Following the tail always lands on the newest content.
+  assert.equal(
+    restoreConversationScrollTop({ followTail: true, scrollTop: 120, anchorId: 'assistant-5', capturedOffset: 24, anchors: [], maximum: 400 }),
+    400,
+  );
+  // Unpinned: when the same captured anchor moves from offset 24 to 61 the
+  // prior scrollTop moves by exactly that 37 delta so the anchor stays put.
+  assert.equal(
+    restoreConversationScrollTop({
+      followTail: false,
+      scrollTop: 120,
+      anchorId: 'assistant-5',
+      capturedOffset: 24,
+      anchors: [
+        { id: 'assistant-4', offset: 10 },
+        { id: 'assistant-5', offset: 61 },
+      ],
+      maximum: 400,
+    }),
+    157,
+  );
+  // Unpinned with no matching anchor: the prior numeric scrollTop is preserved.
+  assert.equal(
+    restoreConversationScrollTop({
+      followTail: false,
+      scrollTop: 120,
+      anchorId: 'assistant-9',
+      capturedOffset: 24,
+      anchors: [{ id: 'assistant-5', offset: 61 }],
+      maximum: 400,
+    }),
+    120,
+  );
+  // The restored scrollTop is clamped to the supplied maximum.
+  assert.equal(
+    restoreConversationScrollTop({
+      followTail: false,
+      scrollTop: 380,
+      anchorId: 'assistant-5',
+      capturedOffset: 24,
+      anchors: [{ id: 'assistant-5', offset: 61 }],
+      maximum: 400,
+    }),
+    400,
+  );
 });
 
 function toLineMap(taskRun: TaskRunSnapshot): Record<string, string> {
