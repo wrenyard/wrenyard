@@ -152,7 +152,7 @@ const deadIpc = () => testIpcPath('missing');
 const CANONICAL_TOOLS = [
   { name: 'task_list', description: 'List tasks', inputSchema: { type: 'object', properties: { repo: { type: 'string' } } } },
   { name: 'task_describe', description: 'Describe a task', inputSchema: { type: 'object', properties: { task_id: { type: 'string' } } } },
-  { name: 'task_run', description: 'Run a task', inputSchema: { type: 'object', properties: { command: { type: 'string' } } } },
+  { name: 'task_run', description: 'Run a task', inputSchema: { type: 'object', properties: { command: { type: 'string' }, invocation_settings: { type: 'object', properties: { mode: { type: 'string' }, explicit_runtime: { type: 'string' }, timeout_ms: { type: 'number' }, additional_instructions: { type: 'string' }, automatic: { type: 'object' } }, additionalProperties: false } }, additionalProperties: false } },
 ];
 
 function canonicalListFixture(msg) {
@@ -200,6 +200,19 @@ test('registers exactly the seven canonical task and workspace-doc aliases with 
   assert.equal(runTask.timeoutMs, undefined, 'run_task omits timeoutMs so DSH enforces no deadline');
 
   assert.equal(runTask.parameters.type, 'object', 'run_task schema is sanitized to an object');
+
+  // The canonical task_run schema exposes the shared one-shot Task settings
+  // layer. run_task must surface it on its sanitized parameters and keep it
+  // optional; there is no DSH-owned settings field or merge logic.
+  const runSettings = runTask.parameters.properties && runTask.parameters.properties.invocation_settings;
+  assert.ok(runSettings, 'run_task parameters expose invocation_settings from the canonical schema');
+  assert.equal(runSettings.type, 'object');
+  assert.equal(runSettings.properties.timeout_ms.type, 'number');
+  assert.equal(runSettings.properties.automatic.type, 'object');
+  assert.ok(
+    runTask.parameters.required === undefined || !runTask.parameters.required.includes('invocation_settings'),
+    'invocation_settings is never required on run_task',
+  );
 
   const listDocs = ctx.registered.find((d) => d.name === 'list_workspace_docs');
   const readDoc = ctx.registered.find((d) => d.name === 'read_workspace_doc');
@@ -411,6 +424,7 @@ const TERMINAL_ENVELOPES = [
 test('run_task creates once, waits once over IPC, and passes through terminal envelopes', async () => {
   for (const envelope of TERMINAL_ENVELOPES) {
     const ipcCalls = [];
+    const createArguments = [];
     const ipcSocket = testIpcPath('run');
     const ipcServer = await startIpc(ipcSocket, (msg) => {
       ipcCalls.push(msg);
@@ -422,6 +436,7 @@ test('run_task creates once, waits once over IPC, and passes through terminal en
       if (msg.method === 'tools/call') {
         taskCallNames.push(msg.params.name);
         if (msg.params.name === 'task_run') {
+          createArguments.push(msg.params.arguments);
           return okReply(msg, { structuredContent: { task_run_id: 't-1', status: 'queued' } });
         }
       }
@@ -431,13 +446,23 @@ test('run_task creates once, waits once over IPC, and passes through terminal en
     await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
     const runTask = ctx.registered.find((d) => d.name === 'run_task');
-    const output = await runTask.execute({ command: 'build' }, {});
+    const invocationSettings = {
+      timeout_ms: 90_000,
+      automatic: { minimum_tps: 2 },
+      additional_instructions: 'be terse',
+    };
+    const output = await runTask.execute({ command: 'build', invocation_settings: invocationSettings }, {});
     assert.match(output, new RegExp(envelope.status));
 
     assert.equal(ipcCalls.length, 1, `exactly one task.run.wait for ${envelope.status}`);
     assert.equal(ipcCalls[0].method, 'task.run.wait');
     assert.equal(ipcCalls[0].params.task_run_id, 't-1');
     assert.deepEqual(taskCallNames, ['task_run'], 'no task_status/task_output polling calls');
+    assert.deepEqual(
+      createArguments,
+      [{ command: 'build', invocation_settings: invocationSettings }],
+      'run_task forwards the caller input, including the nested invocation_settings object, unchanged to the canonical task_run create call',
+    );
 
     server.close();
     ipcServer.close();

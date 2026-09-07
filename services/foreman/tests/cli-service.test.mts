@@ -6,6 +6,7 @@ import { hostname, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, test } from 'node:test'
+import net from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { startForemanDaemon } from '../lib/daemon/daemon.mts'
 import { PlannedRestartStore } from '../lib/daemon/planned-restart-store.mts'
@@ -1126,6 +1127,122 @@ test('foreman task commands reach the running service over IPC', async () => {
     else process.env.WRENYARD_FORGE_ARGS_PREFIX = oldForgeArgsPrefix
     if (oldDbPath === undefined) delete process.env.FOREMAN_DB_PATH
     else process.env.FOREMAN_DB_PATH = oldDbPath
+  }
+})
+
+test('foreman task run --settings-json forwards invocation settings and rejects malformed JSON', async () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const binary = join(repoRoot, 'bin', 'foreman.mts')
+  const configDir = mkdtempSync(join(tmpdir(), 'foreman-cli-settings-config-'))
+  const socketDir = mkdtempSync(join(tmpdir(), 'foreman-cli-settings-ipc-'))
+  const socketPath = join(socketDir, 'settings.sock')
+  tempDirs.push(configDir, socketDir)
+  const port = await allocateFreeTcpPort()
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+  const ipcServer = net.createServer((sock) => {
+    let buffer = ''
+    sock.on('data', (chunk) => {
+      buffer += chunk.toString()
+      let newlineIndex
+      while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim()
+        buffer = buffer.slice(newlineIndex + 1)
+        if (!line) continue
+        let msg: { id?: unknown; method?: string; params?: Record<string, unknown> }
+        try {
+          msg = JSON.parse(line) as { id?: unknown; method?: string; params?: Record<string, unknown> }
+        } catch {
+          continue
+        }
+        const method = msg.method ?? ''
+        const params = msg.params && typeof msg.params === 'object' && !Array.isArray(msg.params)
+          ? msg.params
+          : {}
+        calls.push({ method, params })
+        if (method === 'task.run.create') {
+          sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { id: 'task_xyz', task_run_id: 'task_xyz', hint: 'created' } })}\n`)
+          continue
+        }
+        if (method === 'task.run.wait') {
+          sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { task_run_id: params.task_run_id, status: 'done', output: { result: 'ok' } } })}\n`)
+          continue
+        }
+        sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `unknown method ${method}` } })}\n`)
+      }
+    })
+  })
+  await new Promise<void>((resolve) => ipcServer.listen(socketPath, resolve))
+  const configPath = join(configDir, 'config.json')
+  writeJsonConfig(configPath, {
+    service: { bind: `127.0.0.1:${port}`, ipc: { path: socketPath } },
+    workspace: { root: socketDir },
+    message: { enabled: false },
+    messageDelivery: { enabled: false },
+  })
+
+  try {
+    const settings = {
+      timeout_ms: 90_000,
+      automatic: { minimum_tps: 2 },
+      additional_instructions: 'be terse',
+    }
+
+    // --settings-json is parsed and forwarded verbatim as task.run.create.invocation_settings.
+    const withSettings = await runForeman(repoRoot, binary, [
+      'task', 'run', 'echo', '-p', 'app', '--config', configPath,
+      '--settings-json', JSON.stringify(settings),
+      JSON.stringify({ text: 'hi' }),
+    ])
+    assert.ifError(withSettings.error)
+    assert.equal(withSettings.status, 0, `stdout:\n${withSettings.stdout}\nstderr:\n${withSettings.stderr}`)
+    const createCalls = calls.filter((call) => call.method === 'task.run.create')
+    assert.equal(createCalls.length, 1, 'exactly one task.run.create when --settings-json is present')
+    assert.deepEqual(createCalls[0].params.invocation_settings, settings)
+    assert.deepEqual(createCalls[0].params.input, { text: 'hi' })
+    assert.equal(createCalls[0].params.task_id, 'echo')
+    assert.equal(createCalls[0].params.project, 'app')
+    assert.ok(calls.some((call) => call.method === 'task.run.wait'), 'the created run is waited on')
+    const withSettingsPayload = JSON.parse(withSettings.stdout) as { status?: string; output?: unknown }
+    assert.equal(withSettingsPayload.status, 'done')
+    assert.deepEqual(withSettingsPayload.output, { result: 'ok' })
+
+    // Omission preserves the exact existing request: no invocation_settings field.
+    calls.length = 0
+    const omitted = await runForeman(repoRoot, binary, [
+      'task', 'run', 'echo', '-p', 'app', '--config', configPath,
+      JSON.stringify({ text: 'hi' }),
+    ])
+    assert.ifError(omitted.error)
+    assert.equal(omitted.status, 0, `stdout:\n${omitted.stdout}\nstderr:\n${omitted.stderr}`)
+    const omittedCreate = calls.find((call) => call.method === 'task.run.create')
+    assert.ok(omittedCreate, 'task.run.create must be issued when --settings-json is omitted')
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(omittedCreate.params, 'invocation_settings'),
+      false,
+      'omitting --settings-json must not add an invocation_settings field',
+    )
+
+    // Malformed or non-object JSON returns nonzero before any task is created.
+    for (const bad of ['{nope', 'null', '[]', '42', '"x"']) {
+      calls.length = 0
+      const failed = await runForeman(repoRoot, binary, [
+        'task', 'run', 'echo', '-p', 'app', '--config', configPath,
+        '--settings-json', bad,
+        JSON.stringify({ text: 'hi' }),
+      ])
+      assert.ifError(failed.error)
+      assert.notEqual(failed.status, 0, `malformed --settings-json ${JSON.stringify(bad)} must fail`)
+      assert.match(`${failed.stdout}\n${failed.stderr}`, /--settings-json/u)
+      assert.equal(
+        calls.some((call) => call.method === 'task.run.create'),
+        false,
+        `malformed --settings-json ${JSON.stringify(bad)} must not create a task`,
+      )
+    }
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      ipcServer.close((error) => error ? reject(error) : resolve())
+    })
   }
 })
 
