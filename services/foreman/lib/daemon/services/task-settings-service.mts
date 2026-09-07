@@ -451,7 +451,14 @@ export class TaskSettingsService {
     const summaries = await this.definitions.list(params.project)
     const rows: TaskSettingsTaskRow[] = []
     for (const summary of summaries) {
-      if (params.task_id !== undefined && summary.name !== params.task_id) continue
+      const kind: 'builtin' | 'project' = summary.kind
+        ?? (summary.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
+      const identity = taskSettingsIdentity({
+        kind,
+        name: summary.name,
+        ...(kind === 'project' ? { project: summary.project ?? params.project } : {}),
+      })
+      if (params.task_id !== undefined && summary.name !== params.task_id && identity !== params.task_id) continue
       rows.push(await this.buildRow(summary, params.project, tasks, userGlobal))
     }
 
@@ -469,7 +476,16 @@ export class TaskSettingsService {
       const taskId = params.task_id?.trim() ?? ''
       if (!taskId) throw new TaskSettingsTaskNotFoundError(params.task_id ?? '')
       const summaries = await this.definitions.list(params.project)
-      const summary = summaries.find((entry) => entry.name === taskId)
+      const summary = summaries.find((entry) => {
+        if (entry.name === taskId) return true
+        const kind: 'builtin' | 'project' = entry.kind
+          ?? (entry.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
+        return taskSettingsIdentity({
+          kind,
+          name: entry.name,
+          ...(kind === 'project' ? { project: entry.project ?? params.project } : {}),
+        }) === taskId
+      })
       if (!summary) throw new TaskSettingsTaskNotFoundError(params.task_id ?? '')
       return this.saveTask(params, summary)
     }
@@ -503,7 +519,7 @@ export class TaskSettingsService {
     params: TaskSettingsSaveParams,
     summary: TaskSettingsDefinitionSummary,
   ): Promise<TaskSettingsSnapshotResult> {
-    const taskId = params.task_id?.trim() ?? ''
+    const taskName = summary.name
     const current = this.readConfigRecord()
     if (current.revision !== params.expected_revision) {
       throw new TaskSettingsContentConflictError(params.expected_revision, current.revision)
@@ -513,13 +529,13 @@ export class TaskSettingsService {
       ?? (summary.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
     const identity = taskSettingsIdentity({
       kind,
-      name: taskId,
+      name: taskName,
       ...(kind === 'project' ? { project: summary.project ?? params.project } : {}),
     })
 
     const tasks = tasksSectionOf(current.record)
     const baselineLayer = kind === 'builtin'
-      ? readBuiltinSettingsSelection(tasks, taskId).layer
+      ? readBuiltinSettingsSelection(tasks, taskName).layer
       : readPerTaskSettings(tasks, identity)
     const nextLayer = this.applyPatchToLayer(baselineLayer, params.patch)
 
@@ -546,8 +562,8 @@ export class TaskSettingsService {
         if (effective.runtime === undefined) {
           throw new TaskSettingsInvalidSettingsError('explicit mode requires an exact runtime selection')
         }
-        const triple = this.resolveExplicitRoute(taskId, effective.runtime, effective.dispatch.requiredCapabilities)
-        await this.assertLiveRuntimeAvailability(taskId, effective.runtime, triple)
+        const triple = this.resolveExplicitRoute(taskName, effective.runtime, effective.dispatch.requiredCapabilities)
+        await this.assertLiveRuntimeAvailability(taskName, effective.runtime, triple)
       }
     }
 
@@ -560,7 +576,7 @@ export class TaskSettingsService {
       }
       cleanupEmptyByTask(settings, byTask, root)
     })
-    return this.snapshot({ project: params.project, task_id: taskId })
+    return this.snapshot({ project: params.project, task_id: identity })
   }
 
   private summaryDefaults(summary: TaskSettingsDefinitionSummary, detail?: TaskSettingsDefinitionDetail): {
