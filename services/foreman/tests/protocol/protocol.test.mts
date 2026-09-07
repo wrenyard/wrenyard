@@ -22,7 +22,6 @@ import {
 import {
   STRUCTURED_OUTPUT_INITIAL_TIMEOUT_MS,
   STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-  TASK_TIMEOUT_SCOPE,
 } from '../../lib/task-timeouts.mts'
 
 const expectedMethods = [
@@ -528,13 +527,13 @@ describe('lib/protocol JSON-RPC contract', () => {
       source: 'workspace',
       effectiveTimeoutMs: STRUCTURED_OUTPUT_INITIAL_TIMEOUT_MS,
       structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      timeoutScope: TASK_TIMEOUT_SCOPE,
+      timeoutScope: 'task_execution',
     }]), [{
       name: 'commit',
       source: 'workspace',
       effectiveTimeoutMs: STRUCTURED_OUTPUT_INITIAL_TIMEOUT_MS,
       structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      timeoutScope: TASK_TIMEOUT_SCOPE,
+      timeoutScope: 'task_execution',
     }])
 
     const enrichedGatewayResult = {
@@ -612,7 +611,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       timeoutMs: 7200000,
       effectiveTimeoutMs: 7200000,
       structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      timeoutScope: TASK_TIMEOUT_SCOPE,
+      timeoutScope: 'task_execution',
     }), {
       name: 'commit',
       source: 'workspace',
@@ -621,7 +620,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       timeoutMs: 7200000,
       effectiveTimeoutMs: 7200000,
       structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      timeoutScope: TASK_TIMEOUT_SCOPE,
+      timeoutScope: 'task_execution',
     })
 
     assert.deepEqual(parseMethodResult('task.run.status', {

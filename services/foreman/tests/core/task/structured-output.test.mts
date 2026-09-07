@@ -319,7 +319,8 @@ describe('core task structured-output', () => {
     assert.equal(payload.execution_id, 'exec_cancelled')
   })
 
-  it('uses the short structured-output retry timeout after invalid output', async () => {
+  it('uses the short structured-output retry timeout while the shared total budget has room', async () => {
+    const totalBudgetMs = STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS * 3
     let calls = 0
     const seenTimeouts: Array<number | undefined> = []
 
@@ -329,14 +330,120 @@ describe('core task structured-output', () => {
         calls += 1
         seenTimeouts.push(opts?.timeoutMs)
         return { output: xmlOutput({ wrong: true }), status: 'done' }
-      }, { timeoutMs: 500, maxResumeAttempts: 2 })
+      }, { timeoutMs: totalBudgetMs, maxResumeAttempts: 2 })
     } catch (err) {
       caughtErr = err
     }
 
     assert.equal(calls, 3)
-    assert.deepEqual(seenTimeouts, [500, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS])
+    assert.deepEqual(seenTimeouts, [totalBudgetMs, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS])
     assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+  })
+
+  it('caps a structured retry timeout at the remaining shared total budget', async () => {
+    const clock = stubDateNow()
+    const seenTimeouts: Array<number | undefined> = []
+
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async (_profile, _prompt, opts) => {
+        seenTimeouts.push(opts?.timeoutMs)
+        if (seenTimeouts.length === 1) clock.advance(175_000)
+        return { output: xmlOutput({ wrong: true }), status: 'done' }
+      }, { timeoutMs: 180_000, maxResumeAttempts: 1 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    // Total budget is 180s; the initial attempt consumes 175s, leaving only 5s
+    // of the shared deadline, so the retry is capped at min(60s retry cap, 5s).
+    assert.deepEqual(seenTimeouts, [180_000, 5_000])
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+  })
+
+  it('never renews the total model-execution budget after an invalid first output', async () => {
+    const clock = stubDateNow()
+    const seenTimeouts: Array<number | undefined> = []
+
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async (_profile, _prompt, opts) => {
+        seenTimeouts.push(opts?.timeoutMs)
+        if (seenTimeouts.length === 1) clock.advance(15_000)
+        if (seenTimeouts.length === 2) clock.advance(10_000)
+        return { output: xmlOutput({ wrong: true }), status: 'done' }
+      }, { timeoutMs: 120_000, maxResumeAttempts: 2 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    // The initial attempt gets the full 120s budget; the first retry sees 105s
+    // left and is capped at the 60s retry cap; the second retry sees 95s left
+    // and still gets 60s — the budget is never reset back to 120s per attempt.
+    assert.deepEqual(seenTimeouts, [120_000, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS])
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+  })
+
+  it('throws the agent-timeout classification and starts no retry when the shared total budget is already expired', async () => {
+    const clock = stubDateNow()
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        clock.advance(180_000)
+        return {
+          output: 'first attempt never produced a delivery block',
+          status: 'done',
+          executionId: 'exec_budget_exhausted',
+        } as StructuredOutputAgentResult & { executionId: string }
+      }, { timeoutMs: 120_000, maxResumeAttempts: 3 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1, 'an expired shared total budget must not start a retry attempt')
+    assert.ok(caughtErr instanceof Error)
+    assert.match((caughtErr as Error).message, /timed out/u)
+    const payload = JSON.parse((caughtErr as Error & { error_message?: string }).error_message ?? '{}') as Record<string, unknown>
+    assert.equal(payload.type, 'agent_timeout')
+    assert.equal(payload.execution_id, 'exec_budget_exhausted')
+  })
+
+  it('returns the parsed output on a successful single attempt inside the shared budget', async () => {
+    const clock = stubDateNow()
+    const result = await collectWithAgent(async () => {
+      clock.advance(10_000)
+      return { output: xmlOutput({ label: 'within budget' }), status: 'done' }
+    }, { timeoutMs: 120_000, maxResumeAttempts: 3 })
+
+    assert.deepEqual(result, { label: 'within budget' })
+  })
+
+  it('does not retry or renew the budget after a cancellation on the initial attempt', async () => {
+    const clock = stubDateNow()
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        clock.advance(30_000)
+        return {
+          output: '',
+          status: 'cancelled',
+          executionId: 'exec_cancelled_clock',
+          executionStatus: 'cancelled',
+        } as StructuredOutputAgentResult & { executionId: string; executionStatus: 'cancelled' }
+      }, { timeoutMs: 120_000, maxResumeAttempts: 2 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1)
+    assert.ok(caughtErr instanceof Error)
+    assert.match(caughtErr.message, /cancelled/u)
+    const payload = JSON.parse((caughtErr as Error & { error_message?: string }).error_message ?? '{}') as Record<string, unknown>
+    assert.equal(payload.type, 'agent_cancelled')
   })
 
   it('recovers when a later primitive attempt returns a valid XML delivery', async () => {
@@ -672,6 +779,22 @@ function timeoutAgent(output: string): StructuredOutputAgent {
     executionStatus: 'timeout',
     error: 'timed out',
   } as StructuredOutputAgentResult & { executionId: string; executionStatus: 'timeout'; error: string })
+}
+
+/**
+ * Replace the global Date.now with a deterministic, monotonic fake clock for
+ * the duration of a test. afterEach() restores the original clock, so no manual
+ * cleanup is required. advance() simulates model-execution time consumed by an
+ * agent attempt without any real sleeps.
+ */
+function stubDateNow(): { advance: (ms: number) => void } {
+  let currentMs = 0
+  Date.now = () => currentMs
+  return {
+    advance: (ms: number): void => {
+      currentMs += ms
+    },
+  }
 }
 
 function installSupervisor(handler: (opts: StartExecutionOpts, executionId: string) => SupervisorResult | Promise<SupervisorResult>): StartExecutionOpts[] {

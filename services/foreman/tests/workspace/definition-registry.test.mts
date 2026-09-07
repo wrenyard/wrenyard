@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import {
   STRUCTURED_OUTPUT_INITIAL_TIMEOUT_MS,
   STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-  TASK_TIMEOUT_SCOPE,
 } from '../../lib/task-timeouts.mts'
 import {
   describeTask,
@@ -94,7 +93,7 @@ describe('workspace definition registry', () => {
     const tasks = listTasks(workspace)
     // Builtins and project definitions coexist as plain ids; list returns
     // one effective definition per id.
-    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 33)
+    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 29)
     // Project definitions require project context to be selected.
     const appTasks = listTasks(workspace, 'app')
     assert.equal(appTasks.some((task) => task.name === 'probe' && task.source === 'project'), true)
@@ -128,7 +127,7 @@ describe('workspace definition registry', () => {
     assert.throws(() => resolveTaskTarget('ure/site/edit', workspace), /containing '\/' are not supported/)
   })
 
-  it('exposes per-agent-attempt timeout metadata through list and describe', async () => {
+  it('exposes task-execution timeout metadata through list and describe', async () => {
     const workspace = makeTempDir('foreman-v2-loader-')
     const projectDir = join(workspace, 'projects', 'app')
     registerProject(projectDir, 'app')
@@ -143,21 +142,21 @@ describe('workspace definition registry', () => {
     assert.equal(quick.timeoutMs, undefined)
     assert.equal(quick.effectiveTimeoutMs, STRUCTURED_OUTPUT_INITIAL_TIMEOUT_MS)
     assert.equal(quick.structuredRetryTimeoutMs, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS)
-    assert.equal(quick.timeoutScope, TASK_TIMEOUT_SCOPE)
+    assert.equal(quick.timeoutScope, 'task_execution')
 
     const slow = listTasks(workspace, 'app').find((task) => task.name === 'slow')
     assert.ok(slow, 'slow task should be listed')
     assert.equal(slow.timeoutMs, 7200000)
     assert.equal(slow.effectiveTimeoutMs, 7200000)
     assert.equal(slow.structuredRetryTimeoutMs, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS)
-    assert.equal(slow.timeoutScope, TASK_TIMEOUT_SCOPE)
+    assert.equal(slow.timeoutScope, 'task_execution')
 
     const described = describeTask('slow', workspace, 'app')
     assert.ok(described, 'slow task should be describable')
     assert.equal(described.timeoutMs, 7200000)
     assert.equal(described.effectiveTimeoutMs, 7200000)
     assert.equal(described.structuredRetryTimeoutMs, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS)
-    assert.equal(described.timeoutScope, TASK_TIMEOUT_SCOPE)
+    assert.equal(described.timeoutScope, 'task_execution')
   })
 
   it('records a load error for invalid timeoutMs in task config', async () => {
