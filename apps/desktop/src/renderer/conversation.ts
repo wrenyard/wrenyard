@@ -187,6 +187,38 @@ export function shouldFollowConversationTail(options: { sessionChanged: boolean;
   return options.sessionChanged || options.wasPinned;
 }
 
+export interface ConversationScrollAnchor {
+  id: string;
+  offset: number;
+}
+
+export interface RestoreConversationScrollTopOptions {
+  followTail: boolean;
+  scrollTop: number;
+  anchorId?: string;
+  capturedOffset?: number;
+  anchors: ConversationScrollAnchor[];
+  maximum: number;
+}
+
+/**
+ * Restores the conversation feed scroll position after a streaming rerender.
+ * A pinned / session-followed view returns to the bottom (`maximum`); otherwise
+ * the previously captured visible anchor is located again in the rebuilt feed
+ * and its offset delta is applied to the prior scroll top, clamped into range.
+ * When no matching anchor survives the rebuild, the clamped prior scroll top
+ * is kept.
+ */
+export function restoreConversationScrollTop(options: RestoreConversationScrollTopOptions): number {
+  const clamp = (value: number): number => Math.max(0, Math.min(value, Math.max(0, options.maximum)));
+  if (options.followTail) return Math.max(0, options.maximum);
+  if (options.anchorId !== undefined && options.capturedOffset !== undefined) {
+    const anchor = (options.anchors ?? []).find((candidate) => candidate.id === options.anchorId);
+    if (anchor !== undefined) return clamp(options.scrollTop + anchor.offset - options.capturedOffset);
+  }
+  return clamp(options.scrollTop);
+}
+
 interface ModelPickerEntry extends ConversationModelOptionSnapshot {
   value: string;
   current: boolean;
@@ -475,6 +507,7 @@ export class ConversationView {
     const sessionChanged = snapshot.selectedSessionId !== this.snapshot?.selectedSessionId;
     const wasPinned = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
     const previousScrollTop = this.feed.scrollTop;
+    const scrollAnchor = sessionChanged ? undefined : this.captureScrollAnchor();
     this.captureExpandedItems();
     if (sessionChanged) this.expandedItemIds.clear();
     this.snapshot = snapshot;
@@ -509,9 +542,15 @@ export class ConversationView {
     else this.hideError();
     const followTail = shouldFollowConversationTail({ sessionChanged, wasPinned });
     requestAnimationFrame(() => {
-      this.feed.scrollTop = followTail
-        ? this.feed.scrollHeight
-        : Math.min(previousScrollTop, Math.max(0, this.feed.scrollHeight - this.feed.clientHeight));
+      const maximum = Math.max(0, this.feed.scrollHeight - this.feed.clientHeight);
+      this.feed.scrollTop = restoreConversationScrollTop({
+        followTail,
+        scrollTop: previousScrollTop,
+        anchorId: scrollAnchor?.id,
+        capturedOffset: scrollAnchor?.offset,
+        anchors: this.collectScrollAnchors(),
+        maximum,
+      });
     });
   }
 
@@ -823,13 +862,41 @@ export class ConversationView {
     this.feed.replaceChildren(...nodes);
   }
 
+  private captureScrollAnchor(): { id: string; offset: number } | undefined {
+    const feedRect = this.feed.getBoundingClientRect();
+    for (const child of Array.from(this.feed.children)) {
+      const id = child instanceof HTMLElement ? child.dataset.scrollId : undefined;
+      if (!id) continue;
+      const rect = child.getBoundingClientRect();
+      if (rect.bottom > feedRect.top && rect.top < feedRect.bottom) {
+        return { id, offset: rect.top - feedRect.top };
+      }
+    }
+    return undefined;
+  }
+
+  private collectScrollAnchors(): ConversationScrollAnchor[] {
+    const feedRect = this.feed.getBoundingClientRect();
+    const anchors: ConversationScrollAnchor[] = [];
+    for (const child of Array.from(this.feed.children)) {
+      const id = child instanceof HTMLElement ? child.dataset.scrollId : undefined;
+      if (!id) continue;
+      const rect = child.getBoundingClientRect();
+      anchors.push({ id, offset: rect.top - feedRect.top });
+    }
+    return anchors;
+  }
+
   private renderItem(item: ConversationItemSnapshot): HTMLElement {
     if (item.kind === 'tool') {
-      return this.renderToolItem(item);
+      const tool = this.renderToolItem(item);
+      tool.dataset.scrollId = item.id;
+      return tool;
     }
     if (item.kind === 'assistant') return this.renderAssistantTurn([item], false);
     const article = document.createElement('article');
     article.className = `message message-${item.kind}${item.running ? ' is-streaming' : ''}`;
+    article.dataset.scrollId = item.id;
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
     avatar.textContent = item.kind === 'user' ? '你' : '啾';
@@ -853,6 +920,7 @@ export class ConversationView {
     const article = document.createElement('article');
     article.className = `message message-assistant${items.some((item) => item.running) ? ' is-streaming' : ''}`;
     article.dataset.turnId = first.turnId ?? first.id;
+    article.dataset.scrollId = first.id;
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
     avatar.textContent = '啾';
@@ -946,6 +1014,7 @@ export class ConversationView {
     if (item.toolResultText) {
       const result = document.createElement('details');
       result.className = 'tool-result';
+      this.bindExpandedState(result, `${item.id}:tool-result`);
       const resultSummary = document.createElement('summary');
       resultSummary.textContent = '原始结果';
       const resultBody = document.createElement('div');
