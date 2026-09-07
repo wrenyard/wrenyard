@@ -6,9 +6,44 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
+
+func TestResolveBinaryPrefersPathOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix PATH precedence test")
+	}
+
+	binDir := t.TempDir()
+	homeDir := t.TempDir()
+	clientPath := filepath.Join(binDir, "forge-test-client")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write client: %v", err)
+	}
+
+	nodeEntry := filepath.Join(homeDir, ".npm", "node_modules", "forge-test-client", "index.js")
+	if err := os.MkdirAll(filepath.Dir(nodeEntry), 0o755); err != nil {
+		t.Fatalf("mkdir node entry: %v", err)
+	}
+	if err := os.WriteFile(nodeEntry, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatalf("write node entry: %v", err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", binDir)
+	cmd, err := ResolveBinary(catalog.BinarySpec{
+		Name:      "forge-test-client",
+		NodeEntry: "node_modules/forge-test-client/index.js",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinary: %v", err)
+	}
+	if len(cmd) != 1 || cmd[0] != clientPath {
+		t.Fatalf("expected PATH executable %q, got %v", clientPath, cmd)
+	}
+}
 
 func TestResolveBinaryNodeEntry(t *testing.T) {
 	tempDir := t.TempDir()
@@ -144,5 +179,37 @@ func TestNpmGlobalPrefixWindows(t *testing.T) {
 	want := filepath.Join(appData, "npm")
 	if prefix != want {
 		t.Fatalf("expected %q, got %q", want, prefix)
+	}
+}
+
+func TestNpmGlobalPrefixTimesOutOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix npm timeout test")
+	}
+
+	binDir := t.TempDir()
+	homeDir := t.TempDir()
+	npmPath := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(npmPath, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0o755); err != nil {
+		t.Fatalf("write npm fixture: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PATH", binDir)
+
+	previousTimeout := npmGlobalPrefixTimeout
+	npmGlobalPrefixTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { npmGlobalPrefixTimeout = previousTimeout })
+
+	started := time.Now()
+	prefix, err := npmGlobalPrefix()
+	if err != nil {
+		t.Fatalf("npmGlobalPrefix: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("npmGlobalPrefix exceeded bounded timeout: %s", elapsed)
+	}
+	want := filepath.Join(homeDir, ".npm")
+	if prefix != want {
+		t.Fatalf("expected fallback %q, got %q", want, prefix)
 	}
 }
