@@ -634,3 +634,181 @@ test('raw run_task result text is capped at 16000 characters', () => {
   assert.equal(items[0].toolResultText, big.slice(0, 16_000));
   assert.equal(items[0].taskRun, undefined);
 });
+
+function conversationClientHarness() {
+  const client = new DshConversationClient({
+    baseUrl: 'http://127.0.0.1:1',
+    workspaceId: 'workspace-1',
+    workspace: {
+      status: 'configured',
+      path: '/workspace',
+      configPath: '/config.json',
+      source: 'user-config',
+      readOnly: false,
+    },
+    configuredProviderIds: ['wrenyard'],
+    onChanged() {},
+  });
+  return {
+    client,
+    state: client as unknown as {
+      sessions: Map<string, { sessionId: string; updatedAt: number; running: boolean; blank: boolean }>;
+      workspaceSessionIds: Set<string>;
+      selectedSessionId?: string;
+      history: { events: ReturnType<typeof entry>[]; hasMore: boolean };
+      models: ReturnType<typeof projectConversationModels>;
+      rpc(method: string, payload: Record<string, unknown>): Promise<unknown>;
+    },
+  };
+}
+
+function modelDirectory(current = 'codebuddy/deepseek-v4-flash') {
+  return {
+    current: { provider: 'wrenyard', model: current },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [
+        { id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
+      ],
+    }],
+    failures: [],
+  };
+}
+
+test('New is a local reset and repeated New or empty send creates no durable session', async () => {
+  const { client, state } = conversationClientHarness();
+  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
+  state.workspaceSessionIds.add('old');
+  state.selectedSessionId = 'old';
+  state.history = { events: [entry('user/message', 1, { content: [{ type: 'text', text: '旧历史' }] })], hasMore: false };
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.create();
+  await client.create();
+  await assert.rejects(client.send('   '), /消息不能为空/);
+
+  assert.deepEqual(calls, []);
+  assert.equal(client.snapshot().selectedSessionId, undefined);
+  assert.deepEqual(client.snapshot().items, []);
+  assert.deepEqual(client.snapshot().sessions.map((session) => session.id), ['old']);
+});
+
+test('concurrent first sends share one session create and one prompt', async () => {
+  const { client, state } = conversationClientHarness();
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.create') return { sessionId: 'new-1' };
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  const [first, second] = await Promise.all([client.send('第一条'), client.send('第一条')]);
+
+  assert.equal(calls.filter((call) => call.method === 'session.create').length, 1);
+  assert.equal(calls.filter((call) => call.method === 'session.prompt').length, 1);
+  assert.equal(first.selectedSessionId, 'new-1');
+  assert.equal(second.selectedSessionId, 'new-1');
+});
+
+test('failed first prompt retries on the same blank session without another create', async () => {
+  const { client, state } = conversationClientHarness();
+  let promptAttempts = 0;
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    if (method === 'session.create') return { sessionId: 'new-retry' };
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.prompt') {
+      promptAttempts += 1;
+      if (promptAttempts === 1) throw new Error('temporary prompt failure');
+      return {};
+    }
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await assert.rejects(client.send('重试内容'), /temporary prompt failure/);
+  await client.send('重试内容');
+
+  assert.equal(calls.filter((method) => method === 'session.create').length, 1);
+  assert.equal(calls.filter((method) => method === 'session.prompt').length, 2);
+  assert.equal(calls.some((method) => method === 'session.cancel' || method === 'session.delete'), false);
+});
+
+test('switching to an existing session during first materialization does not steal selection or duplicate prompt', async () => {
+  const { client, state } = conversationClientHarness();
+  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
+  state.workspaceSessionIds.add('old');
+  state.selectedSessionId = 'old';
+  await client.create();
+
+  let releaseCreate!: () => void;
+  const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.create') {
+      await createGate;
+      return { sessionId: 'new-race' };
+    }
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.history') return { events: [], hasMore: false };
+    if (method === 'session.prompt') return {};
+    throw new Error(`unexpected ${method}`);
+  };
+
+  const sending = client.send('新会话消息');
+  await Promise.resolve();
+  const selecting = client.select('old');
+  releaseCreate();
+  await Promise.all([sending, selecting]);
+
+  assert.equal(client.snapshot().selectedSessionId, 'old');
+  const prompts = calls.filter((call) => call.method === 'session.prompt');
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].payload.sessionId, 'new-race');
+  assert.equal(calls.filter((call) => call.method === 'session.create').length, 1);
+});
+
+test('first send reapplies the prior advertised logical model before prompting', async () => {
+  const { client, state } = conversationClientHarness();
+  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
+  state.workspaceSessionIds.add('old');
+  state.selectedSessionId = 'old';
+  state.models = projectConversationModels(modelDirectory('codebuddy/hy4-preview'), ['wrenyard']);
+  await client.create();
+
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.create') return { sessionId: 'new-model' };
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.selectModel') {
+      return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' } };
+    }
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.send('沿用模型');
+
+  assert.deepEqual(calls.map((call) => call.method).slice(0, 4), [
+    'session.create',
+    'session.models',
+    'session.selectModel',
+    'session.prompt',
+  ]);
+  assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview');
+  assert.equal(calls[3].payload.sessionId, 'new-model');
+});

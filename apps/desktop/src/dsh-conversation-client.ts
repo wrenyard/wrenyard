@@ -407,6 +407,9 @@ export class DshConversationClient {
   private history: HistoryPage = { events: [], hasMore: false };
   private models: ConversationModelsSnapshot = { status: 'idle', groups: [] };
   private modelGeneration = 0;
+  private pendingDraftModel: Pick<ConversationModelSelectionSnapshot, 'provider' | 'model'> | undefined;
+  private materializeDraftPromise: Promise<string> | undefined;
+  private initialSendPromise: Promise<ConversationSnapshot> | undefined;
   private stopped = false;
   private sockets = new Set<WebSocket>();
   private reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -483,26 +486,17 @@ export class DshConversationClient {
   }
 
   async create(): Promise<ConversationSnapshot> {
-    let target = [...this.sessions.values()].find((session) => this.workspaceSessionIds.has(session.sessionId) && session.blank);
-    if (!target) {
-      const created = await this.rpc('session.create', { workspaceId: this.workspaceId });
-      if (!isObject(created) || typeof created.sessionId !== 'string') throw new Error('DSH 未返回新会话 id');
-      target = {
-        sessionId: created.sessionId,
-        updatedAt: Date.now(),
-        running: false,
-        blank: true,
-        cwd: this.workspace.path,
-        ...(typeof created.agentPreset === 'string' ? { agentPreset: created.agentPreset } : {}),
-      };
-      this.sessions.set(target.sessionId, target);
-      this.workspaceSessionIds.add(target.sessionId);
+    if (this.initialSendPromise) return this.snapshot();
+    const current = this.models.current;
+    if (this.selectedSessionId) {
+      this.pendingDraftModel = current?.advertised && current.configured
+        ? { provider: current.provider, model: current.model }
+        : undefined;
     }
-    this.selectedSessionId = target.sessionId;
+    this.modelGeneration += 1;
+    this.selectedSessionId = undefined;
     this.history = { events: [], hasMore: false };
-    this.models = { status: 'loading', groups: [] };
     this.notify();
-    await this.refreshModels(target.sessionId);
     return this.snapshot();
   }
 
@@ -553,8 +547,25 @@ export class DshConversationClient {
     const prompt = text.trim();
     if (!prompt) throw new Error('消息不能为空');
     if (prompt.length > 100_000) throw new Error('消息过长');
-    if (!this.selectedSessionId) await this.create();
-    const sessionId = this.selectedSessionId!;
+    if (this.initialSendPromise) return this.initialSendPromise;
+    if (!this.selectedSessionId) {
+      const pending = this.sendInitial(prompt, clientTimeZone);
+      this.initialSendPromise = pending;
+      try {
+        return await pending;
+      } finally {
+        if (this.initialSendPromise === pending) this.initialSendPromise = undefined;
+      }
+    }
+    return this.sendToSession(this.selectedSessionId, prompt, clientTimeZone);
+  }
+
+  private async sendInitial(prompt: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
+    const sessionId = await this.materializeDraftSession();
+    return this.sendToSession(sessionId, prompt, clientTimeZone);
+  }
+
+  private async sendToSession(sessionId: string, prompt: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
     const running = this.sessions.get(sessionId)?.running === true;
     await this.rpc('session.prompt', {
       sessionId,
@@ -568,9 +579,76 @@ export class DshConversationClient {
       summary.blank = false;
       summary.updatedAt = Date.now();
     }
-    await this.loadHistory(sessionId).catch(() => undefined);
+    if (this.selectedSessionId === sessionId) {
+      await this.loadHistory(sessionId).catch(() => undefined);
+    }
     this.notify();
     return this.snapshot();
+  }
+
+  private async materializeDraftSession(): Promise<string> {
+    if (this.selectedSessionId) return this.selectedSessionId;
+    if (this.materializeDraftPromise) return this.materializeDraftPromise;
+
+    const pendingModel = this.pendingDraftModel;
+    const operation = (async (): Promise<string> => {
+      let target = [...this.sessions.values()].find(
+        (session) => this.workspaceSessionIds.has(session.sessionId) && session.blank,
+      );
+      if (!target) {
+        const created = await this.rpc('session.create', { workspaceId: this.workspaceId });
+        if (!isObject(created) || typeof created.sessionId !== 'string') throw new Error('DSH 未返回新会话 id');
+        target = {
+          sessionId: created.sessionId,
+          updatedAt: Date.now(),
+          running: false,
+          blank: true,
+          cwd: this.workspace.path,
+          ...(typeof created.agentPreset === 'string' ? { agentPreset: created.agentPreset } : {}),
+        };
+        this.sessions.set(target.sessionId, target);
+        this.workspaceSessionIds.add(target.sessionId);
+      }
+
+      let nextModels = await this.fetchModels(target.sessionId);
+      if (pendingModel) {
+        const option = nextModels.groups
+          .find((group) => group.provider === pendingModel.provider)
+          ?.models.find((candidate) => candidate.model === pendingModel.model);
+        if (!option) {
+          throw new Error(`新会话无法使用原选择模型 ${pendingModel.provider}/${pendingModel.model}`);
+        }
+        if (nextModels.current?.provider !== pendingModel.provider || nextModels.current.model !== pendingModel.model) {
+          const value = await this.rpc('session.selectModel', {
+            sessionId: target.sessionId,
+            provider: pendingModel.provider,
+            model: pendingModel.model,
+            ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+          });
+          if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
+          nextModels = {
+            ...nextModels,
+            current: modelSelectionSnapshot(value.selected, nextModels.groups, this.configuredProviderIds),
+            routable: true,
+          };
+        }
+      }
+
+      if (!this.selectedSessionId) {
+        this.selectedSessionId = target.sessionId;
+        this.history = { events: [], hasMore: false };
+        this.models = nextModels;
+        this.pendingDraftModel = undefined;
+        this.notify();
+      }
+      return target.sessionId;
+    })();
+    this.materializeDraftPromise = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.materializeDraftPromise === operation) this.materializeDraftPromise = undefined;
+    }
   }
 
   async cancel(): Promise<ConversationSnapshot> {
@@ -643,23 +721,7 @@ export class DshConversationClient {
     this.models = { ...this.models, status: 'loading', message: undefined };
     this.notify();
     try {
-      const value = await this.rpc('session.models', { sessionId });
-      let next = projectConversationModels(
-        value,
-        [...this.configuredProviderIds],
-      );
-      const repair = isObject(value)
-        ? persistedModelSelectionRepair(value.current, next.groups)
-        : undefined;
-      if (repair) {
-        const repaired = await this.rpc('session.selectModel', { sessionId, ...repair });
-        if (!isObject(repaired) || !isObject(repaired.selected)) throw new Error('DSH 未返回归一化后的模型选择');
-        const selected = modelSelectionSnapshot(repaired.selected, next.groups, this.configuredProviderIds);
-        if (selected.provider !== repair.provider || selected.model !== repair.model) {
-          throw new Error('DSH 未持久化归一化后的模型选择');
-        }
-        next = { ...next, current: selected };
-      }
+      const next = await this.fetchModels(sessionId);
       if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
       this.models = next;
       this.notify();
@@ -672,6 +734,23 @@ export class DshConversationClient {
       };
       this.notify();
     }
+  }
+
+  private async fetchModels(sessionId: string): Promise<ConversationModelsSnapshot> {
+    const value = await this.rpc('session.models', { sessionId });
+    let next = projectConversationModels(value, [...this.configuredProviderIds]);
+    const repair = isObject(value)
+      ? persistedModelSelectionRepair(value.current, next.groups)
+      : undefined;
+    if (!repair) return next;
+    const repaired = await this.rpc('session.selectModel', { sessionId, ...repair });
+    if (!isObject(repaired) || !isObject(repaired.selected)) throw new Error('DSH 未返回归一化后的模型选择');
+    const selected = modelSelectionSnapshot(repaired.selected, next.groups, this.configuredProviderIds);
+    if (selected.provider !== repair.provider || selected.model !== repair.model) {
+      throw new Error('DSH 未持久化归一化后的模型选择');
+    }
+    next = { ...next, current: selected };
+    return next;
   }
 
   private openStream(name: 'events.mux' | 'events.host', attempt = 0): void {
