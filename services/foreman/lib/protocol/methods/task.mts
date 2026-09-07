@@ -60,7 +60,7 @@ export interface TaskDefinitionSummary {
   timeoutMs?: number
   effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
-  timeoutScope?: 'agent_attempt'
+  timeoutScope?: 'task_execution'
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
 }
@@ -268,7 +268,7 @@ export const taskDefinitionSummarySchema = {
     timeoutMs: { type: 'number' },
     effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },
-    timeoutScope: { enum: ['agent_attempt'] },
+    timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
     dispatch: taskDispatchRequirementsSchema,
   },
@@ -302,7 +302,7 @@ export const taskDefinitionDetailSchema = {
     timeoutMs: { type: 'number' },
     effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },
-    timeoutScope: { enum: ['agent_attempt'] },
+    timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
   },
   additionalProperties: true,

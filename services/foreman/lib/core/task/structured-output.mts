@@ -128,7 +128,7 @@ export type StructuredOutputAgent = (
 export async function collectStructuredOutput(opts: StructuredOutputOptions): Promise<unknown> {
   const schema = compileSchema(opts.outputSchema)
   assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
-  const timeoutMs = effectiveTaskTimeoutMs(opts.timeoutMs)
+  const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
   const maxResumeAttempts = opts.maxResumeAttempts ?? 3
   let lastValidationErrors: string[] | undefined
   let lastOutputExcerpt: string | undefined
@@ -138,16 +138,36 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   let resolvedProfile: string | undefined
 
   // ── Main attempt loop: dispatch injected agent runner, parse delivery output ──
+  //
+  // timeoutMs is one total model-execution budget shared by the initial attempt
+  // and every structured resume attempt: the single deadline is fixed here when
+  // collection begins (queue/admission/pre-gates run before this function and
+  // never consume it), and it is never renewed. Before each attempt the
+  // dispatched timeout is min(attempt cap, positive remaining total) — the
+  // initial cap is the total budget, the retry cap stays
+  // STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS. An expired budget throws the existing
+  // agent-timeout classification without starting another agent.
+  const deadlineMs = Date.now() + totalBudgetMs
   for (let attempt = 0; attempt <= maxResumeAttempts; attempt += 1) {
+    await opts.beforeAttempt?.()
+    const remainingTotalMs = deadlineMs - Date.now()
+    if (remainingTotalMs <= 0) {
+      throw agentTimeoutError(
+        lastExecutionId ?? 'unknown',
+        attempt,
+        totalBudgetMs,
+        lastActivity ?? 'no model execution started after the shared task execution deadline',
+      )
+    }
     const attemptProfile = attempt === 0
       ? opts.profile
       : assertResolvedProfileForRetry(opts.profile, resolvedProfile)
     const attemptPrompt = attempt === 0
       ? firstPrompt(opts.instructions, schema)
       : resumePrompt(attempt, schema, lastValidationErrors)
-    const attemptTimeoutMs = attempt === 0 ? timeoutMs : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
-    await opts.beforeAttempt?.()
-      const terminal = await runStructuredAttempt(
+    const attemptCapMs = attempt === 0 ? totalBudgetMs : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
+    const attemptTimeoutMs = Math.min(attemptCapMs, remainingTotalMs)
+    const terminal = await runStructuredAttempt(
         opts.runAgent,
         attemptProfile,
         attemptPrompt,

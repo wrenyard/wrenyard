@@ -83,10 +83,12 @@ export interface TaskConfig {
    *  Omit for repo-wide write protection. The execution kernel resolves and
    *  bounds every returned path inside the active checkout/worktree. */
   writeTargets?: (input: unknown) => readonly string[]
-  /** Max wall-clock milliseconds for this task's initial native-agent execution
-   *  before it is force-timed-out. This is per agent attempt, not a cumulative
-   *  task budget; structured-output resume attempts use the shorter retry
-   *  timeout. */
+  /** Total wall-clock milliseconds budgeted for this task's model execution:
+   *  one shared deadline covering the initial native-agent execution and every
+   *  structured-output resume attempt. The deadline begins when model execution
+   *  starts and is never renewed per attempt; each structured retry is capped
+   *  by the shorter retry timeout and by the positive remaining total. Omitted
+   *  tasks inherit the 15-minute default. */
   timeoutMs?: number
 }
 
