@@ -110,10 +110,6 @@ const EXPECTED_BUILTIN_NAMES = [
   'propose-design',
   'request-intake',
   'spec-review',
-  'deep-research-fetch',
-  'deep-research-scope',
-  'deep-research-synthesize',
-  'deep-research-verify',
   'diagnose-repro',
   'instrument-evidence',
   'test-hypothesis',
@@ -145,8 +141,8 @@ const ListedDefinitionShapeSchema = z.object({
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library BUILTIN_TASKS index', () => {
-  it('exposes exactly 34 entries in the fixed order', () => {
-    assert.equal(BUILTIN_TASKS.length, 34)
+  it('exposes exactly 30 entries in the fixed order', () => {
+    assert.equal(BUILTIN_TASKS.length, 30)
     assert.deepEqual(
       BUILTIN_TASKS.map((e) => e.name),
       [...EXPECTED_BUILTIN_NAMES],
@@ -161,8 +157,8 @@ describe('standard-library BUILTIN_TASKS index', () => {
     }
   })
 
-  it('BUILTIN_NAMES matches the 34 builtin names', () => {
-    assert.equal(BUILTIN_NAMES.size, 34)
+  it('BUILTIN_NAMES matches the 30 builtin names', () => {
+    assert.equal(BUILTIN_NAMES.size, 30)
     for (const name of EXPECTED_BUILTIN_NAMES) {
       assert.equal(BUILTIN_NAMES.has(name), true, `${name} should be in BUILTIN_NAMES`)
     }
@@ -174,13 +170,13 @@ describe('standard-library BUILTIN_TASKS index', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library builtin injection', () => {
-  it('keeps all 34 builtins resolvable but omits legacy-only tasks from scheduling lists', async () => {
+  it('keeps all 30 builtins resolvable but omits legacy-only tasks from scheduling lists', async () => {
     const workspace = makeTempDir('foreman-builtin-empty-')
     await discoverTasks(workspace)
 
     const tasks = listTasks(workspace)
     const builtins = tasks.filter((t) => t.source === 'builtin')
-    assert.equal(builtins.length, 33)
+    assert.equal(builtins.length, 29)
 
     for (const name of EXPECTED_BUILTIN_NAMES.filter((candidate) => candidate !== 'implement')) {
       const entry = tasks.find((t) => t.name === name)
@@ -223,7 +219,6 @@ describe('standard-library builtin injection', () => {
       'request-intake',
       'propose-design',
       'feature-point-synthesize',
-      'deep-research-scope',
       'functional-unit-breakdown',
       'diagnose-repro',
       'write-failing-test',
@@ -308,7 +303,7 @@ describe('standard-library builtin list/describe schemas', () => {
 
     const defs = listTaskDefinitions(workspace)
     const builtinDefs = defs.filter((d) => d.source === 'builtin')
-    assert.equal(builtinDefs.length, 33)
+    assert.equal(builtinDefs.length, 29)
     for (const name of EXPECTED_BUILTIN_NAMES.filter((candidate) => candidate !== 'implement')) {
       const def = defs.find((d) => d.name === name)
       assert.ok(def, `${name} should be in listTaskDefinitions`)

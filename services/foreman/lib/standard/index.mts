@@ -23,10 +23,6 @@ import planReviewTask from './tasks/plan-review.mts'
 import proposeDesignTask from './tasks/propose-design.mts'
 import requestIntakeTask from './tasks/request-intake.mts'
 import specReviewTask from './tasks/spec-review.mts'
-import deepResearchFetchTask from './tasks/deep-research-fetch.mts'
-import deepResearchScopeTask from './tasks/deep-research-scope.mts'
-import deepResearchSynthesizeTask from './tasks/deep-research-synthesize.mts'
-import deepResearchVerifyTask from './tasks/deep-research-verify.mts'
 import diagnoseReproTask from './tasks/diagnose-repro.mts'
 import instrumentEvidenceTask from './tasks/instrument-evidence.mts'
 import testHypothesisTask from './tasks/test-hypothesis.mts'
@@ -105,10 +101,6 @@ const BUILTIN_TASK_CATEGORIES: Readonly<Record<string, TaskCategory>> = {
   'propose-design': CATEGORY.architecture,
   'request-intake': CATEGORY.research,
   'spec-review': CATEGORY['code-review'],
-  'deep-research-fetch': CATEGORY.research,
-  'deep-research-scope': CATEGORY.research,
-  'deep-research-synthesize': CATEGORY.research,
-  'deep-research-verify': CATEGORY.research,
   'diagnose-repro': CATEGORY.test,
   'instrument-evidence': CATEGORY.test,
   'test-hypothesis': CATEGORY.test,
@@ -144,9 +136,8 @@ export function builtinTaskCategory(name: string): TaskCategory | undefined {
  *   architect, conform-review, explore-notes,
  *   feature-point-synthesize, fp-review, fu-review,
  *   functional-unit-breakdown, inquiry-step, investigate, plan-review,
- *   propose-design, request-intake, spec-review, deep-research-fetch,
- *   deep-research-scope, deep-research-synthesize, deep-research-verify,
- *   diagnose-repro, instrument-evidence, test-hypothesis, verify-fix,
+ *   propose-design, request-intake, spec-review, diagnose-repro,
+ *   instrument-evidence, test-hypothesis, verify-fix,
  *   implement, write-failing-test.
  */
 export const BUILTIN_TASKS: readonly BuiltinTaskEntry[] = [
@@ -174,10 +165,6 @@ export const BUILTIN_TASKS: readonly BuiltinTaskEntry[] = [
   { name: 'propose-design', definition: withCategory(proposeDesignTask as TaskDefinition, CATEGORY.architecture) },
   { name: 'request-intake', definition: withCategory(requestIntakeTask as TaskDefinition, CATEGORY.research) },
   { name: 'spec-review', definition: withCategory(specReviewTask as TaskDefinition, CATEGORY['code-review']) },
-  { name: 'deep-research-fetch', definition: withCategory(deepResearchFetchTask as TaskDefinition, CATEGORY.research) },
-  { name: 'deep-research-scope', definition: withCategory(deepResearchScopeTask as TaskDefinition, CATEGORY.research) },
-  { name: 'deep-research-synthesize', definition: withCategory(deepResearchSynthesizeTask as TaskDefinition, CATEGORY.research) },
-  { name: 'deep-research-verify', definition: withCategory(deepResearchVerifyTask as TaskDefinition, CATEGORY.research) },
   { name: 'diagnose-repro', definition: withCategory(diagnoseReproTask as TaskDefinition, CATEGORY.test) },
   { name: 'instrument-evidence', definition: withCategory(instrumentEvidenceTask as TaskDefinition, CATEGORY.test) },
   { name: 'test-hypothesis', definition: withCategory(testHypothesisTask as TaskDefinition, CATEGORY.test) },
