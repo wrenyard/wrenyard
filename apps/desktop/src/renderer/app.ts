@@ -22,6 +22,7 @@ import type {
   ClientConfigurationPlanDto,
   ClientConfigurationSnapshotDto,
   ClientModelSelectionDto,
+  ClientSurfaceId,
   GatewayProtocol,
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
@@ -29,7 +30,7 @@ import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
-import { buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
+import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 
 declare global {
   interface Window {
@@ -108,6 +109,8 @@ let providerOrderSaving = false;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
 let pendingClientPlan: ClientConfigurationPlanDto | null = null;
+let selectedClientTab: ClientSurfaceId | null = null;
+let currentClientSnapshot: ClientConfigurationSnapshotDto | null = null;
 let taskSettings: TaskSettingsSnapshot | null = null;
 let tasksSelectedTaskId: string | null = null;
 let tasksSaveBusy = false;
@@ -1034,13 +1037,25 @@ async function refreshQuota(forceRefresh: boolean): Promise<void> {
 }
 
 function renderClients(snapshot: ClientConfigurationSnapshotDto): void {
-  clientsContent.innerHTML = renderClientPageMarkup(buildClientPageModel(snapshot));
+  currentClientSnapshot = snapshot;
+  const activeTab = selectedClientTab !== null && CLIENT_TABS.some((tab) => tab.id === selectedClientTab)
+    ? selectedClientTab
+    : CLIENT_TABS[0].id;
+  selectedClientTab = activeTab;
+  clientsContent.innerHTML = renderClientPageMarkup(buildClientPageModel(snapshot), activeTab);
   const installed = snapshot.surfaces.filter((surface) => surface.installed).length;
   const connected = snapshot.configurations.filter((entry) => entry.state === 'connected' || entry.state === 'needs-restart').length;
   const status = requireElement('clients-status');
   status.className = 'status-pill is-connected';
   status.textContent = '已探测';
   setText('clients-message', `发现 ${installed} 个已安装表面 · ${connected} 组已由 Wrenyard 管理 · ${snapshot.models.length} 个可用模型`);
+}
+
+function selectClientTab(tabId: ClientSurfaceId): void {
+  if (selectedClientTab === tabId) return;
+  selectedClientTab = tabId;
+  if (currentClientSnapshot) renderClients(currentClientSnapshot);
+  document.getElementById(`client-tab-${tabId}`)?.focus();
 }
 
 async function refreshClients(): Promise<void> {
@@ -1357,6 +1372,12 @@ statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => void refreshQuota(true));
 clientsRefreshButton.addEventListener('click', () => void refreshClients());
 clientsContent.addEventListener('click', (event) => {
+  const tabButton = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-tab-target]');
+  if (tabButton) {
+    const tabId = tabButton.dataset.clientTabTarget as ClientSurfaceId | undefined;
+    if (tabId) selectClientTab(tabId);
+    return;
+  }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-action]');
   const card = button?.closest<HTMLElement>('[data-client-id]');
   const action = button?.dataset.clientAction;
@@ -1368,6 +1389,22 @@ clientsContent.addEventListener('click', (event) => {
     status.textContent = '需要处理';
     setText('clients-message', error instanceof Error ? error.message : String(error));
   }).finally(() => { button.disabled = false; });
+});
+clientsContent.addEventListener('keydown', (event) => {
+  if (!(event instanceof KeyboardEvent)) return;
+  const current = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-tab-target]');
+  if (!current) return;
+  const currentIndex = CLIENT_TABS.findIndex((tab) => tab.id === current.dataset.clientTabTarget);
+  if (currentIndex < 0) return;
+  let nextIndex = currentIndex;
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % CLIENT_TABS.length;
+  else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + CLIENT_TABS.length) % CLIENT_TABS.length;
+  else if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = CLIENT_TABS.length - 1;
+  else return;
+  event.preventDefault();
+  const next = CLIENT_TABS[nextIndex];
+  if (next && next.id !== current.dataset.clientTabTarget) selectClientTab(next.id);
 });
 clientPlanCancel.addEventListener('click', closeClientPlan);
 clientPlanConfirm.addEventListener('click', () => {
