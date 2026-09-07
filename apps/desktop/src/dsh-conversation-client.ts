@@ -265,7 +265,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       activeTurnId = turnId;
       if (finalizedSteps.has(key)) continue;
       const draft = drafts.get(key) ?? {
-        id: `assistant-draft-${key}`,
+        id: `assistant-${key}`,
         kind: 'assistant' as const,
         text: '',
         reasoning: '',
@@ -293,7 +293,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const reasoning = contentText(message.content, 'reasoning');
       if (text || reasoning) {
         items.push({
-          id: `assistant-${seq}`,
+          id: `assistant-${key}`,
           kind: 'assistant',
           text,
           turnId,
@@ -309,6 +309,9 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const callId = asString(data.callId) ?? `seq-${seq}`;
       const name = asString(data.name) ?? '工具调用';
       const args = asString(data.arguments)?.trim();
+      const turn = asNumber(data.turn);
+      const turnId = turn === undefined ? activeTurnId : `turn-${turn}`;
+      if (turn !== undefined) activeTurnId = turnId;
       const item: ConversationItemSnapshot & { order: number } = {
         id: `tool-${callId}`,
         kind: 'tool',
@@ -316,7 +319,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         toolState: 'running',
         text: args ? args.slice(0, 4_000) : '',
         time,
-        ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        ...(turnId ? { turnId } : {}),
         order,
       };
       tools.set(callId, item);

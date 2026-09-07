@@ -86,6 +86,58 @@ test('conversation projection keeps every assistant step and tool in one turn gr
   ]);
 });
 
+test('tool call that precedes the first assistant event still joins its data.turn group', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 9, callId: 'call-9', name: 'Read', arguments: '{"path":"README.md"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-9' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-9',
+          content: [],
+          isError: false,
+        }],
+      },
+    }),
+    entry('assistant/message', 3, {
+      turn: 9,
+      step: 1,
+      message: { content: [{ type: 'text', text: '结果如下。' }] },
+    }),
+  ]);
+
+  assert.deepEqual(items.map((item) => ({ kind: item.kind, turnId: item.turnId })), [
+    { kind: 'tool', turnId: 'turn-9' },
+    { kind: 'assistant', turnId: 'turn-9' },
+  ]);
+});
+
+test('assistant item id for one turn and step is stable from the streaming draft to the finalized message', () => {
+  const streamed = projectConversationHistory([
+    entry('assistant/chunk', 1, { turn: 5, step: 1, chunk: { type: 'reasoning-delta', text: '先查' } }),
+    entry('assistant/chunk', 2, { turn: 5, step: 1, chunk: { type: 'text-delta', text: '检查中' } }),
+  ]);
+  const finalized = projectConversationHistory([
+    entry('assistant/chunk', 1, { turn: 5, step: 1, chunk: { type: 'reasoning-delta', text: '先查' } }),
+    entry('assistant/chunk', 2, { turn: 5, step: 1, chunk: { type: 'text-delta', text: '检查中' } }),
+    entry('assistant/message', 3, {
+      turn: 5,
+      step: 1,
+      message: { content: [{ type: 'reasoning', text: '先查' }, { type: 'text', text: '检查完成' }] },
+    }),
+  ]);
+
+  const streamedAssistant = streamed.find((item) => item.kind === 'assistant');
+  const finalizedAssistant = finalized.find((item) => item.kind === 'assistant');
+  assert.ok(streamedAssistant);
+  assert.ok(finalizedAssistant);
+  // Draft reasoning/text expansion is keyed by the item id, so the id must not
+  // change once the message is finalized.
+  assert.ok(streamedAssistant.id);
+  assert.equal(finalizedAssistant.id, streamedAssistant.id);
+});
+
 test('conversation projection keeps a synthetic turn stable when DSH omits turn numbers', () => {
   const items = projectConversationHistory([
     entry('user/message', 1, {
