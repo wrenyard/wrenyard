@@ -63,6 +63,47 @@ const CARD_DEFINITIONS: ReadonlyArray<{
   },
 ];
 
+export interface ClientTabDefinition {
+  id: ClientSurfaceId;
+  clientId: ClientConfigurationId;
+  label: string;
+  copy: string;
+}
+
+/** Five real-client surface tabs; both Codex surfaces operate on the shared codex group. */
+export const CLIENT_TABS: ReadonlyArray<ClientTabDefinition> = [
+  {
+    id: 'claude-app',
+    clientId: 'claude-app',
+    label: 'Claude App',
+    copy: 'Claude App 切换式接入第三方 Gateway，需要完全重启 App 才能生效。',
+  },
+  {
+    id: 'claude-code',
+    clientId: 'claude-code',
+    label: 'Claude Code',
+    copy: 'Claude Code 自动发现本地 Gateway，新开会话后生效。',
+  },
+  {
+    id: 'codex-app',
+    clientId: 'codex-shared',
+    label: 'Codex App',
+    copy: 'Codex App 仅使用 Responses 协议。App 与 Codex CLI 共享同一配置，调整会同时影响 CLI；App 需重启并新建会话后生效。',
+  },
+  {
+    id: 'codex-cli',
+    clientId: 'codex-shared',
+    label: 'Codex CLI',
+    copy: 'Codex CLI 仅使用 Responses 协议。CLI 与 Codex App 共享同一配置，调整会同时影响 App；CLI 需重启并新建会话后生效。',
+  },
+  {
+    id: 'grok-build',
+    clientId: 'grok-build',
+    label: 'Grok Build',
+    copy: 'Grok Build 采用加法式接入，在保留官方模型的基础上叠加 Gateway 模型。',
+  },
+];
+
 function modelsForProtocols(
   protocols: readonly GatewayProtocol[],
   models: readonly ClientGatewayModelDto[],
@@ -139,25 +180,52 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-export function renderClientPageMarkup(model: ClientPageModel): string {
+function renderClientModelList(card: ClientCardModel): string {
+  if (card.availableModels.length === 0) {
+    const emptyMessage = CARD_DEFINITIONS.find((definition) => definition.id === card.id)?.emptyMessage ?? '';
+    return `<p class="client-card__empty">${escapeHtml(emptyMessage)}</p>`;
+  }
+  return card.availableModels.map((model, index) => {
+    const selected = card.models.includes(model.publicId) || (card.models.length === 0 && index === 0);
+    const defaultModel = card.models[0] === model.publicId || (card.models.length === 0 && index === 0);
+    const protocolOptions = card.id === 'grok-build' && model.protocols.length > 1
+      ? `<select data-client-protocol="${escapeHtml(model.publicId)}" aria-label="${escapeHtml(model.displayName)} 协议">${model.protocols.map((protocol) => `<option value="${protocol}">${escapeHtml(protocol)}</option>`).join('')}</select>`
+      : '';
+    return `<label class="client-model-option"><input type="checkbox" data-client-model="${escapeHtml(model.publicId)}"${selected ? ' checked' : ''} /><span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.publicId)}</small></span><input type="radio" name="${card.id}-default-model" data-client-default="${escapeHtml(model.publicId)}" aria-label="设为默认模型"${defaultModel ? ' checked' : ''} />${protocolOptions}</label>`;
+  }).join('');
+}
+
+function renderClientTabPanel(card: ClientCardModel, tab: ClientTabDefinition): string {
+  const surface = card.surfaces.find((row) => row.id === tab.id);
+  return `<header class="client-panel__head">
+    <div class="client-panel__identity">
+      <h2>${escapeHtml(tab.label)}</h2>
+      <p class="client-panel__copy">${escapeHtml(tab.copy)}</p>
+    </div>
+    <span class="client-panel__mode">${escapeHtml(card.connectionMode)}</span>
+  </header>
+  <p class="client-card__status">${escapeHtml(card.status)}${card.detail ? ` · ${escapeHtml(card.detail)}` : ''}</p>
+  ${surface ? `<div class="client-surface" data-surface-id="${surface.id}"><strong>${escapeHtml(surface.label)}</strong><span>${escapeHtml(surface.status)}</span><small>${escapeHtml(surface.detail)}</small></div>` : ''}
+  <div class="client-card__model-list" aria-label="${escapeHtml(tab.label)} 模型">
+    ${renderClientModelList(card)}
+  </div>
+  <div class="client-card__actions"><button type="button" data-client-action="primary">${escapeHtml(card.primaryAction)}</button>${card.canRestore ? '<button type="button" data-client-action="restore">恢复原配置</button>' : ''}</div>`;
+}
+
+export function renderClientPageMarkup(model: ClientPageModel, selectedTabId?: ClientSurfaceId): string {
+  const activeTab = CLIENT_TABS.find((tab) => tab.id === selectedTabId) ?? CLIENT_TABS[0];
+  const activeCard = model.cards.find((card) => card.id === activeTab.clientId) ?? null;
+  const tabButtons = CLIENT_TABS.map((tab) => {
+    const selected = tab.id === activeTab.id;
+    return `    <button type="button" role="tab" id="client-tab-${tab.id}" class="client-tab${selected ? ' is-selected' : ''}" data-client-tab-target="${tab.id}" aria-selected="${String(selected)}" aria-controls="client-tabpanel-${tab.id}"${selected ? '' : ' tabindex="-1"'}><span>${escapeHtml(tab.label)}</span></button>`;
+  }).join('\n');
+  const panel = activeCard ? renderClientTabPanel(activeCard, activeTab) : '';
   return `<section class="client-page" aria-label="客户端配置">
-  <div class="client-page__grid">
-${model.cards.map((card) => `    <article class="client-card" data-client-id="${card.id}">
-      <header><h2>${escapeHtml(card.title)}</h2><span>${card.connectionMode}</span></header>
-      <p class="client-card__status">${escapeHtml(card.status)}</p>
-      ${card.surfaces.map((surface) => `<div class="client-surface" data-surface-id="${surface.id}"><strong>${escapeHtml(surface.label)}</strong><span>${escapeHtml(surface.status)}</span><small>${escapeHtml(surface.detail)}</small></div>`).join('')}
-      <div class="client-card__model-list" aria-label="${escapeHtml(card.title)} 模型">
-        ${card.availableModels.length > 0 ? card.availableModels.map((model, index) => {
-          const selected = card.models.includes(model.publicId) || (card.models.length === 0 && index === 0);
-          const defaultModel = card.models[0] === model.publicId || (card.models.length === 0 && index === 0);
-          const protocolOptions = card.id === 'grok-build' && model.protocols.length > 1
-            ? `<select data-client-protocol="${escapeHtml(model.publicId)}" aria-label="${escapeHtml(model.displayName)} 协议">${model.protocols.map((protocol) => `<option value="${protocol}">${escapeHtml(protocol)}</option>`).join('')}</select>`
-            : '';
-          return `<label class="client-model-option"><input type="checkbox" data-client-model="${escapeHtml(model.publicId)}"${selected ? ' checked' : ''} /><span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.publicId)}</small></span><input type="radio" name="${card.id}-default-model" data-client-default="${escapeHtml(model.publicId)}" aria-label="设为默认模型"${defaultModel ? ' checked' : ''} />${protocolOptions}</label>`;
-        }).join('') : `<p class="client-card__empty">${escapeHtml(CARD_DEFINITIONS.find((definition) => definition.id === card.id)?.emptyMessage ?? '')}</p>`}
-      </div>
-      <div class="client-card__actions"><button type="button" data-client-action="primary">${card.primaryAction}</button>${card.canRestore ? '<button type="button" data-client-action="restore">恢复原配置</button>' : ''}</div>
-    </article>`).join('\n')}
+  <div class="client-tabs" role="tablist" aria-label="客户端">
+${tabButtons}
+  </div>
+  <div class="client-tabpanel" id="client-tabpanel-${activeTab.id}" role="tabpanel" aria-labelledby="client-tab-${activeTab.id}" data-client-id="${activeCard?.id ?? activeTab.clientId}">
+${panel}
   </div>
 </section>`;
 }

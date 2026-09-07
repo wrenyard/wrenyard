@@ -484,11 +484,18 @@ button, input, select { accent-color: var(--moss-deep); }
 /* Real Agent client configuration */
 .clients-hero { align-items: center; }
 .clients-meta { min-height: 49px; display: flex; align-items: center; gap: 11px; color: var(--muted); font-size: 11px; }
-.client-page__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.client-card { min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 18px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
-.client-card > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.client-card > header h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 18px; }
-.client-card > header span { border-radius: 999px; padding: 4px 8px; color: var(--slate); background: var(--paper-deep); font-size: 9px; font-weight: 750; }
+.client-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper-dim); }
+.client-tab { min-height: 30px; border: 0; border-radius: 4px; padding: 0 13px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+.client-tab:hover { color: var(--ink); background: rgba(247, 239, 216, .72); }
+.client-tab.is-selected { color: var(--ink); background: var(--lamp); box-shadow: inset 0 0 0 1px var(--lamp-deep); }
+.client-tab:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
+.client-tabpanel { min-width: 0; margin-top: 14px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
+.client-tabpanel:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
+.client-panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.client-panel__identity { min-width: 0; }
+.client-panel__identity h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 19px; }
+.client-panel__copy { margin: 7px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.client-panel__mode { flex: 0 0 auto; border-radius: 999px; padding: 4px 8px; color: var(--slate); background: var(--paper-deep); font-size: 9px; font-weight: 750; }
 .client-card__status { margin: 10px 0 12px; color: var(--moss-deep); font-size: 11px; font-weight: 750; }
 .client-surface { min-width: 0; display: grid; grid-template-columns: minmax(100px, .7fr) auto; gap: 4px 12px; border-top: 1px solid rgba(212, 201, 168, .65); padding: 9px 0; }
 .client-surface strong { color: var(--ink-soft); font-size: 11px; }
@@ -596,7 +603,6 @@ button, input, select { accent-color: var(--moss-deep); }
   .composer-wrap { padding-inline: 20px; }
   .conversation-error { margin-inline: 20px; }
   .page-hero, .ledger-hero, .quota-hero, .clients-hero { align-items: flex-start; flex-direction: column; }
-  .client-page__grid { grid-template-columns: 1fr; }
   .tasks-model-field { align-items: flex-start; flex-direction: column; }
   .tasks-detail-save-row { align-items: flex-start; flex-direction: column; }
   .ledger-actions { width: 100%; justify-content: space-between; }
