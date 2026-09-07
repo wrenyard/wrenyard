@@ -435,6 +435,26 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(tempResidue().length, 0)
   })
 
+  it('accepts the stable identity returned by snapshot when saving a task row', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+    const after = await service.save({
+      scope: 'task',
+      task_id: 'builtin:commit',
+      expected_revision: before.revision,
+      patch: { additional_instructions: 'identity round trip' },
+    })
+
+    assert.equal(after.rows.length, 1)
+    assert.equal(after.rows[0]?.identity, 'builtin:commit')
+    assert.deepEqual(after.rows[0]?.user_task, { additional_instructions: 'identity round trip' })
+    assert.deepEqual(
+      (readConfig().tasks as { settings: { byTask: Record<string, unknown> } }).settings.byTask['builtin:commit'],
+      { additionalInstructions: 'identity round trip' },
+    )
+  })
+
   it('save persists a validated explicit selection under the stable identity', async () => {
     writeConfig({})
     const service = context!.makeService()
