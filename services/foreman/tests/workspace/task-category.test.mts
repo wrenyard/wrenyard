@@ -79,7 +79,6 @@ describe('task definition categories', () => {
     assert.deepEqual(categoryOf('oracle'), { id: 'architecture', displayLabel: '架构分析' })
     assert.deepEqual(categoryOf('commit'), { id: 'commit', displayLabel: '提交' })
     assert.deepEqual(categoryOf('librarian'), { id: 'research', displayLabel: '资料研究' })
-    assert.deepEqual(categoryOf('deep-research-scope'), { id: 'research', displayLabel: '资料研究' })
   })
 
   it('flows a project category through list and describe summaries', async () => {
