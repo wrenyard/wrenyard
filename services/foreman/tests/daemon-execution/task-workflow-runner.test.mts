@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { discoverTasks, resetRegistry } from '../../lib/workspace/task-loader.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
 import type { AgentOpts, AgentResult, ExecutionOptions, TaskExecutionResult, TaskRunSettingsResolver } from '../../lib/types.mts'
+import type { TaskSettingsLayer } from '../../lib/protocol/methods/task.mts'
 import { closeDb, get as dbGet, getDb, initDb } from '../../lib/db/connection.mts'
 import { setAgentExecutionSupervisor } from '../../lib/core/operations/primitives/agent.mts'
 import { AgentExecutionSupervisor } from '../../lib/daemon/execution/agent-supervisor.mts'
@@ -18,6 +19,7 @@ import {
   DispatchControlError,
 } from '../../lib/daemon/dispatch-control.mts'
 import { DaemonTaskRunner } from '../../lib/daemon/execution/task-runner.mts'
+import { bindTaskRuntimeOverrideConfigPath } from '../../lib/config/task-runtime-override.mts'
 import { foremanSchemas } from '../../lib/core/task/schemas/index.mts'
 import type {
   AgentExecutionHost,
@@ -1066,5 +1068,186 @@ describe('task run settings threading', { concurrency: false }, () => {
     } finally {
       DaemonTaskRunner.prototype.execute = originalExecute
     }
+  })
+})
+
+// ── Task settings resolver execution semantics (real kernel) ─────────────
+
+describe('daemon execution task settings resolver', { concurrency: false }, () => {
+  function writeSettingsTask(workspace: string): void {
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(
+      join(projectDir, 'settings-task.task.ts'),
+`export default defineTask({
+  profile: 'test',
+  permission: 'readonly',
+  timeoutMs: 7200000,
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'base dynamic prompt',
+})
+`,
+      'utf-8',
+    )
+  }
+
+  function automaticResolution(
+    exactAgentRuntime: string,
+    timeoutMs: number | null = null,
+    additionalInstructions: string | null = null,
+  ): import('../../lib/types.mts').TaskRunSettingsResolution {
+    return {
+      mode: 'automatic',
+      exactAgentRuntime,
+      dispatch: null,
+      timeoutMs,
+      additionalInstructions,
+      sources: {
+        selectionMode: 'builtin',
+        agentRuntime: 'builtin',
+        timeoutMs: 'builtin',
+        additionalInstructions: 'system',
+        automatic: {},
+      },
+    }
+  }
+
+  const invocationSettings: TaskSettingsLayer = {
+    mode: 'explicit',
+    explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+    timeout_ms: 42_000,
+    additional_instructions: 'extra guidance',
+  }
+
+  it('passes invocation settings to the resolver and launches only the resolved runtime with its timeout', async () => {
+    const workspace = makeTempDir('foreman-settings-kernel-')
+    writeSettingsTask(workspace)
+    await discoverTasks(workspace)
+
+    let resolverCalls = 0
+    let capturedInvocation: unknown
+    const resolver: TaskRunSettingsResolver = async (params) => {
+      resolverCalls += 1
+      capturedInvocation = params.invocation
+      return automaticResolution('forge/settings-resolved', 42_000)
+    }
+    const launchedProfiles: string[] = []
+    let capturedOpts: AgentOpts | undefined
+    let capturedPrompt: string | undefined
+    const agent = async (profile: string, prompt: string, opts?: AgentOpts): Promise<AgentResult> => {
+      launchedProfiles.push(profile)
+      capturedPrompt = prompt
+      capturedOpts = opts
+      return { output: textOutput('done'), status: 'done' }
+    }
+
+    const result = await executeTask('settings-task', undefined, {
+      workspaceRoot: workspace,
+      taskSettingsResolver: resolver,
+      invocationSettings,
+      primitives: { agent },
+    })
+
+    assert.equal(result.status, 'done')
+    assert.equal(resolverCalls, 1, 'settings resolver must be called exactly once')
+    assert.deepEqual(capturedInvocation, invocationSettings, 'invocation layer must reach the resolver unchanged')
+    assert.deepEqual(launchedProfiles, ['forge/settings-resolved'], 'only the resolved exact runtime may launch')
+    assert.equal(capturedOpts?.timeoutMs, 42_000, 'resolved timeout must reach collectStructuredOutput as the total deadline')
+    assert.equal(capturedOpts?.permission, 'readonly', 'permission must remain the TaskConfig permission')
+    assert.ok(capturedPrompt?.includes('base dynamic prompt'), 'builtin dynamic prompt must still be present')
+    // Invocation settings are never persisted: the task row input stays clean.
+    const row = dbGet<{ input: string | null }>('SELECT input FROM tasks ORDER BY created_at LIMIT 1')
+    assert.ok(row, 'a persisted task row must exist')
+    assert.ok(!(row.input ?? '').includes('extra guidance'), 'invocation content must not leak into persisted input')
+  })
+
+  it('adds resolver additional instructions without removing the builtin dynamic prompt', async () => {
+    const workspace = makeTempDir('foreman-settings-prompt-')
+    writeSettingsTask(workspace)
+    await discoverTasks(workspace)
+
+    const resolver: TaskRunSettingsResolver = async () =>
+      automaticResolution('forge/settings-resolved', null, 'Follow the repo conventions and add only additive tests.')
+
+    let capturedPrompt = ''
+    const agent = async (_profile: string, prompt: string): Promise<AgentResult> => {
+      capturedPrompt = prompt
+      return { output: textOutput('done'), status: 'done' }
+    }
+
+    const result = await executeTask('settings-task', undefined, {
+      workspaceRoot: workspace,
+      taskSettingsResolver: resolver,
+      primitives: { agent },
+    })
+
+    assert.equal(result.status, 'done')
+    assert.match(capturedPrompt, /<instruction-document source="task\.settings\.additionalInstructions"/)
+    assert.match(capturedPrompt, /Follow the repo conventions and add only additive tests\./)
+    assert.ok(
+      capturedPrompt.indexOf('Follow the repo conventions') < capturedPrompt.indexOf('base dynamic prompt'),
+      'additional instructions must appear before the builtin dynamic prompt',
+    )
+    assert.ok(capturedPrompt.includes('base dynamic prompt'), 'builtin dynamic prompt must survive additional instructions')
+  })
+
+  it('does not reintroduce an automatic stale machine pin when a settings resolver is present', async () => {
+    const workspace = makeTempDir('foreman-settings-stale-')
+    writeSettingsTask(workspace)
+    // A machine-configured soft pin that the legacy path would apply for this task.
+    const configPath = join(workspace, 'foreman.config.json')
+    writeFileSync(
+      configPath,
+      JSON.stringify({ tasks: { agentRuntime: { 'settings-task': 'forge/fast' } } }),
+      'utf-8',
+    )
+    const unbind = bindTaskRuntimeOverrideConfigPath(configPath)
+    try {
+      await discoverTasks(workspace)
+      const resolver: TaskRunSettingsResolver = async () => automaticResolution('forge/general')
+
+      let launchedProfile: string | undefined
+      const agent = async (profile: string, _prompt: string): Promise<AgentResult> => {
+        launchedProfile = profile
+        return { output: textOutput('done'), status: 'done' }
+      }
+
+      const result = await executeTask('settings-task', undefined, {
+        workspaceRoot: workspace,
+        taskSettingsResolver: resolver,
+        primitives: { agent },
+      })
+
+      assert.equal(result.status, 'done')
+      assert.equal(launchedProfile, 'forge/general', 'automatic settings result must win over a stale machine pin')
+    } finally {
+      unbind()
+    }
+  })
+
+  it('terminates with no fallback and zero agent calls when the resolver fails explicitly', async () => {
+    const workspace = makeTempDir('foreman-settings-fail-')
+    writeSettingsTask(workspace)
+    await discoverTasks(workspace)
+
+    const resolver: TaskRunSettingsResolver = async () => {
+      throw new Error('settings resolution exploded')
+    }
+    let agentCalls = 0
+    await assert.rejects(
+      () => executeTask('settings-task', undefined, {
+        workspaceRoot: workspace,
+        taskSettingsResolver: resolver,
+        primitives: {
+          agent: async () => {
+            agentCalls += 1
+            return { output: textOutput('done'), status: 'done' }
+          },
+        },
+      }),
+      /settings resolution exploded/,
+    )
+    assert.equal(agentCalls, 0, 'no agent may launch when settings resolution fails')
   })
 })

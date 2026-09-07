@@ -185,6 +185,10 @@ export class TaskService {
     /** Internal compatibility path used only by TaskGraph dispatch so a
      *  persisted graph can resume a legacy definition. */
     allowLegacyTask?: boolean
+    /** Optional one-shot public snake_case invocation settings layer for this run
+     *  only. Forwarded unchanged to execution-time settings resolution; never
+     *  merged or persisted here. */
+    invocationSettings?: import('../../protocol/methods/task.mts').TaskSettingsLayer
   }): Promise<TaskRunResponse> {
     const taskId = params.taskId.trim()
     const project = params.project.trim()
@@ -274,6 +278,7 @@ export class TaskService {
       worktree: params.worktree,
       connectingId: params.connectingId,
       taskContext,
+      invocationSettings: params.invocationSettings,
     })
   }
 
