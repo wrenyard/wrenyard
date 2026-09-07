@@ -121,6 +121,12 @@ ${JSON.stringify(data)}
           eligible() {
             throw new Error('resolver must not run without requirements')
           },
+          resolveExplicit() {
+            throw new Error('resolver must not run without requirements')
+          },
+          listExactRuntimes() {
+            throw new Error('resolver must not run without requirements')
+          },
         },
         primitives: {
           agent: async () => {

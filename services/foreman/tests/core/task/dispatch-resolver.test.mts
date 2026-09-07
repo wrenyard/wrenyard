@@ -299,3 +299,173 @@ describe('core task dispatch-resolver (no-model)', () => {
     assert.equal(failEligible.choices.length, 0)
   })
 })
+
+describe('core task dispatch-resolver explicit mode (no-model)', () => {
+  let resolver: TaskDispatchResolver
+
+  beforeEach(async () => {
+    resolver = await createTaskDispatchResolver({
+      catalog: createBuiltinCatalog(),
+      runtime: createBuiltinProviderRuntime(),
+      localSpeed: localSamples,
+    })
+  })
+
+  it('explicit resolves an exact profile that automatic speed and price filters exclude', () => {
+    // cb-ds carries local 65.32 tps and $3.96/m output. Automatic resolve's hard
+    // minimum-tps floor (80) and $2 output ceiling both rule it out.
+    const autoSpeed = resolver.resolve({
+      taskName: 'explicit-vs-auto-speed',
+      declaredRuntime: 'forge/cb-ds',
+      requirements: { expectedTps: 90, minimumTps: 80 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(autoSpeed.ok, false)
+    assert.equal(autoSpeed.error.code, 'NO_ELIGIBLE_PROFILE')
+
+    const autoPrice = resolver.resolve({
+      taskName: 'explicit-vs-auto-price',
+      declaredRuntime: 'forge/cb-ds',
+      requirements: { maxOutputUsdPerMillion: 2 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(autoPrice.ok, false)
+    assert.equal(autoPrice.error.code, 'NO_ELIGIBLE_PROFILE')
+
+    // Explicit mode runs none of those automatic filters: the exact profile is
+    // returned with its own truthful local speed and catalog pricing.
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-vs-auto-speed', exactRuntime: 'forge/cb-ds' })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, 'forge/cb-ds')
+    const resolved = explicit.resolved
+    assert.equal(resolved.profile, 'cb-ds')
+    assert.equal(resolved.requested_agent_runtime, 'forge/cb-ds')
+    assert.equal(resolved.speed.effective_tps, 65.32)
+    assert.equal(resolved.speed.expected_tps_met, true)
+    assert.equal(resolved.reference_pricing.output_usd_per_million, 3.96)
+  })
+
+  it('explicit resolves an exact profile that an automatic intelligence filter excludes', () => {
+    const auto = resolver.resolve({
+      taskName: 'explicit-vs-auto-intel',
+      declaredRuntime: 'forge/codex-luna',
+      requirements: { intelligenceMin: 'frontier' } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(auto.ok, false)
+    assert.equal(auto.error.code, 'NO_ELIGIBLE_PROFILE')
+
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-vs-auto-intel', exactRuntime: 'forge/codex-luna' })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, 'forge/codex-luna')
+    assert.equal(explicit.resolved.profile, 'codex-luna')
+    assert.equal(explicit.resolved.intelligence, 'mid')
+  })
+
+  it('automatic exclusion lists, machine preference, and ranking cannot replace the explicit pin', () => {
+    // Automatic resolve honors exclusion and a soft preference by picking a
+    // different profile; explicit resolve ignores both and pins cb-ds exactly.
+    const auto = resolver.resolve({
+      taskName: 'explicit-vs-auto-exclude',
+      declaredRuntime: 'forge/fast',
+      machinePreference: 'forge/cb-ds',
+      requirements: {
+        excludeProfileIds: ['cb-ds'],
+        expectedTps: 80,
+        minimumTps: 60,
+      } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(auto.ok, true)
+    assert.notEqual(auto.resolved.profile, 'cb-ds')
+
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-vs-auto-exclude', exactRuntime: 'forge/cb-ds' })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, 'forge/cb-ds')
+    assert.equal(explicit.resolved.profile, 'cb-ds')
+  })
+
+  it('explicit unknown profile returns EXPLICIT_RUNTIME_UNAVAILABLE with a concrete reason and no alternate', () => {
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-unknown', exactRuntime: 'forge/no-such-profile' })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.ok(explicit.error.reason.length > 0)
+  })
+
+  it('explicit policy alias returns EXPLICIT_RUNTIME_UNAVAILABLE and never falls back to a pooled profile', () => {
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-policy', exactRuntime: 'forge/fast' })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(explicit.error.reason, /policy/u)
+  })
+
+  it('explicit unparseable runtime returns EXPLICIT_RUNTIME_UNAVAILABLE', () => {
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-invalid', exactRuntime: 'not-a-runtime' })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.ok(explicit.error.reason.length > 0)
+  })
+
+  it('explicit required capability mismatch returns EXPLICIT_RUNTIME_UNAVAILABLE', () => {
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-capability',
+      exactRuntime: 'forge/cb-dsf',
+      requiredCapabilities: ['image'] as const,
+    })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(explicit.error.reason, /capabilit/u)
+  })
+
+  it('automatic resolve keeps enforcing its original constraints', () => {
+    // Auto exact pin still rejects cb-ds under a $2 output cap, even though
+    // explicit mode would honor the very same profile.
+    const auto = resolver.resolve({
+      taskName: 'auto-constraints-unchanged',
+      declaredRuntime: 'forge/cb-ds',
+      requirements: { maxOutputUsdPerMillion: 2 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(auto.ok, false)
+    assert.equal(auto.error.code, 'NO_ELIGIBLE_PROFILE')
+  })
+
+  it('listExactRuntimes enumerates exact existing configurations with availability and never policy aliases', () => {
+    const listed = resolver.listExactRuntimes({ taskName: 'list-exact' })
+    assert.equal(listed.ok, true)
+    assert.ok(listed.items.length >= 1)
+
+    const byRuntime = new Map(listed.items.map((item) => [item.exactAgentRuntime, item]))
+    for (const runtime of ['forge/cb-dsf', 'forge/codex-luna', 'forge/gk-kimi']) {
+      assert.ok(byRuntime.has(runtime), `expected ${runtime} in exact runtime list`)
+    }
+    assert.ok(!byRuntime.has('forge/fast'))
+    assert.ok(!byRuntime.has('forge/general'))
+    assert.ok(!byRuntime.has('forge/ultra'))
+
+    for (const item of listed.items) {
+      assert.match(item.exactAgentRuntime, /^forge\/[^/]+$/u)
+      if (item.available) {
+        assert.ok(item.resolved)
+        assert.equal(item.unavailableReason, undefined)
+        assert.equal(item.resolved.profile, item.exactAgentRuntime.slice('forge/'.length))
+        assert.equal(item.resolved.requested_agent_runtime, item.exactAgentRuntime)
+      } else {
+        assert.equal(item.resolved, undefined)
+        const reason = item.unavailableReason
+        assert.equal(typeof reason, 'string')
+        assert.ok(reason && reason.length > 0)
+      }
+    }
+  })
+
+  it('list availability agrees with resolveExplicit under the same capability filter', () => {
+    const listed = resolver.listExactRuntimes({ taskName: 'list-agrees', requiredCapabilities: ['image'] as const })
+    const direct = resolver.resolveExplicit({
+      taskName: 'list-agrees',
+      exactRuntime: 'forge/gk-kimi',
+      requiredCapabilities: ['image'] as const,
+    })
+    const gk = listed.items.find((item) => item.exactAgentRuntime === 'forge/gk-kimi')
+    assert.ok(gk)
+    assert.equal(gk.available, direct.ok)
+    if (direct.ok) {
+      assert.equal(gk.resolved?.profile, direct.resolved.profile)
+    }
+  })
+})
