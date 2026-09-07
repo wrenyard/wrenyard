@@ -25,7 +25,7 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
@@ -45,6 +45,12 @@ const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.include
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 /** Task definition enumeration may cold-load the workspace and model catalog. */
 const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
+const TASK_SETTINGS_SAVE_ERROR_MESSAGES: Record<string, string> = {
+  content_conflict: '任务设置已被外部修改，保存冲突',
+  invalid_settings: '任务设置内容无效',
+  runtime_unavailable: '所选 Agent 运行时不可用',
+  task_not_found: '任务不存在或已被移除',
+};
 const SERVICE_RETRY_ATTEMPTS = 10;
 const SERVICE_RETRY_DELAY_MS = 500;
 const SMOKE_TIMEOUT_MS = 30_000;
@@ -567,31 +573,28 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
-  const getTaskSettings = async (project?: string): Promise<TaskSettingsSnapshot> => {
+  const getTaskSettings = async (project?: string, taskId?: string): Promise<TaskSettingsSnapshot> => {
     const params: Record<string, unknown> = {};
     if (project !== undefined) params.project = project;
+    if (taskId !== undefined) params.task_id = taskId;
     return (await requestForeman('task.settings.snapshot', params)) as TaskSettingsSnapshot;
   };
-  const saveTaskPreference = async (
-    taskId: string,
-    agentRuntime: string | null,
-    expectedRevision: string,
-    project?: string,
-  ): Promise<TaskSettingsSnapshot> => {
+  const saveTaskSettings = async (request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> => {
     const params: Record<string, unknown> = {
-      task_id: taskId,
-      agent_runtime: agentRuntime,
-      expected_revision: expectedRevision,
+      scope: request.scope,
+      expected_revision: request.expected_revision,
+      patch: request.patch,
     };
-    if (project !== undefined) params.project = project;
+    if (request.task_id !== undefined) params.task_id = request.task_id;
+    if (request.project !== undefined) params.project = request.project;
     try {
       return (await requestForeman('task.settings.save', params)) as TaskSettingsSnapshot;
     } catch (error) {
       if (error instanceof WrenyardRpcError) {
         const code = (error.data as { code?: string } | undefined)?.code;
-        if (code === 'content_conflict') {
-          const conflict = new Error('任务偏好已被外部修改，保存冲突');
-          (conflict as { code?: string }).code = 'content_conflict';
+        if (code !== undefined && code in TASK_SETTINGS_SAVE_ERROR_MESSAGES) {
+          const conflict = new Error(TASK_SETTINGS_SAVE_ERROR_MESSAGES[code]);
+          (conflict as { code?: string }).code = code;
           throw conflict;
         }
       }
@@ -735,9 +738,8 @@ async function bootstrap(): Promise<void> {
     selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
-    getTaskSettings: (project?: string) => getTaskSettings(project),
-    saveTaskPreference: (taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string) =>
-      saveTaskPreference(taskId, agentRuntime, expectedRevision, project),
+    getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
+    saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

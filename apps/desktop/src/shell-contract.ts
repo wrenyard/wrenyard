@@ -394,68 +394,197 @@ export interface ConversationSnapshot {
 }
 
 /**
- * Daemon Task-settings projection. Preferences are machine-global and keyed by
- * the bare task name, so every workspace that declares the same task shares one
- * preference. The desktop surface only reads the snapshot and saves one bounded
- * model-preference CAS; every other field is read-only display.
+ * Daemon task.settings projection. Settings are layered across system defaults,
+ * daemon builtins, a machine-global user layer, a per-task user layer, and
+ * one-shot invocation overrides. Desktop is only a transport/UI client — the
+ * daemon owns merge, persistence, and preflight — so this contract mirrors the
+ * snake_case wire DTOs from the Foreman task.settings protocol and never
+ * re-implements merging. Readiness/merging/schema editing are daemon-owned.
  */
+
+/** Which user layer a settings snapshot or save request targets. */
+export type TaskSettingsScope = 'global' | 'task';
+
+/** Runtime resolution mode a user layer may request. */
+export type TaskSettingsMode = 'automatic' | 'explicit';
+
+/** One exact runtime pin (client/provider/model) usable only in explicit mode. */
+export interface TaskSettingsExplicitRuntime {
+  client: string;
+  provider: string;
+  model: string;
+}
+
+/** Automatic dispatch field enums (mirrors the task dispatch requirements). */
+export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'frontier' | 'premium';
+export type TaskSettingsCapability = 'text' | 'image';
+
+/** JSON-safe snake_case automatic dispatch constraints a user layer may set. */
+export interface TaskSettingsAutomaticDispatch {
+  expected_tps?: number;
+  minimum_tps?: number;
+  intelligence_min?: TaskSettingsIntelligence;
+  intelligence_max?: TaskSettingsIntelligence;
+  max_output_usd_per_million?: number;
+  required_capabilities?: readonly TaskSettingsCapability[];
+  exclude_model_ids?: readonly string[];
+  exclude_profile_ids?: readonly string[];
+  exclude_client_ids?: readonly string[];
+  exclude_provider_ids?: readonly string[];
+  preferred_runtime?: TaskSettingsExplicitRuntime;
+}
+
+/** Source layer that supplied an effective settings field; higher index wins. */
+export type TaskSettingsSourceLayer =
+  | 'system'
+  | 'builtin'
+  | 'user_global'
+  | 'user_task'
+  | 'invocation';
+
+/** An effective value plus the layer that provided it. */
+export interface TaskSettingsSourcedValue<T> {
+  value: T;
+  source: TaskSettingsSourceLayer;
+}
+
+/**
+ * Writable settings fields of a user layer. Absent fields fall through to the
+ * lower layer; a `null` value clears an override back to the lower layer.
+ * `additional_instructions` is bounded plain text.
+ */
+export interface TaskSettingsLayer {
+  mode?: TaskSettingsMode;
+  explicit_runtime?: TaskSettingsExplicitRuntime | null;
+  timeout_ms?: number | null;
+  additional_instructions?: string | null;
+  automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
+}
+
+/** Field-level save patch; `null` deletes that field only at the selected layer. */
+export interface TaskSettingsPatch {
+  mode?: TaskSettingsMode | null;
+  explicit_runtime?: TaskSettingsExplicitRuntime | null;
+  timeout_ms?: number | null;
+  additional_instructions?: string | null;
+  automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
+}
+
+/** Effective automatic dispatch: every field carries its own source layer. */
+export interface TaskSettingsEffectiveAutomatic {
+  expected_tps: TaskSettingsSourcedValue<number | null>;
+  minimum_tps: TaskSettingsSourcedValue<number | null>;
+  intelligence_min: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
+  intelligence_max: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
+  max_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
+  required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>;
+  exclude_model_ids: TaskSettingsSourcedValue<string[] | null>;
+  exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>;
+  exclude_client_ids: TaskSettingsSourcedValue<string[] | null>;
+  exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>;
+  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>;
+}
+
+/** Effective settings of one task, each value tagged with its source layer. */
+export interface TaskSettingsEffective {
+  mode: TaskSettingsSourcedValue<TaskSettingsMode>;
+  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>;
+  timeout_ms: TaskSettingsSourcedValue<number | null>;
+  additional_instructions: TaskSettingsSourcedValue<string | null>;
+  automatic: TaskSettingsEffectiveAutomatic;
+}
+
+/** A validation problem surfaced by the daemon. */
+export interface TaskSettingsValidationIssue {
+  code: string;
+  message: string;
+  field?: string;
+}
+
+/** Live non-billable readiness of one exact resolved runtime triple. */
+export interface TaskSettingsRuntimeReadiness {
+  /** Exact runtime identity `client/provider/model`. */
+  runtime: string;
+  client: string;
+  provider: string;
+  model: string;
+  daemon: 'accepting' | 'unavailable' | 'unknown';
+  provider_credential: 'available' | 'missing' | 'unknown';
+  provider_live: 'available' | 'unavailable' | 'unknown';
+  quota: 'available' | 'unavailable' | 'unknown';
+  available: boolean;
+  issues: TaskSettingsValidationIssue[];
+}
+
+/** One resolved runtime candidate the Tasks picker may select in explicit mode. */
 export interface TaskSettingsEligibleChoice {
   exactAgentRuntime: string;
-  requested_agent_runtime: string;
-  profile: string;
   client: string;
   provider: string;
   model: string;
   model_id: string;
   mode: 'native' | 'gateway';
-  protocol?: string;
-  speed: {
-    effective_tps: number;
-    source: 'local_31d' | 'catalog_default';
-    sample_count: number;
-    checked_at: string;
-    expected_tps_met: boolean;
-    degradation_reason?: string;
-  };
   intelligence: string;
-  reference_pricing: {
-    input_usd_per_million?: number;
-    output_usd_per_million?: number;
-    cached_input_usd_per_million?: number;
-    cache_write_input_usd_per_million?: number;
-    source: string;
-    checked_at: string;
-  };
+  speed: Record<string, unknown>;
+  reference_pricing: Record<string, unknown>;
+  requested_agent_runtime?: string;
+  profile?: string;
+  protocol?: string;
 }
 
-export interface TaskSettingsTaskRow {
-  /** Bare task name; the machine-global preference key. */
-  task_id: string;
-  project: string;
-  /** Read-only task definition source, independent of preference source. */
+/** Read-only metadata about a daemon-builtin task. */
+export interface TaskSettingsBuiltinMetadata {
+  identity: string;
+  name: string;
   source: string;
-  permission?: 'readonly' | 'edit' | 'yolo';
-  input_schema?: unknown;
-  output_schema?: unknown;
-  dispatch?: unknown;
-  declared_agent_runtime: string | null;
-  machine_preference: string | null;
-  selection: {
-    agent_runtime: string | null;
-    source: 'automatic' | 'machine';
-  };
-  /** Exact choices eligible for this task; the UI builds options only from here. */
-  eligible: TaskSettingsEligibleChoice[];
+  description?: string;
+  project?: string;
+  prompt_template: 'dynamic' | 'fixed';
+  declared_runtime: string | null;
+  timeout_ms: number | null;
+  dispatch: TaskSettingsAutomaticDispatch;
+}
+
+/** Explicit-mode resolution data for a task row. */
+export interface TaskSettingsExplicitRow {
+  runtime: TaskSettingsExplicitRuntime;
+  choices: TaskSettingsEligibleChoice[];
+  resolved: TaskSettingsEligibleChoice | null;
+  readiness: TaskSettingsRuntimeReadiness | null;
+}
+
+/** Stable per-task identity row with persisted layer and merged effective settings. */
+export interface TaskSettingsTaskRow {
+  /** Stable identity: `builtin:<name>` or `project:<project>:<name>`. */
+  identity: string;
+  name: string;
+  project?: string;
+  builtin: TaskSettingsBuiltinMetadata;
+  /** Persisted per-task user layer for this identity. */
+  user_task: TaskSettingsLayer;
+  effective: TaskSettingsEffective;
+  explicit?: TaskSettingsExplicitRow;
+  issues: TaskSettingsValidationIssue[];
 }
 
 export interface TaskSettingsSnapshot {
   config_path: string;
-  /** Compare-and-swap token for task.settings.save. */
   revision: string;
-  scope: 'machine_global';
-  keyed_by: 'bare_task_name';
   project?: string;
-  tasks: TaskSettingsTaskRow[];
+  /** Persisted user-global settings layer. */
+  user_global: TaskSettingsLayer;
+  rows: TaskSettingsTaskRow[];
+}
+
+/** Bounded save request for task.settings.save. */
+export interface TaskSettingsSaveRequest {
+  scope: TaskSettingsScope;
+  /** Required when `scope` is 'task'; must be absent for 'global'. */
+  task_id?: string;
+  /** Optional bounded project hint for task resolution. */
+  project?: string;
+  expected_revision: string;
+  patch: TaskSettingsPatch;
 }
 
 export interface WrenyardShellApi {
@@ -488,8 +617,8 @@ export interface WrenyardShellApi {
   onQuotaChanged(listener: () => void): () => void;
   onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
-  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot>;
-  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot>;
+  getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
+  saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
