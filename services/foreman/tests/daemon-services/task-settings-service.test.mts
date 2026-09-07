@@ -965,4 +965,76 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(beta.sources.timeoutMs, 'user_global')
     assert.equal(beta.sources.additionalInstructions, 'system')
   })
+
+  it('resolveForRun automatic mode runs the live availability callback once against the selected runtime', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const seen: Array<{ client: string; provider: string; model: string }> = []
+    const daemonCalls: number[] = []
+    const service = context!.makeService({
+      daemonAvailability: () => {
+        daemonCalls.push(1)
+        return { accepting: true, known: true }
+      },
+      runtimeAvailability: (runtime) => {
+        seen.push(runtime)
+        return {
+          providerCredential: 'available',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: true,
+        }
+      },
+    })
+    const resolution = await service.resolveForRun({
+      taskName: 'unavailable',
+      kind: 'builtin',
+      defaults: { agentRuntime: 'forge/codex-sol' },
+    })
+    assert.equal(resolution.mode, 'automatic')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    // Live readiness is probed exactly once against the resolver-selected
+    // client/provider/model; unknown quota does not block the run.
+    assert.equal(daemonCalls.length, 1)
+    assert.deepEqual(seen, [resolveTriple(PROFILES[0]!)])
+  })
+
+  it('resolveForRun automatic mode fails on live unavailability with no second resolver call or alternate selection', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const resolver = createResolverFixture()
+    const counts = { resolve: 0, resolveExplicit: 0 }
+    const service = context!.makeService({
+      resolver: {
+        ...resolver,
+        resolve(input) {
+          counts.resolve += 1
+          return resolver.resolve(input)
+        },
+        resolveExplicit(input) {
+          counts.resolveExplicit += 1
+          return resolver.resolveExplicit(input)
+        },
+      },
+      runtimeAvailability: () => ({
+        providerCredential: 'missing',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: false,
+      }),
+    })
+    await assert.rejects(
+      service.resolveForRun({
+        taskName: 'unavailable',
+        kind: 'builtin',
+        defaults: { agentRuntime: 'forge/codex-sol' },
+      }),
+      (error) => error instanceof TaskSettingsRuntimeUnavailableError,
+    )
+    // Exactly one automatic resolver call picked the runtime, the live check
+    // failed it, and no fallback or alternate selection was attempted.
+    assert.equal(counts.resolve, 1)
+    assert.equal(counts.resolveExplicit, 0)
+    assert.deepEqual(readConfig(), {
+      tasks: { settings: { global: { selectionMode: 'automatic' } } },
+    })
+  })
 })

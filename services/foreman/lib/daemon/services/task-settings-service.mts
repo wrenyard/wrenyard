@@ -334,8 +334,9 @@ export class TaskSettingsService {
    *  resolver — no second merge algorithm. The invocation layer is
    *  non-persistent. Automatic mode resolves with the effective dispatch only
    *  (never a stale inherited exact runtime as a pin); explicit mode calls
-   *  resolveExplicit with only required capabilities and then runs the same
-   *  non-billable daemon/provider readiness checks, failing without fallback. */
+   *  resolveExplicit with only required capabilities. Both modes then run the
+   *  same non-billable live daemon/provider readiness checks exactly once
+   *  against the selected runtime and fail without fallback. */
   async resolveForRun(params: TaskRunSettingsParams): Promise<TaskRunSettingsResolution> {
     const { record } = this.readConfigRecord()
     const tasks = tasksSectionOf(record)
@@ -391,9 +392,15 @@ export class TaskSettingsService {
         // Explicit mode bypasses automatic ranking and never falls back.
         throw explicitResolution.error
       }
-      // Same non-billable daemon admission and live provider credential/route
-      // readiness checks shared by snapshot/save preflight.
-      await this.assertExplicitPreflight(params.taskName, runtimeId, capabilities)
+      // Same non-billable live daemon admission and provider credential/route
+      // readiness check shared by automatic runs and snapshot/save preflight,
+      // run once against the runtime resolveExplicit selected; failure never
+      // falls back to another candidate.
+      await this.assertLiveRuntimeAvailability(params.taskName, runtimeId, {
+        client: explicitResolution.resolved.client,
+        provider: explicitResolution.resolved.provider,
+        model: explicitResolution.resolved.model,
+      })
       return {
         mode: 'explicit',
         exactAgentRuntime: runtimeId,
@@ -414,6 +421,16 @@ export class TaskSettingsService {
       requirements: effective.dispatch as ConfigTaskDispatchRequirements,
     })
     if (!resolution.ok) throw resolution.error
+    // Automatic actual runs run the same non-billable live daemon admission and
+    // provider credential/route availability check as explicit runs, exactly
+    // once against the runtime resolver.resolve selected. Failure fails the run
+    // without a second resolver call and without falling back to another
+    // candidate; no paid probe is issued.
+    await this.assertLiveRuntimeAvailability(params.taskName, resolution.exactAgentRuntime, {
+      client: resolution.resolved.client,
+      provider: resolution.resolved.provider,
+      model: resolution.resolved.model,
+    })
     return {
       mode: 'automatic',
       exactAgentRuntime: resolution.exactAgentRuntime,
@@ -529,7 +546,8 @@ export class TaskSettingsService {
         if (effective.runtime === undefined) {
           throw new TaskSettingsInvalidSettingsError('explicit mode requires an exact runtime selection')
         }
-        await this.assertExplicitPreflight(taskId, effective.runtime, effective.dispatch.requiredCapabilities)
+        const triple = this.resolveExplicitRoute(taskId, effective.runtime, effective.dispatch.requiredCapabilities)
+        await this.assertLiveRuntimeAvailability(taskId, effective.runtime, triple)
       }
     }
 
@@ -751,14 +769,14 @@ export class TaskSettingsService {
     }
   }
 
-  /** Non-billable explicit preflight shared by snapshot and save. Never falls
-   *  back to another runtime: resolver route/capability first, then daemon
-   *  admission and live provider credential/availability. */
-  private async assertExplicitPreflight(
+  /** Explicit resolver route/capability validation (snapshot/save preflight).
+   *  Never falls back to another runtime or to automatic ranking. Resolves the
+   *  selected exact runtime into its client/provider/model triple. */
+  private resolveExplicitRoute(
     taskId: string,
     runtimeId: string,
     requiredCapabilities: ConfigTaskDispatchRequirements['requiredCapabilities'],
-  ): Promise<void> {
+  ): { client: string; provider: string; model: string } {
     const explicitResolution = this.resolver.resolveExplicit({
       taskName: taskId,
       exactRuntime: runtimeId,
@@ -770,8 +788,18 @@ export class TaskSettingsService {
       throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
     }
     const resolved = explicitResolution.resolved
-    const triple = { client: resolved.client, provider: resolved.provider, model: resolved.model }
+    return { client: resolved.client, provider: resolved.provider, model: resolved.model }
+  }
 
+  /** Non-billable live daemon admission and provider credential/route
+   *  availability check against an already-selected runtime. No paid probe is
+   *  ever issued, an unknown quota is never treated as available (or zero), and
+   *  failure never falls back to another candidate. */
+  private async assertLiveRuntimeAvailability(
+    taskId: string,
+    runtimeId: string,
+    triple: { client: string; provider: string; model: string },
+  ): Promise<void> {
     if (this.daemonAvailability) {
       const daemon = await this.daemonAvailability()
       if (!daemon.accepting && daemon.known !== false) {
