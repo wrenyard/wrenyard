@@ -566,3 +566,171 @@ export const taskRunEventsResultSchema = {
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
+
+// ─── task.settings.snapshot / task.settings.save ─────────────────────────────
+
+export interface TaskSettingsSnapshotParams {
+  project?: string
+}
+
+/**
+ * One exact runtime the human Tasks page may select. Same resolved
+ * client/provider/model/model_id/mode/protocol/speed/intelligence/
+ * reference_pricing fields as a task.run resolved dispatch, plus its exact
+ * pinned runtime string. Policy aliases (forge/fast/general/ultra) are never
+ * eligible choices.
+ */
+export type TaskSettingsEligibleChoice = TaskResolvedDispatch & { exactAgentRuntime: string }
+
+export interface TaskSettingsTaskRow {
+  /** Bare task name — also the machine-global preference key. */
+  task_id: string
+  project: string
+  /** Read-only task definition source. */
+  source: string
+  /** Read-only permission metadata. */
+  permission?: 'readonly' | 'edit' | 'yolo'
+  /** Read-only input schema metadata. */
+  input_schema?: unknown
+  /** Read-only output schema metadata. */
+  output_schema?: unknown
+  /** Read-only dispatch contract metadata. */
+  dispatch?: TaskDispatchRequirements
+  declared_agent_runtime: string | null
+  machine_preference: string | null
+  /** Current selection. `source: 'machine'` means a preference is set; otherwise 'automatic'. */
+  selection: {
+    agent_runtime: string | null
+    source: 'automatic' | 'machine'
+  }
+  eligible: TaskSettingsEligibleChoice[]
+}
+
+export interface TaskSettingsSnapshotResult {
+  /** Actual authoritative config file the daemon reads and writes. */
+  config_path: string
+  /** Deterministic content revision for CAS save. */
+  revision: string
+  /** Preferences are machine-global, never per-project. */
+  scope: 'machine_global'
+  keyed_by: 'bare_task_name'
+  project?: string
+  tasks: TaskSettingsTaskRow[]
+}
+
+export interface TaskSettingsSaveParams {
+  task_id: string
+  project?: string
+  /** Exact eligible agentRuntime, or null to reset to the machine default. */
+  agent_runtime: string | null
+  expected_revision: string
+}
+
+export type TaskSettingsSaveResult = TaskSettingsSnapshotResult
+
+export const taskSettingsEligibleChoiceSchema = {
+  type: 'object',
+  required: [
+    'exactAgentRuntime',
+    'client',
+    'provider',
+    'model',
+    'model_id',
+    'mode',
+    'speed',
+    'intelligence',
+    'reference_pricing',
+  ],
+  properties: {
+    exactAgentRuntime: { type: 'string', minLength: 1 },
+    requested_agent_runtime: { type: 'string' },
+    profile: { type: 'string', minLength: 1 },
+    client: { type: 'string', minLength: 1 },
+    provider: { type: 'string', minLength: 1 },
+    model: { type: 'string', minLength: 1 },
+    model_id: { type: 'string', minLength: 1 },
+    mode: { enum: ['native', 'gateway'] },
+    protocol: { type: 'string', minLength: 1 },
+    speed: { type: 'object', additionalProperties: true },
+    intelligence: { type: 'string', minLength: 1 },
+    reference_pricing: { type: 'object', additionalProperties: true },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+const taskSettingsTaskRowSchema = {
+  type: 'object',
+  required: [
+    'task_id',
+    'project',
+    'source',
+    'declared_agent_runtime',
+    'machine_preference',
+    'selection',
+    'eligible',
+  ],
+  properties: {
+    task_id: { type: 'string', minLength: 1 },
+    project: { type: 'string' },
+    source: { type: 'string', minLength: 1 },
+    permission: { enum: ['readonly', 'edit', 'yolo'] },
+    input_schema: {},
+    output_schema: {},
+    dispatch: { type: 'object', additionalProperties: true },
+    declared_agent_runtime: nullableStringSchema,
+    machine_preference: nullableStringSchema,
+    selection: {
+      type: 'object',
+      required: ['agent_runtime', 'source'],
+      properties: {
+        agent_runtime: nullableStringSchema,
+        source: { enum: ['automatic', 'machine'] },
+      },
+      additionalProperties: false,
+    },
+    eligible: {
+      type: 'array',
+      items: taskSettingsEligibleChoiceSchema,
+    },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskSettingsSnapshotParamsSchema = {
+  type: 'object',
+  properties: {
+    project: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskSettingsSnapshotResultSchema = {
+  type: 'object',
+  required: ['config_path', 'revision', 'scope', 'keyed_by', 'tasks'],
+  properties: {
+    config_path: { type: 'string', minLength: 1 },
+    revision: { type: 'string', minLength: 1 },
+    scope: { const: 'machine_global' },
+    keyed_by: { const: 'bare_task_name' },
+    project: { type: 'string', minLength: 1 },
+    tasks: {
+      type: 'array',
+      items: taskSettingsTaskRowSchema,
+    },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskSettingsSaveParamsSchema = {
+  type: 'object',
+  required: ['task_id', 'agent_runtime', 'expected_revision'],
+  properties: {
+    task_id: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    agent_runtime: nullableStringSchema,
+    expected_revision: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskSettingsSaveResultSchema = taskSettingsSnapshotResultSchema

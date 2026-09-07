@@ -216,4 +216,86 @@ describe('core task dispatch-resolver (no-model)', () => {
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.44)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 1.32)
   })
+
+  it('eligible policy declaration exposes exact choices only, never policy aliases', () => {
+    const result = resolver.eligible({
+      taskName: 'fast-80-60-eligible',
+      declaredRuntime: 'forge/fast',
+      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+    })
+
+    assert.equal(result.ok, true)
+    const choices = result.choices
+    assert.ok(choices.length >= 1)
+    for (const choice of choices) {
+      // Legacy policy strings are never returned as choices; each row is an
+      // exact forge/<profile> pin carrying full resolved dispatch fields.
+      assert.notEqual(choice.exactAgentRuntime, 'forge/fast')
+      assert.notEqual(choice.exactAgentRuntime, 'forge/general')
+      assert.notEqual(choice.exactAgentRuntime, 'forge/ultra')
+      assert.match(choice.exactAgentRuntime, /^forge\/[^/]+$/u)
+      assert.equal(typeof choice.client, 'string')
+      assert.equal(typeof choice.provider, 'string')
+      assert.equal(typeof choice.model, 'string')
+      assert.equal(typeof choice.model_id, 'string')
+      assert.equal(typeof choice.speed, 'object')
+      assert.equal(typeof choice.intelligence, 'string')
+      assert.equal(typeof choice.reference_pricing, 'object')
+    }
+  })
+
+  it('eligible shares resolve admission: excluded and over-budget profiles never appear', () => {
+    // resolve picks cb-glmf here; eligible must agree on the same hard filters
+    // (excludeProfileIds and the output price cap) and expose all survivors.
+    const resolution = resolver.resolve({
+      taskName: 'eligible-vs-resolve',
+      declaredRuntime: 'forge/fast',
+      machinePreference: 'forge/cb-ds',
+      requirements: { maxOutputUsdPerMillion: 2, excludeProfileIds: ['cb-hy'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(resolution.ok, true)
+
+    const eligible = resolver.eligible({
+      taskName: 'eligible-vs-resolve',
+      declaredRuntime: 'forge/fast',
+      requirements: { maxOutputUsdPerMillion: 2, excludeProfileIds: ['cb-hy'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(eligible.ok, true)
+
+    const exactChoices = eligible.choices.map((choice) => choice.exactAgentRuntime)
+    assert.ok(exactChoices.includes(`forge/${resolution.resolved.profile}`))
+    // Hard exclusions hold for the projection exactly as for dispatch.
+    assert.ok(!exactChoices.includes('forge/cb-ds'))
+    assert.ok(!exactChoices.includes('forge/cb-hy'))
+  })
+
+  it('eligible exact pin exposes at most the pinned candidate and honors ineligibility', () => {
+    // gk-kimi pin passes the image/frontier/$15/min8 requirements: one choice.
+    const okEligible = resolver.eligible({
+      taskName: 'gk-kimi-eligible',
+      declaredRuntime: 'forge/gk-kimi',
+      requirements: {
+        requiredCapabilities: ['image'] as const,
+        intelligenceMin: 'frontier',
+        intelligenceMax: 'frontier',
+        maxOutputUsdPerMillion: 15,
+        minimumTps: 8,
+      } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(okEligible.ok, true)
+    assert.equal(okEligible.choices.length, 1)
+    assert.equal(okEligible.choices[0].exactAgentRuntime, 'forge/gk-kimi')
+    assert.equal(okEligible.choices[0].model, 'k3')
+    assert.equal(okEligible.choices[0].intelligence, 'frontier')
+
+    // codex-sol pin fails the $6 output cap: the same admission resolve applies
+    // and no choice is produced (at most one, ineligible => zero).
+    const failEligible = resolver.eligible({
+      taskName: 'codex-sol-eligible',
+      declaredRuntime: 'forge/codex-sol',
+      requirements: { maxOutputUsdPerMillion: 6 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(failEligible.ok, true)
+    assert.equal(failEligible.choices.length, 0)
+  })
 })

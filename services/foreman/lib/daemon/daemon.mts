@@ -27,6 +27,9 @@ import { createBackend, createTransport, deliverToConnection, type BackendDeps, 
 import type { ChannelConfig, MessageEnvelope, MessageDeliveryResult, MessageDeliveryRegistryConfig } from '../message/delivery/types.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
 import { TaskGraphService } from '../core/taskgraph/index.mts'
+import { TaskSettingsService } from './services/task-settings-service.mts'
+import { ForemanConfigManager } from '../config/manager.mts'
+import { bindTaskRuntimeOverrideConfigPath } from '../config/task-runtime-override.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
@@ -178,10 +181,24 @@ export async function startForemanDaemon(
   plannedRestartStore.snapshot()
   const dispatchControl = new DispatchControl(plannedRestartStore)
 
+  // The daemon's real config path is authoritative for task list/describe/
+  // execution preference reads for the whole daemon lifecycle. One daemon-wide
+  // binding is active at a time; it is released on shutdown or startup failure.
+  const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
+  const releaseTaskOverrideBinding = bindTaskRuntimeOverrideConfigPath(authoritativeConfigPath)
+
   let runtime: ForemanDaemonRuntime | undefined
   try {
     runtime = await bootstrapForemanDaemonRuntime(dispatchControl)
-    return await startForemanDaemonWithRuntime(config, runtime, deps, options)
+    const running = await startForemanDaemonWithRuntime(config, runtime, deps, options)
+    // Wrap stop so the daemon-wide override binding outlives the RPC surface
+    // but is always released when the daemon shuts down.
+    const originalStop = running.stop
+    running.stop = async () => {
+      await originalStop()
+      releaseTaskOverrideBinding()
+    }
+    return running
   } catch (error) {
     if (runtime) {
       // Preserve existing runtime resource cleanup (supervisor shutdown + db
@@ -189,6 +206,7 @@ export async function startForemanDaemon(
       // rollback, drain waiting, plan completion, or admission restoration.
       await cleanupFailedDaemonStart(runtime)
     }
+    releaseTaskOverrideBinding()
     // If a durable plan is active, record the startup failure as a recoverable
     // planned_restart failure; admission stays closed (mode unchanged).
     failActivePlannedRestartOnStartup(plannedRestartStore, error, options.configPath)
@@ -275,6 +293,14 @@ async function startForemanDaemonWithRuntime(
   // reused here so the gateway, client configuration, RPC surface, and the
   // running daemon all share the identical resolver instance.
   const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
+  // One daemon-owned TaskSettingsService shares the already-created resolver and
+  // the authoritative config path; no second catalog/resolver is constructed.
+  const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
+  const taskSettingsService = new TaskSettingsService({
+    workspaceRoot: config.workspaceRoot,
+    configPath: authoritativeConfigPath,
+    resolver: taskDispatchResolver,
+  })
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -401,6 +427,7 @@ async function startForemanDaemonWithRuntime(
       planRestore: ({ clientId }) => clientConfigurationService.planRestore(clientId),
       restore: ({ plan }) => clientConfigurationService.restore(plan),
     },
+    taskSettings: taskSettingsService,
     shutdown: async (reason) => {
       if (options.onShutdownRequest) {
         await options.onShutdownRequest(reason)
@@ -720,6 +747,7 @@ interface DaemonRpcRouterOptions {
   providerList?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerList']
   providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
   clientConfiguration?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['clientConfiguration']
+  taskSettings?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskSettings']
 }
 
 function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {

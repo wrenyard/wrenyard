@@ -118,6 +118,9 @@ ${JSON.stringify(data)}
           resolve() {
             throw new Error('resolver must not run without requirements')
           },
+          eligible() {
+            throw new Error('resolver must not run without requirements')
+          },
         },
         primitives: {
           agent: async () => {

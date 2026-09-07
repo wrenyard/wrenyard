@@ -46,6 +46,8 @@ const expectedMethods = [
   'stats.summary',
   'task.definition.list',
   'task.definition.describe',
+  'task.settings.snapshot',
+  'task.settings.save',
   'task.run.create',
   'task.run.list',
   'task.run.status',
@@ -1045,6 +1047,180 @@ describe('lib/protocol JSON-RPC contract', () => {
         taskgraphs: [{
           ...result.taskgraphs[0],
           nodes: [{ node_id: 'main', state: 'running', raw_result: 'secret' }],
+        }],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+  })
+
+  it('validates task.settings.snapshot/save params and result shapes', () => {
+    // Snapshot params: optional project only.
+    assert.deepEqual(parseMethodParams('task.settings.snapshot', {}), {})
+    assert.deepEqual(parseMethodParams('task.settings.snapshot', { project: 'workspace' }), { project: 'workspace' })
+
+    // Save params: nullable reset is accepted, exact runtime accepted.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      task_id: 'commit',
+      expected_revision: 'rev-1',
+      agent_runtime: null,
+    }), {
+      task_id: 'commit',
+      expected_revision: 'rev-1',
+      agent_runtime: null,
+    })
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      task_id: 'commit',
+      project: 'workspace',
+      expected_revision: 'rev-1',
+      agent_runtime: 'forge/codex-luna',
+    }), {
+      task_id: 'commit',
+      project: 'workspace',
+      expected_revision: 'rev-1',
+      agent_runtime: 'forge/codex-luna',
+    })
+
+    // Missing required fields are rejected.
+    assert.throws(
+      () => parseMethodParams('task.settings.save', { task_id: 'commit', agent_runtime: null }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: 'rev-1' }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('task.settings.save', { task_id: 'commit' }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    // agent_runtime must be a string or null (never a number or object).
+    assert.throws(
+      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: 'rev-1', agent_runtime: 3 }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('task.settings.save', {
+        task_id: 'commit',
+        expected_revision: 'rev-1',
+        agent_runtime: {},
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    // Blank expected_revision is rejected.
+    assert.throws(
+      () => parseMethodParams('task.settings.save', { task_id: 'commit', expected_revision: '', agent_runtime: null }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    const eligibleChoice = {
+      exactAgentRuntime: 'forge/codex-luna',
+      requested_agent_runtime: 'forge/fast',
+      profile: 'codex-luna',
+      client: 'codex',
+      provider: 'codex',
+      model: 'gpt-5.6-luna',
+      model_id: 'codex/gpt-5.6-luna',
+      mode: 'native',
+      speed: {
+        effective_tps: 107,
+        source: 'catalog_default',
+        sample_count: 0,
+        checked_at: '2026-09-05T00:00:00.000Z',
+        expected_tps_met: true,
+      },
+      intelligence: 'mid',
+      reference_pricing: {
+        input_usd_per_million: 0.2,
+        output_usd_per_million: 1.2,
+        source: 'catalog',
+        checked_at: '2026-09-05T00:00:00.000Z',
+      },
+    }
+    const snapshotResult = {
+      config_path: '/tmp/wrenyard/config.json',
+      revision: 'rev-1',
+      scope: 'machine_global',
+      keyed_by: 'bare_task_name',
+      project: 'workspace',
+      tasks: [{
+        task_id: 'commit',
+        project: 'workspace',
+        source: 'workspace',
+        permission: 'readonly',
+        dispatch: { expectedTps: 20, minimumTps: 10 },
+        declared_agent_runtime: 'forge/fast',
+        machine_preference: null,
+        selection: { agent_runtime: null, source: 'automatic' },
+        eligible: [eligibleChoice],
+      }],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', snapshotResult), snapshotResult)
+    assert.deepEqual(parseMethodResult('task.settings.save', snapshotResult), snapshotResult)
+
+    // A machine selection round-trips with a machine source.
+    const machineResult = {
+      ...snapshotResult,
+      tasks: [{
+        ...snapshotResult.tasks[0],
+        machine_preference: 'forge/codex-luna',
+        selection: { agent_runtime: 'forge/codex-luna', source: 'machine' },
+      }],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', machineResult), machineResult)
+
+    // Result must describe config_path/revision/scope/keyed_by and a tasks array.
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        config_path: '/tmp/wrenyard/config.json',
+        revision: 'rev-1',
+        scope: 'machine_global',
+        keyed_by: 'bare_task_name',
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        config_path: '/tmp/wrenyard/config.json',
+        revision: 'rev-1',
+        keyed_by: 'bare_task_name',
+        tasks: [],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    // An eligible row must carry an exact pin plus the resolved dispatch fields.
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        tasks: [{
+          ...snapshotResult.tasks[0],
+          eligible: [{ exactAgentRuntime: 'forge/fast' }],
         }],
       }),
       (error) => {
