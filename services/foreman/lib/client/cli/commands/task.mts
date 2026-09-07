@@ -15,6 +15,7 @@ import {
   workspaceRootForRuntime,
   errorMessage,
 } from '../shared.mts'
+import type { TaskSettingsLayer } from '../../../protocol/methods/task.mts'
 import { ensureDiscovered, getLoadErrors, type DuplicateDefinitionLoadError } from '../../../workspace/task-loader.mts'
 
 export async function handleTaskList(args: string[]): Promise<number> {
@@ -98,7 +99,7 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
 
 export async function handleTaskRun(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] <json-input>')
+    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] <json-input>')
     return 0
   }
 
@@ -108,6 +109,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       config: { type: 'string' },
       project: { type: 'string', short: 'p' },
       worktree: { type: 'string' },
+      'settings-json': { type: 'string' },
     },
     allowPositionals: true,
     strict: true,
@@ -116,12 +118,13 @@ export async function handleTaskRun(args: string[]): Promise<number> {
   const project = typeof values.project === 'string' ? values.project : undefined
   const worktree = typeof values.worktree === 'string' ? values.worktree : undefined
   if (!taskId || !project || positionals.length !== 2) {
-    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] <json-input>')
+    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] <json-input>')
     if (taskId && project && positionals.length < 2) await printTaskInputRequiredHint(taskId, project, values.config)
     return 1
   }
 
   const input = parseJsonInput(positionals[1])
+  const invocationSettings = parseOptionalInvocationSettings(values['settings-json'])
   const client = await connectConfiguredForemanClient(values.config)
   try {
     const accepted = servicePayload(await client.task.run.create({
@@ -129,6 +132,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       project,
       ...(worktree ? { worktree } : {}),
       input,
+      ...(invocationSettings === undefined ? {} : { invocation_settings: invocationSettings }),
     }))
     const taskRunId = taskRunIdFromPayload(accepted.value)
     if (!taskRunId) {
@@ -308,4 +312,25 @@ function formatDuration(ms: number): string {
   if (ms % 60_000 === 0) return `${ms / 60_000}m`
   if (ms % 1000 === 0) return `${ms / 1000}s`
   return `${ms}ms`
+}
+
+/**
+ * Parse an optional --settings-json value into the canonical TaskSettingsLayer
+ * shape (the same public object as task.run.create.invocation_settings).
+ * JSON syntax errors and non-object values (null/array/scalar) fail up front,
+ * before any task is created, using the CLI's existing JSON input error style.
+ * Omission returns undefined so the create request keeps its exact shape.
+ */
+function parseOptionalInvocationSettings(raw: string | undefined): TaskSettingsLayer | undefined {
+  if (raw === undefined) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(raw) as unknown
+  } catch (error) {
+    throw new Error(`Invalid --settings-json: ${errorMessage(error)}`)
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('--settings-json must be a JSON object')
+  }
+  return value as TaskSettingsLayer
 }

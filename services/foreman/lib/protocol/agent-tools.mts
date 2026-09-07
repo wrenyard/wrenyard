@@ -30,7 +30,7 @@ export const mcpProtocolTools: ProtocolToolSpec[] = [
   {
     name: 'task_run',
     method: 'task.run.create',
-    description: 'Run a Foreman task by definition name. MCP returns id/task_run_id plus a concise hint for status/output lookup. If no input is provided, returns an input_required error with the expected schema.',
+    description: 'Run a Foreman task by definition name. Optional invocation_settings applies one-shot Task settings (automatic/explicit/timeout/additional) to this run only and is never persisted. MCP returns id/task_run_id plus a concise hint for status/output lookup. If no input is provided, returns an input_required error with the expected schema.',
   },
   {
     name: 'task_cancel',
