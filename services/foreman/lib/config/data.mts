@@ -1,3 +1,5 @@
+import type { TaskSettingsLayer } from './task-settings.mts'
+
 export type ConfigRecord = Record<string, unknown>
 
 export type ServiceConfigData = ConfigRecord & {
@@ -24,11 +26,27 @@ export type MessageConfigData = ConfigRecord & {
 
 export type TaskAgentRuntimeOverrides = Record<string, string>
 
+/** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while
+ *  staying open to unknown/forward-compatible keys. */
+export type TaskSettingsLayerData = ConfigRecord & TaskSettingsLayer
+
+export type TaskSettingsData = ConfigRecord & {
+  /** Global (non-task-specific) user settings, applied ahead of per-task entries. */
+  global?: TaskSettingsLayerData
+  /** Per-task settings keyed by stable definition identity (builtin:<name> or
+   *  project:<project>:<name>). */
+  byTask?: Record<string, TaskSettingsLayerData>
+}
+
 export type TasksConfigData = ConfigRecord & {
-  /** Local per-task agentRuntime overlay. Packaged task definitions keep their
-   *  declared policy/profile; this map replaces the effective selector at
-   *  list/describe/run time. Do not ship Codex-specific pins in the suite. */
+  /** Legacy local per-task agentRuntime overlay, kept for read compatibility
+   *  with existing configs. Prefer `settings.byTask`; this map only serves as a
+   *  bare builtin fallback when no new per-task selection is present. Do not
+   *  ship Codex-specific pins in the suite. */
   agentRuntime?: TaskAgentRuntimeOverrides
+  /** Layered task settings resolved in order: system defaults -> builtin Task
+   *  defaults -> user global -> user task -> invocation. */
+  settings?: TaskSettingsData
 }
 
 export type ForemanConfigData = {
