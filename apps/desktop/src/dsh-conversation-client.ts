@@ -146,6 +146,35 @@ function canonicalConversationModel(provider: string, model: string): string {
   return canonical.startsWith(`${provider}/`) ? canonical.slice(provider.length + 1) : model;
 }
 
+export interface PersistedModelSelectionRepair {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+}
+
+/**
+ * Return the one safe persistence repair for a retired public Gateway alias.
+ * The provider/catalog directory remains authoritative: this never changes
+ * providers, invents a fallback model, or rewrites a genuinely unknown id.
+ */
+export function persistedModelSelectionRepair(
+  selection: unknown,
+  groups: ConversationModelGroupSnapshot[],
+): PersistedModelSelectionRepair | undefined {
+  if (!isObject(selection) || selection.provider !== 'wrenyard' || typeof selection.model !== 'string') return undefined;
+  const model = canonicalConversationModel('wrenyard', selection.model);
+  if (model === selection.model) return undefined;
+  const option = groups
+    .find((group) => group.provider === 'wrenyard')
+    ?.models.find((candidate) => candidate.model === model);
+  if (!option) return undefined;
+  return {
+    provider: 'wrenyard',
+    model,
+    ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+  };
+}
+
 function modelSelectionSnapshot(
   selection: Record<string, unknown>,
   groups: ConversationModelGroupSnapshot[],
@@ -614,10 +643,23 @@ export class DshConversationClient {
     this.models = { ...this.models, status: 'loading', message: undefined };
     this.notify();
     try {
-      const next = projectConversationModels(
-        await this.rpc('session.models', { sessionId }),
+      const value = await this.rpc('session.models', { sessionId });
+      let next = projectConversationModels(
+        value,
         [...this.configuredProviderIds],
       );
+      const repair = isObject(value)
+        ? persistedModelSelectionRepair(value.current, next.groups)
+        : undefined;
+      if (repair) {
+        const repaired = await this.rpc('session.selectModel', { sessionId, ...repair });
+        if (!isObject(repaired) || !isObject(repaired.selected)) throw new Error('DSH 未返回归一化后的模型选择');
+        const selected = modelSelectionSnapshot(repaired.selected, next.groups, this.configuredProviderIds);
+        if (selected.provider !== repair.provider || selected.model !== repair.model) {
+          throw new Error('DSH 未持久化归一化后的模型选择');
+        }
+        next = { ...next, current: selected };
+      }
       if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
       this.models = next;
       this.notify();

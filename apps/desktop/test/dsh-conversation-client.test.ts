@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  DshConversationClient,
+  persistedModelSelectionRepair,
   projectConversationHistory,
   projectConversationModels,
 } from '../src/dsh-conversation-client.js';
@@ -263,6 +265,123 @@ test('model projection migrates the retired CodeBuddy iOA selection to its adver
     advertised: true,
     configured: true,
   });
+});
+
+test('persisted model repair rewrites only the retired HY4 public alias to the advertised logical id', () => {
+  const groups = projectConversationModels({
+    current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview-ioa' },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [{
+        id: 'codebuddy/hy4-preview',
+        name: 'HY4 Preview',
+        reasoning: { defaultEffort: 'medium' },
+      }],
+    }],
+    failures: [],
+  }).groups;
+
+  assert.deepEqual(
+    persistedModelSelectionRepair(
+      { provider: 'wrenyard', model: 'codebuddy/hy4-preview-ioa' },
+      groups,
+    ),
+    { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' },
+  );
+  assert.equal(
+    persistedModelSelectionRepair(
+      { provider: 'wrenyard', model: 'codebuddy/hy4-preview' },
+      groups,
+    ),
+    undefined,
+    'the current logical id must not cause a persistence mutation',
+  );
+  assert.equal(
+    persistedModelSelectionRepair(
+      { provider: 'wrenyard', model: 'codebuddy/genuinely-unknown' },
+      groups,
+    ),
+    undefined,
+    'an unknown id must stay visible for diagnosis rather than silently switching models',
+  );
+});
+
+test('resumed legacy HY4 selection is persisted before the next prompt without replacing session history', async () => {
+  const client = new DshConversationClient({
+    baseUrl: 'http://127.0.0.1:1',
+    workspaceId: 'workspace-1',
+    workspace: {
+      status: 'configured',
+      path: '/workspace',
+      configPath: '/config.json',
+      source: 'user-config',
+      readOnly: false,
+    },
+    configuredProviderIds: ['wrenyard'],
+    onChanged() {},
+  });
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  const harness = client as unknown as {
+    selectedSessionId: string;
+    history: { events: ReturnType<typeof entry>[]; hasMore: boolean };
+    refreshModels(sessionId: string): Promise<void>;
+    rpc(method: string, payload: Record<string, unknown>): Promise<unknown>;
+  };
+  harness.selectedSessionId = 'session-old';
+  harness.history = {
+    events: [entry('user/message', 1, {
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '保留的旧会话内容' }],
+    })],
+    hasMore: false,
+  };
+  harness.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.models') {
+      return {
+        current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview-ioa' },
+        routable: true,
+        groups: [{
+          id: 'wrenyard',
+          name: 'Wrenyard',
+          models: [{ id: 'codebuddy/hy4-preview', name: 'HY4 Preview' }],
+        }],
+        failures: [],
+      };
+    }
+    if (method === 'session.selectModel') {
+      return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview' } };
+    }
+    if (method === 'session.prompt') return {};
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await harness.refreshModels('session-old');
+  await client.send('继续');
+
+  assert.deepEqual(calls.slice(0, 3), [
+    { method: 'session.models', payload: { sessionId: 'session-old' } },
+    {
+      method: 'session.selectModel',
+      payload: {
+        sessionId: 'session-old',
+        provider: 'wrenyard',
+        model: 'codebuddy/hy4-preview',
+      },
+    },
+    {
+      method: 'session.prompt',
+      payload: {
+        sessionId: 'session-old',
+        mode: 'queue',
+        content: [{ type: 'text', text: '继续' }],
+      },
+    },
+  ]);
+  assert.equal(client.snapshot().models.current?.model, 'codebuddy/hy4-preview');
+  assert.equal(client.snapshot().items[0]?.text, '保留的旧会话内容');
 });
 
 test('model projection keeps a routable unadvertised current selection visible', () => {
