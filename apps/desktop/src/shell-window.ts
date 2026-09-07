@@ -19,6 +19,7 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateChannel,
   type UpdateSnapshot,
+  type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
 } from './shell-contract.js';
 import type {
@@ -60,8 +61,144 @@ export interface ShellWindowOptions {
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
-  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot>;
-  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot>;
+  getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
+  saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
+}
+
+const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic']);
+const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
+  'expected_tps',
+  'minimum_tps',
+  'intelligence_min',
+  'intelligence_max',
+  'max_output_usd_per_million',
+  'required_capabilities',
+  'exclude_model_ids',
+  'exclude_profile_ids',
+  'exclude_client_ids',
+  'exclude_provider_ids',
+  'preferred_runtime',
+]);
+const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'frontier', 'premium']);
+const TASK_SETTINGS_CAPABILITY_VALUES = new Set(['text', 'image']);
+const TASK_SETTINGS_EXPLICIT_FIELDS = ['client', 'provider', 'model'] as const;
+const TASK_SETTINGS_STRING_MAX = 512;
+const TASK_SETTINGS_STRING_ARRAY_MAX = 64;
+const TASK_SETTINGS_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+
+function isBoundedPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function boundedOptionalProject(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !value || value.length > 4_096) throw new Error('项目参数无效');
+  return value;
+}
+
+function isFinitePositiveNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function validateExplicitRuntimeValue(explicitRuntime: unknown): void {
+  if (explicitRuntime === undefined || explicitRuntime === null) return;
+  if (!isBoundedPlainObject(explicitRuntime)) throw new Error('显式运行时无效');
+  for (const field of Object.keys(explicitRuntime)) {
+    if (field !== 'client' && field !== 'provider' && field !== 'model') throw new Error('显式运行时无效');
+  }
+  for (const field of TASK_SETTINGS_EXPLICIT_FIELDS) {
+    const fieldValue = explicitRuntime[field];
+    if (typeof fieldValue !== 'string' || !fieldValue || fieldValue.length > TASK_SETTINGS_STRING_MAX) {
+      throw new Error('显式运行时无效');
+    }
+  }
+}
+
+function validateAutomaticDispatch(automatic: unknown): void {
+  if (automatic === undefined || automatic === null) return;
+  if (!isBoundedPlainObject(automatic)) throw new Error('自动约束无效');
+  for (const key of Object.keys(automatic)) {
+    if (!TASK_SETTINGS_AUTOMATIC_KEYS.has(key)) throw new Error('自动约束无效');
+  }
+  for (const field of ['expected_tps', 'minimum_tps', 'max_output_usd_per_million'] as const) {
+    const value = automatic[field];
+    if (value !== undefined && !isFinitePositiveNumber(value)) throw new Error('自动约束无效');
+  }
+  for (const field of ['intelligence_min', 'intelligence_max'] as const) {
+    const value = automatic[field];
+    if (value !== undefined && (typeof value !== 'string' || !TASK_SETTINGS_INTELLIGENCE_VALUES.has(value))) {
+      throw new Error('自动约束无效');
+    }
+  }
+  const requiredCapabilities = automatic.required_capabilities;
+  if (requiredCapabilities !== undefined) {
+    if (!Array.isArray(requiredCapabilities) || requiredCapabilities.length > 16) throw new Error('自动约束无效');
+    for (const value of requiredCapabilities) {
+      if (typeof value !== 'string' || !TASK_SETTINGS_CAPABILITY_VALUES.has(value)) throw new Error('自动约束无效');
+    }
+  }
+  for (const field of ['exclude_model_ids', 'exclude_profile_ids', 'exclude_client_ids', 'exclude_provider_ids'] as const) {
+    const value = automatic[field];
+    if (value !== undefined) {
+      if (!Array.isArray(value) || value.length > TASK_SETTINGS_STRING_ARRAY_MAX) throw new Error('自动约束无效');
+      for (const item of value) {
+        if (typeof item !== 'string' || !item || item.length > TASK_SETTINGS_STRING_MAX) throw new Error('自动约束无效');
+      }
+    }
+  }
+  if (automatic.preferred_runtime !== undefined) validateExplicitRuntimeValue(automatic.preferred_runtime);
+}
+
+/**
+ * IPC-boundary validation for task.settings.save. Desktop validates the public
+ * DTO shape and bounds only; it never merges settings, so the validated request
+ * is passed through to main unchanged.
+ */
+function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSaveRequest {
+  if (!isBoundedPlainObject(value)) throw new Error('任务设置请求无效');
+  const scope = value.scope;
+  if (scope !== 'global' && scope !== 'task') throw new Error('任务设置作用域无效');
+  const expectedRevision = value.expected_revision;
+  if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 512) {
+    throw new Error('任务设置版本基线无效');
+  }
+  const taskId = value.task_id;
+  if (taskId !== undefined && taskId !== null) {
+    if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务 id 无效');
+  }
+  if (scope === 'task' && (typeof taskId !== 'string' || !taskId)) throw new Error('任务作用域必须携带 task_id');
+  const project = boundedOptionalProject(value.project);
+  const patch = value.patch;
+  if (!isBoundedPlainObject(patch)) throw new Error('任务设置内容无效');
+  for (const key of Object.keys(patch)) {
+    if (!TASK_SETTINGS_PATCH_KEYS.has(key)) throw new Error('任务设置内容无效');
+  }
+  const mode = patch.mode;
+  if (mode !== undefined && mode !== null && mode !== 'automatic' && mode !== 'explicit') throw new Error('运行时模式无效');
+  validateExplicitRuntimeValue(patch.explicit_runtime);
+  const timeoutMs = patch.timeout_ms;
+  if (timeoutMs !== undefined && timeoutMs !== null) {
+    if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');
+  }
+  const additionalInstructions = patch.additional_instructions;
+  if (additionalInstructions !== undefined && additionalInstructions !== null) {
+    if (typeof additionalInstructions !== 'string'
+      || additionalInstructions.length > 4_000
+      || TASK_SETTINGS_CONTROL_CHARS.test(additionalInstructions)) {
+      throw new Error('附加说明无效');
+    }
+  }
+  validateAutomaticDispatch(patch.automatic);
+  const request: TaskSettingsSaveRequest = {
+    scope,
+    expected_revision: expectedRevision,
+    patch: patch as unknown as TaskSettingsSaveRequest['patch'],
+  };
+  if (taskId !== undefined && taskId !== null) request.task_id = taskId;
+  if (project !== undefined) request.project = project;
+  return request;
 }
 
 export class ShellWindowController {
@@ -253,35 +390,20 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.cancelConversation();
     });
-    ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown) => {
+    ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown, taskId: unknown) => {
       assertShellSender(event.sender);
-      if (project !== undefined && project !== null && (typeof project !== 'string' || project.length > 4_096)) {
-        throw new Error('项目参数无效');
+      const boundedProject = boundedOptionalProject(project);
+      if (taskId !== undefined && taskId !== null) {
+        if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务 id 无效');
       }
-      return options.getTaskSettings(project === undefined || project === null ? undefined : project as string);
-    });
-    ipcMain.handle(SHELL_CHANNELS.taskSettingsSave, async (
-      event,
-      taskId: unknown,
-      agentRuntime: unknown,
-      expectedRevision: unknown,
-      project: unknown,
-    ) => {
-      assertShellSender(event.sender);
-      if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务名称无效');
-      if (agentRuntime !== null && (typeof agentRuntime !== 'string' || !agentRuntime || agentRuntime.length > 512)) {
-        throw new Error('Agent 运行时无效');
-      }
-      if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 512) throw new Error('版本基线无效');
-      if (project !== undefined && project !== null && (typeof project !== 'string' || project.length > 4_096)) {
-        throw new Error('项目参数无效');
-      }
-      return options.saveTaskPreference(
-        taskId,
-        agentRuntime as string | null,
-        expectedRevision,
-        project === undefined || project === null ? undefined : project,
+      return options.getTaskSettings(
+        boundedProject,
+        taskId === undefined || taskId === null ? undefined : taskId,
       );
+    });
+    ipcMain.handle(SHELL_CHANNELS.taskSettingsSave, async (event, request: unknown) => {
+      assertShellSender(event.sender);
+      return options.saveTaskSettings(validateTaskSettingsSaveRequest(request));
     });
   }
 

@@ -6,6 +6,8 @@ import {
   isSettingsLaunchRequest,
   isShellPage,
   type QuotaSnapshot,
+  type TaskSettingsLayer,
+  type TaskSettingsSnapshot,
   type UpdateSnapshot,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
@@ -23,7 +25,25 @@ test('isShellPage accepts only product shell destinations', () => {
   assert.equal(isShellPage(null), false);
 });
 
-test('task settings IPC channels and API methods are the only task preference surface', () => {
+function emptyLayer(): TaskSettingsLayer {
+  return {
+    explicit_runtime: null,
+    timeout_ms: null,
+    additional_instructions: null,
+    automatic: null,
+  };
+}
+
+function settingsSnapshot(revision: string): TaskSettingsSnapshot {
+  return {
+    config_path: '/machine-global/config.json',
+    revision,
+    user_global: emptyLayer(),
+    rows: [],
+  };
+}
+
+test('task settings IPC channels and API methods are the only task settings surface', () => {
   assert.equal(SHELL_CHANNELS.taskSettingsSnapshot, 'wrenyard-shell:task-settings-snapshot');
   assert.equal(SHELL_CHANNELS.taskSettingsSave, 'wrenyard-shell:task-settings-save');
   // The withdrawn human docs bridge no longer exists anywhere in the contract.
@@ -31,12 +51,107 @@ test('task settings IPC channels and API methods are the only task preference su
   assert.equal('docsRead' in SHELL_CHANNELS, false);
   assert.equal('docsSave' in SHELL_CHANNELS, false);
   assert.equal('docsDirty' in SHELL_CHANNELS, false);
-  const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskPreference'> = {
-    getTaskSettings: async () => ({ config_path: '', revision: 'revision-1', scope: 'machine_global', keyed_by: 'bare_task_name', tasks: [] }),
-    saveTaskPreference: async () => ({ config_path: '', revision: 'revision-2', scope: 'machine_global', keyed_by: 'bare_task_name', tasks: [] }),
+  const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskSettings'> = {
+    getTaskSettings: async () => settingsSnapshot('revision-1'),
+    saveTaskSettings: async () => settingsSnapshot('revision-2'),
   };
   assert.equal(typeof api.getTaskSettings, 'function');
-  assert.equal(typeof api.saveTaskPreference, 'function');
+  assert.equal(typeof api.saveTaskSettings, 'function');
+  // The task settings surface is exactly the snapshot/save pair.
+  assert.equal('saveTaskPreference' in api, false);
+  const snapshot = settingsSnapshot('revision-1');
+  // The snapshot mirrors the daemon snapshot wire DTO: config_path/revision/user_global/rows.
+  assert.equal('config_path' in snapshot, true);
+  assert.equal(snapshot.revision, 'revision-1');
+  assert.equal(Array.isArray(snapshot.rows), true);
+  // The global layer is directly the writable settings fields — no wrapper.
+  assert.equal('revision' in snapshot.user_global, false);
+  assert.equal('layer' in snapshot.user_global, false);
+  assert.equal('keyed_by' in snapshot, false);
+  assert.equal('tasks' in snapshot, false);
+});
+
+test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO', () => {
+  const snapshot: TaskSettingsSnapshot = {
+    config_path: '/Users/me/.wrenyard/tasks/config.json',
+    revision: 'global-rev',
+    user_global: {
+      mode: 'automatic',
+      timeout_ms: 120_000,
+      additional_instructions: 'Only touch BUILD rules.',
+      automatic: { expected_tps: 20, required_capabilities: ['text'] },
+    },
+    rows: [{
+      identity: 'builtin:build',
+      name: 'build',
+      builtin: {
+        identity: 'builtin:build',
+        name: 'build',
+        source: 'shell',
+        description: 'Compile and check.',
+        prompt_template: 'dynamic',
+        declared_runtime: null,
+        timeout_ms: 300_000,
+        dispatch: { expected_tps: 20, required_capabilities: ['text'] },
+      },
+      user_task: {
+        additional_instructions: 'Only target the BUILD directory.',
+      },
+      effective: {
+        mode: { value: 'automatic', source: 'user_global' },
+        explicit_runtime: { value: null, source: 'builtin' },
+        timeout_ms: { value: 120_000, source: 'user_global' },
+        additional_instructions: { value: 'Only target the BUILD directory.', source: 'user_task' },
+        automatic: {
+          expected_tps: { value: 20, source: 'user_global' },
+          minimum_tps: { value: null, source: 'builtin' },
+          intelligence_min: { value: 'mid', source: 'builtin' },
+          intelligence_max: { value: null, source: 'builtin' },
+          max_output_usd_per_million: { value: null, source: 'builtin' },
+          required_capabilities: { value: ['text'], source: 'user_global' },
+          exclude_model_ids: { value: null, source: 'builtin' },
+          exclude_profile_ids: { value: null, source: 'builtin' },
+          exclude_client_ids: { value: null, source: 'builtin' },
+          exclude_provider_ids: { value: null, source: 'builtin' },
+          preferred_runtime: { value: null, source: 'builtin' },
+        },
+      },
+      issues: [],
+    }],
+  };
+  const taskRow = snapshot.rows[0]!;
+  assert.equal(snapshot.config_path, '/Users/me/.wrenyard/tasks/config.json');
+  assert.equal(snapshot.revision, 'global-rev');
+  assert.equal(taskRow.identity, 'builtin:build');
+  assert.equal(taskRow.builtin.identity, 'builtin:build');
+  assert.equal(taskRow.builtin.name, 'build');
+  assert.equal(taskRow.builtin.prompt_template, 'dynamic');
+  // Row top-level keys are exactly the stable wire fields; no invented wrappers.
+  assert.deepEqual(
+    Object.keys(taskRow).sort(),
+    ['builtin', 'effective', 'identity', 'issues', 'name', 'user_task'],
+  );
+  assert.equal('task_id' in taskRow, false);
+  assert.equal('revision' in taskRow, false);
+  assert.equal('readiness' in taskRow, false);
+  assert.equal('source' in taskRow, false);
+  // Mode is 'automatic', never the invented 'auto', and the runtime triple is
+  // client/provider/model — never agent_runtime.
+  assert.equal(taskRow.effective.mode.value, 'automatic');
+  assert.equal(taskRow.effective.mode.source, 'user_global');
+  const serialized = JSON.stringify(snapshot);
+  assert.equal(serialized.includes('"mode":"auto"'), false);
+  assert.equal(serialized.includes('agent_runtime'), false);
+  // Effective automatic is sourced per field.
+  assert.deepEqual(taskRow.effective.automatic.required_capabilities, { value: ['text'], source: 'user_global' });
+  assert.equal(taskRow.effective.automatic.expected_tps.value, 20);
+  assert.deepEqual(taskRow.issues, []);
+  // Global layer is the writable settings fields, no revision/layer envelope.
+  const globalLayer = snapshot.user_global as unknown as Record<string, unknown>;
+  assert.deepEqual(
+    Object.keys(globalLayer).sort(),
+    ['additional_instructions', 'automatic', 'mode', 'timeout_ms'],
+  );
 });
 
 test('settings launch requests accept only the Desktop settings route', () => {

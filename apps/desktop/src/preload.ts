@@ -11,6 +11,7 @@ import {
   type UpdateSnapshot,
   type ShellPage,
   type WrenyardShellApi,
+  type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
 } from './shell-contract.js';
 
@@ -111,11 +112,11 @@ const api: WrenyardShellApi = {
     ipcRenderer.on(SHELL_CHANNELS.viewChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.viewChanged, handler);
   },
-  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSnapshot, project) as Promise<TaskSettingsSnapshot>;
+  getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSnapshot, project, taskId) as Promise<TaskSettingsSnapshot>;
   },
-  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, taskId, agentRuntime, expectedRevision, project) as Promise<TaskSettingsSnapshot>;
+  saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, request) as Promise<TaskSettingsSnapshot>;
   },
 };
 
