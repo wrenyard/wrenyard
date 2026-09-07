@@ -300,6 +300,32 @@ async function startForemanDaemonWithRuntime(
     workspaceRoot: config.workspaceRoot,
     configPath: authoritativeConfigPath,
     resolver: taskDispatchResolver,
+    // Non-billable readiness: real daemon admission status (never a paid probe)
+    // plus the current provider credential/route availability. Unknown quota is
+    // surfaced as `unknown` — never fabricated as available or zero.
+    daemonAvailability: () => ({
+      accepting: runtime.dispatchControl.status().accepting,
+      known: true,
+    }),
+    runtimeAvailability: async ({ provider }) => {
+      const providerDef = runtime.catalog.provider(provider)
+      if (!providerDef) {
+        return {
+          providerCredential: 'unknown',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: false,
+        }
+      }
+      const credential = await runtime.providerRuntime.credential(providerDef)
+      const available = credential !== undefined
+      return {
+        providerCredential: available ? 'available' : 'missing',
+        providerLive: available ? 'available' : 'unknown',
+        quota: 'unknown',
+        available,
+      }
+    },
   })
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
