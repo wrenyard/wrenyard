@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import {
   type ConfigRecord,
   createDefaultForemanConfigData,
@@ -49,8 +50,27 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
   }
 
   write(configPath: string, data: ConfigRecord): void {
-    mkdirSync(dirname(configPath), { recursive: true })
-    writeFileSync(configPath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+    const dir = dirname(configPath)
+    mkdirSync(dir, { recursive: true })
+    // Atomic same-filesystem write: serialize to a private temp file (restrictive
+    // mode where supported), fsync-free rename over the target, and clean up the
+    // temp file on any failure so readers never observe a partially written
+    // config. The formatted JSON shape (+ trailing newline) is unchanged.
+    const tempPath = join(dir, `.${basename(configPath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+    try {
+      writeFileSync(tempPath, JSON.stringify(data, null, 2) + '\n', {
+        encoding: 'utf-8',
+        mode: 0o600,
+      })
+      renameSync(tempPath, configPath)
+    } catch (error) {
+      try {
+        rmSync(tempPath, { force: true })
+      } catch {
+        // Best-effort cleanup only; the original error is the failure to report.
+      }
+      throw error
+    }
   }
 }
 

@@ -190,6 +190,16 @@ import {
   type TaskRunWaitResult,
 } from './methods/task.mts'
 import {
+  taskSettingsSaveParamsSchema,
+  taskSettingsSaveResultSchema,
+  taskSettingsSnapshotParamsSchema,
+  taskSettingsSnapshotResultSchema,
+  type TaskSettingsSaveParams,
+  type TaskSettingsSaveResult,
+  type TaskSettingsSnapshotParams,
+  type TaskSettingsSnapshotResult,
+} from './methods/task.mts'
+import {
   taskgraphCreateParamsSchema,
   taskgraphCreateResultSchema,
   taskgraphListParamsSchema,
@@ -337,6 +347,12 @@ export type {
   TaskRunWaitResult,
 } from './methods/task.mts'
 export type {
+  TaskSettingsSaveParams,
+  TaskSettingsSaveResult,
+  TaskSettingsSnapshotParams,
+  TaskSettingsSnapshotResult,
+} from './methods/task.mts'
+export type {
   TaskGraphCreateParams,
   TaskGraphCreateResult,
   TaskGraphListParams,
@@ -387,6 +403,8 @@ export interface ForemanMethodParams {
   'stats.summary': StatsSummaryParams
   'task.definition.list': TaskDefinitionListParams
   'task.definition.describe': TaskDefinitionDescribeParams
+  'task.settings.snapshot': TaskSettingsSnapshotParams
+  'task.settings.save': TaskSettingsSaveParams
   'task.run.create': TaskRunCreateParams
   'task.run.list': TaskRunListParams
   'task.run.status': TaskRunStatusParams
@@ -442,6 +460,8 @@ export interface ForemanMethodResults {
   'stats.summary': StatsSummaryResult
   'task.definition.list': TaskDefinitionListResult
   'task.definition.describe': TaskDefinitionDescribeResult
+  'task.settings.snapshot': TaskSettingsSnapshotResult
+  'task.settings.save': TaskSettingsSaveResult
   'task.run.create': TaskRunCreateResult
   'task.run.list': TaskRunListResult
   'task.run.status': TaskRunStatusResult
@@ -562,6 +582,14 @@ export const methodRegistry: {
   'task.definition.describe': {
     params: taskDefinitionDescribeParamsSchema,
     result: taskDefinitionDescribeResultSchema,
+  },
+  'task.settings.snapshot': {
+    params: taskSettingsSnapshotParamsSchema,
+    result: taskSettingsSnapshotResultSchema,
+  },
+  'task.settings.save': {
+    params: taskSettingsSaveParamsSchema,
+    result: taskSettingsSaveResultSchema,
   },
   'task.run.create': {
     params: taskRunCreateParamsSchema,

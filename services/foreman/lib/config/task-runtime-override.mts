@@ -2,6 +2,43 @@ import { AgentRuntimeParseError, parseAgentRuntime } from '../core/agent-runtime
 import { ForemanConfigManager } from './manager.mts'
 
 /**
+ * Daemon-wide authoritative config binding. When a daemon starts with an
+ * explicit `--config` path, task list/describe/execution preference reads must
+ * target that exact file instead of silently reading the default config. Only
+ * one binding may be active at a time; repeated binds of the *same* path are
+ * reference-counted so nested daemon lifecycles release cleanly, while a second
+ * daemon with a different authoritative path fails loudly.
+ */
+let activeBinding: { configPath: string; refs: number } | undefined
+
+export function bindTaskRuntimeOverrideConfigPath(configPath: string): () => void {
+  if (activeBinding) {
+    if (activeBinding.configPath !== configPath) {
+      throw new Error(
+        `task runtime override config binding is already active for ${activeBinding.configPath}; cannot bind ${configPath}`,
+      )
+    }
+    activeBinding.refs += 1
+  } else {
+    activeBinding = { configPath, refs: 1 }
+  }
+  return () => {
+    if (!activeBinding || activeBinding.configPath !== configPath) return
+    activeBinding.refs -= 1
+    if (activeBinding.refs <= 0) activeBinding = undefined
+  }
+}
+
+/** Test/shutdown hook that clears any daemon-wide override binding. */
+export function resetTaskRuntimeOverrideConfigPathBinding(): void {
+  activeBinding = undefined
+}
+
+function boundConfigPath(): string | undefined {
+  return activeBinding?.configPath
+}
+
+/**
  * Read `tasks.agentRuntime` from the live Wrenyard config. Missing or empty
  * maps are a no-op; invalid values fail loudly so a typo cannot silently
  * dispatch the packaged policy.
@@ -9,7 +46,13 @@ import { ForemanConfigManager } from './manager.mts'
 export function readTaskAgentRuntimeOverrides(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const { data } = new ForemanConfigManager({ env }).loadData()
+  const manager = new ForemanConfigManager({ env })
+  const authoritativeConfigPath = boundConfigPath()
+  // Bound daemon: read override preferences from the daemon's authoritative
+  // config file. Non-daemon callers keep the default resolution behavior.
+  const { data } = authoritativeConfigPath
+    ? manager.loadData(authoritativeConfigPath)
+    : manager.loadData()
   return normalizeTaskAgentRuntimeOverrides(data.tasks?.agentRuntime)
 }
 

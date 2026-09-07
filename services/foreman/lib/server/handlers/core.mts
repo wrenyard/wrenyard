@@ -59,6 +59,12 @@ import {
   DAEMON_DRAIN_DEFAULT_TIMEOUT_MS,
 } from '../../protocol/methods/daemon.mts'
 import { DispatchControl, DispatchControlError, type DispatchStatus } from '../../daemon/dispatch-control.mts'
+import {
+  TaskSettingsContentConflictError,
+  TaskSettingsIneligibleRuntimeError,
+  TaskSettingsService,
+  TaskSettingsTaskNotFoundError,
+} from '../../daemon/services/task-settings-service.mts'
 
 export interface CoreRpcHandlerOptions {
   startedAt: number
@@ -74,6 +80,8 @@ export interface CoreRpcHandlerOptions {
   workspaceDocService?: WorkspaceDocHandlerService
   /** IPC-only model Gateway connection descriptor for local clients. */
   gatewayConnection?: () => Promise<GatewayConnectionResult>
+  /** Daemon-owned TaskSettingsService backing task.settings.snapshot/save. */
+  taskSettings?: TaskSettingsService
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
   clientConfiguration?: {
@@ -324,6 +332,48 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     return serviceJsonResult(
       () => taskService.describe(params.task_id, params.project),
     )
+  })
+  // task.settings.snapshot/save delegate to the injected daemon-owned
+  // TaskSettingsService; the RPC surface never recreates selection or config
+  // mutation logic. IPC-only. When the dependency is absent the methods fail
+  // loud with a bounded unavailable error instead of being silently dropped.
+  const requireTaskSettings = (
+    context: unknown,
+    method: string,
+  ): TaskSettingsService => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+        { code: 'task_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.taskSettings) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'task_settings_unavailable' },
+      )
+    }
+    return options.taskSettings
+  }
+  router.register('task.settings.snapshot', async (params, _message, context) => {
+    const service = requireTaskSettings(context, 'task.settings.snapshot')
+    return service.snapshot(params)
+  })
+  router.register('task.settings.save', async (params, _message, context) => {
+    const service = requireTaskSettings(context, 'task.settings.save')
+    try {
+      return await service.save(params)
+    } catch (error) {
+      if (
+        error instanceof TaskSettingsContentConflictError
+        || error instanceof TaskSettingsTaskNotFoundError
+        || error instanceof TaskSettingsIneligibleRuntimeError
+      ) {
+        throw protocolErrorFromTaskSettingsError(error)
+      }
+      throw error
+    }
   })
   router.register('task.run.create', async (params, _message, context) => {
     if (options.dispatchControl) assertDispatchAccepting(options.dispatchControl)
@@ -657,6 +707,32 @@ function protocolErrorFromTaskServiceError(error: TaskServiceError): ProtocolErr
     return serviceProtocolError(TASK_NOT_FOUND.code, error, 'task')
   }
   return serviceProtocolError(protocolCodeForServiceStatus(error.statusCode), error, 'task')
+}
+
+function protocolErrorFromTaskSettingsError(
+  error:
+    | TaskSettingsContentConflictError
+    | TaskSettingsTaskNotFoundError
+    | TaskSettingsIneligibleRuntimeError,
+): ProtocolError {
+  if (error instanceof TaskSettingsTaskNotFoundError) {
+    return new ProtocolError(
+      { code: TASK_NOT_FOUND.code, message: error.message },
+      { service: 'task.settings', code: error.code },
+    )
+  }
+  const detail: Record<string, unknown> = { service: 'task.settings', code: error.code }
+  if (error instanceof TaskSettingsContentConflictError) {
+    detail.expected_revision = error.expectedRevision
+    detail.actual_revision = error.actualRevision
+  } else {
+    detail.task_id = error.taskId
+    detail.agent_runtime = error.agentRuntime
+  }
+  return new ProtocolError(
+    { code: INVALID_PARAMS.code, message: error.message },
+    detail,
+  )
 }
 
 function taskRunNotFound(taskRunId: string): ProtocolError {

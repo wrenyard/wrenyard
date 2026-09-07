@@ -68,8 +68,41 @@ export type TaskDispatchResolution =
   | { ok: true; exactAgentRuntime: string; resolved: TaskResolvedDispatch }
   | { ok: false; error: NoEligiblePlanError }
 
+/**
+ * Eligible projection input. Mirrors `resolve` minus the soft machine
+ * preference: eligibility never depends on an operator preference, only on the
+ * task's declared runtime semantics and its hard dispatch requirements.
+ */
+export interface TaskDispatchEligibleInput {
+  taskName: string
+  requirements: TaskDispatchRequirements
+  /** Exact declared runtime pin or a policy runtime. Never a machine preference. */
+  declaredRuntime?: string
+}
+
+/**
+ * One exact runtime choice: the full resolved-dispatch snapshot (the same
+ * client/provider/model/model_id/mode/protocol/speed/intelligence/
+ * reference_pricing fields as `resolve`) plus its exact pinned runtime string
+ * (`forge/<profile>`). Legacy policy strings (fast/general/ultra) are never
+ * returned as choices.
+ */
+export type TaskDispatchChoice = TaskResolvedDispatch & { exactAgentRuntime: string }
+
+export type TaskDispatchEligibleResult =
+  | { ok: true; choices: TaskDispatchChoice[] }
+  | { ok: false; error: NoEligiblePlanError }
+
 export interface TaskDispatchResolver {
   resolve(input: ResolveTaskDispatchInput): TaskDispatchResolution
+  /**
+   * Enumerates every exact runtime choice currently satisfying the same
+   * declared-runtime semantics and hard requirements as `resolve`. An exact
+   * declared runtime exposes at most the pinned candidate when eligible; a
+   * policy runtime evaluates every exact candidate. Eligibility is never
+   * relaxed against resolve admission.
+   */
+  eligible(input: TaskDispatchEligibleInput): TaskDispatchEligibleResult
 }
 
 function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['reference_pricing'] {
@@ -138,104 +171,136 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // the public resolved-dispatch identity.
   const runtimePlans = await resolveBuiltinRuntimeDispatchPlans(catalog, deps.runtime)
 
+  // Shared pool selection: an exact (non-policy) declared runtime is a strict
+  // single-candidate pin; a policy selector (fast/general/ultra) or an absent
+  // declared runtime opens the full builtin candidate pool and lets the task
+  // requirements perform the sole hard filtering and ranking. An unparseable
+  // declared runtime fails closed rather than broadening admission.
+  const selectCandidatePool = (
+    input: ResolveTaskDispatchInput,
+  ): DispatchCandidate[] | NoEligiblePlanError => {
+    if (!input.declaredRuntime) return allCandidates
+    try {
+      const parsed = parseAgentRuntime(input.declaredRuntime)
+      if (parsed.isPolicy) return allCandidates
+      return allCandidates.filter((candidate) => candidate.profileId === parsed.configId)
+    } catch {
+      return new NoEligiblePlanError(input.taskName, allCandidates, input.requirements)
+    }
+  }
+
+  // Single authoritative evaluation. `resolve` selection and the `eligible`
+  // projection both run this exact code path (same candidate admission, same
+  // `resolveConstrainedDispatch` hard filters, same runtime-plan and evidence
+  // fail-closed checks) so eligibility cannot drift from dispatch admission.
+  const evaluate = (
+    input: ResolveTaskDispatchInput,
+    candidatePool: DispatchCandidate[],
+  ): TaskDispatchResolution => {
+    const req = input.requirements
+
+    // Soft machine preference: mapped onto preferredRuntime only — never a bypass.
+    const effectiveReq: TaskDispatchRequirements = { ...req }
+    if (input.machinePreference) {
+      const preferred = allCandidates.find((candidate) => `forge/${candidate.profileId}` === input.machinePreference)
+      if (preferred) {
+        effectiveReq.preferredRuntime = {
+          client: preferred.client,
+          provider: preferred.provider,
+          model: preferred.model,
+        }
+      }
+    }
+
+    const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
+    const constrained = resolveConstrainedDispatch(catalog, candidatePool, effectiveReq, localSpeed)
+    if (!constrained.ok) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    }
+
+    const selected = constrained.selected
+
+    // Resolve the bare profile id. `resolveConstrainedDispatch` is the sole
+    // filter/order; this lookup only attaches the catalog profile id that
+    // matches the single selected plan (no re-filtering).
+    const chosen = candidatePool.find(
+      (candidate) =>
+        candidate.client === selected.plan.client
+        && candidate.provider === selected.plan.provider
+        && candidate.model === selected.plan.model,
+    )
+    const profileId = chosen?.profileId
+      ?? input.declaredRuntime?.split('/')[1]
+      ?? selected.plan.provider
+
+    // Require a compiled runtime plan for the selected profile. Catalog
+    // selection and the public snapshot retain canonical logical identity;
+    // Forge consumes the exact profile and keeps any upstream alias internal.
+    const runtimePlan = runtimePlans[profileId]
+    if (!runtimePlan) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    }
+
+    // Fail-closed. Constrained tasks always set speed, intelligence, and
+    // max-price, so a selected result must carry real evidence for each.
+    // Fabricating any of these is never allowed.
+    const speed = selected.speed
+    if (!speed.checkedAt) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    }
+    const verifiedSpeed = { ...speed, checkedAt: speed.checkedAt }
+    const model = selected.model
+    if (!model.intelligence) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    }
+    const pricing = model.pricing
+    if (
+      !pricing
+      || pricing.inputUsdPerMillion === undefined
+      || pricing.outputUsdPerMillion === undefined
+      || !pricing.checkedAt
+    ) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    }
+
+    const resolved = toResolvedDispatch(
+      input.declaredRuntime ?? '',
+      profileId,
+      selected.plan,
+      model,
+      verifiedSpeed,
+      pricing,
+      req,
+    )
+    return { ok: true, exactAgentRuntime: `forge/${profileId}`, resolved }
+  }
+
   return {
     resolve(input): TaskDispatchResolution {
-      const req = input.requirements
+      const pool = selectCandidatePool(input)
+      if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
+      return evaluate(input, pool)
+    },
 
-      // Hard pin: an exact (non-policy) declared runtime narrows the pool to
-      // that single profile, which is then validated against every requirement.
-      let candidatePool = allCandidates
-      if (input.declaredRuntime) {
-        try {
-          const parsed = parseAgentRuntime(input.declaredRuntime)
-          if (!parsed.isPolicy) {
-            // An exact (non-policy) declared runtime is a strict single-candidate
-            // pin. A policy selector enumerates every builtin runtime-plan
-            // candidate and lets the task requirements perform the sole hard
-            // filtering and ranking.
-            candidatePool = allCandidates.filter((candidate) => candidate.profileId === parsed.configId)
-          }
-        } catch {
-          // An unparseable declared runtime is invalid; fail closed rather than
-          // broadening admission to the full candidate pool.
-          return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+    eligible(input): TaskDispatchEligibleResult {
+      const pool = selectCandidatePool(input)
+      if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
+
+      // An exact declared pin narrowed the pool to a single candidate, so at
+      // most one choice is produced. A policy declaration evaluates every exact
+      // candidate through the same evaluate() admission as resolve; only exact
+      // (`forge/<profile>`) pins are ever returned — never policy aliases.
+      const choices: TaskDispatchChoice[] = []
+      for (const candidate of pool) {
+        const outcome = evaluate(
+          { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
+          [candidate],
+        )
+        if (outcome.ok) {
+          choices.push({ ...outcome.resolved, exactAgentRuntime: outcome.exactAgentRuntime })
         }
       }
-
-      // Soft machine preference: mapped onto preferredRuntime only — never a bypass.
-      const effectiveReq: TaskDispatchRequirements = { ...req }
-      if (input.machinePreference) {
-        const preferred = allCandidates.find((candidate) => `forge/${candidate.profileId}` === input.machinePreference)
-        if (preferred) {
-          effectiveReq.preferredRuntime = {
-            client: preferred.client,
-            provider: preferred.provider,
-            model: preferred.model,
-          }
-        }
-      }
-
-      const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
-      const constrained = resolveConstrainedDispatch(catalog, candidatePool, effectiveReq, localSpeed)
-      if (!constrained.ok) {
-        return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
-      }
-
-      const selected = constrained.selected
-
-      // Resolve the bare profile id. `resolveConstrainedDispatch` is the sole
-      // filter/order; this lookup only attaches the catalog profile id that
-      // matches the single selected plan (no re-filtering).
-      const chosen = candidatePool.find(
-        (candidate) =>
-          candidate.client === selected.plan.client
-          && candidate.provider === selected.plan.provider
-          && candidate.model === selected.plan.model,
-      )
-      const profileId = chosen?.profileId
-        ?? input.declaredRuntime?.split('/')[1]
-        ?? selected.plan.provider
-
-      // Require a compiled runtime plan for the selected profile. Catalog
-      // selection and the public snapshot retain canonical logical identity;
-      // Forge consumes the exact profile and keeps any upstream alias internal.
-      const runtimePlan = runtimePlans[profileId]
-      if (!runtimePlan) {
-        return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
-      }
-
-      // Fail-closed. Constrained tasks always set speed, intelligence, and
-      // max-price, so a selected result must carry real evidence for each.
-      // Fabricating any of these is never allowed.
-      const speed = selected.speed
-      if (!speed.checkedAt) {
-        return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
-      }
-      const verifiedSpeed = { ...speed, checkedAt: speed.checkedAt }
-      const model = selected.model
-      if (!model.intelligence) {
-        return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
-      }
-      const pricing = model.pricing
-      if (
-        !pricing
-        || pricing.inputUsdPerMillion === undefined
-        || pricing.outputUsdPerMillion === undefined
-        || !pricing.checkedAt
-      ) {
-        return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
-      }
-
-      const resolved = toResolvedDispatch(
-        input.declaredRuntime ?? '',
-        profileId,
-        selected.plan,
-        model,
-        verifiedSpeed,
-        pricing,
-        req,
-      )
-      return { ok: true, exactAgentRuntime: `forge/${profileId}`, resolved }
+      return { ok: true, choices }
     },
   }
 }
