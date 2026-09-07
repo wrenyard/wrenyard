@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/bashgate"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
@@ -155,11 +157,26 @@ func mergeJSONObjects(a, b string) string {
 	return string(data)
 }
 
-// ResolveBinary locates the client binary honoring the catalog.BinarySpec:
-// node-based entry via npm global prefix, then LookPath with corrupt-.cmd-shim
-// detection. Preserves the exact error text and argv behavior of the root
-// forge helper.
+const defaultNpmGlobalPrefixTimeout = 2 * time.Second
+
+var npmGlobalPrefixTimeout = defaultNpmGlobalPrefixTimeout
+
+// ResolveBinary locates the client binary honoring the catalog.BinarySpec.
+// Unix prefers an executable already on PATH so binary discovery cannot be
+// blocked by npm startup. Windows keeps the node-entry lookup first to bypass
+// malformed npm .cmd shims, then validates any shim found through LookPath.
 func ResolveBinary(spec catalog.BinarySpec) ([]string, error) {
+	name := spec.Name
+	if runtime.GOOS == "windows" && spec.WindowsCmd != "" {
+		name = spec.WindowsCmd
+	}
+
+	if runtime.GOOS != "windows" {
+		if path, err := exec.LookPath(name); err == nil {
+			return []string{path}, nil
+		}
+	}
+
 	if spec.NodeEntry != "" {
 		prefix, err := npmGlobalPrefix()
 		if err == nil {
@@ -170,10 +187,6 @@ func ResolveBinary(spec catalog.BinarySpec) ([]string, error) {
 		}
 	}
 
-	name := spec.Name
-	if runtime.GOOS == "windows" && spec.WindowsCmd != "" {
-		name = spec.WindowsCmd
-	}
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return nil, fmt.Errorf("could not find %q on PATH; is it installed?", name)
@@ -205,7 +218,9 @@ func npmGlobalPrefix() (string, error) {
 		}
 		return filepath.Join(appData, "npm"), nil
 	}
-	out, err := exec.Command("npm", "prefix", "-g").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), npmGlobalPrefixTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "npm", "prefix", "-g").Output()
 	if err == nil {
 		prefix := strings.TrimSpace(string(out))
 		if prefix != "" {
