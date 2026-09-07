@@ -11,9 +11,7 @@ import {
   type UpdateSnapshot,
   type ShellPage,
   type WrenyardShellApi,
-  type WorkspaceDocContent,
-  type WorkspaceDocEntry,
-  type WorkspaceDocSaveResult,
+  type TaskSettingsSnapshot,
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
@@ -113,17 +111,11 @@ const api: WrenyardShellApi = {
     ipcRenderer.on(SHELL_CHANNELS.viewChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.viewChanged, handler);
   },
-  listDocs(): Promise<WorkspaceDocEntry[]> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.docsList) as Promise<WorkspaceDocEntry[]>;
+  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSnapshot, project) as Promise<TaskSettingsSnapshot>;
   },
-  readDoc(path: string): Promise<WorkspaceDocContent> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.docsRead, path) as Promise<WorkspaceDocContent>;
-  },
-  saveDoc(path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.docsSave, path, content, expectedContent) as Promise<WorkspaceDocSaveResult>;
-  },
-  setDocsDirty(dirty: boolean): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.docsDirty, dirty) as Promise<void>;
+  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, taskId, agentRuntime, expectedRevision, project) as Promise<TaskSettingsSnapshot>;
   },
 };
 

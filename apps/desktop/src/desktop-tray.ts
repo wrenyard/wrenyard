@@ -7,6 +7,7 @@ import {
 } from 'electron';
 import type { AppConfig, EntityVisibilityConfig } from '@wrenyard/pet/config';
 import { createDesktopTrayIcon } from './tray-icon.js';
+import { trayPrimaryClickOpensDesktop } from './desktop-interaction-policy.js';
 import { createQuotaMenuProviderIcon } from './quota-menu-icon.js';
 import type { QuotaSnapshot } from './shell-contract.js';
 
@@ -26,10 +27,18 @@ export interface DesktopTrayHandle {
   destroy(): void;
 }
 
-export function createDesktopTray(options: DesktopTrayOptions): DesktopTrayHandle {
+export function createDesktopTray(
+  options: DesktopTrayOptions,
+  platform: NodeJS.Platform = process.platform,
+): DesktopTrayHandle {
   const tray = new Tray(createDesktopTrayIcon());
   tray.setToolTip('啾啾工坊');
-  tray.on('click', () => options.openDesktop());
+  // On macOS a tray that owns a context menu opens that menu on primary click,
+  // so registering a restore click would steal the menu gesture. Everywhere
+  // else the primary click restores the desktop window.
+  if (trayPrimaryClickOpensDesktop(platform)) {
+    tray.on('click', () => options.openDesktop());
+  }
 
   const run = (operation: () => Promise<void>): void => {
     void operation()

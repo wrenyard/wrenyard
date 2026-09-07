@@ -16,9 +16,27 @@ test('isShellPage accepts only product shell destinations', () => {
   assert.equal(isShellPage('quota'), true);
   assert.equal(isShellPage('clients'), true);
   assert.equal(isShellPage('settings'), true);
+  assert.equal(isShellPage('tasks'), true);
+  assert.equal(isShellPage('docs'), false);
   assert.equal(isShellPage('dsh-settings'), false);
   assert.equal(isShellPage('../settings'), false);
   assert.equal(isShellPage(null), false);
+});
+
+test('task settings IPC channels and API methods are the only task preference surface', () => {
+  assert.equal(SHELL_CHANNELS.taskSettingsSnapshot, 'wrenyard-shell:task-settings-snapshot');
+  assert.equal(SHELL_CHANNELS.taskSettingsSave, 'wrenyard-shell:task-settings-save');
+  // The withdrawn human docs bridge no longer exists anywhere in the contract.
+  assert.equal('docsList' in SHELL_CHANNELS, false);
+  assert.equal('docsRead' in SHELL_CHANNELS, false);
+  assert.equal('docsSave' in SHELL_CHANNELS, false);
+  assert.equal('docsDirty' in SHELL_CHANNELS, false);
+  const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskPreference'> = {
+    getTaskSettings: async () => ({ config_path: '', revision: 'revision-1', scope: 'machine_global', keyed_by: 'bare_task_name', tasks: [] }),
+    saveTaskPreference: async () => ({ config_path: '', revision: 'revision-2', scope: 'machine_global', keyed_by: 'bare_task_name', tasks: [] }),
+  };
+  assert.equal(typeof api.getTaskSettings, 'function');
+  assert.equal(typeof api.saveTaskPreference, 'function');
 });
 
 test('settings launch requests accept only the Desktop settings route', () => {

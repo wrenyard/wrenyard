@@ -13,6 +13,7 @@ import {
   type ConfiguredWorkspace,
   type DesktopConversationSession,
 } from './conversation-controller.js';
+import { sameGatewayIdentity } from './service-recovery.js';
 import { defaultMcpUrl, WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
@@ -24,11 +25,16 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type WorkspaceDocContent, type WorkspaceDocEntry, type WorkspaceDocSaveResult } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
+import {
+  createMacQuitConfirmationGate,
+  trayPrimaryClickOpensDesktop,
+  type QuitOrigin,
+} from './desktop-interaction-policy.js';
 import {
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
@@ -37,6 +43,8 @@ import {
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
+/** Task definition enumeration may cold-load the workspace and model catalog. */
+const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
 const SERVICE_RETRY_ATTEMPTS = 10;
 const SERVICE_RETRY_DELAY_MS = 500;
 const SMOKE_TIMEOUT_MS = 30_000;
@@ -293,9 +301,19 @@ async function runSmokeWindowLifecycle(shell: ShellWindowController): Promise<vo
   if (!desktopTray) {
     throw new Error('smoke failed: tray is unavailable for the restore check');
   }
-  desktopTray.tray.emit('click');
-  if (window.isDestroyed() || !window.isVisible()) {
-    throw new Error('smoke failed: tray primary click did not restore the shell window');
+  if (trayPrimaryClickOpensDesktop(process.platform)) {
+    desktopTray.tray.emit('click');
+    if (window.isDestroyed() || !window.isVisible()) {
+      throw new Error('smoke failed: tray primary click did not restore the shell window');
+    }
+  } else {
+    // macOS primary click only opens the tray menu; its explicit 打开 item is
+    // bound to this same shared showDesktop path, which is the restore gesture
+    // to verify here without assuming a click restores.
+    showDesktop('workbench');
+    if (window.isDestroyed() || !window.isVisible()) {
+      throw new Error('smoke failed: tray menu open did not restore the shell window');
+    }
   }
   if (!isDshChildAlive(originalPid) || conversationController?.backendProcessId !== originalPid) {
     throw new Error('smoke failed: DSH backend pid changed or exited after tray restore');
@@ -316,6 +334,7 @@ async function createConversationSession(
   ensureChineseLocale(profile.dshHome);
   const registration = await ensureProductWorkspaceRegistered(profile.dshHome, workspace.path);
   const gateway = await readGatewayConnection(ipcPath);
+  lastGatewayConnection = gateway;
   const patchPath = await writeModelPatch(profile.dshHome, gateway);
   const extraEnv: NodeJS.ProcessEnv = { [WRENYARD_GATEWAY_TOKEN_ENV]: gateway.token };
   const configuredProviderIds = [WRENYARD_DSH_PROVIDER_ID];
@@ -374,6 +393,96 @@ async function createConversationSession(
   };
 }
 
+/** Daemon/DSH recovery interval; conservative and unref'd so it never blocks quit. */
+const GATEWAY_RECOVERY_INTERVAL_MS = 2_000;
+
+let recoveryWatcher: ReturnType<typeof setInterval> | null = null;
+let recoveryTickRunning = false;
+let gatewayDownObserved = false;
+/** Last gateway connection read at DSH spawn time, for identity comparison only. */
+let lastGatewayConnection: WrenyardGatewayConnection | null = null;
+
+/** Refresh quota/provider projection once and notify existing surfaces after a daemon restart. */
+async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
+  try {
+    await quotaController?.getSnapshot(true);
+    shellWindow?.notifyQuotaChanged();
+  } catch (error) {
+    console.warn('[wrenyard-desktop] quota refresh after gateway restart failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * Bounded daemon/DSH recovery watcher (started after bootstrap). Each healthy
+ * probe lets an unexpectedly exited DSH child rebuild; the first down->up
+ * transition after an observed daemon outage compares the fresh gateway
+ * connection identity against the one used at spawn time and forces a single
+ * session rebuild only when the identity changed. Never replays a prompt,
+ * draft, task or renderer navigation.
+ */
+function startGatewayRecoveryWatcher(ipcPath: string): void {
+  if (recoveryWatcher) return;
+  const watcher = setInterval(() => {
+    if (recoveryTickRunning || !conversationController) return;
+    recoveryTickRunning = true;
+    void runGatewayRecoveryTick(ipcPath).finally(() => {
+      recoveryTickRunning = false;
+    });
+  }, GATEWAY_RECOVERY_INTERVAL_MS);
+  (watcher as { unref?: () => void }).unref?.();
+  recoveryWatcher = watcher;
+}
+
+function stopGatewayRecoveryWatcher(): void {
+  if (recoveryWatcher) {
+    clearInterval(recoveryWatcher);
+    recoveryWatcher = null;
+  }
+  recoveryTickRunning = false;
+  gatewayDownObserved = false;
+}
+
+async function runGatewayRecoveryTick(ipcPath: string): Promise<void> {
+  const controller = conversationController;
+  if (!controller) return;
+  const workspaceConfigured = controller.workspace.status === 'configured' && Boolean(controller.workspace.path);
+  let healthy = false;
+  try {
+    healthy = await probeWrenyard(ipcPath);
+  } catch {
+    healthy = false;
+  }
+  if (!healthy) {
+    gatewayDownObserved = true;
+    return;
+  }
+  if (gatewayDownObserved) {
+    await refreshQuotaProjectionAfterGatewayRestart();
+    let connection: WrenyardGatewayConnection;
+    try {
+      connection = await readGatewayConnection(ipcPath);
+    } catch {
+      // Health may recover just before the daemon publishes its gateway
+      // snapshot. Keep the transition pending and retry identity comparison on
+      // the next tick instead of treating an unreadable snapshot as unchanged.
+      return;
+    }
+    gatewayDownObserved = false;
+    const identityChanged = lastGatewayConnection !== null
+      && !sameGatewayIdentity(lastGatewayConnection, connection);
+    lastGatewayConnection = connection;
+    if (!workspaceConfigured) return;
+    await controller.recover(identityChanged).catch((error: unknown) => {
+      console.warn('[wrenyard-desktop] gateway recovery failed:', error instanceof Error ? error.message : String(error));
+    });
+    return;
+  }
+  if (!workspaceConfigured) return;
+  await controller.recover(false).catch((error: unknown) => {
+    console.warn('[wrenyard-desktop] DSH session recovery failed:', error instanceof Error ? error.message : String(error));
+  });
+}
+
 let conversationController: DesktopConversationController | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
@@ -383,12 +492,12 @@ let updateController: DesktopUpdateController | null = null;
 let quitting = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
-let docsDirty = false;
 
-/** Whether the renderer currently holds an unsaved docs draft (no persistence, no file writes). */
-function getDocsDirty(): boolean {
-  return docsDirty;
-}
+/**
+ * macOS Cmd+Q confirmation gate: one 3000ms window shared by every
+ * accelerator-driven quit request. Direct/programmatic quits bypass it.
+ */
+const macQuitGate = createMacQuitConfirmationGate({ windowMs: 3_000 });
 
 function showDesktop(page: ShellPage = 'workbench'): void {
   if (!shellWindow || shellWindow.window.isDestroyed()) {
@@ -434,26 +543,11 @@ async function requestInstallFromMenu(): Promise<void> {
       return;
     }
     // One click authorizes the whole remaining flow: prepare (staged even while
-    // busy), then automatically install once idle and no unsaved docs remain.
+    // busy), then automatically install once actual work is idle.
     await updateController.requestInstall(() => setImmediate(() => app.quit()));
   } finally {
     updateDialogActive = false;
   }
-}
-
-/**
- * Desktop exposes only the documentation subset that the spec allows editing:
- * docs/specs/**, projects/<qualified>/docs/specs/**, memories/*.md, and the root
- * AGENTS.md. Every read/save path is validated against exactly these prefixes;
- * the backend's generic workspace.doc.* surface is never reached for other paths.
- */
-function isDocsAllowedPath(rawPath: string): boolean {
-  const path = rawPath.replace(/\\/g, '/');
-  if (path === 'AGENTS.md') return true;
-  if (/^memories\/[^/]+\.md$/u.test(path)) return true;
-  if (/^docs\/specs(\/[^/]+)*\/[^/]+\.md$/u.test(path)) return true;
-  if (/^projects\/[^/]+\/(?:[^/]+\/)*docs\/specs(\/[^/]+)*\/[^/]+\.md$/u.test(path)) return true;
-  return false;
 }
 
 async function bootstrap(): Promise<void> {
@@ -466,30 +560,37 @@ async function bootstrap(): Promise<void> {
   const workspaceConfiguration = await inspectProductWorkspace();
 
   const requestForeman = async (method: string, params: unknown): Promise<unknown> => {
-    const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: FOREMAN_HEALTH_TIMEOUT_MS });
+    const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS });
     try {
       return await client.request(method, params);
     } finally {
       await client.close?.();
     }
   };
-  const listWorkspaceDocs = async (): Promise<WorkspaceDocEntry[]> => {
-    const result = await requestForeman('workspace.doc.list', {}) as { files?: WorkspaceDocEntry[] };
-    return (result.files ?? []).filter((entry) => isDocsAllowedPath(entry.path));
+  const getTaskSettings = async (project?: string): Promise<TaskSettingsSnapshot> => {
+    const params: Record<string, unknown> = {};
+    if (project !== undefined) params.project = project;
+    return (await requestForeman('task.settings.snapshot', params)) as TaskSettingsSnapshot;
   };
-  const readWorkspaceDoc = async (path: string): Promise<WorkspaceDocContent> => {
-    if (!isDocsAllowedPath(path)) throw new Error('文档路径不在允许范围内');
-    return (await requestForeman('workspace.doc.read', { path })) as WorkspaceDocContent;
-  };
-  const saveWorkspaceDoc = async (path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult> => {
-    if (!isDocsAllowedPath(path)) throw new Error('文档路径不在允许范围内');
+  const saveTaskPreference = async (
+    taskId: string,
+    agentRuntime: string | null,
+    expectedRevision: string,
+    project?: string,
+  ): Promise<TaskSettingsSnapshot> => {
+    const params: Record<string, unknown> = {
+      task_id: taskId,
+      agent_runtime: agentRuntime,
+      expected_revision: expectedRevision,
+    };
+    if (project !== undefined) params.project = project;
     try {
-      return (await requestForeman('workspace.doc.update', { path, content, expectedContent })) as WorkspaceDocSaveResult;
+      return (await requestForeman('task.settings.save', params)) as TaskSettingsSnapshot;
     } catch (error) {
       if (error instanceof WrenyardRpcError) {
         const code = (error.data as { code?: string } | undefined)?.code;
         if (code === 'content_conflict') {
-          const conflict = new Error('文档已被外部修改，保存冲突');
+          const conflict = new Error('任务偏好已被外部修改，保存冲突');
           (conflict as { code?: string }).code = 'content_conflict';
           throw conflict;
         }
@@ -531,7 +632,7 @@ async function bootstrap(): Promise<void> {
     onInstall: () => setImmediate(() => app.quit()),
     isBusy: async () => {
       const conversationBusy = conversationController?.snapshot().sessions.some((item) => item.running) === true;
-      return conversationBusy || docsDirty || await wrenyardIsBusy(wrenyardCli);
+      return conversationBusy || await wrenyardIsBusy(wrenyardCli);
     },
     onChanged: () => shellWindow?.notifyUpdateChanged(),
   });
@@ -634,18 +735,33 @@ async function bootstrap(): Promise<void> {
     selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
-    listDocs: () => listWorkspaceDocs(),
-    readDoc: (path: string) => readWorkspaceDoc(path),
-    saveDoc: (path: string, content: string, expectedContent: string) => saveWorkspaceDoc(path, content, expectedContent),
-    setDocsDirty: async (dirty: boolean) => {
-      const previous = docsDirty;
-      docsDirty = dirty;
-      if (previous && !dirty) updateController?.wake();
-    },
+    getTaskSettings: (project?: string) => getTaskSettings(project),
+    saveTaskPreference: (taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string) =>
+      saveTaskPreference(taskId, agentRuntime, expectedRevision, project),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
     () => { void requestInstallFromMenu(); },
+    (origin: QuitOrigin) => {
+      if (origin === 'direct') {
+        app.quit();
+        return;
+      }
+      if (macQuitGate('accelerator') === 'quit') {
+        app.quit();
+        return;
+      }
+      // Warn, never quit: a second Cmd+Q inside the 3s window fully exits
+      // while Cmd+W only backgrounds. The dialog is intentionally non-blocking.
+      void showUpdateMessage({
+        type: 'warning',
+        title: '退出啾啾工坊',
+        message: '再次按下 Cmd+Q 将完全退出',
+        detail: '3 秒内再次按下 Cmd+Q 才会完全退出并停止后台服务；Cmd+W 只会将窗口隐藏到托盘。',
+        buttons: ['好'],
+        noLink: true,
+      });
+    },
   )));
   if (!SMOKE) updateController.start();
 
@@ -663,12 +779,14 @@ async function bootstrap(): Promise<void> {
     restartPet: () => petController!.restart(),
     openDesktop: () => showDesktop('workbench'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
-  });
+  }, process.platform);
 
   if (openSettingsOnReady) {
     openSettingsOnReady = false;
     shellWindow.setPage('settings', false);
   }
+
+  startGatewayRecoveryWatcher(ipcPath);
 
   if (SMOKE) {
     if (conversationController.snapshot().status !== 'ready') {
@@ -703,6 +821,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   void (async () => {
     try {
+      stopGatewayRecoveryWatcher();
       desktopTray?.destroy();
       desktopTray = null;
       quotaController?.stop();
@@ -729,6 +848,7 @@ if (!gotSingleInstanceLock) {
   void bootstrap().catch(async (error) => {
     console.error('[wrenyard-desktop] startup failed:', error instanceof Error ? (error.stack ?? error.message) : String(error));
     try {
+      stopGatewayRecoveryWatcher();
       quotaController?.stop();
       quotaController = null;
       updateController?.stop();

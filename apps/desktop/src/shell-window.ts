@@ -19,9 +19,7 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateChannel,
   type UpdateSnapshot,
-  type WorkspaceDocContent,
-  type WorkspaceDocEntry,
-  type WorkspaceDocSaveResult,
+  type TaskSettingsSnapshot,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -62,10 +60,8 @@ export interface ShellWindowOptions {
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
-  listDocs(): Promise<WorkspaceDocEntry[]>;
-  readDoc(path: string): Promise<WorkspaceDocContent>;
-  saveDoc(path: string, content: string, expectedContent: string): Promise<WorkspaceDocSaveResult>;
-  setDocsDirty(dirty: boolean): Promise<void>;
+  getTaskSettings(project?: string): Promise<TaskSettingsSnapshot>;
+  saveTaskPreference(taskId: string, agentRuntime: string | null, expectedRevision: string, project?: string): Promise<TaskSettingsSnapshot>;
 }
 
 export class ShellWindowController {
@@ -257,26 +253,35 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.cancelConversation();
     });
-    ipcMain.handle(SHELL_CHANNELS.docsList, async (event) => {
+    ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown) => {
       assertShellSender(event.sender);
-      return options.listDocs();
+      if (project !== undefined && project !== null && (typeof project !== 'string' || project.length > 4_096)) {
+        throw new Error('项目参数无效');
+      }
+      return options.getTaskSettings(project === undefined || project === null ? undefined : project as string);
     });
-    ipcMain.handle(SHELL_CHANNELS.docsRead, async (event, path: unknown) => {
+    ipcMain.handle(SHELL_CHANNELS.taskSettingsSave, async (
+      event,
+      taskId: unknown,
+      agentRuntime: unknown,
+      expectedRevision: unknown,
+      project: unknown,
+    ) => {
       assertShellSender(event.sender);
-      if (typeof path !== 'string' || !path || path.length > 4_096) throw new Error('文档路径无效');
-      return options.readDoc(path);
-    });
-    ipcMain.handle(SHELL_CHANNELS.docsSave, async (event, path: unknown, content: unknown, expectedContent: unknown) => {
-      assertShellSender(event.sender);
-      if (typeof path !== 'string' || !path || path.length > 4_096) throw new Error('文档路径无效');
-      if (typeof content !== 'string') throw new Error('文档内容无效');
-      if (typeof expectedContent !== 'string') throw new Error('文档基线内容无效');
-      return options.saveDoc(path, content, expectedContent);
-    });
-    ipcMain.handle(SHELL_CHANNELS.docsDirty, async (event, dirty: unknown) => {
-      assertShellSender(event.sender);
-      if (typeof dirty !== 'boolean') throw new Error('文档脏状态无效');
-      return options.setDocsDirty(dirty);
+      if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务名称无效');
+      if (agentRuntime !== null && (typeof agentRuntime !== 'string' || !agentRuntime || agentRuntime.length > 512)) {
+        throw new Error('Agent 运行时无效');
+      }
+      if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 512) throw new Error('版本基线无效');
+      if (project !== undefined && project !== null && (typeof project !== 'string' || project.length > 4_096)) {
+        throw new Error('项目参数无效');
+      }
+      return options.saveTaskPreference(
+        taskId,
+        agentRuntime as string | null,
+        expectedRevision,
+        project === undefined || project === null ? undefined : project,
+      );
     });
   }
 
@@ -306,10 +311,8 @@ export class ShellWindowController {
       SHELL_CHANNELS.conversationSelectModel,
       SHELL_CHANNELS.conversationSend,
       SHELL_CHANNELS.conversationCancel,
-      SHELL_CHANNELS.docsList,
-      SHELL_CHANNELS.docsRead,
-      SHELL_CHANNELS.docsSave,
-      SHELL_CHANNELS.docsDirty,
+      SHELL_CHANNELS.taskSettingsSnapshot,
+      SHELL_CHANNELS.taskSettingsSave,
     ]) ipcMain.removeHandler(channel);
   }
 

@@ -31,9 +31,9 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H5V5Z" /><path d="M9 19h6M12 15v4" /><path d="M8 9h8" /></svg>
         <span class="tooltip" role="tooltip">客户端</span>
       </button>
-      <button class="activity-item" id="docs-nav" type="button" aria-label="文档" data-page="docs">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Z" /><path d="M14 3v4h4M9 12h6M9 15h6M9 18h4" /></svg>
-        <span class="tooltip" role="tooltip">文档</span>
+      <button class="activity-item" id="tasks-nav" type="button" aria-label="任务" data-page="tasks">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 11h6M9 15h6M9 7h3" /><rect x="4" y="4" width="13" height="16" rx="1.5" /><path d="M17.5 8.5 20 11l-2.5 3" /></svg>
+        <span class="tooltip" role="tooltip">任务</span>
       </button>
       <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
         <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -333,41 +333,55 @@
         </div>
       </section>
 
-      <section class="product-page docs-page" id="docs-page" aria-labelledby="docs-title" hidden>
+      <section class="product-page tasks-page" id="tasks-page" aria-labelledby="tasks-title" hidden>
         <header class="page-hero">
           <div>
-            <p class="eyebrow">WORKSHOP DOCUMENTS</p>
-            <h1 id="docs-title">文档</h1>
-            <p>编辑工坊规范与记忆；只暴露既有 Markdown，按显式保存落地，外部改动会触发保存冲突。</p>
+            <p class="eyebrow">TASK MODEL PREFERENCES</p>
+            <h1 id="tasks-title">任务</h1>
+            <p>查看任务定义与来源；为同名任务选择本机偏好的模型运行时，未设置偏好时由 Wrenyard 自动选择。</p>
           </div>
-          <button class="secondary-button" id="docs-refresh-button" type="button">
+          <button class="secondary-button" id="tasks-refresh" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
-            <span id="docs-refresh-label">刷新</span>
+            <span id="tasks-refresh-label">刷新</span>
           </button>
         </header>
 
-        <div class="docs-meta">
-          <span class="status-pill is-pending" id="docs-status">读取中</span>
-          <div class="docs-category-switch" id="docs-category-switcher" role="tablist" aria-label="文档类别">
-            <button type="button" role="tab" aria-selected="true" class="is-selected" data-docs-category="specs">规范</button>
-            <button type="button" role="tab" aria-selected="false" data-docs-category="memory">记忆</button>
-          </div>
-          <label class="docs-project-filter" for="docs-project-filter"><span>项目</span></label>
-          <select id="docs-project-filter"><option value="">全部项目</option></select>
+        <div class="tasks-meta">
+          <span class="status-pill is-pending" id="tasks-status">读取中</span>
+          <span class="tasks-global-note">模型偏好按任务名称在本机全局生效（同名 Task 共享），不在界面里区分项目策略目录。</span>
         </div>
 
-        <div class="docs-layout">
-          <aside class="docs-sidebar" aria-label="文档列表">
-            <div class="docs-file-list" id="docs-file-list" role="list"></div>
+        <div class="tasks-layout">
+          <aside class="tasks-list-pane" aria-label="任务列表">
+            <div class="tasks-list" id="tasks-list" role="list"></div>
           </aside>
-          <section class="docs-editor-pane" aria-label="文档编辑">
-            <div class="docs-editor-head">
-              <code id="docs-current-path">未选择文档</code>
-              <button class="primary-button" id="docs-save-button" type="button" disabled>保存</button>
-            </div>
-            <textarea id="docs-editor" class="docs-editor" spellcheck="false" placeholder="选择左侧文档开始编辑…" aria-label="Markdown 编辑"></textarea>
-            <div class="docs-conflict" id="docs-conflict" role="alert" hidden></div>
-            <div class="docs-preview" id="docs-preview" aria-label="预览"></div>
+
+          <section class="tasks-detail" id="tasks-detail" aria-labelledby="tasks-detail-name" hidden>
+            <header class="tasks-detail-head">
+              <div class="tasks-detail-heading">
+                <p class="eyebrow">TASK SETTINGS</p>
+                <h2 id="tasks-detail-name">—</h2>
+                <p id="tasks-detail-project">—</p>
+              </div>
+              <span class="status-pill is-pending" id="tasks-detail-source">—</span>
+            </header>
+
+            <div class="tasks-detail-card" id="tasks-detail-card"></div>
+
+            <footer class="tasks-detail-actions">
+              <label class="tasks-model-field" for="tasks-model-select">
+                <span><strong>模型运行时偏好</strong><small>选择 自动选择 保存即清除本机偏好（重置）；选择具体项则本机固定使用该运行时。</small></span>
+                <select id="tasks-model-select">
+                  <option value="">自动选择</option>
+                </select>
+              </label>
+              <div class="tasks-detail-save-row">
+                <span class="tasks-detail-note" id="tasks-note">偏好为本机全局设置，同一裸任务名（bare task name）的所有 Task 共享。</span>
+                <button class="primary-button" id="tasks-save" type="button" disabled>保存偏好</button>
+              </div>
+            </footer>
+
+            <span class="tasks-error" id="tasks-error" role="alert"></span>
           </section>
         </div>
       </section>
@@ -402,18 +416,6 @@
         </div>
       </div>
 
-      <div class="docs-unsaved-backdrop" id="docs-unsaved-dialog" role="dialog" aria-modal="true" aria-labelledby="docs-unsaved-title" aria-hidden="true" hidden>
-        <div class="docs-unsaved-card">
-          <p class="eyebrow">未保存的改动</p>
-          <h2 id="docs-unsaved-title">文档有未保存的改动</h2>
-          <p id="docs-unsaved-message">离开前要保存还是丢弃这些改动？</p>
-          <div class="docs-unsaved-actions">
-            <button class="secondary-button" id="docs-unsaved-cancel" type="button">取消</button>
-            <button class="secondary-button" id="docs-unsaved-discard" type="button">丢弃</button>
-            <button class="primary-button" id="docs-unsaved-save" type="button">保存</button>
-          </div>
-        </div>
-      </div>
     </main>
     <script src="./app.js"></script>
   </body>
