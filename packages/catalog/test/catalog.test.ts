@@ -7,6 +7,10 @@ import {
   type DispatchCandidate,
   type ModelCapability,
   type TaskDispatchRequirements,
+  formatRunSyntax,
+  parseRunSyntax,
+  PUBLIC_CLIENT_KEYS,
+  resolveRunSyntax,
 } from '../src/index.ts';
 
 test('native routing wins over a shared gateway protocol', () => {
@@ -314,4 +318,277 @@ test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flas
   assert.equal(result.selected.plan.model, 'GLM-5.3-Flash');
   assert.notEqual(result.selected.plan.model, 'glm-5.3');
   assert.notEqual(result.selected.plan.model, 'legacy-glm');
+});
+
+function buildDualRouteCatalog(): {
+  catalog: Catalog;
+  native: DispatchCandidate;
+  codebuddyGateway: DispatchCandidate;
+  grokGateway: DispatchCandidate;
+} {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'grok', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    nativeClients: ['claude'],
+    models: [{
+      id: 'm', displayName: 'M', intelligence: 'mid',
+      speed: { tps: 30, source: 'bench', checkedAt: '2026-09-05' },
+      pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
+    }],
+    protocols: [
+      { protocol: 'anthropic_messages', endpoint: 'https://api.vendor.example/v1/messages', authScheme: 'x-api-key' },
+      { protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' },
+    ],
+  });
+  return {
+    catalog,
+    native: { profileId: 'vendor/m:cc', client: 'claude', provider: 'vendor', model: 'm' },
+    codebuddyGateway: { profileId: 'vendor/m:cb', client: 'codebuddy', provider: 'vendor', model: 'm' },
+    grokGateway: { profileId: 'vendor/m:gk', client: 'grok', provider: 'vendor', model: 'm' },
+  };
+}
+
+test('automatic dispatch collapses the same provider/model to the Catalog-native client after hard gates', () => {
+  const { catalog, native, codebuddyGateway, grokGateway } = buildDualRouteCatalog();
+  // The gateway and grok candidates are declared first; collapse must still pick
+  // the eligible native claude plan as the single representative of vendor/m.
+  const result = resolveConstrainedDispatch(catalog, [grokGateway, codebuddyGateway, native], {});
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.plan.client, 'claude');
+  assert.equal(result.selected.plan.mode, 'native');
+  assert.equal(result.selected.plan.provider, 'vendor');
+  assert.equal(result.selected.plan.model, 'm');
+});
+
+test('hard gates run before client collapse: an unusable native path falls back to the grok gateway', () => {
+  const { catalog, native, codebuddyGateway, grokGateway } = buildDualRouteCatalog();
+  // The native claude plan's local sample is under minimumTps, so the hard gate
+  // filters it before collapse; among the surviving gateway clients grok wins.
+  const result = resolveConstrainedDispatch(catalog, [codebuddyGateway, grokGateway, native], { minimumTps: 60 }, [
+    { profileId: native.profileId, tps: 20, sampleCount: 5, checkedAt: '2026-09-05' },
+    { profileId: codebuddyGateway.profileId, tps: 90, sampleCount: 5, checkedAt: '2026-09-05' },
+    { profileId: grokGateway.profileId, tps: 90, sampleCount: 5, checkedAt: '2026-09-05' },
+  ]);
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.plan.client, 'grok');
+  assert.equal(result.selected.plan.mode, 'gateway');
+});
+
+test('with no native route the grok client beats claude for the same provider/model', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
+  catalog.registerClient({ id: 'grok', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    models: [{
+      id: 'm', displayName: 'M', intelligence: 'mid',
+      speed: { tps: 30, source: 'bench', checkedAt: '2026-09-05' },
+      pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
+    }],
+    protocols: [
+      { protocol: 'anthropic_messages', endpoint: 'https://api.vendor.example/v1/messages', authScheme: 'x-api-key' },
+      { protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' },
+    ],
+  });
+  const claudeGateway: DispatchCandidate = { profileId: 'vendor/m:cc', client: 'claude', provider: 'vendor', model: 'm' };
+  const grokGateway: DispatchCandidate = { profileId: 'vendor/m:gk', client: 'grok', provider: 'vendor', model: 'm' };
+  const result = resolveConstrainedDispatch(catalog, [claudeGateway, grokGateway], {});
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.plan.client, 'grok');
+  assert.equal(result.selected.plan.mode, 'gateway');
+});
+
+test('preferredRuntime cannot force an alternate client or a different provider/model in automatic selection', () => {
+  const { catalog, candidates } = buildDispatchCatalog();
+  const tied: DispatchCandidate[] = [
+    ...candidates,
+    { profileId: 'alt', client: 'c1', provider: 'p2', model: 'z' },
+  ];
+  const local = [{ profileId: 'alt', tps: 50, sampleCount: 10, checkedAt: '2026-09-05' }];
+  // z (p2) and mfast (p) share speed and reference output price; stable canonical
+  // identity chooses p/mfast. A preferredRuntime naming z must not change the pick.
+  const baseline = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, local);
+  assert.equal(baseline.ok, true);
+  assert.equal(baseline.selected.plan.provider, 'p');
+  assert.equal(baseline.selected.plan.model, 'mfast');
+
+  const differentProviderModel = resolveConstrainedDispatch(catalog, tied, {
+    expectedTps: 40,
+    preferredRuntime: { client: 'c1', provider: 'p2', model: 'z' },
+  }, local);
+  assert.equal(differentProviderModel.ok, true);
+  assert.deepEqual(differentProviderModel.selected.plan, baseline.selected.plan);
+
+  // A preferredRuntime naming the gateway client for a model that has a usable
+  // native route cannot override the deterministic native choice.
+  const { catalog: dual, native, codebuddyGateway } = buildDualRouteCatalog();
+  const alternateClient = resolveConstrainedDispatch(dual, [native, codebuddyGateway], {
+    preferredRuntime: { client: 'codebuddy', provider: 'vendor', model: 'm' },
+  });
+  assert.equal(alternateClient.ok, true);
+  assert.equal(alternateClient.selected.plan.client, 'claude');
+  assert.equal(alternateClient.selected.plan.mode, 'native');
+});
+
+test('automatic selection stays deterministic when candidate declaration order is reversed', () => {
+  const { catalog, candidates } = buildDispatchCatalog();
+  const forward = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 40 });
+  const backward = resolveConstrainedDispatch(catalog, [...candidates].reverse(), { expectedTps: 40 });
+  assert.equal(forward.ok, true);
+  assert.equal(backward.ok, true);
+  assert.deepEqual(backward.selected.plan, forward.selected.plan);
+});
+
+test('every approved public client key round-trips through parse and format', () => {
+  for (const [publicKey, client] of Object.entries(PUBLIC_CLIENT_KEYS)) {
+    const input = `acme/model-x:${publicKey}`;
+    const parsed = parseRunSyntax(input);
+    assert.deepEqual(parsed, { client, provider: 'acme', model: 'model-x' });
+    assert.equal(formatRunSyntax(parsed), input);
+    assert.deepEqual(parseRunSyntax(formatRunSyntax(parsed)), parsed);
+  }
+});
+
+test('model ids containing an additional slash split provider at the first slash only', () => {
+  const input = 'acme/models/deepseek-v4:gk';
+  assert.deepEqual(parseRunSyntax(input), { client: 'grok', provider: 'acme', model: 'models/deepseek-v4' });
+  assert.equal(formatRunSyntax({ client: 'grok', provider: 'acme', model: 'models/deepseek-v4' }), input);
+});
+
+test('run syntax rejects malformed strings with precise errors', () => {
+  const malformed: Array<[string, RegExp]> = [
+    ['', /empty/],
+    [' acme/model:cc', /whitespace/],
+    ['acme/model :cc', /whitespace/],
+    ['acme/model:cc\n', /whitespace/],
+    ['acme', /"\//],
+    ['acme:cc', /"\//],
+    ['acme/model', /":"/],
+    ['/model:cc', /provider/],
+    ['acme/:cc', /model/],
+    ['acme/model:', /client/],
+    ['acme/model:cc:cc', /":"/],
+  ];
+  for (const [input, pattern] of malformed) {
+    assert.throws(() => parseRunSyntax(input), pattern);
+  }
+});
+
+test('unknown and alias-like client names are rejected as syntax', () => {
+  assert.throws(() => parseRunSyntax('acme/model:fast'), /unknown client key/);
+  assert.throws(() => parseRunSyntax('acme/model:claude'), /unknown client key/);
+  // A bare profile/alias-like name is not run syntax at all: no provider separator.
+  assert.throws(() => parseRunSyntax('fast'), /"\//);
+  assert.throws(() => formatRunSyntax({ client: 'unknown', provider: 'acme', model: 'm' }), /unknown client/);
+});
+
+test('codex/gpt-6-astra:cc parses to the claude client yet still fails resolution', () => {
+  assert.deepEqual(parseRunSyntax('codex/gpt-6-astra:cc'), {
+    client: 'claude',
+    provider: 'codex',
+    model: 'gpt-6-astra',
+  });
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
+  catalog.registerProvider({
+    id: 'codex', displayName: 'Codex', credentialResolver: 'codex',
+    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra' }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://codex.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  // Parseable identity is not proof of compatibility: resolution fails closed.
+  assert.throws(() => resolveRunSyntax(catalog, 'codex/gpt-6-astra:cc'), /cannot serve client claude/);
+});
+
+test('a compatible target resolves exactly through Catalog.resolveRun with no fallback', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
+  catalog.registerProvider({
+    id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
+    nativeClients: ['claude'],
+    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4' }],
+    protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
+  });
+  const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-4:cc');
+  assert.equal(viaSyntax.mode, 'native');
+  assert.deepEqual(viaSyntax, catalog.resolveRun('claude', 'anthropic', 'claude-sonnet-4'));
+});
+
+function buildTaskCatalog(): Catalog {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'], taskCapable: true });
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true });
+  catalog.registerClient({ id: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true });
+  catalog.registerClient({ id: 'dsh', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'anthropic-api', displayName: 'Anthropic', credentialResolver: 'forge-managed',
+    modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
+    models: [
+      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5' },
+      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true },
+    ],
+    protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
+  });
+  catalog.registerProvider({
+    id: 'vendor-api', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    models: [{ id: 'm', displayName: 'M' }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  return catalog;
+}
+
+test('task candidate enumeration is deterministic with canonical dynamic syntax keys', () => {
+  const catalog = buildTaskCatalog();
+  const first = catalog.enumerateTaskCandidates();
+  const second = catalog.enumerateTaskCandidates();
+  assert.deepEqual(second, first);
+  assert.deepEqual(first.map((candidate) => candidate.profileId), [
+    'anthropic-api/claude-sonnet-5:cc',
+    'anthropic-api/claude-task:cc',
+    'vendor-api/m:cb',
+  ]);
+  for (const candidate of first) {
+    const plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model);
+    assert.equal(formatRunSyntax(plan), candidate.profileId);
+  }
+});
+
+test('task candidate enumeration includes compatible taskOnly models', () => {
+  const catalog = buildTaskCatalog();
+  const keys = catalog.enumerateTaskCandidates().map((candidate) => candidate.profileId);
+  assert.ok(keys.includes('anthropic-api/claude-task:cc'));
+  assert.ok(keys.includes('anthropic-api/claude-sonnet-5:cc'));
+  // taskOnly hides the model from the public Gateway /models listing but not from Tasks.
+  assert.ok(!catalog.listGatewayModels('anthropic_messages').some((entry) => entry.id === 'claude-task'));
+});
+
+test('task candidate enumeration excludes parseable but non-task-capable dsh', () => {
+  const catalog = buildTaskCatalog();
+  const candidates = catalog.enumerateTaskCandidates();
+  assert.ok(!candidates.some((candidate) => candidate.client === 'dsh'));
+  assert.ok(!candidates.some((candidate) => candidate.profileId.endsWith(':dsh')));
+  // dsh stays a parseable public key and a compatible gateway route; capability is separate.
+  assert.equal(catalog.resolveRun('dsh', 'vendor-api', 'm').mode, 'gateway');
+  assert.deepEqual(parseRunSyntax('vendor-api/m:dsh'), { client: 'dsh', provider: 'vendor-api', model: 'm' });
+});
+
+test('task candidate enumeration excludes incompatible client/provider pairs', () => {
+  const catalog = buildTaskCatalog();
+  const keys = catalog.enumerateTaskCandidates().map((candidate) => candidate.profileId);
+  assert.ok(!keys.includes('vendor-api/m:cc'));
+  assert.ok(!keys.some((key) => key.endsWith(':codex')));
+  assert.throws(() => catalog.resolveRun('claude', 'vendor-api', 'm'), /cannot serve client claude/);
+  assert.throws(() => catalog.resolveRun('codex', 'vendor-api', 'm'), /cannot serve client codex/);
+});
+
+test('task candidate enumeration never emits model alias duplicates', () => {
+  const catalog = buildTaskCatalog();
+  const candidates = catalog.enumerateTaskCandidates();
+  const aliased = candidates.filter((candidate) => candidate.model === 'sonnet-legacy');
+  assert.deepEqual(aliased, []);
+  const canonicalCount = candidates.filter((candidate) => candidate.model === 'claude-sonnet-5').length;
+  assert.equal(canonicalCount, 1);
+  assert.equal(new Set(candidates.map((candidate) => candidate.profileId)).size, candidates.length);
 });
