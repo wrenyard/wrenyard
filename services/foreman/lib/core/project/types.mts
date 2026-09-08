@@ -1,6 +1,10 @@
 export interface FmprojConfig {
   name: string
   description: string
+  /** Optional authoritative human-facing display label from the top-level
+   *  `.fmproj` `display_name` field. Display metadata only; project name,
+   *  id, and path semantics are unchanged. */
+  displayName?: string
   git?: { remote: string; default_branch?: string }
   hosts?: Record<string, string>
 }
@@ -18,6 +22,9 @@ export interface ProjectNode {
 export interface ProjectEntry {
   name: string
   path: string
+  /** Optional authoritative human-facing display label from the project's
+   *  `.fmproj` `display_name`; display metadata only. */
+  displayName?: string
   noWorktree?: boolean
   gitRemote?: string
   defaultBranch?: string

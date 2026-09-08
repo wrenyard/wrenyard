@@ -245,7 +245,9 @@ export interface TaskRunSnapshot {
   taskId: string;
   taskName?: string;
   source?: 'builtin' | 'project' | 'unknown';
-  status?: 'done' | 'failed' | 'cancelled' | 'running';
+  /** Exact persisted execution project; present only when nonblank. */
+  project?: string;
+  status?: 'done' | 'failed' | 'cancelled' | 'interrupted' | 'running' | 'queued';
   startedAt?: string;
   finishedAt?: string;
   resolvedClient?: string;
@@ -536,6 +538,18 @@ export interface TaskSettingsEligibleChoice {
   protocol?: string;
 }
 
+/** One ordered, non-executing preview segment of a builtin prompt template. */
+export type TaskSettingsInstructionSegment =
+  /** Static instruction text carried verbatim; renderers escape before display. */
+  | { kind: 'text'; source: string; text: string }
+  /** A non-executed function instruction or the input-dependent prompt body. */
+  | { kind: 'placeholder'; source: string; label: string }
+  /** The slot where user additional_instructions are inserted at render time. */
+  | { kind: 'additional_instructions'; source: string };
+
+/** Ordered safe preview of the builtin prompt template; never executes config. */
+export type TaskSettingsInstructionTemplate = TaskSettingsInstructionSegment[];
+
 /** Read-only metadata about a daemon-builtin task. */
 export interface TaskSettingsBuiltinMetadata {
   identity: string;
@@ -544,6 +558,7 @@ export interface TaskSettingsBuiltinMetadata {
   description?: string;
   project?: string;
   prompt_template: 'dynamic' | 'fixed';
+  instruction_template: TaskSettingsInstructionTemplate;
   declared_runtime: string | null;
   timeout_ms: number | null;
   dispatch: TaskSettingsAutomaticDispatch;
@@ -562,7 +577,11 @@ export interface TaskSettingsTaskRow {
   /** Stable identity: `builtin:<name>` or `project:<project>:<name>`. */
   identity: string;
   name: string;
+  /** Authoritative display label; falls back to the exact task `name`. */
+  display_name: string;
   project?: string;
+  /** Authoritative project display label on project rows; falls back to the exact project id. */
+  project_display_name?: string;
   builtin: TaskSettingsBuiltinMetadata;
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer;
@@ -574,6 +593,8 @@ export interface TaskSettingsTaskRow {
    * selected explicit runtime.
    */
   runtime_choices: TaskSettingsEligibleChoice[];
+  /** Row-level exact resolved runtime; null while unresolved/unavailable. */
+  resolved_runtime: TaskSettingsEligibleChoice | null;
   explicit?: TaskSettingsExplicitRow;
   issues: TaskSettingsValidationIssue[];
 }

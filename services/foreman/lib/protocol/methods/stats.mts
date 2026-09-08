@@ -128,12 +128,21 @@ export interface StatsWindowSummary {
 export interface TaskRunLedgerRow {
   task_run_id: string
   task: string
+  /** Exact persisted execution project; present only when nonblank. */
+  project?: string
   source: 'builtin' | 'project' | 'unknown'
   status: string
   created_at: string
   started_at?: string
   finished_at?: string
   resolved?: TaskResolvedDispatch
+  /**
+   * Additive legacy fallback alongside `resolved`: the exact stored nonblank
+   * executions.resolved_profile of the task's execution, carried for runs that
+   * predate full task_run_attempt_dispatch snapshots. Never derived from the
+   * current resolver/defaults and omitted when no nonblank profile is stored.
+   */
+  resolved_profile?: string
   usage: TaskUsage
 }
 
@@ -323,12 +332,16 @@ export const statsSummaryResultSchema = {
         properties: {
           task_run_id: { type: 'string' },
           task: { type: 'string' },
+          project: { type: 'string' },
           source: { enum: ['builtin', 'project', 'unknown'] },
           status: { type: 'string' },
           created_at: { type: 'string' },
           started_at: { type: 'string' },
           finished_at: { type: 'string' },
           resolved: taskResolvedDispatchSchema,
+          // Additive authoritative legacy fallback; only a nonempty string is a
+          // valid profile, so empty/malformed values are rejected.
+          resolved_profile: { type: 'string', minLength: 1 },
           usage: taskUsageSchema,
         },
         additionalProperties: true,

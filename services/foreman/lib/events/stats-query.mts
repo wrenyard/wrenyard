@@ -56,12 +56,23 @@ export interface DailyStatsResponse {
 export interface TaskRunLedgerRow {
   task_run_id: string
   task: string
+  /** Exact persisted execution project, present only when nonblank. */
+  project?: string
   source: 'builtin' | 'project' | 'unknown'
   status: string
   created_at: string
   started_at?: string
   finished_at?: string
   resolved?: TaskResolvedDispatch
+  /**
+   * Authoritative additive legacy fallback: the exact persisted nonblank
+   * executions.resolved_profile of the task's execution. `resolved` remains the
+   * preferred full current/attempt snapshot; this scalar is never derived from
+   * the current resolver, defaults, or another attempt and is omitted for runs
+   * whose execution stores no nonblank profile (for example pre-dispatch
+   * failures with no execution at all).
+   */
+  resolved_profile?: string
   usage: TaskUsage
 }
 
@@ -365,13 +376,16 @@ function readRecentTaskRunLedger(recentLimit: number): TaskRunLedgerRow[] {
     ended_at: string | null
     definition_source: string | null
     started_at: string | null
+    resolved_profile: string | null
   }>(
     `SELECT t.id AS id, t.template AS template, t.project AS project, t.status AS status,
             t.created_at AS created_at, t.ended_at AS ended_at, t.definition_source AS definition_source,
-            ex.started_at AS started_at
+            ex.started_at AS started_at,
+            exe.resolved_profile AS resolved_profile
      FROM tasks t
      LEFT JOIN (SELECT task_id, MIN(started_at) AS started_at FROM executions GROUP BY task_id) ex
        ON ex.task_id = t.id
+     LEFT JOIN executions exe ON exe.id = t.execution_id
      ORDER BY COALESCE(t.ended_at, t.created_at) DESC, t.created_at DESC
      LIMIT ?`,
     recentLimit,
@@ -387,9 +401,16 @@ function readRecentTaskRunLedger(recentLimit: number): TaskRunLedgerRow[] {
       created_at: row.created_at,
       usage: meta.usage,
     }
+    if (row.project && row.project.trim() !== '') ledger.project = row.project
     if (row.started_at) ledger.started_at = row.started_at
     if (row.ended_at) ledger.finished_at = row.ended_at
     if (meta.resolved) ledger.resolved = meta.resolved
+    // Additive authoritative legacy fallback: the exact persisted
+    // executions.resolved_profile of the task's execution, only when nonblank.
+    // Never derived from the current resolver/defaults or another attempt and
+    // never emitted when the run has no execution/profile at all.
+    const legacyResolvedProfile = normalizeResolvedProfile(row.resolved_profile)
+    if (legacyResolvedProfile) ledger.resolved_profile = legacyResolvedProfile
     return ledger
   })
 }

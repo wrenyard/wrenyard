@@ -48,6 +48,9 @@ export interface TaskDispatchRequirements {
 
 export interface TaskDefinitionSummary {
   name: string
+  /** Authoritative human-readable task label parsed from the definition;
+   *  consumers fall back to the exact task `name`. */
+  displayName?: string
   source: string
   project?: string
   description?: string
@@ -263,6 +266,7 @@ export const taskDefinitionSummarySchema = {
   required: ['name', 'source'],
   properties: {
     name: { type: 'string', minLength: 1 },
+    displayName: { type: 'string', minLength: 1 },
     source: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     description: { type: 'string' },
@@ -283,6 +287,7 @@ export const taskDefinitionDetailSchema = {
   required: ['name', 'source', 'path', 'permission'],
   properties: {
     name: { type: 'string', minLength: 1 },
+    displayName: { type: 'string', minLength: 1 },
     source: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     path: { type: 'string', minLength: 1 },
@@ -672,6 +677,18 @@ export interface TaskSettingsRuntimeReadiness {
   issues: TaskSettingsValidationIssue[]
 }
 
+/** One ordered, non-executing preview segment of a builtin prompt template. */
+export type TaskSettingsInstructionSegment =
+  /** Static instruction text carried verbatim; renderers escape before display. */
+  | { kind: 'text'; source: string; text: string }
+  /** A non-executed function instruction or the input-dependent prompt body. */
+  | { kind: 'placeholder'; source: string; label: string }
+  /** The slot where user additional_instructions are inserted at render time. */
+  | { kind: 'additional_instructions'; source: string }
+
+/** Ordered safe preview of the builtin prompt template; never executes config. */
+export type TaskSettingsInstructionTemplate = TaskSettingsInstructionSegment[]
+
 export interface TaskSettingsBuiltinMetadata {
   identity: string
   name: string
@@ -682,6 +699,8 @@ export interface TaskSettingsBuiltinMetadata {
    *  never editable; customization happens only through plain
    *  `additional_instructions`. */
   prompt_template: 'dynamic' | 'fixed'
+  /** Ordered non-executing preview segments of the builtin prompt template. */
+  instruction_template: TaskSettingsInstructionTemplate
   /** Read-only builtin runtime declaration (definition agentRuntime/profile). */
   declared_runtime: string | null
   timeout_ms: number | null
@@ -704,7 +723,11 @@ export interface TaskSettingsTaskRow {
   /** Stable identity: `builtin:<name>` or `project:<project>:<name>`. */
   identity: string
   name: string
+  /** Authoritative display label; falls back to the exact task `name`. */
+  display_name: string
   project?: string
+  /** Authoritative project display label on project rows; falls back to the exact project id. */
+  project_display_name?: string
   builtin: TaskSettingsBuiltinMetadata
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
@@ -716,6 +739,12 @@ export interface TaskSettingsTaskRow {
    * selected explicit runtime.
    */
   runtime_choices: TaskSettingsEligibleChoice[]
+  /**
+   * Row-level exact resolved runtime: the successful automatic or explicit
+   * resolution of this row, or null while unresolved/unavailable. Never a
+   * fallback or stale selection.
+   */
+  resolved_runtime: TaskSettingsEligibleChoice | null
   explicit?: TaskSettingsExplicitRow
   issues: TaskSettingsValidationIssue[]
 }
@@ -1051,9 +1080,58 @@ const taskSettingsRuntimeReadinessSchema = {
   additionalProperties: true,
 } as const satisfies JsonSchema
 
+const taskSettingsInstructionTextSegmentSchema = {
+  type: 'object',
+  required: ['kind', 'source', 'text'],
+  properties: {
+    kind: { const: 'text' },
+    source: { type: 'string', minLength: 1 },
+    text: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskSettingsInstructionPlaceholderSegmentSchema = {
+  type: 'object',
+  required: ['kind', 'source', 'label'],
+  properties: {
+    kind: { const: 'placeholder' },
+    source: { type: 'string', minLength: 1 },
+    label: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskSettingsInstructionAdditionalSlotSchema = {
+  type: 'object',
+  required: ['kind', 'source'],
+  properties: {
+    kind: { const: 'additional_instructions' },
+    source: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskSettingsInstructionSegmentSchema = {
+  oneOf: [
+    taskSettingsInstructionTextSegmentSchema,
+    taskSettingsInstructionPlaceholderSegmentSchema,
+    taskSettingsInstructionAdditionalSlotSchema,
+  ],
+} as const satisfies JsonSchema
+
 const taskSettingsBuiltinMetadataSchema = {
   type: 'object',
-  required: ['identity', 'name', 'source', 'prompt_template', 'declared_runtime', 'timeout_ms', 'dispatch'],
+  required: [
+    'identity',
+    'name',
+    'source',
+    'prompt_template',
+    'instruction_template',
+    'declared_runtime',
+    'timeout_ms',
+    'dispatch',
+  ],
   properties: {
     identity: { type: 'string', minLength: 1 },
     name: { type: 'string', minLength: 1 },
@@ -1061,6 +1139,7 @@ const taskSettingsBuiltinMetadataSchema = {
     description: { type: 'string' },
     project: { type: 'string', minLength: 1 },
     prompt_template: { enum: ['dynamic', 'fixed'] },
+    instruction_template: { type: 'array', items: taskSettingsInstructionSegmentSchema },
     declared_runtime: nullableStringSchema,
     timeout_ms: { anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }] },
     dispatch: taskSettingsAutomaticDispatchSchema,
@@ -1086,15 +1165,20 @@ const taskSettingsExplicitRowSchema = {
 
 const taskSettingsTaskRowSchema = {
   type: 'object',
-  required: ['identity', 'name', 'builtin', 'user_task', 'effective', 'runtime_choices', 'issues'],
+  required: ['identity', 'name', 'display_name', 'builtin', 'user_task', 'effective', 'runtime_choices', 'resolved_runtime', 'issues'],
   properties: {
     identity: { type: 'string', minLength: 1 },
     name: { type: 'string', minLength: 1 },
+    display_name: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
+    project_display_name: { type: 'string', minLength: 1 },
     builtin: taskSettingsBuiltinMetadataSchema,
     user_task: taskSettingsLayerSchema,
     effective: taskSettingsEffectiveSchema,
     runtime_choices: { type: 'array', items: taskSettingsEligibleChoiceSchema },
+    resolved_runtime: {
+      anyOf: [taskSettingsEligibleChoiceSchema, { type: 'null' }],
+    },
     explicit: taskSettingsExplicitRowSchema,
     issues: { type: 'array', items: taskSettingsValidationIssueSchema },
   },

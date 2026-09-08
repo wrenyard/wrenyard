@@ -856,4 +856,34 @@ describe('ProjectManager', () => {
     const result = manager.commitLog('app', 2)
     assert.ok(result.commits.length <= 2)
   })
+
+  it('preserves optional displayName across list/get/find while keeping exact project name and id', () => {
+    const workspace = makeTempDir('foreman-workspace-')
+    const repo = makeTempDir('foreman-repo-')
+    const appDir = join(workspace, 'projects', 'app')
+    mkdirSync(appDir, { recursive: true })
+    writeFileSync(
+      join(appDir, 'app.fmproj'),
+      'name: app\ndescription: Test project\ndisplay_name: "App 应用"\nhosts:\n  test-host.local: ' + JSON.stringify(repo) + '\n',
+      'utf-8',
+    )
+    const manager = new ProjectManager({ workspaceRoot: workspace, hostname: 'test-host.local' })
+
+    const listed = manager.listProjects()
+    assert.equal(listed.length, 1)
+    assert.equal(listed[0].name, 'app')
+    assert.equal(listed[0].path, repo)
+    assert.equal(listed[0].displayName, 'App 应用')
+
+    const got = manager.getProject('app')
+    assert.equal(got.name, 'app')
+    assert.equal(got.path, repo)
+    assert.equal(got.displayName, 'App 应用')
+
+    const found = manager.findProject('app')
+    assert.ok(found)
+    assert.equal(found.name, 'app')
+    assert.equal(found.path, repo)
+    assert.equal(found.displayName, 'App 应用')
+  })
 })

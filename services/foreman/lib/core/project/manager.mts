@@ -191,6 +191,7 @@ export class ProjectManager {
     return {
       name: projectName,
       path: resolve(hostPath),
+      ...(node.config.displayName ? { displayName: node.config.displayName } : {}),
       ...(node.config.git?.remote ? { gitRemote: node.config.git.remote } : {}),
       ...(node.config.git?.default_branch ? { defaultBranch: node.config.git.default_branch } : {}),
       ...(!node.config.git?.remote ? { noWorktree: true } : {}),

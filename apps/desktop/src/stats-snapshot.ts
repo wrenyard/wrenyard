@@ -225,6 +225,7 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
     ...(isTaskRunStatus(statusValue) ? { status: statusValue } : {}),
     ...(readString(record.started_at) !== null ? { startedAt: record.started_at as string } : {}),
     ...(readString(record.finished_at) !== null ? { finishedAt: record.finished_at as string } : {}),
+    ...(readString(record.project) !== null ? { project: record.project as string } : {}),
     ...(resolvedClient !== null ? { resolvedClient } : {}),
     ...(resolvedProvider !== null ? { resolvedProvider } : {}),
     ...(resolvedProfile !== null ? { resolvedProfile } : {}),
@@ -314,7 +315,8 @@ function readCompleteness(value: unknown): TaskRunUsage['completeness'] | null {
 }
 
 function isTaskRunStatus(value: unknown): value is TaskRunSnapshot['status'] {
-  return value === 'done' || value === 'failed' || value === 'cancelled' || value === 'running';
+  return value === 'done' || value === 'failed' || value === 'cancelled' || value === 'interrupted'
+    || value === 'running' || value === 'queued';
 }
 
 function toDaily(today: StatsTodaySnapshot): StatsDailySnapshot {

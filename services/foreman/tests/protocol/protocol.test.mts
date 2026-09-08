@@ -641,6 +641,7 @@ describe('lib/protocol JSON-RPC contract', () => {
     const dispatchSummary = {
       name: 'dispatch-task',
       source: 'workspace',
+      displayName: '调度任务',
       agentRuntime: 'forge/codex-luna',
       dispatch: {
         expectedTps: 20,
@@ -671,6 +672,7 @@ describe('lib/protocol JSON-RPC contract', () => {
     assert.deepEqual(parseMethodResult('task.definition.describe', {
       name: 'commit',
       source: 'workspace',
+      displayName: 'Commit task',
       path: '/tmp/commit.task.ts',
       permission: 'readonly',
       timeoutMs: 7200000,
@@ -680,6 +682,7 @@ describe('lib/protocol JSON-RPC contract', () => {
     }), {
       name: 'commit',
       source: 'workspace',
+      displayName: 'Commit task',
       path: '/tmp/commit.task.ts',
       permission: 'readonly',
       timeoutMs: 7200000,
@@ -802,12 +805,32 @@ describe('lib/protocol JSON-RPC contract', () => {
     assert.deepEqual(parseMethodResult('project.list', [{
       name: 'foreman',
       path: '/tmp/foreman',
+      displayName: 'Foreman 平台',
       gitRemote: 'https://example.test/foreman.git',
+    }, {
+      name: 'legacy',
+      path: '/tmp/legacy',
+      gitRemote: 'https://example.test/legacy.git',
     }]), [{
       name: 'foreman',
       path: '/tmp/foreman',
+      displayName: 'Foreman 平台',
       gitRemote: 'https://example.test/foreman.git',
+    }, {
+      name: 'legacy',
+      path: '/tmp/legacy',
+      gitRemote: 'https://example.test/legacy.git',
     }])
+
+    assert.deepEqual(parseMethodResult('project.describe', {
+      name: 'foreman',
+      path: '/tmp/foreman',
+      displayName: 'Foreman 平台',
+    }), {
+      name: 'foreman',
+      path: '/tmp/foreman',
+      displayName: 'Foreman 平台',
+    })
 
     assert.deepEqual(parseMethodResult('project.status', {
       name: 'foreman',
@@ -1251,13 +1274,21 @@ describe('lib/protocol JSON-RPC contract', () => {
       rows: [{
         identity: 'project:workspace:commit',
         name: 'commit',
+        display_name: 'Commit helper',
         project: 'workspace',
+        project_display_name: 'Workspace 平台',
         builtin: {
           identity: 'project:workspace:commit',
           name: 'commit',
           project: 'workspace',
           source: 'workspace',
           prompt_template: 'dynamic',
+          instruction_template: [
+            { kind: 'text', source: 'task.instructions[0]', text: 'Stage and commit the reviewed changes only.' },
+            { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
+            { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
+            { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
+          ],
           declared_runtime: 'forge/fast',
           timeout_ms: 900000,
           dispatch: { expected_tps: 20, minimum_tps: 10 },
@@ -1287,6 +1318,8 @@ describe('lib/protocol JSON-RPC contract', () => {
         // automatic-mode row so the UI can switch to explicit mode without a
         // fabricated current selection.
         runtime_choices: [eligibleChoice],
+        // The row truthfully states the exact runtime it currently resolves to.
+        resolved_runtime: eligibleChoice,
       }],
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', snapshotResult), snapshotResult)
@@ -1319,6 +1352,40 @@ describe('lib/protocol JSON-RPC contract', () => {
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
         return true
+      },
+    )
+
+    // resolved_runtime is required: every row must state its current resolved
+    // runtime or null for an unresolved/unavailable state.
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        rows: [{
+          ...snapshotResult.rows[0],
+          resolved_runtime: undefined,
+        }],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // Null explicitly marks an unresolved/unavailable row and is accepted.
+    assert.deepEqual(
+      parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        rows: [{
+          ...snapshotResult.rows[0],
+          resolved_runtime: null,
+        }],
+      }),
+      {
+        ...snapshotResult,
+        rows: [{
+          ...snapshotResult.rows[0],
+          resolved_runtime: null,
+        }],
       },
     )
 
@@ -1379,6 +1446,48 @@ describe('lib/protocol JSON-RPC contract', () => {
         return true
       },
     )
+
+    // Rows expose the authoritative display labels alongside the exact id/name.
+    const labeledResult = parseMethodResult('task.settings.snapshot', snapshotResult) as {
+      rows: Array<{ display_name: string; project_display_name?: string }>
+    }
+    assert.equal(labeledResult.rows[0]!.display_name, 'Commit helper')
+    assert.equal(labeledResult.rows[0]!.project_display_name, 'Workspace 平台')
+
+    // A backwards-compatible task definition payload without displayName stays valid.
+    assert.deepEqual(parseMethodResult('task.definition.list', [{ name: 'legacy-task', source: 'workspace' }]), [
+      { name: 'legacy-task', source: 'workspace' },
+    ])
+
+    // Malformed instruction-template segments fail validation.
+    const malformedTemplates: unknown[] = [
+      // text kind requires the verbatim text field.
+      { kind: 'text', source: 'task.instructions[0]' },
+      // placeholder kind requires a stable label.
+      { kind: 'placeholder', source: 'task.instructions[1]' },
+      // additional_instructions requires the bounded source string.
+      { kind: 'additional_instructions' },
+      // unknown kinds are rejected.
+      { kind: 'function', source: 'task.instructions[0]', text: 'x' },
+      // kind/text or kind/label mismatches are rejected.
+      { kind: 'text', source: 'task.instructions[0]', label: 'nope' },
+      { kind: 'placeholder', source: 'task.instructions[1]', text: 'nope' },
+    ]
+    for (const instruction_template of malformedTemplates) {
+      assert.throws(
+        () => parseMethodResult('task.settings.snapshot', {
+          ...snapshotResult,
+          rows: [{
+            ...snapshotResult.rows[0],
+            builtin: { ...snapshotResult.rows[0].builtin, instruction_template: [instruction_template] },
+          }],
+        }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
   })
 
   it('does not register the legacy prompt-shaped task.create method', () => {
@@ -1597,6 +1706,72 @@ describe('lib/protocol JSON-RPC contract', () => {
     ]) {
       assert.throws(
         () => parseMethodResult('stats.summary', bad),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+
+    // Additive recent-run ledger rows may carry authoritative project context.
+    const ledgerUsage = { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false }
+    const projectLedgerResult = {
+      ...legacySummary,
+      recentRuns: [
+        { task_run_id: 'run-1', task: 'commit', project: 'workspace', source: 'project', status: 'done', created_at: '2026-07-19T10:00:00.000Z', usage: ledgerUsage },
+        { task_run_id: 'run-2', task: 'edit', source: 'builtin', status: 'failed', created_at: '2026-07-19T09:00:00.000Z', usage: ledgerUsage },
+      ],
+    }
+    assert.deepEqual(parseMethodResult('stats.summary', projectLedgerResult), projectLedgerResult)
+
+    // Rows without a project stay valid for legacy control planes.
+    assert.deepEqual(parseMethodResult('stats.summary', {
+      ...legacySummary,
+      recentRuns: [
+        { task_run_id: 'run-3', task: 'legacy', source: 'unknown', status: 'done', created_at: '2026-07-19T08:00:00.000Z', usage: ledgerUsage },
+      ],
+    }), {
+      ...legacySummary,
+      recentRuns: [
+        { task_run_id: 'run-3', task: 'legacy', source: 'unknown', status: 'done', created_at: '2026-07-19T08:00:00.000Z', usage: ledgerUsage },
+      ],
+    })
+
+    // Malformed project context is rejected rather than coerced.
+    assert.throws(
+      () => parseMethodResult('stats.summary', {
+        ...legacySummary,
+        recentRuns: [
+          { task_run_id: 'run-4', task: 'commit', project: 3, source: 'project', status: 'done', created_at: '2026-07-19T07:00:00.000Z', usage: ledgerUsage },
+        ],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // The additive legacy resolved_profile scalar round-trips in its exact
+    // nonblank stored form alongside the existing optional fields.
+    const legacyProfileLedger = {
+      ...legacySummary,
+      recentRuns: [
+        { task_run_id: 'run-legacy', task: 'legacy', source: 'unknown', status: 'done', created_at: '2026-07-19T06:00:00.000Z', resolved_profile: 'legacy-clean', usage: ledgerUsage },
+        { task_run_id: 'run-modern', task: 'edit', source: 'builtin', status: 'done', created_at: '2026-07-19T06:30:00.000Z', resolved_profile: 'cb-dsf', usage: ledgerUsage },
+      ],
+    }
+    assert.deepEqual(parseMethodResult('stats.summary', legacyProfileLedger), legacyProfileLedger)
+
+    // Malformed resolved_profile (non-string, empty, or null) is rejected
+    // rather than coerced, mirroring the project-context guard.
+    for (const badProfile of [3, '', null]) {
+      assert.throws(
+        () => parseMethodResult('stats.summary', {
+          ...legacySummary,
+          recentRuns: [
+            { task_run_id: 'run-bad-profile', task: 'commit', source: 'project', status: 'done', created_at: '2026-07-19T05:00:00.000Z', resolved_profile: badProfile, usage: ledgerUsage },
+          ],
+        }),
         (error) => {
           assertProtocolError(error, INVALID_PARAMS.code)
           return true

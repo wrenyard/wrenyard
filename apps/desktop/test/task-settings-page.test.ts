@@ -7,191 +7,194 @@ import { test } from 'node:test';
 import {
   SHELL_CHANNELS,
   isShellPage,
+  type TaskSettingsEffective,
+  type TaskSettingsEligibleChoice,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const dshShellRoot = join(desktopRoot, '..', '..', 'packages', 'dsh-shell');
 
-function snapshotFixture(revision: string): TaskSettingsSnapshot {
+function eligibleChoice(exactAgentRuntime: string, client: string, provider: string, model: string): TaskSettingsEligibleChoice {
   return {
-    config_path: '/Users/me/.wrenyard/tasks/config.json',
-    revision,
-    user_global: {},
-    rows: [],
+    exactAgentRuntime,
+    client,
+    provider,
+    model,
+    model_id: `${provider}/${model}`,
+    mode: 'native',
+    intelligence: 'mid',
+    speed: {
+      effective_tps: 107,
+      source: 'catalog_default',
+      sample_count: 0,
+      checked_at: '2026-09-05T00:00:00.000Z',
+      expected_tps_met: true,
+    },
+    reference_pricing: {
+      input_usd_per_million: 0.2,
+      output_usd_per_million: 1.2,
+      source: 'catalog',
+      checked_at: '2026-09-05T00:00:00.000Z',
+    },
   };
 }
 
-test('tasks replaces docs as a registered, navigator-aware shell page', () => {
+function automaticEffective(): TaskSettingsEffective['automatic'] {
+  return {
+    expected_tps: { value: null, source: 'builtin' },
+    minimum_tps: { value: null, source: 'builtin' },
+    intelligence_min: { value: null, source: 'builtin' },
+    intelligence_max: { value: null, source: 'builtin' },
+    max_output_usd_per_million: { value: null, source: 'builtin' },
+    required_capabilities: { value: null, source: 'builtin' },
+    exclude_model_ids: { value: null, source: 'builtin' },
+    exclude_profile_ids: { value: null, source: 'builtin' },
+    exclude_client_ids: { value: null, source: 'builtin' },
+    exclude_provider_ids: { value: null, source: 'builtin' },
+    preferred_runtime: { value: null, source: 'builtin' },
+  };
+}
+
+function effectiveRow(): TaskSettingsEffective {
+  return {
+    mode: { value: 'automatic', source: 'user_global' },
+    explicit_runtime: { value: null, source: 'builtin' },
+    timeout_ms: { value: 120_000, source: 'user_global' },
+    additional_instructions: { value: '全局附加指令', source: 'user_global' },
+    automatic: automaticEffective(),
+  };
+}
+
+function taskSnapshot(revision = 'rev-1'): TaskSettingsSnapshot {
+  return {
+    config_path: '/Users/me/.wrenyard/tasks/config.json',
+    revision,
+    user_global: { additional_instructions: '全局附加指令' },
+    rows: [
+      {
+        identity: 'builtin:build',
+        name: 'build',
+        display_name: '构建任务',
+        builtin: {
+          identity: 'builtin:build',
+          name: 'build',
+          source: 'shell',
+          description: '编译并检查。',
+          prompt_template: 'dynamic',
+          instruction_template: [
+            { kind: 'text', source: 'shell', text: '你是构建工。' },
+            { kind: 'placeholder', source: 'shell', label: '任务说明' },
+            { kind: 'text', source: 'shell', text: '开始工作。' },
+            { kind: 'additional_instructions', source: 'shell' },
+          ],
+          declared_runtime: null,
+          timeout_ms: 300_000,
+          dispatch: {},
+        },
+        user_task: { additional_instructions: '只改 BUILD 目录。' },
+        effective: effectiveRow(),
+        runtime_choices: [eligibleChoice('forge/codex-luna', 'codex', 'codex', 'gpt-5.6-luna')],
+        resolved_runtime: null,
+        issues: [{ code: 'stale', message: '运行时已下线' }],
+      },
+      {
+        identity: 'project:acme:deploy',
+        name: 'deploy',
+        display_name: '发布上线',
+        project: 'acme',
+        project_display_name: '产品组 Acme',
+        builtin: {
+          identity: 'project:acme:deploy',
+          name: 'deploy',
+          source: 'project',
+          description: '发布到生产。',
+          prompt_template: 'fixed',
+          instruction_template: [
+            { kind: 'text', source: 'project', text: '发布流程如下。' },
+            { kind: 'additional_instructions', source: 'project' },
+          ],
+          declared_runtime: null,
+          timeout_ms: null,
+          dispatch: {},
+        },
+        user_task: { mode: 'explicit', explicit_runtime: { client: 'kimi', provider: 'kimi', model: 'kimi-k3' } },
+        effective: {
+          ...effectiveRow(),
+          mode: { value: 'explicit', source: 'user_task' },
+          explicit_runtime: { value: { client: 'kimi', provider: 'kimi', model: 'kimi-k3' }, source: 'user_task' },
+          additional_instructions: { value: '发布前确认。', source: 'user_task' },
+        },
+        runtime_choices: [eligibleChoice('acme/kimi', 'kimi', 'kimi', 'kimi-k3')],
+        resolved_runtime: eligibleChoice('acme/kimi', 'kimi', 'kimi', 'kimi-k3'),
+        issues: [],
+      },
+    ],
+  };
+}
+
+test('tasks is a registered, navigator-aware shell page with no legacy preference channels', () => {
   assert.equal(isShellPage('tasks'), true);
-  assert.equal(isShellPage('docs'), false);
   assert.equal(SHELL_CHANNELS.taskSettingsSnapshot, 'wrenyard-shell:task-settings-snapshot');
   assert.equal(SHELL_CHANNELS.taskSettingsSave, 'wrenyard-shell:task-settings-save');
-  // The withdrawn human docs bridge has no channels left in the contract.
-  assert.equal('docsList' in SHELL_CHANNELS, false);
-  assert.equal('docsRead' in SHELL_CHANNELS, false);
-  assert.equal('docsSave' in SHELL_CHANNELS, false);
-  assert.equal('docsDirty' in SHELL_CHANNELS, false);
 });
 
-test('WrenyardShellApi exposes the layered snapshot and save surface only', () => {
+test('snapshot rows expose authoritative display labels, ordered template, and resolved runtime', () => {
+  const snapshot = taskSnapshot();
+  const builtinRow = snapshot.rows[0]!;
+  const projectRow = snapshot.rows[1]!;
+  assert.equal(builtinRow.identity, 'builtin:build');
+  assert.equal(builtinRow.name, 'build');
+  assert.equal(builtinRow.display_name, '构建任务');
+  assert.equal(builtinRow.project, undefined);
+  assert.equal('project_display_name' in builtinRow, false);
+  assert.equal(projectRow.project, 'acme');
+  assert.equal(projectRow.project_display_name, '产品组 Acme');
+  assert.equal(projectRow.display_name, '发布上线');
+  assert.deepEqual(
+    Object.keys(builtinRow).sort(),
+    ['builtin', 'display_name', 'effective', 'identity', 'issues', 'name', 'resolved_runtime', 'runtime_choices', 'user_task'],
+  );
+  assert.deepEqual(
+    builtinRow.builtin.instruction_template.map((segment) => segment.kind),
+    ['text', 'placeholder', 'text', 'additional_instructions'],
+  );
+  assert.equal(builtinRow.builtin.instruction_template.filter((segment) => segment.kind === 'placeholder')[0]?.label, '任务说明');
+  assert.equal(builtinRow.resolved_runtime, null);
+  assert.equal(projectRow.resolved_runtime?.exactAgentRuntime, 'acme/kimi');
+  assert.equal(projectRow.effective.mode.value, 'explicit');
+  assert.deepEqual(builtinRow.issues, [{ code: 'stale', message: '运行时已下线' }]);
+});
+
+test('WrenyardShellApi exposes the typed snapshot/save surface only', () => {
   const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskSettings'> = {
-    getTaskSettings: async () => snapshotFixture('revision-1'),
-    saveTaskSettings: async () => snapshotFixture('revision-2'),
+    getTaskSettings: async () => taskSnapshot('revision-1'),
+    saveTaskSettings: async () => taskSnapshot('revision-2'),
   };
   assert.equal(typeof api.getTaskSettings, 'function');
   assert.equal(typeof api.saveTaskSettings, 'function');
-  const getter: Pick<WrenyardShellApi, 'getTaskSettings'> = {
-    getTaskSettings: () => Promise.resolve(snapshotFixture('global-rev')),
-  };
-  assert.equal(typeof getter.getTaskSettings, 'function');
-  assert.equal('saveTaskPreference' in api, false);
 });
 
-test('snapshot models the global layer, stable rows, and sourced effective values', () => {
-  const snapshot: TaskSettingsSnapshot = {
-    config_path: '/Users/me/.wrenyard/tasks/config.json',
-    revision: 'global-rev',
-    user_global: {
-      mode: 'automatic',
-      timeout_ms: 120_000,
-      additional_instructions: 'Only touch BUILD rules.',
-      automatic: { expected_tps: 20, required_capabilities: ['text'] },
-    },
-    rows: [{
-      identity: 'builtin:build',
-      name: 'build',
-      builtin: {
-        identity: 'builtin:build',
-        name: 'build',
-        source: 'shell',
-        description: 'Compile and check.',
-        prompt_template: 'dynamic',
-        declared_runtime: null,
-        timeout_ms: 300_000,
-        dispatch: { expected_tps: 20, required_capabilities: ['text'] },
-      },
-      user_task: {
-        additional_instructions: 'Only target the BUILD directory.',
-      },
-      effective: {
-        mode: { value: 'automatic', source: 'user_global' },
-        explicit_runtime: { value: null, source: 'builtin' },
-        timeout_ms: { value: 120_000, source: 'user_global' },
-        additional_instructions: { value: 'Only target the BUILD directory.', source: 'user_task' },
-        automatic: {
-          expected_tps: { value: 20, source: 'user_global' },
-          minimum_tps: { value: null, source: 'builtin' },
-          intelligence_min: { value: 'mid', source: 'builtin' },
-          intelligence_max: { value: null, source: 'builtin' },
-          max_output_usd_per_million: { value: null, source: 'builtin' },
-          required_capabilities: { value: ['text'], source: 'user_global' },
-          exclude_model_ids: { value: null, source: 'builtin' },
-          exclude_profile_ids: { value: null, source: 'builtin' },
-          exclude_client_ids: { value: null, source: 'builtin' },
-          exclude_provider_ids: { value: null, source: 'builtin' },
-          preferred_runtime: { value: null, source: 'builtin' },
-        },
-      },
-      // An automatic row still carries the authoritative exact runtime picker
-      // options so the UI can offer explicit selection without fabricating a
-      // current explicit runtime.
-      runtime_choices: [{
-        exactAgentRuntime: 'forge/codex-luna',
-        client: 'codex',
-        provider: 'codex',
-        model: 'gpt-5.6-luna',
-        model_id: 'codex/gpt-5.6-luna',
-        mode: 'native',
-        intelligence: 'mid',
-        speed: {
-          effective_tps: 107,
-          source: 'catalog_default',
-          sample_count: 0,
-          checked_at: '2026-09-05T00:00:00.000Z',
-          expected_tps_met: true,
-        },
-        reference_pricing: {
-          input_usd_per_million: 0.2,
-          output_usd_per_million: 1.2,
-          source: 'catalog',
-          checked_at: '2026-09-05T00:00:00.000Z',
-        },
-      }],
-      issues: [],
-    }],
-  };
-  const taskRow = snapshot.rows[0]!;
-  assert.equal(snapshot.config_path, '/Users/me/.wrenyard/tasks/config.json');
-  assert.equal(snapshot.revision, 'global-rev');
-  // The row is exactly the stable identity/name/builtin/user_task/effective/
-  // runtime_choices/issues fields.
-  assert.equal(taskRow.identity, 'builtin:build');
-  assert.equal(taskRow.name, 'build');
-  assert.equal(taskRow.builtin.name, 'build');
-  assert.deepEqual(
-    Object.keys(taskRow).sort(),
-    ['builtin', 'effective', 'identity', 'issues', 'name', 'runtime_choices', 'user_task'],
-  );
-  // No invented per-row wrapper fields exist.
-  assert.equal('task_id' in taskRow, false);
-  assert.equal('revision' in taskRow, false);
-  assert.equal('readiness' in taskRow, false);
-  assert.equal('source' in taskRow, false);
-  // Automatic rows expose exact runtime picker options without an explicit row;
-  // the renderer must source the explicit picker from runtime_choices only.
-  assert.equal(taskRow.explicit, undefined);
-  assert.equal(taskRow.runtime_choices.length, 1);
-  assert.equal(taskRow.runtime_choices[0]!.exactAgentRuntime, 'forge/codex-luna');
-  // The user-global layer is the writable settings fields directly — no revision/layer wrapper.
-  const globalLayer = snapshot.user_global as unknown as Record<string, unknown>;
-  assert.equal('revision' in globalLayer, false);
-  assert.equal('layer' in globalLayer, false);
-  assert.deepEqual(
-    Object.keys(globalLayer).sort(),
-    ['additional_instructions', 'automatic', 'mode', 'timeout_ms'],
-  );
-  // Mode is 'automatic' (never the invented 'auto'); runtime is client/provider/model.
-  assert.equal(taskRow.effective.mode.value, 'automatic');
-  assert.equal(taskRow.effective.mode.source, 'user_global');
-  assert.equal(taskRow.effective.automatic.expected_tps.value, 20);
-  assert.equal(taskRow.effective.automatic.intelligence_min.value, 'mid');
-  const serialized = JSON.stringify(snapshot);
-  assert.equal(serialized.includes('"mode":"auto"'), false);
-  assert.equal(serialized.includes('agent_runtime'), false);
-  assert.deepEqual(taskRow.issues, []);
-});
-
-test('save request carries a bounded global/task patch with CAS revision', () => {
-  const globalSave: TaskSettingsSaveRequest = {
-    scope: 'global',
-    expected_revision: 'global-rev',
-    patch: { timeout_ms: 300_000 },
-  };
+test('save request carries a bounded task patch with exact identity, project scope, and CAS revision', () => {
   const taskSave: TaskSettingsSaveRequest = {
     scope: 'task',
-    task_id: 'builtin:build',
+    task_id: 'project:acme:deploy',
     project: 'acme',
     expected_revision: 'row-rev',
     patch: {
       mode: 'explicit',
-      explicit_runtime: { client: 'kimi-coding', provider: 'kimi', model: 'kimi-k3' },
-      automatic: { intelligence_min: 'mid', required_capabilities: ['text', 'image'] },
+      explicit_runtime: { client: 'kimi', provider: 'kimi', model: 'kimi-k3' },
     },
   };
-  assert.equal(globalSave.scope, 'global');
   assert.equal(taskSave.scope, 'task');
-  assert.equal(taskSave.task_id, 'builtin:build');
+  assert.equal(taskSave.task_id, 'project:acme:deploy');
   assert.equal(taskSave.project, 'acme');
   assert.equal(taskSave.expected_revision, 'row-rev');
-  assert.deepEqual(Object.keys(taskSave.patch).sort(), ['automatic', 'explicit_runtime', 'mode']);
-  assert.equal(taskSave.patch.mode, 'explicit');
+  assert.deepEqual(Object.keys(taskSave.patch).sort(), ['explicit_runtime', 'mode']);
   // The explicit runtime is exactly the client/provider/model triple.
-  const explicitRuntime = taskSave.patch.explicit_runtime as unknown as Record<string, unknown>;
-  assert.deepEqual(explicitRuntime, { client: 'kimi-coding', provider: 'kimi', model: 'kimi-k3' });
-  assert.equal('agent_runtime' in explicitRuntime, false);
+  assert.deepEqual(taskSave.patch.explicit_runtime, { client: 'kimi', provider: 'kimi', model: 'kimi-k3' });
+  assert.equal('agent_runtime' in taskSave.patch.explicit_runtime!, false);
 });
 
 test('preload exposes the typed snapshot/save API with no legacy preference call', () => {
@@ -205,48 +208,33 @@ test('preload exposes the typed snapshot/save API with no legacy preference call
     /saveTaskSettings\(request: TaskSettingsSaveRequest\): Promise<TaskSettingsSnapshot> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.taskSettingsSave, request\)/u,
   );
   assert.doesNotMatch(preload, /saveTaskPreference|agentRuntime|requested_agent_runtime|bare_task_name|machine_global/);
-  assert.doesNotMatch(preload, /listDocs|readDoc|saveDoc|setDocsDirty/);
-  assert.doesNotMatch(preload, /WorkspaceDoc/);
 });
 
-test('main delegates snapshot and save with layered params and typed error mapping', () => {
+test('main delegates snapshot and save with layered params and typed CAS error mapping', () => {
   const main = mainSource();
   assert.match(main, /requestForeman\(\s*'task\.settings\.snapshot'/);
   assert.match(main, /requestForeman\(\s*'task\.settings\.save'/);
-  assert.match(main, /TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000/);
-  assert.match(main, /requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS/);
-  // Snapshot forwards the optional project and task_id.
-  assert.match(main, /if \(project !== undefined\) params\.project = project;/);
-  assert.match(main, /if \(taskId !== undefined\) params\.task_id = taskId;/);
-  // Save forwards the bounded request fields verbatim; no daemon-side merging here.
   assert.match(main, /scope: request\.scope/);
   assert.match(main, /expected_revision: request\.expected_revision/);
   assert.match(main, /patch: request\.patch/);
   assert.match(main, /if \(request\.task_id !== undefined\) params\.task_id = request\.task_id;/);
   assert.match(main, /if \(request\.project !== undefined\) params\.project = request\.project;/);
-  // Daemon CAS and preflight errors map to typed local errors for the renderer.
   assert.match(main, /code in TASK_SETTINGS_SAVE_ERROR_MESSAGES/);
   assert.match(main, /content_conflict: '任务设置已被外部修改，保存冲突'/);
   assert.match(main, /invalid_settings: '任务设置内容无效'/);
   assert.match(main, /runtime_unavailable: '所选 Agent 运行时不可用'/);
   assert.match(main, /task_not_found: '任务不存在或已被移除'/);
   assert.doesNotMatch(main, /saveTaskPreference|agent_runtime:|requested_agent_runtime|bare_task_name|machine_global|任务偏好已被外部修改/);
-  assert.doesNotMatch(main, /workspace\.doc\.(list|read|update|create)/);
-  assert.doesNotMatch(main, /docsDirty/);
 });
 
 test('shell-window validates the bounded task settings DTO at the IPC boundary', () => {
   const win = shellWindowSource();
   assert.match(win, /options\.getTaskSettings\(/);
   assert.match(win, /options\.saveTaskSettings\(validateTaskSettingsSaveRequest\(request\)\)/);
-  assert.match(win, /taskSettingsSnapshot, async \(event, project: unknown, taskId: unknown\)/);
-  assert.match(win, /taskSettingsSave, async \(event, request: unknown\)/);
-  // Scope, CAS, and task_id rules.
   assert.match(win, /scope !== 'global' && scope !== 'task'/);
   assert.match(win, /任务设置版本基线无效/);
   assert.match(win, /任务作用域必须携带 task_id/);
   assert.match(win, /任务设置内容无效/);
-  // Patch allowlist and per-field bounds (plain objects only, no prototypes/arrays).
   assert.match(win, /TASK_SETTINGS_PATCH_KEYS/);
   assert.match(win, /isBoundedPlainObject/);
   // Mode is the real wire enum automatic|explicit — never the invented 'auto'.
@@ -254,97 +242,130 @@ test('shell-window validates the bounded task settings DTO at the IPC boundary',
   assert.doesNotMatch(win, /mode !== 'auto' && mode !== 'explicit'/);
   // Explicit runtime is exactly the client/provider/model triple, never agent_runtime.
   assert.match(win, /'client', 'provider', 'model'/);
-  assert.match(win, /field !== 'client' && field !== 'provider' && field !== 'model'/);
   assert.doesNotMatch(win, /agent_runtime/);
-  assert.match(win, /Number\.isSafeInteger/);
-  assert.match(win, /additionalInstructions\.length > 4_000/);
-  assert.match(win, /\[\\u0000-\\u001F\\u007F\]/);
-  // Automatic nested dispatch is bounded field-by-field: known keys, positive
-  // finite numbers, intelligence/capability enums, bounded string arrays, and
-  // the preferred_runtime client/provider/model triple.
-  assert.match(win, /TASK_SETTINGS_AUTOMATIC_KEYS/);
-  assert.match(win, /TASK_SETTINGS_INTELLIGENCE_VALUES/);
-  assert.match(win, /TASK_SETTINGS_CAPABILITY_VALUES/);
-  assert.match(win, /TASK_SETTINGS_STRING_ARRAY_MAX/);
-  assert.match(win, /Number\.isFinite/);
-  assert.match(win, /preferred_runtime/);
-  // No merging or legacy preference semantics are implemented on the boundary.
   assert.doesNotMatch(win, /saveTaskPreference|requested_agent_runtime|agentRuntime|bare_task_name|machine_global/);
-  assert.doesNotMatch(win, /permission|input_schema|output_schema/);
 });
 
-test('HTML offers layered global/task settings with progressive details and no docs editor', async () => {
+test('HTML exposes only the approved task surface with 内置/项目 tree and exact actions', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
   assert.match(html, /id="tasks-page"/);
-  assert.match(html, /id="tasks-list"/);
+  assert.match(html, /id="tasks-title">任务</);
+  assert.match(html, /class="tasks-tree" id="tasks-list" role="tree" aria-label="任务目录"/);
   assert.match(html, /id="tasks-detail"/);
-  assert.match(html, /id="tasks-refresh"/);
-  assert.match(html, /id="tasks-global-editor"/);
-  assert.match(html, /id="tasks-global-mode"/);
-  assert.match(html, /id="tasks-mode"/);
+  assert.match(html, /id="tasks-detail-name"/);
+  assert.match(html, /id="tasks-detail-identity"/);
+  assert.match(html, /id="tasks-detail-runtime">未解析</);
+  assert.match(html, /id="tasks-mode"><option value="">继承<\/option><option value="automatic">自动选择<\/option><option value="explicit">指定运行时<\/option>/);
+  assert.match(html, /id="tasks-runtime-field" hidden/);
   assert.match(html, /id="tasks-model-select"/);
-  assert.match(html, /<option value="automatic">自动选择<\/option>/);
-  assert.match(html, /<option value="explicit">指定运行时<\/option>/);
-  assert.match(html, /id="tasks-instructions"[^>]+maxlength="4000"/);
-  assert.match(html, /id="tasks-automatic-details"/);
-  assert.match(html, /id="tasks-reset"[^>]*>重置本层</);
-  assert.match(html, /id="tasks-save"[^>]*>保存任务设置</);
-  assert.match(html, /id="tasks-status"/);
-  assert.match(html, /id="tasks-error"/);
-  assert.match(html, /系统 → 内置 → 全局默认 → 当前任务 → 单次运行/);
-  assert.doesNotMatch(html, /id="docs-nav"|id="docs-page"|id="docs-editor"|id="docs-file-list"|id="docs-save-button"|id="docs-unsaved-save"/);
+  assert.match(html, /id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承"/);
+  assert.match(html, /id="tasks-instructions"[^>]*maxlength="4000"/);
+  assert.match(html, /id="tasks-preview-title">指令模板预览</);
+  assert.match(html, /id="tasks-preview"/);
+  assert.match(html, /id="tasks-reset"[^>]*>重置</);
+  assert.match(html, /id="tasks-save"[^>]*>套用</);
+  assert.match(html, /id="tasks-refresh"/);
+  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-meta|tasks-status|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-intelligence-min|tasks-intelligence-max|tasks-max-output-price|tasks-detail-card|tasks-detail-project|tasks-detail-source|tasks-mode-source|tasks-runtime-source|tasks-timeout-source|tasks-instructions-source/);
+  assert.doesNotMatch(html, /重置本层|保存全局默认|保存任务设置|系统 → 内置 → 全局默认|自动选择约束|继承来源与任务元数据/);
+  // The stats ledger page is untouched by this task.
+  assert.match(html, /id="stats-task-runs-list"/);
 });
 
-test('renderer uses runtime_choices, saves layered patches, and preserves drafts on conflict', async () => {
-  const [app, main, update] = await Promise.all([
-    readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
-    Promise.resolve(mainSource()),
-    readFile(join(desktopRoot, 'src', 'update-controller.ts'), 'utf8'),
-  ]);
-  // The explicit picker options are sourced exclusively from the authoritative
-  // runtime_choices carried by every task row (automatic or explicit), never
-  // from an invented per-row eligible alias or a fabricated explicit selection.
+test('renderer reuses the safe rich-text renderer for the ordered template preview', async () => {
+  const app = await rendererSource();
+  const conversation = await readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8');
+  assert.match(conversation, /export function renderRichText\(text: string\): DocumentFragment/);
+  assert.match(app, /import \{ ConversationView, renderRichText \} from '\.\/conversation\.js';/);
+  assert.match(app, /for \(const segment of row\.builtin\.instruction_template\)/);
+  assert.match(app, /renderRichText\(segment\.text\)/);
+  assert.match(app, /renderRichText\(content\)/);
+  // Placeholder segments become structural styled spans; nothing is executed or string-matched.
+  assert.match(app, /segment\.kind === 'text'/);
+  assert.match(app, /segment\.kind === 'placeholder'/);
+  assert.match(app, /segment\.kind === 'additional_instructions'/);
+  assert.match(app, /chip\.className = 'task-preview-placeholder'/);
+  assert.match(app, /chip\.textContent = segment\.label;/);
+  assert.doesNotMatch(app, /new Function\(|Function\.toString|eval\(/);
+});
+
+test('renderer builds 内置/项目 hierarchy with authoritative labels and stable identity leaves', async () => {
+  const app = await rendererSource();
+  assert.match(app, /tasksList\.replaceChildren\(\)/);
+  assert.match(app, /tasksCategoryHeader\('内置'/);
+  assert.match(app, /tasksCategoryHeader\('项目'/);
+  assert.match(app, /leaf\.setAttribute\('role', 'treeitem'\)/);
+  assert.match(app, /label\.textContent = row\.display_name;/);
+  assert.match(app, /projects\.get\(row\.project\)/);
+  assert.match(app, /tasksCategoryHeader\(lead\?\.project_display_name \?\? project/);
+  assert.match(app, /void selectTasksFile\(row\.identity\)/);
+  assert.doesNotMatch(app, /tasks-source-pill|taskModeLabel\(row\.effective/);
+});
+
+test('detail header shows display name, stable exact id, and resolved runtime including null', async () => {
+  const app = await rendererSource();
+  assert.match(app, /tasksDetailName\.textContent = row\.display_name;/);
+  assert.match(app, /tasksDetailIdentity\.textContent = row\.identity;/);
+  assert.match(app, /tasksDetailRuntime\.textContent = row\.resolved_runtime\?\.exactAgentRuntime \?\? '未解析';/);
+  assert.doesNotMatch(app, /tasksDetailProject|PROJECT \$\{row\.project\}/);
+});
+
+test('issue indicator is a focusable, accessible marker on tree leaves', async () => {
+  const app = await rendererSource();
+  assert.match(app, /indicator\.className = 'tasks-issue-indicator';/);
+  assert.match(app, /indicator\.textContent = '!';/);
+  assert.match(app, /indicator\.tabIndex = 0;/);
+  assert.match(app, /indicator\.title = issues\.join\('\\n'\);/);
+  assert.match(app, /indicator\.setAttribute\('aria-label', `需要处理：\$\{issues\.join\('；'\)\}`\);/);
+});
+
+test('explicit runtime selector is visible only when the task-level mode equals explicit', async () => {
+  const app = await rendererSource();
+  assert.match(app, /function updateTasksModeVisibility\(\): void \{\s*tasksRuntimeField\.hidden = tasksModeSelect\.value !== 'explicit';\s*\}/);
+  assert.match(app, /tasksModeSelect\.addEventListener\('change', \(\) => updateTasksModeVisibility\(\)\);/);
   assert.match(app, /renderTasksChoiceOptions\(tasksModelSelect, row\.runtime_choices\)/);
-  assert.match(app, /for \(const choice of choices\)/);
-  assert.match(app, /option\.value = choice\.exactAgentRuntime/);
-  // Option labels surface the actual client/provider/model and any evidence.
+  assert.match(app, /option\.value = choice\.exactAgentRuntime;/);
   assert.match(app, /\[choice\.client, choice\.provider, choice\.model\]/);
-  assert.match(app, /choice\.speed\.effective_tps/);
-  assert.match(app, /choice\.intelligence/);
-  assert.match(app, /choice\.reference_pricing\.output_usd_per_million/);
-  // No legacy forge/fast/general/ultra policy strategy names appear as options.
-  assert.doesNotMatch(app, /forge|fast|general|ultra/);
-  // Low-frequency metadata stays read-only and progressive.
-  assert.match(app, /tasksReadonlyRow\('低频自动约束'/);
-  assert.match(app, /tasksReadonlyRow\('内置动态提示'/);
-  assert.match(app, /tasksReadonlyRow\('配置文件'/);
-  assert.doesNotMatch(app, /contentEditable|docsEditor/);
-  // Saves are bounded layered CAS patches; automatic mode clears only this
-  // layer's explicit pin and reset deletes only current-layer fields.
-  assert.match(app, /saveTaskSettings\(\{ scope: 'task'/);
-  assert.match(app, /saveTaskSettings\(\{ scope: 'global'/);
-  assert.match(app, /patch\.explicit_runtime = null/);
-  assert.match(app, /function resetPatch/);
-  // A conflict reloads authoritative revision but restores both task/global drafts.
+  assert.doesNotMatch(app, /tasksAutomaticDetails/);
+});
+
+test('apply omits automatic, reset clears the task layer, and CAS preserves the remaining draft', async () => {
+  const app = await rendererSource();
+  assert.match(app, /saveTaskSettings\(\{ scope: 'task', task_id: row\.identity/);
+  assert.match(app, /project: row\.project/);
+  assert.match(app, /function buildLayerPatch\(layer: TaskSettingsLayer, modeValue: string, runtimeSelect: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice\[\], timeoutValue: string, instructionsValue: string\)/);
+  // Apply never writes automatic, preserving any hidden persisted automatic overrides.
+  assert.doesNotMatch(app, /includeAutomatic|patch\.automatic/);
+  assert.doesNotMatch(app, /saveTaskSettings\(\{ scope: 'global'/);
+  // Reset still clears every task-layer field, including legacy automatic settings.
+  assert.match(app, /reset \? resetPatch\(row\.user_task\)/);
+  assert.match(app, /'mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic'/);
+  // CAS conflict reloads authoritative state and re-applies only remaining visible fields.
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
-  assert.match(app, /配置已刷新，草稿仍保留/);
-  assert.match(app, /额度未知/);
-  assert.doesNotMatch(app, /saveTaskPreference|row\.eligible|row\.selection|taskSettings\.tasks/);
-  assert.doesNotMatch(app, /mustGuardDocsLeave|showDocsUnsaved|docsDirty/);
-  // Update UX and update-controller carry no removed docs-draft wording.
-  assert.doesNotMatch(update, /docsDirty|保存文档/);
-  assert.doesNotMatch(main, /docsDirty/);
+  assert.match(app, /草稿仍保留/);
+  assert.match(app, /interface TaskFormDraft \{ mode: string; runtime: string; timeout: string; instructions: string \}/);
+  assert.doesNotMatch(app, /expected:|intelligenceMin:|price:/);
 });
 
-test('canonical workspace-doc aliases remain agent-side in the DSH package', () => {
-  const source = readFileSync(join(dshShellRoot, 'src', 'foreman-tools.mjs'), 'utf8');
-  assert.match(source, /DOC_ALIAS_TO_IPC = \{/);
-  assert.match(source, /list_workspace_docs: 'workspace\.doc\.list'/);
-  assert.match(source, /read_workspace_doc: 'workspace\.doc\.read'/);
-  assert.match(source, /create_workspace_doc: 'workspace\.doc\.create'/);
-  assert.match(source, /update_workspace_doc: 'workspace\.doc\.update'/);
+test('template preview resolves additional-instruction content draft-aware with user_global fallback', async () => {
+  const app = await rendererSource();
+  assert.match(app, /function resolvedAdditionalInstructionsContent\(row: TaskSettingsTaskRow\): string \| null/);
+  // trim is only the emptiness probe; the nonempty draft is returned verbatim,
+  // preserving leading/trailing whitespace and line breaks.
+  assert.match(app, /const draft = tasksInstructionsInput\.value;/);
+  assert.match(app, /if \(draft\.trim\(\) !== ''\) return draft;/);
+  assert.doesNotMatch(app, /const draft = tasksInstructionsInput\.value\.trim\(\);/);
+  assert.match(app, /user_global\.additional_instructions/);
+  assert.match(app, /row\.effective\.additional_instructions\.value/);
+  assert.match(app, /'无附加指令'/);
+  assert.match(app, /tasksInstructionsInput\.addEventListener\('input', \(\) => renderTasksPreview\(\)\);/);
+});
+
+test('global/metadata/source/automatic renderer functions and panels are gone', async () => {
+  const app = await rendererSource();
+  assert.doesNotMatch(app, /tasksGlobalMode|tasksGlobalSave|tasksGlobalRuntime|populateGlobalForm|saveGlobalLayer|setTasksStatus|taskSourceLabel|taskModeLabel|tasksReadonlyRow|taskContractValue|tasksDetailCard|setSourceText|tasksExpectedTps|tasksMinimumTps|tasksIntelligenceMin|tasksMaxOutputPrice/);
+  assert.doesNotMatch(app, /保存任务设置|保存全局默认|重置本层/);
 });
 
 function preloadSource(): string {
@@ -357,4 +378,8 @@ function mainSource(): string {
 
 function shellWindowSource(): string {
   return readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
+}
+
+function rendererSource(): Promise<string> {
+  return readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8');
 }

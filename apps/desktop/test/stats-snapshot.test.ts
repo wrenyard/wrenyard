@@ -314,3 +314,149 @@ test('stats snapshot tolerates missing recentRuns and malformed rows', async () 
   assert.equal(snapshot.recentTaskRuns[0].usage.referenceCostComplete, true);
   assert.equal(snapshot.windows.length, 0);
 });
+
+test('stats snapshot keeps authoritative wire resolved_profile without inferring model or provider', async () => {
+  const snapshot = await buildStatsSnapshot(async (method) => {
+    if (method === 'stats.today') throw new Error('method unavailable');
+    return {
+      source: 'sqlite',
+      today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
+      daily: [],
+      byProfile: [],
+      byTask: [],
+      windows: [],
+      recentRuns: [
+        {
+          // Legacy run predating full dispatch snapshots: only the authoritative
+          // stored resolved_profile travels on the wire, never a fabricated
+          // resolved object.
+          task_run_id: 'run-legacy-profile',
+          task: 'legacy',
+          source: 'unknown',
+          status: 'done',
+          resolved_profile: 'legacy-clean',
+          usage: {
+            completeness: 'unavailable',
+            attempt_count: 1,
+            usage_event_count: 0,
+            reference_cost_complete: false,
+          },
+        },
+        {
+          // Quiet missing state: no resolved object and no resolved_profile.
+          task_run_id: 'run-no-profile',
+          task: 'build',
+          source: 'builtin',
+          status: 'done',
+          usage: {
+            completeness: 'unavailable',
+            attempt_count: 0,
+            usage_event_count: 0,
+            reference_cost_complete: false,
+          },
+        },
+      ],
+    };
+  });
+
+  assert.equal(snapshot.recentTaskRuns.length, 2);
+
+  const legacy = snapshot.recentTaskRuns[0];
+  // The fallback chain (resolvedModelId/resolvedModel/resolvedProfile) can use
+  // the authoritative profile without inferring model or provider.
+  assert.equal(legacy.resolvedProfile, 'legacy-clean');
+  assert.equal(legacy.resolvedModel, undefined);
+  assert.equal(legacy.resolvedModelId, undefined);
+  assert.equal(legacy.resolvedClient, undefined);
+  assert.equal(legacy.resolvedProvider, undefined);
+  assert.equal(legacy.speed, undefined);
+
+  const absent = snapshot.recentTaskRuns[1];
+  assert.equal(absent.resolvedProfile, undefined);
+  assert.equal(absent.resolvedModel, undefined);
+  assert.equal(absent.resolvedProvider, undefined);
+});
+
+test('stats snapshot carries project context and keeps queued/interrupted status and zero values', async () => {
+  const snapshot = await buildStatsSnapshot(async (method) => {
+    if (method === 'stats.today') throw new Error('method unavailable');
+    return {
+      source: 'sqlite',
+      today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
+      daily: [],
+      byProfile: [],
+      byTask: [],
+      windows: [],
+      recentRuns: [
+        {
+          task_run_id: 'run-project',
+          task: 'edit',
+          project: 'workspace',
+          source: 'project',
+          status: 'queued',
+          usage: {
+            completeness: 'partial',
+            attempt_count: 0,
+            usage_event_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            reference_cost_complete: false,
+          },
+        },
+        {
+          task_run_id: 'run-zero',
+          task: 'commit',
+          source: 'builtin',
+          status: 'interrupted',
+          usage: {
+            completeness: 'partial',
+            attempt_count: 1,
+            usage_event_count: 1,
+            input_tokens: 0,
+            output_tokens: 0,
+            output_tps: 0,
+            reference_cost_complete: false,
+          },
+        },
+        {
+          task_run_id: 'run-missing',
+          task: 'build',
+          source: 'unknown',
+          status: 'done',
+          usage: {
+            completeness: 'partial',
+            attempt_count: 1,
+            usage_event_count: 1,
+            input_tokens: 0,
+            output_tokens: 120,
+            reference_cost_complete: false,
+          },
+        },
+      ],
+    };
+  });
+
+  assert.equal(snapshot.source, 'summary');
+  assert.equal(snapshot.recentTaskRuns.length, 3);
+
+  const projectRun = snapshot.recentTaskRuns[0];
+  assert.equal(projectRun.project, 'workspace');
+  assert.equal(projectRun.status, 'queued');
+  // real numeric zero is preserved verbatim, never coerced or invented
+  assert.equal(projectRun.usage.inputTokens, 0);
+  assert.equal(projectRun.usage.outputTokens, 0);
+  assert.equal(projectRun.usage.outputTps, undefined);
+
+  const zeroRun = snapshot.recentTaskRuns[1];
+  assert.equal(zeroRun.status, 'interrupted');
+  assert.equal(zeroRun.usage.inputTokens, 0);
+  assert.equal(zeroRun.usage.outputTokens, 0);
+  assert.equal(zeroRun.usage.outputTps, 0);
+
+  const missingRun = snapshot.recentTaskRuns[2];
+  assert.equal(missingRun.status, 'done');
+  assert.equal(missingRun.project, undefined);
+  // output_tps is only the authoritative value; a missing number is never calculated.
+  assert.equal(missingRun.usage.outputTps, undefined);
+  assert.equal(missingRun.usage.outputTokens, 120);
+});

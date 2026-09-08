@@ -1328,4 +1328,142 @@ describe('stats-query readStatsSummary', () => {
       'dispatchCount',
     )
   })
+
+  it('preserves authoritative project context in recentRuns while keeping definition_source classification', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    // A post-migration project definition: exact project context must survive on the run row.
+    seedTaskWithProject('r-proj', 'edit', 'done', iso(todayStart.getTime() + 9 * hour), iso(todayStart.getTime() + 10 * hour), 'ws', 'project')
+    // A post-migration builtin: classified builtin and gains no project label of its own.
+    seedTaskWithProject('r-builtin', 'commit', 'done', iso(todayStart.getTime() + 7 * hour), iso(todayStart.getTime() + 8 * hour), null, 'builtin')
+    // A legacy row predating definition_source: classified unknown, never guessed from its project.
+    seedTaskWithProject('r-legacy', 'review', 'done', iso(todayStart.getTime() + 5 * hour), iso(todayStart.getTime() + 6 * hour), 'ws', null)
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    const runs = result.recentRuns
+    assert.ok(runs, 'expected recentRuns for the seeded task runs')
+    assert.equal(runs.length, 3)
+    const byRunId = new Map(runs.map((run) => [run.task_run_id, run]))
+    const projectRun = byRunId.get('r-proj')
+    assert.ok(projectRun)
+    assert.equal(projectRun.project, 'ws', 'project definitions carry their exact project context')
+    assert.equal(projectRun.source, 'project')
+    assert.equal(projectRun.task, 'edit')
+    const builtinRun = byRunId.get('r-builtin')
+    assert.ok(builtinRun)
+    assert.equal(builtinRun.project, undefined, 'builtin rows keep no fabricated project label')
+    assert.equal(builtinRun.source, 'builtin')
+    assert.equal(builtinRun.task, 'commit')
+    const legacyRun = byRunId.get('r-legacy')
+    assert.ok(legacyRun)
+    assert.equal(legacyRun.project, 'ws', 'legacy rows may still carry the execution project')
+    assert.equal(legacyRun.source, 'unknown', 'legacy NULL definition_source stays unknown regardless of project')
+    assert.equal(legacyRun.task, 'review')
+    closeTestDb()
+  })
+
+  it('surfaces the exact persisted executions.resolved_profile for legacy runs while keeping full resolved preferred', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    const fixedTs = '2024-01-01T00:00:00.000Z'
+
+    // Completed legacy run: a real execution with real usage and a persisted
+    // executions.resolved_profile, but no task_run_attempt_dispatch row at all
+    // (the run predates full dispatch snapshots).
+    seedTaskWithProject(
+      'r-legacy', 'legacy-task', 'done',
+      iso(todayStart.getTime() + 9 * hour), iso(todayStart.getTime() + 10 * hour), null, null,
+    )
+    dbRun(
+      `INSERT INTO executions (id, task_id, profile, resolved_profile, permission, cwd, prompt, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'edit', '/tmp', 'prompt', 'done', ?, ?)`,
+      'exec-legacy', 'r-legacy', 'policy-legacy', 'legacy-clean', fixedTs, fixedTs,
+    )
+    dbRun(
+      `UPDATE tasks SET execution_id = 'exec-legacy' WHERE id = 'r-legacy'`,
+    )
+    const usageIso = iso(todayStart.getTime() + 9.5 * hour)
+    dbRun(
+      `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
+       VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
+      'exec-legacy', 'r-legacy', 1, usageIso,
+      JSON.stringify({ token_scope: 'agent_turn', input_tokens: 100, output_tokens: 50 }),
+      usageIso,
+    )
+
+    // Pre-dispatch failed run: no execution was ever created, so no profile.
+    seedTaskWithProject(
+      'r-none', 'failed-task', 'failed',
+      iso(todayStart.getTime() + 5 * hour), iso(todayStart.getTime() + 6 * hour), null, 'project',
+    )
+
+    // Modern run: a full task_run_attempt_dispatch snapshot exists, so the
+    // full resolved object must remain the preferred representation while the
+    // additive scalar may also be present.
+    seedTaskWithProject(
+      'r-modern', 'modern-task', 'done',
+      iso(todayStart.getTime() + 3 * hour), iso(todayStart.getTime() + 4 * hour), null, 'builtin',
+    )
+    dbRun(
+      `INSERT INTO executions (id, task_id, profile, resolved_profile, permission, cwd, prompt, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'edit', '/tmp', 'prompt', 'done', ?, ?)`,
+      'exec-modern', 'r-modern', 'cb-dsf', 'cb-dsf', fixedTs, fixedTs,
+    )
+    dbRun(
+      `UPDATE tasks SET execution_id = 'exec-modern' WHERE id = 'r-modern'`,
+    )
+    dbRun(
+      `INSERT INTO task_run_attempt_dispatch (
+         execution_id, task_run_id, requested_agent_runtime, profile, client, provider,
+         model, model_id, mode, protocol, intelligence,
+         speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
+         speed_expected_tps_met,
+         reference_pricing_input, reference_pricing_output,
+         reference_pricing_source, reference_pricing_checked_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'native', NULL, 'mid', ?, ?, ?, ?, 1, ?, ?, 'catalog', ?, ?, ?)`,
+      'exec-modern', 'r-modern', 'forge/codebuddy', 'cb-dsf', 'codebuddy', 'codebuddy',
+      'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash',
+      45, 'catalog_default', 7, fixedTs,
+      0.2, 1.2, fixedTs, fixedTs, fixedTs,
+    )
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    const runs = result.recentRuns
+    assert.ok(runs, 'expected recentRuns for the seeded task runs')
+    assert.equal(runs.length, 3)
+    const byRunId = new Map(runs.map((run) => [run.task_run_id, run]))
+
+    const legacyRun = byRunId.get('r-legacy')
+    assert.ok(legacyRun)
+    assert.equal(
+      legacyRun.resolved_profile,
+      'legacy-clean',
+      'legacy completed runs expose their exact persisted executions.resolved_profile',
+    )
+    assert.equal('resolved' in legacyRun, false, 'no full resolved is fabricated from the scalar')
+    assert.equal(legacyRun.resolved, undefined)
+    assert.equal(legacyRun.usage.completeness, 'partial')
+    assert.equal(legacyRun.usage.input_tokens, 100)
+    assert.equal(legacyRun.usage.output_tokens, 50)
+    assert.equal(legacyRun.usage.attempt_count, 1)
+
+    const noneRun = byRunId.get('r-none')
+    assert.ok(noneRun)
+    assert.equal(noneRun.resolved_profile, undefined, 'pre-dispatch runs without an execution stay profile-less')
+    assert.equal('resolved' in noneRun, false)
+    assert.equal('resolved_profile' in noneRun, false)
+
+    const modernRun = byRunId.get('r-modern')
+    assert.ok(modernRun)
+    assert.ok(modernRun.resolved, 'modern full resolved snapshots remain preferred')
+    assert.equal(modernRun.resolved.profile, 'cb-dsf')
+    assert.equal(modernRun.resolved.model_id, 'codebuddy/deepseek-v4-flash')
+    closeTestDb()
+  })
 })
