@@ -66,6 +66,16 @@ import {
   TaskSettingsService,
   TaskSettingsTaskNotFoundError,
 } from '../../daemon/services/task-settings-service.mts'
+import {
+  AliasInvalidTargetError,
+  AliasNotFoundError,
+  RuntimeAliasService,
+} from '../../daemon/services/runtime-alias-service.mts'
+import {
+  AliasValidationError,
+  MalformedStoreError,
+  RevisionConflictError,
+} from '../../runtime-aliases/store.mts'
 
 export interface CoreRpcHandlerOptions {
   startedAt: number
@@ -83,6 +93,14 @@ export interface CoreRpcHandlerOptions {
   gatewayConnection?: () => Promise<GatewayConnectionResult>
   /** Daemon-owned TaskSettingsService backing task.settings.snapshot/save. */
   taskSettings?: TaskSettingsService
+  /** Daemon-owned RuntimeAliasService backing runtime.alias.snapshot/put/remove. */
+  runtimeAlias?: RuntimeAliasService
+  /**
+   * Daemon-owned exact current-Catalog display-name lookup used to label recent
+   * stats.summary task-run rows. Optional: contexts without it emit rows
+   * without the additive paired display-name fields.
+   */
+  resolveTaskRunDisplayNames?: import('../../events/stats-query.mts').TaskRunDisplayNameResolver
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
   clientConfiguration?: {
@@ -255,7 +273,11 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         { param: 'limit', value: limit },
       )
     }
-    return readStatsSummary({ days, limit }) satisfies StatsSummaryResult
+    return readStatsSummary(
+      { days, limit },
+      new Date(),
+      options.resolveTaskRunDisplayNames ? { resolveDisplayNames: options.resolveTaskRunDisplayNames } : undefined,
+    ) satisfies StatsSummaryResult
   })
   router.register('daemon.shutdown', (params, _message, context) => {
     const rpcContext = coreRpcContextFromUnknown(context)
@@ -376,6 +398,49 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       }
       throw error
     }
+  })
+  // runtime.alias.snapshot/put/remove delegate to the injected daemon-owned
+  // RuntimeAliasService; the RPC surface never recreates store or resolution
+  // logic. IPC-only. When the dependency is absent the methods fail loud with a
+  // bounded unavailable error instead of being silently dropped.
+  const requireRuntimeAliasService = (
+    context: unknown,
+    method: string,
+  ): RuntimeAliasService => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+        { code: 'runtime_alias_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.runtimeAlias) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'runtime_alias_unavailable' },
+      )
+    }
+    return options.runtimeAlias
+  }
+  const callRuntimeAliasService = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation()
+    } catch (error) {
+      if (error instanceof ProtocolError) throw error
+      throw protocolErrorFromRuntimeAliasError(error)
+    }
+  }
+  router.register('runtime.alias.snapshot', async (_params, _message, context) => {
+    const service = requireRuntimeAliasService(context, 'runtime.alias.snapshot')
+    return callRuntimeAliasService(() => service.snapshot())
+  })
+  router.register('runtime.alias.put', async (params, _message, context) => {
+    const service = requireRuntimeAliasService(context, 'runtime.alias.put')
+    return callRuntimeAliasService(() => service.put(params))
+  })
+  router.register('runtime.alias.remove', async (params, _message, context) => {
+    const service = requireRuntimeAliasService(context, 'runtime.alias.remove')
+    return callRuntimeAliasService(() => service.remove(params))
   })
   router.register('task.run.create', async (params, _message, context) => {
     if (options.dispatchControl) assertDispatchAccepting(options.dispatchControl)
@@ -740,6 +805,45 @@ function protocolErrorFromTaskSettingsError(
     { code: INVALID_PARAMS.code, message: error.message },
     detail,
   )
+}
+
+function protocolErrorFromRuntimeAliasError(error: unknown): ProtocolError {
+  if (error instanceof RevisionConflictError) {
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message: error.message },
+      {
+        service: 'runtime.alias',
+        code: 'revision_conflict',
+        expected_revision: error.expectedRevision,
+        actual_revision: error.actualRevision,
+      },
+    )
+  }
+  if (error instanceof AliasValidationError) {
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message: error.message },
+      { service: 'runtime.alias', code: 'alias_validation_error' },
+    )
+  }
+  if (error instanceof MalformedStoreError) {
+    return new ProtocolError(
+      { code: INTERNAL_ERROR.code, message: error.message },
+      { service: 'runtime.alias', code: 'malformed_store', reason: error.reason },
+    )
+  }
+  if (error instanceof AliasNotFoundError) {
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message: error.message },
+      { service: 'runtime.alias', code: error.code, alias: error.aliasName },
+    )
+  }
+  if (error instanceof AliasInvalidTargetError) {
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message: error.message },
+      { service: 'runtime.alias', code: error.code, target: error.target },
+    )
+  }
+  throw error
 }
 
 function taskRunNotFound(taskRunId: string): ProtocolError {

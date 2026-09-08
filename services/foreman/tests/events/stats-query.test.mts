@@ -153,6 +153,76 @@ function seedExecutionResolved(id: string, profile: string, resolvedProfile: str
   )
 }
 
+/**
+ * Seeds a completed task run that carries a full modern
+ * task_run_attempt_dispatch snapshot (optionally with a persisted
+ * auto_routing decision), so the run surfaces a `resolved` dispatch in the
+ * recent ledger.
+ */
+function seedResolvedDispatchRun(params: {
+  taskRunId: string
+  template: string
+  createdIso: string
+  endedIso: string
+  executionId: string
+  profile: string
+  client: string
+  provider: string
+  model: string
+  modelId: string
+  autoRoutingJson?: string | null
+}): void {
+  seedTaskWithProject(
+    params.taskRunId, params.template, 'done',
+    params.createdIso, params.endedIso, null, 'builtin',
+  )
+  // The task_run_attempt_dispatch FK references executions(id), so seed the
+  // parent execution row (linked to the task) before the dispatch insert.
+  seedExecutionResolved(params.executionId, params.profile, params.profile, params.taskRunId)
+  const fixedTs = '2024-01-01T00:00:00.000Z'
+  dbRun(
+    `INSERT INTO task_run_attempt_dispatch (
+       execution_id, task_run_id, requested_agent_runtime, profile, client, provider,
+       model, model_id, mode, protocol, intelligence,
+       speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
+       speed_expected_tps_met,
+       reference_pricing_input, reference_pricing_output,
+       reference_pricing_cache, reference_pricing_cache_write,
+       reference_pricing_source, reference_pricing_checked_at,
+       auto_routing, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'native', NULL, 'mid', ?, ?, ?, ?, 1, ?, ?, NULL, NULL, 'catalog', ?, ?, ?, ?)`,
+    params.executionId,
+    params.taskRunId,
+    'forge/codebuddy',
+    params.profile,
+    params.client,
+    params.provider,
+    params.model,
+    params.modelId,
+    45, 'catalog_default', 7, fixedTs,
+    0.2, 1.2, fixedTs,
+    params.autoRoutingJson ?? null,
+    fixedTs, fixedTs,
+  )
+}
+
+function seedAliasOnlyLegacyRun(taskRunId: string, template: string, createdIso: string, endedIso: string, resolvedProfile: string): void {
+  seedTaskWithProject(taskRunId, template, 'done', createdIso, endedIso, null, null)
+  dbRun(
+    `INSERT INTO executions (id, task_id, profile, resolved_profile, permission, cwd, prompt, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'edit', '/tmp', 'prompt', 'done', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z')`,
+    `exec-${taskRunId}`,
+    taskRunId,
+    'policy-legacy',
+    resolvedProfile,
+  )
+  dbRun(
+    `UPDATE tasks SET execution_id = ? WHERE id = ?`,
+    `exec-${taskRunId}`,
+    taskRunId,
+  )
+}
+
 function seedUsageWithDuration(
   dayKey: string,
   inputTokens: number,
@@ -1464,6 +1534,168 @@ describe('stats-query readStatsSummary', () => {
     assert.ok(modernRun.resolved, 'modern full resolved snapshots remain preferred')
     assert.equal(modernRun.resolved.profile, 'cb-dsf')
     assert.equal(modernRun.resolved.model_id, 'codebuddy/deepseek-v4-flash')
+    closeTestDb()
+  })
+
+  it('emits paired display names on recent runs only for an exact resolved provider/model match', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    seedResolvedDispatchRun({
+      taskRunId: 'r-display', template: 'display-task',
+      createdIso: iso(todayStart.getTime() + 8 * hour), endedIso: iso(todayStart.getTime() + 9 * hour),
+      executionId: 'exec-display', profile: 'auto', client: 'codebuddy',
+      provider: 'codebuddy', model: 'deepseek-v4-flash', modelId: 'codebuddy/deepseek-v4-flash',
+    })
+    const calls: Array<[string, string]> = []
+    const result = readStatsSummary(
+      { days: 31, limit: 10 },
+      fixedNow,
+      {
+        resolveDisplayNames: (provider, model) => {
+          calls.push([provider, model])
+          if (provider === 'codebuddy' && model === 'deepseek-v4-flash') {
+            return { provider_display_name: 'CodeBuddy', model_display_name: 'DeepSeek V4 Flash' }
+          }
+          return undefined
+        },
+      },
+    )
+    const run = result.recentRuns?.find((row) => row.task_run_id === 'r-display')
+    assert.ok(run, 'expected recentRuns to include the seeded display run')
+    assert.ok(run.resolved, 'display run must carry its full resolved dispatch')
+    assert.equal(run.provider_display_name, 'CodeBuddy')
+    assert.equal(run.model_display_name, 'DeepSeek V4 Flash')
+    // Exactly once, with the exact canonical provider/model pair.
+    assert.deepEqual(calls, [['codebuddy', 'deepseek-v4-flash']])
+    closeTestDb()
+  })
+
+  it('emits neither display name when the resolver cannot map the exact provider or model', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    seedResolvedDispatchRun({
+      taskRunId: 'r-unknown', template: 'unknown-model-task',
+      createdIso: iso(todayStart.getTime() + 8 * hour), endedIso: iso(todayStart.getTime() + 9 * hour),
+      executionId: 'exec-unknown', profile: 'auto', client: 'codebuddy',
+      provider: 'codebuddy', model: 'missing-model', modelId: 'codebuddy/missing-model',
+    })
+    const calls: Array<[string, string]> = []
+    const result = readStatsSummary(
+      { days: 31, limit: 10 },
+      fixedNow,
+      {
+        resolveDisplayNames: (provider, model) => {
+          calls.push([provider, model])
+          return undefined
+        },
+      },
+    )
+    const run = result.recentRuns?.find((row) => row.task_run_id === 'r-unknown')
+    assert.ok(run)
+    assert.ok(run.resolved)
+    assert.equal(run.provider_display_name, undefined)
+    assert.equal(run.model_display_name, undefined)
+    assert.equal('provider_display_name' in run, false)
+    assert.equal('model_display_name' in run, false)
+    assert.deepEqual(calls, [['codebuddy', 'missing-model']])
+    closeTestDb()
+  })
+
+  it('never invokes the display resolver for alias-only legacy rows without a resolved snapshot', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    seedAliasOnlyLegacyRun(
+      'r-alias', 'alias-task',
+      iso(todayStart.getTime() + 8 * hour), iso(todayStart.getTime() + 9 * hour),
+      'legacy-clean',
+    )
+    const calls: Array<[string, string]> = []
+    const result = readStatsSummary(
+      { days: 31, limit: 10 },
+      fixedNow,
+      {
+        resolveDisplayNames: (provider, model) => {
+          calls.push([provider, model])
+          return { provider_display_name: 'X', model_display_name: 'Y' }
+        },
+      },
+    )
+    const run = result.recentRuns?.find((row) => row.task_run_id === 'r-alias')
+    assert.ok(run)
+    assert.equal(run.resolved_profile, 'legacy-clean')
+    assert.equal('resolved' in run, false)
+    assert.equal('provider_display_name' in run, false)
+    assert.equal('model_display_name' in run, false)
+    assert.equal(calls.length, 0, 'alias-only rows carry no resolved snapshot, so the resolver must not run')
+    closeTestDb()
+  })
+
+  it('never substitutes raw ids/client/profile for labels and auto_routing survives the ledger projection', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+    const decision = {
+      snapshot_id: 'snap-abc',
+      selected_rank: 1,
+      supply_class: 'confirmed_free' as const,
+      quota_tier: 'healthy' as const,
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 1.5,
+      routing_output_usd_per_million: 1.25,
+      effective_cap_usd_per_million: 1.6,
+      score: 9.5,
+      reasons: ['rank-1'],
+    }
+    // The resolved snapshot keeps a run-syntax model_id and non-canonical
+    // client/profile values; only the exact provider/model pair may drive labels.
+    seedResolvedDispatchRun({
+      taskRunId: 'r-safe', template: 'safe-task',
+      createdIso: iso(todayStart.getTime() + 8 * hour), endedIso: iso(todayStart.getTime() + 9 * hour),
+      executionId: 'exec-safe', profile: 'policy-x', client: 'cc-raw',
+      provider: 'codebuddy', model: 'deepseek-v4-flash',
+      modelId: 'codebuddy/deepseek-v4-flash:cc',
+      autoRoutingJson: JSON.stringify(decision),
+    })
+    const calls: Array<[string, string]> = []
+    const result = readStatsSummary(
+      { days: 31, limit: 10 },
+      fixedNow,
+      {
+        resolveDisplayNames: (provider, model) => {
+          calls.push([provider, model])
+          if (provider === 'codebuddy' && model === 'deepseek-v4-flash') {
+            return { provider_display_name: 'CodeBuddy', model_display_name: 'DeepSeek V4 Flash' }
+          }
+          return undefined
+        },
+      },
+    )
+    const run = result.recentRuns?.find((row) => row.task_run_id === 'r-safe')
+    assert.ok(run)
+    assert.ok(run.resolved)
+    assert.equal(run.resolved.client, 'cc-raw')
+    assert.equal(run.resolved.profile, 'policy-x')
+    assert.equal(run.resolved.model_id, 'codebuddy/deepseek-v4-flash:cc')
+    assert.deepEqual(calls, [['codebuddy', 'deepseek-v4-flash']], 'resolver is fed the canonical provider/model pair only')
+    assert.equal(run.provider_display_name, 'CodeBuddy')
+    assert.equal(run.model_display_name, 'DeepSeek V4 Flash')
+    // The persisted decision survives the ledger projection untouched.
+    assert.deepEqual(run.resolved.auto_routing, decision)
+    // The full summary (including recentRuns with paired labels and the
+    // auto_routing decision) is valid on the stats wire path.
+    assert.deepEqual(parseMethodResult('stats.summary', result), result)
     closeTestDb()
   })
 })

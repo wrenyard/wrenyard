@@ -7,32 +7,36 @@ import type {
   SpeedEvidence,
   TaskDispatchRequirements,
 } from '@wrenyard/catalog'
-import { resolveConstrainedDispatch } from '@wrenyard/catalog'
-import { resolveBuiltinDispatchPlans, type ProviderRuntime, resolveBuiltinRuntimeDispatchPlans } from '@wrenyard/providers'
+import { formatRunSyntax, parseRunSyntax, resolveConstrainedDispatch } from '@wrenyard/catalog'
+import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { parseAgentRuntime } from '../agent-runtime.mts'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
 
 /**
  * Canonical daemon-side task dispatch resolver.
  *
- * The resolver is a thin adapter over `@wrenyard/catalog`'s
- * `resolveConstrainedDispatch`: it enumerates the trusted exact runtime dispatch
- * plans (builtin catalog + provider runtime), supplies per-profile local
- * `agent_turn_v1` speed evidence through a lazy injected source, and returns
- * exactly one eligible plan with a full, truthful client/provider/model/
- * mode/protocol/speed/intelligence/reference-pricing snapshot. It never probes
- * the network or invokes a model; speed, pricing, and intelligence are read
- * from the catalog and the local samples, and a candidate with missing evidence
- * is failed (NO_ELIGIBLE_PROFILE), never admitted with fabricated values.
+ * The resolver is a thin adapter over `@wrenyard/catalog`: it derives the
+ * trusted dispatch plans and resolves the runtime task plans through the
+ * catalog/provider runtime, supplies per-candidate local `agent_turn_v1` speed
+ * evidence through a lazy injected source, and returns exactly one eligible
+ * plan with a full, truthful canonical provider/model:client snapshot. It never
+ * probes the network or invokes a model; speed, pricing, and intelligence are
+ * read from the catalog and the local samples, and a candidate with missing
+ * evidence is failed (NO_ELIGIBLE_PROFILE), never admitted with fabricated
+ * values.
  *
- * A task's declared `agentRuntime` is an EXACT PIN: when it parses to a concrete
- * (non-policy) forge profile it narrows the candidate pool to that profile and
- * the single candidate is validated against every hard requirement. A policy
- * runtime (fast/general/ultra) does not pin — it only opens the compatible
- * builtin plan pool. A machine-configured `machinePreference` (soft) is mapped
- * onto `preferredRuntime` and can never relax, skip, or bypass a hard
- * requirement; every candidate (including any the preference would favor) passes
- * the same filters. `resolveConstrainedDispatch` is the sole filter/order; this
+ * Every runtime identity is a canonical dynamic target
+ * (`<provider>/<model>:<client>`) resolved once through the Catalog. Automatic
+ * selection is driven solely by `catalog.enumerateTaskCandidates` and the
+ * resolved runtime task plans: an absent declaredRuntime or a legacy policy
+ * string (fast/general/ultra) opens the full task-capable candidate pool and a
+ * non-policy legacy `forge/<profile>` declaration no longer maps to any source
+ * preset and fails closed. A machine/global `machinePreference` and a
+ * `requirements.preferredRuntime` are ignored by automatic selection: a
+ * concrete runtime/alias choice exists only in explicit mode. Every candidate
+ * passes the same hard gates, then `resolveConstrainedDispatch` collapses
+ * provider/model clients (native > grok > claude/others) and ranks the models.
+ * `resolveConstrainedDispatch` is the sole filter/order; this
  * resolver performs no duplicate filtering of its own.
  */
 
@@ -49,12 +53,13 @@ export class NoEligiblePlanError extends Error {
 }
 
 /**
- * Explicit-mode failure. Resolving an exact existing runtime is a hard pin:
- * when the requested profile is not parseable/non-policy, does not exist,
- * lacks a compiled runtime plan/credential route, is capability-incompatible,
- * or cannot produce truthful resolved dispatch metadata, the resolution fails
- * with this error and a concrete reason. No other candidate is evaluated and
- * no automatic selection rule can substitute a different profile.
+ * Explicit-mode failure. Resolving an exact canonical dynamic target is a hard
+ * pin: when the requested target is not parseable run syntax, does not resolve
+ * through the Catalog, is not in the task-capable candidate/runtime plan set,
+ * is capability-incompatible, or cannot produce truthful resolved dispatch
+ * metadata, the resolution fails with this error and a concrete reason. No
+ * other candidate is evaluated and no automatic selection rule can substitute
+ * a different target.
  */
 export class ExplicitRuntimeUnavailableError extends Error {
   readonly code = 'EXPLICIT_RUNTIME_UNAVAILABLE' as const
@@ -71,16 +76,18 @@ export class ExplicitRuntimeUnavailableError extends Error {
 export interface TaskDispatchResolverDeps {
   catalog: Catalog
   runtime: ProviderRuntime
-  /** Lazy source of per-profile trusted local `agent_turn_v1` speed samples. */
+  /** Lazy source of per-candidate trusted local `agent_turn_v1` speed samples. */
   localSpeed?: () => LocalSpeedSample[]
 }
 
 export interface ResolveTaskDispatchInput {
   taskName: string
   requirements: TaskDispatchRequirements
-  /** Exact declared runtime pin (`'<runtime>/<config-id>'`). Never a preference. */
+  /** Exact declared runtime classification (`'forge/fast'`) or absent for auto. */
   declaredRuntime?: string
-  /** Soft machine override preference; influences preferredRuntime only. */
+  /** Machine/global override preference, retained for interface compatibility.
+   *  Ignored for automatic selection; a concrete runtime/alias choice exists
+   *  only through resolveExplicit. */
   machinePreference?: string
 }
 
@@ -89,23 +96,23 @@ export type TaskDispatchResolution =
   | { ok: false; error: NoEligiblePlanError }
 
 /**
- * Eligible projection input. Mirrors `resolve` minus the soft machine
- * preference: eligibility never depends on an operator preference, only on the
- * task's declared runtime semantics and its hard dispatch requirements.
+ * Eligible projection input. Mirrors `resolve` minus the machine preference
+ * surface: automatic eligibility never depends on an operator preference, only
+ * on the task's declared runtime semantics and its hard dispatch requirements.
  */
 export interface TaskDispatchEligibleInput {
   taskName: string
   requirements: TaskDispatchRequirements
-  /** Exact declared runtime pin or a policy runtime. Never a machine preference. */
+  /** Exact declared runtime classification or a policy runtime. Never a machine preference. */
   declaredRuntime?: string
 }
 
 /**
  * One exact runtime choice: the full resolved-dispatch snapshot (the same
  * client/provider/model/model_id/mode/protocol/speed/intelligence/
- * reference_pricing fields as `resolve`) plus its exact pinned runtime string
- * (`forge/<profile>`). Legacy policy strings (fast/general/ultra) are never
- * returned as choices.
+ * reference_pricing fields as `resolve`) plus its exact canonical dynamic
+ * target (`'<provider>/<model>:<client>'`). Legacy policy strings
+ * (fast/general/ultra) are never returned as choices.
  */
 export type TaskDispatchChoice = TaskResolvedDispatch & { exactAgentRuntime: string }
 
@@ -114,15 +121,16 @@ export type TaskDispatchEligibleResult =
   | { ok: false; error: NoEligiblePlanError }
 
 /**
- * Explicit-resolution input: an EXACT existing configuration pin. Unlike
+ * Explicit-resolution input: an EXACT canonical dynamic target pin. Unlike
  * automatic resolution there is no machine preference, no automatic
  * speed/intelligence/reference-price/exclude requirement surface, and no
- * ranking: the caller names the exact profile, and the only further
- * eligibility constraint is the optional required model capabilities.
+ * ranking: the caller names the exact target, and the only further eligibility
+ * constraint is the optional required model capabilities.
  */
 export interface ResolveExplicitDispatchInput {
   taskName: string
-  /** Exact existing configuration pin, e.g. `forge/cb-dsf`. Never a policy alias. */
+  /** Exact canonical dynamic target, e.g. `codebuddy/deepseek-v4-flash:cb`.
+   *  Never a policy alias. */
   exactRuntime: string
   /** Sole eligibility constraint beyond intrinsic availability. */
   requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities']
@@ -139,9 +147,9 @@ export interface TaskDispatchExactRuntimeListInput {
 }
 
 /**
- * One exact existing configuration with truthful explicit-mode availability.
+ * One exact canonical dynamic target with truthful explicit-mode availability.
  * Policy aliases are never listed and evidence is never fabricated: `resolved`
- * is present exactly when the profile can serve the task, otherwise
+ * is present exactly when the target can serve the task, otherwise
  * `unavailableReason` states the concrete cause.
  */
 export interface TaskDispatchExactRuntimeListItem {
@@ -160,29 +168,27 @@ export interface TaskDispatchResolver {
   resolve(input: ResolveTaskDispatchInput): TaskDispatchResolution
   /**
    * Enumerates every exact runtime choice currently satisfying the same
-   * declared-runtime semantics and hard requirements as `resolve`. An exact
-   * declared runtime exposes at most the pinned candidate when eligible; a
-   * policy runtime evaluates every exact candidate. Eligibility is never
-   * relaxed against resolve admission.
+   * declared-runtime semantics and hard requirements as `resolve`. A policy
+   * or absent declared runtime evaluates every exact canonical candidate.
+   * Eligibility is never relaxed against resolve admission.
    */
   eligible(input: TaskDispatchEligibleInput): TaskDispatchEligibleResult
 
   /**
-   * Resolves one EXACT existing configuration, bypassing every automatic
+   * Resolves one EXACT canonical dynamic target, bypassing every automatic
    * selection constraint (expected/minimum speed, intelligence range,
    * reference-price ceiling, automatic exclusion lists, preferredRuntime,
    * machine preference, and ranking) and applying only intrinsic availability
    * plus optional required capabilities. Failure is terminal: an unavailable,
-   * unknown, policy, capability-incompatible, or non-truthful profile returns
-   * `ExplicitRuntimeUnavailableError` and never falls back to another
-   * candidate.
+   * unknown, non-task-capable, policy, capability-incompatible, or non-truthful
+   * target returns `ExplicitRuntimeUnavailableError` and never falls back to
+   * another candidate.
    */
   resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution
   /**
-   * Enumerates every existing exact profile (`forge/<profile>`) with its
-   * explicit-mode availability, attaching resolved metadata only when it can be
-   * produced truthfully. Synchronous and side-effect free: no inference and no
-   * network.
+   * Enumerates every existing canonical dynamic target with its explicit-mode
+   * availability, attaching resolved metadata only when it can be produced
+   * truthfully. Synchronous and side-effect free: no inference and no network.
    */
   listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult
 }
@@ -236,40 +242,45 @@ function toResolvedDispatch(
 export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps): Promise<TaskDispatchResolver> {
   const catalog = deps.catalog
 
-  // Logical Catalog candidates: canonical model ids drive eligibility, constraint
-  // filtering, and profile identity. An upstream runtime alias must never make a
-  // canonical Catalog profile ineligible.
-  const catalogPlans = resolveBuiltinDispatchPlans(catalog)
-  const allCandidates: DispatchCandidate[] = Object.entries(catalogPlans).map(([profileId, plan]) => ({
-    profileId,
-    client: plan.client,
-    provider: plan.provider,
-    model: plan.model,
-  }))
+  // Auto candidates come only from the Catalog's task-capable enumeration. Each
+  // candidate's profileId IS its canonical provider/model:client identity; no
+  // source preset table, profile registry, or user alias participates here.
+  const allCandidates: DispatchCandidate[] = catalog.enumerateTaskCandidates()
 
-  // Runtime execution plans (which may contain private upstream aliases) are
-  // compiled up front. They validate that the selected profile has a trusted
-  // execution plan, but those internal route labels are never exposed through
-  // the public resolved-dispatch identity.
-  const runtimePlans = await resolveBuiltinRuntimeDispatchPlans(catalog, deps.runtime)
+  // Runtime execution plans are compiled up front and keyed by the same
+  // canonical targets. They validate that the selected target has a trusted
+  // execution plan, but internal route labels (e.g. the CodeBuddy iOA remap)
+  // are runtime-owned and never exposed through the public identity.
+  const runtimePlans = await resolveRuntimeTaskPlans(catalog, deps.runtime)
 
-  // Shared pool selection: an exact (non-policy) declared runtime is a strict
-  // single-candidate pin; a policy selector (fast/general/ultra) or an absent
-  // declared runtime opens the full builtin candidate pool and lets the task
-  // requirements perform the sole hard filtering and ranking. An unparseable
-  // declared runtime fails closed rather than broadening admission.
+  // Legacy policy detection (fast/general/ultra) remains a temporary auto
+  // classification only. A policy selector or an absent declared runtime opens
+  // the full canonical candidate pool and lets the task requirements perform
+  // the sole hard filtering and ranking. Any other declared runtime — including
+  // a legacy non-policy forge/<profile>, which no longer maps to a source
+  // preset — fails closed rather than broadening admission.
+  const isPolicyClassification = (raw: string): boolean => {
+    try {
+      return parseAgentRuntime(raw).isPolicy
+    } catch {
+      return false
+    }
+  }
+
   const selectCandidatePool = (
     input: ResolveTaskDispatchInput,
   ): DispatchCandidate[] | NoEligiblePlanError => {
     if (!input.declaredRuntime) return allCandidates
-    try {
-      const parsed = parseAgentRuntime(input.declaredRuntime)
-      if (parsed.isPolicy) return allCandidates
-      return allCandidates.filter((candidate) => candidate.profileId === parsed.configId)
-    } catch {
+    if (!isPolicyClassification(input.declaredRuntime)) {
       return new NoEligiblePlanError(input.taskName, allCandidates, input.requirements)
     }
+    return allCandidates
   }
+
+  // Canonical identity of a candidate equals its catalog profileId (the public
+  // provider/model:client run syntax). Every runtime plan is keyed by the same
+  // canonical target, so plan lookups use this identity directly.
+  const canonicalTargetOf = (candidate: DispatchCandidate): string => candidate.profileId
 
   // Single authoritative evaluation. `resolve` selection and the `eligible`
   // projection both run this exact code path (same candidate admission, same
@@ -281,29 +292,22 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   ): TaskDispatchResolution => {
     const req = input.requirements
 
-    // Soft machine preference: mapped onto preferredRuntime only — never a bypass.
-    const effectiveReq: TaskDispatchRequirements = { ...req }
-    if (input.machinePreference) {
-      const preferred = allCandidates.find((candidate) => `forge/${candidate.profileId}` === input.machinePreference)
-      if (preferred) {
-        effectiveReq.preferredRuntime = {
-          client: preferred.client,
-          provider: preferred.provider,
-          model: preferred.model,
-        }
-      }
-    }
-
+    // machinePreference and requirements.preferredRuntime are ignored for
+    // automatic selection: a machine/global concrete runtime is never parsed
+    // into a preferred candidate. resolveConstrainedDispatch applies every hard
+    // gate, collapses provider/model clients (native > grok > claude/others),
+    // then ranks models by expected-speed group and reference output price. A
+    // concrete runtime/alias choice exists only in explicit mode.
     const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
-    const constrained = resolveConstrainedDispatch(catalog, candidatePool, effectiveReq, localSpeed)
+    const constrained = resolveConstrainedDispatch(catalog, candidatePool, req, localSpeed)
     if (!constrained.ok) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
     }
 
     const selected = constrained.selected
 
-    // Resolve the bare profile id. `resolveConstrainedDispatch` is the sole
-    // filter/order; this lookup only attaches the catalog profile id that
+    // Resolve the chosen candidate. `resolveConstrainedDispatch` is the sole
+    // filter/order; this lookup only attaches the canonical catalog target that
     // matches the single selected plan (no re-filtering).
     const chosen = candidatePool.find(
       (candidate) =>
@@ -311,14 +315,12 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         && candidate.provider === selected.plan.provider
         && candidate.model === selected.plan.model,
     )
-    const profileId = chosen?.profileId
-      ?? input.declaredRuntime?.split('/')[1]
-      ?? selected.plan.provider
+    const canonicalTarget = chosen ? canonicalTargetOf(chosen) : formatRunSyntax(selected.plan)
 
-    // Require a compiled runtime plan for the selected profile. Catalog
-    // selection and the public snapshot retain canonical logical identity;
-    // Forge consumes the exact profile and keeps any upstream alias internal.
-    const runtimePlan = runtimePlans[profileId]
+    // Require a compiled runtime plan for the selected canonical target. The
+    // public snapshot retains canonical identity; Forge consumes the exact
+    // target and any upstream alias stays runtime-internal.
+    const runtimePlan = runtimePlans[canonicalTarget]
     if (!runtimePlan) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
     }
@@ -347,69 +349,63 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     const resolved = toResolvedDispatch(
       input.declaredRuntime ?? '',
-      profileId,
+      canonicalTarget,
       selected.plan,
       model,
       verifiedSpeed,
       pricing,
       req,
     )
-    return { ok: true, exactAgentRuntime: `forge/${profileId}`, resolved }
+    return { ok: true, exactAgentRuntime: canonicalTarget, resolved }
   }
 
-  // Explicit (existing exact configuration) resolution is a separate, narrower
-  // admission path from automatic `resolve`/`eligible`. The exact profile is
-  // validated only for intrinsic availability (it exists, has a compiled
+  // Explicit (exact canonical dynamic target) resolution is a separate,
+  // narrower admission path from automatic `resolve`/`eligible`. The target is
+  // validated only for intrinsic availability (it resolves through the
+  // Catalog, exists as a task-capable canonical candidate with a compiled
   // runtime plan/credential route, and can yield truthful resolved dispatch
   // metadata) plus the caller's required capabilities. None of the automatic
   // selection machinery runs here: no expected/minimum speed, no intelligence
   // range, no reference-price ceiling, no exclusion lists, no preferredRuntime,
   // no machine preference, and no ranking. A failure is terminal — the explicit
   // error is returned and no other candidate is ever evaluated as a fallback.
-  const evaluateExplicitProfile = (
+  const evaluateExplicitTarget = (
     taskName: string,
     exactAgentRuntime: string,
-    profileId: string,
+    candidate: DispatchCandidate,
     requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
   ): TaskDispatchExplicitResolution => {
-    const catalogPlan = catalogPlans[profileId]
-    if (!catalogPlan) {
+    const canonicalTarget = canonicalTargetOf(candidate)
+    if (canonicalTarget !== exactAgentRuntime) {
       return {
         ok: false,
         error: new ExplicitRuntimeUnavailableError(
           taskName,
           exactAgentRuntime,
-          `no catalog profile '${profileId}'`,
+          `canonical target identity is '${canonicalTarget}', not '${exactAgentRuntime}'`,
         ),
       }
     }
-    const runtimePlan = runtimePlans[profileId]
+    const runtimePlan = runtimePlans[canonicalTarget]
     if (!runtimePlan) {
       return {
         ok: false,
         error: new ExplicitRuntimeUnavailableError(
           taskName,
           exactAgentRuntime,
-          `profile '${profileId}' has no compiled runtime plan or credential route`,
+          `target '${canonicalTarget}' has no compiled runtime plan or credential route`,
         ),
       }
     }
 
     const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
       { taskName, requirements, declaredRuntime: exactAgentRuntime },
-      [
-        {
-          profileId,
-          client: catalogPlan.client,
-          provider: catalogPlan.provider,
-          model: catalogPlan.model,
-        },
-      ],
+      [candidate],
     )
 
     // Availability-only probe. The pool is exactly this candidate and the
     // requirements carry no automatic constraint, so admission here means the
-    // profile can produce a truthful resolved snapshot — never a fabricated one.
+    // target can produce a truthful resolved snapshot — never a fabricated one.
     const availability = probe({})
     if (!availability.ok) {
       return {
@@ -417,7 +413,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         error: new ExplicitRuntimeUnavailableError(
           taskName,
           exactAgentRuntime,
-          `profile '${profileId}' cannot produce truthful resolved dispatch metadata (speed/intelligence/reference-pricing evidence)`,
+          `target '${canonicalTarget}' cannot produce truthful resolved dispatch metadata (speed/intelligence/reference-pricing evidence)`,
         ),
       }
     }
@@ -432,7 +428,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         error: new ExplicitRuntimeUnavailableError(
           taskName,
           exactAgentRuntime,
-          `profile '${profileId}' is incompatible with required capabilities: ${requiredCapabilities.join(', ')}`,
+          `target '${canonicalTarget}' is incompatible with required capabilities: ${requiredCapabilities.join(', ')}`,
         ),
       }
     }
@@ -450,10 +446,10 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       const pool = selectCandidatePool(input)
       if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
 
-      // An exact declared pin narrowed the pool to a single candidate, so at
-      // most one choice is produced. A policy declaration evaluates every exact
-      // candidate through the same evaluate() admission as resolve; only exact
-      // (`forge/<profile>`) pins are ever returned — never policy aliases.
+      // Every candidate in the pool is an exact canonical target, so each
+      // choice is evaluated through the same evaluate() admission as resolve;
+      // only exact (`provider/model:client`) choices are ever returned — never
+      // policy aliases.
       const choices: TaskDispatchChoice[] = []
       for (const candidate of pool) {
         const outcome = evaluate(
@@ -474,28 +470,42 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
       })
 
-      // Require a parseable non-policy `forge/<profile>` exact runtime. Anything
-      // else is a concrete failure, not an implicit request for another profile.
-      if (!/^forge\/[^/]+$/u.test(exactRuntime)) {
-        return unavailable(`'${exactRuntime}' is not a parseable non-policy forge/<profile> exact runtime`)
-      }
-      let parsed: ReturnType<typeof parseAgentRuntime>
+      // Require a parseable canonical dynamic target. Anything else is a
+      // concrete failure, not an implicit request for another target.
+      let parsed: ReturnType<typeof parseRunSyntax>
       try {
-        parsed = parseAgentRuntime(exactRuntime)
-      } catch {
-        return unavailable(`'${exactRuntime}' does not parse as an agent runtime`)
+        parsed = parseRunSyntax(exactRuntime)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return unavailable(`'${exactRuntime}' is not a parseable canonical dynamic target (${message})`)
       }
-      if (parsed.isPolicy) {
-        return unavailable(`policy alias '${exactRuntime}' is not an exact configuration; resolveExplicit requires forge/<profile>`)
+
+      // Resolve through the Catalog (canonicalizing model aliases) and require
+      // the exact canonical target to exist in the task-capable candidate set.
+      let resolvedPlan: { client: string; provider: string; model: string }
+      try {
+        resolvedPlan = catalog.resolveRun(parsed.client, parsed.provider, parsed.model)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return unavailable(`cannot resolve '${exactRuntime}' through the Catalog: ${message}`)
       }
-      return evaluateExplicitProfile(taskName, exactRuntime, parsed.configId, requiredCapabilities)
+      const canonicalTarget = formatRunSyntax(resolvedPlan)
+      const candidate = allCandidates.find(
+        (entry) => entry.client === resolvedPlan.client
+          && entry.provider === resolvedPlan.provider
+          && entry.model === resolvedPlan.model,
+      )
+      if (!candidate) {
+        return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
+      }
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
       const items: TaskDispatchExactRuntimeListItem[] = []
-      for (const profileId of Object.keys(catalogPlans)) {
-        const exactAgentRuntime = `forge/${profileId}`
-        const outcome = evaluateExplicitProfile(input.taskName, exactAgentRuntime, profileId, input.requiredCapabilities)
+      for (const candidate of allCandidates) {
+        const exactAgentRuntime = canonicalTargetOf(candidate)
+        const outcome = evaluateExplicitTarget(input.taskName, exactAgentRuntime, candidate, input.requiredCapabilities)
         if (outcome.ok) {
           items.push({ exactAgentRuntime, available: true, resolved: outcome.resolved })
         } else {

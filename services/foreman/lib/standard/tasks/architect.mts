@@ -29,7 +29,6 @@ const definition = {
   config: {
     description:
       'Architect - map one confirmed FunctionalUnit to executable ImplementationUnits with edit instructions and local verification',
-    agentRuntime: 'forge/ultra',
     dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [editOperationUnits],

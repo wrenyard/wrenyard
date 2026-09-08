@@ -459,3 +459,177 @@ test('initDb migrates events.execution_id to nullable for task lifecycle events'
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('fresh initDb schema exposes nullable task_run_attempt_dispatch.auto_routing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-auto-routing-fresh-'))
+  const dbPath = join(dir, 'wrenyard.db')
+  try {
+    const db = initDb(dbPath)
+    assert.ok(
+      tableColumnNames(db, 'task_run_attempt_dispatch').includes('auto_routing'),
+      'fresh dispatch schema must include auto_routing',
+    )
+    assert.equal(
+      tableColumnInfo(db, 'task_run_attempt_dispatch', 'auto_routing')?.notnull,
+      0,
+      'auto_routing must stay nullable',
+    )
+
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO tasks (id, template, status, retry_policy, created_at, updated_at)
+       VALUES ('task_auto_fresh', 'task', 'done', 'side-effects', ?, ?)`,
+    ).run(now, now)
+    db.prepare(
+      `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
+       VALUES ('exec_auto_fresh', 'task_auto_fresh', 'p', 'readonly', '/tmp', 'p', 'done', ?, ?)`,
+    ).run(now, now)
+    const decisionJson = JSON.stringify({
+      snapshot_id: 'snap-fresh',
+      selected_rank: 0,
+      supply_class: 'standard',
+      quota_tier: 'healthy',
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 3,
+      routing_output_usd_per_million: 2,
+      effective_cap_usd_per_million: 4,
+      score: 0.9,
+      reasons: ['lowest reference price'],
+    })
+    db.prepare(
+      `INSERT INTO task_run_attempt_dispatch (execution_id, task_run_id, model, model_id, auto_routing, created_at, updated_at)
+       VALUES (?, ?, 'sonnet', 'claude-sonnet-4', ?, ?, ?)`,
+    ).run('exec_auto_fresh', 'task_auto_fresh', decisionJson, now, now)
+    const row = db.prepare<[], { auto_routing: string | null }>(
+      `SELECT auto_routing FROM task_run_attempt_dispatch WHERE execution_id = 'exec_auto_fresh'`,
+    ).get()
+    assert.equal(row?.auto_routing, decisionJson, 'fresh schema stores auto_routing JSON text verbatim')
+  } finally {
+    closeDb()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('initDb idempotently migrates nullable auto_routing onto legacy dispatch rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-auto-routing-legacy-'))
+  const dbPath = join(dir, 'wrenyard.db')
+  try {
+    const now = new Date().toISOString()
+    const oldDb = new Database(dbPath)
+    oldDb.exec(`
+      CREATE TABLE workflows (
+        id              TEXT PRIMARY KEY,
+        flow_name       TEXT NOT NULL, project TEXT,
+        input           TEXT,
+        status          TEXT NOT NULL CHECK(status IN
+                          ('running','paused','done','failed','cancelled','interrupted')),
+        checkpoint      TEXT,
+        current_phase   TEXT, error TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT
+      );
+      CREATE TABLE tasks (
+        id              TEXT PRIMARY KEY,
+        template        TEXT NOT NULL,
+        project         TEXT,
+        worktree        TEXT,
+        input           TEXT, output TEXT, summary TEXT, error TEXT,
+        workflow_id     TEXT REFERENCES workflows(id),
+        failure_category TEXT,
+        suggestion      TEXT,
+        error_message   TEXT,
+        notified_via_channel INTEGER NOT NULL DEFAULT 0,
+        definition_source TEXT CHECK(definition_source IN ('builtin','project')),
+        status          TEXT NOT NULL CHECK(status IN
+                          ('queued','running','done','failed','cancelled','interrupted')),
+        structured      INTEGER DEFAULT 0,
+        execution_id    TEXT REFERENCES executions(id),
+        retry_policy    TEXT NOT NULL DEFAULT 'side-effects'
+                          CHECK(retry_policy IN ('idempotent','side-effects','manual')),
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT
+      );
+      CREATE TABLE executions (
+        id                TEXT PRIMARY KEY,
+        task_id           TEXT REFERENCES tasks(id),
+        profile           TEXT NOT NULL,
+        permission        TEXT NOT NULL CHECK(permission IN ('readonly','edit','yolo')),
+        cwd               TEXT NOT NULL,
+        prompt            TEXT NOT NULL,
+        status            TEXT NOT NULL CHECK(status IN
+                          ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
+        native_session_id TEXT,
+        client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor')),
+        pid               INTEGER, pgid INTEGER,
+        started_at        TEXT, ended_at TEXT,
+        exit_code         INTEGER, kill_signal TEXT,
+        kill_reason       TEXT CHECK(kill_reason IN ('cancel','timeout','shutdown','crash','spawn-error')),
+        output            TEXT, raw_result TEXT, error TEXT,
+        timeout_ms        INTEGER,
+        requested_agent_runtime TEXT,
+        resolved_profile  TEXT,
+        created_at        TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE task_run_attempt_dispatch (
+        execution_id TEXT PRIMARY KEY REFERENCES executions(id),
+        task_run_id  TEXT NOT NULL REFERENCES tasks(id),
+        requested_agent_runtime TEXT,
+        profile TEXT, client TEXT, provider TEXT, model TEXT, model_id TEXT,
+        mode TEXT, protocol TEXT,
+        speed_effective_tps REAL, speed_source TEXT, speed_sample_count INTEGER,
+        speed_checked_at TEXT, speed_expected_tps_met INTEGER,
+        speed_degradation_reason TEXT, intelligence TEXT,
+        reference_pricing_input REAL, reference_pricing_output REAL,
+        reference_pricing_cache REAL, reference_pricing_cache_write REAL,
+        reference_pricing_source TEXT, reference_pricing_checked_at TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `)
+    oldDb.prepare(
+      `INSERT INTO tasks (id, template, status, retry_policy, created_at, updated_at)
+       VALUES ('task_auto_legacy', 'task', 'done', 'side-effects', ?, ?)`,
+    ).run(now, now)
+    oldDb.prepare(
+      `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
+       VALUES ('exec_auto_legacy', 'task_auto_legacy', 'p', 'readonly', '/tmp', 'p', 'done', ?, ?)`,
+    ).run(now, now)
+    oldDb.prepare(
+      `INSERT INTO task_run_attempt_dispatch (execution_id, task_run_id, model, model_id, created_at, updated_at)
+       VALUES ('exec_auto_legacy', 'task_auto_legacy', 'sonnet', 'claude-sonnet-4', ?, ?)`,
+    ).run(now, now)
+    oldDb.close()
+
+    const db = initDb(dbPath)
+    assert.ok(
+      tableColumnNames(db, 'task_run_attempt_dispatch').includes('auto_routing'),
+      'legacy dispatch table must gain the auto_routing column',
+    )
+    assert.equal(
+      tableColumnInfo(db, 'task_run_attempt_dispatch', 'auto_routing')?.notnull,
+      0,
+      'auto_routing must stay nullable',
+    )
+    const legacy = db.prepare<[], { model_id: string; auto_routing: string | null }>(
+      `SELECT model_id, auto_routing FROM task_run_attempt_dispatch WHERE execution_id = 'exec_auto_legacy'`,
+    ).get()
+    assert.equal(legacy?.model_id, 'claude-sonnet-4', 'legacy dispatch row must survive the migration')
+    assert.equal(legacy?.auto_routing, null, 'legacy rows keep NULL auto_routing')
+    closeDb()
+
+    // A second bootstrap is an idempotent no-op: the column stays and the row
+    // remains readable with NULL auto_routing.
+    const db2 = initDb(dbPath)
+    assert.ok(
+      tableColumnNames(db2, 'task_run_attempt_dispatch').includes('auto_routing'),
+      'repeated initDb must not duplicate or drop auto_routing',
+    )
+    const again = db2.prepare<[], { model_id: string; auto_routing: string | null }>(
+      `SELECT model_id, auto_routing FROM task_run_attempt_dispatch WHERE execution_id = 'exec_auto_legacy'`,
+    ).get()
+    assert.equal(again?.model_id, 'claude-sonnet-4', 'legacy row survives a second bootstrap')
+    assert.equal(again?.auto_routing, null, 'legacy row stays NULL after a second bootstrap')
+    closeDb()
+  } finally {
+    closeDb()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

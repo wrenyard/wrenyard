@@ -18,7 +18,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Review FunctionalUnitSet contract completeness and implementation-batch readiness before user confirmation',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

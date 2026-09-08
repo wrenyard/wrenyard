@@ -26,7 +26,6 @@ const definition = {
   config: {
     description:
       'Read the failure completely and establish precise reproduction evidence without proposing fixes',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

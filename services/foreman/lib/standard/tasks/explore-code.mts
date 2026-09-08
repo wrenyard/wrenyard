@@ -47,7 +47,6 @@ const definition: TaskDefinition = {
   config: {
     description:
       'Confirm implementation facts against requirements and the doc-first context baseline. Read-only code search that prefers rg and traces entry/data flow.',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],

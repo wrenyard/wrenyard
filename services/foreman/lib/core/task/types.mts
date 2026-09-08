@@ -26,22 +26,16 @@ export interface TaskCapabilityConfig {
  * {minimum,maximum}, maximumOutputUsdPerMillion, per-axis model/client/provider/
  * profile exclusions, and required model capabilities) is authoritative.
  *
- * The `dispatch` field on `TaskConfig` is exactly this contract. A task's
- * concrete `agentRuntime` profile is an exact pin that must satisfy these
- * requirements; the legacy fast/general/ultra selectors open the constrained
- * candidate pool. Machine overlays are only soft preferences that can never
- * relax or bypass a requirement. Required
- * model capabilities live in the dispatch requirements themselves — distinct
- * from the Forge capability packs declared on `TaskConfig.capabilities`.
+ * The `dispatch` field on `TaskConfig` is exactly this contract. Active Tasks
+ * never pin a runtime — they select automatically from dispatch, and any
+ * explicit user selection belongs to Task settings, not Task definitions.
+ * Required model capabilities live in the dispatch requirements themselves —
+ * distinct from the Forge capability packs declared on `TaskConfig.capabilities`.
  */
 import type { TaskDispatchRequirements } from '@wrenyard/catalog'
 export type { TaskDispatchRequirements }
 
-export interface TaskConfig {
-  /** Scheduling lifecycle for this definition. `legacy` definitions remain
-   *  resolvable so persisted runs can recover, but are omitted from task lists
-   *  and rejected when callers try to create new work. */
-  scheduling?: 'active' | 'legacy'
+export interface TaskConfigBase {
   /** Optional human-facing task category. Validated at definition load:
    *  `id` must match `^[a-z][a-z0-9-]{0,31}$` and `displayLabel` must be a
    *  trimmed single line of 1..24 UTF-16 code units. An invalid category
@@ -59,23 +53,15 @@ export interface TaskConfig {
    *  label from `lib/standard`; project definitions may declare their own.
    *  An omitted label stays backwards compatible. */
   displayName?: string
-  /** Declared runtime selector: '<runtime>/<config-id>' (e.g. 'forge/codex-luna').
-   *  Concrete profiles are hard pins; fast/general/ultra select dynamically
-   *  within `dispatch`. When absent, the legacy `profile` field is synthesized. */
-  agentRuntime?: string
-  /** Explicit hard dispatch requirements (catalog SSOT). Concrete profile pins
-   *  must satisfy these; policy selectors and machine preferences can never
-   *  bypass them. Required model capabilities are part of this
-   *  contract, distinct from Forge capability packs. */
+  /** Explicit hard dispatch requirements (catalog SSOT). Active Tasks select
+   *  automatically from dispatch; a machine preference can never bypass these
+   *  requirements. Required model capabilities are part of this contract,
+   *  distinct from Forge capability packs. */
   dispatch?: TaskDispatchRequirements
   /** Declared Forge capability packs this task can select.
    *  Capabilities are mounted when the task runs; absent means no capability
    *  gate. Generic — does not know about specific capability names. */
   capabilities?: TaskCapabilityConfig
-  /** @deprecated Use `agentRuntime` instead. Retained for backward compatibility
-   *  during migration; synthesized as 'forge/<profile>' when agentRuntime is absent.
-   *  Optional — builtin and migrated definitions may rely solely on `agentRuntime`. */
-  profile?: string
   description?: string
   instructions?: Array<string | ((input?: unknown) => string | Promise<string>)>
   input: TaskSchemaInput
@@ -98,6 +84,37 @@ export interface TaskConfig {
    *  tasks inherit the 15-minute default. */
   timeoutMs?: number
 }
+
+/** Active authoring contract: an active Task never pins a runtime. It selects
+ *  automatically from dispatch, and any explicit user selection belongs to
+ *  Task settings (per-task / user-global), never to a Task definition.
+ *  `profile` and the retired `agentRuntime` field are type-level impossible
+ *  here; the definition registry also rejects untyped exports that smuggle
+ *  either field through at load time. */
+export interface TaskConfigActive extends TaskConfigBase {
+  /** Scheduling lifecycle: omitted or `'active'` definitions are eligible for
+   *  new work and never pin a runtime. */
+  scheduling?: 'active'
+  profile?: never
+}
+
+/** Legacy recovery contract: `scheduling: 'legacy'` definitions remain
+ *  resolvable so persisted work stays recoverable, but are omitted from task
+ *  lists and rejected when callers try to create new work. Legacy is only a
+ *  discriminated scheduling mode — the definition carries no runtime pin:
+ *  exact runtime recovery comes from persisted run/execution records, never
+ *  from a definition profile. `profile` and the retired `agentRuntime` field
+ *  are type-level impossible here; the definition registry also rejects untyped
+ *  exports that smuggle either field through at load time. */
+export interface TaskConfigLegacy extends TaskConfigBase {
+  scheduling: 'legacy'
+  /** Runtime pins are retired for current source-authored definitions. Legacy
+   *  persisted runs recover their exact runtime from run/execution records,
+   *  never from a Task definition profile. */
+  profile?: never
+}
+
+export type TaskConfig = TaskConfigActive | TaskConfigLegacy
 
 export interface TaskDefinition {
   __type: 'task'
@@ -148,7 +165,6 @@ export interface TaskListEntry {
   name: string
   project: string
   description?: string
-  agentRuntime?: string
 }
 
 // ── Task gate types ─────────────────────────────────────────────────

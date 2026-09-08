@@ -80,7 +80,6 @@ const definition = {
   config: {
     description:
       'Implementation plan review — verify one-FP/FU-node plan coverage, edit/test traceability, and implement workflow readiness',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

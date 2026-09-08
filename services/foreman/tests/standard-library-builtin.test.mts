@@ -62,7 +62,6 @@ function writeTask(dir: string, name: string): void {
 
 function taskSource(promptExpression: string): string {
   return `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -689,13 +688,13 @@ describe('standard-library prepare-fix builtin task', () => {
     assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'write-failing-test')
   })
 
-  it('exposes a task definition with the migrated static description/runtime/permission', () => {
+  it('exposes a task definition with the migrated static description/permission and no runtime pin', () => {
     assert.equal(prepareFixTask.__type, 'task')
     assert.equal(
       prepareFixTask.config.description,
       'Analyze failed verification evidence and produce precise edit instructions only when the failure is credible and code repair is required.',
     )
-    assert.equal(prepareFixTask.config.agentRuntime, 'forge/general')
+    assert.equal(Object.hasOwn(prepareFixTask.config, 'agentRuntime'), false)
     assert.equal(prepareFixTask.config.permission, 'readonly')
     assert.deepEqual(prepareFixTask.config.instructions, [shellUsage])
     assert.equal(prepareFixTask.sourcePath, 'lib/standard/tasks/prepare-fix.mts')
@@ -781,6 +780,11 @@ describe('standard-library implement builtin task', () => {
     assert.equal(entry.definition.__type, 'task')
     assert.deepEqual(entry.definition.config.category, { id: 'edit', displayLabel: '编码' })
     assert.equal(entry.definition.sourcePath, implementTask.sourcePath)
+    // The registered definition carries the legacy scheduling marker, never a
+    // profile or agentRuntime source pin.
+    assert.equal(entry.definition.config.scheduling, 'legacy')
+    assert.equal(Object.hasOwn(entry.definition.config, 'profile'), false)
+    assert.equal(Object.hasOwn(entry.definition.config, 'agentRuntime'), false)
     // Registration must not mutate the imported module singleton.
     assert.equal(
       (implementTask.config as { category?: unknown }).category,
@@ -789,9 +793,10 @@ describe('standard-library implement builtin task', () => {
     )
   })
 
-  it('keeps the old runtime contract for recovery but marks it legacy-only', () => {
+  it('keeps the legacy-only recovery contract (yolo permission, timeout, legacy scheduling) with no profile or agentRuntime source pin', () => {
     assert.equal(implementTask.__type, 'task')
-    assert.equal(implementTask.config.agentRuntime, 'forge/general')
+    assert.equal(Object.hasOwn(implementTask.config, 'agentRuntime'), false, 'no agentRuntime source pin on the legacy definition')
+    assert.equal(Object.hasOwn(implementTask.config, 'profile'), false, 'no profile source pin on the legacy definition')
     assert.equal(implementTask.config.permission, 'yolo')
     assert.equal(implementTask.config.timeoutMs, 1_800_000)
     assert.equal(implementTask.config.scheduling, 'legacy')
@@ -799,7 +804,30 @@ describe('standard-library implement builtin task', () => {
     assert.ok(implementTask.config.instructions?.includes(shellUsage))
   })
 
-  it('rejects direct scheduling of the legacy implement task', async () => {
+  it('locks implement at the real registry/service surface as scheduling legacy with no profile or agentRuntime pin', async () => {
+    const workspace = makeTempDir('foreman-implement-real-surface-')
+    await discoverTasks(workspace)
+
+    // The registered registry entry is scheduling:'legacy' with no source pin.
+    const registered = BUILTIN_TASKS.find((e) => e.name === 'implement')
+    assert.ok(registered, 'implement should be a builtin task')
+    assert.equal(registered.definition.config.scheduling, 'legacy')
+    assert.equal(Object.hasOwn(registered.definition.config, 'profile'), false)
+    assert.equal(Object.hasOwn(registered.definition.config, 'agentRuntime'), false)
+
+    // The describe surface stays legacy and pin-free too.
+    const described = describeTask('implement', workspace)
+    assert.ok(described)
+    assert.equal(described.scheduling, 'legacy')
+    assert.equal(Object.hasOwn(described, 'agentRuntime'), false)
+    assert.equal(Object.hasOwn(described, 'profile'), false)
+
+    // Implement is absent from every new-work list surface.
+    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
+    assert.equal(listTaskDefinitions(workspace).some((definition) => definition.name === 'implement'), false)
+  })
+
+  it('rejects direct scheduling of the legacy implement task without ever reaching a runner', async () => {
     const workspace = makeTempDir('foreman-legacy-implement-')
     const hostname = osHostname()
     const projectCwd = makeTempDir('foreman-legacy-implement-cwd-')
@@ -812,8 +840,20 @@ describe('standard-library implement builtin task', () => {
     )
     await discoverTasks(workspace)
 
+    let startCalls = 0
     const { TaskService } = await import('../lib/core/task/service.mts')
-    const service = new TaskService({ workspaceRoot: workspace })
+    const service = new TaskService({
+      workspaceRoot: workspace,
+      operations: {
+        runner: {
+          startTaskRun: async () => {
+            startCalls += 1
+            return { id: 'run', task_run_id: 'run', hint: 'ok' }
+          },
+          cancelTaskRun: async () => ({}),
+        } as never,
+      },
+    })
     await assert.rejects(
       service.run({
         taskId: 'implement',
@@ -825,9 +865,15 @@ describe('standard-library implement builtin task', () => {
       }),
       (error) => (error as { code?: string }).code === 'legacy_task_not_schedulable',
     )
+    // New-work rejection is precise and spend-free: no runner start attempt.
+    assert.equal(startCalls, 0, 'direct legacy scheduling must not reach the runner')
   })
 
-  it('allows the internal compatibility flag to resume a persisted implement node', async () => {
+  it('keeps the internal allowLegacyTask flag only as a persisted-node bridge (no definition runtime pin)', async () => {
+    // The compatibility flag exists solely so GraphRunner recovery can reattach
+    // a persisted implement run that already carries a saved task_run_id. It is
+    // not a new-work scheduling path and it does not give the definition a
+    // profile/agentRuntime pin — the module contract above stays pin-free.
     const workspace = makeTempDir('foreman-legacy-implement-recovery-')
     const hostname = osHostname()
     const projectCwd = makeTempDir('foreman-legacy-implement-recovery-cwd-')

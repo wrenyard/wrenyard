@@ -57,7 +57,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Conformance review - verify changes match the intended spec, plan, or architecture direction',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     input: inputSchema,

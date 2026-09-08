@@ -230,8 +230,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
               speed_expected_tps_met, speed_degradation_reason, intelligence,
               reference_pricing_input, reference_pricing_output, reference_pricing_cache,
               reference_pricing_cache_write, reference_pricing_source, reference_pricing_checked_at,
+              auto_routing,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             executionId,
             opts.taskId,
             snap.requested_agent_runtime ?? null,
@@ -255,6 +256,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             snap.reference_pricing.cache_write_input_usd_per_million ?? null,
             snap.reference_pricing.source ?? null,
             snap.reference_pricing.checked_at ?? null,
+            // Automatic attempts persist their privacy-safe routing decision as
+            // JSON text; explicit/legacy attempts with no decision store NULL.
+            snap.auto_routing ? JSON.stringify(snap.auto_routing) : null,
             createdAt,
             createdAt,
           )

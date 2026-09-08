@@ -71,7 +71,6 @@ const definition = {
   config: {
     description:
       'Analyze failed verification evidence and produce precise edit instructions only when the failure is credible and code repair is required.',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

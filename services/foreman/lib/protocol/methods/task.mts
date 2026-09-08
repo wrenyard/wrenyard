@@ -58,7 +58,6 @@ export interface TaskDefinitionSummary {
     id: string
     displayLabel: string
   }
-  agentRuntime?: string
   timeoutMs?: number
   effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
@@ -271,7 +270,6 @@ export const taskDefinitionSummarySchema = {
     project: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     category: taskCategorySchema,
-    agentRuntime: { type: 'string', minLength: 1 },
     timeoutMs: { type: 'number' },
     effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },
@@ -577,20 +575,26 @@ export type TaskSettingsSourceLayer =
   | 'user_task'
   | 'invocation'
 
-/** One exact runtime pin (client/provider/model) usable only in explicit mode. */
-export interface TaskSettingsExplicitRuntime {
+/** One exact resolved runtime triple used only where automatic dispatch
+ *  preference or resolved provider readiness genuinely needs
+ *  client/provider/model. Never a user selection: explicit mode stores a
+ *  structural reference instead, and execution resolves it to a canonical
+ *  run target. */
+export interface TaskSettingsRuntimeTriple {
   client: string
   provider: string
   model: string
 }
 
 /**
- * One exact resolved runtime candidate the Tasks surface may pick for explicit
- * mode. Same resolved dispatch fields as a task.run resolved dispatch plus the
- * exact pinned runtime string. Policy aliases (forge/fast/general/ultra) are
- * never eligible choices.
+ * Structural explicit selection stored by Task settings. Explicit mode either
+ * names a runtime alias (resolved through the runtime-alias protocol) or an
+ * inline exact run target. A resolved client/provider/model triple is never
+ * stored or copied back as the selection.
  */
-export type TaskSettingsEligibleChoice = TaskResolvedDispatch & { exactAgentRuntime: string }
+export type TaskSettingsExplicitReference =
+  | { kind: 'alias'; name: string }
+  | { kind: 'target'; target: string }
 
 /** JSON-safe snake_case automatic dispatch fields mirroring TaskDispatchRequirements. */
 export interface TaskSettingsAutomaticDispatch {
@@ -604,7 +608,7 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_profile_ids?: readonly string[]
   exclude_client_ids?: readonly string[]
   exclude_provider_ids?: readonly string[]
-  preferred_runtime?: TaskSettingsExplicitRuntime
+  preferred_runtime?: TaskSettingsRuntimeTriple
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -614,19 +618,22 @@ export type TaskSettingsAutomaticPatch = {
 /** JSON-safe view of one editable settings layer (user global, user per-task, or invocation). */
 export interface TaskSettingsLayer {
   mode?: TaskSettingsMode
-  explicit_runtime?: TaskSettingsExplicitRuntime | null
+  explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
-  additional_instructions?: string | null
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null
+  /** Global-only auto reference-price ceiling (finite USD per million output
+   *  tokens >= 0); null clears it. Never valid inside `automatic`. */
+  max_auto_output_usd_per_million?: number | null
 }
 
 /** Field-level save patch. `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
   mode?: TaskSettingsMode | null
-  explicit_runtime?: TaskSettingsExplicitRuntime | null
+  explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
-  additional_instructions?: string | null
   automatic?: TaskSettingsAutomaticPatch | null
+  /** Global-only: set (>= 0) or clear (null) the auto reference-price ceiling. */
+  max_auto_output_usd_per_million?: number | null
 }
 
 /** An effective value plus the layer it came from. */
@@ -646,15 +653,16 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>
-  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>
+  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsRuntimeTriple | null>
 }
 
 export interface TaskSettingsEffective {
   mode: TaskSettingsSourcedValue<TaskSettingsMode>
-  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>
+  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>
   timeout_ms: TaskSettingsSourcedValue<number | null>
-  additional_instructions: TaskSettingsSourcedValue<string | null>
   automatic: TaskSettingsEffectiveAutomatic
+  /** Global-only auto ceiling; sourced exclusively from the user_global layer. */
+  max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>
 }
 
 export interface TaskSettingsValidationIssue {
@@ -683,8 +691,6 @@ export type TaskSettingsInstructionSegment =
   | { kind: 'text'; source: string; text: string }
   /** A non-executed function instruction or the input-dependent prompt body. */
   | { kind: 'placeholder'; source: string; label: string }
-  /** The slot where user additional_instructions are inserted at render time. */
-  | { kind: 'additional_instructions'; source: string }
 
 /** Ordered safe preview of the builtin prompt template; never executes config. */
 export type TaskSettingsInstructionTemplate = TaskSettingsInstructionSegment[]
@@ -695,28 +701,41 @@ export interface TaskSettingsBuiltinMetadata {
   source: string
   description?: string
   project?: string
-  /** Read-only builtin prompt template kind. The builtin prompt/required docs are
-   *  never editable; customization happens only through plain
-   *  `additional_instructions`. */
+  /** Read-only builtin prompt template kind. The builtin prompt/required docs
+   *  are never editable. */
   prompt_template: 'dynamic' | 'fixed'
   /** Ordered non-executing preview segments of the builtin prompt template. */
   instruction_template: TaskSettingsInstructionTemplate
-  /** Read-only builtin runtime declaration (definition agentRuntime/profile). */
-  declared_runtime: string | null
   timeout_ms: number | null
   /** Read-only builtin automatic dispatch defaults. */
   dispatch: TaskSettingsAutomaticDispatch
 }
 
 export interface TaskSettingsExplicitRow {
-  /** Effective explicit runtime selection. */
-  runtime: TaskSettingsExplicitRuntime
-  /** Exact candidate runtimes currently resolvable for this task (picker input). */
-  choices: TaskSettingsEligibleChoice[]
-  /** Exact resolution of `runtime`; null when it cannot resolve without fallback. */
-  resolved: TaskSettingsEligibleChoice | null
+  /** Stored structural selection: a runtime alias or an inline exact run target.
+   *  Never a copied resolved client/provider/model triple. */
+  reference: TaskSettingsExplicitReference
+  /** Canonical exact run target (for example `openai/gpt-5.6-sol:codex`) when
+   *  `reference` resolves; null when it cannot resolve without fallback. */
+  resolved_target: string | null
+  /** Exact resolved dispatch of the canonical target; null while unresolved. */
+  resolved: TaskResolvedDispatch | null
   /** Non-billable live readiness of the resolved exact runtime. */
   readiness: TaskSettingsRuntimeReadiness | null
+}
+
+/**
+ * Safe automatic-mode preview selection attached to an automatic row. The
+ * resolved dispatch carries the optional privacy-safe auto_routing decision;
+ * no raw quota/account/domain/credential/provider-error fields are exposed.
+ */
+export interface TaskSettingsAutomaticSelection {
+  /** Canonical exact run target of the selected automatic dispatch. */
+  exact_runtime: string
+  /** Exact resolved automatic dispatch including the safe auto_routing decision. */
+  resolved: TaskResolvedDispatch
+  /** Safe human-readable reason for the automatic selection. */
+  reason: string
 }
 
 export interface TaskSettingsTaskRow {
@@ -732,20 +751,12 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
   effective: TaskSettingsEffective
-  /**
-   * Authoritative list of exact existing runtimes currently resolvable for
-   * selecting explicit mode. Present regardless of the effective mode so an
-   * automatic row can offer the explicit-mode picker without fabricating a
-   * selected explicit runtime.
-   */
-  runtime_choices: TaskSettingsEligibleChoice[]
-  /**
-   * Row-level exact resolved runtime: the successful automatic or explicit
-   * resolution of this row, or null while unresolved/unavailable. Never a
-   * fallback or stale selection.
-   */
-  resolved_runtime: TaskSettingsEligibleChoice | null
+  /** Present when the effective mode is `explicit`; exposes the stored
+   *  structural reference and its exact resolution. */
   explicit?: TaskSettingsExplicitRow
+  /** Present when the effective mode is `automatic` and a selection resolved;
+   *  exposes the selected automatic dispatch and safe reason. */
+  automatic_selection?: TaskSettingsAutomaticSelection
   issues: TaskSettingsValidationIssue[]
 }
 
@@ -760,6 +771,9 @@ export interface TaskSettingsSnapshotResult {
   project?: string
   /** Persisted user-global settings layer. */
   user_global: TaskSettingsLayer
+  /** Authoritative runtime aliases `[{name,target}]` for the explicit-mode
+   *  combobox suggestions (mirrors the runtime-alias protocol snapshot). */
+  aliases: Array<{ name: string; target: string }>
   rows: TaskSettingsTaskRow[]
 }
 
@@ -791,7 +805,7 @@ const taskSettingsSourceLayerSchema = {
   enum: ['system', 'builtin', 'user_global', 'user_task', 'invocation'],
 } as const satisfies JsonSchema
 
-export const taskSettingsExplicitRuntimeSchema = {
+const taskSettingsRuntimeTripleSchema = {
   type: 'object',
   required: ['client', 'provider', 'model'],
   properties: {
@@ -802,8 +816,42 @@ export const taskSettingsExplicitRuntimeSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsNullableExplicitRuntimeSchema = {
-  anyOf: [taskSettingsExplicitRuntimeSchema, { type: 'null' }],
+const taskSettingsAliasReferenceSchema = {
+  type: 'object',
+  required: ['kind', 'name'],
+  properties: {
+    kind: { const: 'alias' },
+    name: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskSettingsTargetReferenceSchema = {
+  type: 'object',
+  required: ['kind', 'target'],
+  properties: {
+    kind: { const: 'target' },
+    target: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskSettingsExplicitReferenceSchema = {
+  anyOf: [taskSettingsAliasReferenceSchema, taskSettingsTargetReferenceSchema],
+} as const satisfies JsonSchema
+
+const taskSettingsNullableExplicitReferenceSchema = {
+  anyOf: [taskSettingsExplicitReferenceSchema, { type: 'null' }],
+} as const satisfies JsonSchema
+
+const taskSettingsAliasEntrySchema = {
+  type: 'object',
+  required: ['name', 'target'],
+  properties: {
+    name: { type: 'string', minLength: 1 },
+    target: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
 } as const satisfies JsonSchema
 
 export const taskSettingsAutomaticDispatchSchema = {
@@ -819,7 +867,7 @@ export const taskSettingsAutomaticDispatchSchema = {
     exclude_profile_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_client_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_provider_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
-    preferred_runtime: taskSettingsExplicitRuntimeSchema,
+    preferred_runtime: taskSettingsRuntimeTripleSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -841,7 +889,7 @@ const taskSettingsAutomaticPatchSchema = {
     exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_client_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_provider_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
-    preferred_runtime: { anyOf: [taskSettingsExplicitRuntimeSchema, { type: 'null' }] },
+    preferred_runtime: { anyOf: [taskSettingsRuntimeTripleSchema, { type: 'null' }] },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -850,14 +898,18 @@ const taskSettingsNullableNumberSchema = {
   anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsNullableNonNegativeNumberSchema = {
+  anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
+} as const satisfies JsonSchema
+
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
     mode: taskSettingsModeSchema,
-    explicit_runtime: taskSettingsNullableExplicitRuntimeSchema,
+    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
-    additional_instructions: nullableStringSchema,
     automatic: taskSettingsNullableAutomaticSchema,
+    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -866,10 +918,10 @@ export const taskSettingsPatchSchema = {
   type: 'object',
   properties: {
     mode: { anyOf: [taskSettingsModeSchema, { type: 'null' }] },
-    explicit_runtime: taskSettingsNullableExplicitRuntimeSchema,
+    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
-    additional_instructions: nullableStringSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
+    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -884,11 +936,11 @@ const taskSettingsSourcedModeSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsSourcedExplicitRuntimeSchema = {
+const taskSettingsSourcedExplicitReferenceSchema = {
   type: 'object',
   required: ['value', 'source'],
   properties: {
-    value: taskSettingsNullableExplicitRuntimeSchema,
+    value: taskSettingsNullableExplicitReferenceSchema,
     source: taskSettingsSourceLayerSchema,
   },
   additionalProperties: false,
@@ -904,11 +956,11 @@ const taskSettingsSourcedNullableNumberSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsSourcedNullableStringSchema = {
+const taskSettingsSourcedNullableNonNegativeNumberSchema = {
   type: 'object',
   required: ['value', 'source'],
   properties: {
-    value: nullableStringSchema,
+    value: taskSettingsNullableNonNegativeNumberSchema,
     source: taskSettingsSourceLayerSchema,
   },
   additionalProperties: false,
@@ -948,11 +1000,11 @@ const taskSettingsSourcedIntelligenceSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsSourcedExplicitRuntimeValueSchema = {
+const taskSettingsSourcedPreferredRuntimeSchema = {
   type: 'object',
   required: ['value', 'source'],
   properties: {
-    value: taskSettingsNullableExplicitRuntimeSchema,
+    value: { anyOf: [taskSettingsRuntimeTripleSchema, { type: 'null' }] },
     source: taskSettingsSourceLayerSchema,
   },
   additionalProperties: false,
@@ -984,50 +1036,20 @@ const taskSettingsEffectiveAutomaticSchema = {
     exclude_profile_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_client_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_provider_ids: taskSettingsSourcedNullableStringArraySchema,
-    preferred_runtime: taskSettingsSourcedExplicitRuntimeValueSchema,
+    preferred_runtime: taskSettingsSourcedPreferredRuntimeSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
 
 const taskSettingsEffectiveSchema = {
   type: 'object',
-  required: ['mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic'],
+  required: ['mode', 'explicit_runtime', 'timeout_ms', 'automatic'],
   properties: {
     mode: taskSettingsSourcedModeSchema,
-    explicit_runtime: taskSettingsSourcedExplicitRuntimeSchema,
+    explicit_runtime: taskSettingsSourcedExplicitReferenceSchema,
     timeout_ms: taskSettingsSourcedNullableNumberSchema,
-    additional_instructions: taskSettingsSourcedNullableStringSchema,
     automatic: taskSettingsEffectiveAutomaticSchema,
-  },
-  additionalProperties: true,
-} as const satisfies JsonSchema
-
-export const taskSettingsEligibleChoiceSchema = {
-  type: 'object',
-  required: [
-    'exactAgentRuntime',
-    'client',
-    'provider',
-    'model',
-    'model_id',
-    'mode',
-    'speed',
-    'intelligence',
-    'reference_pricing',
-  ],
-  properties: {
-    exactAgentRuntime: { type: 'string', minLength: 1 },
-    requested_agent_runtime: { type: 'string' },
-    profile: { type: 'string', minLength: 1 },
-    client: { type: 'string', minLength: 1 },
-    provider: { type: 'string', minLength: 1 },
-    model: { type: 'string', minLength: 1 },
-    model_id: { type: 'string', minLength: 1 },
-    mode: { enum: ['native', 'gateway'] },
-    protocol: { type: 'string', minLength: 1 },
-    speed: { type: 'object', additionalProperties: true },
-    intelligence: { type: 'string', minLength: 1 },
-    reference_pricing: { type: 'object', additionalProperties: true },
+    max_auto_output_usd_per_million: taskSettingsSourcedNullableNonNegativeNumberSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -1102,21 +1124,10 @@ const taskSettingsInstructionPlaceholderSegmentSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsInstructionAdditionalSlotSchema = {
-  type: 'object',
-  required: ['kind', 'source'],
-  properties: {
-    kind: { const: 'additional_instructions' },
-    source: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 const taskSettingsInstructionSegmentSchema = {
   oneOf: [
     taskSettingsInstructionTextSegmentSchema,
     taskSettingsInstructionPlaceholderSegmentSchema,
-    taskSettingsInstructionAdditionalSlotSchema,
   ],
 } as const satisfies JsonSchema
 
@@ -1128,7 +1139,6 @@ const taskSettingsBuiltinMetadataSchema = {
     'source',
     'prompt_template',
     'instruction_template',
-    'declared_runtime',
     'timeout_ms',
     'dispatch',
   ],
@@ -1140,7 +1150,6 @@ const taskSettingsBuiltinMetadataSchema = {
     project: { type: 'string', minLength: 1 },
     prompt_template: { enum: ['dynamic', 'fixed'] },
     instruction_template: { type: 'array', items: taskSettingsInstructionSegmentSchema },
-    declared_runtime: nullableStringSchema,
     timeout_ms: { anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }] },
     dispatch: taskSettingsAutomaticDispatchSchema,
   },
@@ -1149,12 +1158,12 @@ const taskSettingsBuiltinMetadataSchema = {
 
 const taskSettingsExplicitRowSchema = {
   type: 'object',
-  required: ['runtime', 'choices', 'resolved', 'readiness'],
+  required: ['reference', 'resolved_target', 'resolved', 'readiness'],
   properties: {
-    runtime: taskSettingsExplicitRuntimeSchema,
-    choices: { type: 'array', items: taskSettingsEligibleChoiceSchema },
+    reference: taskSettingsExplicitReferenceSchema,
+    resolved_target: nullableStringSchema,
     resolved: {
-      anyOf: [taskSettingsEligibleChoiceSchema, { type: 'null' }],
+      anyOf: [taskResolvedDispatchSchema, { type: 'null' }],
     },
     readiness: {
       anyOf: [taskSettingsRuntimeReadinessSchema, { type: 'null' }],
@@ -1163,9 +1172,62 @@ const taskSettingsExplicitRowSchema = {
   additionalProperties: true,
 } as const satisfies JsonSchema
 
+/** Privacy-safe safe auto-routing decision schema (no raw account/credential data). */
+const taskSettingsAutoRoutingDecisionSchema = {
+  type: 'object',
+  required: [
+    'snapshot_id',
+    'selected_rank',
+    'supply_class',
+    'quota_tier',
+    'quota_coverage_complete',
+    'quota_headroom_trusted',
+    'reference_output_usd_per_million',
+    'routing_output_usd_per_million',
+    'effective_cap_usd_per_million',
+    'score',
+    'reasons',
+  ],
+  properties: {
+    snapshot_id: { type: 'string', minLength: 1 },
+    selected_rank: { type: 'integer', minimum: 1 },
+    supply_class: { enum: ['confirmed_free', 'standard'] },
+    quota_tier: { enum: ['healthy', 'unknown', 'strained'] },
+    quota_coverage_complete: { type: 'boolean' },
+    quota_headroom_trusted: { type: 'boolean' },
+    reference_output_usd_per_million: { type: 'number' },
+    routing_output_usd_per_million: { type: 'number' },
+    effective_cap_usd_per_million: { type: 'number' },
+    score: { type: 'number' },
+    reasons: { type: 'array', items: { type: 'string' } },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+/** Resolved dispatch wire schema extended with the additive safe auto_routing
+ *  decision (backward compatible: all original fields and shape are kept). */
+const taskSettingsAutomaticResolvedDispatchSchema = {
+  ...taskResolvedDispatchSchema,
+  properties: {
+    ...taskResolvedDispatchSchema.properties,
+    auto_routing: taskSettingsAutoRoutingDecisionSchema,
+  },
+} as const satisfies JsonSchema
+
+const taskSettingsAutomaticSelectionSchema = {
+  type: 'object',
+  required: ['exact_runtime', 'resolved', 'reason'],
+  properties: {
+    exact_runtime: { type: 'string', minLength: 1 },
+    resolved: taskSettingsAutomaticResolvedDispatchSchema,
+    reason: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
 const taskSettingsTaskRowSchema = {
   type: 'object',
-  required: ['identity', 'name', 'display_name', 'builtin', 'user_task', 'effective', 'runtime_choices', 'resolved_runtime', 'issues'],
+  required: ['identity', 'name', 'display_name', 'builtin', 'user_task', 'effective', 'issues'],
   properties: {
     identity: { type: 'string', minLength: 1 },
     name: { type: 'string', minLength: 1 },
@@ -1175,11 +1237,8 @@ const taskSettingsTaskRowSchema = {
     builtin: taskSettingsBuiltinMetadataSchema,
     user_task: taskSettingsLayerSchema,
     effective: taskSettingsEffectiveSchema,
-    runtime_choices: { type: 'array', items: taskSettingsEligibleChoiceSchema },
-    resolved_runtime: {
-      anyOf: [taskSettingsEligibleChoiceSchema, { type: 'null' }],
-    },
     explicit: taskSettingsExplicitRowSchema,
+    automatic_selection: taskSettingsAutomaticSelectionSchema,
     issues: { type: 'array', items: taskSettingsValidationIssueSchema },
   },
   additionalProperties: true,
@@ -1196,12 +1255,13 @@ export const taskSettingsSnapshotParamsSchema = {
 
 export const taskSettingsSnapshotResultSchema = {
   type: 'object',
-  required: ['config_path', 'revision', 'user_global', 'rows'],
+  required: ['config_path', 'revision', 'user_global', 'aliases', 'rows'],
   properties: {
     config_path: { type: 'string', minLength: 1 },
     revision: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     user_global: taskSettingsLayerSchema,
+    aliases: { type: 'array', items: taskSettingsAliasEntrySchema },
     rows: { type: 'array', items: taskSettingsTaskRowSchema },
   },
   additionalProperties: true,

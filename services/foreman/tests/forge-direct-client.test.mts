@@ -5,7 +5,7 @@ import { buildForgeCommand } from '../lib/adapters/forge/direct-client.mts'
 describe('forge direct client', () => {
   it('builds the synchronous direct runtime command without lifecycle flags', () => {
     const opts = {
-      profile: 'forge/codex-spark',
+      profile: 'codebuddy/deepseek-v4-flash:cb',
       permission: 'readonly' as const,
       cwd: process.cwd(),
       prompt: 'hello',
@@ -15,7 +15,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(args, [
       '--profile',
-      'codex-spark',
+      'codebuddy/deepseek-v4-flash:cb',
       '--permission',
       'readonly',
       '-C',
@@ -28,6 +28,22 @@ describe('forge direct client', () => {
     assert.equal(args.includes('--work-dir'), false)
     assert.equal(args.includes('--prompt-file'), false)
     assert.equal(args.includes(opts.prompt), false)
+  })
+
+  it('passes a canonical dynamic target intact with --profile', () => {
+    const args = buildForgeCommand({
+      profile: 'kimi-coding/k3:gk',
+      permission: 'readonly',
+      cwd: process.cwd(),
+      prompt: 'hello',
+    })
+
+    assert.deepEqual(args, [
+      '--profile', 'kimi-coding/k3:gk',
+      '--permission', 'readonly',
+      '-C', process.cwd(),
+      '-f', 'stream-json',
+    ])
   })
 
   it('rejects legacy Forge task-session ids as direct runtime resume ids', () => {
@@ -59,7 +75,7 @@ describe('forge direct client', () => {
     ])
   })
 
-  it('uses --profile for forge concrete profile config-ids', () => {
+  it('uses --profile for legacy forge concrete profile config-ids', () => {
     const args = buildForgeCommand({
       profile: 'forge/codex-luna',
       permission: 'readonly',
@@ -75,21 +91,34 @@ describe('forge direct client', () => {
     ])
   })
 
-  it('resolvedProfile always uses --profile regardless of policy classification', () => {
+  it('resolvedProfile always uses --profile and passes canonical targets intact', () => {
     const args = buildForgeCommand({
       profile: 'forge/general',
       permission: 'readonly',
       cwd: process.cwd(),
       prompt: 'hello',
-      resolvedProfile: 'codex-luna',
+      resolvedProfile: 'codebuddy/deepseek-v4-flash:cb',
     })
 
     assert.deepEqual(args, [
-      '--profile', 'codex-luna',
+      '--profile', 'codebuddy/deepseek-v4-flash:cb',
       '--permission', 'readonly',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])
+  })
+
+  it('rejects malformed dynamic-looking values instead of falling back', () => {
+    // Unknown client key: looks like run syntax but fails the shared parser.
+    assert.throws(
+      () => buildForgeCommand({
+        profile: 'codebuddy/deepseek-v4-flash:zz',
+        permission: 'readonly',
+        cwd: process.cwd(),
+        prompt: 'hello',
+      }),
+      /unknown client key/u,
+    )
   })
 
   it('rejects malformed agentRuntime (empty runtime)', () => {
@@ -122,7 +151,7 @@ describe('forge direct client', () => {
 
   it('emits no --cap when capabilities is absent', () => {
     const args = buildForgeCommand({
-      profile: 'forge/codex-spark',
+      profile: 'codex/gpt-5.6-luna:codex',
       permission: 'readonly',
       cwd: process.cwd(),
       prompt: 'hello',
@@ -132,7 +161,7 @@ describe('forge direct client', () => {
 
   it('emits no --cap when capabilities is empty', () => {
     const args = buildForgeCommand({
-      profile: 'forge/codex-spark',
+      profile: 'codex/gpt-5.6-luna:codex',
       permission: 'readonly',
       cwd: process.cwd(),
       prompt: 'hello',
@@ -143,7 +172,7 @@ describe('forge direct client', () => {
 
   it('emits one --cap pair for a single capability', () => {
     const args = buildForgeCommand({
-      profile: 'forge/codex-spark',
+      profile: 'codex/gpt-5.6-luna:codex',
       permission: 'readonly',
       cwd: process.cwd(),
       prompt: 'hello',
@@ -157,7 +186,7 @@ describe('forge direct client', () => {
 
   it('emits two --cap pairs for two capabilities in declaration order', () => {
     const args = buildForgeCommand({
-      profile: 'forge/codex-spark',
+      profile: 'codex/gpt-5.6-luna:codex',
       permission: 'readonly',
       cwd: process.cwd(),
       prompt: 'hello',

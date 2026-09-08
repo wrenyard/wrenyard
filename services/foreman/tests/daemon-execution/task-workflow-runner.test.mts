@@ -34,10 +34,33 @@ let oldForgeBin: string | undefined
 let oldForgeArgsPrefix: string | undefined
 let fakeForgeScriptCounter = 0
 
+function automaticSettingsResolver(): TaskRunSettingsResolver {
+  return async () => ({
+    mode: 'automatic',
+    exactAgentRuntime: 'forge/test',
+    dispatch: null,
+    timeoutMs: null,
+    sources: {
+      selectionMode: 'builtin',
+      explicitRuntime: 'builtin',
+      timeoutMs: 'builtin',
+      automatic: {},
+    },
+  })
+}
+
 function normalizeExecutionOptions(opts: ExecutionOptions | string): ExecutionOptions {
-  return typeof opts === 'string'
+  const normalized = typeof opts === 'string'
     ? { workspaceRoot: opts, currentProject: 'app' }
     : { currentProject: 'app', ...opts }
+  // Isolated kernel tests run without the daemon TaskSettingsService. Active
+  // tasks never fall back to a declared runtime pin, so every run resolves
+  // automatically through an injected settings resolver unless the test under
+  // examination supplies its own.
+  if (!normalized.taskSettingsResolver) {
+    normalized.taskSettingsResolver = automaticSettingsResolver()
+  }
+  return normalized
 }
 
 function createTaskRunner(): DaemonTaskRunner {
@@ -402,7 +425,6 @@ describe('daemon execution', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'echo.task.ts'),
 `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   ${TEXT_OUTPUT_SCHEMA}
@@ -419,6 +441,67 @@ describe('daemon execution', { concurrency: false }, () => {
       () => runTask('echo', {}, { workspaceRoot: workspace, primitives: { agent } }),
       /Invalid input for task 'echo'/u,
     )
+  })
+
+  it('refuses active unconstrained task execution without a settings or dispatch resolver', async () => {
+    const workspace = makeTempDir('foreman-daemon-no-resolver-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    // An active task with no dispatch requirements and no legacy profile pin.
+    writeFileSync(
+      join(projectDir, 'unconstrained.task.ts'),
+      `export default defineTask({
+  permission: 'readonly',
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'auto',
+})
+`,
+      'utf-8',
+    )
+    await discoverTasks(workspace)
+
+    let agentCalls = 0
+    // Bypass the test helper (which injects an automatic settings resolver) to
+    // prove active execution has no hidden profile/config pin fallback.
+    await assert.rejects(
+      () => createTaskRunner().execute('unconstrained', undefined, {
+        workspaceRoot: workspace,
+        currentProject: 'app',
+        primitives: {
+          agent: async () => {
+            agentCalls += 1
+            return { output: textOutput('done'), status: 'done' }
+          },
+        },
+      }),
+      /without a resolver/,
+    )
+    assert.equal(agentCalls, 0)
+  })
+
+  it('does not dispatch the builtin scheduling:legacy implement for new work without explicit resolution', async () => {
+    const workspace = makeTempDir('foreman-daemon-legacy-new-work-')
+    await discoverTasks(workspace)
+
+    let agentCalls = 0
+    // No settings resolver is supplied (same shape as the unconstrained active
+    // case above). The pin-free legacy builtin must never auto-dispatch through
+    // a hidden definition profile, so new-work execution rejects before any
+    // agent launches.
+    await assert.rejects(
+      () => createTaskRunner().execute('implement', undefined, {
+        workspaceRoot: workspace,
+        currentProject: 'app',
+        primitives: {
+          agent: async () => {
+            agentCalls += 1
+            return { output: textOutput('done'), status: 'done' }
+          },
+        },
+      }),
+    )
+    assert.equal(agentCalls, 0, 'legacy implement must never launch an agent for new work')
   })
 })
 
@@ -448,7 +531,6 @@ describe('task run admission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'echo.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   ${TEXT_OUTPUT_SCHEMA}
@@ -507,6 +589,9 @@ describe('task run admission', { concurrency: false }, () => {
       }),
       admissionControl: () => admission.assertAccepting(),
     })
+    // Active execution resolves automatically through the settings resolver,
+    // matching daemon bootstrap; there is no legacy profile fallback.
+    runner.setTaskSettingsResolver(automaticSettingsResolver())
 
     // Accept while mode is accepting.
     const handle = await runner.startTaskRun({
@@ -550,7 +635,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'perm-test.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'yolo',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -587,7 +671,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'scoped-edit.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'edit',
   input: foremanSchemas.z.object({ paths: foremanSchemas.z.array(foremanSchemas.z.string()) }),
   ${TEXT_OUTPUT_SCHEMA}
@@ -627,7 +710,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'scoped-edit.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'edit',
   input: foremanSchemas.z.object({ paths: foremanSchemas.z.array(foremanSchemas.z.string()) }),
   ${TEXT_OUTPUT_SCHEMA}
@@ -664,7 +746,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'perm-none.task.ts'),
       `export default defineTask({
-  profile: 'test',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
   prompt: () => 'test',
@@ -686,7 +767,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'bad-perm.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'bogus',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -714,7 +794,6 @@ describe('daemon execution permission', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'old-perm.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'exec',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -746,7 +825,6 @@ describe('daemon execution timeout', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'timeout-task.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   timeoutMs: 7200000,
   ${NO_INPUT_SCHEMA}
@@ -782,7 +860,6 @@ describe('daemon execution timeout', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'no-timeout.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -834,7 +911,6 @@ describe('daemon execution fact events', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'simple.task.ts'),
 `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   ${TEXT_OUTPUT_SCHEMA}
@@ -860,7 +936,6 @@ describe('daemon execution fact events', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'gated.task.ts'),
 `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -891,7 +966,6 @@ describe('daemon execution fact events', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'failing.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -923,7 +997,6 @@ describe('TaskService _meta execution fields', { concurrency: false }, () => {
     writeFileSync(
       join(projectDir, 'meta-task.task.ts'),
       `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   ${NO_INPUT_SCHEMA}
   ${TEXT_OUTPUT_SCHEMA}
@@ -1002,6 +1075,52 @@ describe('TaskService _meta execution fields', { concurrency: false }, () => {
     assert.equal(outputMeta.resolved_profile, undefined)
   })
 
+  it('keeps historical requested_agent_runtime/resolved_profile readable with no task_run_attempt_dispatch row', async () => {
+    const workspace = makeTempDir('foreman-daemon-execution-')
+    // A genuinely old execution record that predates per-attempt dispatch
+    // snapshots: the identity lives only on the direct executions columns and
+    // there is no task_run_attempt_dispatch row at all.
+    const taskId = `task_hist_${randomBytes(4).toString('hex')}`
+    const executionId = `exec_hist_${randomBytes(4).toString('hex')}`
+    const now = new Date().toISOString()
+    getDb().prepare(
+      `INSERT INTO tasks (
+        id, template, project, input, status, structured, execution_id, created_at, updated_at
+      ) VALUES (?, 'old-pinned', null, '{}', 'done', 1, null, ?, ?)`,
+    ).run(taskId, now, now)
+    getDb().prepare(
+      `INSERT INTO executions (
+        id, task_id, profile, permission, cwd, prompt, status,
+        requested_agent_runtime, resolved_profile, created_at, updated_at
+      ) VALUES (?, ?, 'legacy/profile', 'yolo', ?, 'old run prompt', 'done', ?, ?, ?, ?)`,
+    ).run(executionId, taskId, workspace, 'requested/legacy-runtime', 'resolved/legacy-profile', now, now)
+    getDb().prepare('UPDATE tasks SET execution_id = ? WHERE id = ?').run(executionId, taskId)
+
+    const dispatchCount = getDb()
+      .prepare<[string], { n: number }>('SELECT COUNT(*) AS n FROM task_run_attempt_dispatch WHERE task_run_id = ?')
+      .get(taskId)
+    assert.equal(dispatchCount?.n, 0, 'the old record must have no per-attempt dispatch snapshot')
+
+    // Historical display is a pure read: the persisted fields stay readable
+    // and the absent snapshot is omitted rather than fabricated.
+    const { TaskService } = await import('../../lib/core/task/service.mts')
+    const service = new TaskService({ workspaceRoot: workspace })
+
+    const status = service.status(taskId)
+    assert.ok(status && typeof status === 'object')
+    const statusMeta = (status as { _meta?: { requested_agent_runtime?: unknown; resolved_profile?: unknown } })._meta
+    assert.ok(statusMeta)
+    assert.equal(statusMeta.requested_agent_runtime, 'requested/legacy-runtime')
+    assert.equal(statusMeta.resolved_profile, 'resolved/legacy-profile')
+
+    const output = service.output(taskId)
+    assert.ok(output && typeof output === 'object')
+    const outputMeta = (output as { _meta?: { requested_agent_runtime?: unknown; resolved_profile?: unknown } })._meta
+    assert.ok(outputMeta)
+    assert.equal(outputMeta.requested_agent_runtime, 'requested/legacy-runtime')
+    assert.equal(outputMeta.resolved_profile, 'resolved/legacy-profile')
+  })
+
 
 })
 
@@ -1019,9 +1138,8 @@ describe('task run settings threading', { concurrency: false }, () => {
       timeoutMs: 42_000,
       sources: {
         selectionMode: 'invocation',
-        agentRuntime: 'system',
+        explicitRuntime: 'system',
         timeoutMs: 'invocation',
-        additionalInstructions: 'system',
         automatic: {},
       },
     })
@@ -1080,7 +1198,6 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
     writeFileSync(
       join(projectDir, 'settings-task.task.ts'),
 `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   timeoutMs: 7200000,
   ${NO_INPUT_SCHEMA}
@@ -1095,19 +1212,16 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
   function automaticResolution(
     exactAgentRuntime: string,
     timeoutMs: number | null = null,
-    additionalInstructions: string | null = null,
   ): import('../../lib/types.mts').TaskRunSettingsResolution {
     return {
       mode: 'automatic',
       exactAgentRuntime,
       dispatch: null,
       timeoutMs,
-      additionalInstructions,
       sources: {
         selectionMode: 'builtin',
-        agentRuntime: 'builtin',
+        explicitRuntime: 'builtin',
         timeoutMs: 'builtin',
-        additionalInstructions: 'system',
         automatic: {},
       },
     }
@@ -1115,9 +1229,8 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
 
   const invocationSettings: TaskSettingsLayer = {
     mode: 'explicit',
-    explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+    explicit_runtime: { kind: 'target', target: 'codex/gpt-5.6-luna:codex' },
     timeout_ms: 42_000,
-    additional_instructions: 'extra guidance',
   }
 
   it('passes invocation settings to the resolver and launches only the resolved runtime with its timeout', async () => {
@@ -1159,37 +1272,6 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
     // Invocation settings are never persisted: the task row input stays clean.
     const row = dbGet<{ input: string | null }>('SELECT input FROM tasks ORDER BY created_at LIMIT 1')
     assert.ok(row, 'a persisted task row must exist')
-    assert.ok(!(row.input ?? '').includes('extra guidance'), 'invocation content must not leak into persisted input')
-  })
-
-  it('adds resolver additional instructions without removing the builtin dynamic prompt', async () => {
-    const workspace = makeTempDir('foreman-settings-prompt-')
-    writeSettingsTask(workspace)
-    await discoverTasks(workspace)
-
-    const resolver: TaskRunSettingsResolver = async () =>
-      automaticResolution('forge/settings-resolved', null, 'Follow the repo conventions and add only additive tests.')
-
-    let capturedPrompt = ''
-    const agent = async (_profile: string, prompt: string): Promise<AgentResult> => {
-      capturedPrompt = prompt
-      return { output: textOutput('done'), status: 'done' }
-    }
-
-    const result = await executeTask('settings-task', undefined, {
-      workspaceRoot: workspace,
-      taskSettingsResolver: resolver,
-      primitives: { agent },
-    })
-
-    assert.equal(result.status, 'done')
-    assert.match(capturedPrompt, /<instruction-document source="task\.settings\.additionalInstructions"/)
-    assert.match(capturedPrompt, /Follow the repo conventions and add only additive tests\./)
-    assert.ok(
-      capturedPrompt.indexOf('Follow the repo conventions') < capturedPrompt.indexOf('base dynamic prompt'),
-      'additional instructions must appear before the builtin dynamic prompt',
-    )
-    assert.ok(capturedPrompt.includes('base dynamic prompt'), 'builtin dynamic prompt must survive additional instructions')
   })
 
   it('does not reintroduce an automatic stale machine pin when a settings resolver is present', async () => {

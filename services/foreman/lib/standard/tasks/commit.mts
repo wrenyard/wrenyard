@@ -108,7 +108,6 @@ const definition = {
   config: {
     description:
       'Structured git commit agent. Stages only declared file changes and creates verified local commits. NEVER pushes — outbound push happens only via `wrenyard project push <project>`.',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [commitRules, shellUsage],

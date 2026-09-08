@@ -1879,6 +1879,21 @@ setInterval(() => {}, 1000)
         source: 'catalog',
         checked_at: now,
       },
+      // Automatic attempt: carries the privacy-safe routing decision that must
+      // be persisted verbatim as JSON text.
+      auto_routing: {
+        snapshot_id: 'snap-a',
+        selected_rank: 0,
+        supply_class: 'standard',
+        quota_tier: 'healthy',
+        quota_coverage_complete: true,
+        quota_headroom_trusted: true,
+        reference_output_usd_per_million: 3,
+        routing_output_usd_per_million: 2.5,
+        effective_cap_usd_per_million: 4,
+        score: 0.95,
+        reasons: ['lowest reference output price'],
+      },
     }
     const snapshotB: TaskResolvedDispatch = {
       requested_agent_runtime: 'forge/test',
@@ -1927,8 +1942,8 @@ setInterval(() => {}, 1000)
 
     // The snapshot INSERT happens synchronously inside startExecution before
     // launch, so both rows exist even before the executions complete.
-    const rows = db.prepare<unknown[], { execution_id: string; model: string; reference_pricing_output: number }>(
-      `SELECT execution_id, model, reference_pricing_output
+    const rows = db.prepare<unknown[], { execution_id: string; model: string; reference_pricing_output: number; auto_routing: string | null }>(
+      `SELECT execution_id, model, reference_pricing_output, auto_routing
        FROM task_run_attempt_dispatch WHERE task_run_id = ?`,
     ).all(taskId)
     assert.equal(rows.length, 2, 'two attempts must create two task_run_attempt_dispatch rows')
@@ -1944,6 +1959,12 @@ setInterval(() => {}, 1000)
     assert.equal(rowB.model, 'model-b', 'second attempt snapshot keeps its canonical model')
     assert.equal(rowA.reference_pricing_output, 2, 'first attempt keeps its own output price')
     assert.equal(rowB.reference_pricing_output, 20, 'second attempt keeps its own output price')
+    assert.equal(
+      rowA.auto_routing,
+      JSON.stringify(snapshotA.auto_routing),
+      'automatic attempt must persist its routing decision as exact JSON text',
+    )
+    assert.equal(rowB.auto_routing, null, 'explicit/legacy attempt without a decision persists SQL NULL')
 
     // Let both executions complete so their child processes are reaped.
     await handleA.wait()

@@ -21,11 +21,6 @@ import {
 } from '../task-timeouts.mts'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
-import { parseAgentRuntime, AgentRuntimeParseError, synthesizeAgentRuntime } from '../core/agent-runtime.mts'
-import {
-  applyTaskAgentRuntimeOverride,
-  readTaskAgentRuntimeOverrides,
-} from '../config/task-runtime-override.mts'
 import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/catalog'
 import {
   BUILTIN_SOURCE_PATH,
@@ -111,7 +106,6 @@ export interface ListedDefinition {
     id: string
     displayLabel: string
   }
-  agentRuntime?: string
   input_schema?: unknown
   output_schema?: unknown
   structured?: boolean
@@ -129,8 +123,13 @@ export interface ListedDefinition {
    *  Present only when the task declares capabilities. */
   capabilities?: readonly string[]
   /** `legacy` definitions remain exactly describable/resolvable for persisted
-   *  work, but are omitted from new-work list surfaces. */
+   *  work, but are omitted from new-work list surfaces. Current source-authored
+   *  legacy definitions are pin-free — exact runtime recovery comes from
+   *  persisted run/execution records, never a definition profile. */
   scheduling?: 'active' | 'legacy'
+  /** Reserved for historical describe projections only. Current source-authored
+   *  legacy definitions never expose a profile pin. */
+  profile?: string
   /** Validated explicit dispatch requirements, projected from the task config. */
   dispatch?: TaskDispatchRequirements
 }
@@ -159,29 +158,28 @@ function timeoutMetadata(config: TaskConfig): Pick<ListedDefinition, 'timeoutMs'
   }
 }
 
-function resolveTaskAgentRuntime(config: TaskConfig, taskName: string, overrides?: Record<string, string>): string {
-  const declared = config.agentRuntime
-    ? parseAgentRuntime(config.agentRuntime).toString()
-    : synthesizeAgentRuntime(config.profile ?? '').toString()
-  return applyTaskAgentRuntimeOverride(taskName, declared, overrides)
-}
-
-function validateAgentRuntimeSelector(config: TaskConfig, sourcePath: string): void {
-  if (config.agentRuntime && config.profile) {
-    throw new Error(`${sourcePath} task config must not declare both agentRuntime and profile; use agentRuntime only`)
+/**
+ * Validate the runtime-pin contract for a definition. Neither Active nor
+ * `scheduling: 'legacy'` Tasks pin a runtime in current source: they select
+ * automatically from dispatch, and explicit selection belongs to Task
+ * settings, not Task definitions. Definitions carrying the retired
+ * `agentRuntime` or `profile` fields — including untyped JS exports — are
+ * rejected exactly like the no-pin invariant. `scheduling: 'legacy'` remains a
+ * valid discriminated mode so persisted work stays resolvable while omitted
+ * from new-work surfaces; exact runtime recovery comes from persisted
+ * run/execution records, never a definition profile.
+ */
+function validateTaskRuntimePin(config: TaskConfig, sourcePath: string): void {
+  const raw = config as unknown as Record<string, unknown>
+  if ('agentRuntime' in raw) {
+    throw new Error(
+      `${sourcePath} task config agentRuntime is no longer supported; Tasks select automatically from dispatch`,
+    )
   }
-  if (!config.agentRuntime && !config.profile) {
-    throw new Error(`${sourcePath} task config must declare agentRuntime or profile`)
-  }
-  if (config.agentRuntime) {
-    try {
-      parseAgentRuntime(config.agentRuntime)
-    } catch (error) {
-      if (error instanceof AgentRuntimeParseError) {
-        throw new Error(`Invalid agentRuntime in ${sourcePath}: ${error.message}`)
-      }
-      throw error
-    }
+  if ('profile' in raw && raw.profile !== undefined) {
+    throw new Error(
+      `${sourcePath} task config profile is no longer supported in definitions; exact runtime recovery comes from persisted run/execution records, never a definition profile`,
+    )
   }
 }
 
@@ -518,6 +516,7 @@ async function refreshDefinitionsIfDirty(workspaceRoot: string): Promise<void> {
 function injectBuiltins(registry: Registry): void {
   registry.tasks = registry.tasks.filter((entry) => entry.source !== 'builtin')
   for (const builtin of BUILTIN_TASKS) {
+    validateTaskRuntimePin(builtin.definition.config, BUILTIN_SOURCE_PATH)
     registry.tasks.push({
       name: builtin.name,
       definition: builtin.definition,
@@ -557,7 +556,7 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
   if (definition.config.writeTargets !== undefined && definition.config.permission !== 'edit') {
     throw new Error(`writeTargets in ${absolutePath} requires permission 'edit'`)
   }
-  validateAgentRuntimeSelector(definition.config, absolutePath)
+  validateTaskRuntimePin(definition.config, absolutePath)
   validateTaskDispatch(definition.config, absolutePath)
   resolveTaskCategory(definition.config, absolutePath)
   resolveTaskDisplayName(definition.config, absolutePath)
@@ -601,15 +600,14 @@ export function resolveRunTarget(name: string, workspaceRoot: string, currentPro
 export function describeTask(name: string, workspaceRoot: string, currentProject?: string): ListedDefinition | null {
   const registry = registryFor(workspaceRoot)
   const entry = resolveEntry(registry.tasks, name, currentProject)
-  return entry ? taskToListed(entry, readTaskAgentRuntimeOverrides()) : null
+  return entry ? taskToListed(entry) : null
 }
 
 export function listTasks(workspaceRoot: string, currentProject?: string): ListedDefinition[] {
   const registry = registryFor(workspaceRoot)
-  const overrides = readTaskAgentRuntimeOverrides()
   return effectiveEntries(registry.tasks, currentProject)
     .filter((entry) => entry.definition.config.scheduling !== 'legacy')
-    .map((entry) => taskToListed(entry, overrides))
+    .map((entry) => taskToListed(entry))
 }
 
 export function listTaskDefinitions(workspaceRoot: string, currentProject?: string): Array<{
@@ -627,11 +625,9 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
   structuredRetryTimeoutMs?: number
   timeoutScope?: TaskTimeoutScope
   scheduling?: 'active' | 'legacy'
-  agentRuntime?: string
   dispatch?: TaskDispatchRequirements
 }> {
   const registry = registryFor(workspaceRoot)
-  const overrides = readTaskAgentRuntimeOverrides()
   return effectiveEntries(registry.tasks, currentProject)
     .filter((entry) => entry.definition.config.scheduling !== 'legacy')
     .map((entry) => {
@@ -647,7 +643,6 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
       ...(entry.definition.config.scheduling
         ? { scheduling: entry.definition.config.scheduling }
         : {}),
-      agentRuntime: resolveTaskAgentRuntime(entry.definition.config, entry.name, overrides),
       ...timeoutMetadata(entry.definition.config),
       ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
     }
@@ -860,31 +855,36 @@ function recordDuplicateErrorsForEntries(
   }
 }
 
-function taskToListed(entry: RegisteredTask, overrides?: Record<string, string>): ListedDefinition {
+function taskToListed(entry: RegisteredTask): ListedDefinition {
   const normalizedInput = taskInputSchemaWithContext(normalizeSchema(entry.definition.config.input as any))
   const category = resolveTaskCategory(entry.definition.config, entry.sourcePath)
   const displayName = resolveTaskDisplayName(entry.definition.config, entry.sourcePath)
+  const config = entry.definition.config
   return {
     name: entry.name,
     source: entry.source,
     ...(entry.project ? { project: entry.project } : {}),
     path: entry.sourcePath,
-    ...(entry.definition.config.description ? { description: entry.definition.config.description } : {}),
+    ...(config.description ? { description: config.description } : {}),
     ...(displayName ? { displayName } : {}),
     ...(category ? { category } : {}),
-    agentRuntime: resolveTaskAgentRuntime(entry.definition.config, entry.name, overrides),
     input_schema: normalizedInput,
-    output_schema: normalizeSchema(entry.definition.config.output as any),
+    output_schema: normalizeSchema(config.output as any),
     structured: true,
     ...(normalizedInput ? { input_example: generateInputExample(normalizedInput as any) } : {}),
-    ...(extractGateMetadata(entry.definition.config) ? { gates: extractGateMetadata(entry.definition.config) } : {}),
-    permission: entry.definition.config.permission,
-    ...timeoutMetadata(entry.definition.config),
-    ...capabilitiesMetadata(entry.definition.config),
-    ...(entry.definition.config.scheduling
-      ? { scheduling: entry.definition.config.scheduling }
+    ...(extractGateMetadata(config) ? { gates: extractGateMetadata(config) } : {}),
+    permission: config.permission,
+    ...timeoutMetadata(config),
+    ...capabilitiesMetadata(config),
+    ...(config.scheduling
+      ? { scheduling: config.scheduling }
       : {}),
-    ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
+    // Historical projection only: current source-authored definitions never
+    // carry a profile pin, so this fallback stays inert for new definitions.
+    ...(config.scheduling === 'legacy' && typeof config.profile === 'string'
+      ? { profile: config.profile }
+      : {}),
+    ...(config.dispatch ? { dispatch: config.dispatch } : {}),
   }
 }
 

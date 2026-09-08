@@ -48,7 +48,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Generate 3-5 design options with trade-off, evidence, and FeaturePoint-shape analysis',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     input: InputSchema,

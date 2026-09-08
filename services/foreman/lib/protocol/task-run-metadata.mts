@@ -1,9 +1,11 @@
 import type { JsonSchema } from './jsonrpc.mts'
 import type {
+  TaskAutoRoutingDecision,
   TaskResolvedDispatch,
   TaskUsage,
 } from '../task-run-metadata-types.mts'
 export type {
+  TaskAutoRoutingDecision,
   TaskReferencePricing,
   TaskResolvedDispatch,
   TaskResolvedSpeed,
@@ -18,6 +20,47 @@ export type {
  * between producers and consumers. All numeric fields are optional in the
  * wire type: unknown numerics must be omitted, never zero-filled.
  */
+
+/**
+ * Strict shared wire schema for the privacy-safe automatic-routing decision
+ * that may accompany a resolved automatic dispatch. Mirrors the exact
+ * `TaskAutoRoutingDecision` DTO key set and field types so a persisted decision
+ * stays valid across the stats/delivery wire paths while explicit and legacy
+ * resolved dispatches (which never carry one) stay valid without it.
+ */
+export const taskAutoRoutingDecisionSchema = {
+  type: 'object',
+  required: [
+    'snapshot_id',
+    'selected_rank',
+    'supply_class',
+    'quota_tier',
+    'quota_coverage_complete',
+    'quota_headroom_trusted',
+    'reference_output_usd_per_million',
+    'routing_output_usd_per_million',
+    'effective_cap_usd_per_million',
+    'score',
+    'reasons',
+  ],
+  properties: {
+    snapshot_id: { type: 'string' },
+    selected_rank: { type: 'number' },
+    supply_class: { enum: ['confirmed_free', 'standard'] },
+    quota_tier: { enum: ['healthy', 'unknown', 'strained'] },
+    quota_coverage_complete: { type: 'boolean' },
+    quota_headroom_trusted: { type: 'boolean' },
+    reference_output_usd_per_million: { type: 'number' },
+    routing_output_usd_per_million: { type: 'number' },
+    effective_cap_usd_per_million: { type: 'number' },
+    score: { type: 'number' },
+    reasons: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
 
 export const taskResolvedDispatchSchema = {
   type: 'object',
@@ -42,6 +85,7 @@ export const taskResolvedDispatchSchema = {
     model_id: { type: 'string' },
     mode: { enum: ['native', 'gateway'] },
     protocol: { type: 'string' },
+    auto_routing: taskAutoRoutingDecisionSchema,
     speed: {
       type: 'object',
       required: ['effective_tps', 'source', 'sample_count', 'checked_at', 'expected_tps_met'],

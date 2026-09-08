@@ -71,7 +71,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Spec review — check document format, canonical FP/FU structure, and coverage of confirmed FeaturePoints/FunctionalUnits',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     input: InputSchema,

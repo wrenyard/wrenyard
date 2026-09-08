@@ -33,7 +33,6 @@ const definition = {
   config: {
     description:
       'Temporarily instrument component boundaries once, gather evidence, then revert instrumentation',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],

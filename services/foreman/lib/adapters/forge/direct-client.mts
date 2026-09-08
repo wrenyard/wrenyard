@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
+import { parseRunSyntax } from '@wrenyard/catalog'
 import { spawnForge as spawnResolvedForge } from './exec.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
 
@@ -12,8 +13,8 @@ export interface ForgeCommandOptions {
   cwd: string
   prompt: string
   resume?: string
-  /** If set, use this as the concrete profile for retry/resume, overriding
-   *  any agentRuntime classification. */
+  /** If set, use this as the concrete profile (canonical dynamic target) for
+   *  retry/resume, overriding any agentRuntime classification. */
   resolvedProfile?: string
   /** Selected Forge capability pack ids; each emits one --cap pair before
    *  the prompt/stdin boundary. When absent or empty, argv is unchanged. */
@@ -62,16 +63,25 @@ function buildProfileArgs(opts: ForgeCommandOptions): string[] {
   if (opts.resolvedProfile) {
     return ['--profile', opts.resolvedProfile]
   }
+  const profile = opts.profile
+  // Canonical dynamic target (provider/model:client) first: validate it with
+  // the shared parseRunSyntax contract and pass it intact to Forge --profile.
+  // A malformed dynamic-looking value (contains ':') fails rather than
+  // falling back to a legacy source preset.
+  if (profile.includes(':')) {
+    parseRunSyntax(profile)
+    return ['--profile', profile]
+  }
   try {
-    const rt = parseAgentRuntime(opts.profile)
+    const rt = parseAgentRuntime(profile)
     if (rt.isPolicy) {
       return ['--profile-policy', rt.configId]
     }
     return ['--profile', rt.configId]
   } catch (error) {
-    if (opts.profile.includes('/')) throw error
-    // Fallback for legacy profile strings that aren't in agentRuntime format
-    return ['--profile', opts.profile]
+    if (profile.includes('/')) throw error
+    // Fallback for legacy simple profile names that aren't in agentRuntime format
+    return ['--profile', profile]
   }
 }
 

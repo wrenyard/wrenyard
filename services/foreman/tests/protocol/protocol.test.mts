@@ -41,6 +41,9 @@ const expectedMethods = [
   'client.configuration.restore',
   'provider.list',
   'provider.configure',
+  'runtime.alias.snapshot',
+  'runtime.alias.put',
+  'runtime.alias.remove',
   'stats.today',
   'stats.summary',
   'task.definition.list',
@@ -168,9 +171,8 @@ describe('lib/protocol JSON-RPC contract', () => {
   it('accepts a valid invocation_settings layer on task.run.create params', () => {
     const invocation_settings = {
       mode: 'explicit',
-      explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      explicit_runtime: { kind: 'alias', name: 'prod' },
       timeout_ms: 42_000,
-      additional_instructions: 'Keep changes additive.',
       automatic: { expected_tps: 20, minimum_tps: 10, intelligence_min: 'high' },
     }
     assert.deepEqual(parseMethodParams('task.run.create', {
@@ -185,7 +187,25 @@ describe('lib/protocol JSON-RPC contract', () => {
       invocation_settings,
     })
 
-    // Automatic mode with dispatch constraints round-trips too.
+    // An inline exact target reference round-trips too.
+    const targetLayer = {
+      mode: 'explicit',
+      explicit_runtime: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' },
+    }
+    assert.deepEqual(parseMethodParams('task.run.create', {
+      task_id: 'commit',
+      project: 'foreman',
+      input: { changes_to_commit: { 'src/x.ts': 'all' } },
+      invocation_settings: targetLayer,
+    }), {
+      task_id: 'commit',
+      project: 'foreman',
+      input: { changes_to_commit: { 'src/x.ts': 'all' } },
+      invocation_settings: targetLayer,
+    })
+
+    // Automatic mode with dispatch constraints round-trips too; the automatic
+    // preferred_runtime stays a resolved client/provider/model triple.
     const automaticLayer = {
       mode: 'automatic',
       timeout_ms: 120_000,
@@ -211,9 +231,16 @@ describe('lib/protocol JSON-RPC contract', () => {
     const base = { task_id: 'commit', project: 'foreman', input: {} }
     const malformedLayers: unknown[] = [
       { mode: 'manual' },
-      { mode: 'explicit', explicit_runtime: { client: 'codex', provider: 'codex' } },
+      // A copied client/provider/model triple is never a valid selection.
+      { mode: 'explicit', explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' } },
       { mode: 'explicit', explicit_runtime: 'codex' },
-      { mode: 'explicit', explicit_runtime: { client: '', provider: 'codex', model: 'gpt-5.6-luna' } },
+      { mode: 'explicit', explicit_runtime: { kind: 'alias' } },
+      { mode: 'explicit', explicit_runtime: { kind: 'alias', name: '' } },
+      { mode: 'explicit', explicit_runtime: { kind: 'alias', name: 'prod', extra: 1 } },
+      { mode: 'explicit', explicit_runtime: { kind: 'target' } },
+      { mode: 'explicit', explicit_runtime: { kind: 'target', target: '' } },
+      { mode: 'explicit', explicit_runtime: { kind: 'target', target: 'openai/x', extra: true } },
+      { mode: 'explicit', explicit_runtime: { kind: 'profile', name: 'fast' } },
       { timeout_ms: 0 },
       { timeout_ms: -5 },
       { timeout_ms: '42000' },
@@ -642,7 +669,6 @@ describe('lib/protocol JSON-RPC contract', () => {
       name: 'dispatch-task',
       source: 'workspace',
       displayName: '调度任务',
-      agentRuntime: 'forge/codex-luna',
       dispatch: {
         expectedTps: 20,
         minimumTps: 10,
@@ -1148,7 +1174,7 @@ describe('lib/protocol JSON-RPC contract', () => {
     assert.deepEqual(parseMethodParams('task.settings.snapshot', {}), {})
     assert.deepEqual(parseMethodParams('task.settings.snapshot', { project: 'workspace' }), { project: 'workspace' })
 
-    // Save params: field-level reset and exact runtime selection are accepted.
+    // Save params: field-level reset and structural explicit references are accepted.
     assert.deepEqual(parseMethodParams('task.settings.save', {
       scope: 'task',
       task_id: 'commit',
@@ -1167,7 +1193,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       expected_revision: 'rev-1',
       patch: {
         mode: 'explicit',
-        explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+        explicit_runtime: { kind: 'alias', name: 'prod' },
       },
     }), {
       scope: 'task',
@@ -1176,8 +1202,32 @@ describe('lib/protocol JSON-RPC contract', () => {
       expected_revision: 'rev-1',
       patch: {
         mode: 'explicit',
-        explicit_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+        explicit_runtime: { kind: 'alias', name: 'prod' },
       },
+    })
+    // An inline exact target reference round-trips through save as well.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task',
+      task_id: 'commit',
+      expected_revision: 'rev-1',
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' },
+      },
+    }), {
+      scope: 'task',
+      task_id: 'commit',
+      expected_revision: 'rev-1',
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' },
+      },
+    })
+    // Null resets the explicit reference back to automatic at the selected layer.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1', patch: { explicit_runtime: null },
+    }), {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1', patch: { explicit_runtime: null },
     })
     // Nested null deletes only that automatic field at the selected layer.
     assert.deepEqual(parseMethodParams('task.settings.save', {
@@ -1210,27 +1260,35 @@ describe('lib/protocol JSON-RPC contract', () => {
         return true
       },
     )
-    // explicit_runtime must be a complete client/provider/model triple.
-    assert.throws(
-      () => parseMethodParams('task.settings.save', {
-        scope: 'task', task_id: 'commit', expected_revision: 'rev-1', patch: { explicit_runtime: 3 },
-      }),
-      (error) => {
-        assertProtocolError(error, INVALID_PARAMS.code)
-        return true
-      },
-    )
-    assert.throws(
-      () => parseMethodParams('task.settings.save', {
-        scope: 'task', task_id: 'commit',
-        expected_revision: 'rev-1',
-        patch: { explicit_runtime: {} },
-      }),
-      (error) => {
-        assertProtocolError(error, INVALID_PARAMS.code)
-        return true
-      },
-    )
+    // explicit_runtime must be a strict alias or inline target reference; a
+    // copied selection triple, bare scalar, empty reference, unknown kind, or
+    // mixed/extra key is rejected.
+    const badExplicitRuntime: unknown[] = [
+      3,
+      {},
+      { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+      { kind: 'alias' },
+      { kind: 'alias', name: '' },
+      { kind: 'alias', name: 'prod', target: 'openai/gpt-5.6-sol:codex' },
+      { kind: 'alias', name: 'prod', extra: true },
+      { kind: 'target' },
+      { kind: 'target', target: '' },
+      { kind: 'target', target: 'openai/gpt-5.6-sol:codex', name: 'prod' },
+      { kind: 'policy', name: 'fast' },
+      { kind: 'alias', name: 'prod', client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+    ]
+    for (const explicit_runtime of badExplicitRuntime) {
+      assert.throws(
+        () => parseMethodParams('task.settings.save', {
+          scope: 'task', task_id: 'commit', expected_revision: 'rev-1',
+          patch: { mode: 'explicit', explicit_runtime },
+        }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
     // Blank expected_revision is rejected.
     assert.throws(
       () => parseMethodParams('task.settings.save', {
@@ -1242,35 +1300,17 @@ describe('lib/protocol JSON-RPC contract', () => {
       },
     )
 
-    const eligibleChoice = {
-      exactAgentRuntime: 'forge/codex-luna',
-      requested_agent_runtime: 'forge/fast',
-      profile: 'codex-luna',
-      client: 'codex',
-      provider: 'codex',
-      model: 'gpt-5.6-luna',
-      model_id: 'codex/gpt-5.6-luna',
-      mode: 'native',
-      speed: {
-        effective_tps: 107,
-        source: 'catalog_default',
-        sample_count: 0,
-        checked_at: '2026-09-05T00:00:00.000Z',
-        expected_tps_met: true,
-      },
-      intelligence: 'mid',
-      reference_pricing: {
-        input_usd_per_million: 0.2,
-        output_usd_per_million: 1.2,
-        source: 'catalog',
-        checked_at: '2026-09-05T00:00:00.000Z',
-      },
-    }
+    // Snapshot rows carry no definition runtime pin and no generated runtime
+    // choices; combobox suggestions come from the snapshot-level aliases.
     const snapshotResult = {
       config_path: '/tmp/wrenyard/config.json',
       revision: 'rev-1',
       project: 'workspace',
-      user_global: {},
+      user_global: { max_auto_output_usd_per_million: 0 },
+      aliases: [
+        { name: 'web', target: 'openai/gpt-5.6-sol:codex' },
+        { name: 'prod', target: 'anthropic-api/claude-sonnet-5:cc' },
+      ],
       rows: [{
         identity: 'project:workspace:commit',
         name: 'commit',
@@ -1286,10 +1326,8 @@ describe('lib/protocol JSON-RPC contract', () => {
           instruction_template: [
             { kind: 'text', source: 'task.instructions[0]', text: 'Stage and commit the reviewed changes only.' },
             { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
-            { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
             { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
           ],
-          declared_runtime: 'forge/fast',
           timeout_ms: 900000,
           dispatch: { expected_tps: 20, minimum_tps: 10 },
         },
@@ -1298,7 +1336,7 @@ describe('lib/protocol JSON-RPC contract', () => {
           mode: { value: 'automatic', source: 'builtin' },
           explicit_runtime: { value: null, source: 'system' },
           timeout_ms: { value: 900000, source: 'builtin' },
-          additional_instructions: { value: null, source: 'system' },
+          max_auto_output_usd_per_million: { value: 0, source: 'user_global' },
           automatic: {
             expected_tps: { value: 20, source: 'builtin' },
             minimum_tps: { value: 10, source: 'builtin' },
@@ -1314,16 +1352,84 @@ describe('lib/protocol JSON-RPC contract', () => {
           },
         },
         issues: [],
-        // Authoritative exact runtime picker choices exist even on an
-        // automatic-mode row so the UI can switch to explicit mode without a
-        // fabricated current selection.
-        runtime_choices: [eligibleChoice],
-        // The row truthfully states the exact runtime it currently resolves to.
-        resolved_runtime: eligibleChoice,
       }],
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', snapshotResult), snapshotResult)
     assert.deepEqual(parseMethodResult('task.settings.save', snapshotResult), snapshotResult)
+
+    // A positive global auto reference-price cap round-trips on the snapshot
+    // user_global layer and effective row with its user_global source.
+    const positiveCapResult = {
+      ...snapshotResult,
+      user_global: { max_auto_output_usd_per_million: 25 },
+      rows: [{
+        ...snapshotResult.rows[0],
+        effective: {
+          ...snapshotResult.rows[0].effective,
+          max_auto_output_usd_per_million: { value: 25, source: 'user_global' },
+        },
+      }],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', positiveCapResult), positiveCapResult)
+    assert.deepEqual(parseMethodResult('task.settings.save', positiveCapResult), positiveCapResult)
+
+    // Negative or non-number cap values are rejected wherever the field appears.
+    for (const badUserGlobal of [
+      { max_auto_output_usd_per_million: -1 },
+      { max_auto_output_usd_per_million: '5' },
+    ]) {
+      assert.throws(
+        () => parseMethodResult('task.settings.snapshot', { ...snapshotResult, user_global: badUserGlobal }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+
+    // Global save patches accept 0, positive values, and an explicit null clear.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: 0 },
+    }), {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: 0 },
+    })
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: 12 },
+    }), {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: 12 },
+    })
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: null },
+    }), {
+      scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: null },
+    })
+    // The task-scope patch schema accepts the field (task-scope rejection is a
+    // service-level guard), so a 0 cap also round-trips there.
+    assert.deepEqual(parseMethodParams('task.settings.save', {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1',
+      patch: { max_auto_output_usd_per_million: 0 },
+    }), {
+      scope: 'task', task_id: 'commit', expected_revision: 'rev-1',
+      patch: { max_auto_output_usd_per_million: 0 },
+    })
+    assert.throws(
+      () => parseMethodParams('task.settings.save', {
+        scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: -1 },
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('task.settings.save', {
+        scope: 'global', expected_revision: 'rev-1', patch: { max_auto_output_usd_per_million: '5' },
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
 
     // A persisted user-task override round-trips with its source.
     const overriddenResult = {
@@ -1339,15 +1445,82 @@ describe('lib/protocol JSON-RPC contract', () => {
     }
     assert.deepEqual(parseMethodResult('task.settings.snapshot', overriddenResult), overriddenResult)
 
-    // Every row must carry truthful exact runtime choices; an automatic row
-    // missing runtime_choices is rejected.
+    // An explicit-mode row stores a structural reference and exposes its
+    // canonical target, resolved dispatch, and readiness — never a copied
+    // selection triple.
+    const explicitResult = {
+      ...snapshotResult,
+      rows: [{
+        ...snapshotResult.rows[0],
+        user_task: {
+          mode: 'explicit',
+          explicit_runtime: { kind: 'alias', name: 'prod' },
+        },
+        effective: {
+          ...snapshotResult.rows[0].effective,
+          mode: { value: 'explicit', source: 'user_task' },
+          explicit_runtime: { value: { kind: 'alias', name: 'prod' }, source: 'user_task' },
+        },
+        explicit: {
+          reference: { kind: 'alias', name: 'prod' },
+          resolved_target: 'anthropic-api/claude-sonnet-5:cc',
+          resolved: null,
+          readiness: {
+            runtime: 'anthropic-api/claude-sonnet-5:cc',
+            client: 'cc',
+            provider: 'anthropic-api',
+            model: 'claude-sonnet-5',
+            daemon: 'accepting',
+            provider_credential: 'available',
+            provider_live: 'available',
+            quota: 'available',
+            available: true,
+            issues: [],
+          },
+        },
+      }],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', explicitResult), explicitResult)
+
+    // An explicit inline target reference round-trips through an explicit row.
+    const inlineTargetResult = {
+      ...snapshotResult,
+      rows: [{
+        ...snapshotResult.rows[0],
+        user_task: {
+          mode: 'explicit',
+          explicit_runtime: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' },
+        },
+        effective: {
+          ...snapshotResult.rows[0].effective,
+          mode: { value: 'explicit', source: 'user_task' },
+          explicit_runtime: { value: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' }, source: 'user_task' },
+        },
+        explicit: {
+          reference: { kind: 'target', target: 'openai/gpt-5.6-sol:codex' },
+          resolved_target: null,
+          resolved: null,
+          readiness: null,
+        },
+      }],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.snapshot', inlineTargetResult), inlineTargetResult)
+
+    // The snapshot-level aliases list is the combobox input and stays closed.
     assert.throws(
       () => parseMethodResult('task.settings.snapshot', {
         ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          runtime_choices: undefined,
-        }],
+        aliases: [{ name: 'prod' }],
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', {
+        ...snapshotResult,
+        aliases: [{ name: 'prod', target: 'openai/gpt-5.6-sol:codex', canonical: true }],
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
@@ -1355,61 +1528,13 @@ describe('lib/protocol JSON-RPC contract', () => {
       },
     )
 
-    // resolved_runtime is required: every row must state its current resolved
-    // runtime or null for an unresolved/unavailable state.
-    assert.throws(
-      () => parseMethodResult('task.settings.snapshot', {
-        ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          resolved_runtime: undefined,
-        }],
-      }),
-      (error) => {
-        assertProtocolError(error, INVALID_PARAMS.code)
-        return true
-      },
-    )
-
-    // Null explicitly marks an unresolved/unavailable row and is accepted.
-    assert.deepEqual(
-      parseMethodResult('task.settings.snapshot', {
-        ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          resolved_runtime: null,
-        }],
-      }),
-      {
-        ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          resolved_runtime: null,
-        }],
-      },
-    )
-
-    // A runtime_choices entry missing its resolved dispatch fields is rejected.
-    assert.throws(
-      () => parseMethodResult('task.settings.snapshot', {
-        ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          runtime_choices: [{ exactAgentRuntime: 'forge/codex-luna' }],
-        }],
-      }),
-      (error) => {
-        assertProtocolError(error, INVALID_PARAMS.code)
-        return true
-      },
-    )
-
-    // Result must describe config_path/revision/global layer and rows.
+    // Result must describe config_path/revision/aliases/global layer and rows.
     assert.throws(
       () => parseMethodResult('task.settings.snapshot', {
         config_path: '/tmp/wrenyard/config.json',
         revision: 'rev-1',
         user_global: {},
+        aliases: [],
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)
@@ -1420,6 +1545,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       () => parseMethodResult('task.settings.snapshot', {
         config_path: '/tmp/wrenyard/config.json',
         revision: 'rev-1',
+        aliases: [],
         rows: [],
       }),
       (error) => {
@@ -1427,25 +1553,31 @@ describe('lib/protocol JSON-RPC contract', () => {
         return true
       },
     )
-    // An explicit choice must carry the full resolved dispatch fields.
-    assert.throws(
-      () => parseMethodResult('task.settings.snapshot', {
-        ...snapshotResult,
-        rows: [{
-          ...snapshotResult.rows[0],
-          explicit: {
-            runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
-            choices: [{ exactAgentRuntime: 'forge/fast' }],
-            resolved: eligibleChoice,
-            readiness: null,
-          },
-        }],
-      }),
-      (error) => {
-        assertProtocolError(error, INVALID_PARAMS.code)
-        return true
-      },
-    )
+
+    // An explicit row must expose the structural reference with its exact
+    // resolution; stale selection-triple or picker shapes never appear.
+    const malformedExplicitRows: unknown[] = [
+      { resolved_target: null, resolved: null, readiness: null },
+      { reference: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' }, resolved_target: null, resolved: null, readiness: null },
+      { reference: { kind: 'alias' }, resolved_target: null, resolved: null, readiness: null },
+      { reference: { kind: 'alias', name: 'prod' } },
+      { reference: { kind: 'alias', name: 'prod' }, resolved_target: 'anthropic-api/claude-sonnet-5:cc', resolved: {}, readiness: null },
+    ]
+    for (const explicit of malformedExplicitRows) {
+      assert.throws(
+        () => parseMethodResult('task.settings.snapshot', {
+          ...snapshotResult,
+          rows: [{
+            ...snapshotResult.rows[0],
+            explicit,
+          }],
+        }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
 
     // Rows expose the authoritative display labels alongside the exact id/name.
     const labeledResult = parseMethodResult('task.settings.snapshot', snapshotResult) as {
@@ -1465,8 +1597,6 @@ describe('lib/protocol JSON-RPC contract', () => {
       { kind: 'text', source: 'task.instructions[0]' },
       // placeholder kind requires a stable label.
       { kind: 'placeholder', source: 'task.instructions[1]' },
-      // additional_instructions requires the bounded source string.
-      { kind: 'additional_instructions' },
       // unknown kinds are rejected.
       { kind: 'function', source: 'task.instructions[0]', text: 'x' },
       // kind/text or kind/label mismatches are rejected.
@@ -1482,6 +1612,146 @@ describe('lib/protocol JSON-RPC contract', () => {
             builtin: { ...snapshotResult.rows[0].builtin, instruction_template: [instruction_template] },
           }],
         }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+  })
+
+  it('validates runtime.alias snapshot/put/remove params and result shapes', () => {
+    // Snapshot takes no params and stays closed to extra fields.
+    assert.deepEqual(parseMethodParams('runtime.alias.snapshot', {}), {})
+    assert.throws(
+      () => parseMethodParams('runtime.alias.snapshot', { filter: 'prod' }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // Valid put/remove params require the alias name plus the CAS revision.
+    const validTarget = 'anthropic-api/claude-sonnet-5:cc'
+    assert.deepEqual(parseMethodParams('runtime.alias.put', {
+      name: 'prod',
+      target: validTarget,
+      expected_revision: 2,
+    }), {
+      name: 'prod',
+      target: validTarget,
+      expected_revision: 2,
+    })
+    assert.deepEqual(parseMethodParams('runtime.alias.remove', {
+      name: 'prod',
+      expected_revision: 2,
+    }), {
+      name: 'prod',
+      expected_revision: 2,
+    })
+
+    // Missing expected_revision is rejected for both mutating methods.
+    for (const [method, params] of [
+      ['runtime.alias.put', { name: 'prod', target: validTarget }],
+      ['runtime.alias.remove', { name: 'prod' }],
+    ] as const) {
+      assert.throws(
+        () => parseMethodParams(method, params),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+
+    // Malformed alias/target types and revisions are rejected.
+    const goodTarget = 'openai/gpt-5.6-sol:codex'
+    for (const params of [
+      { name: 42, target: goodTarget, expected_revision: 0 },
+      { name: '', target: goodTarget, expected_revision: 0 },
+      { name: 'Prod', target: goodTarget, expected_revision: 0 },
+      { name: 'has/slash', target: goodTarget, expected_revision: 0 },
+      { name: 'prod', target: 42, expected_revision: 0 },
+      { name: 'prod', target: '', expected_revision: 0 },
+      { name: 'prod', target: goodTarget, expected_revision: -1 },
+      { name: 'prod', target: goodTarget, expected_revision: 1.5 },
+      { name: 'prod', target: goodTarget, expected_revision: '0' },
+    ]) {
+      assert.throws(
+        () => parseMethodParams('runtime.alias.put', params),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+    // Extra properties are rejected on mutating params.
+    assert.throws(
+      () => parseMethodParams('runtime.alias.put', {
+        name: 'prod', target: goodTarget, expected_revision: 0, owner: 'me',
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('runtime.alias.remove', {
+        name: 'prod', expected_revision: 0, force: true,
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // All three methods share the same closed snapshot result envelope.
+    const snapshotResult = {
+      config_path: '/tmp/wrenyard/runtime/config.json',
+      revision: 3,
+      aliases: [
+        { name: 'web', target: 'openai/gpt-5.6-sol:codex' },
+        { name: 'prod', target: 'anthropic-api/claude-sonnet-5:cc' },
+      ],
+      issues: [
+        { name: 'broken', value: 'not-valid-run-syntax', message: 'unrecognized run syntax' },
+        { name: 'typed', value: 42, message: 'alias target must be a string' },
+      ],
+    }
+    assert.deepEqual(parseMethodResult('runtime.alias.snapshot', snapshotResult), snapshotResult)
+    assert.deepEqual(parseMethodResult('runtime.alias.put', snapshotResult), snapshotResult)
+    assert.deepEqual(parseMethodResult('runtime.alias.remove', snapshotResult), snapshotResult)
+
+    // value is optional, and a malformed persisted '' alias name still
+    // projects as a valid issue entry.
+    assert.deepEqual(parseMethodResult('runtime.alias.snapshot', {
+      ...snapshotResult,
+      issues: [
+        { name: 'typed', message: 'alias target must be a string' },
+        { name: '', message: 'alias name must not be empty' },
+      ],
+    }), {
+      ...snapshotResult,
+      issues: [
+        { name: 'typed', message: 'alias target must be a string' },
+        { name: '', message: 'alias name must not be empty' },
+      ],
+    })
+
+    // Malformed result entries are rejected rather than coerced.
+    const malformedResults: unknown[] = [
+      { ...snapshotResult, revision: undefined },
+      { ...snapshotResult, credentials: { token: 'secret' } },
+      { ...snapshotResult, aliases: [{ name: 'prod' }] },
+      { ...snapshotResult, aliases: [{ name: 'prod', target: goodTarget, canonical: true }] },
+      { ...snapshotResult, aliases: [{ name: 7, target: goodTarget }] },
+      { ...snapshotResult, issues: [{ name: 'broken', value: 'x' }] },
+      { ...snapshotResult, issues: [{ name: 'broken', value: { nested: 1 }, message: 'm' }] },
+      { ...snapshotResult, issues: [{ name: 'broken', value: 42, message: '' }] },
+    ]
+    for (const malformed of malformedResults) {
+      assert.throws(
+        () => parseMethodResult('runtime.alias.snapshot', malformed),
         (error) => {
           assertProtocolError(error, INVALID_PARAMS.code)
           return true
@@ -1778,6 +2048,137 @@ describe('lib/protocol JSON-RPC contract', () => {
         },
       )
     }
+  })
+
+  it('accepts paired recent-run display names and a strict complete auto_routing decision, rejecting malformed ones', () => {
+    const baseResult = {
+      source: 'sqlite',
+      today: {
+        dayKey: '2026-07-19',
+        startAt: '2026-07-19T00:00:00.000Z',
+        endAt: '2026-07-20T00:00:00.000Z',
+        dispatchCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        outcomes: { done: 0, failed: 0, cancelled: 0 },
+      },
+      byProfile: [],
+      byTask: [],
+      daily: [],
+    }
+    const ledgerUsage = { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false }
+    const resolvedBase = {
+      requested_agent_runtime: 'forge/codebuddy',
+      profile: 'auto',
+      client: 'codebuddy',
+      provider: 'codebuddy',
+      model: 'deepseek-v4-flash',
+      model_id: 'codebuddy/deepseek-v4-flash',
+      mode: 'native',
+      speed: { effective_tps: 45, source: 'catalog_default', sample_count: 7, checked_at: '2026-07-19T00:00:00.000Z', expected_tps_met: true },
+      intelligence: 'mid',
+      reference_pricing: { input_usd_per_million: 0.2, output_usd_per_million: 1.2, source: 'catalog', checked_at: '2026-07-19T00:00:00.000Z' },
+    }
+    const decision = {
+      snapshot_id: 'snap-1',
+      selected_rank: 1,
+      supply_class: 'confirmed_free',
+      quota_tier: 'healthy',
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 1.5,
+      routing_output_usd_per_million: 1.25,
+      effective_cap_usd_per_million: 1.6,
+      score: 9.5,
+      reasons: ['rank-1'],
+    }
+    const row = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+      task_run_id: 'run-1',
+      task: 'commit',
+      source: 'builtin',
+      status: 'done',
+      created_at: '2026-07-19T10:00:00.000Z',
+      usage: ledgerUsage,
+      ...overrides,
+    })
+    const summary = (recentRuns: unknown[]): Record<string, unknown> => ({ ...baseResult, recentRuns })
+
+    // Both additive additions absent remains valid (backwards compatible).
+    const plainRow = row({})
+    assert.deepEqual(parseMethodResult('stats.summary', summary([plainRow])), summary([plainRow]))
+
+    // Paired display-name strings round-trip.
+    const labeledRow = row({ provider_display_name: 'CodeBuddy', model_display_name: 'DeepSeek V4 Flash' })
+    assert.deepEqual(parseMethodResult('stats.summary', summary([labeledRow])), summary([labeledRow]))
+
+    // A complete safe auto_routing decision inside `resolved` round-trips.
+    const decisionRow = row({ resolved: { ...resolvedBase, auto_routing: decision } })
+    assert.deepEqual(parseMethodResult('stats.summary', summary([decisionRow])), summary([decisionRow]))
+
+    // Paired display names together with a full resolved decision stay valid.
+    const fullRow = row({
+      provider_display_name: 'CodeBuddy',
+      model_display_name: 'DeepSeek V4 Flash',
+      resolved: { ...resolvedBase, auto_routing: decision },
+    })
+    assert.deepEqual(parseMethodResult('stats.summary', summary([fullRow])), summary([fullRow]))
+
+    // Malformed auto_routing decisions are rejected: extra fields, missing
+    // required fields, wrong enums, and non-string reasons.
+    const decisionMissingReasons = {
+      snapshot_id: 'snap-1',
+      selected_rank: 1,
+      supply_class: 'confirmed_free',
+      quota_tier: 'healthy',
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 1.5,
+      routing_output_usd_per_million: 1.25,
+      effective_cap_usd_per_million: 1.6,
+      score: 9.5,
+    }
+    const badDecisions: unknown[] = [
+      { ...decision, tampered: true },
+      decisionMissingReasons,
+      { ...decision, supply_class: 'premium' },
+      { ...decision, quota_tier: 'exhausted' },
+      { ...decision, score: '9.5' },
+      { ...decision, reasons: [1] },
+      { ...decision, reasons: 'rank-1' },
+    ]
+    for (const auto_routing of badDecisions) {
+      assert.throws(
+        () => parseMethodResult('stats.summary', summary([row({ resolved: { ...resolvedBase, auto_routing } })])),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+
+    // Extra resolved-level decision fields and non-string display names fail.
+    assert.throws(
+      () => parseMethodResult('stats.summary', summary([row({ resolved: { ...resolvedBase, auto_routing: { ...decision, supplier_hint: 'x' } } })])),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodResult('stats.summary', summary([row({ provider_display_name: 3, model_display_name: 'DeepSeek V4 Flash' })])),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodResult('stats.summary', summary([row({ provider_display_name: 'CodeBuddy', model_display_name: false })])),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
   })
 
   it('keeps lib/protocol free of runtime imports', () => {

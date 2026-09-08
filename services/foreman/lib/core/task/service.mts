@@ -141,7 +141,6 @@ export class TaskService {
       id: string
       displayLabel: string
     }
-    agentRuntime?: string
     timeoutMs?: number
     effectiveTimeoutMs?: number
     structuredRetryTimeoutMs?: number

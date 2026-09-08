@@ -68,7 +68,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Review FeaturePointSet design-contract completeness before user confirmation and breakdown',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],

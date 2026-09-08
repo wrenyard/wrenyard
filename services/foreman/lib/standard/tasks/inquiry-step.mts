@@ -15,7 +15,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Reusable inquiry step: ask one question, request optional targeted exploration, converge, or block',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

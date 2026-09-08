@@ -97,10 +97,10 @@ const commitOutputSample = {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly / forge/fast', () => {
+  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto)', () => {
     assert.equal(exploreTask.__type, 'task')
     assert.equal(exploreTask.config.permission, 'readonly')
-    assert.equal(exploreTask.config.agentRuntime, 'forge/fast')
+    assert.equal(Object.hasOwn(exploreTask.config, 'agentRuntime'), false)
     assert.equal(exploreTask.sourcePath, 'lib/standard/tasks/explore.mts')
     // problem-driven builtin has no migrated external instructions
     assert.deepEqual(exploreTask.config.instructions, [])
@@ -153,10 +153,10 @@ describe('standard/tasks explore — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks edit — definition shape & config', () => {
-  it('is a lean TaskDefinition with edit / forge/fast and shell guidance only', () => {
+  it('is a lean TaskDefinition with edit and shell guidance only, no runtime pin (defaults to auto)', () => {
     assert.equal(editTask.__type, 'task')
     assert.equal(editTask.config.permission, 'edit')
-    assert.equal(editTask.config.agentRuntime, 'forge/fast')
+    assert.equal(Object.hasOwn(editTask.config, 'agentRuntime'), false)
     assert.equal(editTask.sourcePath, 'lib/standard/tasks/edit.mts')
 
     const joined = (editTask.config.instructions ?? []).join('\n')
@@ -224,10 +224,10 @@ describe('standard/tasks edit — schema behavior ({changes: Change[]} -> FileEv
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks test — definition shape & config', () => {
-  it('is a TaskDefinition object literal with yolo / forge/fast and migrated shell usage', () => {
+  it('is a TaskDefinition object literal with yolo and no runtime pin (defaults to auto), migrated shell usage', () => {
     assert.equal(testTask.__type, 'task')
     assert.equal(testTask.config.permission, 'yolo')
-    assert.equal(testTask.config.agentRuntime, 'forge/fast')
+    assert.equal(Object.hasOwn(testTask.config, 'agentRuntime'), false)
     assert.equal(testTask.sourcePath, 'lib/standard/tasks/test.mts')
 
     const joined = (testTask.config.instructions ?? []).join('\n')
@@ -300,7 +300,7 @@ describe('standard/tasks commit — definition shape & config', () => {
   it('is a TaskDefinition object literal with yolo and migrated commit instructions', () => {
     assert.equal(commitTask.__type, 'task')
     assert.equal(commitTask.config.permission, 'yolo')
-    assert.equal(commitTask.config.agentRuntime, 'forge/fast')
+    assert.equal(Object.hasOwn(commitTask.config, 'agentRuntime'), false)
     assert.equal(commitTask.sourcePath, 'lib/standard/tasks/commit.mts')
 
     const joined = (commitTask.config.instructions ?? []).join('\n')

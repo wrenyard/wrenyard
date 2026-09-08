@@ -149,6 +149,7 @@ test('service provider.list projects only public model metadata over IPC', async
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'hy4-preview',
+      'hy3',
       'minimax-m3',
       'kimi-k3',
       'glm-5.3',
@@ -211,7 +212,6 @@ test('service IPC task run can target a managed worktree', async () => {
   writeFileSync(
     join(projectDir, 'echo.task.ts'),
     `export default defineTask({
-  agentRuntime: 'forge/codex-luna',
   dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),

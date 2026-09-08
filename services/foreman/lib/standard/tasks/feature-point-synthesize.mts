@@ -29,7 +29,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Synthesize a design-complete FeaturePointSet from brainstorm context and selected design decision',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],

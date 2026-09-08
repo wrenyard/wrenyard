@@ -71,7 +71,6 @@ const definition = {
   config: {
     description:
       'Read-only strategic advisor for architecture decisions, self-review, hard debugging, and complex trade-offs. Returns findings, decisions, and any unresolved questions to escalate. Advises only; never executes or mutates.',
-    agentRuntime: 'forge/ultra',
     dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],

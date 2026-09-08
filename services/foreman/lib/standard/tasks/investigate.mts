@@ -103,7 +103,6 @@ const definition = {
   config: {
     description:
       'Mini systematic debugging investigation. Read-only in behavior, but yolo permission allows repro commands and tests; outputs root cause plus edit/test schemas.',
-    agentRuntime: 'forge/ultra',
     dispatch: ULTRA_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],

@@ -73,6 +73,23 @@ class LazyCancelBridge extends FakeTaskBridge {
   }
 }
 
+/**
+ * FakeTaskBridge that can refuse new dispatches once armed. Recovery tests arm
+ * this before service recreation: if restart recovery wrongly fell back to a
+ * fresh start (re-resolving a current alias or re-running the dispatch path)
+ * instead of reattaching the persisted task_run_id, start() would throw.
+ */
+class GuardStartBridge extends FakeTaskBridge {
+  failStart = false
+
+  override async start(request: TaskGraphTaskRequest): Promise<TaskGraphTaskHandle> {
+    if (this.failStart) {
+      throw new Error('taskBridge.start must not be called during restart recovery')
+    }
+    return super.start(request)
+  }
+}
+
 class FakeContractResolver implements TaskGraphTaskContractResolver {
   private readonly contracts = new Map<string, unknown>()
   private readonly outputs = new Map<string, unknown>()
@@ -440,6 +457,50 @@ describe('TaskGraph runtime kernel', () => {
     })
     assert.equal(restored.status({ taskgraph_id: id }).state, 'running')
     await restored.whenIdle(id)
+
+    // Recovery only reattaches the persisted task_run_id; the daemon never
+    // launches a fresh dispatch from the current definition, so the bridge has
+    // exactly the original start and the run keeps its original identity.
+    assert.equal(bridge.requests.length, 1, 'recovery must reattach, not redispatch')
+    const reattached = restored.inspect({ taskgraph_id: id, node_id: 'work' })
+    assert.equal(reattached.run.state, 'running')
+    assert.equal(reattached.run.task_run_id, 'task_1')
+
+    bridge.terminal('task_1', { status: 'done', output: { status: 'ok' } })
+    await settle(restored, id)
+    assert.equal(restored.status({ taskgraph_id: id }).state, 'done')
+    // Terminal evidence stays bound to the original reattached task_run_id.
+    const completed = restored.inspect({ taskgraph_id: id, node_id: 'work' })
+    assert.equal(completed.run.state, 'done')
+    assert.equal(completed.run.task_run_id, 'task_1')
+  })
+
+  it('restart recovery reattaches only the saved task_run_id when the start path fails closed', async () => {
+    const db = initTestDb()
+    const bridge = new GuardStartBridge()
+    const first = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
+    const created = await first.create({ graph: { nodes: linearTaskGraph() } })
+    const id = created.taskgraph.id
+    first.signal({ taskgraph_id: id, signal: { type: 'start_graph', input: { seed: 'restart' } } })
+    await first.whenIdle(id)
+    assert.equal(first.inspect({ taskgraph_id: id, node_id: 'work' }).run.state, 'running')
+    assert.equal(first.inspect({ taskgraph_id: id, node_id: 'work' }).run.task_run_id, 'task_1')
+    assert.equal(bridge.requests.length, 1)
+
+    // Make the current dispatch/start path fail: restart recovery that wrongly
+    // re-resolved a current alias/settings fixture or re-ran the start path
+    // would throw here instead of quietly reattaching the saved run.
+    bridge.failStart = true
+    const restored = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
+    assert.equal(restored.status({ taskgraph_id: id }).state, 'running')
+    await restored.whenIdle(id)
+
+    const work = restored.inspect({ taskgraph_id: id, node_id: 'work' })
+    assert.equal(work.run.state, 'running')
+    assert.equal(work.run.task_run_id, 'task_1', 'recovery must retain the original persisted task_run_id')
+    assert.equal(bridge.requests.length, 1, 'recovery must reattach and never call taskBridge.start again')
+
+    bridge.failStart = false
     bridge.terminal('task_1', { status: 'done', output: { status: 'ok' } })
     await settle(restored, id)
     assert.equal(restored.status({ taskgraph_id: id }).state, 'done')
@@ -725,7 +786,7 @@ describe('TaskGraph runtime kernel', () => {
 
   it('fails a persisted running node with no task run binding on restart recovery', async () => {
     const db = initTestDb()
-    const bridge = new FakeTaskBridge()
+    const bridge = new GuardStartBridge()
     const first = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     const created = await first.create({ graph: { nodes: linearTaskGraph() } })
     const id = created.taskgraph.id
@@ -742,6 +803,9 @@ describe('TaskGraph runtime kernel', () => {
       new Date().toISOString(),
     )
 
+    // Fail closed on the missing identity: restart recovery may not silently
+    // redispatch, so any fresh start attempt would throw here.
+    bridge.failStart = true
     const restored = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     restored.status({ taskgraph_id: id })
     await restored.whenIdle(id)
@@ -752,6 +816,11 @@ describe('TaskGraph runtime kernel', () => {
     const work = restored.inspect({ taskgraph_id: id, node_id: 'work' })
     assert.equal(work.run.state, 'failed')
     assert.equal(work.run.error?.code, 'TASK_RUN_UNBOUND')
+    assert.equal(bridge.requests.length, 1, 'an unbound running node must never be silently redispatched')
+    assert.ok(
+      work.run.task_run_id === undefined || work.run.task_run_id === null,
+      'no task_run_id may be invented for an unbound node',
+    )
     const eventTypes = restored.events({ taskgraph_id: id }).events.map((event) => event.type)
     assert.ok(eventTypes.includes('taskgraph.node.failed'))
     assert.ok(eventTypes.includes('taskgraph.paused'))
@@ -759,7 +828,7 @@ describe('TaskGraph runtime kernel', () => {
 
   it('isolates reattach failures per node without aborting sibling recovery', async () => {
     const db = initTestDb()
-    const bridge = new FakeTaskBridge()
+    const bridge = new GuardStartBridge()
     const first = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     const created = await first.create({ graph: { nodes: parallelTaskGraph() } })
     const id = created.taskgraph.id
@@ -767,8 +836,11 @@ describe('TaskGraph runtime kernel', () => {
     await first.whenIdle(id)
     assert.equal(first.status({ taskgraph_id: id }).node_counts.running, 2)
 
-    // Simulate a restart where one task run is unknown to the daemon.
+    // Simulate a restart where one task run is unknown to the daemon. Arm the
+    // start guard too: an unusable saved binding must fail closed with the
+    // precise reattach error, never be redispatched as a fresh start.
     bridge.forget('task_2')
+    bridge.failStart = true
 
     const restored = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     restored.status({ taskgraph_id: id })
@@ -779,9 +851,11 @@ describe('TaskGraph runtime kernel', () => {
     assert.equal(status.node_counts.failed, 1)
     // The healthy sibling reattached and keeps running.
     assert.equal(restored.inspect({ taskgraph_id: id, node_id: 'left' }).run.state, 'running')
+    assert.equal(restored.inspect({ taskgraph_id: id, node_id: 'left' }).run.task_run_id, 'task_1')
     const right = restored.inspect({ taskgraph_id: id, node_id: 'right' })
     assert.equal(right.run.state, 'failed')
     assert.equal(right.run.error?.code, 'TASK_RUN_REATTACH_FAILED')
+    assert.equal(bridge.requests.length, 2, 'a failed reattach must never be redispatched as a fresh start')
   })
 
   it('omitted policy preserves node failure -> paused with no persisted cause', async () => {
@@ -955,7 +1029,7 @@ describe('TaskGraph runtime kernel', () => {
 
   it('recovery failure under a cancel policy converges to cancelled with recovery_failed evidence', async () => {
     const db = initTestDb()
-    const bridge = new FakeTaskBridge()
+    const bridge = new GuardStartBridge()
     const first = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     const created = await first.create({
       graph: { nodes: linearTaskGraph() },
@@ -967,7 +1041,10 @@ describe('TaskGraph runtime kernel', () => {
     assert.equal(first.inspect({ taskgraph_id: id, node_id: 'work' }).run.state, 'running')
 
     // Simulate a restart where the daemon can no longer reattach the task run.
+    // Arm the start guard: an unusable saved binding must fail closed with the
+    // precise reattach error, never be redispatched as a fresh start.
     bridge.forget('task_1')
+    bridge.failStart = true
 
     const restored = new TaskGraphService({ db, workspaceRoot: process.cwd(), taskBridge: bridge })
     restored.status({ taskgraph_id: id })
@@ -982,6 +1059,7 @@ describe('TaskGraph runtime kernel', () => {
     assert.equal(failure?.node_id, 'work')
     assert.equal(failure?.error.code, 'TASK_RUN_REATTACH_FAILED')
     assert.equal(restored.inspect({ taskgraph_id: id, node_id: 'work' }).run.state, 'failed')
+    assert.equal(bridge.requests.length, 1, 'an unusable saved binding must never be redispatched as a fresh start')
     assert.ok(!restored.events({ taskgraph_id: id }).events
       .some((event) => event.type === 'taskgraph.paused'))
   })

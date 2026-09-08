@@ -30,7 +30,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Reusable request intake: classify scope, decide whether targeted exploration is needed, then assess scope',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

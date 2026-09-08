@@ -66,7 +66,6 @@ const definition = {
   config: {
     description:
       'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and returns structured findings and evidences. Read-only; never fabricates or mutates files.',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],

@@ -148,7 +148,6 @@ const definition: TaskDefinition = {
   config: {
     description:
       'Problem-driven read-only exploration. Investigates targets against a goal and questions, pooling evidences and findings, and answers each question as answered/unanswered/blocked.',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],

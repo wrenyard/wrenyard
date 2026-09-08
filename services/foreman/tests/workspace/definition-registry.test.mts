@@ -52,7 +52,6 @@ function assertTaskTarget(target: ResolvedTarget | null): asserts target is Reso
 
 function taskSource(promptExpression: string, extraConfig = ''): string {
   return `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
 ${extraConfig}
   input: foremanSchemas.z.object({}),
@@ -379,18 +378,23 @@ describe('workspace definition registry', () => {
     assert.equal(await afterRefresh.definition.config.prompt({}), 'v2', 'should pick up v2 after non-skipped refresh')
   })
 
-  // ── agentRuntime tests ──
+  // ── runtime pin contract tests ──
 
-  it('exposes agentRuntime in list/describe and synthesizes forge/<profile> from legacy definitions', async () => {
+  it('loads active definitions with no profile/agentRuntime and lists/describes dispatch', async () => {
     const workspace = makeTempDir('foreman-v2-loader-')
     const projectDir = join(workspace, 'projects', 'app')
     registerProject(projectDir, 'app')
-    // Legacy: no agentRuntime, only profile
-    writeFileSync(join(projectDir, 'legacy.task.ts'), taskSource("'legacy'"), 'utf-8')
-    // New: agentRuntime with concrete profile
+    // Active: no agentRuntime, no profile — only dispatch requirements.
+    const dispatch = {
+      expectedTps: 20,
+      minimumTps: 10,
+      intelligenceMin: 'high',
+      maxOutputUsdPerMillion: 5,
+      requiredCapabilities: ['text'],
+      preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+    }
     writeFileSync(join(projectDir, 'modern.task.ts'), `export default defineTask({
   permission: 'readonly',
-  agentRuntime: 'forge/codex-luna',
   dispatch: {
     expectedTps: 20,
     minimumTps: 10,
@@ -406,38 +410,195 @@ describe('workspace definition registry', () => {
 `, 'utf-8')
 
     await discoverTasks(workspace)
+    assert.equal(getLoadErrors(workspace).length, 0)
 
-    const listed = listTasks(workspace, 'app')
-    const legacy = listed.find((task) => task.name === 'legacy')
-    assert.ok(legacy, 'legacy task should be listed')
-    assert.equal(legacy.agentRuntime, 'forge/test')
-    assert.equal('profile' in legacy, false, 'profile must not appear in public metadata')
-
-    const modern = listed.find((task) => task.name === 'modern')
+    const modern = listTasks(workspace, 'app').find((task) => task.name === 'modern')
     assert.ok(modern, 'modern task should be listed')
-    assert.equal(modern.agentRuntime, 'forge/codex-luna')
+    assert.equal('agentRuntime' in modern, false, 'active tasks expose no fixed runtime pin')
     assert.equal('profile' in modern, false, 'profile must not appear in public metadata')
+    assert.deepEqual(modern.dispatch, dispatch)
 
-    const summaries = listTaskDefinitions(workspace, 'app')
-    const modernSummary = summaries.find((task) => task.name === 'modern')
+    const modernSummary = listTaskDefinitions(workspace, 'app').find((task) => task.name === 'modern')
     assert.ok(modernSummary, 'modern task summary should be listed')
-    assert.equal(modernSummary.agentRuntime, 'forge/codex-luna')
-    assert.deepEqual(modernSummary.dispatch, {
-      expectedTps: 20,
-      minimumTps: 10,
-      intelligenceMin: 'high',
-      maxOutputUsdPerMillion: 5,
-      requiredCapabilities: ['text'],
-      preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
-    })
+    assert.equal('agentRuntime' in modernSummary, false)
+    assert.equal('profile' in modernSummary, false)
+    assert.deepEqual(modernSummary.dispatch, dispatch)
 
     const described = describeTask('modern', workspace, 'app')
     assert.ok(described, 'modern task should be describable')
-    assert.equal(described.agentRuntime, 'forge/codex-luna')
+    assert.equal('agentRuntime' in described, false)
     assert.equal('profile' in described, false)
+    assert.deepEqual(described.dispatch, dispatch)
   })
 
-  it('synthesizes forge/<profile> for findTaskDefinition', async () => {
+  it('rejects active project Task agentRuntime declarations as unsupported by the TaskConfig contract', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'pinned.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'pinned'",
+      "  agentRuntime: 'forge/codex-luna',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('pinned', workspace, 'app'), null,
+      'active task with a fixed runtime pin should not resolve')
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('agentRuntime')),
+      errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects active project Task policy runtime declarations instead of blessing them', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'policy.task.ts')
+    registerProject(projectDir, 'app')
+    // Forge policy selectors were previously blessed for active tasks; under
+    // the authoring contract they are fixed runtime pins and unsupported.
+    writeFileSync(taskPath, taskSource("'policy'",
+      "  agentRuntime: 'forge/general',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('policy', workspace, 'app'), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('agentRuntime')),
+      errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('rejects untyped active exports smuggling agentRuntime or profile', async () => {
+    // Untyped config exports bypass the typed authoring contract, so the
+    // registry must reject the smuggled fields at load time.
+    for (const [name, extra] of [
+      ['untyped-runtime', "agentRuntime: 'forge/codex-luna',"],
+      ['untyped-profile', "profile: 'test',"],
+    ] as const) {
+      const workspace = makeTempDir('foreman-v2-loader-untyped-')
+      const projectDir = join(workspace, 'projects', 'app')
+      registerProject(projectDir, 'app')
+      const taskPath = join(projectDir, `${name}.task.ts`)
+      writeFileSync(taskPath, `const config = {
+  permission: 'readonly',
+  ${extra}
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => '${name}',
+}
+export default defineTask(config)
+`, 'utf-8')
+
+      await discoverTasks(workspace)
+
+      assert.equal(resolveTaskTarget(name, workspace, 'app'), null,
+        `${name} with a smuggled runtime pin should not resolve`)
+      const errors = getLoadErrors(workspace)
+      assert.ok(errors.some((error) => /agentRuntime|profile/u.test(error.load_error)),
+        errors.map((e) => e.load_error).join('; '))
+    }
+  })
+
+  it('rejects active project Tasks declaring both agentRuntime and profile', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'both.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'both'",
+      "  agentRuntime: 'forge/codex-luna',\n  profile: 'test',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('both', workspace, 'app'), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => /agentRuntime|profile/u.test(error.load_error)),
+      errors.map((e) => e.load_error).join('; '))
+  })
+
+  it('registers the builtin scheduling:legacy implement pin-free and keeps it out of new-work surfaces', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-legacy-builtin-')
+    await discoverTasks(workspace)
+
+    // Builtin injection must not require any source runtime pin: the legacy
+    // implement registers exactly like the no-pin invariant.
+    assert.equal(getLoadErrors(workspace).length, 0)
+
+    // ...but remains resolvable/describable for persisted-run recovery.
+    assert.equal(resolveTaskTarget('implement', workspace)?.source, 'builtin')
+    const described = describeTask('implement', workspace)
+    assert.ok(described, 'builtin legacy implement must be describable for recovery')
+    assert.equal(described.scheduling, 'legacy')
+    assert.equal('profile' in described, false, 'legacy describe surfaces must not expose a source profile pin')
+    assert.equal('agentRuntime' in described, false)
+    const found = findTaskDefinition('implement', workspace)
+    assert.ok(found, 'builtin legacy implement must remain findable for recovery')
+    assert.equal('profile' in found, false)
+
+    // ...and is omitted from new-work list surfaces.
+    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
+    assert.equal(listTaskDefinitions(workspace).some((task) => task.name === 'implement'), false)
+  })
+
+  it('registers a pin-free current source-authored scheduling:legacy definition for recovery only', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-legacy-source-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'legacy-source.task.ts'), `export default defineTask({
+  scheduling: 'legacy',
+  permission: 'readonly',
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => 'legacy-source',
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(getLoadErrors(workspace).length, 0,
+      'a pin-free scheduling legacy definition must remain loadable for recovery')
+    // Legacy definitions stay omitted from new-work list surfaces.
+    assert.equal(listTasks(workspace, 'app').some((task) => task.name === 'legacy-source'), false)
+    assert.equal(listTaskDefinitions(workspace, 'app').some((task) => task.name === 'legacy-source'), false)
+    // ...but remain resolvable and describable for persisted-run recovery.
+    assert.equal(resolveTaskTarget('legacy-source', workspace, 'app')?.source, 'project')
+    const described = describeTask('legacy-source', workspace, 'app')
+    assert.ok(described, 'legacy task should be describable for recovery')
+    assert.equal(described.scheduling, 'legacy')
+    assert.equal('profile' in described, false, 'current legacy definitions expose no profile pin')
+    assert.equal('agentRuntime' in described, false)
+    const target = resolveTaskTarget('legacy-source', workspace, 'app')
+    assert.ok(target, 'legacy task target should resolve for recovery')
+    assert.equal('profile' in target.definition.config, false)
+    assert.equal('agentRuntime' in target.definition.config, false)
+  })
+
+  it('rejects current source-authored scheduling legacy definitions carrying profile or agentRuntime', async () => {
+    for (const [name, extraConfig] of [
+      ['legacy-profile', "  profile: 'test',\n"],
+      ['legacy-runtime', "  agentRuntime: 'forge/codex-luna',\n"],
+    ] as const) {
+      const workspace = makeTempDir('foreman-v2-loader-legacy-pin-')
+      const projectDir = join(workspace, 'projects', 'app')
+      const taskPath = join(projectDir, `${name}.task.ts`)
+      registerProject(projectDir, 'app')
+      writeFileSync(taskPath, `export default defineTask({
+  scheduling: 'legacy',
+${extraConfig}  permission: 'readonly',
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => '${name}',
+})
+`, 'utf-8')
+
+      await discoverTasks(workspace)
+
+      assert.equal(resolveTaskTarget(name, workspace, 'app'), null,
+        `${name} with a legacy runtime pin must not resolve`)
+      const errors = getLoadErrors(workspace)
+      assert.ok(errors.some((error) => /agentRuntime|profile/u.test(error.load_error)),
+        errors.map((e) => e.load_error).join('; '))
+    }
+  })
+
+  it('does not expose a runtime pin for active project tasks via findTaskDefinition', async () => {
     const workspace = makeTempDir('foreman-v2-loader-')
     const projectDir = join(workspace, 'projects', 'app')
     registerProject(projectDir, 'app')
@@ -447,123 +608,8 @@ describe('workspace definition registry', () => {
 
     const found = findTaskDefinition('finder', workspace, 'app')
     assert.ok(found, 'task should be findable')
-    assert.equal(found.agentRuntime, 'forge/test')
+    assert.equal('agentRuntime' in found, false)
     assert.equal('profile' in found, false)
-  })
-
-  it('validates agentRuntime format at load time', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-')
-    const projectDir = join(workspace, 'projects', 'app')
-    const taskPath = join(projectDir, 'bad-runtime.task.ts')
-    registerProject(projectDir, 'app')
-    writeFileSync(taskPath, taskSource("'bad-runtime'",
-      "  agentRuntime: '/no-runtime',\n"), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    assert.equal(resolveTaskTarget('bad-runtime', workspace), null, 'task with bad runtime format should not resolve')
-    const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('agentRuntime')), 'should have agentRuntime load error')
-  })
-
-  it('accepts forge policy profiles via agentRuntime', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-')
-    const projectDir = join(workspace, 'projects', 'app')
-    registerProject(projectDir, 'app')
-    writeFileSync(join(projectDir, 'policy.task.ts'), `export default defineTask({
-  permission: 'readonly',
-  agentRuntime: 'forge/general',
-  input: foremanSchemas.z.object({}),
-  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
-  prompt: () => 'policy',
-})
-`, 'utf-8')
-
-    await discoverTasks(workspace)
-
-    const task = describeTask('policy', workspace, 'app')
-    assert.ok(task, 'policy task should be loadable')
-    assert.equal(task.agentRuntime, 'forge/general')
-  })
-
-  it('rejects unsupported runtime in agentRuntime', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-')
-    const projectDir = join(workspace, 'projects', 'app')
-    const taskPath = join(projectDir, 'unsupported.task.ts')
-    registerProject(projectDir, 'app')
-    writeFileSync(taskPath, `export default defineTask({
-  permission: 'readonly',
-  agentRuntime: 'claude/sonnet',
-  input: foremanSchemas.z.object({}),
-  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
-  prompt: () => 'unsupported',
-})
-`, 'utf-8')
-
-    await discoverTasks(workspace)
-
-    assert.equal(resolveTaskTarget('unsupported', workspace), null)
-    const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('Unsupported runtime')), errors.map((e) => e.load_error).join('; '))
-  })
-
-  it('rejects agentRuntime with slash in config-id', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-')
-    const projectDir = join(workspace, 'projects', 'app')
-    const taskPath = join(projectDir, 'slashes.task.ts')
-    registerProject(projectDir, 'app')
-    writeFileSync(taskPath, taskSource("'slashes'",
-      "  agentRuntime: 'forge/nested/config',\n"), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    assert.equal(resolveTaskTarget('slashes', workspace), null)
-    const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('agentRuntime')), errors.map((e) => e.load_error).join('; '))
-  })
-
-  it('rejects task definition declaring both agentRuntime and profile', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-')
-    const projectDir = join(workspace, 'projects', 'app')
-    const taskPath = join(projectDir, 'both.task.ts')
-    registerProject(projectDir, 'app')
-    writeFileSync(taskPath, taskSource("'both'",
-      "  agentRuntime: 'forge/codex-luna',\n"), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    assert.equal(resolveTaskTarget('both', workspace), null, 'task with both profile and agentRuntime should not resolve')
-    const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('both agentRuntime')), errors.map((e) => e.load_error).join('; '))
-  })
-
-  it('applies local tasks.agentRuntime overlays to list and describe without changing definitions', async () => {
-    const configDir = makeTempDir('foreman-task-runtime-overlay-')
-    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
-      tasks: {
-        agentRuntime: {
-          commit: 'forge/codex-spark',
-          'explore-commit': 'forge/codex-spark',
-        },
-      },
-    }), 'utf-8')
-    const previous = process.env.WRENYARD_CONFIG_HOME
-    process.env.WRENYARD_CONFIG_HOME = configDir
-    try {
-      const workspace = makeTempDir('foreman-v2-loader-overlay-')
-      await discoverTasks(workspace)
-      assert.equal(describeTask('commit', workspace)?.agentRuntime, 'forge/codex-spark')
-      assert.equal(describeTask('explore-commit', workspace)?.agentRuntime, 'forge/codex-spark')
-      assert.equal(describeTask('edit', workspace)?.agentRuntime, 'forge/fast')
-      const listed = listTasks(workspace)
-      assert.equal(listed.find((task) => task.name === 'commit')?.agentRuntime, 'forge/codex-spark')
-      const target = resolveTaskTarget('commit', workspace)
-      assertTaskTarget(target)
-      assert.equal(target.definition.config.agentRuntime, 'forge/fast')
-    } finally {
-      if (previous === undefined) delete process.env.WRENYARD_CONFIG_HOME
-      else process.env.WRENYARD_CONFIG_HOME = previous
-    }
   })
 
   it('exposes source and omits project on public task definitions', async () => {

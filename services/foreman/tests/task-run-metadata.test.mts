@@ -176,6 +176,12 @@ function fullPricedDispatch(
   }
 }
 
+function setDispatchAutoRouting(db: ReturnType<typeof initDb>, executionId: string, value: string | null): void {
+  db.prepare(
+    `UPDATE task_run_attempt_dispatch SET auto_routing = ? WHERE execution_id = ?`,
+  ).run(value, executionId)
+}
+
 test('two unequal attempts with different prices sum to exact USD', () => {
   withDb((db) => {
     const task = 'task-sum'
@@ -463,5 +469,187 @@ test('executions primary key is aliased to execution_id and joined', () => {
     assert.equal(usage.input_tokens, 40)
     assert.equal(usage.output_tokens, 60)
     assert.equal(usage.reference_cost_complete, true)
+  })
+})
+
+test('valid auto_routing payload reprojects onto the resolved automatic dispatch', () => {
+  withDb((db) => {
+    const task = 'task-ar-valid'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    const decision = {
+      snapshot_id: 'snap-1',
+      selected_rank: 0,
+      supply_class: 'standard',
+      quota_tier: 'healthy',
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 3,
+      routing_output_usd_per_million: 2,
+      effective_cap_usd_per_million: 4,
+      score: 0.95,
+      reasons: ['lowest reference price', 'healthy quota'],
+    }
+    setDispatchAutoRouting(db, 'e1', JSON.stringify(decision))
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'resolved dispatch must remain available')
+    assert.equal(resolved!.model, 'sonnet')
+    assert.equal(resolved!.mode, 'native')
+    assert.deepEqual(resolved!.auto_routing, decision, 'valid decision must re-project exactly')
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
+test('NULL auto_routing behaves exactly like a legacy explicit dispatch', () => {
+  withDb((db) => {
+    const task = 'task-ar-null'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    setDispatchAutoRouting(db, 'e1', null)
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'resolved dispatch must stay available')
+    assert.equal(resolved!.auto_routing, undefined, 'NULL payload must be omitted')
+    assert.equal(resolved!.model, 'sonnet')
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
+test('malformed auto_routing JSON is omitted without invalidating the resolved dispatch', () => {
+  withDb((db) => {
+    const task = 'task-ar-malformed'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    setDispatchAutoRouting(db, 'e1', '{not-json')
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'malformed payload must not invalidate the resolved dispatch')
+    assert.equal(resolved!.auto_routing, undefined, 'malformed JSON must be omitted')
+    assert.equal(resolved!.mode, 'native')
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
+test('incomplete auto_routing payload is omitted while resolved identity stays available', () => {
+  withDb((db) => {
+    const task = 'task-ar-incomplete'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    setDispatchAutoRouting(db, 'e1', JSON.stringify({ snapshot_id: 'snap-x', reasons: ['no other fields'] }))
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'incomplete payload must not invalidate the resolved dispatch')
+    assert.equal(resolved!.auto_routing, undefined, 'incomplete JSON must be omitted')
+    assert.equal(resolved!.model_id, 'claude-sonnet-4')
+    assert.equal(usage.reference_cost_complete, true)
+  })
+})
+
+test('extra-field auto_routing payload is omitted and never leaks arbitrary JSON', () => {
+  withDb((db) => {
+    const task = 'task-ar-extra'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    const smuggled = {
+      snapshot_id: 'snap-t',
+      selected_rank: 1,
+      supply_class: 'confirmed_free',
+      quota_tier: 'strained',
+      quota_coverage_complete: false,
+      quota_headroom_trusted: false,
+      reference_output_usd_per_million: 5,
+      routing_output_usd_per_million: 6,
+      effective_cap_usd_per_million: 7,
+      score: 0.5,
+      reasons: ['only candidate'],
+      injected_credential: 'sk-secret',
+      raw_provider_error: 'authentication denied: user:pass@domain',
+    }
+    setDispatchAutoRouting(db, 'e1', JSON.stringify(smuggled))
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'tampered payload must not invalidate the resolved dispatch')
+    assert.equal(resolved!.auto_routing, undefined, 'extra-field payload is not a schema-safe decision and must be omitted')
+    const serialized = JSON.stringify(resolved)
+    assert.equal(serialized.includes('sk-secret'), false, 'arbitrary JSON must never leak')
+    assert.equal(serialized.includes('raw_provider_error'), false, 'provider error text must never leak')
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
+test('automatic dispatch persisted with requested_agent_runtime "" still resolves and keeps auto_routing', () => {
+  withDb((db) => {
+    const task = 'task-ar-auto-empty-runtime'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    // Automatic-mode persisted attempts legitimately carry '' requested_agent_runtime.
+    seedDispatch(db, 'e1', task, {
+      ...fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
+      requested_agent_runtime: '',
+    })
+    const decision = {
+      snapshot_id: 'snap-auto',
+      selected_rank: 0,
+      supply_class: 'standard',
+      quota_tier: 'healthy',
+      quota_coverage_complete: true,
+      quota_headroom_trusted: true,
+      reference_output_usd_per_million: 3,
+      routing_output_usd_per_million: 2,
+      effective_cap_usd_per_million: 4,
+      score: 0.95,
+      reasons: ['lowest reference price'],
+    }
+    setDispatchAutoRouting(db, 'e1', JSON.stringify(decision))
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'complete automatic row with empty requested_agent_runtime must resolve')
+    assert.equal(resolved!.requested_agent_runtime, '')
+    assert.equal(resolved!.model, 'sonnet')
+    assert.equal(resolved!.mode, 'native')
+    assert.deepEqual(resolved!.auto_routing, decision, 'valid automatic routing decision must round-trip')
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
+test('genuinely incomplete identity still omits resolved', () => {
+  withDb((db) => {
+    const task = 'task-incomplete-identity'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    // Null out a required identity field; every other field stays complete.
+    db.prepare('UPDATE task_run_attempt_dispatch SET client = NULL WHERE execution_id = ?').run('e1')
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.equal(resolved, undefined, 'missing identity field must omit resolved')
+    assert.equal(usage.attempt_count, 1)
   })
 })

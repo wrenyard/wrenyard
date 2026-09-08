@@ -136,10 +136,10 @@ const codeReviewFailedSample = {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks librarian — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly / forge/general and migrated shell usage', () => {
+  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto), migrated shell usage', () => {
     assert.equal(librarianTask.__type, 'task')
     assert.equal(librarianTask.config.permission, 'readonly')
-    assert.equal(librarianTask.config.agentRuntime, 'forge/general')
+    assert.equal(Object.hasOwn(librarianTask.config, 'agentRuntime'), false)
     assert.equal(librarianTask.sourcePath, 'lib/standard/tasks/librarian.mts')
 
     const joined = (librarianTask.config.instructions ?? []).join('\n')
@@ -186,10 +186,10 @@ describe('standard/tasks librarian — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks look-at — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly / forge/gk-kimi', () => {
+  it('is a TaskDefinition object literal with readonly and no runtime pin (vision Task defaults to auto)', () => {
     assert.equal(lookAtTask.__type, 'task')
     assert.equal(lookAtTask.config.permission, 'readonly')
-    assert.equal(lookAtTask.config.agentRuntime, 'forge/gk-kimi')
+    assert.equal(Object.hasOwn(lookAtTask.config, 'agentRuntime'), false)
     assert.equal(lookAtTask.sourcePath, 'lib/standard/tasks/look-at.mts')
     assert.deepEqual(lookAtTask.config.instructions, [])
   })
@@ -231,10 +231,10 @@ describe('standard/tasks look-at — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks oracle — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly / forge/ultra', () => {
+  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto)', () => {
     assert.equal(oracleTask.__type, 'task')
     assert.equal(oracleTask.config.permission, 'readonly')
-    assert.equal(oracleTask.config.agentRuntime, 'forge/ultra')
+    assert.equal(Object.hasOwn(oracleTask.config, 'agentRuntime'), false)
     assert.equal(oracleTask.sourcePath, 'lib/standard/tasks/oracle.mts')
     assert.deepEqual(oracleTask.config.instructions, [])
   })
@@ -296,10 +296,10 @@ describe('standard/tasks oracle — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks code-review — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly / forge/general and migrated shell usage', () => {
+  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto), migrated shell usage', () => {
     assert.equal(codeReviewTask.__type, 'task')
     assert.equal(codeReviewTask.config.permission, 'readonly')
-    assert.equal(codeReviewTask.config.agentRuntime, 'forge/general')
+    assert.equal(Object.hasOwn(codeReviewTask.config, 'agentRuntime'), false)
     assert.equal(codeReviewTask.sourcePath, 'lib/standard/tasks/code-review.mts')
 
     const joined = (codeReviewTask.config.instructions ?? []).join('\n')
