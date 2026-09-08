@@ -2,10 +2,24 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { Catalog, DispatchPlan, ProviderDefinition } from '@wrenyard/catalog';
-import { resolveBuiltinDispatchPlans } from './catalog.ts';
+import { deriveTaskDispatchPlans } from './catalog.ts';
 
 export interface ProviderCredential {
   value: string;
+}
+
+/**
+ * Privacy-safe confirmed-free routing supply fact scoped to an already-loaded
+ * CodeBuddy credential. Carries no domain, token, upstream suffix or
+ * model/provider/subscription label: it only records that the credential's
+ * current account/environment classification is confirmed free.
+ */
+export interface RoutingFreeSupplyFact {
+  readonly confirmedFree: true
+  /** Stable source label for the classification evidence. */
+  readonly source: 'codebuddy.credential_environment'
+  /** Stable policy rule id granting the confirmed-free classification. */
+  readonly ruleId: 'codebuddy.internal_or_ioa_confirmed_free'
 }
 
 export interface ProviderRuntime {
@@ -13,6 +27,16 @@ export interface ProviderRuntime {
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
+  /**
+   * Privacy-safe routing supply fact for an already-loaded provider
+   * credential. Only the current CodeBuddy credential environments classified
+   * internal or ioa ever return a confirmed-free fact; cloudhosted, external,
+   * unknown, missing credentials and every other provider return undefined.
+   * Never exposes the domain, token, internal upstream suffix, or treats
+   * model/provider/subscription names as free. Optional so non-CodeBuddy
+   * runtime callers remain backward compatible.
+   */
+  freeSupply?(provider: ProviderDefinition, credential: ProviderCredential): RoutingFreeSupplyFact | undefined;
 }
 
 export interface BuiltinProviderRuntimeOptions {
@@ -40,6 +64,7 @@ const CODEBUDDY_IOA_UPSTREAM_MODELS: Readonly<Record<string, string>> = {
   'deepseek-v4-flash': 'deepseek-v4-flash-ioa',
   'deepseek-v4-pro': 'deepseek-v4-pro-ioa',
   'hy4-preview': 'hy4-preview-ioa',
+  'hy3': 'hy3-ioa',
   'minimax-m3': 'minimax-m3-ioa',
 };
 
@@ -190,6 +215,16 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         : publicModel;
       return model === upstreamModel || model === logicalModel ? publicModel : model;
     },
+    freeSupply(provider, credential) {
+      if (provider.id !== 'codebuddy') return undefined;
+      const environment = codeBuddyEnvironments.get(credential);
+      if (environment !== 'internal' && environment !== 'ioa') return undefined;
+      return {
+        confirmedFree: true,
+        source: 'codebuddy.credential_environment',
+        ruleId: 'codebuddy.internal_or_ioa_confirmed_free',
+      };
+    },
     async configureApiKey(provider, key) {
       if (provider.credentialResolver !== 'forge-managed') {
         throw new Error(`provider ${provider.id} does not accept a managed API key`);
@@ -213,11 +248,15 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   };
 }
 
-export async function resolveBuiltinRuntimeDispatchPlans(
+// Compile Catalog-derived task dispatch plans into runtime plans. Preserves the
+// canonical target keys, caches credentials per provider, and keeps the private
+// CodeBuddy iOA upstream remap runtime-owned. User alias loading is daemon
+// composition and never happens here.
+export async function resolveRuntimeTaskPlans(
   catalog: Catalog,
   runtime: ProviderRuntime,
 ): Promise<Readonly<Record<string, DispatchPlan>>> {
-  const plans = resolveBuiltinDispatchPlans(catalog);
+  const plans = deriveTaskDispatchPlans(catalog);
   const credentials = new Map<string, Promise<ProviderCredential | undefined>>();
   const resolveCredential = (provider: ProviderDefinition): Promise<ProviderCredential | undefined> => {
     let pending = credentials.get(provider.id);
@@ -227,12 +266,12 @@ export async function resolveBuiltinRuntimeDispatchPlans(
     }
     return pending;
   };
-  return Object.fromEntries(await Promise.all(Object.entries(plans).map(async ([profile, plan]) => {
-    if (plan.mode !== 'native') return [profile, plan] as const;
+  return Object.fromEntries(await Promise.all(Object.entries(plans).map(async ([target, plan]) => {
+    if (plan.mode !== 'native') return [target, plan] as const;
     const provider = catalog.provider(plan.provider);
-    if (!provider) return [profile, plan] as const;
+    if (!provider) return [target, plan] as const;
     const credential = await resolveCredential(provider);
-    return [profile, { ...plan, model: runtime.resolveUpstreamModel(provider, plan.model, credential) }] as const;
+    return [target, { ...plan, model: runtime.resolveUpstreamModel(provider, plan.model, credential) }] as const;
   })));
 }
 

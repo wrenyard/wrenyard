@@ -1,7 +1,8 @@
-import { Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition } from '@wrenyard/catalog';
+import { Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
+const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
 const SRC_OPENAI = 'https://developers.openai.com';
 const SRC_AA_DEEPSEEK = 'https://artificialanalysis.ai/models/deepseek-v4-flash/';
 const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
@@ -14,13 +15,13 @@ const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol/';
 const DEFAULT_CHECKED_AT = '2026-09-05';
 
 const clients: readonly ClientDefinition[] = [
-  { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'] },
-  { id: 'codebuddy', nativeProvider: 'codebuddy', gatewayProtocols: ['openai_chat'] },
-  { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'] },
-  { id: 'cursor', nativeProvider: 'cursor', gatewayProtocols: ['openai_chat'] },
+  { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true },
+  { id: 'codebuddy', nativeProvider: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true },
+  { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true },
+  { id: 'cursor', nativeProvider: 'cursor', gatewayProtocols: ['openai_chat'], taskCapable: true },
   { id: 'dsh', gatewayProtocols: ['openai_chat'] },
-  { id: 'grok', nativeProvider: 'spacex-ai', gatewayProtocols: ['openai_chat'] },
-  { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'] },
+  { id: 'grok', nativeProvider: 'spacex-ai', gatewayProtocols: ['openai_chat'], taskCapable: true },
+  { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
 ];
 
 const model = (id: string, displayName: string, contextWindow?: number, maxTokens?: number): ModelDefinition => ({
@@ -57,6 +58,7 @@ const builtinProviders: readonly ProviderDefinition[] = [
       model('deepseek-v4-flash', 'DeepSeek V4 Flash'),
       model('deepseek-v4-pro', 'DeepSeek V4 Pro'),
       model('hy4-preview', 'HY4 Preview'),
+      model('hy3', 'HY3'),
       model('minimax-m3', 'MiniMax M3'),
       model('kimi-k3', 'Kimi K3'),
       model('glm-5.3', 'GLM-5.3'),
@@ -240,6 +242,7 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
 
 type ModelMeta = {
   intelligence?: IntelligenceTier;
+  reasoningEffort?: ReasoningEffort;
   capabilities: readonly ModelCapability[];
   speed?: ModelSpeedMeta;
   maxOutputTokens?: number;
@@ -264,13 +267,27 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0.834, cachedInputUsdPerMillion: 0.042, outputUsdPerMillion: 2.501, source: SRC_TENCENT_HY, checkedAt: DEFAULT_CHECKED_AT },
   },
+  'hy3': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    // Canonical CodeBuddy hunyuan model. Reference price derived from the
+    // official Tencent TokenHub CNY list 1/0.25/4 (input/cached/output) using
+    // the repository's fixed 7.2 CNY/USD with three-decimal convention.
+    pricing: { inputUsdPerMillion: 0.139, cachedInputUsdPerMillion: 0.035, outputUsdPerMillion: 0.556, source: SRC_TENCENT_TOKENHUB, checkedAt: '2026-09-08' },
+  },
   'gpt-6-astra': {
+    reasoningEffort: 'xhigh',
     intelligence: 'premium',
     capabilities: ['text', 'image'],
     maxOutputTokens: 128_000,
     pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
+  'gpt-5.3-codex-spark': {
+    reasoningEffort: 'xhigh',
+    capabilities: ['text'],
+  },
   'gpt-5.6-sol': {
+    reasoningEffort: 'xhigh',
     intelligence: 'frontier',
     capabilities: ['text', 'image'],
     // External decode default from Artificial Analysis; superseded by a local agent_turn_v1 measured profile when present.
@@ -278,11 +295,13 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.6-terra': {
+    reasoningEffort: 'xhigh',
     intelligence: 'frontier',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.6-luna': {
+    reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     // External decode default from Artificial Analysis (minimum of current listed effort speeds); superseded by a local agent_turn_v1 measured profile when present.
@@ -323,6 +342,7 @@ function withMeta(def: ModelDefinition): ModelDefinition {
   return {
     ...def,
     ...(meta.intelligence ? { intelligence: meta.intelligence } : {}),
+    ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
     capabilities: meta.capabilities,
     ...(meta.speed ? { speed: meta.speed } : {}),
     ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
@@ -335,32 +355,6 @@ export const BUILTIN_PROVIDERS: readonly ProviderDefinition[] = builtinProviders
   ...PROVIDER_PRESENTATION[provider.id],
   models: provider.models.map(withMeta),
 }));
-
-const BUILTIN_RUN_TARGETS = {
-  'codex-sol': ['codex', 'codex', 'gpt-5.6-sol'],
-  'codex-terra': ['codex', 'codex', 'gpt-5.6-terra'],
-  'codex-luna': ['codex', 'codex', 'gpt-5.6-luna'],
-  'codex-astra': ['codex', 'codex', 'gpt-6-astra'],
-  'codex-spark': ['codex', 'codex-spark', 'gpt-5.3-codex-spark'],
-  'cb-hy': ['codebuddy', 'codebuddy', 'hy4-preview'],
-  'cb-ds': ['codebuddy', 'codebuddy', 'deepseek-v4-pro'],
-  'cb-dsf': ['codebuddy', 'codebuddy', 'deepseek-v4-flash'],
-  'cb-minimax': ['codebuddy', 'codebuddy', 'minimax-m3'],
-  'cb-kimi': ['codebuddy', 'codebuddy', 'kimi-k3'],
-  'cb-glm': ['codebuddy', 'codebuddy', 'glm-5.3'],
-  'cb-glmf': ['codebuddy', 'codebuddy', 'glm-5.3-flash'],
-  'cc-kimi': ['claude', 'kimi-coding', 'k3'],
-  'cc-glm': ['claude', 'zhipu-coding', 'glm-5.3'],
-  'cc-glmf': ['claude', 'zhipu-coding', 'glm-5.3-flash'],
-  'gk-glm': ['grok', 'zhipu-coding', 'glm-5.3'],
-  'gk-glmf': ['grok', 'zhipu-coding', 'glm-5.3-flash'],
-  'gk-kimi': ['grok', 'kimi-coding', 'k3'],
-  'gk-grok': ['grok', 'spacex-ai', 'grok-4.5'],
-  'cur-composer': ['cursor', 'cursor', 'composer-2.5'],
-  'cur-grok': ['cursor', 'cursor', 'cursor-grok-4.6-high'],
-  'cur-kimi': ['cursor', 'cursor', 'kimi-k3'],
-  'cur-opus': ['cursor', 'cursor', 'claude-opus-5'],
-} as const;
 
 export function createBuiltinCatalog(): Catalog {
   const catalog = new Catalog();
@@ -379,7 +373,13 @@ export function canonicalizeBuiltinPublicModelId(publicId: string): string {
   return canonicalModelId ? `${providerId}/${canonicalModelId}` : publicId;
 }
 
-export function resolveBuiltinDispatchPlans(catalog: Catalog): Readonly<Record<string, DispatchPlan>> {
-  return Object.fromEntries(Object.entries(BUILTIN_RUN_TARGETS).map(([profile, [client, provider, model]]) =>
-    [profile, catalog.resolveRun(client, provider, model)]));
+// Derive logical task dispatch plans solely from Catalog compatibility and
+// task-capable client metadata. Keys are canonical provider/model:client targets
+// (formatRunSyntax); no source preset table, seed, profile aliases, or policy
+// registry exists in this file.
+export function deriveTaskDispatchPlans(catalog: Catalog): Readonly<Record<string, DispatchPlan>> {
+  return Object.fromEntries(catalog.enumerateTaskCandidates().map((candidate) => [
+    candidate.profileId,
+    catalog.resolveRun(candidate.client, candidate.provider, candidate.model),
+  ]));
 }

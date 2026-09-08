@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltinCatalog, resolveBuiltinDispatchPlans } from '../src/index.ts';
+import { createBuiltinCatalog, deriveTaskDispatchPlans } from '../src/index.ts';
 
 test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
@@ -9,6 +9,7 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
     'deepseek-v4-flash',
     'deepseek-v4-pro',
     'hy4-preview',
+    'hy3',
     'minimax-m3',
     'kimi-k3',
     'glm-5.3',
@@ -27,29 +28,63 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
   assert.equal(legacy.publicId, 'codebuddy/hy4-preview');
 });
 
-test('daemon dispatch plans are resolved by the TypeScript catalog', () => {
-  const plans = resolveBuiltinDispatchPlans(createBuiltinCatalog());
-  assert.deepEqual(plans['cc-kimi'], {
-    client: 'claude', provider: 'kimi-coding', model: 'k3', mode: 'gateway', protocol: 'anthropic_messages',
+test('derived task plans key representative native and gateway combinations canonically', () => {
+  const plans = deriveTaskDispatchPlans(createBuiltinCatalog());
+  assert.deepEqual(plans['codex/gpt-5.6-sol:codex'], {
+    client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh',
   });
-  assert.deepEqual(plans['codex-sol'], {
-    client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native',
+  assert.deepEqual(plans['codex-spark/gpt-5.3-codex-spark:codex'], {
+    client: 'codex', provider: 'codex-spark', model: 'gpt-5.3-codex-spark', mode: 'native', reasoningEffort: 'xhigh',
   });
-  assert.deepEqual(plans['cb-minimax'], {
+  assert.deepEqual(plans['codebuddy/minimax-m3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'minimax-m3', mode: 'native',
   });
-  assert.deepEqual(plans['cb-hy'], {
+  assert.deepEqual(plans['codebuddy/hy4-preview:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'hy4-preview', mode: 'native',
   });
-  assert.deepEqual(plans['cb-kimi'], {
+  assert.deepEqual(plans['codebuddy/hy3:cb'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'hy3', mode: 'native',
+  });
+  assert.deepEqual(plans['codebuddy/kimi-k3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'kimi-k3', mode: 'native',
   });
-  assert.deepEqual(plans['cb-glm'], {
+  assert.deepEqual(plans['codebuddy/glm-5.3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3', mode: 'native',
   });
-  assert.deepEqual(plans['cb-glmf'], {
+  assert.deepEqual(plans['codebuddy/glm-5.3-flash:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3-flash', mode: 'native',
   });
+  assert.deepEqual(plans['kimi-coding/k3:cc'], {
+    client: 'claude', provider: 'kimi-coding', model: 'k3', mode: 'gateway', protocol: 'anthropic_messages',
+  });
+  assert.deepEqual(plans['zhipu-coding/glm-5.3-flash:cc'], {
+    client: 'claude', provider: 'zhipu-coding', model: 'glm-5.3-flash', mode: 'gateway', protocol: 'anthropic_messages',
+  });
+  assert.deepEqual(plans['spacex-ai/grok-4.5:gk'], {
+    client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native',
+  });
+});
+
+test('derived task plans carry canonical keys only — no legacy profile, policy, or alias ids', () => {
+  const catalog = createBuiltinCatalog();
+  const plans = deriveTaskDispatchPlans(catalog);
+  const keys = Object.keys(plans);
+  assert.equal(new Set(keys).size, keys.length, 'no duplicate canonical targets');
+  assert.ok(!keys.includes('cc-kimi'));
+  assert.ok(!keys.includes('codex-sol'));
+  assert.ok(!keys.includes('cb-hy'));
+  assert.ok(!keys.includes('codex-astra'));
+  assert.ok(keys.every((key) => key.includes('/') && key.includes(':')));
+  assert.ok(!keys.some((key) => key.includes('hy4-preview-ioa')), 'aliases never become model targets');
+  assert.ok(!keys.some((key) => key.includes('hy3-ioa')), 'hy3 internal upstream suffix never becomes a model target');
+  assert.ok(!keys.some((key) => key.includes('hy3-preview')), 'hy3-preview near id never becomes a model target');
+  assert.ok(!keys.some((key) => key.includes('codex-astra')));
+  assert.ok(!keys.some((key) => key.endsWith(':dsh')), 'dsh is not a direct Task adapter');
+  assert.equal(plans['codex/gpt-6-astra:codex']?.model, 'gpt-6-astra');
+  // taskOnly hides codex-spark from Gateway /models yet keeps it a Task target.
+  assert.equal(plans['codex-spark/gpt-5.3-codex-spark:codex']?.mode, 'native');
+  // dsh stays a parseable public key and a compatible gateway route.
+  assert.equal(catalog.resolveRun('dsh', 'codebuddy', 'glm-5.3').mode, 'gateway');
 });
 
 test('dispatch plans contain no provider endpoint or credential metadata', () => {
@@ -69,13 +104,36 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.equal(astra!.contextWindow, 1_050_000);
   assert.equal(astra!.maxOutputTokens, 128_000);
   assert.equal(astra!.intelligence, 'premium');
+  assert.equal(astra!.reasoningEffort, 'xhigh');
   assert.equal(astra!.pricing?.inputUsdPerMillion, 10);
   assert.equal(astra!.pricing?.cachedInputUsdPerMillion, 1);
   assert.equal(astra!.pricing?.outputUsdPerMillion, 50);
   assert.equal(astra!.pricing?.source, 'https://developers.openai.com');
   assert.deepEqual(astra!.capabilities, ['text', 'image']);
-  const plans = resolveBuiltinDispatchPlans(catalog);
-  assert.equal(plans['codex-astra'].model, 'gpt-6-astra');
+  const plans = deriveTaskDispatchPlans(catalog);
+  assert.equal(plans['codex/gpt-6-astra:codex'].model, 'gpt-6-astra');
+  assert.equal(plans['codex/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
+});
+
+test('Codex/OpenAI GPT plans carry xhigh reasoning effort and never max/ultra', () => {
+  const catalog = createBuiltinCatalog();
+  const plans = deriveTaskDispatchPlans(catalog);
+  // Representative Codex execution plans, including GPT-6 Astra as the cap.
+  assert.equal(plans['codex/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['codex/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['codex/gpt-5.6-terra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['codex/gpt-5.6-luna:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['codex-spark/gpt-5.3-codex-spark:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['openai/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
+  // max/ultra are not part of the product field, in metadata or in any plan.
+  const serialized = JSON.stringify(plans);
+  assert.doesNotMatch(serialized, /"reasoningEffort":"(max|ultra)"/u);
+  for (const model of catalog.provider('codex')!.models) {
+    if (model.reasoningEffort) assert.ok(['low', 'medium', 'high', 'xhigh'].includes(model.reasoningEffort));
+  }
+  // Levels are declared product metadata, never inferred: unrelated plans stay unset.
+  assert.equal(plans['kimi-coding/k3:cc'].reasoningEffort, undefined);
+  assert.equal(plans['codebuddy/deepseek-v4-flash:cb'].reasoningEffort, undefined);
 });
 
 test('reference metadata has real provenance and unknown fields stay absent', () => {
@@ -129,6 +187,18 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   const hy = codebuddy.models.find((entry) => entry.id === 'hy4-preview')!;
   assert.equal(hy.pricing?.outputUsdPerMillion, 2.501);
   assert.equal(hy.pricing?.source, 'https://intl.cloud.tencent.com/zh/document/product/1300/78937');
+
+  // HY3 is canonical (no preview/suffix aliases), high/text, no static speed,
+  // and carries the official Tencent TokenHub-derived nonzero reference price.
+  const hy3 = codebuddy.models.find((entry) => entry.id === 'hy3')!;
+  assert.equal(hy3.intelligence, 'high');
+  assert.deepEqual(hy3.capabilities, ['text']);
+  assert.equal(hy3.speed, undefined);
+  assert.equal(hy3.pricing?.inputUsdPerMillion, 0.139);
+  assert.equal(hy3.pricing?.cachedInputUsdPerMillion, 0.035);
+  assert.equal(hy3.pricing?.outputUsdPerMillion, 0.556);
+  assert.equal(hy3.pricing?.source, 'https://cloud.tencent.com/document/product/1823/130055');
+  assert.equal(hy3.pricing?.checkedAt, '2026-09-08');
 });
 
 test('unverified conservative speeds stay absent and local evidence can later override', () => {
@@ -136,7 +206,7 @@ test('unverified conservative speeds stay absent and local evidence can later ov
   const codebuddy = catalog.provider('codebuddy')!;
   const codex = catalog.provider('codex')!;
   // These had arbitrary SRC_CONSERVATIVE TPS removed; absence stays unknown.
-  for (const id of ['hy4-preview']) {
+  for (const id of ['hy4-preview', 'hy3']) {
     assert.equal(codebuddy.models.find((entry) => entry.id === id)!.speed, undefined, `${id} speed must be absent`);
   }
   // Terra and Astra still carry no sourced speed; only Luna/Sol gained sourced fallbacks.
@@ -162,11 +232,11 @@ test('unverified conservative speeds stay absent and local evidence can later ov
   assert.notEqual(luna.speed?.source.includes('local'), true);
 });
 
-test('GLM-5.3, K3/Kimi, and Sol remain identifiable for hard exclusions', () => {
+test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', () => {
   const catalog = createBuiltinCatalog();
-  const plans = resolveBuiltinDispatchPlans(catalog);
-  assert.equal(plans['cb-glm'].model, 'glm-5.3');
-  assert.equal(plans['cc-kimi'].model, 'k3');
-  assert.equal(plans['cb-kimi'].model, 'kimi-k3');
-  assert.equal(plans['codex-sol'].model, 'gpt-5.6-sol');
+  const plans = deriveTaskDispatchPlans(catalog);
+  assert.equal(plans['codebuddy/glm-5.3:cb'].model, 'glm-5.3');
+  assert.equal(plans['kimi-coding/k3:cc'].model, 'k3');
+  assert.equal(plans['codebuddy/kimi-k3:cb'].model, 'kimi-k3');
+  assert.equal(plans['codex/gpt-5.6-sol:codex'].model, 'gpt-5.6-sol');
 });
