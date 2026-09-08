@@ -1078,12 +1078,15 @@ async function refreshStats(): Promise<void> {
   statsRefreshButton.disabled = true;
   statsRefreshLabel.textContent = '刷新中…';
   try {
-    const [snapshot, settings] = await Promise.all([
-      window.wrenyardShell.getStats(),
-      window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null),
-    ]);
-    buildTaskDisplayNames(settings);
+    // Fetch and render stats first; getTaskSettings must not run concurrently
+    // or stats.summary can blow past its 5s request timeout and regress to
+    // today-only compatibility data while task definitions cold-resolve.
+    const snapshot = await window.wrenyardShell.getStats();
     renderStats(snapshot);
+    const settings = await window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null);
+    buildTaskDisplayNames(settings);
+    // Rerender only the recent task-run ledger with the rebuilt names.
+    renderTaskRuns(snapshot);
   } finally {
     statsRefreshButton.disabled = false;
     statsRefreshLabel.textContent = '刷新';

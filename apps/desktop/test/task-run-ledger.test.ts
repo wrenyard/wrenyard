@@ -65,11 +65,25 @@ test('recent-run ledger is a five-column authoritative table without dense cells
 });
 
 test('recent-run ledger resolves display names only through authoritative TaskSettings identities', () => {
-  // Stats refresh fetches stats and task settings concurrently and rebuilds a
-  // read-only display map from authoritative TaskSettings rows.
-  assert.ok(appSource.includes('window.wrenyardShell.getStats()'), 'stats refresh fetches getStats');
-  assert.ok(appSource.includes('window.wrenyardShell.getTaskSettings()'), 'stats refresh fetches getTaskSettings');
-  assert.ok(appSource.includes('Promise.all'), 'stats refresh fetches stats and settings concurrently');
+  // Stats refresh must fetch and render the stats snapshot before it starts
+  // the settings lookup: issuing getStats and getTaskSettings concurrently
+  // pushes stats.summary past its 5s request timeout and regresses to
+  // today-only compatibility data while task definitions cold-resolve.
+  const refreshStart = appSource.indexOf('async function refreshStats');
+  const refreshEnd = appSource.indexOf('async function refreshQuota', refreshStart);
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart, 'refreshStats must precede refreshQuota in app.ts');
+  const refreshBody = appSource.slice(refreshStart, refreshEnd);
+  const statsAt = refreshBody.indexOf('window.wrenyardShell.getStats()');
+  const settingsAt = refreshBody.indexOf('window.wrenyardShell.getTaskSettings()');
+  const renderAt = refreshBody.indexOf('renderStats(snapshot)');
+  assert.ok(statsAt >= 0 && settingsAt > statsAt, 'stats are fetched before getTaskSettings starts');
+  assert.ok(renderAt >= 0 && settingsAt > renderAt, 'stats render before the settings lookup starts');
+  assert.ok(!refreshBody.includes('Promise.all'), 'stats and settings are never fetched concurrently');
+  assert.ok(refreshBody.includes('buildTaskDisplayNames(settings)'), 'settings result rebuilds the display-name map');
+  assert.ok(
+    refreshBody.indexOf('renderTaskRuns(snapshot)') > refreshBody.indexOf('buildTaskDisplayNames(settings)'),
+    'only the ledger reruns from the same stats snapshot after display names are rebuilt',
+  );
   assert.ok(appSource.includes('taskDisplayNames: ReadonlyMap<string, string>'), 'display map is read-only');
   assert.ok(appSource.includes('map.set(row.identity, row.display_name)'), 'display map is built from authoritative TaskSettings rows');
 
