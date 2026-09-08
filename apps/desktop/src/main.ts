@@ -25,7 +25,7 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type ShellPage, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
@@ -50,6 +50,12 @@ const TASK_SETTINGS_SAVE_ERROR_MESSAGES: Record<string, string> = {
   invalid_settings: '任务设置内容无效',
   runtime_unavailable: '所选 Agent 运行时不可用',
   task_not_found: '任务不存在或已被移除',
+};
+const RUNTIME_ALIAS_ERROR_MESSAGES: Record<string, string> = {
+  content_conflict: '运行时别名已被外部修改，保存冲突',
+  invalid_name: '运行时别名格式无效',
+  invalid_target: '运行时目标无效',
+  alias_not_found: '运行时别名不存在',
 };
 const SERVICE_RETRY_ATTEMPTS = 10;
 const SERVICE_RETRY_DELAY_MS = 500;
@@ -573,6 +579,41 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
+  const mapRuntimeAliasError = (error: unknown): never => {
+    if (error instanceof WrenyardRpcError) {
+      const code = (error.data as { code?: string } | undefined)?.code;
+      if (code !== undefined && code in RUNTIME_ALIAS_ERROR_MESSAGES) {
+        const mapped = new Error(RUNTIME_ALIAS_ERROR_MESSAGES[code]);
+        (mapped as { code?: string }).code = code;
+        throw mapped;
+      }
+    }
+    throw error;
+  };
+  const getRuntimeAliasSnapshot = async (): Promise<RuntimeAliasSnapshot> => {
+    return (await requestForeman('runtime.alias.snapshot', {})) as RuntimeAliasSnapshot;
+  };
+  const putRuntimeAlias = async (request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot> => {
+    try {
+      return (await requestForeman('runtime.alias.put', {
+        expected_revision: request.expected_revision,
+        name: request.name,
+        target: request.target,
+      })) as RuntimeAliasSnapshot;
+    } catch (error) {
+      throw mapRuntimeAliasError(error);
+    }
+  };
+  const removeRuntimeAlias = async (request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot> => {
+    try {
+      return (await requestForeman('runtime.alias.remove', {
+        expected_revision: request.expected_revision,
+        name: request.name,
+      })) as RuntimeAliasSnapshot;
+    } catch (error) {
+      throw mapRuntimeAliasError(error);
+    }
+  };
   const getTaskSettings = async (project?: string, taskId?: string): Promise<TaskSettingsSnapshot> => {
     const params: Record<string, unknown> = {};
     if (project !== undefined) params.project = project;
@@ -740,6 +781,9 @@ async function bootstrap(): Promise<void> {
     cancelConversation: () => conversationController!.cancel(),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
+    runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
+    runtimeAliasPut: (request: RuntimeAliasPutRequest) => putRuntimeAlias(request),
+    runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

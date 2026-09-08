@@ -13,6 +13,9 @@ import {
   type WrenyardShellApi,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
+  type RuntimeAliasPutRequest,
+  type RuntimeAliasRemoveRequest,
+  type RuntimeAliasSnapshot,
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
@@ -117,6 +120,15 @@ const api: WrenyardShellApi = {
   },
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, request) as Promise<TaskSettingsSnapshot>;
+  },
+  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasSnapshot) as Promise<RuntimeAliasSnapshot>;
+  },
+  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasPut, request) as Promise<RuntimeAliasSnapshot>;
+  },
+  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasRemove, request) as Promise<RuntimeAliasSnapshot>;
   },
 };
 

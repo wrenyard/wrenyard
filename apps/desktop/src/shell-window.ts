@@ -19,6 +19,9 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateChannel,
   type UpdateSnapshot,
+  type RuntimeAliasPutRequest,
+  type RuntimeAliasRemoveRequest,
+  type RuntimeAliasSnapshot,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
 } from './shell-contract.js';
@@ -63,9 +66,12 @@ export interface ShellWindowOptions {
   cancelConversation(): Promise<ConversationSnapshot>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
+  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
+  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
+  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
 }
 
-const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic']);
+const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
 const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
@@ -81,7 +87,9 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
 ]);
 const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'frontier', 'premium']);
 const TASK_SETTINGS_CAPABILITY_VALUES = new Set(['text', 'image']);
-const TASK_SETTINGS_EXPLICIT_FIELDS = ['client', 'provider', 'model'] as const;
+const RUNTIME_ALIAS_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const RUNTIME_ALIAS_REVISION_MAX = 512;
+const RUNTIME_ALIAS_TARGET_MAX = 512;
 const TASK_SETTINGS_STRING_MAX = 512;
 const TASK_SETTINGS_STRING_ARRAY_MAX = 64;
 const TASK_SETTINGS_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
@@ -102,18 +110,37 @@ function isFinitePositiveNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-function validateExplicitRuntimeValue(explicitRuntime: unknown): void {
-  if (explicitRuntime === undefined || explicitRuntime === null) return;
-  if (!isBoundedPlainObject(explicitRuntime)) throw new Error('显式运行时无效');
-  for (const field of Object.keys(explicitRuntime)) {
-    if (field !== 'client' && field !== 'provider' && field !== 'model') throw new Error('显式运行时无效');
-  }
-  for (const field of TASK_SETTINGS_EXPLICIT_FIELDS) {
-    const fieldValue = explicitRuntime[field];
-    if (typeof fieldValue !== 'string' || !fieldValue || fieldValue.length > TASK_SETTINGS_STRING_MAX) {
-      throw new Error('显式运行时无效');
+function isBoundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max;
+}
+
+function isBoundedRevision(value: unknown): value is string {
+  return isBoundedString(value, RUNTIME_ALIAS_REVISION_MAX);
+}
+
+function validateExplicitReferenceValue(explicitReference: unknown): void {
+  if (explicitReference === undefined || explicitReference === null) return;
+  if (!isBoundedPlainObject(explicitReference)) throw new Error('显式运行时引用无效');
+  const kind = explicitReference.kind;
+  if (kind === 'alias') {
+    for (const field of Object.keys(explicitReference)) {
+      if (field !== 'kind' && field !== 'name') throw new Error('显式运行时引用无效');
     }
+    const name = explicitReference.name;
+    if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('显式运行时引用无效');
+    return;
   }
+  if (kind === 'target') {
+    for (const field of Object.keys(explicitReference)) {
+      if (field !== 'kind' && field !== 'target') throw new Error('显式运行时引用无效');
+    }
+    const target = explicitReference.target;
+    if (typeof target !== 'string' || !target || target.length > TASK_SETTINGS_STRING_MAX || TASK_SETTINGS_CONTROL_CHARS.test(target)) {
+      throw new Error('显式运行时引用无效');
+    }
+    return;
+  }
+  throw new Error('显式运行时引用无效');
 }
 
 function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false): void {
@@ -155,7 +182,7 @@ function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false):
       }
     }
   }
-  if (automatic.preferred_runtime !== undefined && !(allowFieldReset && automatic.preferred_runtime === null)) validateExplicitRuntimeValue(automatic.preferred_runtime);
+  if (automatic.preferred_runtime !== undefined && !(allowFieldReset && automatic.preferred_runtime === null)) validateExplicitReferenceValue(automatic.preferred_runtime);
 }
 
 /**
@@ -182,20 +209,21 @@ function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSaveReques
   for (const key of Object.keys(patch)) {
     if (!TASK_SETTINGS_PATCH_KEYS.has(key)) throw new Error('任务设置内容无效');
   }
+  const autoOutputCap = patch.max_auto_output_usd_per_million;
+  if (autoOutputCap !== undefined) {
+    // Global-only auto-dispatch reference output cap; null clears, 0 is valid.
+    // The nested per-task automatic max_output_usd_per_million stays strictly positive.
+    if (scope !== 'global') throw new Error('自动派发参考输出单价上限仅支持全局作用域');
+    if (autoOutputCap !== null && (typeof autoOutputCap !== 'number' || !Number.isFinite(autoOutputCap) || autoOutputCap < 0)) {
+      throw new Error('自动派发参考输出单价上限无效');
+    }
+  }
   const mode = patch.mode;
   if (mode !== undefined && mode !== null && mode !== 'automatic' && mode !== 'explicit') throw new Error('运行时模式无效');
-  validateExplicitRuntimeValue(patch.explicit_runtime);
+  validateExplicitReferenceValue(patch.explicit_runtime);
   const timeoutMs = patch.timeout_ms;
   if (timeoutMs !== undefined && timeoutMs !== null) {
     if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');
-  }
-  const additionalInstructions = patch.additional_instructions;
-  if (additionalInstructions !== undefined && additionalInstructions !== null) {
-    if (typeof additionalInstructions !== 'string'
-      || additionalInstructions.length > 4_000
-      || TASK_SETTINGS_CONTROL_CHARS.test(additionalInstructions)) {
-      throw new Error('附加说明无效');
-    }
   }
   validateAutomaticDispatch(patch.automatic, true);
   const request: TaskSettingsSaveRequest = {
@@ -206,6 +234,33 @@ function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSaveReques
   if (taskId !== undefined && taskId !== null) request.task_id = taskId;
   if (project !== undefined) request.project = project;
   return request;
+}
+
+/**
+ * IPC-boundary validation for runtime.alias.put. Desktop validates the public
+ * DTO shape and bounds only; the alias store itself stays daemon-owned.
+ */
+function validateRuntimeAliasPutRequest(value: unknown): RuntimeAliasPutRequest {
+  if (!isBoundedPlainObject(value)) throw new Error('运行时别名请求无效');
+  const expectedRevision = value.expected_revision;
+  if (!isBoundedRevision(expectedRevision)) throw new Error('运行时别名版本基线无效');
+  const name = value.name;
+  if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('运行时别名格式无效');
+  const target = value.target;
+  if (typeof target !== 'string' || !target || target.length > RUNTIME_ALIAS_TARGET_MAX || TASK_SETTINGS_CONTROL_CHARS.test(target)) {
+    throw new Error('运行时目标无效');
+  }
+  return { expected_revision: expectedRevision, name, target };
+}
+
+/** IPC-boundary validation for runtime.alias.remove; CAS on the store revision. */
+function validateRuntimeAliasRemoveRequest(value: unknown): RuntimeAliasRemoveRequest {
+  if (!isBoundedPlainObject(value)) throw new Error('运行时别名请求无效');
+  const expectedRevision = value.expected_revision;
+  if (!isBoundedRevision(expectedRevision)) throw new Error('运行时别名版本基线无效');
+  const name = value.name;
+  if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('运行时别名格式无效');
+  return { expected_revision: expectedRevision, name };
 }
 
 export class ShellWindowController {
@@ -412,6 +467,18 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.saveTaskSettings(validateTaskSettingsSaveRequest(request));
     });
+    ipcMain.handle(SHELL_CHANNELS.runtimeAliasSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.runtimeAliasSnapshot();
+    });
+    ipcMain.handle(SHELL_CHANNELS.runtimeAliasPut, async (event, request: unknown) => {
+      assertShellSender(event.sender);
+      return options.runtimeAliasPut(validateRuntimeAliasPutRequest(request));
+    });
+    ipcMain.handle(SHELL_CHANNELS.runtimeAliasRemove, async (event, request: unknown) => {
+      assertShellSender(event.sender);
+      return options.runtimeAliasRemove(validateRuntimeAliasRemoveRequest(request));
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -442,6 +509,9 @@ export class ShellWindowController {
       SHELL_CHANNELS.conversationCancel,
       SHELL_CHANNELS.taskSettingsSnapshot,
       SHELL_CHANNELS.taskSettingsSave,
+      SHELL_CHANNELS.runtimeAliasSnapshot,
+      SHELL_CHANNELS.runtimeAliasPut,
+      SHELL_CHANNELS.runtimeAliasRemove,
     ]) ipcMain.removeHandler(channel);
   }
 

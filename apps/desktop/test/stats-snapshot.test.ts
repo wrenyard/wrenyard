@@ -460,3 +460,94 @@ test('stats snapshot carries project context and keeps queued/interrupted status
   assert.equal(missingRun.usage.outputTps, undefined);
   assert.equal(missingRun.usage.outputTokens, 120);
 });
+
+test('stats snapshot projects paired Catalog display labels only when the server row sends both', async () => {
+  const snapshot = await buildStatsSnapshot(async (method) => {
+    if (method === 'stats.today') throw new Error('method unavailable');
+    return {
+      source: 'sqlite',
+      today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
+      daily: [],
+      byProfile: [],
+      byTask: [],
+      windows: [],
+      recentRuns: [
+        {
+          // Complete paired row-level display labels.
+          task_run_id: 'run-paired',
+          task: 'edit',
+          source: 'builtin',
+          status: 'done',
+          provider_display_name: 'Kimi Coding',
+          model_display_name: 'Kimi K2',
+          usage: {
+            completeness: 'complete',
+            attempt_count: 1,
+            usage_event_count: 1,
+            reference_cost_usd: 0.001,
+            reference_cost_complete: true,
+          },
+        },
+        {
+          // Missing one half: neither label is projected or copied from the sibling.
+          task_run_id: 'run-provider-only',
+          task: 'edit',
+          provider_display_name: 'Kimi Coding',
+          usage: {
+            completeness: 'complete',
+            attempt_count: 1,
+            usage_event_count: 1,
+            reference_cost_usd: 0.001,
+            reference_cost_complete: true,
+          },
+        },
+        {
+          // Legacy/raw resolved identity payloads never generate display labels.
+          task_run_id: 'run-raw',
+          task: 'legacy',
+          resolved: {
+            client: 'kimi',
+            provider: 'moonshot',
+            profile: 'moonshot',
+            model: 'kimi-k3',
+            model_id: 'moonshot/kimi-k3',
+          },
+          resolved_client: 'kimi',
+          resolved_provider: 'moonshot',
+          resolved_profile: 'moonshot',
+          resolved_model: 'kimi-k3',
+          resolved_model_id: 'moonshot/kimi-k3',
+          usage: {
+            completeness: 'complete',
+            attempt_count: 1,
+            usage_event_count: 1,
+            reference_cost_usd: 0.001,
+            reference_cost_complete: true,
+          },
+        },
+      ],
+    };
+  });
+
+  assert.equal(snapshot.recentTaskRuns.length, 3);
+
+  const paired = snapshot.recentTaskRuns[0]!;
+  assert.equal(paired.resolvedProviderDisplayName, 'Kimi Coding');
+  assert.equal(paired.resolvedModelDisplayName, 'Kimi K2');
+
+  const providerOnly = snapshot.recentTaskRuns[1]!;
+  // A missing sibling means neither display label is carried.
+  assert.equal(providerOnly.resolvedProviderDisplayName, undefined);
+  assert.equal(providerOnly.resolvedModelDisplayName, undefined);
+
+  const raw = snapshot.recentTaskRuns[2]!;
+  // Raw resolved identities keep the compatibility projection but are never
+  // promoted into paired Catalog display labels.
+  assert.equal(raw.resolvedClient, 'kimi');
+  assert.equal(raw.resolvedProvider, 'moonshot');
+  assert.equal(raw.resolvedProfile, 'moonshot');
+  assert.equal(raw.resolvedModel, 'kimi-k3');
+  assert.equal(raw.resolvedModelId, 'moonshot/kimi-k3');
+  assert.equal(raw.resolvedProviderDisplayName, undefined);
+  assert.equal(raw.resolvedModelDisplayName, undefined);
+});

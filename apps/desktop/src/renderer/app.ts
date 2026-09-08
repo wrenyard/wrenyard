@@ -12,7 +12,9 @@ import type {
   TaskRunSnapshot,
   UpdateChannel,
   UpdateSnapshot,
-  TaskSettingsEligibleChoice,
+  RuntimeAliasEntry,
+  RuntimeAliasSnapshot,
+  TaskSettingsExplicitReference,
   TaskSettingsLayer,
   TaskSettingsPatch,
   TaskSettingsSnapshot,
@@ -29,7 +31,7 @@ import type {
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
-import { ConversationView, renderRichText } from './conversation.js';
+import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
@@ -71,11 +73,12 @@ const tasksDetailName = requireElement<HTMLElement>('tasks-detail-name');
 const tasksDetailIdentity = requireElement<HTMLElement>('tasks-detail-identity');
 const tasksDetailRuntime = requireElement<HTMLElement>('tasks-detail-runtime');
 const tasksModeSelect = requireElement<HTMLSelectElement>('tasks-mode');
-const tasksModelSelect = requireElement<HTMLSelectElement>('tasks-model-select');
-const tasksRuntimeField = requireElement<HTMLElement>('tasks-runtime-field');
 const tasksTimeoutInput = requireElement<HTMLInputElement>('tasks-timeout');
-const tasksInstructionsInput = requireElement<HTMLTextAreaElement>('tasks-instructions');
-const tasksPreview = requireElement<HTMLElement>('tasks-preview');
+const tasksTimeoutEffective = requireElement<HTMLElement>('tasks-timeout-effective');
+const tasksTimeoutReset = requireElement<HTMLButtonElement>('tasks-timeout-reset');
+const tasksExplicitRow = requireElement<HTMLElement>('tasks-explicit-row');
+const tasksRuntimeInput = requireElement<HTMLInputElement>('tasks-runtime');
+const tasksRuntimeSuggestions = requireElement<HTMLDataListElement>('tasks-runtime-suggestions');
 const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
 const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
@@ -103,6 +106,17 @@ const providerDialogSave = requireElement<HTMLButtonElement>('provider-dialog-sa
 const updateActionButton = requireElement<HTMLButtonElement>('update-action-button');
 const updateChannelSwitcher = requireElement<HTMLElement>('update-channel-switcher');
 const statsHeatTooltip = requireElement<HTMLElement>('stats-heat-tooltip');
+const aliasNameInput = requireElement<HTMLInputElement>('alias-name-input');
+const aliasTargetInput = requireElement<HTMLInputElement>('alias-target-input');
+const aliasSubmitButton = requireElement<HTMLButtonElement>('alias-submit');
+const aliasRefreshButton = requireElement<HTMLButtonElement>('alias-refresh');
+const aliasRefreshLabel = requireElement<HTMLElement>('alias-refresh-label');
+const aliasError = requireElement<HTMLElement>('alias-error');
+const aliasList = requireElement<HTMLElement>('alias-list');
+const autoCapInput = requireElement<HTMLInputElement>('auto-cap-input');
+const autoCapSaveButton = requireElement<HTMLButtonElement>('auto-cap-save');
+const autoCapEffective = requireElement<HTMLElement>('auto-cap-effective');
+const autoCapStatus = requireElement<HTMLElement>('auto-cap-status');
 
 let petDraft: PetCompanionSettings | null = null;
 let petDirty = false;
@@ -122,6 +136,11 @@ let currentClientSnapshot: ClientConfigurationSnapshotDto | null = null;
 let taskSettings: TaskSettingsSnapshot | null = null;
 let tasksSelectedTaskId: string | null = null;
 let tasksSaveBusy = false;
+let runtimeAliases: RuntimeAliasSnapshot | null = null;
+let aliasBusy = false;
+/** Authoritative task.settings snapshot backing the Model Supply global auto cap control. */
+let autoCapSettings: TaskSettingsSnapshot | null = null;
+let autoCapBusy = false;
 const conversationView = new ConversationView(window.wrenyardShell, () => void navigate('settings'));
 
 function requireElement<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -729,6 +748,224 @@ function emptyQuotaCard(message: string): HTMLElement {
   return empty;
 }
 
+const RUNTIME_ALIAS_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+function aliasErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+  return String(error);
+}
+
+function validateAliasName(name: string): string | null {
+  if (!RUNTIME_ALIAS_NAME_PATTERN.test(name)) return '别名需以小写字母开头，仅限 a-z 0-9 . _ -，最长 64 位。';
+  return null;
+}
+
+function renderAliasList(): void {
+  aliasList.replaceChildren();
+  const entries = runtimeAliases?.aliases ?? [];
+  if (entries.length === 0) {
+    aliasList.append(emptyRow('暂无运行时别名；先在上方保存一个。'));
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'alias-row';
+    const name = document.createElement('strong');
+    name.textContent = entry.name;
+    name.title = entry.name;
+    const target = document.createElement('code');
+    target.textContent = entry.target;
+    target.title = entry.target;
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'secondary-button';
+    removeButton.textContent = '删除';
+    removeButton.disabled = aliasBusy;
+    removeButton.setAttribute('aria-label', `删除别名 ${entry.name}`);
+    removeButton.addEventListener('click', () => void removeAlias(entry.name));
+    row.append(name, target, removeButton);
+    aliasList.append(row);
+  }
+}
+
+function setAliasBusy(busy: boolean): void {
+  aliasBusy = busy;
+  aliasSubmitButton.disabled = busy;
+  aliasRefreshButton.disabled = busy;
+  renderAliasList();
+}
+
+async function loadRuntimeAliases(): Promise<void> {
+  aliasRefreshButton.disabled = true;
+  aliasRefreshLabel.textContent = '读取中…';
+  try {
+    runtimeAliases = await window.wrenyardShell.runtimeAliasSnapshot();
+    aliasError.textContent = '';
+    renderAliasList();
+  } catch (error) {
+    runtimeAliases = null;
+    aliasError.textContent = `读取失败：${aliasErrorMessage(error)}`;
+    aliasList.replaceChildren(emptyRow('运行时别名不可用'));
+  } finally {
+    aliasRefreshButton.disabled = false;
+    aliasRefreshLabel.textContent = '刷新别名';
+  }
+}
+
+async function saveAliasEntry(): Promise<void> {
+  if (aliasBusy) return;
+  const name = aliasNameInput.value.trim();
+  const target = aliasTargetInput.value.trim();
+  const nameProblem = validateAliasName(name);
+  if (nameProblem) {
+    aliasError.textContent = nameProblem;
+    aliasNameInput.focus();
+    return;
+  }
+  if (!target || target.length > 512) {
+    aliasError.textContent = '目标不能为空且最长 512 位；写法为 provider/model:client。';
+    aliasTargetInput.focus();
+    return;
+  }
+  setAliasBusy(true);
+  aliasError.textContent = '';
+  try {
+    runtimeAliases = await window.wrenyardShell.runtimeAliasPut({
+      expected_revision: runtimeAliases?.revision ?? '',
+      name,
+      target,
+    });
+    renderAliasList();
+    aliasNameInput.value = '';
+    aliasTargetInput.value = '';
+  } catch (error) {
+    aliasError.textContent = `保存失败：${aliasErrorMessage(error)}`;
+    if (aliasErrorMessage(error).includes('冲突')) {
+      await loadRuntimeAliases();
+      aliasError.textContent = '保存冲突：别名列表已刷新，请重新提交。';
+    }
+  } finally {
+    setAliasBusy(false);
+  }
+}
+
+async function removeAlias(name: string): Promise<void> {
+  if (!runtimeAliases || aliasBusy) return;
+  setAliasBusy(true);
+  aliasError.textContent = '';
+  try {
+    runtimeAliases = await window.wrenyardShell.runtimeAliasRemove({
+      expected_revision: runtimeAliases.revision,
+      name,
+    });
+    renderAliasList();
+  } catch (error) {
+    aliasError.textContent = `删除失败：${aliasErrorMessage(error)}`;
+    if (aliasErrorMessage(error).includes('冲突')) {
+      await loadRuntimeAliases();
+      aliasError.textContent = '删除冲突：别名列表已刷新，请重试。';
+    }
+  } finally {
+    setAliasBusy(false);
+  }
+}
+
+/** Input text for a persisted global auto cap: the number verbatim (0 stays), unset → empty. */
+function autoCapDisplayValue(value: number | null | undefined): string {
+  if (value === undefined || value === null) return '';
+  return String(value);
+}
+
+/** Effective meaning line for the persisted global auto cap (from the authoritative snapshot). */
+function renderAutoCapEffective(): void {
+  const cap = autoCapSettings?.user_global.max_auto_output_usd_per_million;
+  if (cap === undefined || cap === null) {
+    autoCapEffective.textContent = '当前未设全局上限：自动选择沿用各 Task 自身的默认参考单价。';
+  } else {
+    autoCapEffective.textContent = `当前全局上限为 ${cap} USD / 百万输出 Token：只收紧“自动选择”的候选模型。`;
+  }
+}
+
+/**
+ * Load the authoritative task.settings snapshot for the Model Supply auto cap.
+ * Fresh loads reset the input to the persisted value; preserveDraft keeps the
+ * user's unsaved text (used by the quota refresh button).
+ */
+async function loadAutoCapState(preserveDraft = false): Promise<void> {
+  autoCapSaveButton.disabled = true;
+  const draft = autoCapInput.value;
+  autoCapStatus.classList.remove('is-error');
+  autoCapStatus.textContent = '';
+  try {
+    autoCapSettings = await window.wrenyardShell.getTaskSettings();
+  } catch (error) {
+    if (!autoCapSettings) {
+      autoCapInput.value = '';
+      autoCapEffective.textContent = '无法读取全局设置，请稍后刷新。';
+    }
+    autoCapStatus.classList.add('is-error');
+    autoCapStatus.textContent = `读取失败：${tasksErrorMessage(error)}`;
+    autoCapSaveButton.disabled = false;
+    return;
+  }
+  if (!preserveDraft) autoCapInput.value = autoCapDisplayValue(autoCapSettings.user_global.max_auto_output_usd_per_million);
+  else autoCapInput.value = draft;
+  renderAutoCapEffective();
+  autoCapSaveButton.disabled = false;
+}
+
+/** Save the Model Supply auto cap at global scope; empty clears with null, zero is preserved. */
+async function saveAutoCapState(): Promise<void> {
+  if (autoCapBusy) return;
+  const raw = autoCapInput.value.trim();
+  if (raw !== '') {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      autoCapStatus.classList.add('is-error');
+      autoCapStatus.textContent = '上限需为 ≥ 0 的数值；留空表示清除全局上限并沿用各 Task 默认。';
+      autoCapInput.focus();
+      return;
+    }
+  }
+  const snapshot = autoCapSettings;
+  if (!snapshot) {
+    autoCapStatus.classList.add('is-error');
+    autoCapStatus.textContent = '全局配置暂不可用，请先刷新。';
+    return;
+  }
+  const draftValue = raw === '' ? null : Number(raw);
+  autoCapBusy = true;
+  autoCapSaveButton.disabled = true;
+  autoCapInput.disabled = true;
+  autoCapStatus.classList.remove('is-error');
+  autoCapStatus.textContent = '正在保存…';
+  try {
+    autoCapSettings = await window.wrenyardShell.saveTaskSettings({
+      scope: 'global',
+      expected_revision: snapshot.revision,
+      patch: { max_auto_output_usd_per_million: draftValue },
+    });
+    renderAutoCapEffective();
+    autoCapStatus.textContent = '已保存：全局自动派发参考输出单价上限已生效。';
+  } catch (error) {
+    const message = tasksErrorMessage(error);
+    if (message.includes('冲突')) {
+      // Reload the authoritative snapshot but keep the typed draft in the input.
+      autoCapSettings = await window.wrenyardShell.getTaskSettings().catch(() => autoCapSettings);
+      renderAutoCapEffective();
+      autoCapStatus.classList.add('is-error');
+      autoCapStatus.textContent = '保存冲突：已刷新到最新配置，你填写的值仍保留，请核对后重新保存。';
+    } else {
+      autoCapStatus.classList.add('is-error');
+      autoCapStatus.textContent = `保存失败：${message}`;
+    }
+  } finally {
+    autoCapBusy = false;
+    autoCapSaveButton.disabled = false;
+    autoCapInput.disabled = false;
+  }
+}
+
 function renderPeriod(snapshot: StatsSnapshot): void {
   const statsWindow = selectedWindow(snapshot);
   if (statsWindow && statsWindow.period !== selectedPeriod) selectedPeriod = statsWindow.period;
@@ -976,20 +1213,17 @@ function taskRunCell(value: string): HTMLElement {
   return cell;
 }
 
-/** Model identity cell: full resolved model id/name stays a plain model cell; a
- *  lone persisted legacy resolvedProfile renders verbatim but is labeled truthfully
- *  as run-configuration history, never as a reconstructed full model identity. */
+/** Model cell: paired Catalog display-name labels only. A run missing either
+ *  label (or an alias-only history row) renders the dash placeholder; raw
+ *  resolved model id/model/profile/provider/client values are never shown. */
 function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
-  const identity = run.resolvedModelId ?? run.resolvedModel;
-  if (identity !== undefined && identity !== null) return taskRunCell(identity);
-  const profile = run.resolvedProfile;
-  if (profile === undefined || profile === null) return taskRunCell('-');
-  const legacyNote = `运行配置：${profile}（历史记录未保存完整模型身份）`;
-  const cell = document.createElement('span');
-  cell.textContent = profile;
-  cell.title = legacyNote;
-  cell.setAttribute('aria-label', legacyNote);
-  return cell;
+  const provider = run.resolvedProviderDisplayName;
+  const model = run.resolvedModelDisplayName;
+  if (provider === undefined || provider === null || provider.length === 0
+    || model === undefined || model === null || model.length === 0) {
+    return taskRunCell('-');
+  }
+  return taskRunCell(`${provider} · ${model}`);
 }
 
 function renderTaskRuns(snapshot: StatsSnapshot): void {
@@ -1068,7 +1302,11 @@ async function navigate(page: ShellPage): Promise<void> {
   renderPage(page);
   await window.wrenyardShell.navigate(page);
   if (page === 'stats') await refreshStats();
-  if (page === 'quota') await refreshQuota(false);
+  if (page === 'quota') {
+    await refreshQuota(false);
+    await loadRuntimeAliases();
+    await loadAutoCapState();
+  }
   if (page === 'clients') await refreshClients();
   if (page === 'tasks') await loadTasks();
   if (page === 'settings') renderSnapshot(await window.wrenyardShell.getSettings());
@@ -1274,99 +1512,90 @@ function renderTasksDetail(): void {
   tasksDetail.hidden = false;
   tasksDetailName.textContent = row.display_name;
   tasksDetailIdentity.textContent = row.identity;
-  tasksDetailRuntime.textContent = row.resolved_runtime?.exactAgentRuntime ?? '未解析';
+  const automaticRuntime = row.automatic_selection?.resolved?.runtime;
+  const automaticReason = row.automatic_selection?.reason;
+  tasksDetailRuntime.textContent = row.effective.mode.value === 'automatic'
+    ? automaticRuntime
+      ? automaticReason
+        ? `${automaticRuntime}（${automaticReason}）`
+        : automaticRuntime
+      : '未解析'
+    : (row.explicit?.resolved?.runtime ?? '未解析');
   populateTaskForm(row);
 }
 
-function tasksChoiceLabel(choice: TaskSettingsEligibleChoice): string {
-  const identity = [choice.client, choice.provider, choice.model].filter(Boolean).join(' / ');
-  const hints = [
-    typeof choice.speed.effective_tps === 'number' ? `速度 ${choice.speed.effective_tps.toFixed(1)} TPS` : null,
-    `智能 ${choice.intelligence}`,
-    typeof choice.reference_pricing.output_usd_per_million !== 'number'
-      ? null
-      : `输出参考价 $${choice.reference_pricing.output_usd_per_million}/M`,
-  ].filter((hint): hint is string => hint !== null);
-  return `${identity}${hints.length > 0 ? ` · ${hints.join(' · ')}` : ''}`;
+/** Render text for a stored explicit reference: alias name or inline target. */
+function explicitReferenceText(reference: TaskSettingsExplicitReference | null | undefined): string {
+  if (!reference) return '';
+  return reference.kind === 'alias' ? reference.name : reference.target;
 }
 
-function renderTasksChoiceOptions(select: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[]): void {
-  for (const option of Array.from(select.querySelectorAll('option'))) {
-    if (option.value === '') continue;
-    option.remove();
-  }
-  for (const choice of choices) {
+/** The stored alias whose name exactly matches the trimmed input, if any. */
+function runtimeAliasEntryForInput(value: string): RuntimeAliasEntry | undefined {
+  const trimmed = value.trim();
+  if (!taskSettings || trimmed === '') return undefined;
+  return taskSettings.aliases.find((entry) => entry.name === trimmed);
+}
+
+/** Alias name when it matches a stored alias; otherwise an inline canonical target. */
+function referenceFromRuntimeInput(value: string): TaskSettingsExplicitReference {
+  const trimmed = value.trim();
+  if (trimmed === '') throw new Error('请填写已保存别名或 provider/model:client 目标');
+  const alias = runtimeAliasEntryForInput(trimmed);
+  return alias ? { kind: 'alias', name: alias.name } : { kind: 'target', target: trimmed };
+}
+
+function explicitReferencesEqual(
+  left: TaskSettingsExplicitReference | null | undefined,
+  right: TaskSettingsExplicitReference | null | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.kind !== right.kind) return false;
+  if (left.kind === 'alias' && right.kind === 'alias') return left.name === right.name;
+  if (left.kind === 'target' && right.kind === 'target') return left.target === right.target;
+  return false;
+}
+
+function populateRuntimeSuggestions(): void {
+  tasksRuntimeSuggestions.replaceChildren();
+  for (const entry of taskSettings?.aliases ?? []) {
     const option = document.createElement('option');
-    option.value = choice.exactAgentRuntime;
-    option.textContent = tasksChoiceLabel(choice);
-    select.append(option);
+    option.value = entry.name;
+    option.textContent = entry.name;
+    tasksRuntimeSuggestions.append(option);
   }
 }
 
-function exactRuntimeValue(choices: readonly TaskSettingsEligibleChoice[], runtime: TaskSettingsLayer['explicit_runtime']): string {
-  if (!runtime) return '';
-  return choices.find((choice) => choice.client === runtime.client && choice.provider === runtime.provider && choice.model === runtime.model)?.exactAgentRuntime ?? '';
-}
-
-function resolvedAdditionalInstructionsContent(row: TaskSettingsTaskRow): string | null {
-  const draft = tasksInstructionsInput.value;
-  if (draft.trim() !== '') return draft;
-  const hasTaskOverride = typeof row.user_task.additional_instructions === 'string';
-  if (hasTaskOverride) {
-    const fallback = taskSettings?.user_global.additional_instructions;
-    return typeof fallback === 'string' && fallback !== '' ? fallback : null;
+function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
+  const override = row.user_task.timeout_ms;
+  const effective = row.effective.timeout_ms.value;
+  if (override !== undefined && override !== null) {
+    tasksTimeoutEffective.textContent = `本层覆盖 ${override.toLocaleString('zh-CN')} 毫秒`;
+    tasksTimeoutEffective.classList.remove('is-dim');
+    tasksTimeoutEffective.classList.add('is-override');
+  } else {
+    tasksTimeoutEffective.textContent = effective !== undefined && effective !== null
+      ? `继承 ${effective.toLocaleString('zh-CN')} 毫秒`
+      : '继承（未设置）';
+    tasksTimeoutEffective.classList.add('is-dim');
+    tasksTimeoutEffective.classList.remove('is-override');
   }
-  const effective = row.effective.additional_instructions.value;
-  return effective && effective !== '' ? effective : null;
-}
-
-function renderTasksPreview(): void {
-  tasksPreview.replaceChildren();
-  const row = tasksSelectedRow();
-  if (!row) return;
-  for (const segment of row.builtin.instruction_template) {
-    if (segment.kind === 'text') {
-      tasksPreview.append(renderRichText(segment.text));
-      continue;
-    }
-    if (segment.kind === 'placeholder') {
-      const chip = document.createElement('span');
-      chip.className = 'task-preview-placeholder';
-      chip.textContent = segment.label;
-      tasksPreview.append(chip);
-      continue;
-    }
-    if (segment.kind === 'additional_instructions') {
-      const content = resolvedAdditionalInstructionsContent(row);
-      if (content === null) {
-        const none = document.createElement('span');
-        none.className = 'tasks-preview-none';
-        none.textContent = '无附加指令';
-        tasksPreview.append(none);
-        continue;
-      }
-      const block = document.createElement('div');
-      block.className = 'task-preview-instructions';
-      block.append(renderRichText(content));
-      tasksPreview.append(block);
-    }
-  }
+  tasksTimeoutReset.disabled = tasksSaveBusy || override === undefined || override === null;
 }
 
 function populateTaskForm(row: TaskSettingsTaskRow): void {
   tasksModeSelect.value = row.user_task.mode ?? '';
-  renderTasksChoiceOptions(tasksModelSelect, row.runtime_choices);
-  tasksModelSelect.value = exactRuntimeValue(row.runtime_choices, row.user_task.explicit_runtime);
   tasksTimeoutInput.value = row.user_task.timeout_ms?.toString() ?? '';
-  tasksInstructionsInput.value = row.user_task.additional_instructions ?? '';
-  updateTasksModeVisibility();
-  renderTasksPreview();
+  tasksRuntimeInput.value = explicitReferenceText(row.user_task.explicit_runtime);
+  populateRuntimeSuggestions();
+  renderTimeoutEffective(row);
+  updateTasksRowVisibility();
   tasksSaveButton.disabled = tasksSaveBusy;
   tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
 }
 
-function updateTasksModeVisibility(): void {
-  tasksRuntimeField.hidden = tasksModeSelect.value !== 'explicit';
+function updateTasksRowVisibility(): void {
+  tasksExplicitRow.hidden = tasksModeSelect.value !== 'explicit';
 }
 
 function positiveNumber(value: string, label: string): number | null {
@@ -1376,32 +1605,25 @@ function positiveNumber(value: string, label: string): number | null {
   return parsed;
 }
 
-function selectedRuntime(select: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[]): TaskSettingsPatch['explicit_runtime'] {
-  const choice = choices.find((candidate) => candidate.exactAgentRuntime === select.value);
-  if (!choice) throw new Error('请选择一个当前可用的运行时');
-  return { client: choice.client, provider: choice.provider, model: choice.model };
-}
-
-function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeSelect: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[], timeoutValue: string, instructionsValue: string): TaskSettingsPatch {
+function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeValue: string, timeoutValue: string): TaskSettingsPatch {
   const patch: TaskSettingsPatch = {};
   const mode = modeValue as '' | 'automatic' | 'explicit';
   if ((layer.mode ?? '') !== mode) patch.mode = mode === '' ? null : mode;
   if (mode === 'explicit') {
-    const runtime = selectedRuntime(runtimeSelect, choices);
-    if (JSON.stringify(layer.explicit_runtime ?? null) !== JSON.stringify(runtime)) patch.explicit_runtime = runtime;
+    const runtime = referenceFromRuntimeInput(runtimeValue);
+    if (!explicitReferencesEqual(layer.explicit_runtime, runtime)) patch.explicit_runtime = runtime;
   } else if (layer.explicit_runtime) {
+    // Automatic/inherited saves clear only this layer's explicit reference.
     patch.explicit_runtime = null;
   }
   const timeout = positiveNumber(timeoutValue, '总执行时限');
   if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
-  const instructions = instructionsValue.trim() === '' ? null : instructionsValue;
-  if ((layer.additional_instructions ?? null) !== instructions) patch.additional_instructions = instructions;
   return patch;
 }
 
 function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
   const patch: TaskSettingsPatch = {};
-  for (const field of ['mode', 'explicit_runtime', 'timeout_ms', 'additional_instructions', 'automatic'] as const) {
+  for (const field of ['mode', 'explicit_runtime', 'timeout_ms', 'automatic'] as const) {
     if (layer[field] !== undefined) patch[field] = null as never;
   }
   return patch;
@@ -1454,14 +1676,13 @@ async function reloadTasksAuthoritative(): Promise<void> {
   else tasksDetail.hidden = true;
 }
 
-async function saveTaskLayer(reset = false): Promise<void> {
+async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   const row = tasksSelectedRow();
   if (!taskSettings || !row || tasksSaveBusy) return;
   tasksSaveBusy = true;
   tasksSaveButton.disabled = true;
   setTasksError('');
   try {
-    const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksModelSelect, row.runtime_choices, tasksTimeoutInput.value, tasksInstructionsInput.value);
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
     taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'task', task_id: row.identity, ...(row.project ? { project: row.project } : {}), expected_revision: taskSettings.revision, patch });
     if (!taskSettings.rows.some((candidate) => candidate.identity === row.identity)) tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
@@ -1479,12 +1700,35 @@ async function saveTaskLayer(reset = false): Promise<void> {
     tasksSaveBusy = false;
     tasksSaveButton.disabled = false;
     tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
+    const current = tasksSelectedRow();
+    if (current) renderTimeoutEffective(current);
   }
 }
 
-interface TaskFormDraft { mode: string; runtime: string; timeout: string; instructions: string }
-function readTaskDraft(): TaskFormDraft { return { mode: tasksModeSelect.value, runtime: tasksModelSelect.value, timeout: tasksTimeoutInput.value, instructions: tasksInstructionsInput.value }; }
-function applyTaskDraft(draft: TaskFormDraft): void { tasksModeSelect.value = draft.mode; tasksModelSelect.value = draft.runtime; tasksTimeoutInput.value = draft.timeout; tasksInstructionsInput.value = draft.instructions; updateTasksModeVisibility(); renderTasksPreview(); }
+async function saveTaskLayer(reset = false): Promise<void> {
+  const row = tasksSelectedRow();
+  if (!row || tasksSaveBusy) return;
+  const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksRuntimeInput.value, tasksTimeoutInput.value);
+  await commitTaskSave(patch);
+}
+
+/** ※ 只重置本行超时覆盖；任务层其余字段保持不变。 */
+async function saveTaskTimeoutReset(): Promise<void> {
+  const row = tasksSelectedRow();
+  if (!row || tasksSaveBusy || row.user_task.timeout_ms === undefined || row.user_task.timeout_ms === null) return;
+  await commitTaskSave({ timeout_ms: null });
+}
+
+interface TaskFormDraft { mode: string; runtime: string; timeout: string }
+function readTaskDraft(): TaskFormDraft {
+  return { mode: tasksModeSelect.value, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value };
+}
+function applyTaskDraft(draft: TaskFormDraft): void {
+  tasksModeSelect.value = draft.mode;
+  tasksRuntimeInput.value = draft.runtime;
+  tasksTimeoutInput.value = draft.timeout;
+  updateTasksRowVisibility();
+}
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
   const models = Array.from(card.querySelectorAll<HTMLInputElement>('input[data-client-model]:checked')).map((input) => input.dataset.clientModel ?? '').filter(Boolean);
@@ -1543,7 +1787,11 @@ refreshButton.addEventListener('click', () => {
   });
 });
 statsRefreshButton.addEventListener('click', () => void refreshStats());
-quotaRefreshButton.addEventListener('click', () => void refreshQuota(true));
+quotaRefreshButton.addEventListener('click', () => {
+  void refreshQuota(true);
+  void loadRuntimeAliases();
+  void loadAutoCapState(true);
+});
 clientsRefreshButton.addEventListener('click', () => void refreshClients());
 clientsContent.addEventListener('click', (event) => {
   const tabButton = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-tab-target]');
@@ -1705,17 +1953,30 @@ window.addEventListener('keydown', (event) => {
 });
 
 tasksRefresh.addEventListener('click', () => void loadTasks());
-tasksModeSelect.addEventListener('change', () => updateTasksModeVisibility());
+tasksModeSelect.addEventListener('change', () => updateTasksRowVisibility());
 tasksSaveButton.addEventListener('click', () => void saveTaskLayer());
 tasksResetButton.addEventListener('click', () => void saveTaskLayer(true));
-tasksInstructionsInput.addEventListener('input', () => renderTasksPreview());
+tasksTimeoutReset.addEventListener('click', () => void saveTaskTimeoutReset());
+aliasSubmitButton.addEventListener('click', () => void saveAliasEntry());
+aliasRefreshButton.addEventListener('click', () => void loadRuntimeAliases());
+autoCapSaveButton.addEventListener('click', () => void saveAutoCapState());
+autoCapInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void saveAutoCapState();
+  }
+});
 
 window.wrenyardShell.onViewChanged(async (page) => {
   const changed = page !== currentPage;
   renderPage(page);
   if (!changed) return;
   if (page === 'stats') void refreshStats();
-  if (page === 'quota') void refreshQuota(false);
+  if (page === 'quota') {
+    void refreshQuota(false);
+    void loadRuntimeAliases();
+    void loadAutoCapState();
+  }
   if (page === 'clients') void refreshClients();
   if (page === 'tasks') void loadTasks();
   if (page === 'settings') void window.wrenyardShell.getSettings().then(renderSnapshot);

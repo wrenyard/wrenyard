@@ -112,50 +112,32 @@ test('recent-run ledger panel is plain markup with wrapping five-column styles',
   assert.ok(!cssSource.includes('minmax(0, 1.1fr) 42px'), 'no orphaned 8-column grid selector');
 });
 
-test('recent-run ledger model cell honors resolved identity priority and labels a lone legacy profile truthfully', () => {
-  const body = ledgerRegion();
+test('recent-run ledger model cell renders paired Catalog display labels joined by a middle dot only', () => {
+  const start = appSource.indexOf('function taskRunModelCell');
+  const end = appSource.indexOf('function renderTaskRuns', start);
+  assert.ok(start >= 0 && end > start, 'taskRunModelCell must precede renderTaskRuns in app.ts');
+  const body = appSource.slice(start, end);
 
-  // The model cell renders through a dedicated helper: the full resolved model
-  // id, then the full resolved model name, stay a normal model identity cell.
   assert.ok(
     body.includes('function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {'),
     'model cell renders through a dedicated helper',
   );
-  assert.ok(
-    body.includes('run.resolvedModelId ?? run.resolvedModel'),
-    'full resolved model id then resolved model keep identity priority',
-  );
-  assert.ok(
-    body.includes('return taskRunCell(identity)'),
-    'a present resolved identity reuses the plain model-cell rendering',
-  );
+  // Only the two paired server-provided display-name fields feed the cell.
+  assert.ok(body.includes('run.resolvedProviderDisplayName'), 'provider display label is read from the run row');
+  assert.ok(body.includes('run.resolvedModelDisplayName'), 'model display label is read from the run row');
+  // Both labels are rendered as one label joined by a middle dot.
+  assert.ok(body.includes(' · '), 'paired display names are joined by a middle dot');
+  // A missing half or an alias-only history row renders the dash placeholder.
+  assert.ok(body.includes("taskRunCell('-')"), 'incomplete display pair falls back to the dash placeholder');
 
-  // A lone persisted legacy resolvedProfile is displayed verbatim but carries a
-  // title/aria-label describing it as run configuration, never a reconstructed
-  // full model identity.
-  assert.ok(
-    body.includes('`运行配置：${profile}（历史记录未保存完整模型身份）`'),
-    'legacy profile cell exposes the truthful configuration-history note',
-  );
-  assert.ok(
-    body.includes('cell.textContent = profile'),
-    'legacy profile renders its exact raw profile text',
-  );
-  assert.ok(
-    body.includes('cell.title = legacyNote'),
-    'legacy note appears as the hover tooltip',
-  );
-  assert.ok(
-    body.includes("cell.setAttribute('aria-label', legacyNote)"),
-    'legacy note appears as the accessible name',
-  );
-
-  // Genuinely absent model metadata renders '-' and the cell never infers a
-  // model from client/provider evidence.
-  assert.ok(
-    body.includes("return taskRunCell('-')"),
-    'true missing model metadata falls back to the dash placeholder',
-  );
-  assert.ok(!body.includes('run.resolvedClient') && !body.includes('run.resolvedProvider'),
-    'model column is not derived from resolved client/provider identities');
+  // The helper body touches only the display-name properties of the run: no raw
+  // resolved model id/model/profile/client/provider value may feed the cell.
+  const runReferences = body.match(/run\.resolved[A-Za-z_$]*/g) ?? [];
+  assert.ok(runReferences.length > 0, 'model cell reads the paired resolved display labels');
+  for (const reference of runReferences) {
+    assert.ok(
+      reference === 'run.resolvedProviderDisplayName' || reference === 'run.resolvedModelDisplayName',
+      `raw resolved identity reference ${reference} must not feed the model cell`,
+    );
+  }
 });

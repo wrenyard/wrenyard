@@ -6,8 +6,16 @@ import {
   isSettingsLaunchRequest,
   isShellPage,
   type QuotaSnapshot,
+  type RuntimeAliasEntry,
+  type RuntimeAliasPutRequest,
+  type RuntimeAliasRemoveRequest,
+  type RuntimeAliasSnapshot,
+  type TaskResolvedDispatch,
+  type TaskRunSnapshot,
+  type TaskSettingsExplicitReference,
   type TaskSettingsLayer,
   type TaskSettingsSnapshot,
+  type TaskSettingsTaskRow,
   type UpdateSnapshot,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
@@ -29,7 +37,6 @@ function emptyLayer(): TaskSettingsLayer {
   return {
     explicit_runtime: null,
     timeout_ms: null,
-    additional_instructions: null,
     automatic: null,
   };
 }
@@ -40,30 +47,104 @@ function settingsSnapshot(revision: string): TaskSettingsSnapshot {
     revision,
     user_global: emptyLayer(),
     rows: [],
+    aliases: [],
   };
 }
 
-test('task settings IPC channels and API methods are the only task settings surface', () => {
+function aliasSnapshot(revision: string): RuntimeAliasSnapshot {
+  return {
+    revision,
+    aliases: [
+      { name: 'cc-fast', target: 'anthropic/claude-sonnet-4:cc' },
+    ],
+  };
+}
+
+function automaticSelectionRow(): TaskSettingsTaskRow {
+  return {
+    identity: 'builtin:code',
+    name: 'code',
+    display_name: '编码助手',
+    builtin: {
+      identity: 'builtin:code',
+      name: 'code',
+      source: 'shell',
+      description: 'Automatic model dispatch.',
+      prompt_template: 'dynamic',
+      instruction_template: [
+        { kind: 'placeholder', source: 'task.prompt', label: '运行时填入任务输入' },
+      ],
+      timeout_ms: null,
+      dispatch: { intelligence_min: 'mid' },
+    },
+    user_task: {
+      mode: 'automatic',
+      automatic: { intelligence_min: 'mid' },
+    },
+    effective: {
+      mode: { value: 'automatic', source: 'user_task' },
+      explicit_runtime: { value: null, source: 'builtin' },
+      timeout_ms: { value: 120_000, source: 'user_global' },
+      max_auto_output_usd_per_million: { value: null, source: 'builtin' },
+      automatic: {
+        expected_tps: { value: null, source: 'builtin' },
+        minimum_tps: { value: null, source: 'builtin' },
+        intelligence_min: { value: 'mid', source: 'user_task' },
+        intelligence_max: { value: null, source: 'builtin' },
+        max_output_usd_per_million: { value: null, source: 'builtin' },
+        required_capabilities: { value: null, source: 'builtin' },
+        exclude_model_ids: { value: null, source: 'builtin' },
+        exclude_profile_ids: { value: null, source: 'builtin' },
+        exclude_client_ids: { value: null, source: 'builtin' },
+        exclude_provider_ids: { value: null, source: 'builtin' },
+        preferred_runtime: { value: null, source: 'builtin' },
+      },
+    },
+    automatic_selection: {
+      exact_runtime: 'moonshot/kimi-k3',
+      resolved: {
+        runtime: 'moonshot/kimi-k3:kimi',
+        client: 'kimi',
+        provider: 'moonshot',
+        model: 'kimi-k3',
+        model_id: 'moonshot/kimi-k3',
+      },
+      reason: 'Catalog default covers the task intelligence requirement.',
+    },
+    issues: [],
+  };
+}
+
+test('task settings and runtime alias IPC channels are the only task surface', () => {
   assert.equal(SHELL_CHANNELS.taskSettingsSnapshot, 'wrenyard-shell:task-settings-snapshot');
   assert.equal(SHELL_CHANNELS.taskSettingsSave, 'wrenyard-shell:task-settings-save');
+  assert.equal(SHELL_CHANNELS.runtimeAliasSnapshot, 'wrenyard-shell:runtime-alias-snapshot');
+  assert.equal(SHELL_CHANNELS.runtimeAliasPut, 'wrenyard-shell:runtime-alias-put');
+  assert.equal(SHELL_CHANNELS.runtimeAliasRemove, 'wrenyard-shell:runtime-alias-remove');
   // The withdrawn human docs bridge no longer exists anywhere in the contract.
   assert.equal('docsList' in SHELL_CHANNELS, false);
   assert.equal('docsRead' in SHELL_CHANNELS, false);
   assert.equal('docsSave' in SHELL_CHANNELS, false);
   assert.equal('docsDirty' in SHELL_CHANNELS, false);
-  const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskSettings'> = {
+  const api: Pick<WrenyardShellApi, 'getTaskSettings' | 'saveTaskSettings' | 'runtimeAliasSnapshot' | 'runtimeAliasPut' | 'runtimeAliasRemove'> = {
     getTaskSettings: async () => settingsSnapshot('revision-1'),
     saveTaskSettings: async () => settingsSnapshot('revision-2'),
+    runtimeAliasSnapshot: async () => aliasSnapshot('alias-rev-1'),
+    runtimeAliasPut: async () => aliasSnapshot('alias-rev-2'),
+    runtimeAliasRemove: async () => aliasSnapshot('alias-rev-3'),
   };
   assert.equal(typeof api.getTaskSettings, 'function');
   assert.equal(typeof api.saveTaskSettings, 'function');
-  // The task settings surface is exactly the snapshot/save pair.
+  assert.equal(typeof api.runtimeAliasSnapshot, 'function');
+  assert.equal(typeof api.runtimeAliasPut, 'function');
+  assert.equal(typeof api.runtimeAliasRemove, 'function');
   assert.equal('saveTaskPreference' in api, false);
   const snapshot = settingsSnapshot('revision-1');
-  // The snapshot mirrors the daemon snapshot wire DTO: config_path/revision/user_global/rows.
+  // The snapshot mirrors the daemon snapshot wire DTO: config_path/revision/user_global/rows/aliases.
   assert.equal('config_path' in snapshot, true);
   assert.equal(snapshot.revision, 'revision-1');
   assert.equal(Array.isArray(snapshot.rows), true);
+  assert.deepEqual(snapshot.aliases, []);
   // The global layer is directly the writable settings fields — no wrapper.
   assert.equal('revision' in snapshot.user_global, false);
   assert.equal('layer' in snapshot.user_global, false);
@@ -71,30 +152,57 @@ test('task settings IPC channels and API methods are the only task settings surf
   assert.equal('tasks' in snapshot, false);
 });
 
-test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO', () => {
-  // The exact runtime this automatic row currently resolves to; the title can
-  // render it directly without re-inferring resolution.
-  const resolvedRuntime = {
-    exactAgentRuntime: 'forge/codex-luna',
-    client: 'codex',
+test('TaskSettingsSnapshot rows mirror the current daemon wire DTO', () => {
+  const resolved: TaskResolvedDispatch = {
+    runtime: 'codex/gpt-5.6-luna:cc',
+    client: 'cc',
     provider: 'codex',
     model: 'gpt-5.6-luna',
     model_id: 'codex/gpt-5.6-luna',
-    mode: 'native' as const,
-    intelligence: 'mid',
-    speed: {
-      effective_tps: 107,
-      source: 'catalog_default',
-      sample_count: 0,
-      checked_at: '2026-09-05T00:00:00.000Z',
-      expected_tps_met: true,
+  };
+  const alias: TaskSettingsExplicitReference = { kind: 'alias', name: 'cc-fast' };
+  const row: TaskSettingsTaskRow = {
+    identity: 'builtin:build',
+    name: 'build',
+    display_name: 'Build project',
+    builtin: {
+      identity: 'builtin:build',
+      name: 'build',
+      source: 'shell',
+      description: 'Compile and check.',
+      prompt_template: 'dynamic',
+      instruction_template: [
+        { kind: 'text', source: 'task.instructions[0]', text: 'Run the full build.' },
+        { kind: 'placeholder', source: 'task.prompt', label: '运行时填入任务输入' },
+      ],
+      timeout_ms: 300_000,
+      dispatch: { expected_tps: 20, required_capabilities: ['text'] },
     },
-    reference_pricing: {
-      input_usd_per_million: 0.2,
-      output_usd_per_million: 1.2,
-      source: 'catalog',
-      checked_at: '2026-09-05T00:00:00.000Z',
+    user_task: {
+      mode: 'explicit',
+      explicit_runtime: alias,
     },
+    effective: {
+      mode: { value: 'explicit', source: 'user_task' },
+      explicit_runtime: { value: alias, source: 'user_task' },
+      timeout_ms: { value: 120_000, source: 'user_global' },
+      max_auto_output_usd_per_million: { value: 0, source: 'user_global' },
+      automatic: {
+        expected_tps: { value: 20, source: 'user_global' },
+        minimum_tps: { value: null, source: 'builtin' },
+        intelligence_min: { value: 'mid', source: 'builtin' },
+        intelligence_max: { value: null, source: 'builtin' },
+        max_output_usd_per_million: { value: 5, source: 'builtin' },
+        required_capabilities: { value: ['text'], source: 'user_global' },
+        exclude_model_ids: { value: null, source: 'builtin' },
+        exclude_profile_ids: { value: null, source: 'builtin' },
+        exclude_client_ids: { value: null, source: 'builtin' },
+        exclude_provider_ids: { value: null, source: 'builtin' },
+        preferred_runtime: { value: null, source: 'builtin' },
+      },
+    },
+    explicit: { resolved },
+    issues: [],
   };
   const snapshot: TaskSettingsSnapshot = {
     config_path: '/Users/me/.wrenyard/tasks/config.json',
@@ -102,105 +210,103 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
     user_global: {
       mode: 'automatic',
       timeout_ms: 120_000,
-      additional_instructions: 'Only touch BUILD rules.',
+      max_auto_output_usd_per_million: 0,
       automatic: { expected_tps: 20, required_capabilities: ['text'] },
     },
-    rows: [{
-      identity: 'builtin:build',
-      name: 'build',
-      display_name: 'Build project',
-      builtin: {
-        identity: 'builtin:build',
-        name: 'build',
-        source: 'shell',
-        description: 'Compile and check.',
-        prompt_template: 'dynamic',
-        instruction_template: [
-          { kind: 'text', source: 'task.instructions[0]', text: 'Run the full build.' },
-          { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
-          { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
-          { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
-        ],
-        declared_runtime: null,
-        timeout_ms: 300_000,
-        dispatch: { expected_tps: 20, required_capabilities: ['text'] },
-      },
-      user_task: {
-        additional_instructions: 'Only target the BUILD directory.',
-      },
-      effective: {
-        mode: { value: 'automatic', source: 'user_global' },
-        explicit_runtime: { value: null, source: 'builtin' },
-        timeout_ms: { value: 120_000, source: 'user_global' },
-        additional_instructions: { value: 'Only target the BUILD directory.', source: 'user_task' },
-        automatic: {
-          expected_tps: { value: 20, source: 'user_global' },
-          minimum_tps: { value: null, source: 'builtin' },
-          intelligence_min: { value: 'mid', source: 'builtin' },
-          intelligence_max: { value: null, source: 'builtin' },
-          max_output_usd_per_million: { value: null, source: 'builtin' },
-          required_capabilities: { value: ['text'], source: 'user_global' },
-          exclude_model_ids: { value: null, source: 'builtin' },
-          exclude_profile_ids: { value: null, source: 'builtin' },
-          exclude_client_ids: { value: null, source: 'builtin' },
-          exclude_provider_ids: { value: null, source: 'builtin' },
-          preferred_runtime: { value: null, source: 'builtin' },
-        },
-      },
-      // An automatic row still carries the authoritative exact runtime picker
-      // options so the UI can offer explicit selection without fabricating a
-      // current explicit runtime.
-      runtime_choices: [resolvedRuntime],
-      // Row-level exact resolved runtime drives direct title rendering.
-      resolved_runtime: resolvedRuntime,
-      issues: [],
-    }],
+    rows: [row],
+    aliases: [{ name: 'cc-fast', target: 'anthropic/claude-sonnet-4:cc' }],
   };
-  const taskRow = snapshot.rows[0]!;
   assert.equal(snapshot.config_path, '/Users/me/.wrenyard/tasks/config.json');
   assert.equal(snapshot.revision, 'global-rev');
-  assert.equal(taskRow.identity, 'builtin:build');
-  assert.equal(taskRow.builtin.identity, 'builtin:build');
-  assert.equal(taskRow.builtin.name, 'build');
-  assert.equal(taskRow.display_name, 'Build project');
-  assert.equal(taskRow.builtin.prompt_template, 'dynamic');
-  // Read-only instruction_template mirrors the daemon's safe ordered preview.
-  assert.deepEqual(taskRow.builtin.instruction_template, [
+  assert.equal(snapshot.aliases[0]?.name, 'cc-fast');
+  assert.equal(snapshot.aliases[0]?.target, 'anthropic/claude-sonnet-4:cc');
+  assert.equal(snapshot.rows[0]!.identity, 'builtin:build');
+  assert.equal(snapshot.rows[0]!.builtin.prompt_template, 'dynamic');
+  // instruction_template has no additional_instructions slot and no edit surface.
+  assert.deepEqual(snapshot.rows[0]!.builtin.instruction_template, [
     { kind: 'text', source: 'task.instructions[0]', text: 'Run the full build.' },
-    { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
-    { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
-    { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
+    { kind: 'placeholder', source: 'task.prompt', label: '运行时填入任务输入' },
   ]);
-  // Row top-level keys are exactly the stable wire fields; no invented wrappers.
+  // Row top-level keys are exactly the stable wire fields; no runtime choice pools.
   assert.deepEqual(
-    Object.keys(taskRow).sort(),
-    ['builtin', 'display_name', 'effective', 'identity', 'issues', 'name', 'resolved_runtime', 'runtime_choices', 'user_task'],
+    Object.keys(row).sort(),
+    ['builtin', 'display_name', 'effective', 'explicit', 'identity', 'issues', 'name', 'user_task'],
   );
-  assert.equal('task_id' in taskRow, false);
-  assert.equal('revision' in taskRow, false);
-  assert.equal('readiness' in taskRow, false);
-  assert.equal('source' in taskRow, false);
-  // The automatic row exposes exact runtime picker choices without an explicit row.
-  assert.equal(taskRow.explicit, undefined);
-  assert.equal(taskRow.runtime_choices.length, 1);
-  assert.equal(taskRow.runtime_choices[0]!.exactAgentRuntime, 'forge/codex-luna');
-  // Mode is 'automatic', never the invented 'auto', and the runtime triple is
-  // client/provider/model — never agent_runtime.
-  assert.equal(taskRow.effective.mode.value, 'automatic');
-  assert.equal(taskRow.effective.mode.source, 'user_global');
+  assert.equal('task_id' in row, false);
+  assert.equal('revision' in row, false);
+  assert.equal('runtime_choices' in row, false);
+  assert.equal('resolved_runtime' in row, false);
+  assert.equal('declared_runtime' in row.builtin, false);
+  assert.equal('additional_instructions' in row.user_task, false);
+  assert.equal('additional_instructions' in row.effective, false);
+  // Explicit reference is alias-or-target, never a client/provider/model triple.
+  const explicitReference = row.user_task.explicit_runtime!;
+  assert.deepEqual(explicitReference, { kind: 'alias', name: 'cc-fast' });
+  assert.equal('client' in explicitReference, false);
+  assert.equal('provider' in explicitReference, false);
+  assert.equal('model' in explicitReference, false);
+  assert.equal(row.effective.mode.value, 'explicit');
+  // Explicit resolved dispatch shape (daemon-owned projection only).
+  assert.equal(row.explicit?.resolved?.runtime, 'codex/gpt-5.6-luna:cc');
+  // Global-only top-level auto cap is sourced and distinct from nested automatic max_output.
+  assert.equal(row.effective.max_auto_output_usd_per_million.value, 0);
+  assert.equal(row.effective.max_auto_output_usd_per_million.source, 'user_global');
+  assert.equal(row.effective.automatic.max_output_usd_per_million.value, 5);
+  assert.equal('max_output_usd_per_million' in row.effective, false);
+  assert.equal(snapshot.user_global.max_auto_output_usd_per_million, 0);
+  assert.deepEqual(row.issues, []);
   const serialized = JSON.stringify(snapshot);
   assert.equal(serialized.includes('"mode":"auto"'), false);
   assert.equal(serialized.includes('agent_runtime'), false);
-  // Effective automatic is sourced per field.
-  assert.deepEqual(taskRow.effective.automatic.required_capabilities, { value: ['text'], source: 'user_global' });
-  assert.equal(taskRow.effective.automatic.expected_tps.value, 20);
-  assert.deepEqual(taskRow.issues, []);
-  // Global layer is the writable settings fields, no revision/layer envelope.
-  const globalLayer = snapshot.user_global as unknown as Record<string, unknown>;
-  assert.deepEqual(
-    Object.keys(globalLayer).sort(),
-    ['additional_instructions', 'automatic', 'mode', 'timeout_ms'],
-  );
+  assert.equal(serialized.includes('runtime_choices'), false);
+  assert.equal(serialized.includes('additional_instructions'), false);
+  assert.equal(serialized.includes('declared_runtime'), false);
+});
+
+test('automatic rows may carry optional automatic_selection with exact runtime, resolved dispatch, and reason', () => {
+  const row = automaticSelectionRow();
+  const snapshot: TaskSettingsSnapshot = { ...settingsSnapshot('auto-rev'), rows: [row] };
+  assert.equal(row.effective.mode.value, 'automatic');
+  assert.equal(row.automatic_selection?.exact_runtime, 'moonshot/kimi-k3');
+  assert.equal(row.automatic_selection?.resolved?.runtime, 'moonshot/kimi-k3:kimi');
+  assert.equal(row.automatic_selection?.resolved?.model, 'kimi-k3');
+  assert.equal(row.automatic_selection?.reason, 'Catalog default covers the task intelligence requirement.');
+  // automatic_selection is an additive optional; when present it serializes in
+  // the daemon snake_case wire shape. Explicit/alias rows keep their shape.
+  const serialized = JSON.stringify(snapshot);
+  assert.equal(serialized.includes('automatic_selection'), true);
+  assert.equal(serialized.includes('exact_runtime'), true);
+  assert.equal(serialized.includes('declared_runtime'), false);
+});
+
+test('TaskRunSnapshot optionally carries paired Catalog display-name labels alongside legacy raw identity', () => {
+  const paired: TaskRunSnapshot = {
+    taskRunId: 'run-a',
+    taskId: 'edit',
+    resolvedProviderDisplayName: 'Kimi Coding',
+    resolvedModelDisplayName: 'Kimi K2',
+    usage: { completeness: 'complete', attemptCount: 1, usageEventCount: 1, referenceCostComplete: true },
+  };
+  assert.equal(paired.resolvedProviderDisplayName, 'Kimi Coding');
+  assert.equal(paired.resolvedModelDisplayName, 'Kimi K2');
+  // Legacy raw identity payloads remain representable and are never projected
+  // into the paired Catalog display labels.
+  const legacy: TaskRunSnapshot = {
+    taskRunId: 'run-b',
+    taskId: 'build',
+    resolvedClient: 'kimi',
+    resolvedProvider: 'moonshot',
+    resolvedProfile: 'moonshot',
+    resolvedModel: 'kimi-k3',
+    resolvedModelId: 'moonshot/kimi-k3',
+    usage: { completeness: 'complete', attemptCount: 1, usageEventCount: 1, referenceCostComplete: true },
+  };
+  assert.equal(legacy.resolvedClient, 'kimi');
+  assert.equal(legacy.resolvedProvider, 'moonshot');
+  assert.equal(legacy.resolvedModelId, 'moonshot/kimi-k3');
+  assert.equal(legacy.resolvedProviderDisplayName, undefined);
+  assert.equal(legacy.resolvedModelDisplayName, undefined);
+  assert.equal('resolvedModelId' in legacy, true);
 });
 
 test('settings launch requests accept only the Desktop settings route', () => {
@@ -241,7 +347,6 @@ test('update IPC channels expose bounded Desktop update operations', () => {
   assert.equal(SHELL_CHANNELS.requestInstall, 'wrenyard-shell:request-install');
   assert.equal(SHELL_CHANNELS.cancelPendingInstall, 'wrenyard-shell:cancel-pending-install');
   assert.equal(SHELL_CHANNELS.updateChanged, 'wrenyard-shell:update-changed');
-  // The old two-click prepare/restart channels no longer exist.
   assert.equal('prepareUpdate' in SHELL_CHANNELS, false);
   assert.equal('restartUpdate' in SHELL_CHANNELS, false);
   const api: Pick<WrenyardShellApi, 'requestInstall' | 'cancelPendingInstall'> = {
@@ -270,4 +375,33 @@ test('QuotaSnapshot carries a provider catalog without secrets', () => {
   assert.equal(snapshot.catalog[0].authMode, 'api-key');
   assert.equal('key' in snapshot.catalog[0], false);
   assert.equal('apiKey' in snapshot.catalog[0], false);
+});
+
+test('runtime alias entries and CAS requests use snake_case wire fields', () => {
+  const entry: RuntimeAliasEntry = {
+    name: 'cc-fast',
+    target: 'anthropic/claude-sonnet-4:cc',
+  };
+  const putRequest: RuntimeAliasPutRequest = {
+    expected_revision: 'alias-rev',
+    name: 'cc-fast',
+    target: 'anthropic/claude-sonnet-4:cc',
+  };
+  const removeRequest: RuntimeAliasRemoveRequest = {
+    expected_revision: 'alias-rev',
+    name: 'cc-fast',
+  };
+  assert.deepEqual(entry, { name: 'cc-fast', target: 'anthropic/claude-sonnet-4:cc' });
+  assert.deepEqual(putRequest, { expected_revision: 'alias-rev', name: 'cc-fast', target: 'anthropic/claude-sonnet-4:cc' });
+  assert.deepEqual(removeRequest, { expected_revision: 'alias-rev', name: 'cc-fast' });
+  const snapshot = aliasSnapshot('alias-rev-4');
+  assert.equal('expected_revision' in putRequest, true);
+  assert.equal('expected_revision' in removeRequest, true);
+  assert.equal('revision' in snapshot, true);
+  assert.equal(snapshot.aliases.length, 1);
+  // No secrets or resolved triples live on the alias store projection.
+  const serialized = JSON.stringify(snapshot);
+  assert.equal(serialized.includes('client'), false);
+  assert.equal(serialized.includes('provider'), false);
+  assert.equal(serialized.includes('apiKey'), false);
 });
