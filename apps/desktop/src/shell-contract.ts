@@ -40,6 +40,9 @@ export const SHELL_CHANNELS = {
   viewChanged: 'wrenyard-shell:view-changed',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
+  runtimeAliasSnapshot: 'wrenyard-shell:runtime-alias-snapshot',
+  runtimeAliasPut: 'wrenyard-shell:runtime-alias-put',
+  runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
 } as const;
 
 export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
@@ -255,6 +258,10 @@ export interface TaskRunSnapshot {
   resolvedProfile?: string;
   resolvedModel?: string;
   resolvedModelId?: string;
+  /** Paired Catalog provider display label; present only when the run row carries both labels. */
+  resolvedProviderDisplayName?: string;
+  /** Paired Catalog model display label; present only when the run row carries both labels. */
+  resolvedModelDisplayName?: string;
   speed?: TaskRunSpeedEvidence;
   usage: TaskRunUsage;
 }
@@ -410,12 +417,14 @@ export type TaskSettingsScope = 'global' | 'task';
 /** Runtime resolution mode a user layer may request. */
 export type TaskSettingsMode = 'automatic' | 'explicit';
 
-/** One exact runtime pin (client/provider/model) usable only in explicit mode. */
-export interface TaskSettingsExplicitRuntime {
-  client: string;
-  provider: string;
-  model: string;
-}
+/**
+ * Explicit-mode runtime selection: either a stored runtime alias name or an
+ * inline canonical `provider/model:client` target. Desktop never synthesizes a
+ * resolved client/provider/model triple and never enumerates catalog candidates.
+ */
+export type TaskSettingsExplicitReference =
+  | { kind: 'alias'; name: string }
+  | { kind: 'target'; target: string };
 
 /** Automatic dispatch field enums (mirrors the task dispatch requirements). */
 export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'frontier' | 'premium';
@@ -433,7 +442,7 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_profile_ids?: readonly string[];
   exclude_client_ids?: readonly string[];
   exclude_provider_ids?: readonly string[];
-  preferred_runtime?: TaskSettingsExplicitRuntime;
+  preferred_runtime?: TaskSettingsExplicitReference;
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -457,22 +466,23 @@ export interface TaskSettingsSourcedValue<T> {
 /**
  * Writable settings fields of a user layer. Absent fields fall through to the
  * lower layer; a `null` value clears an override back to the lower layer.
- * `additional_instructions` is bounded plain text.
  */
 export interface TaskSettingsLayer {
   mode?: TaskSettingsMode;
-  explicit_runtime?: TaskSettingsExplicitRuntime | null;
+  explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
-  additional_instructions?: string | null;
+  /** Global-only auto-dispatch reference output cap (USD / million output tokens). 0 is valid; null clears; absent falls through. */
+  max_auto_output_usd_per_million?: number | null;
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
 
 /** Field-level save patch; `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
   mode?: TaskSettingsMode | null;
-  explicit_runtime?: TaskSettingsExplicitRuntime | null;
+  explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
-  additional_instructions?: string | null;
+  /** Global-only reference output cap; null deletes only this field at the selected layer. */
+  max_auto_output_usd_per_million?: number | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }
 
@@ -488,15 +498,16 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>;
-  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>;
+  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
 }
 
 /** Effective settings of one task, each value tagged with its source layer. */
 export interface TaskSettingsEffective {
   mode: TaskSettingsSourcedValue<TaskSettingsMode>;
-  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitRuntime | null>;
+  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
   timeout_ms: TaskSettingsSourcedValue<number | null>;
-  additional_instructions: TaskSettingsSourcedValue<string | null>;
+  /** Global-only auto cap; effective per task carries its own source layer. */
+  max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
   automatic: TaskSettingsEffectiveAutomatic;
 }
 
@@ -507,45 +518,27 @@ export interface TaskSettingsValidationIssue {
   field?: string;
 }
 
-/** Live non-billable readiness of one exact resolved runtime triple. */
-export interface TaskSettingsRuntimeReadiness {
-  /** Exact runtime identity `client/provider/model`. */
+/** A daemon-owned resolved dispatch projection for an explicit reference. */
+export interface TaskResolvedDispatch {
+  /** Exact canonical resolved identity string. */
   runtime: string;
   client: string;
   provider: string;
   model: string;
-  daemon: 'accepting' | 'unavailable' | 'unknown';
-  provider_credential: 'available' | 'missing' | 'unknown';
-  provider_live: 'available' | 'unavailable' | 'unknown';
-  quota: 'available' | 'unavailable' | 'unknown';
-  available: boolean;
-  issues: TaskSettingsValidationIssue[];
-}
-
-/** One resolved runtime candidate the Tasks picker may select in explicit mode. */
-export interface TaskSettingsEligibleChoice {
-  exactAgentRuntime: string;
-  client: string;
-  provider: string;
-  model: string;
-  model_id: string;
-  mode: 'native' | 'gateway';
-  intelligence: string;
-  speed: Record<string, unknown>;
-  reference_pricing: Record<string, unknown>;
-  requested_agent_runtime?: string;
+  model_id?: string;
   profile?: string;
-  protocol?: string;
 }
 
-/** One ordered, non-executing preview segment of a builtin prompt template. */
+/**
+ * One ordered, non-executing preview segment of a builtin prompt template. The
+ * former user additional-instructions insertion slot was removed from the
+ * surface, so no segment exposes an editing slot.
+ */
 export type TaskSettingsInstructionSegment =
   /** Static instruction text carried verbatim; renderers escape before display. */
   | { kind: 'text'; source: string; text: string }
   /** A non-executed function instruction or the input-dependent prompt body. */
-  | { kind: 'placeholder'; source: string; label: string }
-  /** The slot where user additional_instructions are inserted at render time. */
-  | { kind: 'additional_instructions'; source: string };
+  | { kind: 'placeholder'; source: string; label: string };
 
 /** Ordered safe preview of the builtin prompt template; never executes config. */
 export type TaskSettingsInstructionTemplate = TaskSettingsInstructionSegment[];
@@ -559,17 +552,31 @@ export interface TaskSettingsBuiltinMetadata {
   project?: string;
   prompt_template: 'dynamic' | 'fixed';
   instruction_template: TaskSettingsInstructionTemplate;
-  declared_runtime: string | null;
   timeout_ms: number | null;
   dispatch: TaskSettingsAutomaticDispatch;
 }
 
-/** Explicit-mode resolution data for a task row. */
+/** Explicit-mode resolution data carried on a row by the daemon when resolved. */
 export interface TaskSettingsExplicitRow {
-  runtime: TaskSettingsExplicitRuntime;
-  choices: TaskSettingsEligibleChoice[];
-  resolved: TaskSettingsEligibleChoice | null;
-  readiness: TaskSettingsRuntimeReadiness | null;
+  /** Daemon-resolved dispatch; null while unresolved/unavailable. */
+  resolved: TaskResolvedDispatch | null;
+}
+
+/**
+ * Automatic-mode resolution data carried on an automatic row by the daemon when
+ * resolved. Mirrors the daemon automatic-selection row projection exactly: when
+ * this object is present it is fully populated. Backward compatibility for older
+ * snapshots and unresolved rows lives on the optional row-level field
+ * `TaskSettingsTaskRow.automatic_selection`, which is omitted until the daemon
+ * resolves.
+ */
+export interface TaskSettingsAutomaticSelection {
+  /** Exact runtime reference (alias name or target) that produced the automatic selection. */
+  exact_runtime: string;
+  /** Daemon-resolved dispatch of the automatic selection. */
+  resolved: TaskResolvedDispatch;
+  /** Human-safe rationale text for the automatic selection. */
+  reason: string;
 }
 
 /** Stable per-task identity row with persisted layer and merged effective settings. */
@@ -586,16 +593,10 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer;
   effective: TaskSettingsEffective;
-  /**
-   * Authoritative list of exact existing runtimes currently resolvable for
-   * selecting explicit mode. Present regardless of the effective mode so an
-   * automatic row can offer the explicit-mode picker without fabricating a
-   * selected explicit runtime.
-   */
-  runtime_choices: TaskSettingsEligibleChoice[];
-  /** Row-level exact resolved runtime; null while unresolved/unavailable. */
-  resolved_runtime: TaskSettingsEligibleChoice | null;
+  /** Daemon resolution projection; present only when the daemon resolves. */
   explicit?: TaskSettingsExplicitRow;
+  /** Automatic resolution projection; present only on automatic rows the daemon resolves. */
+  automatic_selection?: TaskSettingsAutomaticSelection;
   issues: TaskSettingsValidationIssue[];
 }
 
@@ -606,6 +607,46 @@ export interface TaskSettingsSnapshot {
   /** Persisted user-global settings layer. */
   user_global: TaskSettingsLayer;
   rows: TaskSettingsTaskRow[];
+  /** Read-only runtime alias projection used to suggest explicit references. */
+  aliases: RuntimeAliasEntry[];
+}
+
+/** A validation problem surfaced by the daemon for a runtime alias entry. */
+export interface RuntimeAliasIssue {
+  code: string;
+  message: string;
+  field?: string;
+}
+
+/**
+ * One stored runtime alias binding a name to a canonical `provider/model:client`
+ * target. Names follow `^[a-z0-9][a-z0-9._-]{0,63}$`; the store is daemon-owned.
+ */
+export interface RuntimeAliasEntry {
+  name: string;
+  target: string;
+  created_at?: string;
+  updated_at?: string;
+  issues?: RuntimeAliasIssue[];
+}
+
+/** Snapshot of the daemon-owned runtime alias store. */
+export interface RuntimeAliasSnapshot {
+  revision: string;
+  aliases: RuntimeAliasEntry[];
+}
+
+/** Bounded request for runtime.alias.put; CAS on the store revision. */
+export interface RuntimeAliasPutRequest {
+  expected_revision: string;
+  name: string;
+  target: string;
+}
+
+/** Bounded request for runtime.alias.remove; CAS on the store revision. */
+export interface RuntimeAliasRemoveRequest {
+  expected_revision: string;
+  name: string;
 }
 
 /** Bounded save request for task.settings.save. */
@@ -651,6 +692,9 @@ export interface WrenyardShellApi {
   onViewChanged(listener: (page: ShellPage) => void): () => void;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
+  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
+  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
+  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

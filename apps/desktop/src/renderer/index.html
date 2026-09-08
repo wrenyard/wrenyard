@@ -219,6 +219,46 @@
           <span class="quota-pace-legend"><i></i> 时间进度建议余量</span>
         </div>
         <div class="quota-provider-grid" id="quota-provider-grid" aria-live="polite"></div>
+        <section class="auto-cap-panel" aria-labelledby="auto-cap-title">
+          <div class="auto-cap-head">
+            <div>
+              <h2 id="auto-cap-title">自动派发参考输出单价上限</h2>
+              <p>全局参考单价上限只收紧“自动选择”的候选范围；留空表示清除全局上限并沿用各 Task 自身的默认参考单价。</p>
+            </div>
+          </div>
+          <div class="auto-cap-form">
+            <label for="auto-cap-input">参考单价上限</label>
+            <span class="auto-cap-control">
+              <input id="auto-cap-input" type="number" min="0" step="0.5" placeholder="沿用各 Task 默认" aria-describedby="auto-cap-unit auto-cap-effective" />
+              <span class="auto-cap-unit" id="auto-cap-unit">USD / 百万输出 Token</span>
+            </span>
+            <button class="primary-button" id="auto-cap-save" type="button">保存</button>
+          </div>
+          <p class="auto-cap-effective" id="auto-cap-effective">正在读取当前全局上限…</p>
+          <span class="auto-cap-status" id="auto-cap-status" role="status" aria-live="polite"></span>
+        </section>
+        <section class="alias-panel" aria-labelledby="alias-title">
+          <div class="alias-panel-head">
+            <div>
+              <h2 id="alias-title">运行时别名</h2>
+              <p>把常用运行时存成短别名，供任务“指定运行时”引用。目标写法：provider/model:client。</p>
+            </div>
+            <button class="secondary-button" id="alias-refresh" type="button">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+              <span id="alias-refresh-label">刷新别名</span>
+            </button>
+          </div>
+          <div class="alias-form" id="alias-form">
+            <label for="alias-name-input">别名</label>
+            <input id="alias-name-input" type="text" spellcheck="false" autocomplete="off" maxlength="64" placeholder="例如 cc-fast" aria-describedby="alias-name-rule" />
+            <label for="alias-target-input">目标</label>
+            <input id="alias-target-input" type="text" spellcheck="false" autocomplete="off" maxlength="512" placeholder="provider/model:client，例如 anthropic/claude-sonnet-4:cc" />
+            <button class="primary-button" id="alias-submit" type="button">保存别名</button>
+          </div>
+          <p class="alias-name-rule" id="alias-name-rule">别名为小写字母开头，仅限 a-z 0-9 . _ -，最长 64 位；同名保存为更新，需匹配已保存别名方可在任务中引用。</p>
+          <span class="alias-error" id="alias-error" role="alert"></span>
+          <div class="alias-list" id="alias-list" aria-live="polite"></div>
+        </section>
         <p class="quota-footnote">Provider 次序同时用于模型供应与额度显示；额度区域只展示已激活且支持额度的 Provider。</p>
       </section>
 
@@ -337,7 +377,7 @@
           <div>
             <p class="eyebrow">TASK SETTINGS</p>
             <h1 id="tasks-title">任务</h1>
-            <p>设置当前任务的运行方式、总时限与附加指令；本层未覆盖的字段会沿用既有设置。</p>
+            <p>设置当前任务的运行方式与总时限；指定运行时可用别名或内联目标，本层未覆盖的字段会沿用既有设置。</p>
           </div>
           <button class="secondary-button" id="tasks-refresh" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
@@ -360,20 +400,34 @@
               </div>
             </header>
 
-            <div class="tasks-form-grid">
-              <label><span>选择方式</span><select id="tasks-mode"><option value="">继承</option><option value="automatic">自动选择</option><option value="explicit">指定运行时</option></select></label>
-              <label id="tasks-runtime-field" hidden><span>指定运行时</span><select id="tasks-model-select"><option value="">请选择</option></select></label>
-              <label><span>总执行时限（毫秒）</span><input id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承" /></label>
-              <label class="tasks-form-wide"><span>附加指令</span><textarea id="tasks-instructions" maxlength="4000" rows="4" placeholder="继承；纯文本会插入到内置提示的对应位置"></textarea></label>
+            <div class="tasks-rows">
+              <div class="tasks-setting-row">
+                <label for="tasks-mode">选择方式</label>
+                <span class="tasks-setting-control">
+                  <select id="tasks-mode"><option value="">继承</option><option value="automatic">自动选择</option><option value="explicit">指定运行时</option></select>
+                </span>
+              </div>
+              <div class="tasks-setting-row">
+                <label for="tasks-timeout">总执行时限</label>
+                <span class="tasks-setting-control tasks-timeout-control">
+                  <input id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承" />
+                  <button class="tasks-reset-flag" id="tasks-timeout-reset" type="button" title="仅重置本行超时覆盖" aria-label="重置本行超时">※</button>
+                </span>
+                <span class="tasks-effective-hint" id="tasks-timeout-effective">—</span>
+              </div>
+              <div class="tasks-setting-row tasks-explicit-row" id="tasks-explicit-row" hidden>
+                <label for="tasks-runtime">指定运行时</label>
+                <span class="tasks-setting-control tasks-runtime-control">
+                  <input id="tasks-runtime" type="text" spellcheck="false" autocomplete="off" list="tasks-runtime-suggestions" placeholder="别名，或 provider/model:client" aria-describedby="tasks-runtime-help-tooltip" />
+                  <datalist id="tasks-runtime-suggestions"></datalist>
+                  <button class="tasks-help-trigger" id="tasks-runtime-help" type="button" aria-label="运行时写法帮助">?</button>
+                  <span class="tasks-help-tooltip" id="tasks-runtime-help-tooltip" role="tooltip">填已保存别名，或直接写 provider/model:client（例如 anthropic/claude-sonnet-4:cc）。匹配已保存别名时按别名保存，否则按内联目标保存。</span>
+                </span>
+              </div>
             </div>
 
-            <section class="tasks-preview" aria-labelledby="tasks-preview-title">
-              <h3 id="tasks-preview-title">指令模板预览</h3>
-              <div class="tasks-preview-body" id="tasks-preview"></div>
-            </section>
-
             <footer class="tasks-detail-actions">
-              <span class="tasks-detail-note">“自动选择”会清除本层显式运行时；重置只删除当前任务层的覆盖。</span>
+              <span class="tasks-detail-note">“自动选择”会清除本层显式运行时；重置只删除当前任务层的覆盖，※ 只重置本行超时。</span>
               <div class="tasks-form-actions">
                 <button class="secondary-button" id="tasks-reset" type="button">重置</button>
                 <button class="primary-button" id="tasks-save" type="button">套用</button>

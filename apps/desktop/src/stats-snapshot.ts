@@ -216,6 +216,21 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
   const resolvedProfile = readString(resolvedRecord?.profile) ?? readString(record.resolved_profile);
   const resolvedModel = readString(resolvedRecord?.model) ?? readString(record.resolved_model);
   const resolvedModelId = readString(resolvedRecord?.model_id) ?? readString(record.resolved_model_id);
+  const providerDisplayName = readString(record.provider_display_name);
+  const modelDisplayName = readString(record.model_display_name);
+  // Paired Catalog display labels travel only when the server row carries both
+  // as nonempty strings; they are never derived from resolved identities and
+  // one is never copied when its sibling is missing.
+  const displayLabels =
+    providerDisplayName !== null &&
+    providerDisplayName.length > 0 &&
+    modelDisplayName !== null &&
+    modelDisplayName.length > 0
+      ? {
+          resolvedProviderDisplayName: providerDisplayName,
+          resolvedModelDisplayName: modelDisplayName,
+        }
+      : null;
 
   return {
     taskRunId,
@@ -231,6 +246,7 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
     ...(resolvedProfile !== null ? { resolvedProfile } : {}),
     ...(resolvedModel !== null ? { resolvedModel } : {}),
     ...(resolvedModelId !== null ? { resolvedModelId } : {}),
+    ...(displayLabels !== null ? displayLabels : {}),
     ...(speed ? { speed } : {}),
     usage,
   };
