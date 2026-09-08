@@ -720,4 +720,92 @@ describe('workspace definition registry', () => {
     const errors = getLoadErrors(workspace)
     assert.ok(errors.some((error) => error.load_error.includes('no longer supported')), errors.map((e) => e.load_error).join('; '))
   })
+
+  // ── TaskConfig.displayName tests ──
+
+  it('trims and projects an optional displayName through list, listTaskDefinitions, and describe', async () => {
+    const workspace = makeTempDir('foreman-v2-displayname-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'labeled.task.ts'), taskSource("'labeled'", "  displayName: '  Build Service  ',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const listed = listTasks(workspace, 'app').find((task) => task.name === 'labeled')
+    assert.ok(listed, 'labeled task should be listed')
+    assert.equal(listed.displayName, 'Build Service')
+    assert.equal(listed.name, 'labeled')
+
+    const summary = listTaskDefinitions(workspace, 'app').find((task) => task.name === 'labeled')
+    assert.ok(summary, 'labeled task should appear in listTaskDefinitions')
+    assert.equal(summary.displayName, 'Build Service')
+
+    const described = describeTask('labeled', workspace, 'app')
+    assert.ok(described, 'labeled task should be describable')
+    assert.equal(described.displayName, 'Build Service')
+    assert.equal(described.name, 'labeled')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('omits displayName when the definition declares none', async () => {
+    const workspace = makeTempDir('foreman-v2-displayname-none-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeTask(projectDir, 'plain')
+
+    await discoverTasks(workspace)
+
+    const listed = listTasks(workspace, 'app').find((task) => task.name === 'plain')
+    assert.ok(listed)
+    assert.equal('displayName' in listed, false)
+    const described = describeTask('plain', workspace, 'app')
+    assert.ok(described)
+    assert.equal('displayName' in described, false)
+  })
+
+  it('rejects an empty displayName at definition load', async () => {
+    const workspace = makeTempDir('foreman-v2-displayname-empty-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'blank-label.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'blank-label'", "  displayName: '   ',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('blank-label', workspace, 'app'), null)
+    const error = getLoadErrors(workspace).find((e) => e.sourcePath === taskPath)
+    assert.ok(error, 'blank displayName should produce a load error')
+    assert.match(error.load_error, /displayName must be a non-empty string after trimming whitespace/)
+  })
+
+  it('rejects a displayName containing CR or LF line breaks', async () => {
+    const workspace = makeTempDir('foreman-v2-displayname-newline-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'newline-label.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'newline-label'", "  displayName: 'line1\\nline2',\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('newline-label', workspace, 'app'), null)
+    const error = getLoadErrors(workspace).find((e) => e.sourcePath === taskPath)
+    assert.ok(error, 'newline displayName should produce a load error')
+    assert.match(error.load_error, /displayName must not contain CR or LF line breaks/)
+  })
+
+  it('rejects a displayName longer than 80 UTF-16 code units', async () => {
+    const workspace = makeTempDir('foreman-v2-displayname-long-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'long-label.task.ts')
+    registerProject(projectDir, 'app')
+    const overlong = 'x'.repeat(81)
+    writeFileSync(taskPath, taskSource("'long-label'", `  displayName: '${overlong}',\n`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('long-label', workspace, 'app'), null)
+    const error = getLoadErrors(workspace).find((e) => e.sourcePath === taskPath)
+    assert.ok(error, 'overlong displayName should produce a load error')
+    assert.match(error.load_error, /displayName must not exceed 80 UTF-16 code units/)
+  })
 })

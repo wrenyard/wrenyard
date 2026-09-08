@@ -14,6 +14,7 @@ import {
   TaskSettingsRuntimeUnavailableError,
   TaskSettingsService,
   TaskSettingsTaskNotFoundError,
+  taskInstructionTemplate,
   type TaskSettingsDaemonAvailabilityCallback,
   type TaskSettingsDefinitionSource,
   type TaskSettingsRuntimeAvailabilityCallback,
@@ -176,16 +177,20 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
 
 interface DefEntry {
   name: string
+  displayName?: string
   agentRuntime: string
   dispatch?: Record<string, unknown>
   timeoutMs?: number
   description?: string
   source?: string
+  /** Ordered TaskConfig-style instructions (strings + functions). */
+  instructions?: Array<string | ((input?: unknown) => string | Promise<string>)>
 }
 
 const BUILTIN_DEFS: DefEntry[] = [
   {
     name: 'commit',
+    displayName: 'Commit helper',
     agentRuntime: 'forge/fast',
     dispatch: { expectedTps: 80, minimumTps: 60 },
     timeoutMs: 120_000,
@@ -221,12 +226,16 @@ const BUILTIN_DEFS: DefEntry[] = [
 function defToSummary(entry: DefEntry, project?: string) {
   return {
     name: entry.name,
+    ...(entry.displayName !== undefined ? { displayName: entry.displayName } : {}),
     ...(project !== undefined ? { kind: 'project' as const, project } : { kind: 'builtin' as const }),
     source: entry.source ?? 'workspace',
     description: entry.description,
     agentRuntime: entry.agentRuntime,
     ...(entry.timeoutMs !== undefined ? { timeoutMs: entry.timeoutMs } : {}),
     ...(entry.dispatch !== undefined ? { dispatch: entry.dispatch } : {}),
+    ...(entry.instructions !== undefined
+      ? { instructionTemplate: taskInstructionTemplate({ instructions: entry.instructions, prompt: () => '' }) }
+      : {}),
   }
 }
 
@@ -243,6 +252,53 @@ function createDefinitionsFixture(): TaskSettingsDefinitionSource {
     },
     async describe(taskId, project) {
       const entry = findEntry(taskId)
+      if (!entry) throw new Error(`task '${taskId}' not found`)
+      const summary = defToSummary(entry, project)
+      return {
+        ...summary,
+        permission: 'readonly',
+        input_schema: { note: taskId },
+        output_schema: { done: true },
+      }
+    },
+  }
+}
+
+interface ProjectFixtureGroup {
+  id: string
+  displayName?: string
+  defs: DefEntry[]
+}
+
+/** Injectable source with registered-project discovery: unscoped listing yields
+ *  builtins only; each registered project lists exactly its own task defs. */
+function createGroupedDefinitionsFixture(projects: ProjectFixtureGroup[]): TaskSettingsDefinitionSource {
+  const projectOf = (taskId: string, project?: string): DefEntry | undefined => {
+    if (project !== undefined) {
+      const group = projects.find((entry) => entry.id === project)
+      const found = group?.defs.find((entry) => entry.name === taskId)
+      if (found) return found
+    }
+    return undefined
+  }
+  const anyProjectEntry = (taskId: string): DefEntry | undefined =>
+    projects.flatMap((group) => group.defs).find((entry) => entry.name === taskId)
+  const findEntry = (taskId: string, project?: string): DefEntry | undefined =>
+    projectOf(taskId, project) ?? BUILTIN_DEFS.find((entry) => entry.name === taskId) ?? anyProjectEntry(taskId)
+  return {
+    async list(project) {
+      if (project === undefined) return BUILTIN_DEFS.map((entry) => defToSummary(entry))
+      const group = projects.find((entry) => entry.id === project)
+      return group ? group.defs.map((entry) => defToSummary(entry, project)) : []
+    },
+    async listProjects() {
+      return projects.map((entry) => ({
+        id: entry.id,
+        ...(entry.displayName !== undefined ? { displayName: entry.displayName } : {}),
+      }))
+    },
+    async describe(taskId, project) {
+      const entry = findEntry(taskId, project)
       if (!entry) throw new Error(`task '${taskId}' not found`)
       const summary = defToSummary(entry, project)
       return {
@@ -611,6 +667,9 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(commit)
     assert.equal(commit.effective.mode.value, 'automatic')
     assert.deepEqual(commit.issues, [])
+    // The automatic row exposes the exact successful resolver result.
+    assert.equal(commit.resolved_runtime?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(commit.resolved_runtime?.model, PROFILES[0]!.model)
 
     // auto-fail resolves through the same resolver path and stays as a row with
     // a structured unavailable issue (never dropped).
@@ -618,6 +677,8 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(autoFail)
     assert.equal(autoFail.effective.mode.value, 'automatic')
     assert.ok(autoFail.issues.some((issue) => issue.code === 'automatic_dispatch_unavailable'))
+    // A failed automatic resolution never exposes a stale or alternate runtime.
+    assert.equal(autoFail.resolved_runtime, null)
   })
 
   it('explicit preflight runs through resolveExplicit/listExactRuntimes with no fallback', async () => {
@@ -639,6 +700,9 @@ describe('daemon task-settings-service (no-model)', () => {
       ['forge/cb-dsf', 'forge/codex-luna', 'forge/codex-sol'].sort(),
     )
     assert.equal(review.explicit.resolved?.exactAgentRuntime, 'forge/codex-sol')
+    // The row-level resolved runtime mirrors the exact explicit resolution.
+    assert.equal(review.resolved_runtime?.exactAgentRuntime, 'forge/codex-sol')
+    assert.equal(review.resolved_runtime?.model, PROFILES[2]!.model)
     // Readiness from injected non-billable availability callbacks.
     assert.ok(review.explicit.readiness)
     assert.equal(review.explicit.readiness.daemon, 'accepting')
@@ -657,6 +721,9 @@ describe('daemon task-settings-service (no-model)', () => {
       assert.equal(unavailable.explicit.resolved, null)
       assert.equal(unavailable.explicit.readiness, null)
     }
+    // The row-level resolved runtime stays null: no stale/alternate runtime is
+    // ever reported when the exact resolution fails.
+    assert.equal(unavailable.resolved_runtime, null)
   })
 
   it('exposes authoritative runtime_choices on automatic rows and reuses them for explicit rows', async () => {
@@ -676,6 +743,8 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(commit.effective.mode.value, 'automatic')
     assert.equal(commit.explicit, undefined)
     assert.equal(commit.effective.explicit_runtime.value, null)
+    // The automatic row's resolved runtime is the exact resolver selection.
+    assert.equal(commit.resolved_runtime?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
     assert.deepEqual(
       commit.runtime_choices.map((choice) => choice.exactAgentRuntime).sort(),
       ['forge/cb-dsf', 'forge/codex-luna'].sort(),
@@ -705,6 +774,8 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(unavailable.explicit)
     assert.deepEqual(unavailable.explicit.choices, unavailable.runtime_choices)
     assert.equal(unavailable.explicit.resolved, null)
+    // No stale or alternate runtime leaks into the row-level resolved runtime.
+    assert.equal(unavailable.resolved_runtime, null)
   })
 
   it('snapshot readiness reflects a non-accepting daemon and unknown quota', async () => {
@@ -1104,5 +1175,178 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.deepEqual(readConfig(), {
       tasks: { settings: { global: { selectionMode: 'automatic' } } },
     })
+  })
+
+  it('unscoped snapshot lists builtins once plus exact project tasks and never duplicates inherited builtins', async () => {
+    writeConfig({})
+    const groups: ProjectFixtureGroup[] = [
+      {
+        id: 'alpha',
+        displayName: 'Alpha 平台',
+        defs: [
+          { name: 'commit', displayName: 'Alpha commit task', agentRuntime: 'forge/fast', timeoutMs: 45_000 },
+          { name: 'alpha-only', displayName: 'Alpha only task', agentRuntime: 'forge/fast', timeoutMs: 30_000 },
+        ],
+      },
+      {
+        id: 'beta',
+        defs: [{ name: 'commit', displayName: 'Beta commit task', agentRuntime: 'forge/fast', timeoutMs: 55_000 }],
+      },
+    ]
+    const service = context!.makeService({
+      definitions: createGroupedDefinitionsFixture(groups),
+    })
+    const snapshot = await service.snapshot({})
+
+    // Every builtin is listed exactly once, regardless of any project.
+    for (const entry of BUILTIN_DEFS) {
+      const matches = snapshot.rows.filter((row) => row.identity === `builtin:${entry.name}`)
+      assert.equal(matches.length, 1, `expected exactly one builtin:${entry.name}`)
+    }
+    // Registered projects contribute exactly their own definitions.
+    assert.deepEqual(
+      snapshot.rows.filter((row) => row.identity.startsWith('project:alpha:')).map((row) => row.identity).sort(),
+      ['project:alpha:alpha-only', 'project:alpha:commit'],
+    )
+    assert.deepEqual(
+      snapshot.rows.filter((row) => row.identity.startsWith('project:beta:')).map((row) => row.identity),
+      ['project:beta:commit'],
+    )
+    // Inherited builtins are never duplicated under a project: auto-fail and
+    // unavailable exist only as builtin identities.
+    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:auto-fail'), false)
+    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:unavailable'), false)
+    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:review'), false)
+    // Deduplicated stable identities across the whole snapshot.
+    const identities = snapshot.rows.map((row) => row.identity)
+    assert.equal(new Set(identities).size, identities.length)
+  })
+
+  it('labels use authoritative display values then exact name/id fallbacks', async () => {
+    writeConfig({})
+    const groups: ProjectFixtureGroup[] = [
+      {
+        id: 'alpha',
+        displayName: 'Alpha 平台',
+        defs: [{ name: 'commit', displayName: 'Alpha commit task', agentRuntime: 'forge/fast' }],
+      },
+      { id: 'beta', defs: [{ name: 'commit', displayName: 'Beta commit task', agentRuntime: 'forge/fast' }] },
+    ]
+    const service = context!.makeService({
+      definitions: createGroupedDefinitionsFixture(groups),
+    })
+    const snapshot = await service.snapshot({})
+
+    const builtinCommit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(builtinCommit)
+    assert.equal(builtinCommit.name, 'commit')
+    assert.equal(builtinCommit.display_name, 'Commit helper')
+    assert.equal('project_display_name' in builtinCommit, false)
+
+    // auto-fail declares no displayName: exact task name fallback.
+    const builtinAutoFail = snapshot.rows.find((row) => row.identity === 'builtin:auto-fail')
+    assert.ok(builtinAutoFail)
+    assert.equal(builtinAutoFail.display_name, 'auto-fail')
+
+    // alpha is registered with a `.fmproj` display label; beta is not.
+    const alphaCommit = snapshot.rows.find((row) => row.identity === 'project:alpha:commit')
+    assert.ok(alphaCommit)
+    assert.equal(alphaCommit.display_name, 'Alpha commit task')
+    assert.equal(alphaCommit.project_display_name, 'Alpha 平台')
+    assert.equal(alphaCommit.project, 'alpha')
+
+    const betaCommit = snapshot.rows.find((row) => row.identity === 'project:beta:commit')
+    assert.ok(betaCommit)
+    assert.equal(betaCommit.display_name, 'Beta commit task')
+    // No authoritative project display label: exact project id fallback.
+    assert.equal(betaCommit.project_display_name, 'beta')
+  })
+
+  it('unscoped and scoped snapshots preserve stable per-project save scopes', async () => {
+    writeConfig({})
+    const groups: ProjectFixtureGroup[] = [
+      {
+        id: 'alpha',
+        displayName: 'Alpha 平台',
+        defs: [{ name: 'commit', agentRuntime: 'forge/fast' }, { name: 'alpha-only', agentRuntime: 'forge/fast' }],
+      },
+      { id: 'beta', defs: [{ name: 'commit', agentRuntime: 'forge/fast' }] },
+    ]
+    const service = context!.makeService({
+      definitions: createGroupedDefinitionsFixture(groups),
+    })
+    const before = await service.snapshot({ project: 'alpha' })
+    assert.equal(before.rows.some((row) => row.identity === 'project:alpha:commit'), true)
+
+    await service.save({
+      scope: 'task',
+      task_id: 'project:alpha:commit',
+      project: 'alpha',
+      expected_revision: before.revision,
+      patch: { timeout_ms: 222_000 },
+    })
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    // The per-task override is keyed only under the exact alpha project
+    // identity; the beta project sharing the name is untouched.
+    assert.deepEqual(byTask, { 'project:alpha:commit': { timeoutMs: 222_000 } })
+  })
+
+  it('projects a safe instruction_template preserving static text/order without executing anything', async () => {
+    writeConfig({})
+    const executed: string[] = []
+    const previewDef: DefEntry = {
+      name: 'preview',
+      agentRuntime: 'forge/fast',
+      instructions: [
+        'First static instruction.',
+        () => {
+          executed.push('second instruction executed')
+          return 'dynamic function guidance'
+        },
+        'Second static instruction.',
+      ],
+    }
+    const service = context!.makeService({
+      definitions: {
+        async list() {
+          return [defToSummary(previewDef)]
+        },
+        async listProjects() {
+          return []
+        },
+        async describe(taskId) {
+          if (taskId !== 'preview') throw new Error(`task '${taskId}' not found`)
+          return { ...defToSummary(previewDef), permission: 'readonly' }
+        },
+      },
+      daemonAvailability: () => {
+        throw new Error('daemon probe must not run for a preview')
+      },
+      runtimeAvailability: () => {
+        throw new Error('runtime availability must not be probed for a preview')
+      },
+    })
+    const snapshot = await service.snapshot({ task_id: 'builtin:preview' })
+
+    const row = snapshot.rows.find((entry) => entry.identity === 'builtin:preview')
+    assert.ok(row)
+    assert.deepEqual(row.builtin.instruction_template, [
+      { kind: 'text', source: 'task.instructions[0]', text: 'First static instruction.' },
+      { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
+      { kind: 'text', source: 'task.instructions[2]', text: 'Second static instruction.' },
+      // One additional-instructions slot in buildTaskPrompt order: after every
+      // TaskConfig instruction and before the input-dependent prompt body.
+      { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
+      { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
+    ])
+    // Static instructions kept their exact text and relative order, and the
+    // function instruction was never invoked.
+    assert.deepEqual(executed, [])
+    // Labels fall back to the exact task name when none is declared.
+    assert.equal(row.display_name, 'preview')
   })
 })

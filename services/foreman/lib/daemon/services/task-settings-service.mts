@@ -3,6 +3,7 @@ import type { TaskDispatchResolver } from '../../core/task/dispatch-resolver.mts
 import { TaskService } from '../../core/task/service.mts'
 import { synthesizeAgentRuntime } from '../../core/agent-runtime.mts'
 import { resolveTaskTarget } from '../../workspace/definition-registry.mts'
+import { discoverProjects } from '../../core/project/loader.mts'
 import type { ForemanConfigStore } from '../../config/manager.mts'
 import { JsonForemanConfigStore } from '../../config/manager.mts'
 import {
@@ -22,8 +23,10 @@ import {
 } from '../../config/task-settings.mts'
 import type {
   TaskSettingsAutomaticDispatch,
+  TaskSettingsEligibleChoice,
   TaskSettingsExplicitRow,
   TaskSettingsExplicitRuntime,
+  TaskSettingsInstructionSegment,
   TaskSettingsLayer as TaskSettingsLayerDto,
   TaskSettingsMode,
   TaskSettingsPatch,
@@ -66,6 +69,10 @@ export type {
  */
 export interface TaskSettingsDefinitionSummary {
   name: string
+  /** Authoritative human-facing task label; consumers fall back to the exact `name`. */
+  displayName?: string
+  /** Authoritative project display label for project rows; fallback to project id. */
+  projectDisplayName?: string
   kind?: 'builtin' | 'project'
   project?: string
   source?: string
@@ -74,6 +81,9 @@ export interface TaskSettingsDefinitionSummary {
   timeoutMs?: number
   dispatch?: unknown
   promptTemplate?: 'dynamic' | 'fixed'
+  /** Ordered safe preview segments of the builtin prompt template; never
+   *  produced by executing definition functions. */
+  instructionTemplate?: TaskSettingsInstructionSegment[]
 }
 
 export interface TaskSettingsDefinitionDetail extends TaskSettingsDefinitionSummary {
@@ -82,9 +92,19 @@ export interface TaskSettingsDefinitionDetail extends TaskSettingsDefinitionSumm
   output_schema?: unknown
 }
 
+/** One registered project known to project discovery: id plus the optional
+ *  authoritative `.fmproj` display label. */
+export interface TaskSettingsProjectSummary {
+  id: string
+  displayName?: string
+}
+
 export interface TaskSettingsDefinitionSource {
   list(project?: string): TaskSettingsDefinitionSummary[] | Promise<TaskSettingsDefinitionSummary[]>
   describe(taskId: string, project?: string): TaskSettingsDefinitionDetail | Promise<TaskSettingsDefinitionDetail>
+  /** Optional discovery-only view of registered projects (id + `.fmproj`
+   *  displayName). Never touches host paths, clones, sync, or remotes. */
+  listProjects?(): TaskSettingsProjectSummary[] | Promise<TaskSettingsProjectSummary[]>
 }
 
 export interface TaskSettingsProviderAvailability {
@@ -226,6 +246,51 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
     raw.dispatch = toSnakeDispatch(layer.dispatch)
   }
   return raw
+}
+
+/** The authoritative origin of a definition: its registered project id, or
+ *  undefined when the definition is builtin/workspace-scoped. */
+function authoritativeProjectOf(summary: TaskSettingsDefinitionSummary): string | undefined {
+  return summary.project !== undefined || summary.kind === 'project' ? summary.project : undefined
+}
+
+/** Stable identity of a definition independent of any snapshot project filter. */
+function summaryStableIdentity(summary: TaskSettingsDefinitionSummary): string {
+  const kind: 'builtin' | 'project' = summary.kind ?? (summary.project !== undefined ? 'project' : 'builtin')
+  return taskSettingsIdentity({
+    kind,
+    name: summary.name,
+    ...(kind === 'project' && summary.project !== undefined ? { project: summary.project } : {}),
+  })
+}
+
+/** Safe, non-executing preview of the resolved TaskConfig prompt template.
+ *
+ *  Mirrors the exact buildTaskPrompt structure and ordering: each string
+ *  instruction becomes a verbatim `text` segment in source order, each
+ *  function instruction becomes an explicit placeholder segment (never
+ *  invoked, never source-inspected), one `additional_instructions` slot is
+ *  inserted where buildTaskPrompt appends the resolved additional
+ *  instructions document (after every TaskConfig instruction), and the
+ *  input-dependent `config.prompt` body is represented as a final
+ *  placeholder. Nothing is executed and no prompt text is fabricated. */
+export function taskInstructionTemplate(
+  config: { instructions?: unknown; prompt?: unknown } | undefined,
+): TaskSettingsInstructionSegment[] {
+  const segments: TaskSettingsInstructionSegment[] = []
+  const instructions = Array.isArray(config?.instructions) ? config.instructions : []
+  for (const [index, instruction] of instructions.entries()) {
+    if (typeof instruction === 'string') {
+      if (instruction.trim()) {
+        segments.push({ kind: 'text', source: `task.instructions[${index}]`, text: instruction })
+      }
+    } else if (typeof instruction === 'function') {
+      segments.push({ kind: 'placeholder', source: `task.instructions[${index}]`, label: '运行时填入任务输入' })
+    }
+  }
+  segments.push({ kind: 'additional_instructions', source: 'task.settings.additionalInstructions' })
+  segments.push({ kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' })
+  return segments
 }
 
 export class TaskSettingsService {
@@ -448,7 +513,7 @@ export class TaskSettingsService {
     const tasks = tasksSectionOf(record)
     const userGlobal = readGlobalTaskSettings(tasks)
 
-    const summaries = await this.definitions.list(params.project)
+    const summaries = await this.collectSnapshotSummaries(params)
     const rows: TaskSettingsTaskRow[] = []
     for (const summary of summaries) {
       const kind: 'builtin' | 'project' = summary.kind
@@ -469,6 +534,67 @@ export class TaskSettingsService {
       user_global: this.toLayerDto(userGlobal),
       rows,
     }
+  }
+
+  /** Collects the definitions backing one snapshot.
+   *
+   *  Scoped snapshots (a project filter) keep the historic behavior: the
+   *  source's project listing is used as-is. Unscoped snapshots enumerate the
+   *  builtin list exactly once and then, for every project registered in
+   *  project discovery, only the definitions whose authoritative source is
+   *  that exact project — inherited builtins are never duplicated under a
+   *  project. Results are deduplicated by stable identity and project rows are
+   *  decorated with their authoritative `.fmproj` display label. */
+  private async collectSnapshotSummaries(
+    params: TaskSettingsSnapshotParams,
+  ): Promise<TaskSettingsDefinitionSummary[]> {
+    if (params.project === undefined && this.definitions.listProjects !== undefined) {
+      const [unscoped, projects] = await Promise.all([
+        this.definitions.list(undefined),
+        this.definitions.listProjects(),
+      ])
+      const builtins = unscoped.filter((summary) => authoritativeProjectOf(summary) === undefined)
+      const grouped: TaskSettingsDefinitionSummary[] = [...builtins]
+      const seen = new Set(builtins.map((summary) => summaryStableIdentity(summary)))
+      for (const project of projects) {
+        let projectDefs: TaskSettingsDefinitionSummary[]
+        try {
+          projectDefs = (await this.definitions.list(project.id)).filter(
+            (summary) => authoritativeProjectOf(summary) === project.id,
+          )
+        } catch {
+          // A discovered project without resolvable task metadata contributes
+          // nothing; it never fails the whole snapshot.
+          projectDefs = []
+        }
+        for (const summary of projectDefs) {
+          const identity = summaryStableIdentity(summary)
+          if (seen.has(identity)) continue
+          seen.add(identity)
+          grouped.push(
+            project.displayName !== undefined && summary.projectDisplayName === undefined
+              ? { ...summary, projectDisplayName: project.displayName }
+              : summary,
+          )
+        }
+      }
+      return grouped
+    }
+
+    const summaries = await this.definitions.list(params.project)
+    if (params.project !== undefined && this.definitions.listProjects !== undefined) {
+      const label = (await this.definitions.listProjects()).find(
+        (project) => project.id === params.project,
+      )?.displayName
+      if (label !== undefined) {
+        return summaries.map((summary) =>
+          authoritativeProjectOf(summary) === params.project && summary.projectDisplayName === undefined
+            ? { ...summary, projectDisplayName: label }
+            : summary,
+        )
+      }
+    }
+    return summaries
   }
 
   async save(params: TaskSettingsSaveParams): Promise<TaskSettingsSnapshotResult> {
@@ -612,7 +738,12 @@ export class TaskSettingsService {
 
     let detail: TaskSettingsDefinitionDetail | undefined
     try {
-      detail = await this.definitions.describe(summary.name, project)
+      // Project rows resolve their detail in the row's own project context so
+      // unscoped snapshots still get authoritative project labels/templates.
+      detail = await this.definitions.describe(
+        summary.name,
+        kind === 'project' ? summary.project ?? project : project,
+      )
     } catch {
       detail = undefined
     }
@@ -640,6 +771,11 @@ export class TaskSettingsService {
     const source = summary.source ?? detail?.source ?? ''
     const description = summary.description ?? detail?.description
     const projectName = kind === 'project' ? summary.project ?? project : undefined
+    const displayName = summary.displayName ?? detail?.displayName ?? summary.name
+    const projectDisplayName = kind === 'project'
+      ? summary.projectDisplayName ?? detail?.projectDisplayName ?? projectName ?? ''
+      : undefined
+    const instructionTemplate = summary.instructionTemplate ?? detail?.instructionTemplate ?? []
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
     let explicitRow: TaskSettingsExplicitRow | undefined
@@ -660,6 +796,10 @@ export class TaskSettingsService {
         .filter((item) => item.available && item.resolved !== undefined)
         .map((item) => ({ ...item.resolved!, exactAgentRuntime: item.exactAgentRuntime }))
       : []
+    // Row-level current resolved runtime: the exact successful automatic or
+    // explicit resolver result, or null on any resolution/readiness failure.
+    // It is a fresh per-row value and never reuses a stale or fallback runtime.
+    let resolved_runtime: TaskSettingsEligibleChoice | null = null
     if (effective.mode === 'explicit') {
       if (runtimeId === undefined) {
         issues.push({
@@ -685,6 +825,9 @@ export class TaskSettingsService {
             triple,
           )
           explicitRow = { runtime: triple, choices: runtimeChoices, resolved, readiness }
+          // Row-level runtime stays the exact resolver result only while live
+          // readiness confirms the run could start now; otherwise it is null.
+          if (readiness.available) resolved_runtime = resolved
         } else {
           issues.push({
             code: 'explicit_runtime_unavailable',
@@ -706,13 +849,17 @@ export class TaskSettingsService {
           code: 'automatic_dispatch_unavailable',
           message: resolution.error.message,
         })
+      } else {
+        resolved_runtime = { ...resolution.resolved, exactAgentRuntime: resolution.exactAgentRuntime }
       }
     }
 
     return {
       identity,
       name: summary.name,
+      display_name: displayName,
       ...(projectName !== undefined ? { project: projectName } : {}),
+      ...(projectDisplayName !== undefined ? { project_display_name: projectDisplayName } : {}),
       builtin: {
         identity,
         name: summary.name,
@@ -720,6 +867,7 @@ export class TaskSettingsService {
         ...(description !== undefined ? { description } : {}),
         ...(projectName !== undefined ? { project: projectName } : {}),
         prompt_template: summary.promptTemplate ?? detail?.promptTemplate ?? 'dynamic',
+        instruction_template: instructionTemplate,
         declared_runtime: builtinLayer.agentRuntime ?? null,
         timeout_ms: builtinLayer.timeoutMs ?? null,
         dispatch: toSnakeDispatch(builtinLayer.dispatch ?? {}),
@@ -739,6 +887,7 @@ export class TaskSettingsService {
         automatic,
       },
       runtime_choices: runtimeChoices,
+      resolved_runtime,
       ...(explicitRow !== undefined ? { explicit: explicitRow } : {}),
       issues,
     }
@@ -1081,6 +1230,12 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
     service ??= new TaskService({ workspaceRoot })
     return service
   }
+  /** Authoritative `.fmproj` display label for a registered project id, when
+   *  the project is known to project discovery. */
+  const projectLabel = (projectId: string | undefined): string | undefined => {
+    if (projectId === undefined) return undefined
+    return discoverProjects(workspaceRoot).get(projectId)?.config.displayName
+  }
   return {
     async list(project) {
       const items = await getService().list(project)
@@ -1099,11 +1254,14 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             promptTemplate?: unknown
           }
           const projectName = record.project !== undefined ? String(record.project) : undefined
+          const projectDisplayName = projectLabel(projectName)
           return {
             name: item.name,
             ...(projectName !== undefined
               ? { kind: 'project' as const, project: projectName }
               : { kind: 'builtin' as const }),
+            ...(config?.displayName !== undefined ? { displayName: config.displayName } : {}),
+            ...(projectDisplayName !== undefined ? { projectDisplayName } : {}),
             ...(record.source !== undefined ? { source: String(record.source) } : {}),
             ...(record.description !== undefined ? { description: String(record.description) } : {}),
             ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
@@ -1116,9 +1274,16 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
               ? { promptTemplate: record.promptTemplate }
               : {}),
+            instructionTemplate: taskInstructionTemplate(config),
           }
         })
         : []
+    },
+    async listProjects() {
+      return [...discoverProjects(workspaceRoot).values()].map((node) => ({
+        id: node.id,
+        ...(node.config.displayName !== undefined ? { displayName: node.config.displayName } : {}),
+      }))
     },
     async describe(taskId, project) {
       const detail = await getService().describe(taskId, project)
@@ -1127,11 +1292,15 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
       const config = target?.definition.config
       const declaredAgentRuntime = config?.agentRuntime
         ?? (config?.profile ? synthesizeAgentRuntime(config.profile).toString() : undefined)
+      const recordProject = record.project !== undefined ? String(record.project) : undefined
+      const projectDisplayName = projectLabel(recordProject ?? project)
       const summary: TaskSettingsDefinitionSummary = {
         name: String(record.name ?? ''),
         ...(record.project !== undefined
           ? { kind: 'project' as const, project: String(record.project) }
           : { kind: 'builtin' as const }),
+        ...(config?.displayName !== undefined ? { displayName: config.displayName } : {}),
+        ...(projectDisplayName !== undefined ? { projectDisplayName } : {}),
         ...(record.source !== undefined ? { source: String(record.source) } : {}),
         ...(record.description !== undefined ? { description: String(record.description) } : {}),
         ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
@@ -1140,6 +1309,7 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
         ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
           ? { promptTemplate: record.promptTemplate }
           : {}),
+        instructionTemplate: taskInstructionTemplate(config),
       }
       return {
         ...summary,

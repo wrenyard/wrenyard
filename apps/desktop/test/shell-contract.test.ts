@@ -72,6 +72,30 @@ test('task settings IPC channels and API methods are the only task settings surf
 });
 
 test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO', () => {
+  // The exact runtime this automatic row currently resolves to; the title can
+  // render it directly without re-inferring resolution.
+  const resolvedRuntime = {
+    exactAgentRuntime: 'forge/codex-luna',
+    client: 'codex',
+    provider: 'codex',
+    model: 'gpt-5.6-luna',
+    model_id: 'codex/gpt-5.6-luna',
+    mode: 'native' as const,
+    intelligence: 'mid',
+    speed: {
+      effective_tps: 107,
+      source: 'catalog_default',
+      sample_count: 0,
+      checked_at: '2026-09-05T00:00:00.000Z',
+      expected_tps_met: true,
+    },
+    reference_pricing: {
+      input_usd_per_million: 0.2,
+      output_usd_per_million: 1.2,
+      source: 'catalog',
+      checked_at: '2026-09-05T00:00:00.000Z',
+    },
+  };
   const snapshot: TaskSettingsSnapshot = {
     config_path: '/Users/me/.wrenyard/tasks/config.json',
     revision: 'global-rev',
@@ -84,12 +108,19 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
     rows: [{
       identity: 'builtin:build',
       name: 'build',
+      display_name: 'Build project',
       builtin: {
         identity: 'builtin:build',
         name: 'build',
         source: 'shell',
         description: 'Compile and check.',
         prompt_template: 'dynamic',
+        instruction_template: [
+          { kind: 'text', source: 'task.instructions[0]', text: 'Run the full build.' },
+          { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
+          { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
+          { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
+        ],
         declared_runtime: null,
         timeout_ms: 300_000,
         dispatch: { expected_tps: 20, required_capabilities: ['text'] },
@@ -119,28 +150,9 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
       // An automatic row still carries the authoritative exact runtime picker
       // options so the UI can offer explicit selection without fabricating a
       // current explicit runtime.
-      runtime_choices: [{
-        exactAgentRuntime: 'forge/codex-luna',
-        client: 'codex',
-        provider: 'codex',
-        model: 'gpt-5.6-luna',
-        model_id: 'codex/gpt-5.6-luna',
-        mode: 'native',
-        intelligence: 'mid',
-        speed: {
-          effective_tps: 107,
-          source: 'catalog_default',
-          sample_count: 0,
-          checked_at: '2026-09-05T00:00:00.000Z',
-          expected_tps_met: true,
-        },
-        reference_pricing: {
-          input_usd_per_million: 0.2,
-          output_usd_per_million: 1.2,
-          source: 'catalog',
-          checked_at: '2026-09-05T00:00:00.000Z',
-        },
-      }],
+      runtime_choices: [resolvedRuntime],
+      // Row-level exact resolved runtime drives direct title rendering.
+      resolved_runtime: resolvedRuntime,
       issues: [],
     }],
   };
@@ -150,11 +162,19 @@ test('TaskSettingsSnapshot rows and effective values mirror the daemon wire DTO'
   assert.equal(taskRow.identity, 'builtin:build');
   assert.equal(taskRow.builtin.identity, 'builtin:build');
   assert.equal(taskRow.builtin.name, 'build');
+  assert.equal(taskRow.display_name, 'Build project');
   assert.equal(taskRow.builtin.prompt_template, 'dynamic');
+  // Read-only instruction_template mirrors the daemon's safe ordered preview.
+  assert.deepEqual(taskRow.builtin.instruction_template, [
+    { kind: 'text', source: 'task.instructions[0]', text: 'Run the full build.' },
+    { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
+    { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
+    { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
+  ]);
   // Row top-level keys are exactly the stable wire fields; no invented wrappers.
   assert.deepEqual(
     Object.keys(taskRow).sort(),
-    ['builtin', 'effective', 'identity', 'issues', 'name', 'runtime_choices', 'user_task'],
+    ['builtin', 'display_name', 'effective', 'identity', 'issues', 'name', 'resolved_runtime', 'runtime_choices', 'user_task'],
   );
   assert.equal('task_id' in taskRow, false);
   assert.equal('revision' in taskRow, false);

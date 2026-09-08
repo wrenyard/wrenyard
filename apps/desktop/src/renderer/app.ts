@@ -29,7 +29,7 @@ import type {
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
-import { ConversationView } from './conversation.js';
+import { ConversationView, renderRichText } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
@@ -65,34 +65,20 @@ const tasksNav = requireElement<HTMLButtonElement>('tasks-nav');
 const tasksPage = requireElement<HTMLElement>('tasks-page');
 const tasksRefresh = requireElement<HTMLButtonElement>('tasks-refresh');
 const tasksRefreshLabel = requireElement<HTMLElement>('tasks-refresh-label');
-const tasksStatus = requireElement<HTMLElement>('tasks-status');
 const tasksList = requireElement<HTMLElement>('tasks-list');
 const tasksDetail = requireElement<HTMLElement>('tasks-detail');
 const tasksDetailName = requireElement<HTMLElement>('tasks-detail-name');
-const tasksDetailProject = requireElement<HTMLElement>('tasks-detail-project');
-const tasksDetailSource = requireElement<HTMLElement>('tasks-detail-source');
-const tasksDetailCard = requireElement<HTMLElement>('tasks-detail-card');
+const tasksDetailIdentity = requireElement<HTMLElement>('tasks-detail-identity');
+const tasksDetailRuntime = requireElement<HTMLElement>('tasks-detail-runtime');
 const tasksModeSelect = requireElement<HTMLSelectElement>('tasks-mode');
 const tasksModelSelect = requireElement<HTMLSelectElement>('tasks-model-select');
 const tasksRuntimeField = requireElement<HTMLElement>('tasks-runtime-field');
 const tasksTimeoutInput = requireElement<HTMLInputElement>('tasks-timeout');
 const tasksInstructionsInput = requireElement<HTMLTextAreaElement>('tasks-instructions');
-const tasksExpectedTpsInput = requireElement<HTMLInputElement>('tasks-expected-tps');
-const tasksMinimumTpsInput = requireElement<HTMLInputElement>('tasks-minimum-tps');
-const tasksIntelligenceMin = requireElement<HTMLSelectElement>('tasks-intelligence-min');
-const tasksIntelligenceMax = requireElement<HTMLSelectElement>('tasks-intelligence-max');
-const tasksMaxOutputPriceInput = requireElement<HTMLInputElement>('tasks-max-output-price');
-const tasksAutomaticDetails = requireElement<HTMLDetailsElement>('tasks-automatic-details');
+const tasksPreview = requireElement<HTMLElement>('tasks-preview');
 const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
 const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
-const tasksGlobalMode = requireElement<HTMLSelectElement>('tasks-global-mode');
-const tasksGlobalRuntime = requireElement<HTMLSelectElement>('tasks-global-runtime');
-const tasksGlobalRuntimeField = requireElement<HTMLElement>('tasks-global-runtime-field');
-const tasksGlobalTimeout = requireElement<HTMLInputElement>('tasks-global-timeout');
-const tasksGlobalInstructions = requireElement<HTMLTextAreaElement>('tasks-global-instructions');
-const tasksGlobalSave = requireElement<HTMLButtonElement>('tasks-global-save');
-const tasksGlobalReset = requireElement<HTMLButtonElement>('tasks-global-reset');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
 const clientPlanError = requireElement<HTMLElement>('client-plan-error');
@@ -123,6 +109,8 @@ let petDirty = false;
 let dialogProvider: ProviderCatalogSnapshot | null = null;
 let currentPage: ShellPage = 'workbench';
 let currentStats: StatsSnapshot | null = null;
+/** Read-only authoritative TaskSettings display names keyed by stable identity. */
+let taskDisplayNames: ReadonlyMap<string, string> = new Map();
 let currentQuota: QuotaSnapshot | null = null;
 let selectedPeriod: StatsPeriod = '24h';
 let providerOrderSaving = false;
@@ -936,8 +924,72 @@ function taskRunStatusLabel(status: TaskRunSnapshot['status'] | undefined): stri
   if (status === 'done') return '完成';
   if (status === 'failed') return '失败';
   if (status === 'cancelled') return '取消';
+  if (status === 'interrupted') return '中断';
   if (status === 'running') return '运行中';
+  if (status === 'queued') return '排队中';
   return '未知';
+}
+
+function taskRunStatusGlyph(status: TaskRunSnapshot['status'] | undefined): string {
+  if (status === 'done') return '✓';
+  if (status === 'failed') return '✕';
+  if (status === 'cancelled') return '—';
+  if (status === 'interrupted') return '■';
+  if (status === 'running') return '●';
+  if (status === 'queued') return '○';
+  return '?';
+}
+
+/** One compact status icon; visual first column with tooltip and accessible name. */
+function taskRunStatusCell(run: TaskRunSnapshot): HTMLElement {
+  const cell = document.createElement('span');
+  cell.className = `task-run-status is-${run.status ?? 'unknown'}`;
+  cell.setAttribute('role', 'img');
+  const label = taskRunStatusLabel(run.status);
+  cell.setAttribute('aria-label', label);
+  cell.title = label;
+  cell.textContent = taskRunStatusGlyph(run.status);
+  return cell;
+}
+
+/** Stable identity from the authoritative TaskSettings rows, or null when unknowable. */
+function taskRunIdentity(run: TaskRunSnapshot): string | null {
+  if (run.source === 'builtin') return `builtin:${run.taskId}`;
+  if (run.source === 'project') {
+    const project = run.project;
+    return project && project.length > 0 ? `project:${project}:${run.taskId}` : null;
+  }
+  return null;
+}
+
+/** Authoritative display name when the identity still exists; otherwise the exact identifier. */
+function taskDisplayLabel(run: TaskRunSnapshot): string {
+  const identity = taskRunIdentity(run);
+  if (identity === null) return run.taskId;
+  return taskDisplayNames.get(identity) ?? run.taskId;
+}
+
+function taskRunCell(value: string): HTMLElement {
+  const cell = document.createElement('span');
+  cell.textContent = value;
+  cell.title = value;
+  return cell;
+}
+
+/** Model identity cell: full resolved model id/name stays a plain model cell; a
+ *  lone persisted legacy resolvedProfile renders verbatim but is labeled truthfully
+ *  as run-configuration history, never as a reconstructed full model identity. */
+function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
+  const identity = run.resolvedModelId ?? run.resolvedModel;
+  if (identity !== undefined && identity !== null) return taskRunCell(identity);
+  const profile = run.resolvedProfile;
+  if (profile === undefined || profile === null) return taskRunCell('-');
+  const legacyNote = `运行配置：${profile}（历史记录未保存完整模型身份）`;
+  const cell = document.createElement('span');
+  cell.textContent = profile;
+  cell.title = legacyNote;
+  cell.setAttribute('aria-label', legacyNote);
+  return cell;
 }
 
 function renderTaskRuns(snapshot: StatsSnapshot): void {
@@ -948,40 +1000,28 @@ function renderTaskRuns(snapshot: StatsSnapshot): void {
     return;
   }
   list.replaceChildren(
-    tableHeader(['Task', '状态', '模型', 'Token', '选择速度', '实测 TPS', '参考费用（估算）', '尝试 / 完整']),
+    tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度']),
     ...runs.slice(0, 50).map((run) => {
-      const usage = run.usage;
-      const knownTokenDetails = [
-        usage.inputTokens !== undefined ? `入 ${formatCompactTokenCount(usage.inputTokens)}` : null,
-        usage.outputTokens !== undefined ? `出 ${formatCompactTokenCount(usage.outputTokens)}` : null,
-      ].filter((value): value is string => value !== null);
-      const tokenLabel = usage.totalTokens === undefined && knownTokenDetails.length === 0
-        ? '未知'
-        : [`总量 ${usage.totalTokens === undefined ? '未知' : formatCompactTokenCount(usage.totalTokens)}`, ...knownTokenDetails].join(' · ');
-      const speedLabel = run.speed === undefined
-        ? '未知'
-        : `${run.speed.effectiveTps.toFixed(1)} · ${run.speed.source === 'local_31d' ? '本机 31 天' : run.speed.source === 'catalog_default' ? '目录默认' : '未知来源'}`
-          + (run.speed.expectedTpsMet === false ? '（低于预期）' : run.speed.degradationReason ? '（已降级）' : '');
-      const actualTpsLabel = usage.outputTps === undefined ? '未知' : usage.outputTps.toFixed(2);
-      const costLabel = usage.referenceCostUsd === undefined ? '未知' : `$${usage.referenceCostUsd.toFixed(4)}`;
-      const completenessLabel = usage.completeness === 'complete'
-        ? '完整'
-        : usage.completeness === 'partial'
-          ? '部分'
-          : '未知';
-      const modelLabel = run.resolvedProfile === undefined && run.resolvedModel === undefined
-        ? '未知'
-        : [run.resolvedProfile, run.resolvedModel].filter((value): value is string => value !== undefined).join(' / ');
-      return tableRow([
-        run.taskName ?? run.taskId,
-        taskRunStatusLabel(run.status),
-        modelLabel,
-        tokenLabel,
-        speedLabel,
-        actualTpsLabel,
-        costLabel,
-        `尝试 ${usage.attemptCount} · ${completenessLabel}`,
-      ], `task-run-row${run.status === 'failed' ? ' is-failed' : ''}`);
+      const active = run.status === 'queued' || run.status === 'running';
+      const inputTokens = active || run.usage.inputTokens === undefined
+        ? '-'
+        : `↑${formatCount(run.usage.inputTokens)}`;
+      const outputTokens = active || run.usage.outputTokens === undefined
+        ? '-'
+        : `↓${formatCount(run.usage.outputTokens)}`;
+      const speedLabel = active || run.usage.outputTps === undefined
+        ? '-'
+        : `${run.usage.outputTps.toFixed(2)} TPS`;
+      const row = document.createElement('div');
+      row.className = `table-row task-run-row${run.status ? ` is-${run.status}` : ''}`;
+      row.append(
+        taskRunStatusCell(run),
+        taskRunCell(taskDisplayLabel(run)),
+        taskRunModelCell(run),
+        taskRunCell(`${inputTokens} / ${outputTokens}`),
+        taskRunCell(speedLabel),
+      );
+      return row;
     }),
   );
 }
@@ -1038,11 +1078,23 @@ async function refreshStats(): Promise<void> {
   statsRefreshButton.disabled = true;
   statsRefreshLabel.textContent = '刷新中…';
   try {
-    renderStats(await window.wrenyardShell.getStats());
+    const [snapshot, settings] = await Promise.all([
+      window.wrenyardShell.getStats(),
+      window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null),
+    ]);
+    buildTaskDisplayNames(settings);
+    renderStats(snapshot);
   } finally {
     statsRefreshButton.disabled = false;
     statsRefreshLabel.textContent = '刷新';
   }
+}
+
+/** Rebuilds the read-only authoritative display-name map from TaskSettings rows. */
+function buildTaskDisplayNames(settings: TaskSettingsSnapshot | null): void {
+  const map = new Map<string, string>();
+  for (const row of settings?.rows ?? []) map.set(row.identity, row.display_name);
+  taskDisplayNames = map;
 }
 
 async function refreshQuota(forceRefresh: boolean): Promise<void> {
@@ -1102,11 +1154,6 @@ function tasksErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function setTasksStatus(label: string, kind: 'is-connected' | 'is-unavailable' | 'is-pending'): void {
-  tasksStatus.textContent = label;
-  tasksStatus.className = `status-pill ${kind}`;
-}
-
 function setTasksError(message: string): void {
   tasksError.textContent = message;
 }
@@ -1116,80 +1163,103 @@ function tasksSelectedRow(): TaskSettingsTaskRow | null {
   return taskSettings.rows.find((row) => row.identity === tasksSelectedTaskId) ?? null;
 }
 
-function taskSourceLabel(source: TaskSettingsTaskRow['effective']['mode']['source']): string {
-  return ({
-    system: '系统', builtin: '内置', user_global: '全局默认', user_task: '当前任务', invocation: '单次运行',
-  } as const)[source];
-}
-
-function taskModeLabel(mode: 'automatic' | 'explicit'): string {
-  return mode === 'explicit' ? '指定运行时' : '自动选择';
-}
-
 function taskIssues(row: TaskSettingsTaskRow): string[] {
-  const issues = [...row.issues, ...(row.explicit?.readiness?.issues ?? [])].map((issue) => issue.message);
-  if (row.explicit?.readiness?.quota === 'unknown') issues.push('额度未知');
-  return [...new Set(issues)];
+  return [...new Set(row.issues.map((issue) => issue.message))];
+}
+
+function tasksCategoryHeader(label: string, count: number, level: number): HTMLElement {
+  const header = document.createElement('div');
+  header.className = 'tasks-tree-category';
+  header.setAttribute('role', 'treeitem');
+  header.setAttribute('aria-level', String(level));
+  header.setAttribute('aria-expanded', 'true');
+  const name = document.createElement('span');
+  name.textContent = label;
+  const total = document.createElement('small');
+  total.textContent = String(count);
+  header.append(name, total);
+  return header;
+}
+
+function tasksTreeGroup(): HTMLElement {
+  const group = document.createElement('div');
+  group.className = 'tasks-tree-group';
+  group.setAttribute('role', 'group');
+  return group;
+}
+
+function tasksTreeLeaf(row: TaskSettingsTaskRow, level: number): HTMLElement {
+  const selected = row.identity === tasksSelectedTaskId;
+  const leaf = document.createElement('div');
+  leaf.className = `tasks-tree-leaf${selected ? ' is-selected' : ''}`;
+  leaf.setAttribute('role', 'treeitem');
+  leaf.setAttribute('aria-level', String(level));
+  leaf.setAttribute('aria-selected', String(selected));
+  leaf.tabIndex = 0;
+  const label = document.createElement('span');
+  label.className = 'tasks-tree-label';
+  label.textContent = row.display_name;
+  leaf.append(label);
+  const issues = taskIssues(row);
+  if (issues.length > 0) {
+    const indicator = document.createElement('span');
+    indicator.className = 'tasks-issue-indicator';
+    indicator.textContent = '!';
+    indicator.tabIndex = 0;
+    indicator.title = issues.join('\n');
+    indicator.setAttribute('aria-label', `需要处理：${issues.join('；')}`);
+    indicator.addEventListener('click', (event) => event.stopPropagation());
+    leaf.append(indicator);
+  }
+  leaf.addEventListener('click', () => void selectTasksFile(row.identity));
+  leaf.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    void selectTasksFile(row.identity);
+  });
+  return leaf;
 }
 
 function renderTasksList(): void {
   const rows = taskSettings?.rows ?? [];
   tasksList.replaceChildren();
+  if (!taskSettings) {
+    tasksList.append(emptyRow('无法读取任务设置'));
+    return;
+  }
   if (rows.length === 0) {
     tasksList.append(emptyRow('暂无任务设置'));
     return;
   }
+  const fragment = document.createDocumentFragment();
+  const builtinRows = rows.filter((row) => !row.project);
+  if (builtinRows.length > 0) {
+    fragment.append(tasksCategoryHeader('内置', builtinRows.length, 1));
+    const builtinGroup = tasksTreeGroup();
+    for (const row of builtinRows) builtinGroup.append(tasksTreeLeaf(row, 2));
+    fragment.append(builtinGroup);
+  }
+  const projects = new Map<string, TaskSettingsTaskRow[]>();
   for (const row of rows) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = `tasks-list-row${row.identity === tasksSelectedTaskId ? ' is-selected' : ''}`;
-    item.setAttribute('role', 'listitem');
-    const copy = document.createElement('span');
-    const name = document.createElement('strong');
-    name.textContent = row.name;
-    const sub = document.createElement('small');
-    sub.textContent = row.project ? `${row.identity} · ${row.project}` : row.identity;
-    copy.append(name, sub);
-    const pill = document.createElement('span');
-    pill.className = `tasks-source-pill${row.effective.mode.source === 'user_task' ? ' is-machine' : ''}`;
-    pill.textContent = taskModeLabel(row.effective.mode.value);
-    const issues = taskIssues(row);
-    if (issues.length > 0) {
-      const warning = document.createElement('span');
-      warning.className = 'tasks-issue-indicator';
-      warning.textContent = '!';
-      warning.tabIndex = 0;
-      warning.title = issues.join('\n');
-      warning.setAttribute('aria-label', `需要处理：${issues.join('；')}`);
-      pill.append(warning);
+    if (!row.project) continue;
+    const bucket = projects.get(row.project) ?? [];
+    bucket.push(row);
+    projects.set(row.project, bucket);
+  }
+  if (projects.size > 0) {
+    const projectRowCount = rows.filter((row) => row.project).length;
+    fragment.append(tasksCategoryHeader('项目', projectRowCount, 1));
+    const projectCategory = tasksTreeGroup();
+    for (const [project, projectRows] of projects) {
+      const lead = projectRows[0];
+      projectCategory.append(tasksCategoryHeader(lead?.project_display_name ?? project, projectRows.length, 2));
+      const projectGroup = tasksTreeGroup();
+      for (const row of projectRows) projectGroup.append(tasksTreeLeaf(row, 3));
+      projectCategory.append(projectGroup);
     }
-    item.append(copy, pill);
-    item.addEventListener('click', () => selectTasksFile(row.identity));
-    tasksList.append(item);
+    fragment.append(projectCategory);
   }
-}
-
-function taskContractValue(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function tasksReadonlyRow(title: string, value: unknown): HTMLElement | null {
-  const rendered = taskContractValue(value);
-  if (!rendered) return null;
-  const row = document.createElement('div');
-  row.className = 'tasks-readonly-row';
-  const heading = document.createElement('h3');
-  heading.textContent = title;
-  const body = document.createElement('p');
-  body.textContent = rendered;
-  row.append(heading, body);
-  return row;
+  tasksList.append(fragment);
 }
 
 function renderTasksDetail(): void {
@@ -1199,44 +1269,9 @@ function renderTasksDetail(): void {
     return;
   }
   tasksDetail.hidden = false;
-  tasksDetailName.textContent = row.name;
-  tasksDetailProject.textContent = `${row.identity}${row.project ? ` · PROJECT ${row.project}` : ''}`;
-  tasksDetailSource.textContent = taskModeLabel(row.effective.mode.value);
-  tasksDetailSource.className = `status-pill ${taskIssues(row).length > 0 ? 'is-unavailable' : 'is-connected'}`;
-  tasksDetailSource.setAttribute('aria-label', `生效方式：${taskModeLabel(row.effective.mode.value)}，来源：${taskSourceLabel(row.effective.mode.source)}`);
-
-  const card = tasksDetailCard;
-  card.replaceChildren();
-  const issueMessages = taskIssues(row);
-  if (issueMessages.length > 0) {
-    const issue = document.createElement('p');
-    issue.className = 'tasks-readonly-note is-warning';
-    issue.textContent = `需要处理：${issueMessages.join('；')}`;
-    card.append(issue);
-  }
-  const readonlyRows = [
-    tasksReadonlyRow('生效来源', {
-      mode: taskSourceLabel(row.effective.mode.source),
-      runtime: taskSourceLabel(row.effective.explicit_runtime.source),
-      timeout: taskSourceLabel(row.effective.timeout_ms.source),
-      instructions: taskSourceLabel(row.effective.additional_instructions.source),
-    }),
-    tasksReadonlyRow('任务说明', row.builtin.description),
-    tasksReadonlyRow('低频自动约束', {
-      required_capabilities: row.effective.automatic.required_capabilities,
-      exclude_model_ids: row.effective.automatic.exclude_model_ids,
-      exclude_profile_ids: row.effective.automatic.exclude_profile_ids,
-      exclude_client_ids: row.effective.automatic.exclude_client_ids,
-      exclude_provider_ids: row.effective.automatic.exclude_provider_ids,
-      preferred_runtime: row.effective.automatic.preferred_runtime,
-    }),
-    tasksReadonlyRow('内置动态提示', row.builtin.prompt_template === 'dynamic' ? '是（只读）' : '否（只读）'),
-    tasksReadonlyRow('配置文件', taskSettings?.config_path),
-  ];
-  for (const element of readonlyRows) {
-    if (element) card.append(element);
-  }
-  renderTasksChoiceOptions(tasksModelSelect, row.runtime_choices);
+  tasksDetailName.textContent = row.display_name;
+  tasksDetailIdentity.textContent = row.identity;
+  tasksDetailRuntime.textContent = row.resolved_runtime?.exactAgentRuntime ?? '未解析';
   populateTaskForm(row);
 }
 
@@ -1270,48 +1305,65 @@ function exactRuntimeValue(choices: readonly TaskSettingsEligibleChoice[], runti
   return choices.find((choice) => choice.client === runtime.client && choice.provider === runtime.provider && choice.model === runtime.model)?.exactAgentRuntime ?? '';
 }
 
-function setSourceText(id: string, label: string, source: TaskSettingsTaskRow['effective']['mode']['source']): void {
-  setText(id, `${label} · 来源：${taskSourceLabel(source)}`);
+function resolvedAdditionalInstructionsContent(row: TaskSettingsTaskRow): string | null {
+  const draft = tasksInstructionsInput.value;
+  if (draft.trim() !== '') return draft;
+  const hasTaskOverride = typeof row.user_task.additional_instructions === 'string';
+  if (hasTaskOverride) {
+    const fallback = taskSettings?.user_global.additional_instructions;
+    return typeof fallback === 'string' && fallback !== '' ? fallback : null;
+  }
+  const effective = row.effective.additional_instructions.value;
+  return effective && effective !== '' ? effective : null;
+}
+
+function renderTasksPreview(): void {
+  tasksPreview.replaceChildren();
+  const row = tasksSelectedRow();
+  if (!row) return;
+  for (const segment of row.builtin.instruction_template) {
+    if (segment.kind === 'text') {
+      tasksPreview.append(renderRichText(segment.text));
+      continue;
+    }
+    if (segment.kind === 'placeholder') {
+      const chip = document.createElement('span');
+      chip.className = 'task-preview-placeholder';
+      chip.textContent = segment.label;
+      tasksPreview.append(chip);
+      continue;
+    }
+    if (segment.kind === 'additional_instructions') {
+      const content = resolvedAdditionalInstructionsContent(row);
+      if (content === null) {
+        const none = document.createElement('span');
+        none.className = 'tasks-preview-none';
+        none.textContent = '无附加指令';
+        tasksPreview.append(none);
+        continue;
+      }
+      const block = document.createElement('div');
+      block.className = 'task-preview-instructions';
+      block.append(renderRichText(content));
+      tasksPreview.append(block);
+    }
+  }
 }
 
 function populateTaskForm(row: TaskSettingsTaskRow): void {
   tasksModeSelect.value = row.user_task.mode ?? '';
+  renderTasksChoiceOptions(tasksModelSelect, row.runtime_choices);
   tasksModelSelect.value = exactRuntimeValue(row.runtime_choices, row.user_task.explicit_runtime);
   tasksTimeoutInput.value = row.user_task.timeout_ms?.toString() ?? '';
   tasksInstructionsInput.value = row.user_task.additional_instructions ?? '';
-  tasksExpectedTpsInput.value = row.user_task.automatic?.expected_tps?.toString() ?? '';
-  tasksMinimumTpsInput.value = row.user_task.automatic?.minimum_tps?.toString() ?? '';
-  tasksIntelligenceMin.value = row.user_task.automatic?.intelligence_min ?? '';
-  tasksIntelligenceMax.value = row.user_task.automatic?.intelligence_max ?? '';
-  tasksMaxOutputPriceInput.value = row.user_task.automatic?.max_output_usd_per_million?.toString() ?? '';
-  setSourceText('tasks-mode-source', taskModeLabel(row.effective.mode.value), row.effective.mode.source);
-  const effectiveRuntime = row.effective.explicit_runtime.value;
-  setSourceText('tasks-runtime-source', effectiveRuntime ? `${effectiveRuntime.client}/${effectiveRuntime.provider}/${effectiveRuntime.model}` : '未指定', row.effective.explicit_runtime.source);
-  setSourceText('tasks-timeout-source', row.effective.timeout_ms.value === null ? '未设置' : `${row.effective.timeout_ms.value} ms`, row.effective.timeout_ms.source);
-  setSourceText('tasks-instructions-source', row.effective.additional_instructions.value ? '已有附加指令' : '无附加指令', row.effective.additional_instructions.source);
-  updateTasksModeVisibility(row.effective.mode.value);
+  updateTasksModeVisibility();
+  renderTasksPreview();
   tasksSaveButton.disabled = tasksSaveBusy;
   tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
 }
 
-function updateTasksModeVisibility(inheritedMode?: 'automatic' | 'explicit'): void {
-  const mode = tasksModeSelect.value || inheritedMode || 'automatic';
-  tasksRuntimeField.hidden = mode !== 'explicit';
-  tasksAutomaticDetails.hidden = mode === 'explicit';
-}
-
-function populateGlobalForm(): void {
-  if (!taskSettings) return;
-  const layer = taskSettings.user_global;
-  tasksGlobalMode.value = layer.mode ?? '';
-  const choices = [...new Map(taskSettings.rows.flatMap((row) => row.runtime_choices).map((choice) => [choice.exactAgentRuntime, choice])).values()];
-  renderTasksChoiceOptions(tasksGlobalRuntime, choices);
-  tasksGlobalRuntime.value = exactRuntimeValue(choices, layer.explicit_runtime);
-  tasksGlobalTimeout.value = layer.timeout_ms?.toString() ?? '';
-  tasksGlobalInstructions.value = layer.additional_instructions ?? '';
-  tasksGlobalRuntimeField.hidden = tasksGlobalMode.value !== 'explicit';
-  tasksGlobalReset.disabled = tasksSaveBusy || Object.keys(layer).length === 0;
-  tasksGlobalSave.disabled = tasksSaveBusy;
+function updateTasksModeVisibility(): void {
+  tasksRuntimeField.hidden = tasksModeSelect.value !== 'explicit';
 }
 
 function positiveNumber(value: string, label: string): number | null {
@@ -1327,7 +1379,7 @@ function selectedRuntime(select: HTMLSelectElement, choices: readonly TaskSettin
   return { client: choice.client, provider: choice.provider, model: choice.model };
 }
 
-function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeSelect: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[], timeoutValue: string, instructionsValue: string, includeAutomatic: boolean): TaskSettingsPatch {
+function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeSelect: HTMLSelectElement, choices: readonly TaskSettingsEligibleChoice[], timeoutValue: string, instructionsValue: string): TaskSettingsPatch {
   const patch: TaskSettingsPatch = {};
   const mode = modeValue as '' | 'automatic' | 'explicit';
   if ((layer.mode ?? '') !== mode) patch.mode = mode === '' ? null : mode;
@@ -1341,21 +1393,6 @@ function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeSel
   if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
   const instructions = instructionsValue.trim() === '' ? null : instructionsValue;
   if ((layer.additional_instructions ?? null) !== instructions) patch.additional_instructions = instructions;
-  if (includeAutomatic) {
-    const values = {
-      expected_tps: positiveNumber(tasksExpectedTpsInput.value, '期望速度'),
-      minimum_tps: positiveNumber(tasksMinimumTpsInput.value, '最低速度'),
-      intelligence_min: tasksIntelligenceMin.value || null,
-      intelligence_max: tasksIntelligenceMax.value || null,
-      max_output_usd_per_million: positiveNumber(tasksMaxOutputPriceInput.value, '输出参考价上限'),
-    };
-    const automatic: Record<string, unknown> = {};
-    for (const [field, value] of Object.entries(values)) {
-      const previous = layer.automatic?.[field as keyof NonNullable<TaskSettingsLayer['automatic']>] ?? null;
-      if (previous !== value) automatic[field] = value;
-    }
-    if (Object.keys(automatic).length > 0) patch.automatic = automatic as TaskSettingsPatch['automatic'];
-  }
   return patch;
 }
 
@@ -1373,30 +1410,26 @@ async function selectTasksFile(taskId: string): Promise<void> {
   renderTasksList();
   renderTasksDetail();
   setTasksError('');
-  setTasksStatus('已载入', 'is-connected');
 }
 
 async function loadTasks(): Promise<void> {
   tasksRefresh.disabled = true;
   tasksRefreshLabel.textContent = '读取中…';
-  setTasksStatus('读取中', 'is-pending');
   try {
     taskSettings = await window.wrenyardShell.getTaskSettings();
     if (!taskSettings.rows.some((row) => row.identity === tasksSelectedTaskId)) {
       tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
     }
-    populateGlobalForm();
     renderTasksList();
     if (tasksSelectedTaskId) renderTasksDetail();
     else tasksDetail.hidden = true;
-    setTasksStatus('已载入', 'is-connected');
+    setTasksError('');
   } catch (error) {
     taskSettings = null;
     tasksSelectedTaskId = null;
     tasksList.replaceChildren(emptyRow('无法读取任务设置'));
     tasksDetail.hidden = true;
     setTasksError(`读取失败：${tasksErrorMessage(error)}`);
-    setTasksStatus('读取失败', 'is-unavailable');
   } finally {
     tasksRefresh.disabled = false;
     tasksRefreshLabel.textContent = '刷新';
@@ -1413,7 +1446,6 @@ async function reloadTasksAuthoritative(): Promise<void> {
   if (!taskSettings || !taskSettings.rows.some((row) => row.identity === tasksSelectedTaskId)) {
     tasksSelectedTaskId = taskSettings?.rows[0]?.identity ?? null;
   }
-  if (taskSettings) populateGlobalForm();
   renderTasksList();
   if (tasksSelectedTaskId) renderTasksDetail();
   else tasksDetail.hidden = true;
@@ -1426,63 +1458,30 @@ async function saveTaskLayer(reset = false): Promise<void> {
   tasksSaveButton.disabled = true;
   setTasksError('');
   try {
-    const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksModelSelect, row.runtime_choices, tasksTimeoutInput.value, tasksInstructionsInput.value, true);
+    const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksModelSelect, row.runtime_choices, tasksTimeoutInput.value, tasksInstructionsInput.value);
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
     taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'task', task_id: row.identity, ...(row.project ? { project: row.project } : {}), expected_revision: taskSettings.revision, patch });
     if (!taskSettings.rows.some((candidate) => candidate.identity === row.identity)) tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
-    populateGlobalForm();
     renderTasksList();
     renderTasksDetail();
-    setTasksStatus(reset ? '已重置当前任务层' : '已保存任务设置', 'is-connected');
   } catch (error) {
     setTasksError(`保存失败：${tasksErrorMessage(error)}`);
-    setTasksStatus('保存未生效', 'is-unavailable');
     if (tasksErrorMessage(error).includes('冲突')) {
       const draft = readTaskDraft();
       await reloadTasksAuthoritative();
       applyTaskDraft(draft);
-      setTasksStatus('配置已刷新，草稿仍保留', 'is-pending');
+      setTasksError('保存冲突：配置已刷新，草稿仍保留');
     }
   } finally {
     tasksSaveBusy = false;
     tasksSaveButton.disabled = false;
     tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
-    tasksGlobalSave.disabled = false;
   }
 }
 
-interface TaskFormDraft { mode: string; runtime: string; timeout: string; instructions: string; expected: string; minimum: string; intelligenceMin: string; intelligenceMax: string; price: string }
-function readTaskDraft(): TaskFormDraft { return { mode: tasksModeSelect.value, runtime: tasksModelSelect.value, timeout: tasksTimeoutInput.value, instructions: tasksInstructionsInput.value, expected: tasksExpectedTpsInput.value, minimum: tasksMinimumTpsInput.value, intelligenceMin: tasksIntelligenceMin.value, intelligenceMax: tasksIntelligenceMax.value, price: tasksMaxOutputPriceInput.value }; }
-function applyTaskDraft(draft: TaskFormDraft): void { tasksModeSelect.value = draft.mode; tasksModelSelect.value = draft.runtime; tasksTimeoutInput.value = draft.timeout; tasksInstructionsInput.value = draft.instructions; tasksExpectedTpsInput.value = draft.expected; tasksMinimumTpsInput.value = draft.minimum; tasksIntelligenceMin.value = draft.intelligenceMin; tasksIntelligenceMax.value = draft.intelligenceMax; tasksMaxOutputPriceInput.value = draft.price; updateTasksModeVisibility(tasksSelectedRow()?.effective.mode.value); }
-
-async function saveGlobalLayer(reset = false): Promise<void> {
-  if (!taskSettings || tasksSaveBusy) return;
-  const snapshot = taskSettings;
-  const draft = { mode: tasksGlobalMode.value, runtime: tasksGlobalRuntime.value, timeout: tasksGlobalTimeout.value, instructions: tasksGlobalInstructions.value };
-  tasksSaveBusy = true;
-  tasksGlobalSave.disabled = true;
-  setTasksError('');
-  try {
-    const choices = [...new Map(snapshot.rows.flatMap((row) => row.runtime_choices).map((choice) => [choice.exactAgentRuntime, choice])).values()];
-    const patch = reset ? resetPatch(snapshot.user_global) : buildLayerPatch(snapshot.user_global, draft.mode, tasksGlobalRuntime, choices, draft.timeout, draft.instructions, false);
-    if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
-    taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'global', expected_revision: snapshot.revision, patch });
-    renderTasksList(); populateGlobalForm(); renderTasksDetail();
-    setTasksStatus(reset ? '已重置全局默认层' : '已保存全局默认', 'is-connected');
-  } catch (error) {
-    setTasksError(`保存失败：${tasksErrorMessage(error)}`);
-    setTasksStatus('保存未生效', 'is-unavailable');
-    if (tasksErrorMessage(error).includes('冲突')) {
-      await reloadTasksAuthoritative();
-      tasksGlobalMode.value = draft.mode; tasksGlobalRuntime.value = draft.runtime; tasksGlobalTimeout.value = draft.timeout; tasksGlobalInstructions.value = draft.instructions;
-      tasksGlobalRuntimeField.hidden = draft.mode !== 'explicit';
-      setTasksStatus('配置已刷新，草稿仍保留', 'is-pending');
-    }
-  } finally {
-    tasksSaveBusy = false;
-    tasksGlobalSave.disabled = false;
-  }
-}
+interface TaskFormDraft { mode: string; runtime: string; timeout: string; instructions: string }
+function readTaskDraft(): TaskFormDraft { return { mode: tasksModeSelect.value, runtime: tasksModelSelect.value, timeout: tasksTimeoutInput.value, instructions: tasksInstructionsInput.value }; }
+function applyTaskDraft(draft: TaskFormDraft): void { tasksModeSelect.value = draft.mode; tasksModelSelect.value = draft.runtime; tasksTimeoutInput.value = draft.timeout; tasksInstructionsInput.value = draft.instructions; updateTasksModeVisibility(); renderTasksPreview(); }
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
   const models = Array.from(card.querySelectorAll<HTMLInputElement>('input[data-client-model]:checked')).map((input) => input.dataset.clientModel ?? '').filter(Boolean);
@@ -1703,12 +1702,10 @@ window.addEventListener('keydown', (event) => {
 });
 
 tasksRefresh.addEventListener('click', () => void loadTasks());
-tasksModeSelect.addEventListener('change', () => updateTasksModeVisibility(tasksSelectedRow()?.effective.mode.value));
-tasksGlobalMode.addEventListener('change', () => { tasksGlobalRuntimeField.hidden = tasksGlobalMode.value !== 'explicit'; });
+tasksModeSelect.addEventListener('change', () => updateTasksModeVisibility());
 tasksSaveButton.addEventListener('click', () => void saveTaskLayer());
 tasksResetButton.addEventListener('click', () => void saveTaskLayer(true));
-tasksGlobalSave.addEventListener('click', () => void saveGlobalLayer());
-tasksGlobalReset.addEventListener('click', () => void saveGlobalLayer(true));
+tasksInstructionsInput.addEventListener('input', () => renderTasksPreview());
 
 window.wrenyardShell.onViewChanged(async (page) => {
   const changed = page !== currentPage;

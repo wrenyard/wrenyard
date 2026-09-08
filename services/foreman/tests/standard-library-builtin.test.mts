@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { z } from 'zod'
 import {
+  BUILTIN_METADATA,
   BUILTIN_NAMES,
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
@@ -163,6 +164,41 @@ describe('standard-library BUILTIN_TASKS index', () => {
       assert.equal(BUILTIN_NAMES.has(name), true, `${name} should be in BUILTIN_NAMES`)
     }
   })
+
+  it('every builtin carries its curated Chinese displayName and category from the single metadata map', () => {
+    assert.equal(Object.keys(BUILTIN_METADATA).length, 30)
+    for (const name of EXPECTED_BUILTIN_NAMES) {
+      const metadata = BUILTIN_METADATA[name]
+      assert.ok(metadata, `${name} should have builtin metadata`)
+      assert.ok(metadata.displayName.length > 0, `${name} should have a non-empty displayName`)
+      assert.ok(metadata.displayName.length <= 80, `${name} displayName must fit in 80 UTF-16 code units`)
+      const entry = BUILTIN_TASKS.find((e) => e.name === name)
+      assert.ok(entry, `${name} should be a builtin task`)
+      assert.equal(entry.definition.config.displayName, metadata.displayName)
+      assert.deepEqual(entry.definition.config.category, metadata.category)
+    }
+    // No second catalog drift: metadata keys exactly match builtin ids.
+    for (const key of Object.keys(BUILTIN_METADATA)) {
+      assert.equal(
+        EXPECTED_BUILTIN_NAMES.includes(key as (typeof EXPECTED_BUILTIN_NAMES)[number]),
+        true,
+        `metadata key ${key} must be a builtin id`,
+      )
+    }
+  })
+
+  it('keeps curated labels exact while categories and task ids stay unchanged', () => {
+    assert.equal(BUILTIN_METADATA.explore.displayName, '综合探索')
+    assert.equal(BUILTIN_METADATA.edit.displayName, '编辑文件')
+    assert.equal(BUILTIN_METADATA.implement.displayName, '实施（旧版）')
+    assert.deepEqual(BUILTIN_METADATA.explore.category, { id: 'explore', displayLabel: '代码探索' })
+    assert.deepEqual(BUILTIN_METADATA.edit.category, { id: 'edit', displayLabel: '编码' })
+    assert.deepEqual(BUILTIN_METADATA.implement.category, { id: 'edit', displayLabel: '编码' })
+    // The registry index (29 active + implement legacy) is untouched.
+    const active = BUILTIN_TASKS.filter((e) => e.definition.config.scheduling !== 'legacy')
+    assert.equal(active.length, 29)
+    assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'write-failing-test')
+  })
 })
 
 // ───────────────────────────────────────────────────────────────────
@@ -201,6 +237,33 @@ describe('standard-library builtin injection', () => {
       assert.equal(target.source, 'builtin')
       assert.equal(target.project, undefined)
     }
+  })
+
+  it('exposes the curated Chinese displayName on active builtin list and describe entries', async () => {
+    const workspace = makeTempDir('foreman-builtin-displayname-')
+    await discoverTasks(workspace)
+
+    const builtins = listTasks(workspace).filter((t) => t.source === 'builtin')
+    assert.equal(builtins.length, 29)
+    for (const task of builtins) {
+      const metadata = BUILTIN_METADATA[task.name]
+      assert.ok(metadata, `${task.name} should have builtin metadata`)
+      assert.equal(task.displayName, metadata.displayName)
+      assert.deepEqual(task.category, metadata.category)
+    }
+
+    for (const name of ['explore', 'edit', 'oracle', 'look-at', 'code-review']) {
+      const described = describeTask(name, workspace)
+      assert.ok(described, `${name} should be describable`)
+      assert.equal(described.displayName, BUILTIN_METADATA[name].displayName)
+    }
+
+    // The legacy implement entry stays describable with its curated label.
+    const implemented = describeTask('implement', workspace)
+    assert.ok(implemented)
+    assert.equal(implemented.displayName, '实施（旧版）')
+    assert.equal(implemented.scheduling, 'legacy')
+    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
   })
 
   it('rejects qualified task ids instead of parsing them', async () => {

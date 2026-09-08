@@ -250,7 +250,7 @@ function appendInlineMarkdown(target: HTMLElement, text: string): void {
   }
 }
 
-function renderRichText(text: string): DocumentFragment {
+export function renderRichText(text: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const parts = text.split(/(```[\s\S]*?```)/g);
   for (const part of parts) {

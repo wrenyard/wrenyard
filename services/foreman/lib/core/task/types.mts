@@ -52,6 +52,13 @@ export interface TaskConfig {
     id: string
     displayLabel: string
   }
+  /** Optional authoritative human-facing display label for this definition.
+   *  It is a trimmed single-line label of up to 80 UTF-16 code units and is
+   *  display metadata only: it never changes the task id, scheduling,
+   *  resolution, or execution semantics. Builtins receive their curated
+   *  label from `lib/standard`; project definitions may declare their own.
+   *  An omitted label stays backwards compatible. */
+  displayName?: string
   /** Declared runtime selector: '<runtime>/<config-id>' (e.g. 'forge/codex-luna').
    *  Concrete profiles are hard pins; fast/general/ultra select dynamically
    *  within `dispatch`. When absent, the legacy `profile` field is synthesized. */

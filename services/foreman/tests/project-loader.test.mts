@@ -392,3 +392,72 @@ test('resolveProjectPath uses canonical fallback for .fmproj host resolution', (
   assert.equal(resolveProjectPath('canonical', 'BUILD-NODE.local'), '/path/to/repo')
   assert.equal(resolveProjectPath('canonical', 'unknown'), null)
 })
+
+test('parses and trims the optional top-level display_name on .fmproj files', () => {
+  const workspaceDir = createWorkspaceWithProjectsDir()
+  const projectDir = join(workspaceDir, 'projects', 'app')
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(join(projectDir, 'app.fmproj'), 'name: app\ndescription: test\ndisplay_name: "  App 应用  "\n', 'utf-8')
+
+  const projects = discoverProjects(workspaceDir)
+  const project = projects.get('app')
+
+  assert.ok(project)
+  assert.equal(project.config.displayName, 'App 应用')
+  assert.equal(project.config.name, 'app')
+  assert.equal(project.flatName, 'app')
+  assert.equal(project.id, 'app')
+})
+
+test('preserves legacy .fmproj files that omit display_name', () => {
+  const workspaceDir = createWorkspaceWithProjectsDir()
+  const projectsDir = join(workspaceDir, 'projects')
+  writeFmproj(projectsDir, 'legacy', { name: 'legacy', description: 'Legacy project' })
+
+  const projects = discoverProjects(workspaceDir)
+  const project = projects.get('legacy')
+
+  assert.ok(project)
+  assert.equal(project.config.name, 'legacy')
+  assert.equal('displayName' in project.config, false)
+})
+
+test('rejects .fmproj display_name that is empty after trimming', () => {
+  const workspaceDir = createWorkspaceWithProjectsDir()
+  const projectDir = join(workspaceDir, 'projects', 'blank')
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(join(projectDir, 'blank.fmproj'), 'name: blank\ndescription: test\ndisplay_name: "   "\n', 'utf-8')
+
+  assert.throws(
+    () => discoverProjects(workspaceDir),
+    /Invalid display_name in blank\.fmproj: must be a non-empty string after trimming whitespace/,
+  )
+})
+
+test('rejects .fmproj display_name containing line breaks', () => {
+  const workspaceDir = createWorkspaceWithProjectsDir()
+  const projectDir = join(workspaceDir, 'projects', 'newline')
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(join(projectDir, 'newline.fmproj'), 'name: newline\ndescription: test\ndisplay_name: "a\\nb"\n', 'utf-8')
+
+  assert.throws(
+    () => discoverProjects(workspaceDir),
+    /Invalid display_name in newline\.fmproj: must not contain CR or LF line breaks/,
+  )
+})
+
+test('rejects .fmproj display_name longer than 80 UTF-16 code units', () => {
+  const workspaceDir = createWorkspaceWithProjectsDir()
+  const projectDir = join(workspaceDir, 'projects', 'long')
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(
+    join(projectDir, 'long.fmproj'),
+    `name: long\ndescription: test\ndisplay_name: "${'x'.repeat(81)}"\n`,
+    'utf-8',
+  )
+
+  assert.throws(
+    () => discoverProjects(workspaceDir),
+    /Invalid display_name in long\.fmproj: must not exceed 80 UTF-16 code units/,
+  )
+})

@@ -102,6 +102,9 @@ export interface ListedDefinition {
   project?: string
   path: string
   description?: string
+  /** Optional authoritative human-facing display label from the final
+   *  (project-overridden) definition. Trimmed single-line metadata only. */
+  displayName?: string
   /** Resolved optional task category ({id, displayLabel}); present only when
    *  the final (project-overridden) definition declares one. */
   category?: {
@@ -319,6 +322,7 @@ function isIntelligenceTier(value: unknown): value is IntelligenceTier {
 
 const CATEGORY_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u
 const CATEGORY_DISPLAY_MAX = 24
+const TASK_DISPLAY_NAME_MAX = 80
 
 /**
  * Validate an optional task category and return its canonical normalized form.
@@ -354,6 +358,35 @@ function resolveTaskCategory(config: TaskConfig, sourcePath: string): { id: stri
     throw new Error(`${sourcePath} task config category.displayLabel must not exceed ${CATEGORY_DISPLAY_MAX} UTF-16 code units`)
   }
   return { id: category.id, displayLabel }
+}
+
+/**
+ * Validate an optional task displayName and return its canonical normalized
+ * form. `displayName` is authoritative human-facing display metadata only: a
+ * trimmed single-line label of 1..80 UTF-16 code units that never changes the
+ * task id, scheduling, resolution, or execution semantics. Returns `undefined`
+ * when the task declares none (backwards compatible); throws on an invalid
+ * value. The returned string is the single canonical value stored in every
+ * list/describe surface, so a padded label is trimmed exactly once and raw
+ * config never leaks into summaries.
+ */
+function resolveTaskDisplayName(config: TaskConfig, sourcePath: string): string | undefined {
+  const displayName = config.displayName
+  if (displayName === undefined) return undefined
+  if (typeof displayName !== 'string') {
+    throw new Error(`${sourcePath} task config displayName must be a string when present`)
+  }
+  const normalized = displayName.trim()
+  if (normalized.length === 0) {
+    throw new Error(`${sourcePath} task config displayName must be a non-empty string after trimming whitespace`)
+  }
+  if (/[\r\n]/u.test(normalized)) {
+    throw new Error(`${sourcePath} task config displayName must not contain CR or LF line breaks`)
+  }
+  if (normalized.length > TASK_DISPLAY_NAME_MAX) {
+    throw new Error(`${sourcePath} task config displayName must not exceed ${TASK_DISPLAY_NAME_MAX} UTF-16 code units`)
+  }
+  return normalized
 }
 const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'out', 'build', 'coverage']
 const registries = new Map<string, Registry>()
@@ -527,6 +560,7 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
   validateAgentRuntimeSelector(definition.config, absolutePath)
   validateTaskDispatch(definition.config, absolutePath)
   resolveTaskCategory(definition.config, absolutePath)
+  resolveTaskDisplayName(definition.config, absolutePath)
 
   const duplicate = findDuplicateInScope(registry.tasks, name, scope, absolutePath)
   if (duplicate) {
@@ -583,6 +617,7 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
   source: DefinitionSource
   project?: string
   description?: string
+  displayName?: string
   category?: {
     id: string
     displayLabel: string
@@ -601,11 +636,13 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
     .filter((entry) => entry.definition.config.scheduling !== 'legacy')
     .map((entry) => {
     const category = resolveTaskCategory(entry.definition.config, entry.sourcePath)
+    const displayName = resolveTaskDisplayName(entry.definition.config, entry.sourcePath)
     return {
       name: entry.name,
       source: entry.source,
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.definition.config.description ? { description: entry.definition.config.description } : {}),
+      ...(displayName ? { displayName } : {}),
       ...(category ? { category } : {}),
       ...(entry.definition.config.scheduling
         ? { scheduling: entry.definition.config.scheduling }
@@ -826,12 +863,14 @@ function recordDuplicateErrorsForEntries(
 function taskToListed(entry: RegisteredTask, overrides?: Record<string, string>): ListedDefinition {
   const normalizedInput = taskInputSchemaWithContext(normalizeSchema(entry.definition.config.input as any))
   const category = resolveTaskCategory(entry.definition.config, entry.sourcePath)
+  const displayName = resolveTaskDisplayName(entry.definition.config, entry.sourcePath)
   return {
     name: entry.name,
     source: entry.source,
     ...(entry.project ? { project: entry.project } : {}),
     path: entry.sourcePath,
     ...(entry.definition.config.description ? { description: entry.definition.config.description } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(category ? { category } : {}),
     agentRuntime: resolveTaskAgentRuntime(entry.definition.config, entry.name, overrides),
     input_schema: normalizedInput,

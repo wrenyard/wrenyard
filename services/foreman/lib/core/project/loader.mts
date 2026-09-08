@@ -12,6 +12,7 @@ const FLAT_NAME_RE = /^[A-Za-z0-9._-]+$/u
 const ROOT_SCOPE = '__root__'
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'out', 'build', 'coverage'])
 const ORDINAL_RE = /-\d+$/u
+const DISPLAY_NAME_MAX = 80
 const warnedAmbiguousCanonicalHosts = new Set<string>()
 
 export function canonicalize(hostname: string): string {
@@ -196,6 +197,7 @@ function loadProjectFromFile(
 
   const name = typeof raw.name === 'string' ? raw.name.trim() : ''
   const description = typeof raw.description === 'string' ? raw.description.trim() : ''
+  const displayName = parseOptionalDisplayName(fileName, raw.display_name)
 
   if (!name) {
     console.error(`Skipping invalid project ${fileName} (missing name)`)
@@ -225,6 +227,7 @@ function loadProjectFromFile(
   const config: FmprojConfig = {
     name,
     description,
+    ...(displayName ? { displayName } : {}),
     git: parseGit(raw.git),
     hosts: parseHosts(raw.hosts),
   }
@@ -290,6 +293,31 @@ function parseHosts(raw: unknown): Record<string, string> | undefined {
   }
 
   return hasHost ? hosts : undefined
+}
+
+/**
+ * Parse and validate the optional top-level `.fmproj` `display_name` field.
+ * It is authoritative display metadata only: trimmed, non-empty, single-line,
+ * at most 80 UTF-16 code units. Returns `undefined` when the field is absent
+ * (backwards compatible) and throws a precise validation error for invalid
+ * values. It is never derived from `description` and never renames a project.
+ */
+function parseOptionalDisplayName(fileName: string, raw: unknown): string | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'string') {
+    throw new Error(`Invalid display_name in ${fileName}: must be a string when present`)
+  }
+  const displayName = raw.trim()
+  if (displayName.length === 0) {
+    throw new Error(`Invalid display_name in ${fileName}: must be a non-empty string after trimming whitespace`)
+  }
+  if (/[\r\n]/u.test(displayName)) {
+    throw new Error(`Invalid display_name in ${fileName}: must not contain CR or LF line breaks`)
+  }
+  if (displayName.length > DISPLAY_NAME_MAX) {
+    throw new Error(`Invalid display_name in ${fileName}: must not exceed ${DISPLAY_NAME_MAX} UTF-16 code units`)
+  }
+  return displayName
 }
 
 function isRecord(value: unknown): value is UnknownRecord {

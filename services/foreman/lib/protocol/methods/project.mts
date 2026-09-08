@@ -17,6 +17,7 @@ export interface ProjectListParams {}
 export interface ProjectEntry {
   name: string
   path: string
+  displayName?: string
   noWorktree?: boolean
   gitRemote?: string
   defaultBranch?: string
@@ -164,6 +165,7 @@ export const projectEntrySchema = {
   properties: {
     name: { type: 'string', minLength: 1 },
     path: { type: 'string', minLength: 1 },
+    displayName: { type: 'string' },
     noWorktree: { type: 'boolean' },
     gitRemote: { type: 'string' },
     defaultBranch: { type: 'string' },
