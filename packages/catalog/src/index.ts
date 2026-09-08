@@ -16,6 +16,11 @@ export type CredentialResolver =
 
 export type IntelligenceTier = 'low' | 'mid' | 'high' | 'frontier' | 'premium';
 
+// Genuine upstream reasoning-effort levels exposed as a product-owned field on
+// model definitions and dispatch plans. max/ultra are intentionally not part of
+// this product field, and levels are never inferred lexically from a model id.
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
 export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   low: 0,
   mid: 1,
@@ -62,6 +67,7 @@ export interface ModelDefinition {
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
   intelligence?: IntelligenceTier;
+  reasoningEffort?: ReasoningEffort;
   maxOutputTokens?: number;
   capabilities?: readonly ModelCapability[];
   speed?: ModelSpeedMeta;
@@ -79,6 +85,8 @@ export interface TaskDispatchRequirements {
   excludeProfileIds?: readonly string[];
   excludeClientIds?: readonly string[];
   excludeProviderIds?: readonly string[];
+  // Retained for interface compatibility but ignored by automatic constrained
+  // dispatch: a concrete runtime/alias preference exists only in explicit mode.
   preferredRuntime?: { client: string; provider: string; model: string };
 }
 
@@ -134,6 +142,9 @@ export interface ClientDefinition {
   id: string;
   nativeProvider?: string;
   gatewayProtocols: readonly GatewayProtocol[];
+  // Task-capable clients are enumerated as derived task dispatch candidates.
+  // Parseable public run syntax alone does not make a client task-capable.
+  taskCapable?: boolean;
 }
 
 export interface PublicGatewayModel extends ModelDefinition {
@@ -155,6 +166,9 @@ export interface DispatchPlan {
   model: string;
   mode: 'native' | 'gateway';
   protocol?: GatewayProtocol;
+  // The model's own product-owned upstream reasoning effort. It travels from the
+  // resolved model definition into the plan; aliases never own effort policy.
+  reasoningEffort?: ReasoningEffort;
 }
 
 function requireID(kind: string, value: string): void {
@@ -208,6 +222,42 @@ export class Catalog {
     return [...this.clientsByID.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  // Deterministically enumerate every exact compatible task-capable target from the
+  // registered providers/models and registered task-capable clients. Compatibility is
+  // decided only by resolveRun; parseability is not evidence that a client can run the
+  // target, and model aliases are never enumerated as separate candidates. taskOnly
+  // models are included: that flag hides them from public Gateway /models, it does not
+  // forbid them as Task targets.
+  enumerateTaskCandidates(): DispatchCandidate[] {
+    const taskClients = this.clients().filter((client) => client.taskCapable === true);
+    const candidates: DispatchCandidate[] = [];
+    for (const provider of this.providers()) {
+      for (const model of provider.models) {
+        for (const client of taskClients) {
+          let plan: DispatchPlan;
+          try {
+            plan = this.resolveRun(client.id, provider.id, model.id);
+          } catch {
+            continue; // Incompatible client/provider pair is not a candidate.
+          }
+          try {
+            // formatRunSyntax(plan) is the stable canonical profileId/target identity.
+            candidates.push({
+              profileId: formatRunSyntax(plan),
+              client: plan.client,
+              provider: plan.provider,
+              model: plan.model,
+            });
+          } catch {
+            continue; // Task-capable client without a public run-syntax key.
+          }
+        }
+      }
+    }
+    // Deterministic canonical target order, independent of declaration order.
+    return candidates.sort((a, b) => a.profileId.localeCompare(b.profileId));
+  }
+
   provider(id: string): ProviderDefinition | undefined {
     return this.providersByID.get(id);
   }
@@ -253,16 +303,18 @@ export class Catalog {
     const provider = this.providersByID.get(providerID);
     if (!provider) throw new Error(`unknown provider: ${providerID}`);
     modelID = provider.modelAliases?.[modelID] ?? modelID;
-    if (!provider.models.some((model) => model.id === modelID)) {
-      throw new Error(`unknown model: ${providerID}/${modelID}`);
-    }
+    const modelDef = provider.models.find((model) => model.id === modelID);
+    if (!modelDef) throw new Error(`unknown model: ${providerID}/${modelID}`);
+    // Carry the model's declared reasoning effort (when present) into the exact
+    // plan. Effort is product metadata on the model, never inferred lexically.
+    const effort = modelDef.reasoningEffort ? { reasoningEffort: modelDef.reasoningEffort } : {};
     if (provider.nativeClients?.includes(clientID)) {
-      return { client: clientID, provider: providerID, model: modelID, mode: 'native' };
+      return { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effort };
     }
     const protocol = client.gatewayProtocols.find((candidate) =>
       provider.protocols?.some((capability) => capability.protocol === candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
-    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol };
+    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...effort };
   }
 
 }
@@ -281,7 +333,6 @@ export function resolveConstrainedDispatch(
   const excludedProfiles = new Set(requirements.excludeProfileIds ?? []);
   const excludedClients = new Set(requirements.excludeClientIds ?? []);
   const excludedProviders = new Set(requirements.excludeProviderIds ?? []);
-  const preferred = requirements.preferredRuntime;
   const requiredCaps = requirements.requiredCapabilities ?? [];
 
   const eligible: DispatchResolution[] = [];
@@ -373,28 +424,202 @@ export function resolveConstrainedDispatch(
     return { ok: false, reason: 'no-eligible-candidate', considered };
   }
 
+  // Collapse by canonical provider/model before comparing different models. Every
+  // hard gate above has already admitted each survivor, so within one canonical
+  // provider/model the single representative client is chosen deterministically:
+  // a Catalog-native plan first; when no native plan is eligible, the grok
+  // gateway client before claude and the remaining gateway clients; then the
+  // stable client id. preferredRuntime never participates in automatic selection.
+  const byProviderModel = new Map<string, DispatchResolution[]>();
+  for (const entry of eligible) {
+    const key = `${entry.plan.provider}/${entry.plan.model}`;
+    const group = byProviderModel.get(key);
+    if (group) group.push(entry);
+    else byProviderModel.set(key, [entry]);
+  }
+  const collapsed: DispatchResolution[] = [];
+  for (const group of byProviderModel.values()) {
+    const native = group.filter((entry) => entry.plan.mode === 'native');
+    const usable = native.length > 0 ? native : group;
+    usable.sort((a, b) => {
+      if (native.length === 0) {
+        const aGrok = a.plan.client === 'grok' ? 0 : 1;
+        const bGrok = b.plan.client === 'grok' ? 0 : 1;
+        if (aGrok !== bGrok) return aGrok - bGrok;
+      }
+      return a.plan.client.localeCompare(b.plan.client);
+    });
+    collapsed.push(usable[0]);
+  }
+
   const expected = requirements.expectedTps;
-  eligible.sort((a, b) => {
-    // Deterministic ordering: expected-speed group first (meets expectedTps), then
-    // within the same group lower reference output price first, then declared
-    // preference, then stable canonical identity. A preferred candidate never
-    // bypasses the hard filters above.
+  collapsed.sort((a, b) => {
+    // Deterministic ordering across the collapsed model representatives:
+    // expected-speed group first (meets expectedTps), then lower reference
+    // output price first, then stable canonical provider/model identity. No
+    // concrete declared preference is consulted, so a preferredRuntime cannot
+    // alter the automatic client or provider/model outcome.
     const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
     const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
     if (aMeets !== bMeets) return aMeets ? -1 : 1;
     const pa = a.model.pricing?.outputUsdPerMillion ?? Number.POSITIVE_INFINITY;
     const pb = b.model.pricing?.outputUsdPerMillion ?? Number.POSITIVE_INFINITY;
     if (pa !== pb) return pa - pb;
-    const aPreferred = preferred && preferred.client === a.plan.client && preferred.provider === a.plan.provider && preferred.model === a.plan.model ? 1 : 0;
-    const bPreferred = preferred && preferred.client === b.plan.client && preferred.provider === b.plan.provider && preferred.model === b.plan.model ? 1 : 0;
-    if (aPreferred !== bPreferred) return bPreferred - aPreferred;
     const idA = `${a.plan.provider}/${a.plan.model}`;
     const idB = `${b.plan.provider}/${b.plan.model}`;
     return idA.localeCompare(idB);
   });
 
-  eligible.forEach((entry, index) => {
+  collapsed.forEach((entry, index) => {
     entry.rank = index + 1;
   });
-  return { ok: true, selected: eligible[0], considered };
+  return { ok: true, selected: collapsed[0], considered };
 }
+
+// Public dynamic run-target syntax (provider/model:client). These helpers are the
+// single source of truth for the public client-key table and the strict parse/format
+// contract for the syntax. Catalog remains the only compatibility resolver: a
+// parseable identity is not proof that a client can actually run the target.
+
+export interface RunSyntaxRef {
+  readonly client: string;
+  readonly provider: string;
+  readonly model: string;
+}
+
+export const PUBLIC_CLIENT_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  cc: 'claude',
+  cb: 'codebuddy',
+  codex: 'codex',
+  cur: 'cursor',
+  gk: 'grok',
+  dsh: 'dsh',
+  oc: 'opencode',
+});
+
+const CLIENT_KEY_BY_ID: Readonly<Record<string, string>> = Object.freeze(
+  Object.entries(PUBLIC_CLIENT_KEYS).reduce<Record<string, string>>((byID, [publicKey, client]) => {
+    byID[client] = publicKey;
+    return byID;
+  }, {}),
+);
+
+const RUN_SYNTAX_WHITESPACE = /\s/;
+
+function rejectWhitespace(label: string, value: string): void {
+  if (RUN_SYNTAX_WHITESPACE.test(value)) {
+    throw new Error(`${label} must not contain whitespace: ${JSON.stringify(value)}`);
+  }
+}
+
+export function parseRunSyntax(input: string): RunSyntaxRef {
+  if (input.length === 0) {
+    throw new Error(`run syntax must be a non-empty string: ${JSON.stringify(input)}`);
+  }
+  rejectWhitespace('run syntax', input);
+  const slash = input.indexOf('/');
+  if (slash === -1) {
+    throw new Error(`run syntax must separate provider and model with "/": ${JSON.stringify(input)}`);
+  }
+  const colon = input.indexOf(':');
+  if (colon === -1) {
+    throw new Error(`run syntax must separate model and client with ":": ${JSON.stringify(input)}`);
+  }
+  if (input.indexOf(':', colon + 1) !== -1) {
+    throw new Error(`run syntax must contain exactly one ":" separator: ${JSON.stringify(input)}`);
+  }
+  if (colon < slash) {
+    throw new Error(`run syntax must be provider/model:client with "/" before ":": ${JSON.stringify(input)}`);
+  }
+  // Split provider at the first slash so model ids may contain additional slashes,
+  // and take the client from the single (and therefore final) colon.
+  const provider = input.slice(0, slash);
+  const model = input.slice(slash + 1, colon);
+  const rawClient = input.slice(colon + 1);
+  if (provider.length === 0) {
+    throw new Error(`run syntax provider must not be empty: ${JSON.stringify(input)}`);
+  }
+  if (model.length === 0) {
+    throw new Error(`run syntax model must not be empty: ${JSON.stringify(input)}`);
+  }
+  const client: string | undefined = PUBLIC_CLIENT_KEYS[rawClient];
+  if (client === undefined) {
+    throw new Error(
+      `unknown client key ${JSON.stringify(rawClient)}; expected one of ${Object.keys(PUBLIC_CLIENT_KEYS).join(', ')}`,
+    );
+  }
+  return { client, provider, model };
+}
+
+export function formatRunSyntax(target: RunSyntaxRef): string {
+  const publicKey: string | undefined = CLIENT_KEY_BY_ID[target.client];
+  if (publicKey === undefined) {
+    throw new Error(
+      `unknown client ${JSON.stringify(target.client)}; expected one of ${Object.keys(CLIENT_KEY_BY_ID).join(', ')}`,
+    );
+  }
+  // Guarantee the canonical syntax round-trips: the parser splits provider at "/"
+  // and client at ":" and rejects whitespace, so reject those in formatted parts.
+  rejectWhitespace('provider', target.provider);
+  rejectWhitespace('model', target.model);
+  if (target.provider.length === 0) {
+    throw new Error('provider must not be empty');
+  }
+  if (target.model.length === 0) {
+    throw new Error('model must not be empty');
+  }
+  if (target.provider.includes('/')) {
+    throw new Error(`provider must not contain "/": ${JSON.stringify(target.provider)}`);
+  }
+  if (target.provider.includes(':') || target.model.includes(':')) {
+    throw new Error(
+      `provider and model must not contain ":": ${JSON.stringify(target.provider)} / ${JSON.stringify(target.model)}`,
+    );
+  }
+  return `${target.provider}/${target.model}:${publicKey}`;
+}
+
+export function resolveRunSyntax(catalog: Catalog, input: string): DispatchPlan {
+  const target = parseRunSyntax(input);
+  return catalog.resolveRun(target.client, target.provider, target.model);
+}
+export {
+  EFFICIENCY_EVIDENCE_WEIGHT,
+  EFFICIENCY_HEADROOM_WEIGHT,
+  FULL_CYCLE_HEADROOM_WEIGHT,
+  FULL_CYCLE_MIN_REMAINING,
+  FULL_CYCLE_RESET_PACE,
+  FULL_CYCLE_RESET_WEIGHT,
+  HEADROOM_CHALLENGE_MIN_GAP,
+  HEALTHY_ROLLING_REMAINING,
+  NEUTRAL_HEADROOM,
+  REFERENCE_PRICE_GATE_USD_PER_M,
+  SCORE_WEIGHTS,
+  STRAINED_ROLLING_REMAINING,
+  assessRequiredQuota,
+  evaluateCandidate,
+  rankAutoRoutingCandidates,
+} from './auto-routing-policy.js';
+export type {
+  AutoRoutingResult,
+  CandidateAssessment,
+  CandidateEvaluation,
+  CandidateInput,
+  ConstraintAssessment,
+  ConstraintRejectCode,
+  ConstraintState,
+  ExcludedCandidate,
+  ExcludedReason,
+  MarginalPriceEvidence,
+  QuotaAssessment,
+  QuotaBurnEfficiencyDomain,
+  QuotaBurnEfficiencyEvidence,
+  QuotaEvidence,
+  QuotaState,
+  QuotaTier,
+  RankedCandidate,
+  ReferenceKind,
+  ReplenishmentKind,
+  RequiredQuotaConstraint,
+  WorstApplicableMarker,
+} from './auto-routing-policy.js';
