@@ -1439,4 +1439,131 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.deepEqual(tasks.settings.global, { maxAutoOutputUsdPerMillion: 3 })
     assert.equal(tempResidue().length, 0)
   })
+
+  it('automatic preview rows reuse quota and credential evidence within one snapshot request only', async () => {
+    writeConfig({})
+    let quotaCalls = 0
+    const probeTriples: Array<{ client: string; provider: string; model: string }> = []
+    // The quota service itself does not cache, so counting snapshot() calls
+    // proves the request-scoped memo (not the service) collapses them.
+    const realQuotaService = unknownQuotaSnapshotService()
+    const quotaService = {
+      snapshot: () => {
+        quotaCalls += 1
+        return realQuotaService.snapshot()
+      },
+    } as unknown as AutoRoutingQuotaSnapshotService
+    const service = context!.makeService({
+      quotaSnapshots: quotaService,
+      runtimeAvailability: (runtime) => {
+        probeTriples.push(runtime)
+        return {
+          providerCredential: 'available',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: true,
+        }
+      },
+    })
+
+    // One snapshot request contains multiple automatic rows ('commit', 'review',
+    // plus failing 'auto-fail') that share the same eligible exact runtimes.
+    // Quota is obtained once and each canonical runtime readiness is probed at
+    // most once across all automatic rows.
+    const first = await service.snapshot({})
+    assert.equal(quotaCalls, 1)
+    assert.deepEqual(probeTriples, PROFILES.map((profile) => runtimeTriple(profile)))
+    assert.equal(first.rows.filter((row) => row.automatic_selection !== undefined).length, 2)
+
+    const commit = first.rows.find((row) => row.identity === 'builtin:commit')
+    const review = first.rows.find((row) => row.identity === 'builtin:review')
+    assert.ok(commit)
+    assert.ok(commit.automatic_selection)
+    assert.ok(review)
+    assert.ok(review.automatic_selection)
+    // Row automatic selections remain correct: each preview row matches what the
+    // fresh run path resolves for the same effective requirements.
+    const commitRun = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { timeoutMs: 120_000, dispatch: { expectedTps: 80, minimumTps: 60 } },
+    })
+    const reviewRun = await service.resolveForRun({
+      taskName: 'review',
+      kind: 'builtin',
+      defaults: { timeoutMs: 180_000, dispatch: { maxOutputUsdPerMillion: 15 } },
+    })
+    assert.equal(commit.automatic_selection.exact_runtime, commitRun.exactAgentRuntime)
+    assert.equal(review.automatic_selection.exact_runtime, reviewRun.exactAgentRuntime)
+    assert.deepEqual(commit.issues, [])
+
+    // The memo is request-scoped and never leaks: a second snapshot request
+    // performs fresh request-scoped probes again (one quota snapshot, one probe
+    // per canonical runtime) while the chosen semantics stay identical.
+    quotaCalls = 0
+    probeTriples.length = 0
+    const second = await service.snapshot({})
+    assert.equal(quotaCalls, 1)
+    assert.deepEqual(probeTriples, PROFILES.map((profile) => runtimeTriple(profile)))
+    const secondCommit = second.rows.find((row) => row.identity === 'builtin:commit')
+    const secondReview = second.rows.find((row) => row.identity === 'builtin:review')
+    assert.ok(secondCommit)
+    assert.ok(secondCommit.automatic_selection)
+    assert.ok(secondReview)
+    assert.ok(secondReview.automatic_selection)
+    // Rows stay semantically identical across requests: same exact runtime
+    // (provider/model/client target) and the same ranked decision and reasons.
+    // Only the request-scoped quota snapshot identity inside auto_routing
+    // refreshes, so compare the stable selection semantics instead of deep
+    // equal-ing the whole object and requiring a stale snapshot_id.
+    const splitSnapshotIdentity = (value: unknown): { body: unknown; snapshotIds: string[] } => {
+      if (Array.isArray(value)) {
+        const bodies: unknown[] = []
+        const snapshotIds: string[] = []
+        for (const entry of value) {
+          const part = splitSnapshotIdentity(entry)
+          bodies.push(part.body)
+          snapshotIds.push(...part.snapshotIds)
+        }
+        return { body: bodies, snapshotIds }
+      }
+      if (value !== null && typeof value === 'object') {
+        const body: Record<string, unknown> = {}
+        const snapshotIds: string[] = []
+        for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+          if (key === 'snapshot_id' && typeof entry === 'string') {
+            snapshotIds.push(entry)
+          } else {
+            const part = splitSnapshotIdentity(entry)
+            body[key] = part.body
+            snapshotIds.push(...part.snapshotIds)
+          }
+        }
+        return { body, snapshotIds }
+      }
+      return { body: value, snapshotIds: [] }
+    }
+    const firstCommit = splitSnapshotIdentity(commit.automatic_selection)
+    const secondCommitParts = splitSnapshotIdentity(secondCommit.automatic_selection)
+    const firstReviewParts = splitSnapshotIdentity(review.automatic_selection)
+    const secondReviewParts = splitSnapshotIdentity(secondReview.automatic_selection)
+    assert.deepEqual(secondCommitParts.body, firstCommit.body)
+    assert.deepEqual(secondReviewParts.body, firstReviewParts.body)
+    assert.equal(
+      secondCommit.automatic_selection.exact_runtime,
+      commit.automatic_selection.exact_runtime,
+    )
+    assert.equal(
+      secondReview.automatic_selection.exact_runtime,
+      review.automatic_selection.exact_runtime,
+    )
+    // The second request consumed a fresh quota snapshot: its auto_routing
+    // snapshot_id must differ even though every semantic field stayed equal.
+    assert.ok(firstCommit.snapshotIds.length >= 1)
+    assert.ok(secondCommitParts.snapshotIds.length >= 1)
+    assert.notDeepEqual(secondCommitParts.snapshotIds, firstCommit.snapshotIds)
+    assert.ok(firstReviewParts.snapshotIds.length >= 1)
+    assert.ok(secondReviewParts.snapshotIds.length >= 1)
+    assert.notDeepEqual(secondReviewParts.snapshotIds, firstReviewParts.snapshotIds)
+  })
 })

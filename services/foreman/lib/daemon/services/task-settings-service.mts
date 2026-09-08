@@ -173,8 +173,9 @@ export interface TaskSettingsServiceOptions {
   /** Optional non-billable live provider credential/route availability probe. */
   runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
   /** Daemon-owned immutable automatic-routing quota snapshot service shared by
-   *  every automatic selection (run and snapshot row preview). One snapshot is
-   *  taken per selection call. */
+   *  every automatic selection (run and snapshot row preview). Snapshot row
+   *  preview takes one immutable snapshot per request; every other selection
+   *  call takes its own. */
   quotaSnapshots?: AutoRoutingQuotaSnapshotService
 }
 
@@ -522,6 +523,10 @@ export class TaskSettingsService {
 
     const summaries = await this.collectSnapshotSummaries(params)
     const rows: TaskSettingsTaskRow[] = []
+    // Request-scoped automatic preview memo for this snapshot request only:
+    // automatic rows reuse one immutable quota snapshot and one readiness probe
+    // per canonical runtime, so the list never repeats quota/credential reads.
+    const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
     for (const summary of summaries) {
       const kind: 'builtin' | 'project' = summary.kind
         ?? (summary.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
@@ -531,7 +536,7 @@ export class TaskSettingsService {
         ...(kind === 'project' ? { project: summary.project ?? params.project } : {}),
       })
       if (params.task_id !== undefined && summary.name !== params.task_id && identity !== params.task_id) continue
-      rows.push(await this.buildRow(summary, params.project, tasks, userGlobal))
+      rows.push(await this.buildRow(summary, params.project, tasks, userGlobal, previewMemo))
     }
 
     return {
@@ -748,6 +753,7 @@ export class TaskSettingsService {
     project: string | undefined,
     tasks: TasksConfigSettingsInput | undefined,
     userGlobal: ConfigTaskSettingsLayer | undefined,
+    previewMemo?: AutomaticPreviewMemo,
   ): Promise<TaskSettingsTaskRow> {
     const issues: TaskSettingsValidationIssue[] = []
     const kind: 'builtin' | 'project' = summary.kind
@@ -845,16 +851,19 @@ export class TaskSettingsService {
       }
     } else {
       // Automatic preview shares the exact automatic-selection helper used by
-      // automatic runs (same quota snapshot evidence, same availability/free/
-      // cap/client policy, same immutable ranking), but takes its own snapshot
-      // per row and never falls back. A failure surfaces as a structured issue.
+      // automatic runs (same availability/free/cap/client policy, same
+      // immutable ranking), but never falls back. All automatic rows in one
+      // snapshot request reuse the request-scoped preview memo — one immutable
+      // quota snapshot and one readiness probe per canonical runtime — so rows
+      // stay deterministic without repeating quota/credential reads. A failure
+      // surfaces as a structured issue.
       try {
         const selection = await this.resolveAutomaticSelection({
           taskName: summary.name,
           requirements: effective.dispatch,
           timeoutMs: effective.timeoutMs,
           maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
-        })
+        }, previewMemo)
         if (selection.ok) {
           automaticSelection = {
             exact_runtime: selection.exactAgentRuntime,
@@ -984,26 +993,55 @@ export class TaskSettingsService {
     }
   }
 
+  /** Non-billable live provider credential/route readiness for one canonical
+   *  runtime triple. When a request-scoped preview memo is supplied (automatic
+   *  snapshot rows only), each runtime is probed at most once and the same
+   *  resolved evidence is shared by every automatic row in the request. The
+   *  run/save-preflight paths pass no memo and keep probing fresh per call. */
+  private async previewRuntimeAvailability(
+    runtime: TaskSettingsRuntimeTriple,
+    previewMemo?: AutomaticPreviewMemo,
+  ): Promise<TaskSettingsProviderAvailability | undefined> {
+    if (!this.runtimeAvailability) return undefined
+    if (previewMemo === undefined) return await this.runtimeAvailability(runtime)
+    const key = runtimeTripleKey(runtime)
+    let memoized = previewMemo.availability.get(key)
+    if (memoized === undefined) {
+      memoized = Promise.resolve(this.runtimeAvailability(runtime))
+      previewMemo.availability.set(key, memoized)
+    }
+    return await memoized
+  }
+
   /** One immutable automatic selection: the shared quota/free/cap/client
    *  policy path used by both resolveForRun and automatic snapshot row preview.
    *
-   *  Exactly one AutoRoutingQuotaSnapshot is obtained per call. Static hard
-   *  gates come from `resolver.eligible`; every exact choice is then filtered
-   *  through the live runtimeAvailability callback before ranking (absent
-   *  callback stays backward-compatible available; `available: false` is
-   *  excluded) and through the snapshot's hard-blocked providers. Only variants
-   *  sharing the same canonical provider+model AND the same reference pricing
-   *  identity collapse (native then grok then stable other client). The
-   *  effective cap is the min of the defined task/global caps; when neither is
-   *  defined the maximum admitted finite reference output price is used only as
-   *  non-rejecting score normalization. rankAutoRoutingCandidates runs once and
-   *  the matching exact choice is selected with no fallback. */
+   *  Exactly one AutoRoutingQuotaSnapshot is obtained per call; when a
+   *  request-scoped preview memo is supplied (snapshot rows only) that snapshot
+   *  is shared by every automatic row in the same request. Static hard gates
+   *  come from `resolver.eligible`; every exact choice is then filtered through
+   *  the live runtimeAvailability callback before ranking (absent callback
+   *  stays backward-compatible available; `available: false` is excluded) and
+   *  through the snapshot's hard-blocked providers. Preview memoization keys
+   *  that probe by canonical runtime so identical credential reads are never
+   *  repeated across automatic rows; runs/save preflight pass no memo and probe
+   *  fresh each call. Only variants sharing the same canonical provider+model
+   *  AND the same reference pricing identity collapse (native then grok then
+   *  stable other client). The effective cap is the min of the defined
+   *  task/global caps; when neither is defined the maximum admitted finite
+   *  reference output price is used only as non-rejecting score normalization.
+   *  rankAutoRoutingCandidates runs once and the matching exact choice is
+   *  selected with no fallback. */
   private async resolveAutomaticSelection(
     params: AutomaticSelectionParams,
+    previewMemo?: AutomaticPreviewMemo,
   ): Promise<AutomaticSelectionResult> {
-    const snapshot: AutoRoutingQuotaSnapshot | null = this.quotaSnapshots
-      ? await this.quotaSnapshots.snapshot()
-      : null
+    const quotaPromise = previewMemo?.quota
+      ?? (this.quotaSnapshots
+        ? this.quotaSnapshots.snapshot()
+        : Promise.resolve(null))
+    if (previewMemo !== undefined) previewMemo.quota = quotaPromise
+    const snapshot: AutoRoutingQuotaSnapshot | null = await quotaPromise
     const nowMs = snapshot ? snapshot.nowMs : Date.now()
     const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
 
@@ -1013,9 +1051,10 @@ export class TaskSettingsService {
     const probed: AutomaticProbeEntry[] = []
     for (const choice of eligible.choices) {
       if (blocked.has(choice.provider)) continue
-      const availability = this.runtimeAvailability
-        ? await this.runtimeAvailability(TaskSettingsService.tripleOf(choice))
-        : undefined
+      const availability = await this.previewRuntimeAvailability(
+        TaskSettingsService.tripleOf(choice),
+        previewMemo,
+      )
       if (availability === undefined || availability.available) probed.push({ choice, availability })
     }
     const collapsed = collapseAutomaticChoices(probed)
@@ -1231,6 +1270,27 @@ interface AutomaticSelectionParams {
 interface AutomaticProbeEntry {
   choice: TaskDispatchChoice
   availability?: TaskSettingsProviderAvailability
+}
+
+/** Request-scoped automatic-preview memo built per snapshot() request and
+ *  passed through buildRow -> resolveAutomaticSelection for automatic rows
+ *  only. It holds the request's single immutable quota snapshot (unknown/
+ *  fail-closed results included) and one non-billable readiness probe promise
+ *  per canonical runtime triple, so N automatic rows sharing the same eligible
+ *  runtimes never repeat quota reads or identical credential reads. resolveForRun
+ *  and save preflight never construct or pass a memo: they always probe fresh. */
+interface AutomaticPreviewMemo {
+  /** Immutable quota snapshot promise for this request, created on the first
+   *  automatic row that needs one and reused by the rest of the rows. */
+  quota?: Promise<AutoRoutingQuotaSnapshot | null>
+  /** Non-billable runtimeAvailability probe per canonical runtime triple. */
+  availability: Map<string, Promise<TaskSettingsProviderAvailability>>
+}
+
+/** Canonical string key of a resolved runtime triple used to dedupe identical
+ *  non-billable readiness probes within one snapshot request. */
+function runtimeTripleKey(runtime: { client: string; provider: string; model: string }): string {
+  return `${runtime.provider}/${runtime.model}:${runtime.client}`
 }
 
 type AutomaticSelectionResult =
