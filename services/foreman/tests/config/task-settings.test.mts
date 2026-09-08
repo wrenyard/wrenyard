@@ -2,28 +2,23 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  ADDITIONAL_INSTRUCTIONS_MAX_LENGTH,
   SYSTEM_DEFAULT_MODE,
   SYSTEM_DEFAULT_TIMEOUT_MS,
   normalizeTaskSettingsLayer,
-  readBuiltinSettingsSelection,
   readGlobalTaskSettings,
-  readLegacyRuntimePin,
   readPerTaskSettings,
   resolveEffectiveTaskSettings,
   taskDefaultsToSettingsLayer,
   taskSettingsIdentity,
   TaskSettingsValidationError,
   type EffectiveTaskSettings,
-  type TaskRuntimeCatalog,
+  type TaskExplicitRuntime,
   type TaskSettingsLayer,
   type TaskSettingsLayersInput,
 } from '../../lib/config/task-settings.mts'
 
-const CATALOG: TaskRuntimeCatalog = {
-  exactRuntimeIds: ['codex-cli', 'runtime-x'],
-  policyRuntimeIds: ['auto', 'fast'],
-}
+const ALIAS_REF: TaskExplicitRuntime = { kind: 'alias', name: 'cc-glmf' }
+const TARGET_REF: TaskExplicitRuntime = { kind: 'target', target: 'zhipu-coding/glm-5.3-flash:cc' }
 
 describe('task settings identity', () => {
   it('builds builtin identity as builtin:<name>', () => {
@@ -64,8 +59,7 @@ describe('resolveEffectiveTaskSettings defaults', () => {
     assert.equal(result.mode, SYSTEM_DEFAULT_MODE)
     assert.equal(result.timeoutMs, 15 * 60 * 1000)
     assert.equal(result.timeoutMs, SYSTEM_DEFAULT_TIMEOUT_MS)
-    assert.equal(result.runtime, undefined)
-    assert.equal(result.additionalInstructions, undefined)
+    assert.equal(result.explicitRuntime, undefined)
     assert.deepEqual(result.dispatch, {})
     assert.equal(result.sources.timeoutMs, 'system_global')
     assert.equal(result.sources.selectionMode, 'system_global')
@@ -78,23 +72,23 @@ describe('resolveEffectiveTaskSettings precedence', () => {
       system: { selectionMode: 'automatic', timeoutMs: 1000 },
       builtin: {
         selectionMode: 'explicit',
-        agentRuntime: 'codex-cli',
+        explicitRuntime: ALIAS_REF,
         timeoutMs: 2000,
       },
       userGlobal: { timeoutMs: 3000 },
       userTask: { timeoutMs: 4000 },
       invocation: { timeoutMs: 5000 },
     }
-    const layered = resolveEffectiveTaskSettings(base, CATALOG)
+    const layered = resolveEffectiveTaskSettings(base)
     assert.equal(layered.mode, 'explicit')
-    assert.equal(layered.runtime, 'codex-cli')
+    assert.deepEqual(layered.explicitRuntime, ALIAS_REF)
+    assert.equal(layered.sources.explicitRuntime, 'builtin_task')
     assert.equal(layered.timeoutMs, 5000)
     assert.equal(layered.sources.timeoutMs, 'invocation')
 
     // Dropping the invocation override re-inherits the user-task value.
     const withoutInvocation = resolveEffectiveTaskSettings(
       { ...base, invocation: {} },
-      CATALOG,
     )
     assert.equal(withoutInvocation.timeoutMs, 4000)
     assert.equal(withoutInvocation.sources.timeoutMs, 'user_task')
@@ -104,15 +98,12 @@ describe('resolveEffectiveTaskSettings precedence', () => {
     const result = resolveEffectiveTaskSettings(
       {
         system: { timeoutMs: 15 * 60 * 1000 },
-        builtin: { selectionMode: 'explicit', agentRuntime: 'codex-cli', timeoutMs: 30_000 },
-        userGlobal: { timeoutMs: 60_000, additionalInstructions: 'g' },
+        builtin: { selectionMode: 'explicit', explicitRuntime: TARGET_REF, timeoutMs: 30_000 },
+        userGlobal: { timeoutMs: 60_000 },
       },
-      CATALOG,
     )
     assert.equal(result.timeoutMs, 60_000)
     assert.equal(result.sources.timeoutMs, 'user_global')
-    assert.equal(result.additionalInstructions, 'g')
-    assert.equal(result.sources.additionalInstructions, 'user_global')
   })
 
   it('lets the user task layer override the user global layer', () => {
@@ -121,7 +112,6 @@ describe('resolveEffectiveTaskSettings precedence', () => {
         userGlobal: { timeoutMs: 60_000 },
         userTask: { timeoutMs: 120_000 },
       },
-      CATALOG,
     )
     assert.equal(result.timeoutMs, 120_000)
     assert.equal(result.sources.timeoutMs, 'user_task')
@@ -136,7 +126,6 @@ describe('resolveEffectiveTaskSettings precedence', () => {
         userTask: {},
         invocation: {},
       },
-      CATALOG,
     )
     assert.equal(result.timeoutMs, 60_000)
     assert.equal(result.sources.timeoutMs, 'user_global')
@@ -144,7 +133,6 @@ describe('resolveEffectiveTaskSettings precedence', () => {
     // A fully deleted userGlobal layer re-inherits builtin.
     const result2 = resolveEffectiveTaskSettings(
       { builtin: { timeoutMs: 30_000 } },
-      CATALOG,
     )
     assert.equal(result2.timeoutMs, 30_000)
     assert.equal(result2.sources.timeoutMs, 'builtin_task')
@@ -153,9 +141,8 @@ describe('resolveEffectiveTaskSettings precedence', () => {
   it('preserves the builtin explicit timeout default', () => {
     const result = resolveEffectiveTaskSettings(
       {
-        builtin: { selectionMode: 'explicit', agentRuntime: 'codex-cli', timeoutMs: 25_000 },
+        builtin: { selectionMode: 'explicit', explicitRuntime: TARGET_REF, timeoutMs: 25_000 },
       },
-      CATALOG,
     )
     assert.equal(result.timeoutMs, 25_000)
     assert.equal(result.sources.timeoutMs, 'builtin_task')
@@ -183,13 +170,13 @@ describe('resolveEffectiveTaskSettings precedence', () => {
   it('does not mutate any input layer when invocation wins', () => {
     const layers: TaskSettingsLayersInput = {
       system: { timeoutMs: 1000 },
-      builtin: { selectionMode: 'explicit', agentRuntime: 'codex-cli', timeoutMs: 2000 },
-      userGlobal: { timeoutMs: 3000, additionalInstructions: 'g' },
+      builtin: { selectionMode: 'explicit', explicitRuntime: ALIAS_REF, timeoutMs: 2000 },
+      userGlobal: { timeoutMs: 3000 },
       userTask: { dispatch: { expectedTps: 4 } },
       invocation: { timeoutMs: 5000, dispatch: { expectedTps: 9 } },
     }
     const snapshot = structuredClone(layers)
-    const result = resolveEffectiveTaskSettings(layers, CATALOG)
+    const result = resolveEffectiveTaskSettings(layers)
     assert.equal(result.timeoutMs, 5000)
     assert.equal(result.sources.timeoutMs, 'invocation')
     assert.equal(result.dispatch.expectedTps, 9)
@@ -198,80 +185,88 @@ describe('resolveEffectiveTaskSettings precedence', () => {
 })
 
 describe('resolveEffectiveTaskSettings mode switching', () => {
-  it('ignores an inherited explicit runtime pin when a higher layer is automatic', () => {
+  it('ignores an inherited explicit reference when a higher layer is automatic', () => {
     const result = resolveEffectiveTaskSettings(
       {
-        builtin: { selectionMode: 'explicit', agentRuntime: 'stale-pin' },
+        builtin: { selectionMode: 'explicit', explicitRuntime: ALIAS_REF },
         userGlobal: { selectionMode: 'automatic' },
       },
-      CATALOG,
     )
     assert.equal(result.mode, 'automatic')
-    assert.equal(result.runtime, undefined)
-    assert.equal(result.sources.agentRuntime, undefined)
+    assert.equal(result.explicitRuntime, undefined)
+    assert.equal(result.sources.explicitRuntime, undefined)
   })
 
-  it('ignores a runtime pin layered under a higher automatic mode', () => {
+  it('ignores an explicit reference layered under a higher automatic mode', () => {
     const result = resolveEffectiveTaskSettings(
       {
-        builtin: { selectionMode: 'explicit', agentRuntime: 'codex-cli' },
-        userGlobal: { agentRuntime: 'runtime-x' },
+        builtin: { selectionMode: 'explicit', explicitRuntime: ALIAS_REF },
+        userGlobal: { explicitRuntime: TARGET_REF },
         userTask: { selectionMode: 'automatic' },
       },
-      CATALOG,
     )
     assert.equal(result.mode, 'automatic')
-    assert.equal(result.runtime, undefined)
+    assert.equal(result.explicitRuntime, undefined)
   })
 
-  it('rejects explicit mode without any runtime', () => {
+  it('never resolves or validates a reference in automatic mode', () => {
+    // Automatic mode must not consult any reference, so even a structurally
+    // valid but unknown alias name is ignored without error.
+    const result = resolveEffectiveTaskSettings(
+      {
+        userGlobal: {
+          selectionMode: 'explicit',
+          explicitRuntime: { kind: 'alias', name: 'stale-unknown-alias' },
+        },
+        invocation: { selectionMode: 'automatic' },
+      },
+    )
+    assert.equal(result.mode, 'automatic')
+    assert.equal(result.explicitRuntime, undefined)
+  })
+
+  it('rejects explicit mode without any structural reference', () => {
     assert.throws(
-      () => resolveEffectiveTaskSettings({ userGlobal: { selectionMode: 'explicit' } }, CATALOG),
+      () => resolveEffectiveTaskSettings({ userGlobal: { selectionMode: 'explicit' } }),
       TaskSettingsValidationError,
     )
-  })
-
-  it('rejects policy aliases in explicit mode', () => {
     assert.throws(
-      () =>
-        resolveEffectiveTaskSettings(
-          {
-            builtin: { selectionMode: 'automatic' },
-            userTask: { selectionMode: 'explicit', agentRuntime: 'auto' },
-          },
-          CATALOG,
-        ),
-      /policy alias/,
-    )
-    assert.throws(
-      () =>
-        resolveEffectiveTaskSettings(
-          { invocation: { selectionMode: 'explicit', agentRuntime: 'fast' } },
-          CATALOG,
-        ),
-      /policy alias/,
+      () => resolveEffectiveTaskSettings({ invocation: { selectionMode: 'explicit' } }),
+      /explicit runtime reference/,
     )
   })
 
-  it('rejects unknown runtimes in explicit mode when catalog is authoritative', () => {
-    assert.throws(
-      () =>
-        resolveEffectiveTaskSettings(
-          { invocation: { selectionMode: 'explicit', agentRuntime: 'nope' } },
-          CATALOG,
-        ),
-      /not a known exact runtime/,
-    )
-  })
-
-  it('accepts an exact existing runtime in explicit mode', () => {
+  it('accepts an alias reference in explicit mode and reports its winning source', () => {
     const result = resolveEffectiveTaskSettings(
-      { invocation: { selectionMode: 'explicit', agentRuntime: 'runtime-x' } },
-      CATALOG,
+      { invocation: { selectionMode: 'explicit', explicitRuntime: ALIAS_REF } },
     )
     assert.equal(result.mode, 'explicit')
-    assert.equal(result.runtime, 'runtime-x')
-    assert.equal(result.sources.agentRuntime, 'invocation')
+    assert.deepEqual(result.explicitRuntime, ALIAS_REF)
+    assert.equal(result.sources.explicitRuntime, 'invocation')
+  })
+
+  it('accepts an inline target reference in explicit mode', () => {
+    const result = resolveEffectiveTaskSettings(
+      { userTask: { selectionMode: 'explicit', explicitRuntime: TARGET_REF } },
+    )
+    assert.equal(result.mode, 'explicit')
+    assert.deepEqual(result.explicitRuntime, TARGET_REF)
+    assert.equal(result.sources.explicitRuntime, 'user_task')
+  })
+
+  it('carries references structurally without resolving them here', () => {
+    // Alias resolution and compatibility checking happen in the daemon, never
+    // in the settings model; a not-yet-known alias still resolves to explicit.
+    const result = resolveEffectiveTaskSettings(
+      {
+        userGlobal: {
+          selectionMode: 'explicit',
+          explicitRuntime: { kind: 'alias', name: 'not-yet-registered-alias' },
+        },
+      },
+    )
+    assert.equal(result.mode, 'explicit')
+    assert.deepEqual(result.explicitRuntime, { kind: 'alias', name: 'not-yet-registered-alias' })
   })
 })
 
@@ -300,23 +295,101 @@ describe('normalizeTaskSettingsLayer validation', () => {
     )
   })
 
-  it('throws on oversized additional instructions', () => {
-    const long = 'x'.repeat(ADDITIONAL_INSTRUCTIONS_MAX_LENGTH + 1)
+  it('accepts the persisted snake explicit_runtime alias', () => {
+    const layer = normalizeTaskSettingsLayer({
+      selection_mode: 'explicit',
+      explicit_runtime: { kind: 'alias', name: 'cc-glmf' },
+      timeout_ms: 42_000,
+    })
+    assert.deepEqual(layer, {
+      selectionMode: 'explicit',
+      explicitRuntime: ALIAS_REF,
+      timeoutMs: 42_000,
+    })
+  })
+
+  it('trims reference name and target values', () => {
+    const alias = normalizeTaskSettingsLayer({
+      explicitRuntime: { kind: 'alias', name: '  cc-glmf  ' },
+    })
+    assert.deepEqual(alias, { explicitRuntime: { kind: 'alias', name: 'cc-glmf' } })
+    const target = normalizeTaskSettingsLayer({
+      explicitRuntime: { kind: 'target', target: ' zhipu-coding/glm-5.3-flash:cc ' },
+    })
+    assert.deepEqual(target, { explicitRuntime: TARGET_REF })
+  })
+
+  it('rejects a non-object explicitRuntime and unknown kinds', () => {
     assert.throws(
-      () => normalizeTaskSettingsLayer({ additionalInstructions: long }),
-      TaskSettingsValidationError,
+      () => normalizeTaskSettingsLayer({ explicitRuntime: 'codex-cli' }),
+      /explicitRuntime must be an object/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ explicitRuntime: { kind: 'bogus', name: 'x' } }),
+      /"alias" or "target"/,
     )
   })
 
-  it('throws on non-plain-text additional instructions', () => {
+  it('rejects missing or blank reference name/target', () => {
     assert.throws(
-      () => normalizeTaskSettingsLayer({ additionalInstructions: 'a\u0000b' }),
-      TaskSettingsValidationError,
+      () => normalizeTaskSettingsLayer({ explicitRuntime: { kind: 'alias' } }),
+      /non-empty trimmed name/,
     )
     assert.throws(
-      () => normalizeTaskSettingsLayer({ additionalInstructions: 'a\u001Fb' }),
-      TaskSettingsValidationError,
+      () => normalizeTaskSettingsLayer({ explicitRuntime: { kind: 'alias', name: '   ' } }),
+      /non-empty trimmed name/,
     )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ explicitRuntime: { kind: 'target' } }),
+      /non-empty trimmed target/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ explicitRuntime: { kind: 'target', target: '' } }),
+      /non-empty trimmed target/,
+    )
+  })
+
+  it('rejects extra and mixed reference fields', () => {
+    assert.throws(
+      () =>
+        normalizeTaskSettingsLayer({
+          explicitRuntime: { kind: 'alias', name: 'cc-glmf', target: 'zhipu/...' },
+        }),
+      /does not accept field "target"/,
+    )
+    assert.throws(
+      () =>
+        normalizeTaskSettingsLayer({
+          explicitRuntime: { kind: 'target', name: 'cc-glmf', target: 'zhipu/...' },
+        }),
+      /does not accept field "name"/,
+    )
+    assert.throws(
+      () =>
+        normalizeTaskSettingsLayer({
+          explicitRuntime: { kind: 'alias', name: 'cc-glmf', extra: 1 },
+        }),
+      /does not accept field "extra"/,
+    )
+  })
+
+  it('drops legacy agentRuntime layer keys as unknown input', () => {
+    const layer = normalizeTaskSettingsLayer({
+      agentRuntime: 'codex-cli',
+      agent_runtime: 'stale',
+      timeoutMs: 5000,
+    } as unknown as TaskSettingsLayer)
+    assert.deepEqual(layer, { timeoutMs: 5000 })
+
+    const effective = resolveEffectiveTaskSettings(
+      {
+        userGlobal: { timeoutMs: 60_000 },
+        invocation: { agent_runtime: 'stale-pin' },
+      } as unknown as TaskSettingsLayersInput,
+    )
+    assert.equal(effective.timeoutMs, 60_000)
+    assert.equal(effective.explicitRuntime, undefined)
+    assert.deepEqual(effective.dispatch, {})
   })
 
   it('throws on unknown selectionMode and malformed dispatch', () => {
@@ -329,54 +402,39 @@ describe('normalizeTaskSettingsLayer validation', () => {
       TaskSettingsValidationError,
     )
   })
-
-  it('accepts a bounded plain-text instruction and treats null as unset', () => {
-    const layer = normalizeTaskSettingsLayer({
-      additionalInstructions: 'always explain line by line\nwith examples',
-      timeoutMs: null,
-    })
-    assert.equal(
-      layer.additionalInstructions,
-      'always explain line by line\nwith examples',
-    )
-    assert.equal(layer.timeoutMs, undefined)
-  })
-})
-
-describe('additional instructions override behavior', () => {
-  it('is a plain-text override that never replaces the builtin dynamic prompt', () => {
-    const builtinPrompt = 'sync files into the vault'
-    const result = resolveEffectiveTaskSettings(
-      {
-        builtin: { selectionMode: 'explicit', agentRuntime: 'codex-cli' },
-        invocation: { additionalInstructions: 'always read the manifest first' },
-      },
-      CATALOG,
-    )
-    assert.equal(result.additionalInstructions, 'always read the manifest first')
-    assert.equal(builtinPrompt, 'sync files into the vault')
-    assert.equal(result.additionalInstructions.includes(builtinPrompt), false)
-  })
 })
 
 describe('taskDefaultsToSettingsLayer', () => {
-  it('maps policy runtimes to automatic and exact runtimes to explicit', () => {
-    const automatic = taskDefaultsToSettingsLayer({ runtime: 'auto' }, CATALOG)
-    assert.deepEqual(automatic, { selectionMode: 'automatic' })
+  it('always authors automatic selection for Task defaults', () => {
+    const defaults = taskDefaultsToSettingsLayer({ timeoutMs: 30_000 })
+    assert.deepEqual(defaults, { selectionMode: 'automatic', timeoutMs: 30_000 })
+  })
 
-    const exact = taskDefaultsToSettingsLayer(
-      { runtime: 'codex-cli', timeoutMs: 30_000 },
-      CATALOG,
-    )
-    assert.deepEqual(exact, {
-      selectionMode: 'explicit',
-      agentRuntime: 'codex-cli',
+  it('defaults every Task to automatic regardless of legacy-looking runtime input', () => {
+    // Legacy TaskConfig inputs (runtime strings, profile selectors) must never
+    // flip the builtin layer to explicit nor carry a runtime forward.
+    const withLegacyRuntime = taskDefaultsToSettingsLayer({
       timeoutMs: 30_000,
-    })
+      runtime: 'codex-cli',
+    } as unknown as Parameters<typeof taskDefaultsToSettingsLayer>[0])
+    assert.deepEqual(withLegacyRuntime, { selectionMode: 'automatic', timeoutMs: 30_000 })
 
-    // An unrecognized declared runtime behaves like a policy/profile.
-    const unknown = taskDefaultsToSettingsLayer({ runtime: 'profile-heavy' }, CATALOG)
-    assert.deepEqual(unknown, { selectionMode: 'automatic' })
+    const withPolicySelector = taskDefaultsToSettingsLayer({
+      runtime: 'fast',
+    } as unknown as Parameters<typeof taskDefaultsToSettingsLayer>[0])
+    assert.deepEqual(withPolicySelector, { selectionMode: 'automatic' })
+  })
+
+  it('carries only timeout and dispatch defaults', () => {
+    const layer = taskDefaultsToSettingsLayer({
+      timeoutMs: 60_000,
+      dispatch: { minimumTps: 1, expectedTps: 5 },
+    })
+    assert.deepEqual(layer, {
+      selectionMode: 'automatic',
+      timeoutMs: 60_000,
+      dispatch: { minimumTps: 1, expectedTps: 5 },
+    })
   })
 })
 
@@ -397,59 +455,150 @@ describe('persisted settings readers', () => {
     assert.equal(readPerTaskSettings(tasks, 'builtin:other'), undefined)
   })
 
-  it('applies the legacy agentRuntime fallback only for builtin tasks with no new byTask selection', () => {
-    const withSelection = {
-      agentRuntime: { clean: 'codex-cli' },
-      settings: { byTask: { 'builtin:clean': { timeoutMs: 5000 } } },
+  it('keeps byTask the only per-task user selection source and ignores tasks.agentRuntime', () => {
+    // A legacy tasks.agentRuntime root is never consulted by any reader.
+    const tasks = {
+      agentRuntime: { clean: 'codex-cli', 'builtin:clean': 'runtime-x' },
+      settings: {
+        byTask: { 'builtin:clean': { selectionMode: 'explicit', explicitRuntime: ALIAS_REF } },
+      },
+    } as unknown as Parameters<typeof readPerTaskSettings>[0]
+
+    assert.equal(readGlobalTaskSettings(tasks), undefined)
+    assert.deepEqual(readPerTaskSettings(tasks, 'builtin:clean'), {
+      selectionMode: 'explicit',
+      explicitRuntime: ALIAS_REF,
+    })
+
+    // byTask entries can still author automatic, which ignores any inherited pin.
+    const autoTasks = {
+      settings: { byTask: { 'builtin:clean': { selectionMode: 'automatic' } } },
     }
-    const selected = readBuiltinSettingsSelection(withSelection, 'clean')
-    assert.equal(selected.source, 'task')
-    assert.equal(selected.layer?.timeoutMs, 5000)
+    assert.deepEqual(readPerTaskSettings(autoTasks, 'builtin:clean'), {
+      selectionMode: 'automatic',
+    })
+  })
+})
 
-    const withLegacy = { agentRuntime: { clean: 'runtime-x' } }
-    const legacy = readBuiltinSettingsSelection(withLegacy, 'clean')
-    assert.equal(legacy.source, 'legacy')
-    assert.deepEqual(legacy.layer, { selectionMode: 'explicit', agentRuntime: 'runtime-x' })
-
-    const none = readBuiltinSettingsSelection({}, 'clean')
-    assert.equal(none.source, 'none')
-    assert.equal(none.layer, undefined)
+describe('maxAutoOutputUsdPerMillion global-only cap', () => {
+  it('normalizes zero and positive values through camel and snake aliases', () => {
+    assert.deepEqual(normalizeTaskSettingsLayer({ maxAutoOutputUsdPerMillion: 0 }), {
+      maxAutoOutputUsdPerMillion: 0,
+    })
+    assert.deepEqual(normalizeTaskSettingsLayer({ maxAutoOutputUsdPerMillion: 12.5 }), {
+      maxAutoOutputUsdPerMillion: 12.5,
+    })
+    assert.deepEqual(normalizeTaskSettingsLayer({ max_auto_output_usd_per_million: 25 }), {
+      maxAutoOutputUsdPerMillion: 25,
+    })
+    // camelCase wins when both aliases are present.
+    assert.deepEqual(
+      normalizeTaskSettingsLayer({
+        maxAutoOutputUsdPerMillion: 0,
+        max_auto_output_usd_per_million: 5,
+      }),
+      { maxAutoOutputUsdPerMillion: 0 },
+    )
   })
 
-  it('never applies the legacy fallback to project tasks', () => {
-    const tasks = { agentRuntime: { clean: 'runtime-x' } }
-    const projectLayer = readPerTaskSettings(tasks, 'project:projA:clean')
-    assert.equal(projectLayer, undefined)
-    assert.equal(readLegacyRuntimePin(tasks, 'clean'), 'runtime-x')
+  it('rejects negative, non-finite, and non-number values', () => {
+    for (const raw of [
+      { maxAutoOutputUsdPerMillion: -1 },
+      { maxAutoOutputUsdPerMillion: -0.01 },
+      { maxAutoOutputUsdPerMillion: Number.POSITIVE_INFINITY },
+      { maxAutoOutputUsdPerMillion: Number.NaN },
+      { maxAutoOutputUsdPerMillion: '5' },
+    ]) {
+      assert.throws(() => normalizeTaskSettingsLayer(raw), TaskSettingsValidationError)
+    }
+  })
+
+  it('treats null and absence as cleared, and keeps positive dispatch price caps strictly positive', () => {
+    assert.deepEqual(normalizeTaskSettingsLayer({ maxAutoOutputUsdPerMillion: null }), {})
+    assert.deepEqual(
+      normalizeTaskSettingsLayer({ max_auto_output_usd_per_million: null, timeoutMs: 5000 }),
+      { timeoutMs: 5000 },
+    )
+    assert.equal(
+      readGlobalTaskSettings({ settings: { global: { max_auto_output_usd_per_million: 2 } } })
+        ?.maxAutoOutputUsdPerMillion,
+      2,
+    )
+    assert.equal(
+      readGlobalTaskSettings({ settings: { global: {} } })?.maxAutoOutputUsdPerMillion,
+      undefined,
+    )
+    // dispatch.maxOutputUsdPerMillion remains independent and strictly positive.
+    assert.deepEqual(
+      normalizeTaskSettingsLayer({
+        maxAutoOutputUsdPerMillion: 0,
+        dispatch: { maxOutputUsdPerMillion: 15 },
+      }),
+      { maxAutoOutputUsdPerMillion: 0, dispatch: { maxOutputUsdPerMillion: 15 } },
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { maxOutputUsdPerMillion: 0 } }),
+      /positive number/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { maxOutputUsdPerMillion: -1 } }),
+      /positive number/,
+    )
+  })
+
+  it('sources the cap only from userGlobal and ignores the same field on other layers', () => {
+    const capped = resolveEffectiveTaskSettings({
+      userGlobal: { maxAutoOutputUsdPerMillion: 0 },
+      userTask: { maxAutoOutputUsdPerMillion: 40 },
+      invocation: { maxAutoOutputUsdPerMillion: 90 },
+    })
+    assert.equal(capped.maxAutoOutputUsdPerMillion, 0)
+    assert.equal(capped.sources.maxAutoOutputUsdPerMillion, 'user_global')
+
+    const positiveCap = resolveEffectiveTaskSettings({
+      userGlobal: { maxAutoOutputUsdPerMillion: 12.5 },
+    })
+    assert.equal(positiveCap.maxAutoOutputUsdPerMillion, 12.5)
+    assert.equal(positiveCap.sources.maxAutoOutputUsdPerMillion, 'user_global')
+
+    // A cap only ever present on non-userGlobal layers stays undefined, so a
+    // stale system/user-task/invocation pin can never leak into auto admission.
+    const uncapped = resolveEffectiveTaskSettings({
+      system: { maxAutoOutputUsdPerMillion: 7 },
+      builtin: { maxAutoOutputUsdPerMillion: 8 },
+      userTask: { maxAutoOutputUsdPerMillion: 40 },
+      invocation: { maxAutoOutputUsdPerMillion: 90 },
+    })
+    assert.equal(uncapped.maxAutoOutputUsdPerMillion, undefined)
+    assert.equal(uncapped.sources.maxAutoOutputUsdPerMillion, undefined)
   })
 })
 
 describe('resolveEffectiveTaskSettings integration', () => {
   it('produces a complete effective result across all five layers', () => {
-    const builtin = taskDefaultsToSettingsLayer(
-      { runtime: 'codex-cli', timeoutMs: 30_000 },
-      CATALOG,
-    )
+    const builtin = taskDefaultsToSettingsLayer({ timeoutMs: 30_000 })
     const result: EffectiveTaskSettings = resolveEffectiveTaskSettings(
       {
         builtin,
-        userGlobal: { additionalInstructions: 'g' },
-        userTask: { timeoutMs: 45_000, dispatch: { minimumTps: 1 } },
+        userTask: {
+          selectionMode: 'explicit',
+          explicitRuntime: ALIAS_REF,
+          timeoutMs: 45_000,
+          dispatch: { minimumTps: 1 },
+        },
         invocation: { dispatch: { minimumTps: 2 } },
       },
-      CATALOG,
     )
     assert.deepEqual(result, {
       mode: 'explicit',
-      runtime: 'codex-cli',
+      explicitRuntime: ALIAS_REF,
       timeoutMs: 45_000,
-      additionalInstructions: 'g',
       dispatch: { minimumTps: 2 },
+      maxAutoOutputUsdPerMillion: undefined,
       sources: {
-        selectionMode: 'builtin_task',
-        agentRuntime: 'builtin_task',
+        selectionMode: 'user_task',
+        explicitRuntime: 'user_task',
         timeoutMs: 'user_task',
-        additionalInstructions: 'user_global',
         dispatch: { minimumTps: 'invocation' },
       },
     } satisfies EffectiveTaskSettings)

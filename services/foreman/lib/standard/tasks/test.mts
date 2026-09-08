@@ -169,7 +169,6 @@ const definition = {
   config: {
     description:
       'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via capability packs.',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     capabilities: testCapabilityConfig,

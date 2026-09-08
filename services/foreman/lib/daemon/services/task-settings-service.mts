@@ -1,16 +1,21 @@
 import { createHash } from 'node:crypto'
-import type { TaskDispatchResolver } from '../../core/task/dispatch-resolver.mts'
+import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates } from '@wrenyard/catalog'
+import type { CandidateInput } from '@wrenyard/catalog'
+import {
+  NoEligiblePlanError,
+  type TaskDispatchChoice,
+  type TaskDispatchResolver,
+} from '../../core/task/dispatch-resolver.mts'
 import { TaskService } from '../../core/task/service.mts'
-import { synthesizeAgentRuntime } from '../../core/agent-runtime.mts'
 import { resolveTaskTarget } from '../../workspace/definition-registry.mts'
 import { discoverProjects } from '../../core/project/loader.mts'
 import type { ForemanConfigStore } from '../../config/manager.mts'
 import { JsonForemanConfigStore } from '../../config/manager.mts'
+import type { RuntimeAliasService } from './runtime-alias-service.mts'
 import {
   TASK_DISPATCH_FIELDS,
   taskDefaultsToSettingsLayer,
   taskSettingsIdentity,
-  readBuiltinSettingsSelection,
   readGlobalTaskSettings,
   readPerTaskSettings,
   normalizeTaskSettingsLayer,
@@ -22,15 +27,24 @@ import {
   type TasksConfigSettingsInput,
 } from '../../config/task-settings.mts'
 import type {
+  TaskAutoRoutingDecision,
+  TaskResolvedDispatch,
+} from '../../task-run-metadata-types.mts'
+import {
+  AutoRoutingQuotaSnapshotService,
+  type AutoRoutingQuotaSnapshot,
+} from './auto-routing-snapshot-service.mts'
+import type {
   TaskSettingsAutomaticDispatch,
-  TaskSettingsEligibleChoice,
+  TaskSettingsAutomaticSelection,
+  TaskSettingsExplicitReference,
   TaskSettingsExplicitRow,
-  TaskSettingsExplicitRuntime,
   TaskSettingsInstructionSegment,
   TaskSettingsLayer as TaskSettingsLayerDto,
   TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsRuntimeReadiness,
+  TaskSettingsRuntimeTriple,
   TaskSettingsSaveParams,
   TaskSettingsSnapshotParams,
   TaskSettingsSnapshotResult,
@@ -56,16 +70,23 @@ export type {
  *
  * Persistence is restricted to `tasks.settings.global` (user-global layer) and
  * `tasks.settings.byTask[<stable identity>]` (per-task user layer). The legacy
- * `tasks.agentRuntime` map is read only as builtin compatibility (through
- * `readBuiltinSettingsSelection`) and is never written.
+ * `tasks.agentRuntime` map is neither read nor written.
+ *
+ * Explicit selection is structural only: persisted layers store an alias
+ * reference or an inline target, never a copied client/provider/model triple.
+ * Every snapshot/save preflight/run resolves aliases freshly through the
+ * injected daemon-owned RuntimeAliasService and passes the canonical
+ * `provider/model:client` target through `TaskDispatchResolver.resolveExplicit`
+ * — the same path inline targets take. Unknown/deleted/unusable aliases and
+ * unavailable inline targets fail without automatic fallback.
  *
  * Effective settings resolve through config/task-settings.mts, merging the
  * system defaults, builtin task defaults, user global, user per-task, and (for
  * runs) invocation layers right-wins. Snapshot/preflight never performs a paid
- * model call: automatic mode validates via `TaskDispatchResolver.resolve` and
- * explicit mode via `resolveExplicit`/`listExactRuntimes`, with daemon
- * admission and live provider credential/availability supplied by injected
- * non-billable callbacks.
+ * model call: automatic mode ignores aliases and validates via
+ * `TaskDispatchResolver.resolve`; explicit mode validates via
+ * `resolveExplicit`, with daemon admission and live provider
+ * credential/availability supplied by injected non-billable callbacks.
  */
 export interface TaskSettingsDefinitionSummary {
   name: string
@@ -77,7 +98,6 @@ export interface TaskSettingsDefinitionSummary {
   project?: string
   source?: string
   description?: string
-  agentRuntime?: string
   timeoutMs?: number
   dispatch?: unknown
   promptTemplate?: 'dynamic' | 'fixed'
@@ -112,10 +132,19 @@ export interface TaskSettingsProviderAvailability {
   providerLive: 'available' | 'unavailable' | 'unknown'
   quota: 'available' | 'unavailable' | 'unknown'
   available: boolean
+  /** Privacy-safe confirmed-free routing supply fact for the already-read
+   *  credential (current CodeBuddy internal/ioa environments only). Never
+   *  carries a token, domain, or internal upstream suffix. Absent means the
+   *  account/environment is not confirmed free (external/cloudhosted/unknown/
+   *  missing credential/other providers). */
+  freeSupply?: { confirmedFree: true; source: string; ruleId: string }
 }
 
+/** Non-billable live provider credential/route availability probe input: the
+ *  resolved client/provider/model triple of an already-selected canonical
+ *  target. Never carries user config or alias state. */
 export type TaskSettingsRuntimeAvailabilityCallback = (
-  runtime: TaskSettingsExplicitRuntime,
+  runtime: TaskSettingsRuntimeTriple,
 ) => Promise<TaskSettingsProviderAvailability> | TaskSettingsProviderAvailability
 
 export interface TaskSettingsDaemonStatus {
@@ -133,12 +162,20 @@ export interface TaskSettingsServiceOptions {
   configPath: string
   /** Shared daemon dispatch resolver; eligibility comes from this instance only. */
   resolver: TaskDispatchResolver
+  /** Daemon-owned runtime alias owner. Alias references are resolved freshly
+   *  through this exact instance at every snapshot/save preflight/run call;
+   *  the service never duplicates or caches alias targets. */
+  aliases: RuntimeAliasService
   store?: ForemanConfigStore
   definitions?: TaskSettingsDefinitionSource
   /** Optional non-billable daemon admission availability (accepting/frozen). */
   daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   /** Optional non-billable live provider credential/route availability probe. */
   runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
+  /** Daemon-owned immutable automatic-routing quota snapshot service shared by
+   *  every automatic selection (run and snapshot row preview). One snapshot is
+   *  taken per selection call. */
+  quotaSnapshots?: AutoRoutingQuotaSnapshotService
 }
 
 /** Typed CAS failure: the caller's expected_revision no longer matches the file. */
@@ -239,9 +276,11 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   if (!layer) return {}
   const raw: Record<string, unknown> = {}
   if (layer.selectionMode !== undefined) raw.selection_mode = layer.selectionMode
-  if (layer.agentRuntime !== undefined) raw.agent_runtime = layer.agentRuntime
+  if (layer.explicitRuntime !== undefined) raw.explicit_runtime = layer.explicitRuntime
   if (layer.timeoutMs !== undefined) raw.timeout_ms = layer.timeoutMs
-  if (layer.additionalInstructions !== undefined) raw.additional_instructions = layer.additionalInstructions
+  if (layer.maxAutoOutputUsdPerMillion !== undefined) {
+    raw.max_auto_output_usd_per_million = layer.maxAutoOutputUsdPerMillion
+  }
   if (layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0) {
     raw.dispatch = toSnakeDispatch(layer.dispatch)
   }
@@ -269,11 +308,9 @@ function summaryStableIdentity(summary: TaskSettingsDefinitionSummary): string {
  *  Mirrors the exact buildTaskPrompt structure and ordering: each string
  *  instruction becomes a verbatim `text` segment in source order, each
  *  function instruction becomes an explicit placeholder segment (never
- *  invoked, never source-inspected), one `additional_instructions` slot is
- *  inserted where buildTaskPrompt appends the resolved additional
- *  instructions document (after every TaskConfig instruction), and the
- *  input-dependent `config.prompt` body is represented as a final
- *  placeholder. Nothing is executed and no prompt text is fabricated. */
+ *  invoked, never source-inspected), and the input-dependent `config.prompt`
+ *  body is represented as a final placeholder. Nothing is executed and no
+ *  prompt text is fabricated. */
 export function taskInstructionTemplate(
   config: { instructions?: unknown; prompt?: unknown } | undefined,
 ): TaskSettingsInstructionSegment[] {
@@ -288,7 +325,6 @@ export function taskInstructionTemplate(
       segments.push({ kind: 'placeholder', source: `task.instructions[${index}]`, label: '运行时填入任务输入' })
     }
   }
-  segments.push({ kind: 'additional_instructions', source: 'task.settings.additionalInstructions' })
   segments.push({ kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' })
   return segments
 }
@@ -296,19 +332,22 @@ export function taskInstructionTemplate(
 export class TaskSettingsService {
   private readonly configPath: string
   private readonly resolver: TaskDispatchResolver
+  private readonly aliases: RuntimeAliasService
   private readonly store: ForemanConfigStore
   private readonly definitions: TaskSettingsDefinitionSource
   private readonly daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   private readonly runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
-  private exactRuntimeIdsCache: readonly string[] | undefined
+  private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
 
   constructor(options: TaskSettingsServiceOptions) {
     this.configPath = options.configPath
     this.resolver = options.resolver
+    this.aliases = options.aliases
     this.store = options.store ?? new JsonForemanConfigStore()
     this.definitions = options.definitions ?? createWorkspaceDefinitionSource(options.workspaceRoot)
     this.daemonAvailability = options.daemonAvailability
     this.runtimeAvailability = options.runtimeAvailability
+    this.quotaSnapshots = options.quotaSnapshots
   }
 
   /** The authoritative config path this daemon-owned service reads and writes. */
@@ -316,50 +355,39 @@ export class TaskSettingsService {
     return this.configPath
   }
 
-  private exactRuntimeIds(): readonly string[] {
-    if (this.exactRuntimeIdsCache === undefined) {
-      const listed = this.resolver.listExactRuntimes({ taskName: 'task-settings' })
-      this.exactRuntimeIdsCache = listed.ok ? listed.items.map((item) => item.exactAgentRuntime) : []
-    }
-    return this.exactRuntimeIdsCache
+  /** Live alias entries `[{name,target}]` for the snapshot surface. Mirrors the
+   *  runtime-alias protocol snapshot and is re-read at every call; never
+   *  cached. */
+  private async aliasEntries(): Promise<Array<{ name: string; target: string }>> {
+    const snapshot = await this.aliases.snapshot()
+    return snapshot.aliases
   }
 
-  /** Maps an exact runtime id (`forge/<profile>`) to its client/provider/model
-   *  triple, or null when no available exact candidate carries that id. */
-  private exactRuntimeTriple(runtimeId: string): TaskSettingsExplicitRuntime | null {
-    const items = this.resolver.listExactRuntimes({ taskName: 'task-settings' })
-    if (!items.ok) return null
-    const match = items.items.find(
-      (item) => item.available && item.resolved !== undefined && item.exactAgentRuntime === runtimeId,
-    )
-    if (!match?.resolved) return null
-    return {
-      client: match.resolved.client,
-      provider: match.resolved.provider,
-      model: match.resolved.model,
-    }
+  /** Resolves one stored structural reference freshly to its canonical
+   *  `provider/model:client` run target. Alias references reload the daemon
+   *  alias store at call time (never a stale cached target); inline targets are
+   *  canonicalized through the same alias owner. Unresolvable references throw
+   *  and callers never fall back to another runtime or to automatic mode. */
+  private async resolveReference(reference: TaskSettingsExplicitReference): Promise<string> {
+    const resolved = await this.aliases.resolve(reference)
+    return resolved.target
   }
 
-  /** Maps an explicit client/provider/model triple back to one exact runtime id. */
-  private exactRuntimeIdForTriple(triple: TaskSettingsExplicitRuntime): string | null {
-    const items = this.resolver.listExactRuntimes({ taskName: 'task-settings' })
-    if (!items.ok) return null
-    const matches = items.items.filter(
-      (item) =>
-        item.available
-        && item.resolved !== undefined
-        && item.resolved.client === triple.client
-        && item.resolved.provider === triple.provider
-        && item.resolved.model === triple.model,
-    )
-    if (matches.length !== 1) return null
-    return matches[0]!.exactAgentRuntime
+  /** Client/provider/model triple of an already-resolved dispatch snapshot,
+   *  used only for the non-billable live readiness probes. */
+  private static tripleOf(resolved: {
+    client: string
+    provider: string
+    model: string
+  }): TaskSettingsRuntimeTriple {
+    return { client: resolved.client, provider: resolved.provider, model: resolved.model }
   }
 
   /** Maps a non-persistent public snake_case invocation layer into the canonical
-   *  config layer. An explicit_runtime triple is converted back to the one exact
-   *  runtime id, rejecting triples that identify no single currently-available
-   *  exact runtime. The invocation layer is never written to config. */
+   *  config layer. An explicit_runtime structural reference (alias or inline
+   *  target) is carried verbatim and is never mapped to a resolved triple or
+   *  runtime id here — alias resolution happens freshly at execution time. The
+   *  invocation layer is never written to config. */
   private invocationLayerToCanonical(
     invocation: TaskSettingsLayerDto,
   ): ConfigTaskSettingsLayer {
@@ -368,22 +396,10 @@ export class TaskSettingsService {
       raw.selectionMode = invocation.mode
     }
     if (invocation.explicit_runtime !== undefined && invocation.explicit_runtime !== null) {
-      const runtimeId = this.exactRuntimeIdForTriple(invocation.explicit_runtime)
-      if (runtimeId === null) {
-        throw new TaskSettingsInvalidSettingsError(
-          `explicit_runtime ${JSON.stringify(invocation.explicit_runtime)} does not map to exactly one available exact runtime`,
-        )
-      }
-      raw.agentRuntime = runtimeId
+      raw.explicitRuntime = invocation.explicit_runtime
     }
     if (invocation.timeout_ms !== undefined && invocation.timeout_ms !== null) {
       raw.timeoutMs = invocation.timeout_ms
-    }
-    if (
-      invocation.additional_instructions !== undefined
-      && invocation.additional_instructions !== null
-    ) {
-      raw.additionalInstructions = invocation.additional_instructions
     }
     if (invocation.automatic !== undefined && invocation.automatic !== null) {
       raw.dispatch = invocation.automatic
@@ -394,14 +410,19 @@ export class TaskSettingsService {
   /** Resolves the authoritative settings for one task run at execution time.
    *  The authoritative config is read here at call time and the five layers
    *  (system defaults -> builtin Task defaults supplied by the kernel ->
-   *  user global -> stable per-task incl. legacy builtin compatibility ->
-   *  invocation) merge right-wins through the config/task-settings.mts
-   *  resolver — no second merge algorithm. The invocation layer is
-   *  non-persistent. Automatic mode resolves with the effective dispatch only
-   *  (never a stale inherited exact runtime as a pin); explicit mode calls
-   *  resolveExplicit with only required capabilities. Both modes then run the
-   *  same non-billable live daemon/provider readiness checks exactly once
-   *  against the selected runtime and fail without fallback. */
+   *  user global -> stable per-task identity -> invocation) merge right-wins
+   *  through the config/task-settings.mts resolver — no second merge
+   *  algorithm. The invocation layer is non-persistent.
+   *
+   *  Automatic mode ignores aliases and any inherited explicit reference; it
+   *  resolves with the effective dispatch only through `resolver.resolve`.
+   *  Explicit mode resolves the effective structural reference (alias or
+   *  inline target) freshly through the injected RuntimeAliasService and calls
+   *  `resolver.resolveExplicit` with only required capabilities; an
+   *  unknown/deleted alias or an unavailable inline target fails the run with
+   *  no automatic fallback. Both modes run the same non-billable live
+   *  daemon/provider readiness checks exactly once against the selected
+   *  canonical target and fail without fallback. */
   async resolveForRun(params: TaskRunSettingsParams): Promise<TaskRunSettingsResolution> {
     const { record } = this.readConfigRecord()
     const tasks = tasksSectionOf(record)
@@ -413,18 +434,12 @@ export class TaskSettingsService {
       ...(project !== undefined ? { project } : {}),
     })
 
-    const builtinLayer = taskDefaultsToSettingsLayer(
-      {
-        ...(params.defaults?.agentRuntime !== undefined ? { runtime: params.defaults.agentRuntime } : {}),
-        ...(params.defaults?.timeoutMs !== undefined ? { timeoutMs: params.defaults.timeoutMs } : {}),
-        dispatch: rawDefinitionDispatch(params.defaults?.dispatch),
-      },
-      { exactRuntimeIds: this.exactRuntimeIds() },
-    )
+    const builtinLayer = taskDefaultsToSettingsLayer({
+      ...(params.defaults?.timeoutMs !== undefined ? { timeoutMs: params.defaults.timeoutMs } : {}),
+      dispatch: rawDefinitionDispatch(params.defaults?.dispatch),
+    })
 
-    const userTaskLayer = kind === 'builtin'
-      ? readBuiltinSettingsSelection(tasks, params.taskName).layer
-      : readPerTaskSettings(tasks, identity)
+    const userTaskLayer = readPerTaskSettings(tasks, identity)
 
     const invocationLayer = params.invocation === undefined
       ? undefined
@@ -443,14 +458,17 @@ export class TaskSettingsService {
     }
 
     if (effective.mode === 'explicit') {
-      const runtimeId = effective.runtime
-      if (runtimeId === undefined) {
-        throw new TaskSettingsInvalidSettingsError('explicit mode requires an exact runtime selection')
+      const reference = effective.explicitRuntime
+      if (reference === undefined) {
+        throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (alias or target)')
       }
+      // Fresh alias resolution at call time; never a stale/cached target. An
+      // unknown/deleted alias throws here and never falls back to automatic.
+      const target = await this.resolveReference(reference)
       const capabilities = effective.dispatch.requiredCapabilities
       const explicitResolution = this.resolver.resolveExplicit({
         taskName: params.taskName,
-        exactRuntime: runtimeId,
+        exactRuntime: target,
         ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
       })
       if (!explicitResolution.ok) {
@@ -459,51 +477,40 @@ export class TaskSettingsService {
       }
       // Same non-billable live daemon admission and provider credential/route
       // readiness check shared by automatic runs and snapshot/save preflight,
-      // run once against the runtime resolveExplicit selected; failure never
-      // falls back to another candidate.
-      await this.assertLiveRuntimeAvailability(params.taskName, runtimeId, {
-        client: explicitResolution.resolved.client,
-        provider: explicitResolution.resolved.provider,
-        model: explicitResolution.resolved.model,
-      })
+      // run once against the canonical target resolveExplicit selected;
+      // failure never falls back to another candidate.
+      await this.assertLiveRuntimeAvailability(
+        params.taskName,
+        explicitResolution.exactAgentRuntime,
+        TaskSettingsService.tripleOf(explicitResolution.resolved),
+      )
       return {
         mode: 'explicit',
-        exactAgentRuntime: runtimeId,
+        exactAgentRuntime: explicitResolution.exactAgentRuntime,
         dispatch: explicitResolution.resolved,
         timeoutMs: effective.timeoutMs,
-        ...(effective.additionalInstructions !== undefined
-          ? { additionalInstructions: effective.additionalInstructions }
-          : {}),
         sources: toRunSources(effective.sources),
       }
     }
 
-    // Automatic mode: pass only the effective dispatch to resolver.resolve; any
-    // inherited exact runtime declaration is a stale pin and is deliberately
-    // never forwarded as an exactRuntime constraint.
-    const resolution = this.resolver.resolve({
+    // Automatic mode ignores aliases and any inherited/stale explicit
+    // reference; only the effective dispatch is forwarded to the shared
+    // automatic-selection path (resolver.eligible + live availability +
+    // quota/free/cap policy + immutable ranking). Readiness already ran for
+    // every exact choice before ranking, so there is NO second post-selection
+    // runtimeAvailability call and no fallback after selection.
+    const selection = await this.resolveAutomaticSelection({
       taskName: params.taskName,
-      requirements: effective.dispatch as ConfigTaskDispatchRequirements,
+      requirements: effective.dispatch,
+      timeoutMs: effective.timeoutMs,
+      maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
     })
-    if (!resolution.ok) throw resolution.error
-    // Automatic actual runs run the same non-billable live daemon admission and
-    // provider credential/route availability check as explicit runs, exactly
-    // once against the runtime resolver.resolve selected. Failure fails the run
-    // without a second resolver call and without falling back to another
-    // candidate; no paid probe is issued.
-    await this.assertLiveRuntimeAvailability(params.taskName, resolution.exactAgentRuntime, {
-      client: resolution.resolved.client,
-      provider: resolution.resolved.provider,
-      model: resolution.resolved.model,
-    })
+    if (!selection.ok) throw selection.error
     return {
       mode: 'automatic',
-      exactAgentRuntime: resolution.exactAgentRuntime,
-      dispatch: resolution.resolved,
+      exactAgentRuntime: selection.exactAgentRuntime,
+      dispatch: selection.dispatch,
       timeoutMs: effective.timeoutMs,
-      ...(effective.additionalInstructions !== undefined
-        ? { additionalInstructions: effective.additionalInstructions }
-        : {}),
       sources: toRunSources(effective.sources),
     }
   }
@@ -532,6 +539,7 @@ export class TaskSettingsService {
       revision,
       ...(params.project !== undefined ? { project: params.project } : {}),
       user_global: this.toLayerDto(userGlobal),
+      aliases: await this.aliasEntries(),
       rows,
     }
   }
@@ -627,8 +635,8 @@ export class TaskSettingsService {
     const tasks = tasksSectionOf(current.record)
     const existingGlobal = readGlobalTaskSettings(tasks)
     const nextGlobal = this.applyPatchToLayer(existingGlobal, params.patch)
-    if (nextGlobal?.selectionMode === 'explicit' && nextGlobal.agentRuntime === undefined) {
-      throw new TaskSettingsInvalidSettingsError('global explicit mode requires an exact explicit_runtime selection')
+    if (nextGlobal?.selectionMode === 'explicit' && nextGlobal.explicitRuntime === undefined) {
+      throw new TaskSettingsInvalidSettingsError('global explicit mode requires an explicit runtime reference (alias or target)')
     }
 
     this.writeRecordMutation(current.record, (settings) => {
@@ -645,6 +653,11 @@ export class TaskSettingsService {
     params: TaskSettingsSaveParams,
     summary: TaskSettingsDefinitionSummary,
   ): Promise<TaskSettingsSnapshotResult> {
+    if (params.patch.max_auto_output_usd_per_million !== undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        'max_auto_output_usd_per_million is global-only and cannot be applied at task scope',
+      )
+    }
     const taskName = summary.name
     const current = this.readConfigRecord()
     if (current.revision !== params.expected_revision) {
@@ -660,20 +673,14 @@ export class TaskSettingsService {
     })
 
     const tasks = tasksSectionOf(current.record)
-    const baselineLayer = kind === 'builtin'
-      ? readBuiltinSettingsSelection(tasks, taskName).layer
-      : readPerTaskSettings(tasks, identity)
+    const baselineLayer = readPerTaskSettings(tasks, identity)
     const nextLayer = this.applyPatchToLayer(baselineLayer, params.patch)
 
     if (nextLayer !== undefined) {
-      const builtinLayer = taskDefaultsToSettingsLayer(
-        {
-          runtime: summary.agentRuntime,
-          ...(summary.timeoutMs !== undefined ? { timeoutMs: summary.timeoutMs } : {}),
-          dispatch: rawDefinitionDispatch(summary.dispatch),
-        },
-        { exactRuntimeIds: this.exactRuntimeIds() },
-      )
+      const builtinLayer = taskDefaultsToSettingsLayer({
+        ...(summary.timeoutMs !== undefined ? { timeoutMs: summary.timeoutMs } : {}),
+        dispatch: rawDefinitionDispatch(summary.dispatch),
+      })
       let effective
       try {
         effective = resolveEffectiveTaskSettings({
@@ -685,11 +692,28 @@ export class TaskSettingsService {
         throw new TaskSettingsInvalidSettingsError(undefined, messageOf(error))
       }
       if (effective.mode === 'explicit') {
-        if (effective.runtime === undefined) {
-          throw new TaskSettingsInvalidSettingsError('explicit mode requires an exact runtime selection')
+        const reference = effective.explicitRuntime
+        if (reference === undefined) {
+          throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (alias or target)')
         }
-        const triple = this.resolveExplicitRoute(taskName, effective.runtime, effective.dispatch.requiredCapabilities)
-        await this.assertLiveRuntimeAvailability(taskName, effective.runtime, triple)
+        // Preflight resolves the stored reference freshly (never a cached
+        // target); an unknown/deleted alias or an unavailable inline target
+        // fails the save with no automatic fallback.
+        const target = await this.resolveReference(reference)
+        const capabilities = effective.dispatch.requiredCapabilities
+        const explicitResolution = this.resolver.resolveExplicit({
+          taskName,
+          exactRuntime: target,
+          ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+        })
+        if (!explicitResolution.ok) {
+          throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
+        }
+        await this.assertLiveRuntimeAvailability(
+          taskName,
+          explicitResolution.exactAgentRuntime,
+          TaskSettingsService.tripleOf(explicitResolution.resolved),
+        )
       }
     }
 
@@ -706,12 +730,10 @@ export class TaskSettingsService {
   }
 
   private summaryDefaults(summary: TaskSettingsDefinitionSummary, detail?: TaskSettingsDefinitionDetail): {
-    runtime?: string
     timeoutMs?: number
     dispatch: ConfigTaskDispatchRequirements
   } {
     return {
-      ...(summary.agentRuntime !== undefined ? { runtime: summary.agentRuntime } : {}),
       ...(summary.timeoutMs !== undefined
         ? { timeoutMs: summary.timeoutMs }
         : detail?.timeoutMs !== undefined
@@ -748,13 +770,9 @@ export class TaskSettingsService {
       detail = undefined
     }
 
-    const builtinLayer = taskDefaultsToSettingsLayer(this.summaryDefaults(summary, detail), {
-      exactRuntimeIds: this.exactRuntimeIds(),
-    })
+    const builtinLayer = taskDefaultsToSettingsLayer(this.summaryDefaults(summary, detail))
 
-    const userTaskLayer = kind === 'builtin'
-      ? readBuiltinSettingsSelection(tasks, summary.name).layer
-      : readPerTaskSettings(tasks, identity)
+    const userTaskLayer = readPerTaskSettings(tasks, identity)
 
     let effective: ReturnType<typeof resolveEffectiveTaskSettings>
     try {
@@ -778,79 +796,79 @@ export class TaskSettingsService {
     const instructionTemplate = summary.instructionTemplate ?? detail?.instructionTemplate ?? []
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
+    // Explicit-mode row: the stored structural reference plus its exact
+    // resolution. Alias references are resolved freshly at snapshot time; an
+    // unknown/deleted alias or an unavailable inline target reports the issue
+    // and keeps the structural reference — it never falls back to another
+    // runtime or to automatic mode.
     let explicitRow: TaskSettingsExplicitRow | undefined
-    const runtimeId = effective.runtime
-    const capabilities = effective.dispatch.requiredCapabilities
-    // Authoritative explicit-mode picker input: exact existing runtimes the
-    // resolver can select for this task's required capabilities. Enumerated once
-    // regardless of the effective mode so an automatic row can offer explicit
-    // selection without fabricating a current explicit runtime. Only available
-    // items with truthful resolved metadata are projected; no paid probe is
-    // issued and no default explicit runtime is selected.
-    const listed = this.resolver.listExactRuntimes({
-      taskName: summary.name,
-      ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
-    })
-    const runtimeChoices = listed.ok
-      ? listed.items
-        .filter((item) => item.available && item.resolved !== undefined)
-        .map((item) => ({ ...item.resolved!, exactAgentRuntime: item.exactAgentRuntime }))
-      : []
-    // Row-level current resolved runtime: the exact successful automatic or
-    // explicit resolver result, or null on any resolution/readiness failure.
-    // It is a fresh per-row value and never reuses a stale or fallback runtime.
-    let resolved_runtime: TaskSettingsEligibleChoice | null = null
+    // Automatic-mode row: selected resolved dispatch + safe reason, exposed
+    // through minimal additive optional fields (keeps the Task page layout).
+    let automaticSelection: TaskSettingsAutomaticSelection | undefined
     if (effective.mode === 'explicit') {
-      if (runtimeId === undefined) {
+      const reference = effective.explicitRuntime
+      if (reference === undefined) {
         issues.push({
           code: 'invalid_settings',
-          message: 'explicit mode is selected but no exact runtime is available',
+          message: 'explicit mode is selected but no explicit runtime reference (alias or target) is set',
         })
       } else {
-        const explicitResolution = this.resolver.resolveExplicit({
-          taskName: summary.name,
-          exactRuntime: runtimeId,
-          ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
-        })
-        if (explicitResolution.ok) {
-          const resolved = { ...explicitResolution.resolved, exactAgentRuntime: explicitResolution.exactAgentRuntime }
-          const triple = {
-            client: explicitResolution.resolved.client,
-            provider: explicitResolution.resolved.provider,
-            model: explicitResolution.resolved.model,
-          }
-          const readiness = await this.runtimeReadiness(
-            summary.name,
-            explicitResolution.exactAgentRuntime,
-            triple,
-          )
-          explicitRow = { runtime: triple, choices: runtimeChoices, resolved, readiness }
-          // Row-level runtime stays the exact resolver result only while live
-          // readiness confirms the run could start now; otherwise it is null.
-          if (readiness.available) resolved_runtime = resolved
-        } else {
-          issues.push({
-            code: 'explicit_runtime_unavailable',
-            message: explicitResolution.error.message,
+        let resolvedTarget: string | null = null
+        let resolved: TaskSettingsExplicitRow['resolved'] = null
+        let readiness: TaskSettingsRuntimeReadiness | null = null
+        try {
+          const target = await this.resolveReference(reference)
+          const capabilities = effective.dispatch.requiredCapabilities
+          const explicitResolution = this.resolver.resolveExplicit({
+            taskName: summary.name,
+            exactRuntime: target,
+            ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
           })
-          const fallbackTriple = this.exactRuntimeTriple(runtimeId)
-          if (fallbackTriple !== null) {
-            explicitRow = { runtime: fallbackTriple, choices: runtimeChoices, resolved: null, readiness: null }
+          if (explicitResolution.ok) {
+            resolvedTarget = explicitResolution.exactAgentRuntime
+            resolved = explicitResolution.resolved
+            readiness = await this.runtimeReadiness(
+              summary.name,
+              explicitResolution.exactAgentRuntime,
+              TaskSettingsService.tripleOf(explicitResolution.resolved),
+            )
+          } else {
+            issues.push({
+              code: 'explicit_runtime_unavailable',
+              message: explicitResolution.error.message,
+            })
           }
+        } catch (error) {
+          issues.push({ code: 'explicit_runtime_unavailable', message: messageOf(error) })
         }
+        explicitRow = { reference, resolved_target: resolvedTarget, resolved, readiness }
       }
     } else {
-      const resolution = this.resolver.resolve({
-        taskName: summary.name,
-        requirements: effective.dispatch as ConfigTaskDispatchRequirements,
-      })
-      if (!resolution.ok) {
-        issues.push({
-          code: 'automatic_dispatch_unavailable',
-          message: resolution.error.message,
+      // Automatic preview shares the exact automatic-selection helper used by
+      // automatic runs (same quota snapshot evidence, same availability/free/
+      // cap/client policy, same immutable ranking), but takes its own snapshot
+      // per row and never falls back. A failure surfaces as a structured issue.
+      try {
+        const selection = await this.resolveAutomaticSelection({
+          taskName: summary.name,
+          requirements: effective.dispatch,
+          timeoutMs: effective.timeoutMs,
+          maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
         })
-      } else {
-        resolved_runtime = { ...resolution.resolved, exactAgentRuntime: resolution.exactAgentRuntime }
+        if (selection.ok) {
+          automaticSelection = {
+            exact_runtime: selection.exactAgentRuntime,
+            resolved: selection.dispatch,
+            reason: selection.reason,
+          }
+        } else {
+          issues.push({
+            code: 'automatic_dispatch_unavailable',
+            message: selection.error.message,
+          })
+        }
+      } catch (error) {
+        issues.push({ code: 'automatic_dispatch_unavailable', message: messageOf(error) })
       }
     }
 
@@ -868,7 +886,6 @@ export class TaskSettingsService {
         ...(projectName !== undefined ? { project: projectName } : {}),
         prompt_template: summary.promptTemplate ?? detail?.promptTemplate ?? 'dynamic',
         instruction_template: instructionTemplate,
-        declared_runtime: builtinLayer.agentRuntime ?? null,
         timeout_ms: builtinLayer.timeoutMs ?? null,
         dispatch: toSnakeDispatch(builtinLayer.dispatch ?? {}),
       },
@@ -876,19 +893,18 @@ export class TaskSettingsService {
       effective: {
         mode: { value: effective.mode as TaskSettingsMode, source: toSourceLayer(effective.sources.selectionMode) },
         explicit_runtime: {
-          value: runtimeId === undefined ? null : this.exactRuntimeTriple(runtimeId),
-          source: toSourceLayer(effective.sources.agentRuntime),
+          value: effective.explicitRuntime ?? null,
+          source: toSourceLayer(effective.sources.explicitRuntime),
         },
         timeout_ms: { value: effective.timeoutMs, source: toSourceLayer(effective.sources.timeoutMs) },
-        additional_instructions: {
-          value: effective.additionalInstructions ?? null,
-          source: toSourceLayer(effective.sources.additionalInstructions),
+        max_auto_output_usd_per_million: {
+          value: effective.maxAutoOutputUsdPerMillion ?? null,
+          source: toSourceLayer(effective.sources.maxAutoOutputUsdPerMillion),
         },
         automatic,
       },
-      runtime_choices: runtimeChoices,
-      resolved_runtime,
       ...(explicitRow !== undefined ? { explicit: explicitRow } : {}),
+      ...(automaticSelection !== undefined ? { automatic_selection: automaticSelection } : {}),
       issues,
     }
   }
@@ -896,7 +912,7 @@ export class TaskSettingsService {
   private async runtimeReadiness(
     taskName: string,
     exactRuntime: string,
-    runtime: TaskSettingsExplicitRuntime,
+    runtime: TaskSettingsRuntimeTriple,
   ): Promise<TaskSettingsRuntimeReadiness> {
     const issues: TaskSettingsValidationIssue[] = []
     const daemonReport = this.daemonAvailability ? await this.daemonAvailability() : undefined
@@ -941,28 +957,6 @@ export class TaskSettingsService {
     }
   }
 
-  /** Explicit resolver route/capability validation (snapshot/save preflight).
-   *  Never falls back to another runtime or to automatic ranking. Resolves the
-   *  selected exact runtime into its client/provider/model triple. */
-  private resolveExplicitRoute(
-    taskId: string,
-    runtimeId: string,
-    requiredCapabilities: ConfigTaskDispatchRequirements['requiredCapabilities'],
-  ): { client: string; provider: string; model: string } {
-    const explicitResolution = this.resolver.resolveExplicit({
-      taskName: taskId,
-      exactRuntime: runtimeId,
-      ...(requiredCapabilities !== undefined && requiredCapabilities.length > 0
-        ? { requiredCapabilities }
-        : {}),
-    })
-    if (!explicitResolution.ok) {
-      throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
-    }
-    const resolved = explicitResolution.resolved
-    return { client: resolved.client, provider: resolved.provider, model: resolved.model }
-  }
-
   /** Non-billable live daemon admission and provider credential/route
    *  availability check against an already-selected runtime. No paid probe is
    *  ever issued, an unknown quota is never treated as available (or zero), and
@@ -990,6 +984,117 @@ export class TaskSettingsService {
     }
   }
 
+  /** One immutable automatic selection: the shared quota/free/cap/client
+   *  policy path used by both resolveForRun and automatic snapshot row preview.
+   *
+   *  Exactly one AutoRoutingQuotaSnapshot is obtained per call. Static hard
+   *  gates come from `resolver.eligible`; every exact choice is then filtered
+   *  through the live runtimeAvailability callback before ranking (absent
+   *  callback stays backward-compatible available; `available: false` is
+   *  excluded) and through the snapshot's hard-blocked providers. Only variants
+   *  sharing the same canonical provider+model AND the same reference pricing
+   *  identity collapse (native then grok then stable other client). The
+   *  effective cap is the min of the defined task/global caps; when neither is
+   *  defined the maximum admitted finite reference output price is used only as
+   *  non-rejecting score normalization. rankAutoRoutingCandidates runs once and
+   *  the matching exact choice is selected with no fallback. */
+  private async resolveAutomaticSelection(
+    params: AutomaticSelectionParams,
+  ): Promise<AutomaticSelectionResult> {
+    const snapshot: AutoRoutingQuotaSnapshot | null = this.quotaSnapshots
+      ? await this.quotaSnapshots.snapshot()
+      : null
+    const nowMs = snapshot ? snapshot.nowMs : Date.now()
+    const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
+
+    const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: params.requirements })
+    if (!eligible.ok) return { ok: false, error: eligible.error }
+
+    const probed: AutomaticProbeEntry[] = []
+    for (const choice of eligible.choices) {
+      if (blocked.has(choice.provider)) continue
+      const availability = this.runtimeAvailability
+        ? await this.runtimeAvailability(TaskSettingsService.tripleOf(choice))
+        : undefined
+      if (availability === undefined || availability.available) probed.push({ choice, availability })
+    }
+    const collapsed = collapseAutomaticChoices(probed)
+    if (collapsed.length === 0) {
+      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+    }
+
+    const caps: number[] = []
+    if (typeof params.requirements.maxOutputUsdPerMillion === 'number') {
+      caps.push(params.requirements.maxOutputUsdPerMillion)
+    }
+    if (params.maxAutoOutputUsdPerMillion !== undefined) {
+      caps.push(params.maxAutoOutputUsdPerMillion)
+    }
+    const finiteReferences = collapsed
+      .map((entry) => entry.choice.reference_pricing.output_usd_per_million)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+    const capUsdPerM = caps.length > 0
+      ? Math.min(...caps)
+      : finiteReferences.length > 0
+        ? Math.max(...finiteReferences)
+        : 0
+
+    const context: AutomaticSelectionContext = {
+      snapshotId: snapshot ? snapshot.snapshotId : 'settings-no-quota-snapshot',
+      nowMs,
+      timeoutMs: params.timeoutMs,
+      snapshot,
+      capUsdPerM,
+      minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
+      expectedTps: finiteOrDefault(params.requirements.expectedTps, 0),
+      intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
+      intelligenceMaxRank: intelligenceRankOf(params.requirements.intelligenceMax, INTELLIGENCE_ORDER.premium),
+    }
+
+    const inputs: CandidateInput[] = []
+    for (const entry of collapsed) {
+      const candidate = toAutomaticCandidateInput(entry, context)
+      if (candidate !== null) inputs.push(candidate)
+    }
+    if (inputs.length === 0) {
+      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+    }
+
+    const ranked = rankAutoRoutingCandidates(inputs)
+    const best = ranked.ranked[0]
+    if (!best) {
+      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+    }
+    const chosen = collapsed.find((entry) => entry.choice.exactAgentRuntime === best.canonicalId)
+    if (!chosen) {
+      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+    }
+
+    const decision: TaskAutoRoutingDecision = {
+      snapshot_id: best.snapshotId,
+      selected_rank: best.rank,
+      supply_class: best.supplyClass,
+      quota_tier: best.tier,
+      quota_coverage_complete: best.coverageComplete,
+      quota_headroom_trusted: best.headroomTrusted,
+      reference_output_usd_per_million: best.referenceUsdPerM,
+      routing_output_usd_per_million: best.routingPriceUsdPerM,
+      effective_cap_usd_per_million: context.capUsdPerM,
+      score: best.score,
+      reasons: [...best.notes],
+    }
+    const { exactAgentRuntime: _exact, ...resolvedFields } = chosen.choice
+    const dispatch: TaskResolvedDispatch = { ...resolvedFields, auto_routing: decision }
+    const reason = `automatic selection rank ${best.rank}/${ranked.ranked.length} (${best.supplyClass}, quota tier ${best.tier})`
+    return {
+      ok: true,
+      exactAgentRuntime: chosen.choice.exactAgentRuntime,
+      dispatch,
+      decision,
+      reason,
+    }
+  }
+
   private applyPatchToLayer(
     layer: ConfigTaskSettingsLayer | undefined,
     patch: TaskSettingsPatch,
@@ -1006,15 +1111,11 @@ export class TaskSettingsService {
 
     if (patch.explicit_runtime !== undefined) {
       if (patch.explicit_runtime === null) {
-        delete raw.agent_runtime
+        delete raw.explicit_runtime
       } else {
-        const runtimeId = this.exactRuntimeIdForTriple(patch.explicit_runtime)
-        if (runtimeId === null) {
-          throw new TaskSettingsInvalidSettingsError(
-            `explicit_runtime ${JSON.stringify(patch.explicit_runtime)} does not match an existing exact runtime`,
-          )
-        }
-        raw.agent_runtime = runtimeId
+        // Structural reference (alias or inline target) is stored verbatim.
+        // Alias usability is validated by the fresh save preflight, never here.
+        raw.explicit_runtime = patch.explicit_runtime
       }
     }
 
@@ -1026,11 +1127,11 @@ export class TaskSettingsService {
       }
     }
 
-    if (patch.additional_instructions !== undefined) {
-      if (patch.additional_instructions === null) {
-        delete raw.additional_instructions
+    if (patch.max_auto_output_usd_per_million !== undefined) {
+      if (patch.max_auto_output_usd_per_million === null) {
+        delete raw.max_auto_output_usd_per_million
       } else {
-        raw.additional_instructions = patch.additional_instructions
+        raw.max_auto_output_usd_per_million = patch.max_auto_output_usd_per_million
       }
     }
 
@@ -1069,25 +1170,19 @@ export class TaskSettingsService {
   }
 
   /** Converts a canonical config layer into the JSON-safe snake_case layer DTO.
-   *  The stored exact runtime id is mapped back to an explicit_runtime triple
-   *  when an available candidate still carries it; otherwise the field is
-   *  omitted (the effective row reports the precise issue). */
+   *  The stored explicit reference (alias or inline target) is structural and
+   *  is carried verbatim; a resolved triple is never copied back. */
   private toLayerDto(layer?: ConfigTaskSettingsLayer): TaskSettingsLayerDto {
     if (!layer) return {}
     return {
       ...(layer.selectionMode !== undefined ? { mode: layer.selectionMode } : {}),
       ...(layer.timeoutMs !== undefined ? { timeout_ms: layer.timeoutMs } : {}),
-      ...(layer.additionalInstructions !== undefined
-        ? { additional_instructions: layer.additionalInstructions }
-        : {}),
       ...(layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0
         ? { automatic: toSnakeDispatch(layer.dispatch) }
         : {}),
-      ...(layer.agentRuntime !== undefined
-        ? (() => {
-          const triple = this.exactRuntimeTriple(layer.agentRuntime!)
-          return triple !== null ? { explicit_runtime: triple } : {}
-        })()
+      ...(layer.explicitRuntime !== undefined ? { explicit_runtime: layer.explicitRuntime } : {}),
+      ...(layer.maxAutoOutputUsdPerMillion !== undefined
+        ? { max_auto_output_usd_per_million: layer.maxAutoOutputUsdPerMillion }
         : {}),
     }
   }
@@ -1122,6 +1217,137 @@ export class TaskSettingsService {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Automatic selection policy plumbing (quota/free/cap/client)
+// ---------------------------------------------------------------------------
+
+interface AutomaticSelectionParams {
+  taskName: string
+  requirements: ConfigTaskDispatchRequirements
+  timeoutMs: number
+  maxAutoOutputUsdPerMillion: number | undefined
+}
+
+interface AutomaticProbeEntry {
+  choice: TaskDispatchChoice
+  availability?: TaskSettingsProviderAvailability
+}
+
+type AutomaticSelectionResult =
+  | {
+      ok: true
+      exactAgentRuntime: string
+      dispatch: TaskResolvedDispatch
+      decision: TaskAutoRoutingDecision
+      reason: string
+    }
+  | { ok: false; error: Error }
+
+interface AutomaticSelectionContext {
+  snapshotId: string
+  nowMs: number
+  timeoutMs: number
+  snapshot: AutoRoutingQuotaSnapshot | null
+  capUsdPerM: number
+  minimumTps: number
+  expectedTps: number
+  intelligenceMinRank: number
+  intelligenceMaxRank: number
+}
+
+function finiteOrDefault(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function intelligenceRankOf(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const rank = INTELLIGENCE_ORDER[value as keyof typeof INTELLIGENCE_ORDER]
+  return rank === undefined ? fallback : rank
+}
+
+/** Collapse only variants sharing the same canonical provider+model AND the
+ *  same reference pricing identity. Within a group prefer native, then grok,
+ *  then the stable other client (alphabetical tie-break). Distinct canonical
+ *  model ids / pricing variants always stay separate. */
+function collapseAutomaticChoices(entries: readonly AutomaticProbeEntry[]): AutomaticProbeEntry[] {
+  const groups = new Map<string, AutomaticProbeEntry[]>()
+  for (const entry of entries) {
+    const choice = entry.choice
+    const pricing = choice.reference_pricing
+    const referenceIdentity = pricing
+      ? `${pricing.source}:${String(pricing.output_usd_per_million)}`
+      : 'no-reference'
+    const key = `${choice.provider}/${choice.model}#${referenceIdentity}`
+    const group = groups.get(key)
+    if (group) group.push(entry)
+    else groups.set(key, [entry])
+  }
+  const collapsed: AutomaticProbeEntry[] = []
+  for (const group of groups.values()) {
+    group.sort((a, b) => {
+      const aPreference = automaticClientPreference(a.choice)
+      const bPreference = automaticClientPreference(b.choice)
+      if (aPreference !== bPreference) return aPreference - bPreference
+      return a.choice.client.localeCompare(b.choice.client)
+    })
+    collapsed.push(group[0]!)
+  }
+  return collapsed
+}
+
+function automaticClientPreference(choice: TaskDispatchChoice): number {
+  if (choice.mode === 'native') return 0
+  if (choice.client === 'grok') return 1
+  return 2
+}
+
+/** Builds one policy CandidateInput from truthful resolved dispatch evidence,
+ *  the snapshot quota entry (or an empty unknown list), and the confirmed-free
+ *  supply fact covering the routing timeout horizon. Returns null when the
+ *  candidate cannot supply truthful reference/speed/intelligence evidence. */
+function toAutomaticCandidateInput(
+  entry: AutomaticProbeEntry,
+  context: AutomaticSelectionContext,
+): CandidateInput | null {
+  const choice = entry.choice
+  const referenceUsdPerM = choice.reference_pricing.output_usd_per_million
+  if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
+    return null
+  }
+  const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
+  if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
+  const quotaEntry = context.snapshot?.entries.find(
+    (candidate) => candidate.providerId === choice.provider && candidate.modelId === choice.model,
+  )
+  const requiredQuota = quotaEntry?.requiredQuota ?? []
+  const freeFact = entry.availability?.freeSupply
+  return {
+    snapshotId: context.snapshotId,
+    canonicalId: choice.exactAgentRuntime,
+    nowMs: context.nowMs,
+    referenceUsdPerM,
+    referenceKind: 'listed',
+    effectiveCapUsdPerM: context.capUsdPerM,
+    timeoutMs: context.timeoutMs,
+    minimumTps: context.minimumTps,
+    expectedTps: context.expectedTps,
+    effectiveTps: choice.speed.effective_tps,
+    intelligenceRank,
+    intelligenceMinRank: context.intelligenceMinRank,
+    intelligenceMaxRank: context.intelligenceMaxRank,
+    requiredQuota,
+    confirmedFreeSupply: freeFact
+      ? {
+          kind: 'confirmed_free',
+          appliesFromMs: context.nowMs,
+          appliesUntilMs: context.nowMs + context.timeoutMs,
+          source: freeFact.source,
+          ruleId: freeFact.ruleId,
+        }
+      : null,
+  }
+}
+
 interface TaskSettingsEffectiveAutomaticDto {
   expected_tps: { value: number | null; source: TaskSettingsSourceLayer }
   minimum_tps: { value: number | null; source: TaskSettingsSourceLayer }
@@ -1133,7 +1359,7 @@ interface TaskSettingsEffectiveAutomaticDto {
   exclude_profile_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_client_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_provider_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
-  preferred_runtime: { value: TaskSettingsExplicitRuntime | null; source: TaskSettingsSourceLayer }
+  preferred_runtime: { value: TaskSettingsRuntimeTriple | null; source: TaskSettingsSourceLayer }
 }
 
 function toEffectiveAutomatic(
@@ -1166,9 +1392,8 @@ function toRunSources(
   }
   return {
     selectionMode: toSourceLayer(sources.selectionMode),
-    agentRuntime: toSourceLayer(sources.agentRuntime),
+    explicitRuntime: toSourceLayer(sources.explicitRuntime),
     timeoutMs: toSourceLayer(sources.timeoutMs),
-    additionalInstructions: toSourceLayer(sources.additionalInstructions),
     automatic,
   }
 }
@@ -1241,10 +1466,10 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
       const items = await getService().list(project)
       return Array.isArray(items)
         ? items.map((item) => {
+          // Definitions never pin a runtime: only timeout/dispatch/prompt
+          // metadata is projected; no agentRuntime/profile is derived.
           const target = resolveTaskTarget(item.name, workspaceRoot, project)
           const config = target?.definition.config
-          const declaredAgentRuntime = config?.agentRuntime
-            ?? (config?.profile ? synthesizeAgentRuntime(config.profile).toString() : undefined)
           const record = item as {
             project?: unknown
             source?: unknown
@@ -1265,9 +1490,6 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             ...(record.source !== undefined ? { source: String(record.source) } : {}),
             ...(record.description !== undefined ? { description: String(record.description) } : {}),
             ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
-            ...(declaredAgentRuntime !== undefined
-              ? { agentRuntime: declaredAgentRuntime }
-              : {}),
             ...(record.dispatch !== undefined
               ? { dispatch: record.dispatch }
               : {}),
@@ -1288,10 +1510,10 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
     async describe(taskId, project) {
       const detail = await getService().describe(taskId, project)
       const record = detail as unknown as Record<string, unknown>
+      // Definitions never pin a runtime; only timeout/dispatch/prompt metadata
+      // is projected, so no agentRuntime/profile is derived here.
       const target = resolveTaskTarget(taskId, workspaceRoot, project)
       const config = target?.definition.config
-      const declaredAgentRuntime = config?.agentRuntime
-        ?? (config?.profile ? synthesizeAgentRuntime(config.profile).toString() : undefined)
       const recordProject = record.project !== undefined ? String(record.project) : undefined
       const projectDisplayName = projectLabel(recordProject ?? project)
       const summary: TaskSettingsDefinitionSummary = {
@@ -1304,7 +1526,6 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
         ...(record.source !== undefined ? { source: String(record.source) } : {}),
         ...(record.description !== undefined ? { description: String(record.description) } : {}),
         ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
-        ...(declaredAgentRuntime !== undefined ? { agentRuntime: declaredAgentRuntime } : {}),
         ...(record.dispatch !== undefined ? { dispatch: record.dispatch } : {}),
         ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
           ? { promptTemplate: record.promptTemplate }

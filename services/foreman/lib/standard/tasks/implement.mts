@@ -60,7 +60,6 @@ const definition = {
     description:
       'LEGACY RECOVERY ONLY. New work must compose atomic edit and test tasks in a TaskGraph; this merged implementation task remains resolvable only for persisted runs.',
     scheduling: 'legacy',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     timeoutMs: 1_800_000,

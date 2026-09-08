@@ -524,22 +524,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function isPolicyAgentRuntime(raw: string): boolean {
+  try {
+    return parseAgentRuntime(raw).isPolicy
+  } catch {
+    return false
+  }
+}
+
 function assertResolvedProfileForRetry(agentRuntime: string, resolvedProfile: string | undefined): string {
   if (resolvedProfile) {
-    return `forge/${resolvedProfile}`
-  }
-  // If the original was not a policy, re-use it directly
-  try {
-    const rt = parseAgentRuntime(agentRuntime)
-    if (!rt.isPolicy) {
-      return agentRuntime
+    // A resolved canonical dynamic target (provider/model:client) is preserved
+    // exactly: it is never wrapped as forge/<profile>, which would corrupt the
+    // identity into an invalid forge/provider/model:client string. Only a
+    // genuinely legacy simple profile name (no '/', no ':') keeps the legacy
+    // forge/<profile> wrapper; any already-qualified profile is reused verbatim.
+    if (!resolvedProfile.includes('/') && !resolvedProfile.includes(':')) {
+      return `forge/${resolvedProfile}`
     }
-  } catch {
-    // Non-agentRuntime format; re-use directly
-    return agentRuntime
+    return resolvedProfile
   }
-  // Policy-based agentRuntime with no resolved profile: fail
-  throw new Error(
-    `A concrete resolved profile is required for policy retry. The policy-based agentRuntime '${agentRuntime}' did not produce a resolved profile.`,
-  )
+  // No resolved profile: reuse the original runtime when it is not a policy
+  // classification. A policy-based agentRuntime with no resolved profile is a
+  // deterministic failure.
+  if (isPolicyAgentRuntime(agentRuntime)) {
+    throw new Error(
+      `A concrete resolved profile is required for policy retry. The policy-based agentRuntime '${agentRuntime}' did not produce a resolved profile.`,
+    )
+  }
+  return agentRuntime
 }

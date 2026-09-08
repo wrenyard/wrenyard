@@ -20,7 +20,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Write the simplest automated failing test that reproduces the confirmed root cause',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],

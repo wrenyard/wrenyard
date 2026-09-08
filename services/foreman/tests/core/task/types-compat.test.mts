@@ -45,7 +45,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
     // at runtime via a small factory to keep TypeScript honest.
     const samples: Array<unknown> = []
     const taskConfig: TaskConfig = {
-      profile: 'p',
+      scheduling: 'legacy',
       input: z.object({}),
       output: z.object({}),
       prompt: () => '',
@@ -90,7 +90,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
   it('RegisteredTask requires explicit source provenance', () => {
     const entry: RegisteredTask = {
       name: 'edit',
-      definition: { __type: 'task', config: { profile: 'p', input: z.object({}), output: z.object({}), prompt: () => '' }, sourcePath: '(builtin)' },
+      definition: { __type: 'task', config: { scheduling: 'legacy', input: z.object({}), output: z.object({}), prompt: () => '' }, sourcePath: '(builtin)' },
       project: 'foreman',
       sourcePath: '(builtin)',
       mtime: 0,
@@ -130,7 +130,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
       checkpoint,
     }
     const resolved: ResolvedTarget = {
-      definition: { __type: 'task', config: { profile: 'p', input: z.object({}), output: z.object({}), prompt: () => '' }, sourcePath: '/x' },
+      definition: { __type: 'task', config: { scheduling: 'legacy', input: z.object({}), output: z.object({}), prompt: () => '' }, sourcePath: '/x' },
       type: 'task',
       name: 't',
       project: 'foreman',
@@ -153,12 +153,37 @@ describe('TaskConfig accepts ZodType only (AC-5)', () => {
     const zodInput = z.object({ question: z.string() })
     const zodOutput = z.object({ answer: z.string() })
     const config: TaskConfig = {
-      profile: 'p',
       input: zodInput,
       output: zodOutput,
       prompt: () => '',
     }
     assert.equal(typeof config.input, 'object')
     assert.equal(typeof config.output, 'object')
+  })
+})
+
+describe('pin-free legacy authoring contract', () => {
+  it('accepts scheduling:legacy without a profile or agentRuntime pin', () => {
+    const legacy: TaskConfig = {
+      scheduling: 'legacy',
+      input: z.object({}),
+      output: z.object({}),
+      prompt: () => '',
+    }
+    assert.equal(legacy.scheduling, 'legacy')
+    assert.equal('profile' in legacy, false)
+    assert.equal('agentRuntime' in legacy, false)
+  })
+
+  it('rejects profile and retired agentRuntime on scheduling:legacy at the type level', () => {
+    // Current source-authored legacy definitions are pin-free: profile and the
+    // retired agentRuntime are type-level impossible. Each @ts-expect-error
+    // directive below is the compile-time assertion — typecheck fails if a pin
+    // ever becomes legal for scheduling:legacy again.
+    // @ts-expect-error scheduling:'legacy' must reject profile at the type level
+    const withProfile: TaskConfig = { scheduling: 'legacy', profile: 'test', input: z.object({}), output: z.object({}), prompt: () => '' }
+    // @ts-expect-error scheduling:'legacy' must reject retired agentRuntime at the type level
+    const withAgentRuntime: TaskConfig = { scheduling: 'legacy', agentRuntime: 'forge/test', input: z.object({}), output: z.object({}), prompt: () => '' }
+    assert.ok(withProfile && withAgentRuntime)
   })
 })

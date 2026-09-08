@@ -1,5 +1,6 @@
 import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
 import type {
+  TaskAutoRoutingDecision,
   TaskReferencePricing,
   TaskResolvedDispatch,
   TaskResolvedSpeed,
@@ -49,6 +50,7 @@ interface AttemptDispatchRow {
   reference_pricing_cache_write: number | null
   reference_pricing_source: string | null
   reference_pricing_checked_at: string | null
+  auto_routing: string | null
 }
 
 interface TelemetryRow {
@@ -80,7 +82,8 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
             intelligence,
             reference_pricing_input, reference_pricing_output, reference_pricing_cache,
             reference_pricing_cache_write,
-            reference_pricing_source, reference_pricing_checked_at
+            reference_pricing_source, reference_pricing_checked_at,
+            auto_routing
      FROM task_run_attempt_dispatch WHERE task_run_id = ? ORDER BY created_at ASC, execution_id ASC`,
     taskRunId,
   )
@@ -267,9 +270,10 @@ function toResolvedDispatch(row: AttemptDispatchRow): TaskResolvedDispatch | und
   if (!speed || !pricing) return undefined
   // All identity / speed / intelligence / pricing fields must form a full,
   // schema-valid snapshot; otherwise the dispatch is treated as historical and
-  // incomplete and is omitted.
+  // incomplete and is omitted. Only a NULL requested_agent_runtime is rejected
+  // (an incomplete historical row); '' stays valid as automatic mode.
   if (
-    !row.requested_agent_runtime
+    row.requested_agent_runtime === null
     || !row.profile
     || !row.client
     || !row.provider
@@ -291,6 +295,11 @@ function toResolvedDispatch(row: AttemptDispatchRow): TaskResolvedDispatch | und
     reference_pricing: pricing,
   }
   if (row.protocol) resolved.protocol = row.protocol
+  // Automatic attempts carry an optional routing decision. A missing, NULL,
+  // malformed, incomplete, or tampered auto_routing payload is omitted without
+  // invalidating the otherwise complete resolved dispatch.
+  const autoRouting = parseAutoRoutingDecision(row.auto_routing)
+  if (autoRouting) resolved.auto_routing = autoRouting
   return resolved
 }
 
@@ -340,6 +349,90 @@ function toPricing(row: AttemptDispatchRow): TaskReferencePricing | undefined {
   if (row.reference_pricing_cache != null) pricing.cached_input_usd_per_million = row.reference_pricing_cache
   if (row.reference_pricing_cache_write != null) pricing.cache_write_input_usd_per_million = row.reference_pricing_cache_write
   return pricing
+}
+
+/** The exact privacy-safe TaskAutoRoutingDecision DTO key set. */
+const AUTO_ROUTING_DECISION_KEYS: ReadonlySet<string> = new Set([
+  'snapshot_id',
+  'selected_rank',
+  'supply_class',
+  'quota_tier',
+  'quota_coverage_complete',
+  'quota_headroom_trusted',
+  'reference_output_usd_per_million',
+  'routing_output_usd_per_million',
+  'effective_cap_usd_per_million',
+  'score',
+  'reasons',
+])
+
+/**
+ * Type guard for a complete, schema-safe TaskAutoRoutingDecision parsed from
+ * JSON. Accepts only the exact DTO key set with exact boolean / finite number /
+ * string / string-array field types and the allowed supply_class / quota_tier
+ * enums, so arbitrary JSON (credentials, domains, raw provider errors) can
+ * never be mistaken for or re-exposed as a routing decision.
+ */
+function isAutoRoutingDecision(record: Record<string, unknown>): record is TaskAutoRoutingDecision & Record<string, unknown> {
+  const keys = Object.keys(record)
+  if (keys.length !== AUTO_ROUTING_DECISION_KEYS.size) return false
+  for (const key of keys) {
+    if (!AUTO_ROUTING_DECISION_KEYS.has(key)) return false
+  }
+  return (
+    typeof record.snapshot_id === 'string'
+    && isFiniteNumber(record.selected_rank)
+    && (record.supply_class === 'confirmed_free' || record.supply_class === 'standard')
+    && (record.quota_tier === 'healthy' || record.quota_tier === 'unknown' || record.quota_tier === 'strained')
+    && typeof record.quota_coverage_complete === 'boolean'
+    && typeof record.quota_headroom_trusted === 'boolean'
+    && isFiniteNumber(record.reference_output_usd_per_million)
+    && isFiniteNumber(record.routing_output_usd_per_million)
+    && isFiniteNumber(record.effective_cap_usd_per_million)
+    && isFiniteNumber(record.score)
+    && isStringArray(record.reasons)
+  )
+}
+
+/**
+ * Re-project a persisted auto_routing JSON payload into the privacy-safe
+ * TaskAutoRoutingDecision DTO. NULL/absent, malformed, incomplete, and
+ * extra-field payloads return undefined and are omitted from the resolved
+ * dispatch, which otherwise stays complete. The re-projected object is built
+ * field by field so no arbitrary JSON field is ever exposed.
+ */
+function parseAutoRoutingDecision(raw: string | null): TaskAutoRoutingDecision | undefined {
+  if (raw === null || raw === '') return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+  const record = parsed as Record<string, unknown>
+  if (!isAutoRoutingDecision(record)) return undefined
+  return {
+    snapshot_id: record.snapshot_id,
+    selected_rank: record.selected_rank,
+    supply_class: record.supply_class,
+    quota_tier: record.quota_tier,
+    quota_coverage_complete: record.quota_coverage_complete,
+    quota_headroom_trusted: record.quota_headroom_trusted,
+    reference_output_usd_per_million: record.reference_output_usd_per_million,
+    routing_output_usd_per_million: record.routing_output_usd_per_million,
+    effective_cap_usd_per_million: record.effective_cap_usd_per_million,
+    score: record.score,
+    reasons: [...record.reasons],
+  }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
 
 /**

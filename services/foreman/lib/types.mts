@@ -124,9 +124,8 @@ export interface TaskRunSettingsParams {
   kind?: 'builtin' | 'project'
   /** Project name required to isolate a stable per-task identity for project tasks. */
   project?: string
-  /** TaskConfig-declared defaults (declared runtime/timeout/dispatch). */
+  /** TaskConfig-declared defaults (timeout/dispatch; never a runtime pin). */
   defaults?: {
-    agentRuntime?: string
     timeoutMs?: number
     dispatch?: Record<string, unknown>
   }
@@ -136,20 +135,18 @@ export interface TaskRunSettingsParams {
 
 export interface TaskRunSettingsResolution {
   mode: 'automatic' | 'explicit'
-  /** The single exact runtime id the execution must launch ('forge/<profile>'). */
+  /** The single exact runtime id the execution must launch ('forge/<profile>').
+   *  Set only when explicit mode resolves a reference to a canonical target. */
   exactAgentRuntime: string | null
   /** Resolved dispatch snapshot produced by the daemon resolver for this run. */
   dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null
   /** Effective total task timeout after all layer merges. */
   timeoutMs: number | null
-  /** Effective additional instructions, when any layer contributes them. */
-  additionalInstructions?: string | null
   /** Per-field winning source layer. */
   sources: {
     selectionMode: TaskRunSettingsLayerName
-    agentRuntime: TaskRunSettingsLayerName
+    explicitRuntime: TaskRunSettingsLayerName
     timeoutMs: TaskRunSettingsLayerName
-    additionalInstructions: TaskRunSettingsLayerName
     automatic: Partial<Record<string, TaskRunSettingsLayerName>>
   }
 }

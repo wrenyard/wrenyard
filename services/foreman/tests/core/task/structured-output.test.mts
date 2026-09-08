@@ -507,7 +507,7 @@ describe('core task structured-output', () => {
     )
   })
 
-  it('retries with forge/<resolvedProfile> when policy attempt resolves a concrete profile', async () => {
+  it('retries with the resolved canonical dynamic target verbatim when policy attempt resolves one', async () => {
     let calls = 0
     const seenProfiles: string[] = []
     const agent: StructuredOutputAgent = async (profile, _prompt, opts) => {
@@ -518,7 +518,7 @@ describe('core task structured-output', () => {
           output: 'no output block',
           status: 'done',
           nativeSessionId: 'native_resolved',
-          resolvedProfile: 'codex-luna',
+          resolvedProfile: 'codebuddy/deepseek-v4-flash:cb',
         } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
       }
       return {
@@ -532,8 +532,51 @@ describe('core task structured-output', () => {
     assert.equal(calls, 2)
     assert.deepEqual(result, { label: 'retried with concrete' })
     assert.equal(seenProfiles[0], 'test')
+    assert.equal(seenProfiles[1], 'codebuddy/deepseek-v4-flash:cb',
+      'retry must reuse the canonical target verbatim, never forge/<provider/model:client>')
+  })
+
+  it('keeps the legacy forge/<profile> wrapper only for legacy simple resolved profile names', async () => {
+    let calls = 0
+    const seenProfiles: string[] = []
+    const agent: StructuredOutputAgent = async (profile, _prompt, opts) => {
+      calls += 1
+      seenProfiles.push(profile)
+      if (calls === 1) {
+        return {
+          output: 'no output block',
+          status: 'done',
+          nativeSessionId: 'native_resolved_legacy',
+          resolvedProfile: 'codex-luna',
+        } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
+      }
+      return {
+        output: xmlOutput({ label: 'retried with legacy' }),
+        status: 'done',
+        nativeSessionId: 'native_resolved_legacy',
+      }
+    }
+
+    const result = await collectWithAgent(agent, { maxResumeAttempts: 1 })
+    assert.equal(calls, 2)
+    assert.deepEqual(result, { label: 'retried with legacy' })
     assert.equal(seenProfiles[1], 'forge/codex-luna',
-      'retry must use forge/<resolvedProfile>, not the original policy agentRuntime')
+      'a genuinely legacy simple resolved profile name keeps the legacy forge/ wrapper')
+  })
+
+  it('reuses a non-policy legacy agentRuntime verbatim on retry without a resolved profile', async () => {
+    let calls = 0
+    const seenProfiles: string[] = []
+    const result = await collectWithAgent(async (profile, _prompt) => {
+      calls += 1
+      seenProfiles.push(profile)
+      if (calls === 1) return { output: 'bad output', status: 'done' }
+      return { output: xmlOutput({ label: 'retried ok' }), status: 'done' }
+    }, { maxResumeAttempts: 1, profile: 'forge/codex-luna' })
+
+    assert.equal(calls, 2)
+    assert.deepEqual(result, { label: 'retried ok' })
+    assert.deepEqual(seenProfiles, ['forge/codex-luna', 'forge/codex-luna'])
   })
 
   it('fails deterministically when retry is required without a resolved profile for policy', async () => {
@@ -681,18 +724,6 @@ describe('core task structured-output', () => {
     assert.equal(payload.status, 'failed')
     assert.match(payload.detail as string, /auth rejected/u,
       'the original agent error text must be preserved')
-  })
-
-  it('retries safely for non-policy profiles without resolvedProfile', async () => {
-    let calls = 0
-    const result = await collectWithAgent(async () => {
-      calls += 1
-      if (calls === 1) return { output: 'bad output', status: 'done' }
-      return { output: xmlOutput({ label: 'retried ok' }), status: 'done' }
-    }, { maxResumeAttempts: 1, profile: 'forge/codex-luna' })
-
-    assert.equal(calls, 2)
-    assert.deepEqual(result, { label: 'retried ok' })
   })
 
   it('forwards selected capabilities to first attempt and retry', async () => {

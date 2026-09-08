@@ -30,7 +30,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Explore Obsidian notes through notesmd-cli only — strictly read-only, multi-direction note investigation',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],

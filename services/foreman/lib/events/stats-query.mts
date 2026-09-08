@@ -73,7 +73,30 @@ export interface TaskRunLedgerRow {
    * failures with no execution at all).
    */
   resolved_profile?: string
+  /**
+   * Additive paired human labels resolved exactly once from an injected exact
+   * current-Catalog lookup on the persisted canonical `resolved.provider` and
+   * `resolved.model`. Emitted together only when both are nonempty strings.
+   */
+  provider_display_name?: string
+  model_display_name?: string
   usage: TaskUsage
+}
+
+/**
+ * Exact current-Catalog display-name resolver injected by the daemon for
+ * recent-run ledger rows. Given the persisted canonical `resolved.provider`
+ * and `resolved.model` ids it returns paired human labels only when both
+ * definitions exist with nonempty display names; it never resolves aliases or
+ * run syntax and never consults a client.
+ */
+export type TaskRunDisplayNameResolver = (
+  providerId: string,
+  modelId: string,
+) => { provider_display_name: string; model_display_name: string } | undefined
+
+export interface StatsQueryOptions {
+  resolveDisplayNames?: TaskRunDisplayNameResolver
 }
 
 /**
@@ -125,7 +148,11 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
   }
 }
 
-export function readStatsSummary(params: { days?: number; limit?: number } = {}, now = new Date()): StatsSummaryResult {
+export function readStatsSummary(
+  params: { days?: number; limit?: number } = {},
+  now = new Date(),
+  options: StatsQueryOptions = {},
+): StatsSummaryResult {
   const days = params.days ?? 7
   const limit = params.limit ?? 20
 
@@ -355,7 +382,7 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
     totalTaskDurationMs,
     byTaskDuration,
     windows,
-    recentRuns: readRecentTaskRunLedger(Math.min(limit, RECENT_RUNS_CAP)),
+    recentRuns: readRecentTaskRunLedger(Math.min(limit, RECENT_RUNS_CAP), options.resolveDisplayNames),
   }
 }
 
@@ -366,7 +393,10 @@ export function readStatsSummary(params: { days?: number; limit?: number } = {},
  * Ordering follows the existing indexed task recency (ended_at then created_at)
  * and the result is capped by RECENT_RUNS_CAP.
  */
-function readRecentTaskRunLedger(recentLimit: number): TaskRunLedgerRow[] {
+function readRecentTaskRunLedger(
+  recentLimit: number,
+  resolveDisplayNames?: TaskRunDisplayNameResolver,
+): TaskRunLedgerRow[] {
   const rows = dbQuery<{
     id: string
     template: string | null
@@ -405,6 +435,21 @@ function readRecentTaskRunLedger(recentLimit: number): TaskRunLedgerRow[] {
     if (row.started_at) ledger.started_at = row.started_at
     if (row.ended_at) ledger.finished_at = row.ended_at
     if (meta.resolved) ledger.resolved = meta.resolved
+    // Additive paired human display labels: the injected resolver performs an
+    // exact current-Catalog lookup on the persisted canonical provider/model
+    // ids (never model_id syntax, aliases, profile, or client). The pair is
+    // emitted only when both labels are nonempty strings.
+    if (meta.resolved && resolveDisplayNames) {
+      const displayNames = resolveDisplayNames(meta.resolved.provider, meta.resolved.model)
+      if (
+        displayNames
+        && displayNames.provider_display_name.trim() !== ''
+        && displayNames.model_display_name.trim() !== ''
+      ) {
+        ledger.provider_display_name = displayNames.provider_display_name
+        ledger.model_display_name = displayNames.model_display_name
+      }
+    }
     // Additive authoritative legacy fallback: the exact persisted
     // executions.resolved_profile of the task's execution, only when nonblank.
     // Never derived from the current resolver/defaults or another attempt and

@@ -21,7 +21,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Test exactly one debugging hypothesis with the smallest reversible change',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],

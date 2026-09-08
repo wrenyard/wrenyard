@@ -143,6 +143,16 @@ export interface TaskRunLedgerRow {
    * current resolver/defaults and omitted when no nonblank profile is stored.
    */
   resolved_profile?: string
+  /**
+   * Additive paired human labels resolved exactly once from the current builtin
+   * Catalog display names for the persisted canonical `resolved.provider` and
+   * `resolved.model`. Emitted together only when both definitions exist with
+   * nonempty display names; never derived from client/profile/model_id/run
+   * syntax and never filled from raw identity fallbacks. Desktop assembles the
+   * final "Provider · Model" label from these separate fields.
+   */
+  provider_display_name?: string
+  model_display_name?: string
   usage: TaskUsage
 }
 
@@ -342,6 +352,10 @@ export const statsSummaryResultSchema = {
           // Additive authoritative legacy fallback; only a nonempty string is a
           // valid profile, so empty/malformed values are rejected.
           resolved_profile: { type: 'string', minLength: 1 },
+          // Additive paired human display labels emitted only after an exact
+          // current-Catalog mapping of `resolved.provider`/`resolved.model`.
+          provider_display_name: { type: 'string' },
+          model_display_name: { type: 'string' },
           usage: taskUsageSchema,
         },
         additionalProperties: true,

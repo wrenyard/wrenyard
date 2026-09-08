@@ -17,15 +17,20 @@ import {
  * undefined), which makes the next lower defined value inherit again. Layers
  * never carry copies of defaults.
  *
- * Runtime selection is mode-driven:
- *   - `automatic` ignores any runtime id found on lower/inherited layers
- *     (a stale pin is dropped, never validated).
- *   - `explicit` requires an effective, existing, non-policy runtime id and
- *     rejects policy/profile aliases.
+ * Runtime selection is mode-driven and has exactly two modes:
+ *   - `automatic` ignores any explicit reference found on lower/inherited
+ *     layers (a stale reference is dropped, never validated nor resolved).
+ *   - `explicit` requires one structural explicit reference (an alias name or
+ *     an inline target) to be effective. This module never resolves aliases
+ *     nor checks compatibility against a catalog: it only carries the
+ *     structural reference forward for the daemon to honor.
  *
+ * Task definitions never pin a runtime; every Task defaults to `automatic`.
+ * The only per-task user selection source is the persisted
+ * `tasks.settings.byTask` map (plus the user-global and invocation layers).
  * This module is dependency-light by design: it only consumes plain layer
- * shapes plus persisted `tasks.settings.global`/`tasks.settings.byTask` and
- * the legacy `tasks.agentRuntime` data. It never mutates configuration input.
+ * shapes plus persisted `tasks.settings.global`/`tasks.settings.byTask`. It
+ * never mutates configuration input.
  */
 
 export type TaskSelectionMode = 'automatic' | 'explicit'
@@ -51,12 +56,9 @@ export const SYSTEM_DEFAULT_MODE: TaskSelectionMode = 'automatic'
 /** System default total execution timeout: 15 minutes. */
 export const SYSTEM_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
 
-/** Upper bound (in characters) for the additional-instructions override. */
-export const ADDITIONAL_INSTRUCTIONS_MAX_LENGTH = 4000
-
 export type TaskDefinitionKind = 'builtin' | 'project'
 
-/** Stable key used for `tasks.settings.byTask` entries and legacy lookups. */
+/** Stable key used for `tasks.settings.byTask` entries. */
 export type TaskSettingsIdentity = string
 
 /**
@@ -145,17 +147,30 @@ const INTELLIGENCE_TIERS: ReadonlySet<string> = new Set([
  * Layer model
  * -------------------------------------------------------------------------- */
 
+/**
+ * Structural user explicit selection. `alias` names a registered alias to be
+ * resolved by the daemon; `target` is an inline runtime target. This module
+ * validates the shape but never resolves aliases or compatibility.
+ */
+export type TaskExplicitRuntime =
+  | { kind: 'alias'; name: string }
+  | { kind: 'target'; target: string }
+
 export interface TaskSettingsLayer {
   selectionMode?: TaskSelectionMode
-  /** Exact runtime id, or a policy/profile alias when describing Task defaults.
-   *  The effective runtime is honored only in explicit mode. */
-  agentRuntime?: string
+  /** Structural explicit reference, honored only in explicit mode. */
+  explicitRuntime?: TaskExplicitRuntime
   dispatch?: Partial<TaskDispatchRequirements>
   /** Total execution timeout in milliseconds. */
   timeoutMs?: number
-  /** Bounded plain-text instruction override (never replaces TaskConfig
-   *  instructions or the builtin dynamic prompt). */
-  additionalInstructions?: string
+  /**
+   * Optional user-global-only ceiling on the automatic reference price in USD
+   * per million output tokens. Accepts finite values >= 0 (zero is an explicit
+   * ceiling); it is independent from `dispatch.maxOutputUsdPerMillion` and,
+   * during effective resolution, is sourced exclusively from the normalized
+   * user-global layer.
+   */
+  maxAutoOutputUsdPerMillion?: number
 }
 
 /** Five named layers in merge precedence order. All are optional. */
@@ -169,33 +184,26 @@ export interface TaskSettingsLayersInput {
 
 export interface EffectiveTaskSettingsSources {
   selectionMode?: TaskSettingsSourceTag
-  agentRuntime?: TaskSettingsSourceTag
+  explicitRuntime?: TaskSettingsSourceTag
   timeoutMs?: TaskSettingsSourceTag
-  additionalInstructions?: TaskSettingsSourceTag
+  maxAutoOutputUsdPerMillion?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
 export interface EffectiveTaskSettings {
   mode: TaskSelectionMode
-  runtime: string | undefined
+  explicitRuntime: TaskExplicitRuntime | undefined
   timeoutMs: number
-  additionalInstructions: string | undefined
   dispatch: TaskDispatchRequirements
+  /** User-global auto reference-price ceiling; undefined when never set. */
+  maxAutoOutputUsdPerMillion: number | undefined
   /** Winning source per field; dispatch sources are per dispatch field. */
   sources: EffectiveTaskSettingsSources
 }
 
-/** Runtime classification catalog. When `exactRuntimeIds` is provided it is
- *  the authoritative set of existing exact runtimes; `policyRuntimeIds` are
- *  aliases that are never valid in explicit mode. */
-export interface TaskRuntimeCatalog {
-  exactRuntimeIds?: readonly string[]
-  policyRuntimeIds?: readonly string[]
-}
-
 export interface TaskDefaultsLike {
-  /** TaskConfig-declared runtime selector (policy/profile or exact id). */
-  runtime?: string
+  /** TaskConfig-declared defaults. Task definitions never pin a runtime:
+   *  only timeout and dispatch are carried into the builtin layer. */
   timeoutMs?: number
   dispatch?: Partial<TaskDispatchRequirements>
 }
@@ -240,6 +248,53 @@ function assertSafeIntegerTimeout(value: unknown, scope: string): number {
     fail(scope, `timeoutMs must be a positive safe integer, got ${String(value)}`)
   }
   return value
+}
+
+function assertFiniteNonNegativeNumber(value: unknown, scope: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    fail(scope, `maxAutoOutputUsdPerMillion must be a finite number >= 0, got ${String(value)}`)
+  }
+  return value
+}
+
+const EXPLICIT_RUNTIME_KEYS = {
+  alias: ['kind', 'name'],
+  target: ['kind', 'target'],
+} as const
+
+/**
+ * Validates one explicit runtime reference. The reference must be exactly
+ * `{ kind: 'alias', name }` or `{ kind: 'target', target }` with a non-empty
+ * trimmed value; extra fields and mixed alias/target fields are rejected.
+ */
+function normalizeExplicitRuntime(raw: unknown, scope: string): TaskExplicitRuntime {
+  if (!isPlainObject(raw)) {
+    fail(scope, 'explicitRuntime must be an object reference')
+  }
+  const record = raw as Record<string, unknown>
+  const kind = record.kind
+  if (kind !== 'alias' && kind !== 'target') {
+    fail(scope, `explicitRuntime.kind must be "alias" or "target", got ${String(kind)}`)
+  }
+  const allowed: readonly string[] =
+    kind === 'alias' ? EXPLICIT_RUNTIME_KEYS.alias : EXPLICIT_RUNTIME_KEYS.target
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) {
+      fail(scope, `explicitRuntime ${kind} reference does not accept field "${key}"`)
+    }
+  }
+  if (kind === 'alias') {
+    const name = record.name
+    if (typeof name !== 'string' || name.trim() === '') {
+      fail(scope, 'explicitRuntime alias requires a non-empty trimmed name')
+    }
+    return { kind: 'alias', name: name.trim() }
+  }
+  const target = record.target
+  if (typeof target !== 'string' || target.trim() === '') {
+    fail(scope, 'explicitRuntime target requires a non-empty trimmed target')
+  }
+  return { kind: 'target', target: target.trim() }
 }
 
 function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchRequirements> {
@@ -316,15 +371,16 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
 
 const LAYER_FIELD_ALIASES = {
   selectionMode: ['selectionMode', 'selection_mode'],
-  agentRuntime: ['agentRuntime', 'agent_runtime'],
+  explicitRuntime: ['explicitRuntime', 'explicit_runtime'],
   timeoutMs: ['timeoutMs', 'timeout_ms'],
-  additionalInstructions: ['additionalInstructions', 'additional_instructions'],
+  maxAutoOutputUsdPerMillion: ['maxAutoOutputUsdPerMillion', 'max_auto_output_usd_per_million'],
   dispatch: ['dispatch'],
 } as const
 
 /**
  * Validates and normalizes one persisted/config layer. Unknown keys are
- * tolerated and dropped; `null` values behave as unset fields. Returns a new
+ * tolerated and dropped (so legacy `agentRuntime`/`agent_runtime` pins are
+ * ignored, never honored); `null` values behave as unset fields. Returns a new
  * canonical layer; the input is never mutated.
  */
 export function normalizeTaskSettingsLayer(
@@ -346,11 +402,9 @@ export function normalizeTaskSettingsLayer(
     layer.selectionMode = mode.value
   }
 
-  const runtime = resolveAliased(record, LAYER_FIELD_ALIASES.agentRuntime)
-  if (runtime.value !== undefined) {
-    if (typeof runtime.value !== 'string') fail(scope, 'agentRuntime must be a string')
-    const id = runtime.value.trim()
-    if (id !== '') layer.agentRuntime = id
+  const explicitRuntime = resolveAliased(record, LAYER_FIELD_ALIASES.explicitRuntime)
+  if (explicitRuntime.value !== undefined) {
+    layer.explicitRuntime = normalizeExplicitRuntime(explicitRuntime.value, scope)
   }
 
   const timeout = resolveAliased(record, LAYER_FIELD_ALIASES.timeoutMs)
@@ -358,21 +412,9 @@ export function normalizeTaskSettingsLayer(
     layer.timeoutMs = assertSafeIntegerTimeout(timeout.value, scope)
   }
 
-  const instruction = resolveAliased(record, LAYER_FIELD_ALIASES.additionalInstructions)
-  if (instruction.value !== undefined) {
-    if (typeof instruction.value !== 'string') {
-      fail(scope, 'additionalInstructions must be a string')
-    }
-    if (instruction.value.length > ADDITIONAL_INSTRUCTIONS_MAX_LENGTH) {
-      fail(
-        scope,
-        `additionalInstructions must be at most ${ADDITIONAL_INSTRUCTIONS_MAX_LENGTH} characters`,
-      )
-    }
-    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(instruction.value)) {
-      fail(scope, 'additionalInstructions must be plain text without control characters')
-    }
-    layer.additionalInstructions = instruction.value
+  const maxAutoOutput = resolveAliased(record, LAYER_FIELD_ALIASES.maxAutoOutputUsdPerMillion)
+  if (maxAutoOutput.value !== undefined) {
+    layer.maxAutoOutputUsdPerMillion = assertFiniteNonNegativeNumber(maxAutoOutput.value, scope)
   }
 
   const dispatch = resolveAliased(record, LAYER_FIELD_ALIASES.dispatch)
@@ -391,39 +433,24 @@ export function normalizeTaskSettingsLayer(
  * -------------------------------------------------------------------------- */
 
 /**
- * Converts project/builtin TaskConfig-style defaults into the builtin layer:
- * a policy/profile runtime implies `automatic`, a recognized exact runtime
- * implies `explicit`; dispatch and timeout are carried over as defaults.
+ * Converts TaskConfig defaults into the builtin layer. Every Task defaults to
+ * `automatic` selection: Task definitions never pin a runtime, and explicit
+ * user selection belongs to user settings layers. Only timeout and dispatch
+ * defaults are carried over.
  */
-export function taskDefaultsToSettingsLayer(
-  taskDefaults: TaskDefaultsLike,
-  catalog?: TaskRuntimeCatalog,
-): TaskSettingsLayer {
-  const layer: TaskSettingsLayer = {}
-  const runtime = taskDefaults.runtime?.trim() || undefined
-
-  if (
-    runtime !== undefined &&
-    (catalog?.exactRuntimeIds?.includes(runtime) ?? false)
-  ) {
-    layer.selectionMode = 'explicit'
-    layer.agentRuntime = runtime
-  } else {
-    layer.selectionMode = 'automatic'
-  }
-
-  const merged: Record<string, unknown> = { ...layer }
+export function taskDefaultsToSettingsLayer(taskDefaults: TaskDefaultsLike): TaskSettingsLayer {
+  const layer: TaskSettingsLayer = { selectionMode: 'automatic' }
   if (taskDefaults.timeoutMs !== undefined) {
-    merged.timeoutMs = taskDefaults.timeoutMs
+    layer.timeoutMs = taskDefaults.timeoutMs
   }
   if (taskDefaults.dispatch !== undefined) {
-    merged.dispatch = { ...taskDefaults.dispatch }
+    layer.dispatch = { ...taskDefaults.dispatch }
   }
-  return normalizeTaskSettingsLayer(merged, { scope: 'taskDefaults' })
+  return layer
 }
 
 /* -------------------------------------------------------------------------- *
- * Reading persisted tasks.settings.global / byTask + legacy agentRuntime
+ * Reading persisted tasks.settings.global / byTask
  * -------------------------------------------------------------------------- */
 
 /** Structural view over persisted TasksConfigData.task settings sections. */
@@ -432,7 +459,6 @@ export interface TasksConfigSettingsInput {
     global?: unknown
     byTask?: Record<string, unknown>
   } | null
-  agentRuntime?: Record<string, unknown> | null
 }
 
 /** Reads and normalizes the user-global layer from `tasks.settings.global`. */
@@ -445,7 +471,8 @@ export function readGlobalTaskSettings(
 }
 
 /** Reads and normalizes the user-task layer for a stable definition identity
- *  from `tasks.settings.byTask`. Returns undefined when no entry exists. */
+ *  from `tasks.settings.byTask`. Returns undefined when no entry exists.
+ *  `byTask` is the only per-task user selection source. */
 export function readPerTaskSettings(
   tasks?: TasksConfigSettingsInput | null,
   identity?: TaskSettingsIdentity,
@@ -456,72 +483,6 @@ export function readPerTaskSettings(
   return normalizeTaskSettingsLayer(byTask[identity], {
     scope: `tasks.settings.byTask[${identity}]`,
   })
-}
-
-/** Legacy `tasks.agentRuntime` bare builtin pin; undefined when absent. */
-export function readLegacyRuntimePin(
-  tasks?: TasksConfigSettingsInput | null,
-  taskName?: string,
-): string | undefined {
-  const overrides = tasks?.agentRuntime
-  if (taskName === undefined || overrides === undefined || overrides === null) {
-    return undefined
-  }
-  const raw = overrides[taskName]
-  if (raw === undefined || raw === null) return undefined
-  if (typeof raw !== 'string') {
-    throw new TaskSettingsValidationError(
-      `tasks.agentRuntime.${taskName} must be a runtime id string`,
-    )
-  }
-  const id = raw.trim()
-  return id === '' ? undefined : id
-}
-
-export interface BuiltinSettingsSelection {
-  identity: TaskSettingsIdentity
-  source: 'task' | 'legacy' | 'none'
-  layer?: TaskSettingsLayer
-}
-
-/**
- * Resolves a builtin task's user selection: the new per-task layer wins when a
- * `settings.byTask` entry exists; otherwise a legacy `tasks.agentRuntime` pin
- * is used as an explicit fallback (bare builtin name only). Returns `none`
- * when neither exists. Never applies legacy pins to project tasks.
- */
-export function readBuiltinSettingsSelection(
-  tasks?: TasksConfigSettingsInput | null,
-  taskName?: string,
-): BuiltinSettingsSelection {
-  if (taskName === undefined) return { identity: '', source: 'none' }
-  const identity = taskSettingsIdentity({ kind: 'builtin', name: taskName })
-
-  const byTask = tasks?.settings?.byTask
-  if (
-    byTask !== undefined &&
-    byTask !== null &&
-    Object.prototype.hasOwnProperty.call(byTask, identity)
-  ) {
-    return {
-      identity,
-      source: 'task',
-      layer: normalizeTaskSettingsLayer(byTask[identity], {
-        scope: `tasks.settings.byTask[${identity}]`,
-      }),
-    }
-  }
-
-  const legacyPin = readLegacyRuntimePin(tasks, taskName)
-  if (legacyPin !== undefined) {
-    return {
-      identity,
-      source: 'legacy',
-      layer: { selectionMode: 'explicit', agentRuntime: legacyPin },
-    }
-  }
-
-  return { identity, source: 'none' }
 }
 
 /* -------------------------------------------------------------------------- *
@@ -557,22 +518,12 @@ function rightmostDefined<T>(
   return { value: undefined, source: undefined }
 }
 
-function assertExplicitRuntime(
-  runtime: string | undefined,
-  catalog: TaskRuntimeCatalog | undefined,
+function assertExplicitReference(
+  explicitRuntime: TaskExplicitRuntime | undefined,
   scope: string,
 ): void {
-  if (runtime === undefined) {
-    fail(scope, 'explicit mode requires an exact runtime id')
-  }
-  if (catalog?.policyRuntimeIds?.includes(runtime) ?? false) {
-    fail(scope, `runtime ${runtime} is a policy alias and cannot be used in explicit mode`)
-  }
-  if (
-    catalog?.exactRuntimeIds !== undefined &&
-    !catalog.exactRuntimeIds.includes(runtime)
-  ) {
-    fail(scope, `runtime ${runtime} is not a known exact runtime id`)
+  if (explicitRuntime === undefined) {
+    fail(scope, 'explicit mode requires an explicit runtime reference (alias or target)')
   }
 }
 
@@ -600,12 +551,12 @@ function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): v
  * Inputs are normalized but never mutated.
  *
  * System defaults: mode `automatic`, total execution timeout 15 minutes.
- * Automatic mode ignores any inherited/stale runtime pin; explicit mode
- * requires an effective existing non-policy runtime id.
+ * Automatic mode ignores any inherited/stale explicit reference; explicit
+ * mode requires one effective structural reference. References are never
+ * resolved or compatibility-checked here.
  */
 export function resolveEffectiveTaskSettings(
   layers: TaskSettingsLayersInput,
-  catalog?: TaskRuntimeCatalog,
 ): EffectiveTaskSettings {
   const entries: NormalizedLayerEntry[] = LAYER_SOURCE_ENTRIES.map(({ tag, key }) => ({
     tag,
@@ -616,22 +567,28 @@ export function resolveEffectiveTaskSettings(
   const mode = modeLeaf.value ?? SYSTEM_DEFAULT_MODE
   const modeSource = modeLeaf.source ?? 'system_global'
 
-  const runtimeLeaf = rightmostDefined(entries, (layer) => layer.agentRuntime)
+  const explicitRuntimeLeaf = rightmostDefined(entries, (layer) => layer.explicitRuntime)
 
-  let runtime: string | undefined
-  let runtimeSource: TaskSettingsSourceTag | undefined
+  let effectiveExplicitRuntime: TaskExplicitRuntime | undefined
+  let explicitRuntimeSource: TaskSettingsSourceTag | undefined
   if (mode === 'explicit') {
-    assertExplicitRuntime(runtimeLeaf.value, catalog, '')
-    runtime = runtimeLeaf.value
-    runtimeSource = runtimeLeaf.source
+    assertExplicitReference(explicitRuntimeLeaf.value, '')
+    effectiveExplicitRuntime = explicitRuntimeLeaf.value
+    explicitRuntimeSource = explicitRuntimeLeaf.source
   }
-  // automatic mode deliberately ignores any inherited runtime pin.
+  // automatic mode deliberately ignores any inherited explicit reference.
 
   const timeoutLeaf = rightmostDefined(entries, (layer) => layer.timeoutMs)
   const timeoutMs = timeoutLeaf.value ?? SYSTEM_DEFAULT_TIMEOUT_MS
   const timeoutSource = timeoutLeaf.source ?? 'system_global'
 
-  const instructionLeaf = rightmostDefined(entries, (layer) => layer.additionalInstructions)
+  // The user-global auto reference-price ceiling is global-only by design: it
+  // is sourced exclusively from the normalized userGlobal layer. The same
+  // field on system, builtin, user-task, or invocation layers is structurally
+  // ignored so a stale lower-layer pin can never leak into automatic
+  // admission, and an undefined value exposes "no ceiling set".
+  const userGlobalEntry = entries.find((entry) => entry.tag === 'user_global')
+  const maxAutoOutputUsdPerMillion = userGlobalEntry?.layer.maxAutoOutputUsdPerMillion
 
   const dispatch: TaskDispatchRequirements = {}
   const dispatchSources: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>> = {}
@@ -648,18 +605,16 @@ export function resolveEffectiveTaskSettings(
     selectionMode: modeSource,
     timeoutMs: timeoutSource,
   }
-  if (runtimeSource !== undefined) sources.agentRuntime = runtimeSource
-  if (instructionLeaf.value !== undefined && instructionLeaf.source !== undefined) {
-    sources.additionalInstructions = instructionLeaf.source
-  }
+  if (explicitRuntimeSource !== undefined) sources.explicitRuntime = explicitRuntimeSource
+  if (maxAutoOutputUsdPerMillion !== undefined) sources.maxAutoOutputUsdPerMillion = 'user_global'
   sources.dispatch = dispatchSources
 
   return {
     mode,
-    runtime,
+    explicitRuntime: effectiveExplicitRuntime,
     timeoutMs,
-    additionalInstructions: instructionLeaf.value,
     dispatch,
+    maxAutoOutputUsdPerMillion,
     sources,
   }
 }

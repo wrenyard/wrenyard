@@ -24,8 +24,7 @@ import {
   ensureDiscovered,
   resolveTaskTarget,
 } from '../../workspace/task-loader.mts'
-import { parseAgentRuntime } from '../../core/agent-runtime.mts'
-import { applyTaskAgentRuntimeOverride, taskRuntimeOverridePreference } from '../../config/task-runtime-override.mts'
+import { taskRuntimeOverridePreference } from '../../config/task-runtime-override.mts'
 import { installRuntimeGlobals } from './runtime-globals.mts'
 import {
   compileSchema,
@@ -346,28 +345,35 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
 
     const definition = target.definition as TaskDefinition
     config = definition.config
-    const taskProfile = config.profile
-    const declaredAgentRuntime = config.agentRuntime
-      ? parseAgentRuntime(config.agentRuntime).toString()
-      : `forge/${taskProfile}`
-    // Soft runtime override preference is read separately from the exact declared
-    // runtime; it influences the resolver's preferredRuntime only and can never
-    // relax, skip, or bypass a hard dispatch requirement.
+    // A soft runtime override preference is read separately from any declared
+    // runtime; it influences the automatic resolver's preferredRuntime only and
+    // can never relax, skip, or bypass a hard dispatch requirement. Active Task
+    // definitions never declare a fixed runtime pin.
     const runtimeOverridePreference = taskRuntimeOverridePreference(target.name)
 
     // Effective runtime/timeout placeholders. Production execution resolves them
     // through the daemon TaskSettingsService exactly once, after pre-gates and
-    // before the first agent attempt. The dispatch-resolver/legacy path below is
-    // preserved only when no settings resolver was supplied (isolated/legacy
-    // tests) and never runs alongside task settings resolution.
-    let requestedAgentRuntime = declaredAgentRuntime
-    let exactAgentRuntime: string = declaredAgentRuntime
+    // before the first agent attempt. The dispatch-resolver path below is
+    // preserved only when no settings resolver was supplied (isolated tests) and
+    // never runs alongside task settings resolution.
+    let requestedAgentRuntime: string | undefined
+    let exactAgentRuntime: string | undefined
     let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
     let resolvedTimeoutMs: number | undefined
-    let resolvedAdditionalInstructions: string | undefined
     if (!options.taskSettingsResolver) {
-      // Resolve the deterministic constrained dispatch plan before the first agent
-      // attempt. Constrained production definitions MUST supply a resolver.
+      // Pin-free legacy recovery boundary: a scheduling:'legacy' definition is
+      // never auto/alias-resolved here. Recovery reattaches an already persisted
+      // task_run_id/exact execution and does not invoke this kernel, so a legacy
+      // launch reaching automatic dispatch is always refused with a precise
+      // error instead of re-resolving a runtime from the current definition.
+      if (config.scheduling === 'legacy') {
+        throw new Error(
+          `Legacy task '${target.name}' cannot be auto-dispatched: legacy recovery must reattach an already persisted task_run_id/exact execution and cannot re-resolve a current definition.`,
+        )
+      }
+      // Resolve the deterministic automatic dispatch plan before the first agent
+      // attempt. Active tasks MUST resolve through a resolver: either this
+      // constrained path or the daemon settings service.
       if (config.dispatch) {
         if (!options.taskDispatchResolver) {
           throw new Error(
@@ -377,21 +383,16 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         const resolution = options.taskDispatchResolver.resolve({
           taskName: target.name,
           requirements: config.dispatch,
-          declaredRuntime: declaredAgentRuntime,
           machinePreference: runtimeOverridePreference,
         })
         if (!resolution.ok) throw resolution.error
         exactAgentRuntime = resolution.exactAgentRuntime
+        requestedAgentRuntime = exactAgentRuntime
         dispatchSnapshot = resolution.resolved
-      } else if (options.taskDispatchResolver && config.scheduling !== 'legacy') {
-        throw new Error(
-          `Active task '${target.name}' must declare explicit dispatch requirements before model execution.`,
-        )
       } else {
-        // Legacy: preserve declared exact/policy runtime behavior, applying any soft
-        // runtime override. The exact approved profile remains the chosen runtime.
-        requestedAgentRuntime = applyTaskAgentRuntimeOverride(target.name, declaredAgentRuntime)
-        exactAgentRuntime = requestedAgentRuntime
+        throw new Error(
+          `Active task '${target.name}' cannot run without a resolver: automatic selection requires a taskSettingsResolver or dispatch requirements with a taskDispatchResolver.`,
+        )
       }
     }
     const executionOptions = options
@@ -457,35 +458,44 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
 
     // Resolve task settings exactly once, after pre-gates and before the
     // prompt/first agent attempt. The daemon TaskSettingsService owns field
-    // merging and readiness; its result is authoritative: the exact runtime is
-    // the only launched profile, the dispatch snapshot feeds telemetry, and the
-    // effective timeout is the single total task_execution deadline. An explicit
-    // resolution failure terminates the run here, with no fallback.
+    // merging and readiness; its result is authoritative: the canonical exact
+    // target (automatic or explicit) is the only launched runtime, the
+    // dispatch snapshot feeds telemetry, and the effective timeout is the
+    // single total task_execution deadline. exactAgentRuntime is optional on
+    // the resolution contract; a null target terminates the run here with no
+    // fallback runtime or stale agentRuntime pin.
     if (options.taskSettingsResolver) {
+      // Legacy recovery must never reach a new model launch through current
+      // settings: refuse before the settings service can auto/alias-resolve a
+      // fresh runtime for a scheduling:'legacy' definition.
+      if (config.scheduling === 'legacy') {
+        throw new Error(
+          `Legacy task '${target.name}' cannot be launched through task settings resolution: legacy recovery must reattach an already persisted task_run_id/exact execution and cannot re-resolve a current definition.`,
+        )
+      }
       const settingsResolution = await options.taskSettingsResolver({
         taskName: target.name,
         kind: target.source,
         project: record.project || undefined,
         defaults: {
-          agentRuntime: declaredAgentRuntime,
           timeoutMs: config.timeoutMs,
           ...(config.dispatch ? { dispatch: config.dispatch as unknown as Record<string, unknown> } : {}),
         },
         ...(options.invocationSettings ? { invocation: options.invocationSettings } : {}),
       })
-      if (!settingsResolution.exactAgentRuntime) {
+      // Consume the canonical target produced by the settings service exactly;
+      // never fall back to a stale agentRuntime pin when it is absent.
+      const canonicalTarget = settingsResolution.exactAgentRuntime
+      if (!canonicalTarget) {
         throw new Error(
-          `Task settings resolution for '${target.name}' returned no exact runtime; refusing to launch a fallback profile.`,
+          `Task settings resolution for '${target.name}' returned no canonical exact target; refusing to launch a fallback runtime.`,
         )
       }
-      exactAgentRuntime = settingsResolution.exactAgentRuntime
-      requestedAgentRuntime = settingsResolution.exactAgentRuntime
+      exactAgentRuntime = canonicalTarget
+      requestedAgentRuntime = canonicalTarget
       dispatchSnapshot = settingsResolution.dispatch
       if (settingsResolution.timeoutMs !== undefined && settingsResolution.timeoutMs !== null) {
         resolvedTimeoutMs = settingsResolution.timeoutMs
-      }
-      if (settingsResolution.additionalInstructions !== undefined && settingsResolution.additionalInstructions !== null) {
-        resolvedAdditionalInstructions = settingsResolution.additionalInstructions
       }
     }
 
@@ -493,7 +503,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       definition,
       effectiveInput,
       taskInputContext.ctx,
-      resolvedAdditionalInstructions,
     )
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
@@ -505,6 +514,14 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           permission: opts?.permission ?? 'edit',
           writePaths: opts?.writePaths,
         })
+      }
+      // An unresolved exact runtime must never launch a fallback: guard the
+      // optional resolution result before constructing the structured run so
+      // the resolved runtime is safely assigned to the required profile.
+      if (!exactAgentRuntime) {
+        throw new Error(
+          `No exact agent runtime resolved for task '${target.name}'; refusing to launch a fallback runtime.`,
+        )
       }
       const structuredOptions: Parameters<typeof collectStructuredOutput>[0] = {
         profile: exactAgentRuntime,

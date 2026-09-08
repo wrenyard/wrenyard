@@ -28,6 +28,9 @@ import type { ChannelConfig, MessageEnvelope, MessageDeliveryResult, MessageDeli
 import { createTaskGraphService } from './services/taskgraph-service.mts'
 import { TaskGraphService } from '../core/taskgraph/index.mts'
 import { TaskSettingsService } from './services/task-settings-service.mts'
+import { AutoRoutingQuotaSnapshotService } from './services/auto-routing-snapshot-service.mts'
+import { RuntimeAliasService } from './services/runtime-alias-service.mts'
+import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { bindTaskRuntimeOverrideConfigPath } from '../config/task-runtime-override.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
@@ -35,7 +38,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
-import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveBuiltinRuntimeDispatchPlans } from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveRuntimeTaskPlans } from '@wrenyard/providers'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { readTrustedSpeedSamples31d } from '../events/stats-query.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
@@ -288,21 +291,41 @@ async function startForemanDaemonWithRuntime(
   let boundPort = config.service.port
   const stateRoot = foremanStateRoot()
   const gatewayToken = await loadOrCreateGatewayCredential(join(stateRoot, 'gateway', 'credential'))
-  // Catalog / provider runtime / builtin dispatch plans / deterministic resolver
+  // Catalog / provider runtime / canonical task plans / deterministic resolver
   // are constructed once in bootstrap (see bootstrapForemanDaemonRuntime) and
   // reused here so the gateway, client configuration, RPC surface, and the
   // running daemon all share the identical resolver instance.
   const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
-  // One daemon-owned TaskSettingsService shares the already-created resolver and
-  // the authoritative config path; no second catalog/resolver is constructed.
+  // One daemon-owned RuntimeAliasStore + RuntimeAliasService back the
+  // runtime.alias.* IPC surface. The store resolves the
+  // XDG_CONFIG_HOME/~/.config/wrenyard/runtime/config.json path itself, and no
+  // alias target is cached: every snapshot/put/remove/resolve reloads at call
+  // time so the service never serves a stale copied triple. This single alias
+  // owner is constructed before TaskSettingsService and shared with it — task
+  // settings resolves alias references freshly through the same instance.
+  const runtimeAliasStore = new RuntimeAliasStore()
+  const runtimeAliasService = new RuntimeAliasService(runtimeAliasStore)
+  // One daemon-owned immutable automatic-routing quota snapshot service. All
+  // automatic selections (TaskSettingsService run + preview) share this single
+  // instance so quota evidence/caching never diverges between paths.
+  const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService()
+  // One daemon-owned TaskSettingsService shares the already-created resolver,
+  // the single alias owner, the shared quota snapshot service, and the
+  // authoritative config path; no second catalog/resolver/alias store is
+  // constructed.
   const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
   const taskSettingsService = new TaskSettingsService({
     workspaceRoot: config.workspaceRoot,
     configPath: authoritativeConfigPath,
     resolver: taskDispatchResolver,
+    aliases: runtimeAliasService,
+    quotaSnapshots: autoRoutingQuotaSnapshots,
     // Non-billable readiness: real daemon admission status (never a paid probe)
     // plus the current provider credential/route availability. Unknown quota is
-    // surfaced as `unknown` — never fabricated as available or zero.
+    // surfaced as `unknown` — never fabricated as available or zero. The
+    // privacy-safe confirmed-free supply fact for an already-read credential is
+    // included without any token/domain/upstream suffix; no paid/model probes
+    // are ever issued.
     daemonAvailability: () => ({
       accepting: runtime.dispatchControl.status().accepting,
       known: true,
@@ -319,11 +342,15 @@ async function startForemanDaemonWithRuntime(
       }
       const credential = await runtime.providerRuntime.credential(providerDef)
       const available = credential !== undefined
+      const freeSupply = credential === undefined
+        ? undefined
+        : runtime.providerRuntime.freeSupply?.(providerDef, credential)
       return {
         providerCredential: available ? 'available' : 'missing',
         providerLive: available ? 'available' : 'unknown',
         quota: 'unknown',
         available,
+        ...(freeSupply ? { freeSupply } : {}),
       }
     },
   })
@@ -350,9 +377,9 @@ async function startForemanDaemonWithRuntime(
     },
   })
   // Recovered tasks can dispatch during startup reconciliation, before the
-  // HTTP listener and IPC transport are exposed. Install the exact daemon
-  // plan and provisional loopback connection first so Forge never falls back
-  // to resolving provider/model/protocol data itself.
+  // HTTP listener and IPC transport are exposed. Install the exact canonical
+  // task plans and provisional loopback connection first so Forge never falls
+  // back to resolving provider/model/protocol data itself.
   let restoreGatewayEnvironment = installGatewayEnvironment({
     ...await gateway.connection(gatewayOrigin(config.service.host, config.service.port)),
     token: gatewayToken,
@@ -458,6 +485,26 @@ async function startForemanDaemonWithRuntime(
       restore: ({ plan }) => clientConfigurationService.restore(plan),
     },
     taskSettings: taskSettingsService,
+    runtimeAlias: runtimeAliasService,
+    // Exact current-Catalog display-name lookup for stats recent-run rows: only
+    // the builtin Catalog definitions for the exact persisted provider/model ids
+    // feed the paired labels, and only when both definitions exist with nonempty
+    // display names. Aliases, run syntax, and client/upstream identifiers are
+    // never consulted.
+    resolveTaskRunDisplayNames: (providerId, modelId) => {
+      const provider = catalog.provider(providerId)
+      if (!provider) return undefined
+      const model = provider.models.find((candidate) => candidate.id === modelId)
+      if (!model) return undefined
+      const providerDisplayName = provider.displayName
+      const modelDisplayName = model.displayName
+      if (typeof providerDisplayName !== 'string' || providerDisplayName.trim() === '') return undefined
+      if (typeof modelDisplayName !== 'string' || modelDisplayName.trim() === '') return undefined
+      return {
+        provider_display_name: providerDisplayName.trim(),
+        model_display_name: modelDisplayName.trim(),
+      }
+    },
     shutdown: async (reason) => {
       if (options.onShutdownRequest) {
         await options.onShutdownRequest(reason)
@@ -778,6 +825,8 @@ interface DaemonRpcRouterOptions {
   providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
   clientConfiguration?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['clientConfiguration']
   taskSettings?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskSettings']
+  runtimeAlias?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['runtimeAlias']
+  resolveTaskRunDisplayNames?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveTaskRunDisplayNames']
 }
 
 function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {
@@ -794,6 +843,7 @@ interface ForemanDaemonRuntime {
   dispatchControl: DispatchControl
   catalog: import('@wrenyard/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
+  /** Canonical task dispatch plans keyed by provider/model:client targets. */
   dispatchPlans: Readonly<Record<string, import('@wrenyard/catalog').DispatchPlan>>
   taskDispatchResolver: TaskDispatchResolver
 }
@@ -803,20 +853,20 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   retainDaemonDb()
 
   // Catalog + provider runtime are the single source of truth for the daemon.
-  // Builtin exact dispatch plans and the deterministic resolver are derived here
-  // (not in the runtime bootstrap) so the runner is wired with a fully
+  // Canonical task dispatch plans and the deterministic resolver are derived
+  // here (not in the runtime bootstrap) so the runner is wired with a fully
   // constructed resolver, and the gateway/RPC surfaces reuse the same instances.
   const catalog = createBuiltinCatalog()
   const providerRuntime = createBuiltinProviderRuntime()
-  const dispatchPlans = await resolveBuiltinRuntimeDispatchPlans(catalog, providerRuntime)
+  const dispatchPlans = await resolveRuntimeTaskPlans(catalog, providerRuntime)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
-    // Lazy per-profile trusted local agent_turn_v1 speed evidence. The stats
-    // query reports samples keyed by `forge/<profile>`; the resolver's
-    // LocalSpeedSample expects a bare profileId, so strip the prefix here.
+    // Lazy per-candidate trusted local agent_turn_v1 speed evidence. The stats
+    // query reports samples keyed by the canonical provider/model:client target,
+    // the same identity the Catalog candidates and runtime task plans use.
     localSpeed: () => readTrustedSpeedSamples31d().map((sample) => ({
-      profileId: sample.resolvedProfile.replace(/^forge\//u, ''),
+      profileId: sample.resolvedProfile,
       tps: sample.tps,
       sampleCount: sample.sampleCount,
       checkedAt: sample.checkedAt,

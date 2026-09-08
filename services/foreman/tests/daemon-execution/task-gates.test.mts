@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { describeTask, discoverTasks, listTasks, resetRegistry } from '../../lib/workspace/task-loader.mts'
 import { isGateError } from '../../lib/core/task/failure.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
-import type { AgentResult, ExecutionOptions, TaskExecutionResult } from '../../lib/types.mts'
+import type { AgentResult, ExecutionOptions, TaskExecutionResult, TaskRunSettingsResolver } from '../../lib/types.mts'
 import { closeDb, get as dbGet, initDb, run as dbRun } from '../../lib/db/connection.mts'
 import { DaemonTaskRunner } from '../../lib/daemon/execution/task-runner.mts'
 import { getForemanEventBus, resetForemanEventBusForTest } from '../../lib/events/event-bus.mts'
@@ -14,10 +14,33 @@ import type { ForemanEvent } from '../../lib/events/event-types.mts'
 
 let tempDirs: string[] = []
 
+function automaticSettingsResolver(): TaskRunSettingsResolver {
+  return async () => ({
+    mode: 'automatic',
+    exactAgentRuntime: 'forge/test',
+    dispatch: null,
+    timeoutMs: null,
+    sources: {
+      selectionMode: 'builtin',
+      explicitRuntime: 'builtin',
+      timeoutMs: 'builtin',
+      automatic: {},
+    },
+  })
+}
+
 function normalizeExecutionOptions(opts: ExecutionOptions | string): ExecutionOptions {
-  return typeof opts === 'string'
+  const normalized = typeof opts === 'string'
     ? { workspaceRoot: opts, currentProject: 'app' }
     : { currentProject: 'app', ...opts }
+  // Isolated kernel tests run without the daemon TaskSettingsService. Active
+  // tasks never fall back to a declared runtime pin, so every run resolves
+  // automatically through an injected settings resolver unless the test under
+  // examination supplies its own.
+  if (!normalized.taskSettingsResolver) {
+    normalized.taskSettingsResolver = automaticSettingsResolver()
+  }
+  return normalized
 }
 
 function executeTask(name: string, input: unknown, opts: ExecutionOptions | string): Promise<TaskExecutionResult> {
@@ -102,7 +125,6 @@ ${JSON.stringify(data)}
     const workspace = makeTempDir('foreman-v2-dispatch-required-')
     const projectDir = join(workspace, 'projects', 'app')
     writeFileSync(join(projectDir, 'missing-dispatch.task.ts'), `export default defineTask({
-  agentRuntime: 'forge/codex-luna',
   permission: 'readonly',
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -112,8 +134,9 @@ ${JSON.stringify(data)}
     let modelCalls = 0
 
     await assert.rejects(
-      executeTask('missing-dispatch', {}, {
+      new DaemonTaskRunner().execute('missing-dispatch', {}, {
         workspaceRoot: workspace,
+        currentProject: 'app',
         taskDispatchResolver: {
           resolve() {
             throw new Error('resolver must not run without requirements')
@@ -135,7 +158,7 @@ ${JSON.stringify(data)}
           },
         },
       }),
-      /must declare explicit dispatch requirements/u,
+      /automatic selection requires a taskSettingsResolver or dispatch requirements with a taskDispatchResolver/u,
     )
 
     assert.equal(modelCalls, 0)
@@ -146,7 +169,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -184,7 +206,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -242,7 +263,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -281,7 +301,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -324,7 +343,6 @@ ${JSON.stringify(data)}
     mkdirSync(projectDir, { recursive: true })
     // Use a portable cwd check; Windows cmd does not provide pwd.
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -364,7 +382,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -400,7 +417,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -441,7 +457,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   description: 'Task with gates',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
@@ -481,7 +496,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'gated.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -528,7 +542,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -573,7 +586,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
@@ -618,7 +630,6 @@ ${JSON.stringify(data)}
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, 'echo.task.ts'), `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),

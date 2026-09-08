@@ -68,7 +68,6 @@ const definition: TaskDefinition = {
   config: {
     description:
       'Read recent git commits and identify change trends and active development areas. Read-only git history analysis.',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     capabilities: commitCapabilityConfig,

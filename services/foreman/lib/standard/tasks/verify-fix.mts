@@ -21,7 +21,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Run the new failing test and surrounding suite to verify the fix and detect regressions',
-    agentRuntime: 'forge/fast',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'yolo',
     instructions: [shellUsage],

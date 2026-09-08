@@ -11,6 +11,7 @@ import {
 import type { TaskResolvedDispatch } from '../../lib/task-run-metadata-types.mts'
 import {
   TaskSettingsContentConflictError,
+  TaskSettingsInvalidSettingsError,
   TaskSettingsRuntimeUnavailableError,
   TaskSettingsService,
   TaskSettingsTaskNotFoundError,
@@ -19,10 +20,17 @@ import {
   type TaskSettingsDefinitionSource,
   type TaskSettingsRuntimeAvailabilityCallback,
 } from '../../lib/daemon/services/task-settings-service.mts'
+import {
+  AliasNotFoundError,
+  RuntimeAliasService,
+} from '../../lib/daemon/services/runtime-alias-service.mts'
+import RuntimeAliasStore from '../../lib/runtime-aliases/store.mts'
+import { AutoRoutingQuotaSnapshotService } from '../../lib/daemon/services/auto-routing-snapshot-service.mts'
 
 const CATALOG_CHECKED_AT = '2026-09-05'
 
 interface ProfileFixture {
+  /** Canonical `provider/model:client` run target. */
   exactAgentRuntime: string
   profile: string
   client: string
@@ -36,7 +44,7 @@ interface ProfileFixture {
 
 const PROFILES: ProfileFixture[] = [
   {
-    exactAgentRuntime: 'forge/cb-dsf',
+    exactAgentRuntime: 'codex/gpt-5.6-luna:codex',
     profile: 'cb-dsf',
     client: 'codex',
     provider: 'codex',
@@ -47,7 +55,7 @@ const PROFILES: ProfileFixture[] = [
     outputUsd: 1.2,
   },
   {
-    exactAgentRuntime: 'forge/codex-luna',
+    exactAgentRuntime: 'codex/gpt-6.0-nova:codex',
     profile: 'codex-luna',
     client: 'codex',
     provider: 'codex',
@@ -58,9 +66,9 @@ const PROFILES: ProfileFixture[] = [
     outputUsd: 2.0,
   },
   {
-    exactAgentRuntime: 'forge/codex-sol',
+    exactAgentRuntime: 'claude/claude-opus-4:cc',
     profile: 'codex-sol',
-    client: 'claude',
+    client: 'cc',
     provider: 'claude',
     model: 'claude-opus-4',
     intelligence: 'frontier',
@@ -96,15 +104,8 @@ function resolvedChoice(profile: ProfileFixture): TaskResolvedDispatch {
   }
 }
 
-function resolveTriple(profile: ProfileFixture): { client: string; provider: string; model: string } {
+function runtimeTriple(profile: ProfileFixture): { client: string; provider: string; model: string } {
   return { client: profile.client, provider: profile.provider, model: profile.model }
-}
-
-function exactRuntimeIdForTriple(triple: { client: string; provider: string; model: string }): string | null {
-  const profile = PROFILES.find(
-    (p) => p.client === triple.client && p.provider === triple.provider && p.model === triple.model,
-  )
-  return profile?.exactAgentRuntime ?? null
 }
 
 interface ResolverFixtureOptions {
@@ -112,11 +113,14 @@ interface ResolverFixtureOptions {
   unavailable?: Record<string, string>
   /** tasks whose automatic `resolve` must fail deterministically. */
   autoFailTasks?: string[]
+  /** Candidate pool (defaults to the base PROFILES). */
+  profiles?: ProfileFixture[]
 }
 
 function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispatchResolver {
   const unavailable = options.unavailable ?? {}
   const autoFailTasks = options.autoFailTasks ?? []
+  const pool = options.profiles ?? PROFILES
   const blocked = (taskName: string, exactAgentRuntime: string): boolean =>
     unavailable[taskName] === exactAgentRuntime
   return {
@@ -124,17 +128,20 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
       if (autoFailTasks.includes(input.taskName)) {
         return { ok: false as const, error: new NoEligiblePlanError(input.taskName, [], input.requirements) }
       }
-      const profile = PROFILES[0]!
+      const profile = pool[0]!
       return { ok: true as const, exactAgentRuntime: profile.exactAgentRuntime, resolved: resolvedChoice(profile) }
     },
     eligible(input) {
-      const choices = PROFILES
+      if (autoFailTasks.includes(input.taskName)) {
+        return { ok: false as const, error: new NoEligiblePlanError(input.taskName, [], input.requirements) }
+      }
+      const choices = pool
         .filter((profile) => !blocked(input.taskName, profile.exactAgentRuntime))
         .map((profile) => ({ ...resolvedChoice(profile), exactAgentRuntime: profile.exactAgentRuntime }))
       return { ok: true as const, choices }
     },
     resolveExplicit(input) {
-      const profile = PROFILES.find((p) => p.exactAgentRuntime === input.exactRuntime)
+      const profile = pool.find((p) => p.exactAgentRuntime === input.exactRuntime)
       if (!profile) {
         return {
           ok: false as const,
@@ -160,7 +167,7 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
     listExactRuntimes(input) {
       return {
         ok: true as const,
-        items: PROFILES.map((profile) => {
+        items: pool.map((profile) => {
           const isAvailable = !blocked(input.taskName, profile.exactAgentRuntime)
           return isAvailable
             ? { exactAgentRuntime: profile.exactAgentRuntime, available: true as const, resolved: resolvedChoice(profile) }
@@ -178,7 +185,6 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
 interface DefEntry {
   name: string
   displayName?: string
-  agentRuntime: string
   dispatch?: Record<string, unknown>
   timeoutMs?: number
   description?: string
@@ -191,7 +197,6 @@ const BUILTIN_DEFS: DefEntry[] = [
   {
     name: 'commit',
     displayName: 'Commit helper',
-    agentRuntime: 'forge/fast',
     dispatch: { expectedTps: 80, minimumTps: 60 },
     timeoutMs: 120_000,
     description: 'Commit message helper',
@@ -199,23 +204,13 @@ const BUILTIN_DEFS: DefEntry[] = [
   },
   {
     name: 'review',
-    agentRuntime: 'forge/codex-sol',
     dispatch: { maxOutputUsdPerMillion: 15 },
     timeoutMs: 180_000,
     description: 'Code review',
     source: 'workspace',
   },
   {
-    name: 'unavailable',
-    agentRuntime: 'forge/codex-sol',
-    dispatch: { maxOutputUsdPerMillion: 15 },
-    timeoutMs: 180_000,
-    description: 'Review task whose pinned runtime is blocked',
-    source: 'workspace',
-  },
-  {
     name: 'auto-fail',
-    agentRuntime: 'forge/fast',
     dispatch: { expectedTps: 1000 },
     timeoutMs: 120_000,
     description: 'Automatic dispatch that fails preflight',
@@ -230,7 +225,6 @@ function defToSummary(entry: DefEntry, project?: string) {
     ...(project !== undefined ? { kind: 'project' as const, project } : { kind: 'builtin' as const }),
     source: entry.source ?? 'workspace',
     description: entry.description,
-    agentRuntime: entry.agentRuntime,
     ...(entry.timeoutMs !== undefined ? { timeoutMs: entry.timeoutMs } : {}),
     ...(entry.dispatch !== undefined ? { dispatch: entry.dispatch } : {}),
     ...(entry.instructions !== undefined
@@ -264,56 +258,10 @@ function createDefinitionsFixture(): TaskSettingsDefinitionSource {
   }
 }
 
-interface ProjectFixtureGroup {
-  id: string
-  displayName?: string
-  defs: DefEntry[]
-}
-
-/** Injectable source with registered-project discovery: unscoped listing yields
- *  builtins only; each registered project lists exactly its own task defs. */
-function createGroupedDefinitionsFixture(projects: ProjectFixtureGroup[]): TaskSettingsDefinitionSource {
-  const projectOf = (taskId: string, project?: string): DefEntry | undefined => {
-    if (project !== undefined) {
-      const group = projects.find((entry) => entry.id === project)
-      const found = group?.defs.find((entry) => entry.name === taskId)
-      if (found) return found
-    }
-    return undefined
-  }
-  const anyProjectEntry = (taskId: string): DefEntry | undefined =>
-    projects.flatMap((group) => group.defs).find((entry) => entry.name === taskId)
-  const findEntry = (taskId: string, project?: string): DefEntry | undefined =>
-    projectOf(taskId, project) ?? BUILTIN_DEFS.find((entry) => entry.name === taskId) ?? anyProjectEntry(taskId)
-  return {
-    async list(project) {
-      if (project === undefined) return BUILTIN_DEFS.map((entry) => defToSummary(entry))
-      const group = projects.find((entry) => entry.id === project)
-      return group ? group.defs.map((entry) => defToSummary(entry, project)) : []
-    },
-    async listProjects() {
-      return projects.map((entry) => ({
-        id: entry.id,
-        ...(entry.displayName !== undefined ? { displayName: entry.displayName } : {}),
-      }))
-    },
-    async describe(taskId, project) {
-      const entry = findEntry(taskId, project)
-      if (!entry) throw new Error(`task '${taskId}' not found`)
-      const summary = defToSummary(entry, project)
-      return {
-        ...summary,
-        permission: 'readonly',
-        input_schema: { note: taskId },
-        output_schema: { done: true },
-      }
-    },
-  }
-}
-
 interface TestContext {
   dir: string
   configPath: string
+  aliasService: RuntimeAliasService
   makeService: (overrides?: Partial<ConstructorParameters<typeof TaskSettingsService>[0]>) => TaskSettingsService
 }
 
@@ -325,26 +273,83 @@ const defaultRuntimeAvailability: TaskSettingsRuntimeAvailabilityCallback = () =
   available: true,
 })
 
+/** All-unknown immutable quota snapshot service (empty raw report). */
+function unknownQuotaSnapshotService(now: () => number = () => Date.now()): AutoRoutingQuotaSnapshotService {
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.resolve('[]'),
+    now,
+  })
+}
+
+/** CodeBuddy native cb profile plus a same-model grok gateway variant, used by
+ *  client-collapse / confirmed-free focused tests in isolation. */
+const CODEBUDDY_NATIVE_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:cb',
+  profile: 'codebuddy-native',
+  client: 'cb',
+  provider: 'codebuddy',
+  model: 'deepseek-v4-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.2,
+  outputUsd: 0.6,
+}
+
+const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:gk',
+  profile: 'codebuddy-grok',
+  client: 'gk',
+  provider: 'codebuddy',
+  model: 'deepseek-v4-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.2,
+  outputUsd: 0.6,
+}
+
+/** A different, more expensive canonical model used to prove distinct models
+ *  never collapse with the codebuddy/deepseek-v4-flash variants above. */
+const CODEBUDDY_MINIMAX_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/minimax-m3:cb',
+  profile: 'codebuddy-minimax',
+  client: 'cb',
+  provider: 'codebuddy',
+  model: 'minimax-m3',
+  intelligence: 'mid',
+  tps: 60,
+  inputUsd: 0.8,
+  outputUsd: 2.4,
+}
+
 describe('daemon task-settings-service (no-model)', () => {
   let context: TestContext | undefined
+
+  const seedAlias = async (name: string, target: string): Promise<void> => {
+    const { revision } = await context!.aliasService.snapshot()
+    await context!.aliasService.put({ name, target, expected_revision: revision })
+  }
 
   beforeEach(() => {
     const dir = mkdtempSync(join(tmpdir(), 'foreman-task-settings-'))
     const configPath = join(dir, 'config.json')
+    const aliasService = new RuntimeAliasService(new RuntimeAliasStore({ configRoot: join(dir, 'alias-store') }))
     context = {
       dir,
       configPath,
+      aliasService,
       makeService: (overrides = {}) =>
         new TaskSettingsService({
           workspaceRoot: dir,
           configPath,
           resolver: createResolverFixture({
-            unavailable: { unavailable: 'forge/codex-sol' },
+            unavailable: {},
             autoFailTasks: ['auto-fail'],
           }),
+          aliases: aliasService,
           definitions: createDefinitionsFixture(),
           daemonAvailability: defaultDaemonAvailability,
           runtimeAvailability: defaultRuntimeAvailability,
+          quotaSnapshots: unknownQuotaSnapshotService(),
           ...overrides,
         }),
     }
@@ -373,6 +378,8 @@ describe('daemon task-settings-service (no-model)', () => {
         settings: {
           global: { selectionMode: 'automatic', timeoutMs: 900_000, dispatch: { expectedTps: 100 } },
           byTask: {
+            // The retired legacy additional-instructions key stays as unrelated
+            // raw config: never surfaced or effective, preserved on disk.
             'builtin:commit': { additionalInstructions: 'be terse', dispatch: { minimumTps: 90 } },
           },
         },
@@ -383,6 +390,7 @@ describe('daemon task-settings-service (no-model)', () => {
 
     assert.equal(snapshot.config_path, context!.configPath)
     assert.equal(snapshot.revision.length > 0, true)
+    assert.deepEqual(snapshot.aliases, [])
     // user-global layer surfaced as JSON-safe snake_case layer.
     assert.deepEqual(snapshot.user_global, {
       mode: 'automatic',
@@ -392,23 +400,28 @@ describe('daemon task-settings-service (no-model)', () => {
 
     const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
     assert.ok(commit)
-    // Builtin metadata is read-only: source/description and a dynamic template marker.
+    // Builtin metadata is read-only: source/description, template marker, and
+    // never a declared runtime.
     assert.equal(commit.builtin.name, 'commit')
     assert.equal(commit.builtin.source, 'workspace')
     assert.equal(commit.builtin.prompt_template, 'dynamic')
-    assert.equal('additional_instructions' in commit.builtin, false)
-    assert.equal(commit.builtin.declared_runtime, null)
+    assert.equal('declared_runtime' in commit.builtin, false)
 
-    // Per-task persisted layer is exactly the byTask entry (snake_case DTO).
+    // Per-task persisted layer surfaces only supported fields (snake_case DTO).
     assert.deepEqual(commit.user_task, {
-      additional_instructions: 'be terse',
       automatic: { minimum_tps: 90 },
     })
+    // The retired legacy key never surfaces in the per-task layer or the
+    // effective row; it survives verbatim as unrelated raw config on disk.
+    assert.equal(Object.hasOwn(commit.user_task, 'additional_instructions'), false)
+    assert.equal(Object.hasOwn(commit.effective, 'additional_instructions'), false)
+    const onDiskTasks = readConfig().tasks as { settings: { byTask: Record<string, unknown> } }
+    const onDiskCommit = onDiskTasks.settings.byTask['builtin:commit'] as Record<string, unknown> | undefined
+    assert.equal(onDiskCommit?.additionalInstructions, 'be terse')
 
     // Field-level right-wins precedence with the winning source reported.
     assert.deepEqual(commit.effective.mode, { value: 'automatic', source: 'user_global' })
     assert.deepEqual(commit.effective.timeout_ms, { value: 900_000, source: 'user_global' })
-    assert.deepEqual(commit.effective.additional_instructions, { value: 'be terse', source: 'user_task' })
     assert.deepEqual(commit.effective.explicit_runtime, { value: null, source: 'system' })
     assert.deepEqual(commit.effective.automatic.expected_tps, { value: 100, source: 'user_global' })
     // Builtin minimumTps (60) overridden by the per-task minimumTps (90).
@@ -436,8 +449,8 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(review.project, 'alpha')
     assert.deepEqual(review.effective.timeout_ms, { value: 222_000, source: 'user_task' })
     assert.equal(review.builtin.identity, 'project:alpha:review')
-    // No legacy agentRuntime is consulted for project rows.
-    assert.equal(review.builtin.declared_runtime, 'forge/codex-sol')
+    // Definitions never pin a runtime; the builtin metadata exposes no runtime.
+    assert.equal('declared_runtime' in review.builtin, false)
   })
 
   it('reset deletes only the current-layer field and cleans empty containers', async () => {
@@ -446,7 +459,7 @@ describe('daemon task-settings-service (no-model)', () => {
       tasks: {
         settings: {
           global: { timeoutMs: 800_000 },
-          byTask: { 'builtin:commit': { timeoutMs: 123_456, additionalInstructions: 'keep me' } },
+          byTask: { 'builtin:commit': { timeoutMs: 123_456, dispatch: { minimumTps: 90 } } },
         },
       },
     })
@@ -462,8 +475,8 @@ describe('daemon task-settings-service (no-model)', () => {
 
     const commit = after.rows.find((row) => row.identity === 'builtin:commit')
     assert.ok(commit)
-    // timeout_ms deleted at the per-task layer only; the sibling field survives.
-    assert.deepEqual(commit.user_task, { additional_instructions: 'keep me' })
+    // timeout_ms deleted at the per-task layer only; the sibling dispatch field survives.
+    assert.deepEqual(commit.user_task, { automatic: { minimum_tps: 90 } })
     // Global timeout inherited again.
     assert.deepEqual(commit.effective.timeout_ms, { value: 800_000, source: 'user_global' })
 
@@ -471,7 +484,7 @@ describe('daemon task-settings-service (no-model)', () => {
     const tasks = onDisk.tasks as Record<string, unknown>
     const settings = tasks.settings as Record<string, unknown>
     const byTask = settings.byTask as Record<string, unknown>
-    assert.deepEqual(byTask['builtin:commit'], { additionalInstructions: 'keep me' })
+    assert.deepEqual(byTask['builtin:commit'], { dispatch: { minimumTps: 90 } })
     assert.deepEqual(onDisk.top_level, { keep: true })
     assert.equal(tempResidue().length, 0)
 
@@ -481,7 +494,7 @@ describe('daemon task-settings-service (no-model)', () => {
       scope: 'task',
       task_id: 'commit',
       expected_revision: secondBefore.revision,
-      patch: { additional_instructions: null },
+      patch: { automatic: { minimum_tps: null } },
     })
     onDisk = readConfig()
     const afterTasks = onDisk.tasks as Record<string, unknown>
@@ -499,19 +512,19 @@ describe('daemon task-settings-service (no-model)', () => {
       scope: 'task',
       task_id: 'builtin:commit',
       expected_revision: before.revision,
-      patch: { additional_instructions: 'identity round trip' },
+      patch: { timeout_ms: 333_000 },
     })
 
     assert.equal(after.rows.length, 1)
     assert.equal(after.rows[0]?.identity, 'builtin:commit')
-    assert.deepEqual(after.rows[0]?.user_task, { additional_instructions: 'identity round trip' })
+    assert.deepEqual(after.rows[0]?.user_task, { timeout_ms: 333_000 })
     assert.deepEqual(
       (readConfig().tasks as { settings: { byTask: Record<string, unknown> } }).settings.byTask['builtin:commit'],
-      { additionalInstructions: 'identity round trip' },
+      { timeoutMs: 333_000 },
     )
   })
 
-  it('save persists a validated explicit selection under the stable identity', async () => {
+  it('save persists an explicit inline target reference under the stable identity', async () => {
     writeConfig({})
     const service = context!.makeService()
     const before = await service.snapshot({})
@@ -522,7 +535,7 @@ describe('daemon task-settings-service (no-model)', () => {
       expected_revision: before.revision,
       patch: {
         mode: 'explicit',
-        explicit_runtime: resolveTriple(PROFILES[0]!),
+        explicit_runtime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
       },
     })
 
@@ -530,13 +543,17 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(commit)
     assert.deepEqual(commit.effective.mode, { value: 'explicit', source: 'user_task' })
     assert.deepEqual(commit.effective.explicit_runtime, {
-      value: resolveTriple(PROFILES[0]!),
+      value: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
       source: 'user_task',
     })
-    assert.ok(commit.explicit)
-    assert.equal(commit.explicit.runtime.client, PROFILES[0]!.client)
-    assert.equal(commit.explicit.resolved?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    assert.equal(commit.explicit.resolved?.model, PROFILES[0]!.model)
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    // The stored structural reference plus its exact canonical resolution.
+    assert.deepEqual(explicit.reference, { kind: 'target', target: PROFILES[0]!.exactAgentRuntime })
+    assert.equal(explicit.resolved_target, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(explicit.resolved?.model, PROFILES[0]!.model)
+    assert.ok(explicit.readiness)
+    assert.equal(explicit.readiness.available, true)
 
     const onDisk = readConfig()
     const tasks = onDisk.tasks as Record<string, unknown>
@@ -544,8 +561,64 @@ describe('daemon task-settings-service (no-model)', () => {
     const byTask = settings.byTask as Record<string, unknown>
     assert.deepEqual(byTask['builtin:commit'], {
       selectionMode: 'explicit',
-      agentRuntime: 'forge/cb-dsf',
+      explicitRuntime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
     })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('save persists an alias reference and resolves it through the live alias service', async () => {
+    writeConfig({})
+    await seedAlias('primary', PROFILES[1]!.exactAgentRuntime)
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const after = await service.save({
+      scope: 'task',
+      task_id: 'commit',
+      expected_revision: before.revision,
+      patch: {
+        mode: 'explicit',
+        explicit_runtime: { kind: 'alias', name: 'primary' },
+      },
+    })
+
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    assert.deepEqual(explicit.reference, { kind: 'alias', name: 'primary' })
+    assert.equal(explicit.resolved_target, PROFILES[1]!.exactAgentRuntime)
+    assert.equal(explicit.resolved?.profile, PROFILES[1]!.profile)
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as Record<string, unknown>
+    const settings = tasks.settings as Record<string, unknown>
+    const byTask = settings.byTask as Record<string, unknown>
+    assert.deepEqual(byTask['builtin:commit'], {
+      selectionMode: 'explicit',
+      explicitRuntime: { kind: 'alias', name: 'primary' },
+    })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('rejects an explicit save referencing a missing alias and writes nothing', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: {
+          mode: 'explicit',
+          explicit_runtime: { kind: 'alias', name: 'does-not-exist' },
+        },
+      }),
+      (error) => error instanceof AliasNotFoundError,
+    )
+    assert.deepEqual(readConfig(), {})
     assert.equal(tempResidue().length, 0)
   })
 
@@ -568,7 +641,7 @@ describe('daemon task-settings-service (no-model)', () => {
         expected_revision: before.revision,
         patch: {
           mode: 'explicit',
-          explicit_runtime: resolveTriple(PROFILES[0]!),
+          explicit_runtime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
         },
       }),
       (error) => error instanceof TaskSettingsRuntimeUnavailableError,
@@ -591,7 +664,7 @@ describe('daemon task-settings-service (no-model)', () => {
         expected_revision: before.revision,
         patch: {
           mode: 'explicit',
-          explicit_runtime: resolveTriple(PROFILES[0]!),
+          explicit_runtime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
         },
       }),
       (error) => error instanceof TaskSettingsRuntimeUnavailableError,
@@ -617,7 +690,7 @@ describe('daemon task-settings-service (no-model)', () => {
         scope: 'task',
         task_id: 'commit',
         expected_revision: before.revision,
-        patch: { additional_instructions: 'never written' },
+        patch: { timeout_ms: 400_000 },
       }),
       (error) => error instanceof TaskSettingsContentConflictError,
     )
@@ -648,7 +721,7 @@ describe('daemon task-settings-service (no-model)', () => {
       scope: 'task',
       task_id: 'commit',
       expected_revision: before.revision,
-      patch: { additional_instructions: 'hello' },
+      patch: { timeout_ms: 90_000 },
     })
 
     const onDisk = readConfig()
@@ -667,262 +740,226 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(commit)
     assert.equal(commit.effective.mode.value, 'automatic')
     assert.deepEqual(commit.issues, [])
-    // The automatic row exposes the exact successful resolver result.
-    assert.equal(commit.resolved_runtime?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    assert.equal(commit.resolved_runtime?.model, PROFILES[0]!.model)
+    // An automatic row carries no explicit row (no fabricated explicit state).
+    assert.equal(commit.explicit, undefined)
 
-    // auto-fail resolves through the same resolver path and stays as a row with
-    // a structured unavailable issue (never dropped).
+    // auto-fail resolves through the same automatic resolver path and stays as
+    // a row with a structured unavailable issue (never dropped).
     const autoFail = snapshot.rows.find((row) => row.identity === 'builtin:auto-fail')
     assert.ok(autoFail)
     assert.equal(autoFail.effective.mode.value, 'automatic')
     assert.ok(autoFail.issues.some((issue) => issue.code === 'automatic_dispatch_unavailable'))
-    // A failed automatic resolution never exposes a stale or alternate runtime.
-    assert.equal(autoFail.resolved_runtime, null)
+    assert.equal(autoFail.explicit, undefined)
   })
 
-  it('explicit preflight runs through resolveExplicit/listExactRuntimes with no fallback', async () => {
+  it('explicit rows resolve alias and inline references through resolveExplicit with no fallback', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'alias', name: 'primary' },
+          },
+        },
+      },
+    })
+    await seedAlias('primary', PROFILES[1]!.exactAgentRuntime)
     const service = context!.makeService()
     const snapshot = await service.snapshot({})
 
-    // review declares an exact builtin runtime; explicit resolution succeeds.
-    const review = snapshot.rows.find((row) => row.identity === 'builtin:review')
-    assert.ok(review)
-    assert.deepEqual(review.effective.mode, { value: 'explicit', source: 'builtin' })
-    assert.deepEqual(review.effective.explicit_runtime, {
-      value: resolveTriple(PROFILES[2]!),
-      source: 'builtin',
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.effective.mode, { value: 'explicit', source: 'user_global' })
+    assert.deepEqual(commit.effective.explicit_runtime, {
+      value: { kind: 'alias', name: 'primary' },
+      source: 'user_global',
     })
-    assert.ok(review.explicit)
-    // Pickers surface every currently available exact runtime.
-    assert.deepEqual(
-      review.explicit.choices.map((choice) => choice.exactAgentRuntime).sort(),
-      ['forge/cb-dsf', 'forge/codex-luna', 'forge/codex-sol'].sort(),
-    )
-    assert.equal(review.explicit.resolved?.exactAgentRuntime, 'forge/codex-sol')
-    // The row-level resolved runtime mirrors the exact explicit resolution.
-    assert.equal(review.resolved_runtime?.exactAgentRuntime, 'forge/codex-sol')
-    assert.equal(review.resolved_runtime?.model, PROFILES[2]!.model)
-    // Readiness from injected non-billable availability callbacks.
-    assert.ok(review.explicit.readiness)
-    assert.equal(review.explicit.readiness.daemon, 'accepting')
-    assert.equal(review.explicit.readiness.quota, 'unknown')
-    assert.equal(review.explicit.readiness.available, true)
-    assert.equal(review.explicit.readiness.runtime, 'forge/codex-sol')
-
-    // unavailable declares the same exact runtime but its resolveExplicit fails
-    // deterministically. The mode stays explicit and the row reports the issue:
-    // automatic mode is never used as a fallback.
-    const unavailable = snapshot.rows.find((row) => row.identity === 'builtin:unavailable')
-    assert.ok(unavailable)
-    assert.equal(unavailable.effective.mode.value, 'explicit')
-    assert.ok(unavailable.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
-    if (unavailable.explicit) {
-      assert.equal(unavailable.explicit.resolved, null)
-      assert.equal(unavailable.explicit.readiness, null)
-    }
-    // The row-level resolved runtime stays null: no stale/alternate runtime is
-    // ever reported when the exact resolution fails.
-    assert.equal(unavailable.resolved_runtime, null)
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    assert.deepEqual(explicit.reference, { kind: 'alias', name: 'primary' })
+    assert.equal(explicit.resolved_target, PROFILES[1]!.exactAgentRuntime)
+    assert.equal(explicit.resolved?.profile, PROFILES[1]!.profile)
+    assert.equal(explicit.resolved?.model, PROFILES[1]!.model)
+    assert.ok(explicit.readiness)
+    assert.equal(explicit.readiness.runtime, PROFILES[1]!.exactAgentRuntime)
+    assert.equal(explicit.readiness.daemon, 'accepting')
+    assert.equal(explicit.readiness.available, true)
+    // No legacy runtime choice / resolved-runtime enumeration leaks.
+    assert.equal('runtime_choices' in commit, false)
+    assert.equal('resolved_runtime' in commit, false)
   })
 
-  it('exposes authoritative runtime_choices on automatic rows and reuses them for explicit rows', async () => {
-    // Block forge/codex-sol for both the automatic 'commit' row and the
-    // explicit 'unavailable' row so exclusion and reuse are observable.
+  it('a missing alias keeps the structural explicit row unresolved with a structured issue', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'alias', name: 'gone' },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({})
+
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.effective.mode.value, 'explicit')
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    // The stored structural reference survives; no resolution is fabricated and
+    // no automatic mode is substituted.
+    assert.deepEqual(explicit.reference, { kind: 'alias', name: 'gone' })
+    assert.equal(explicit.resolved_target, null)
+    assert.equal(explicit.resolved, null)
+    assert.equal(explicit.readiness, null)
+    assert.ok(commit.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
+  })
+
+  it('an unavailable inline target fails preflight and runs without automatic fallback', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: PROFILES[2]!.exactAgentRuntime },
+          },
+        },
+      },
+    })
     const service = context!.makeService({
       resolver: createResolverFixture({
-        unavailable: { commit: 'forge/codex-sol', unavailable: 'forge/codex-sol' },
+        unavailable: { commit: PROFILES[2]!.exactAgentRuntime },
       }),
     })
     const snapshot = await service.snapshot({})
 
-    // Automatic row: runtime_choices come straight from listExactRuntimes, the
-    // blocked runtime is excluded, and no explicit current selection is invented.
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.effective.mode.value, 'explicit')
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    assert.equal(explicit.resolved_target, null)
+    assert.equal(explicit.resolved, null)
+    assert.equal(explicit.readiness, null)
+    assert.ok(commit.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
+    // Automatic mode was never used as a fallback.
+    assert.equal(commit.effective.mode.value, 'explicit')
+
+    await assert.rejects(
+      service.resolveForRun({
+        taskName: 'commit',
+        kind: 'builtin',
+        defaults: {},
+      }),
+      (error) => error instanceof ExplicitRuntimeUnavailableError,
+    )
+  })
+
+  it('fresh alias update and deletion are observed by later snapshots and runs', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'alias', name: 'primary' },
+          },
+        },
+      },
+    })
+    await seedAlias('primary', PROFILES[0]!.exactAgentRuntime)
+    const service = context!.makeService()
+
+    // First snapshot resolves the alias to its original target.
+    let snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+    let commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.explicit?.resolved_target, PROFILES[0]!.exactAgentRuntime)
+
+    // Re-point the alias; the next snapshot sees the fresh target with no cache.
+    await seedAlias('primary', PROFILES[1]!.exactAgentRuntime)
+    snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+    commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.explicit?.resolved_target, PROFILES[1]!.exactAgentRuntime)
+    assert.equal(commit.explicit?.resolved?.profile, PROFILES[1]!.profile)
+
+    // A run resolves the fresh alias target too.
+    let resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.mode, 'explicit')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[1]!.exactAgentRuntime)
+
+    // Deleting the alias leaves the structural reference but nothing resolves.
+    const { revision } = await context!.aliasService.snapshot()
+    await context!.aliasService.remove({ name: 'primary', expected_revision: revision })
+    snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+    commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    const explicit = commit.explicit
+    assert.ok(explicit)
+    assert.equal(explicit.resolved_target, null)
+    assert.equal(explicit.resolved, null)
+    assert.equal(explicit.readiness, null)
+    assert.ok(commit.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
+
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof AliasNotFoundError,
+    )
+  })
+
+  it('snapshot returns the current live aliases for the explicit-mode picker', async () => {
+    writeConfig({})
+    await seedAlias('zed', PROFILES[0]!.exactAgentRuntime)
+    await seedAlias('alpha', PROFILES[1]!.exactAgentRuntime)
+    const service = context!.makeService()
+
+    const snapshot = await service.snapshot({})
+    assert.deepEqual(snapshot.aliases, [
+      { name: 'alpha', target: PROFILES[1]!.exactAgentRuntime },
+      { name: 'zed', target: PROFILES[0]!.exactAgentRuntime },
+    ])
+
+    // A save returns the same live alias surface.
+    const before = await service.snapshot({})
+    const after = await service.save({
+      scope: 'global',
+      expected_revision: before.revision,
+      patch: { timeout_ms: 60_000 },
+    })
+    assert.deepEqual(after.aliases, snapshot.aliases)
+  })
+
+  it('automatic mode is independent from aliases', async () => {
+    writeConfig({
+      tasks: { settings: { global: { selectionMode: 'automatic', timeoutMs: 900_000 } } },
+    })
+    // The alias points at a runtime that is explicitly blocked for this task;
+    // automatic selection must never consult it.
+    await seedAlias('primary', PROFILES[2]!.exactAgentRuntime)
+    const service = context!.makeService({
+      resolver: createResolverFixture({
+        unavailable: { commit: PROFILES[2]!.exactAgentRuntime },
+      }),
+    })
+
+    const resolution = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { dispatch: { expectedTps: 80 } },
+    })
+    assert.equal(resolution.mode, 'automatic')
+    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
+    assert.equal(resolution.timeoutMs, 900_000)
+    assert.equal(resolution.sources.selectionMode, 'user_global')
+    assert.equal(resolution.sources.timeoutMs, 'user_global')
+
+    const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
     const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
     assert.ok(commit)
     assert.equal(commit.effective.mode.value, 'automatic')
     assert.equal(commit.explicit, undefined)
-    assert.equal(commit.effective.explicit_runtime.value, null)
-    // The automatic row's resolved runtime is the exact resolver selection.
-    assert.equal(commit.resolved_runtime?.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    assert.deepEqual(
-      commit.runtime_choices.map((choice) => choice.exactAgentRuntime).sort(),
-      ['forge/cb-dsf', 'forge/codex-luna'].sort(),
-    )
-    assert.equal(commit.runtime_choices.some((choice) => choice.exactAgentRuntime === 'forge/codex-sol'), false)
-    // Only available items with truthful resolved metadata are projected.
-    assert.ok(
-      commit.runtime_choices.every(
-        (choice) =>
-          choice.client !== ''
-          && choice.provider !== ''
-          && choice.model !== ''
-          && choice.model_id !== ''
-          && choice.mode === 'native',
-      ),
-    )
-
-    // Explicit row: explicit.choices is the same authoritative array, still
-    // excluding the blocked runtime while keeping the mode explicit.
-    const unavailable = snapshot.rows.find((row) => row.identity === 'builtin:unavailable')
-    assert.ok(unavailable)
-    assert.equal(unavailable.effective.mode.value, 'explicit')
-    assert.deepEqual(
-      unavailable.runtime_choices.map((choice) => choice.exactAgentRuntime).sort(),
-      ['forge/cb-dsf', 'forge/codex-luna'].sort(),
-    )
-    assert.ok(unavailable.explicit)
-    assert.deepEqual(unavailable.explicit.choices, unavailable.runtime_choices)
-    assert.equal(unavailable.explicit.resolved, null)
-    // No stale or alternate runtime leaks into the row-level resolved runtime.
-    assert.equal(unavailable.resolved_runtime, null)
-  })
-
-  it('snapshot readiness reflects a non-accepting daemon and unknown quota', async () => {
-    const service = context!.makeService({
-      daemonAvailability: () => ({ accepting: false, known: true }),
-      runtimeAvailability: () => ({
-        providerCredential: 'available',
-        providerLive: 'unknown',
-        quota: 'unknown',
-        available: true,
-      }),
-    })
-    const snapshot = await service.snapshot({})
-
-    const review = snapshot.rows.find((row) => row.identity === 'builtin:review')
-    assert.ok(review)
-    assert.ok(review.explicit?.readiness)
-    assert.equal(review.explicit.readiness.daemon, 'unavailable')
-    assert.equal(review.explicit.readiness.available, false)
-    assert.equal(review.explicit.readiness.quota, 'unknown')
-    assert.ok(review.explicit.readiness.issues.some((issue) => issue.code === 'daemon_not_accepting'))
-  })
-
-  it('reads legacy tasks.agentRuntime pins as builtin compatibility but never writes them', async () => {
-    writeConfig({ tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
-    const service = context!.makeService()
-    const before = await service.snapshot({})
-
-    const commit = before.rows.find((row) => row.identity === 'builtin:commit')
-    assert.ok(commit)
-    assert.deepEqual(commit.user_task, {
-      mode: 'explicit',
-      explicit_runtime: resolveTriple(PROFILES[2]!),
-    })
-    assert.deepEqual(commit.effective.mode, { value: 'explicit', source: 'user_task' })
-    assert.deepEqual(commit.effective.explicit_runtime, {
-      value: resolveTriple(PROFILES[2]!),
-      source: 'user_task',
-    })
-
-    // Editing a different field migrates the selection into tasks.settings but
-    // never rewrites the legacy agentRuntime map.
-    await service.save({
-      scope: 'task',
-      task_id: 'commit',
-      expected_revision: before.revision,
-      patch: { timeout_ms: 777_000 },
-    })
-
-    const onDisk = readConfig()
-    const tasks = onDisk.tasks as Record<string, unknown>
-    const settings = tasks.settings as Record<string, unknown>
-    const byTask = settings.byTask as Record<string, unknown>
-    assert.deepEqual(tasks.agentRuntime, { commit: 'forge/codex-sol' })
-    assert.deepEqual(byTask['builtin:commit'], {
-      selectionMode: 'explicit',
-      agentRuntime: 'forge/codex-sol',
-      timeoutMs: 777_000,
-    })
-    assert.equal(tempResidue().length, 0)
-  })
-
-  it('prompt customization is a plain additional_instructions field; the builtin template stays read-only', async () => {
-    writeConfig({})
-    const service = context!.makeService()
-    const before = await service.snapshot({})
-
-    const after = await service.save({
-      scope: 'task',
-      task_id: 'review',
-      expected_revision: before.revision,
-      patch: { additional_instructions: 'always cite line numbers' },
-    })
-
-    const review = after.rows.find((row) => row.identity === 'builtin:review')
-    assert.ok(review)
-    assert.equal(review.builtin.prompt_template, 'dynamic')
-    assert.deepEqual(review.builtin, {
-      ...review.builtin,
-      prompt_template: 'dynamic',
-      source: 'workspace',
-      description: 'Code review',
-      identity: 'builtin:review',
-      name: 'review',
-      declared_runtime: 'forge/codex-sol',
-      timeout_ms: 180_000,
-      dispatch: { max_output_usd_per_million: 15 },
-    })
-    assert.equal(review.effective.additional_instructions.value, 'always cite line numbers')
-
-    const onDisk = readConfig()
-    const tasks = onDisk.tasks as Record<string, unknown>
-    const settings = tasks.settings as Record<string, unknown>
-    const byTask = settings.byTask as Record<string, unknown>
-    // Only the editable plain-instruction override is stored for the builtin.
-    assert.deepEqual(byTask['builtin:review'], { additionalInstructions: 'always cite line numbers' })
-  })
-
-  it('task existence is required before any task-scope save', async () => {
-    writeConfig({})
-    const service = context!.makeService()
-    const before = await service.snapshot({})
-
-    await assert.rejects(
-      service.save({
-        scope: 'task',
-        task_id: 'does-not-exist',
-        expected_revision: before.revision,
-        patch: { additional_instructions: 'x' },
-      }),
-      (error) => error instanceof TaskSettingsTaskNotFoundError,
-    )
-    assert.deepEqual(readConfig(), {})
-    assert.equal(tempResidue().length, 0)
-  })
-
-  it('a malformed explicit runtime triple is rejected as invalid settings', async () => {
-    writeConfig({})
-    const service = context!.makeService()
-    const before = await service.snapshot({})
-
-    await assert.rejects(
-      service.save({
-        scope: 'task',
-        task_id: 'commit',
-        expected_revision: before.revision,
-        patch: {
-          mode: 'explicit',
-          explicit_runtime: { client: 'nope', provider: 'nope', model: 'nope' },
-        },
-      }),
-      (error) => error instanceof Error && error.message.includes('invalid task settings'),
-    )
-    assert.deepEqual(readConfig(), {})
-    assert.equal(tempResidue().length, 0)
-  })
-
-  it('exact runtime identity mapping is stable across triple and id forms', () => {
-    for (const profile of PROFILES) {
-      const triple = resolveTriple(profile)
-      const id = exactRuntimeIdForTriple(triple)
-      assert.equal(id, profile.exactAgentRuntime)
-    }
-    assert.equal(
-      exactRuntimeIdForTriple({ client: 'x', provider: 'y', model: 'z' }),
-      null,
-    )
   })
 
   it('resolveForRun merges five layers right-wins including invocation and never persists it', async () => {
@@ -931,14 +968,13 @@ describe('daemon task-settings-service (no-model)', () => {
         settings: {
           global: {
             selectionMode: 'explicit',
-            agentRuntime: 'forge/codex-luna',
+            explicitRuntime: { kind: 'target', target: PROFILES[2]!.exactAgentRuntime },
             timeoutMs: 900_000,
-            additionalInstructions: 'global note',
           },
           byTask: {
             'builtin:commit': {
               selectionMode: 'explicit',
-              agentRuntime: 'forge/codex-sol',
+              explicitRuntime: { kind: 'target', target: PROFILES[2]!.exactAgentRuntime },
               timeoutMs: 700_000,
             },
           },
@@ -949,26 +985,23 @@ describe('daemon task-settings-service (no-model)', () => {
     const resolution = await service.resolveForRun({
       taskName: 'commit',
       kind: 'builtin',
-      defaults: { agentRuntime: 'forge/codex-sol', timeoutMs: 200_000 },
+      defaults: { timeoutMs: 200_000, dispatch: { expectedTps: 100 } },
       invocation: {
         mode: 'automatic',
         timeout_ms: 111_000,
-        additional_instructions: 'invocation note',
         automatic: { expected_tps: 250 },
       },
     })
-    // Invocation is the top layer: its automatic mode, timeout, additional
-    // instructions and automatic dispatch field each win right-wins.
+    // Invocation is the top layer: automatic mode, timeout, and the automatic
+    // dispatch field each win right-wins; the inherited explicit reference is
+    // ignored in automatic mode.
     assert.equal(resolution.mode, 'automatic')
     assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
     assert.equal(resolution.timeoutMs, 111_000)
-    assert.equal(resolution.additionalInstructions, 'invocation note')
     assert.equal(resolution.sources.selectionMode, 'invocation')
     assert.equal(resolution.sources.timeoutMs, 'invocation')
-    assert.equal(resolution.sources.additionalInstructions, 'invocation')
+    assert.equal(resolution.sources.explicitRuntime, 'system')
     assert.deepEqual(resolution.sources.automatic.expected_tps, 'invocation')
-    // The inherited exact runtime pin is dropped in automatic mode.
-    assert.equal(resolution.sources.agentRuntime, 'system')
     assert.ok(resolution.dispatch)
     assert.equal(resolution.dispatch.profile, PROFILES[0]!.profile)
     assert.equal(resolution.dispatch.model, PROFILES[0]!.model)
@@ -978,64 +1011,50 @@ describe('daemon task-settings-service (no-model)', () => {
     const tasks = onDisk.tasks as Record<string, unknown>
     const settings = tasks.settings as Record<string, unknown>
     assert.deepEqual(settings.byTask, {
-      'builtin:commit': { selectionMode: 'explicit', agentRuntime: 'forge/codex-sol', timeoutMs: 700_000 },
+      'builtin:commit': {
+        selectionMode: 'explicit',
+        explicitRuntime: { kind: 'target', target: PROFILES[2]!.exactAgentRuntime },
+        timeoutMs: 700_000,
+      },
     })
     assert.equal((settings as { invocation?: unknown }).invocation, undefined)
   })
 
-  it('resolveForRun converts an invocation explicit_runtime triple to the one exact runtime id', async () => {
-    writeConfig({
-      tasks: { settings: { global: { selectionMode: 'explicit', agentRuntime: 'forge/codex-luna' } } },
-    })
+  it('resolveForRun resolves an invocation alias reference freshly and never persists it', async () => {
+    writeConfig({})
+    await seedAlias('primary', PROFILES[0]!.exactAgentRuntime)
     const service = context!.makeService()
     const resolution = await service.resolveForRun({
       taskName: 'commit',
       kind: 'builtin',
-      defaults: { agentRuntime: 'forge/codex-sol' },
-      invocation: { mode: 'explicit', explicit_runtime: resolveTriple(PROFILES[0]!) },
+      defaults: {},
+      invocation: {
+        mode: 'explicit',
+        explicit_runtime: { kind: 'alias', name: 'primary' },
+        timeout_ms: 42_000,
+      },
     })
     assert.equal(resolution.mode, 'explicit')
     assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    assert.equal(resolution.sources.agentRuntime, 'invocation')
+    assert.equal(resolution.timeoutMs, 42_000)
+    assert.equal(resolution.sources.explicitRuntime, 'invocation')
     assert.ok(resolution.dispatch)
     assert.equal(resolution.dispatch.client, PROFILES[0]!.client)
-    // Config unchanged: triple conversion never persisted an agentRuntime id.
-    assert.deepEqual(readConfig(), {
-      tasks: { settings: { global: { selectionMode: 'explicit', agentRuntime: 'forge/codex-luna' } } },
-    })
-  })
-
-  it('resolveForRun automatic mode ignores a stale inherited exact runtime pin', async () => {
-    // 'unavailable' declares an exact runtime the resolver blocks, but
-    // user-global automatic mode must ignore that stale pin and resolve.
-    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
-    const service = context!.makeService()
-    const resolution = await service.resolveForRun({
-      taskName: 'unavailable',
-      kind: 'builtin',
-      defaults: { agentRuntime: 'forge/codex-sol' },
-    })
-    assert.equal(resolution.mode, 'automatic')
-    assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    assert.equal(resolution.timeoutMs, 900_000)
-  })
-
-  it('resolveForRun explicit mode fails without automatic fallback when the exact runtime is unavailable', async () => {
-    writeConfig({})
-    const service = context!.makeService()
-    await assert.rejects(
-      service.resolveForRun({
-        taskName: 'unavailable',
-        kind: 'builtin',
-        defaults: { agentRuntime: 'forge/codex-sol' },
-      }),
-      (error) => error instanceof ExplicitRuntimeUnavailableError,
-    )
+    // Config unchanged: the invocation alias was never persisted.
     assert.deepEqual(readConfig(), {})
   })
 
-  it('resolveForRun explicit mode fails when the live provider credential is unavailable', async () => {
-    writeConfig({})
+  it('resolveForRun explicit mode fails without fallback when the live provider credential is unavailable', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
+          },
+        },
+      },
+    })
     const service = context!.makeService({
       runtimeAvailability: () => ({
         providerCredential: 'missing',
@@ -1046,36 +1065,31 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     await assert.rejects(
       service.resolveForRun({
-        taskName: 'review',
+        taskName: 'commit',
         kind: 'builtin',
-        defaults: { agentRuntime: 'forge/codex-sol' },
+        defaults: {},
       }),
       (error) => error instanceof TaskSettingsRuntimeUnavailableError,
     )
-    assert.deepEqual(readConfig(), {})
-  })
-
-  it('resolveForRun reads legacy builtin agentRuntime pins when no per-task entry exists and never writes them', async () => {
-    writeConfig({ tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
-    const service = context!.makeService()
-    const resolution = await service.resolveForRun({
-      taskName: 'commit',
-      kind: 'builtin',
-      defaults: { agentRuntime: 'forge/cb-dsf' },
+    assert.deepEqual(readConfig(), {
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
+          },
+        },
+      },
     })
-    assert.equal(resolution.mode, 'explicit')
-    assert.equal(resolution.exactAgentRuntime, 'forge/codex-sol')
-    assert.equal(resolution.sources.agentRuntime, 'user_task')
-    assert.deepEqual(readConfig(), { tasks: { agentRuntime: { commit: 'forge/codex-sol' } } })
   })
 
-  it('resolveForRun isolates stable per-task settings by project identity and reports effective timeout and instructions', async () => {
+  it('resolveForRun isolates stable per-task settings by project identity and reports the effective timeout', async () => {
     writeConfig({
       tasks: {
         settings: {
           global: { timeoutMs: 60_000 },
           byTask: {
-            'project:alpha:review': { timeoutMs: 222_000, additionalInstructions: 'alpha review terse' },
+            'project:alpha:review': { timeoutMs: 222_000 },
           },
         },
       },
@@ -1085,27 +1099,23 @@ describe('daemon task-settings-service (no-model)', () => {
       taskName: 'review',
       kind: 'project',
       project: 'alpha',
-      defaults: { agentRuntime: 'forge/codex-sol' },
+      defaults: { dispatch: { maxOutputUsdPerMillion: 15 } },
     })
     assert.equal(alpha.timeoutMs, 222_000)
-    assert.equal(alpha.additionalInstructions, 'alpha review terse')
     assert.equal(alpha.sources.timeoutMs, 'user_task')
-    assert.equal(alpha.sources.additionalInstructions, 'user_task')
 
     // 'beta' shares the name but not the stable identity: no alpha settings leak.
     const beta = await service.resolveForRun({
       taskName: 'review',
       kind: 'project',
       project: 'beta',
-      defaults: { agentRuntime: 'forge/codex-sol' },
+      defaults: { dispatch: { maxOutputUsdPerMillion: 15 } },
     })
     assert.equal(beta.timeoutMs, 60_000)
-    assert.equal(beta.additionalInstructions, undefined)
     assert.equal(beta.sources.timeoutMs, 'user_global')
-    assert.equal(beta.sources.additionalInstructions, 'system')
   })
 
-  it('resolveForRun automatic mode runs the live availability callback once against the selected runtime', async () => {
+  it('automatic runs probe live availability once per exact choice before ranking and never again after selection', async () => {
     writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
     const seen: Array<{ client: string; provider: string; model: string }> = []
     const daemonCalls: number[] = []
@@ -1125,29 +1135,47 @@ describe('daemon task-settings-service (no-model)', () => {
       },
     })
     const resolution = await service.resolveForRun({
-      taskName: 'unavailable',
+      taskName: 'commit',
       kind: 'builtin',
-      defaults: { agentRuntime: 'forge/codex-sol' },
+      defaults: { dispatch: { expectedTps: 80 } },
     })
     assert.equal(resolution.mode, 'automatic')
     assert.equal(resolution.exactAgentRuntime, PROFILES[0]!.exactAgentRuntime)
-    // Live readiness is probed exactly once against the resolver-selected
-    // client/provider/model; unknown quota does not block the run.
-    assert.equal(daemonCalls.length, 1)
-    assert.deepEqual(seen, [resolveTriple(PROFILES[0]!)])
+    // Live readiness ran for EVERY exact choice before ranking (once each, no
+    // second post-selection runtimeAvailability call); daemon admission is not
+    // part of the automatic selection helper.
+    assert.deepEqual(seen, PROFILES.map((profile) => runtimeTriple(profile)))
+    assert.equal(daemonCalls.length, 0)
+    // The resolved automatic dispatch carries the safe immutable decision.
+    assert.ok(resolution.dispatch)
+    const decision = resolution.dispatch!.auto_routing
+    assert.ok(decision)
+    assert.equal(decision!.selected_rank, 1)
+    assert.equal(decision!.snapshot_id.length > 0, true)
+    assert.ok(Array.isArray(decision!.reasons))
+    // No secret/domain/upstream suffix leaks through the safe decision.
+    const serialized = JSON.stringify(decision)
+    assert.ok(!serialized.includes('native-codebuddy-token'))
+    assert.ok(!serialized.includes('-ioa'))
+    assert.ok(!serialized.includes('authorization'))
   })
 
-  it('resolveForRun automatic mode fails on live unavailability with no second resolver call or alternate selection', async () => {
-    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+  it('explicit run preflight fails on live unavailability with no second resolver call', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
+          },
+        },
+      },
+    })
     const resolver = createResolverFixture()
-    const counts = { resolve: 0, resolveExplicit: 0 }
+    const counts = { resolveExplicit: 0 }
     const service = context!.makeService({
       resolver: {
         ...resolver,
-        resolve(input) {
-          counts.resolve += 1
-          return resolver.resolve(input)
-        },
         resolveExplicit(input) {
           counts.resolveExplicit += 1
           return resolver.resolveExplicit(input)
@@ -1162,137 +1190,86 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     await assert.rejects(
       service.resolveForRun({
-        taskName: 'unavailable',
+        taskName: 'commit',
         kind: 'builtin',
-        defaults: { agentRuntime: 'forge/codex-sol' },
+        defaults: {},
       }),
       (error) => error instanceof TaskSettingsRuntimeUnavailableError,
     )
-    // Exactly one automatic resolver call picked the runtime, the live check
-    // failed it, and no fallback or alternate selection was attempted.
-    assert.equal(counts.resolve, 1)
-    assert.equal(counts.resolveExplicit, 0)
-    assert.deepEqual(readConfig(), {
-      tasks: { settings: { global: { selectionMode: 'automatic' } } },
-    })
+    // Exactly one explicit resolver call picked the canonical target; the live
+    // check failed it and no fallback or alternate selection was attempted.
+    assert.equal(counts.resolveExplicit, 1)
   })
 
-  it('unscoped snapshot lists builtins once plus exact project tasks and never duplicates inherited builtins', async () => {
-    writeConfig({})
-    const groups: ProjectFixtureGroup[] = [
-      {
-        id: 'alpha',
-        displayName: 'Alpha 平台',
-        defs: [
-          { name: 'commit', displayName: 'Alpha commit task', agentRuntime: 'forge/fast', timeoutMs: 45_000 },
-          { name: 'alpha-only', displayName: 'Alpha only task', agentRuntime: 'forge/fast', timeoutMs: 30_000 },
-        ],
+  it('snapshot readiness reflects a non-accepting daemon and unknown quota', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: PROFILES[0]!.exactAgentRuntime },
+          },
+        },
       },
-      {
-        id: 'beta',
-        defs: [{ name: 'commit', displayName: 'Beta commit task', agentRuntime: 'forge/fast', timeoutMs: 55_000 }],
-      },
-    ]
+    })
     const service = context!.makeService({
-      definitions: createGroupedDefinitionsFixture(groups),
+      daemonAvailability: () => ({ accepting: false, known: true }),
+      runtimeAvailability: () => ({
+        providerCredential: 'available',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: true,
+      }),
     })
     const snapshot = await service.snapshot({})
 
-    // Every builtin is listed exactly once, regardless of any project.
-    for (const entry of BUILTIN_DEFS) {
-      const matches = snapshot.rows.filter((row) => row.identity === `builtin:${entry.name}`)
-      assert.equal(matches.length, 1, `expected exactly one builtin:${entry.name}`)
-    }
-    // Registered projects contribute exactly their own definitions.
-    assert.deepEqual(
-      snapshot.rows.filter((row) => row.identity.startsWith('project:alpha:')).map((row) => row.identity).sort(),
-      ['project:alpha:alpha-only', 'project:alpha:commit'],
-    )
-    assert.deepEqual(
-      snapshot.rows.filter((row) => row.identity.startsWith('project:beta:')).map((row) => row.identity),
-      ['project:beta:commit'],
-    )
-    // Inherited builtins are never duplicated under a project: auto-fail and
-    // unavailable exist only as builtin identities.
-    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:auto-fail'), false)
-    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:unavailable'), false)
-    assert.equal(snapshot.rows.some((row) => row.identity === 'project:alpha:review'), false)
-    // Deduplicated stable identities across the whole snapshot.
-    const identities = snapshot.rows.map((row) => row.identity)
-    assert.equal(new Set(identities).size, identities.length)
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    const readiness = commit.explicit?.readiness
+    assert.ok(readiness)
+    assert.equal(readiness.daemon, 'unavailable')
+    assert.equal(readiness.available, false)
+    assert.equal(readiness.quota, 'unknown')
+    assert.ok(readiness.issues.some((issue) => issue.code === 'daemon_not_accepting'))
   })
 
-  it('labels use authoritative display values then exact name/id fallbacks', async () => {
+  it('task existence is required before any task-scope save', async () => {
     writeConfig({})
-    const groups: ProjectFixtureGroup[] = [
-      {
-        id: 'alpha',
-        displayName: 'Alpha 平台',
-        defs: [{ name: 'commit', displayName: 'Alpha commit task', agentRuntime: 'forge/fast' }],
-      },
-      { id: 'beta', defs: [{ name: 'commit', displayName: 'Beta commit task', agentRuntime: 'forge/fast' }] },
-    ]
-    const service = context!.makeService({
-      definitions: createGroupedDefinitionsFixture(groups),
-    })
-    const snapshot = await service.snapshot({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
 
-    const builtinCommit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
-    assert.ok(builtinCommit)
-    assert.equal(builtinCommit.name, 'commit')
-    assert.equal(builtinCommit.display_name, 'Commit helper')
-    assert.equal('project_display_name' in builtinCommit, false)
-
-    // auto-fail declares no displayName: exact task name fallback.
-    const builtinAutoFail = snapshot.rows.find((row) => row.identity === 'builtin:auto-fail')
-    assert.ok(builtinAutoFail)
-    assert.equal(builtinAutoFail.display_name, 'auto-fail')
-
-    // alpha is registered with a `.fmproj` display label; beta is not.
-    const alphaCommit = snapshot.rows.find((row) => row.identity === 'project:alpha:commit')
-    assert.ok(alphaCommit)
-    assert.equal(alphaCommit.display_name, 'Alpha commit task')
-    assert.equal(alphaCommit.project_display_name, 'Alpha 平台')
-    assert.equal(alphaCommit.project, 'alpha')
-
-    const betaCommit = snapshot.rows.find((row) => row.identity === 'project:beta:commit')
-    assert.ok(betaCommit)
-    assert.equal(betaCommit.display_name, 'Beta commit task')
-    // No authoritative project display label: exact project id fallback.
-    assert.equal(betaCommit.project_display_name, 'beta')
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'does-not-exist',
+        expected_revision: before.revision,
+        patch: { timeout_ms: 60_000 },
+      }),
+      (error) => error instanceof TaskSettingsTaskNotFoundError,
+    )
+    assert.deepEqual(readConfig(), {})
+    assert.equal(tempResidue().length, 0)
   })
 
-  it('unscoped and scoped snapshots preserve stable per-project save scopes', async () => {
+  it('a malformed explicit runtime reference is rejected as invalid settings', async () => {
     writeConfig({})
-    const groups: ProjectFixtureGroup[] = [
-      {
-        id: 'alpha',
-        displayName: 'Alpha 平台',
-        defs: [{ name: 'commit', agentRuntime: 'forge/fast' }, { name: 'alpha-only', agentRuntime: 'forge/fast' }],
-      },
-      { id: 'beta', defs: [{ name: 'commit', agentRuntime: 'forge/fast' }] },
-    ]
-    const service = context!.makeService({
-      definitions: createGroupedDefinitionsFixture(groups),
-    })
-    const before = await service.snapshot({ project: 'alpha' })
-    assert.equal(before.rows.some((row) => row.identity === 'project:alpha:commit'), true)
+    const service = context!.makeService()
+    const before = await service.snapshot({})
 
-    await service.save({
-      scope: 'task',
-      task_id: 'project:alpha:commit',
-      project: 'alpha',
-      expected_revision: before.revision,
-      patch: { timeout_ms: 222_000 },
-    })
-
-    const onDisk = readConfig()
-    const tasks = onDisk.tasks as Record<string, unknown>
-    const settings = tasks.settings as Record<string, unknown>
-    const byTask = settings.byTask as Record<string, unknown>
-    // The per-task override is keyed only under the exact alpha project
-    // identity; the beta project sharing the name is untouched.
-    assert.deepEqual(byTask, { 'project:alpha:commit': { timeoutMs: 222_000 } })
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: {
+          mode: 'explicit',
+          explicit_runtime: { kind: 'bogus' } as never,
+        },
+      }),
+      (error) => error instanceof Error && /Invalid task settings/.test(error.message),
+    )
+    assert.deepEqual(readConfig(), {})
+    assert.equal(tempResidue().length, 0)
   })
 
   it('projects a safe instruction_template preserving static text/order without executing anything', async () => {
@@ -1300,7 +1277,6 @@ describe('daemon task-settings-service (no-model)', () => {
     const executed: string[] = []
     const previewDef: DefEntry = {
       name: 'preview',
-      agentRuntime: 'forge/fast',
       instructions: [
         'First static instruction.',
         () => {
@@ -1323,12 +1299,16 @@ describe('daemon task-settings-service (no-model)', () => {
           return { ...defToSummary(previewDef), permission: 'readonly' }
         },
       },
-      daemonAvailability: () => {
-        throw new Error('daemon probe must not run for a preview')
-      },
-      runtimeAvailability: () => {
-        throw new Error('runtime availability must not be probed for a preview')
-      },
+      // The automatic preview runs the same non-billable live readiness probe
+      // as automatic runs through the shared selection helper, so these
+      // callbacks must answer (never throw) and must never be paid probes.
+      daemonAvailability: () => ({ accepting: true, known: true }),
+      runtimeAvailability: () => ({
+        providerCredential: 'available',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: true,
+      }),
     })
     const snapshot = await service.snapshot({ task_id: 'builtin:preview' })
 
@@ -1338,9 +1318,7 @@ describe('daemon task-settings-service (no-model)', () => {
       { kind: 'text', source: 'task.instructions[0]', text: 'First static instruction.' },
       { kind: 'placeholder', source: 'task.instructions[1]', label: '运行时填入任务输入' },
       { kind: 'text', source: 'task.instructions[2]', text: 'Second static instruction.' },
-      // One additional-instructions slot in buildTaskPrompt order: after every
-      // TaskConfig instruction and before the input-dependent prompt body.
-      { kind: 'additional_instructions', source: 'task.settings.additionalInstructions' },
+      // The input-dependent prompt body stays the final placeholder segment.
       { kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' },
     ])
     // Static instructions kept their exact text and relative order, and the
@@ -1348,5 +1326,117 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.deepEqual(executed, [])
     // Labels fall back to the exact task name when none is declared.
     assert.equal(row.display_name, 'preview')
+  })
+
+  it('global CAS save persists a zero max_auto_output_usd_per_million cap atomically and reports its source', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const after = await service.save({
+      scope: 'global',
+      expected_revision: before.revision,
+      patch: { max_auto_output_usd_per_million: 0 },
+    })
+
+    assert.deepEqual(after.user_global, { max_auto_output_usd_per_million: 0 })
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.effective.max_auto_output_usd_per_million, {
+      value: 0,
+      source: 'user_global',
+    })
+    // Persisted in canonical camel-case form; per-task/builtin dispatch
+    // constraints are untouched.
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as { settings: { global: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.global, { maxAutoOutputUsdPerMillion: 0 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('global CAS null clears the auto cap without altering sibling settings', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { timeoutMs: 60_000, maxAutoOutputUsdPerMillion: 5 },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+    assert.deepEqual(before.user_global, {
+      timeout_ms: 60_000,
+      max_auto_output_usd_per_million: 5,
+    })
+
+    const after = await service.save({
+      scope: 'global',
+      expected_revision: before.revision,
+      patch: { max_auto_output_usd_per_million: null },
+    })
+    assert.deepEqual(after.user_global, { timeout_ms: 60_000 })
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.effective.max_auto_output_usd_per_million, {
+      value: null,
+      source: 'system',
+    })
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as { settings: { global: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.global, { timeoutMs: 60_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('task-scope saves carrying the global-only auto cap are rejected without mutation', async () => {
+    writeConfig({
+      tasks: { settings: { byTask: { 'builtin:commit': { timeoutMs: 10_000 } } } },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: { max_auto_output_usd_per_million: 2 },
+      }),
+      (error) => error instanceof TaskSettingsInvalidSettingsError,
+    )
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as { settings: { byTask: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.byTask['builtin:commit'], { timeoutMs: 10_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('stale-revision global saves carrying the auto cap still raise content_conflict and preserve external edits', async () => {
+    writeConfig({
+      external: 'edited',
+      tasks: { settings: { global: { maxAutoOutputUsdPerMillion: 3 } } },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    writeConfig({
+      external: 'edited-v2',
+      tasks: { settings: { global: { maxAutoOutputUsdPerMillion: 3 } } },
+    })
+
+    await assert.rejects(
+      service.save({
+        scope: 'global',
+        expected_revision: before.revision,
+        patch: { max_auto_output_usd_per_million: 0 },
+      }),
+      (error) => error instanceof TaskSettingsContentConflictError,
+    )
+
+    const onDisk = readConfig()
+    assert.equal(onDisk.external, 'edited-v2')
+    const tasks = onDisk.tasks as { settings: { global: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.global, { maxAutoOutputUsdPerMillion: 3 })
+    assert.equal(tempResidue().length, 0)
   })
 })

@@ -94,10 +94,11 @@ const commitOutputSample = {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore — direct definition, prompt & exported schemas', () => {
-  it('is a direct readonly forge/fast TaskDefinition backed by the exported schemas', () => {
+  it('is a direct readonly TaskDefinition backed by the exported schemas with no runtime pin', () => {
     assert.equal(exploreTask.__type, 'task')
     assert.equal(exploreTask.config.permission, 'readonly')
-    assert.equal(exploreTask.config.agentRuntime, 'forge/fast')
+    assert.equal('agentRuntime' in exploreTask.config, false)
+    assert.equal('profile' in exploreTask.config, false)
     assert.equal(exploreTask.sourcePath, 'lib/standard/tasks/explore.mts')
     assert.deepEqual(exploreTask.config.instructions, [])
     assert.equal(exploreTask.config.input, ExploreInputSchema)
@@ -147,11 +148,11 @@ describe('standard/tasks explore — direct definition, prompt & exported schema
   it('keeps the direct family configuration differences explicit', () => {
     assert.deepEqual(
       [
-        exploreTask.config.agentRuntime,
-        exploreCodeTask.config.agentRuntime,
-        exploreCommitTask.config.agentRuntime,
+        'agentRuntime' in exploreTask.config,
+        'agentRuntime' in exploreCodeTask.config,
+        'agentRuntime' in exploreCommitTask.config,
       ],
-      ['forge/fast', 'forge/fast', 'forge/fast'],
+      [false, false, false],
     )
     assert.deepEqual(exploreCodeTask.config.instructions, [])
     assert.notDeepEqual(exploreCommitTask.config.instructions, [])
@@ -213,10 +214,10 @@ describe('standard-library Batch D3 — domain Targets satisfy open TargetBase',
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore-code — definition, prompt & schema', () => {
-  it('is a direct readonly forge/fast TaskDefinition with FileTarget schemas', () => {
+  it('is a direct readonly TaskDefinition with FileTarget schemas and no runtime pin', () => {
     assert.equal(exploreCodeTask.__type, 'task')
     assert.equal(exploreCodeTask.config.permission, 'readonly')
-    assert.equal(exploreCodeTask.config.agentRuntime, 'forge/fast')
+    assert.equal('agentRuntime' in exploreCodeTask.config, false)
     assert.equal(exploreCodeTask.sourcePath, 'lib/standard/tasks/explore-code.mts')
     assert.deepEqual(exploreCodeTask.config.instructions, [])
   })
@@ -248,10 +249,10 @@ describe('standard/tasks explore-code — definition, prompt & schema', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore-commit — definition, prompt & schema', () => {
-  it('is a direct readonly forge/fast TaskDefinition with GitCommitTarget schemas', () => {
+  it('is a direct readonly TaskDefinition with GitCommitTarget schemas and no runtime pin', () => {
     assert.equal(exploreCommitTask.__type, 'task')
     assert.equal(exploreCommitTask.config.permission, 'readonly')
-    assert.equal(exploreCommitTask.config.agentRuntime, 'forge/fast')
+    assert.equal('agentRuntime' in exploreCommitTask.config, false)
     assert.equal(exploreCommitTask.sourcePath, 'lib/standard/tasks/explore-commit.mts')
     const joined = (exploreCommitTask.config.instructions ?? []).join('\n')
     assert.match(joined, /# Shell Usage/)

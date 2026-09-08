@@ -259,6 +259,18 @@ import {
   type WorkspaceDocUpdateParams,
   type WorkspaceDocUpdateResult,
 } from './methods/workspace-doc.mts'
+import {
+  runtimeAliasPutParamsSchema,
+  runtimeAliasPutResultSchema,
+  runtimeAliasRemoveParamsSchema,
+  runtimeAliasRemoveResultSchema,
+  runtimeAliasSnapshotParamsSchema,
+  runtimeAliasSnapshotResultSchema,
+  type RuntimeAliasPutParams,
+  type RuntimeAliasRemoveParams,
+  type RuntimeAliasSnapshotParams,
+  type RuntimeAliasSnapshotResult,
+} from './methods/runtime-alias.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -320,6 +332,14 @@ export type {
   WorkspaceDocUpdateParams,
   WorkspaceDocUpdateResult,
 } from './methods/workspace-doc.mts'
+export type {
+  RuntimeAliasPutParams,
+  RuntimeAliasPutResult,
+  RuntimeAliasRemoveParams,
+  RuntimeAliasRemoveResult,
+  RuntimeAliasSnapshotParams,
+  RuntimeAliasSnapshotResult,
+} from './methods/runtime-alias.mts'
 export type {
   StatsTodayParams,
   StatsTodayResult,
@@ -437,6 +457,9 @@ export interface ForemanMethodParams {
   'workspace.doc.read': WorkspaceDocReadParams
   'workspace.doc.create': WorkspaceDocCreateParams
   'workspace.doc.update': WorkspaceDocUpdateParams
+  'runtime.alias.snapshot': RuntimeAliasSnapshotParams
+  'runtime.alias.put': RuntimeAliasPutParams
+  'runtime.alias.remove': RuntimeAliasRemoveParams
 }
 
 export interface ForemanMethodResults {
@@ -494,6 +517,9 @@ export interface ForemanMethodResults {
   'workspace.doc.read': WorkspaceDocReadResult
   'workspace.doc.create': WorkspaceDocCreateResult
   'workspace.doc.update': WorkspaceDocUpdateResult
+  'runtime.alias.snapshot': RuntimeAliasSnapshotResult
+  'runtime.alias.put': RuntimeAliasSnapshotResult
+  'runtime.alias.remove': RuntimeAliasSnapshotResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -718,6 +744,18 @@ export const methodRegistry: {
   'workspace.doc.update': {
     params: workspaceDocUpdateParamsSchema,
     result: workspaceDocUpdateResultSchema,
+  },
+  'runtime.alias.snapshot': {
+    params: runtimeAliasSnapshotParamsSchema,
+    result: runtimeAliasSnapshotResultSchema,
+  },
+  'runtime.alias.put': {
+    params: runtimeAliasPutParamsSchema,
+    result: runtimeAliasPutResultSchema,
+  },
+  'runtime.alias.remove': {
+    params: runtimeAliasRemoveParamsSchema,
+    result: runtimeAliasRemoveResultSchema,
   },
 }
 

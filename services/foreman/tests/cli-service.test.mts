@@ -935,7 +935,6 @@ test('foreman task commands reach the running service over IPC', async () => {
   writeFileSync(
     join(appRepo, 'echo.task.ts'),
     `export default defineTask({
-  agentRuntime: 'forge/codex-luna',
   dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.object({
@@ -952,7 +951,6 @@ test('foreman task commands reach the running service over IPC', async () => {
   writeFileSync(
     join(appRepo, 'items.task.ts'),
     `export default defineTask({
-  agentRuntime: 'forge/codex-luna',
   dispatch: { minimumTps: 1 },
   permission: 'readonly',
   input: foremanSchemas.z.array(foremanSchemas.z.string()),
@@ -1184,7 +1182,6 @@ test('foreman task run --settings-json forwards invocation settings and rejects 
     const settings = {
       timeout_ms: 90_000,
       automatic: { minimum_tps: 2 },
-      additional_instructions: 'be terse',
     }
 
     // --settings-json is parsed and forwarded verbatim as task.run.create.invocation_settings.

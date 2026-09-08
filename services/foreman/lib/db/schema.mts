@@ -26,6 +26,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   reconcileTaskRunTelemetryTokenColumns(database)
   createTaskRunAttemptDispatchTable(database)
   reconcileTaskRunAttemptDispatchCacheWriteColumn(database)
+  reconcileTaskRunAttemptDispatchAutoRoutingColumn(database)
   recreateTaskIndexes(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
@@ -658,6 +659,7 @@ const TASK_RUN_ATTEMPT_DISPATCH_TABLE_SQL = `CREATE TABLE task_run_attempt_dispa
   reference_pricing_cache_write REAL,
   reference_pricing_source    TEXT,
   reference_pricing_checked_at TEXT,
+  auto_routing        TEXT,
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL
 )`
@@ -1095,6 +1097,23 @@ function reconcileTaskRunAttemptDispatchCacheWriteColumn(database: ForemanDataba
     .map((column) => column.name))
   if (!columns.has('reference_pricing_cache_write')) {
     database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN reference_pricing_cache_write REAL').run()
+  }
+}
+
+/**
+ * Idempotent migration adding the nullable auto_routing JSON column to
+ * task_run_attempt_dispatch so each automatic dispatch attempt can durably
+ * carry the privacy-safe TaskAutoRoutingDecision DTO that routed it. Only adds
+ * the column when absent; legacy rows keep NULL and remain readable, matching
+ * explicit/legacy dispatch rows that never captured a decision.
+ */
+function reconcileTaskRunAttemptDispatchAutoRoutingColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_attempt_dispatch)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('auto_routing')) {
+    database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN auto_routing TEXT').run()
   }
 }
 

@@ -30,7 +30,6 @@ description: test project
 
 function taskSource(extraConfig = ''): string {
   return `export default defineTask({
-  profile: 'test',
   permission: 'readonly',
 ${extraConfig}
   input: foremanSchemas.z.object({}),

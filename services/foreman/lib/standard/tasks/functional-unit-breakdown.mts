@@ -23,7 +23,6 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Break down a design-complete FeaturePointSet into implementation-ready FunctionalUnit contracts',
-    agentRuntime: 'forge/general',
     dispatch: GENERAL_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage, featurePointDefinition],

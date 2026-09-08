@@ -44,6 +44,18 @@ function installRunnerSupervisor(host: AgentExecutionHost): void {
   setTaskWorkflowRunner(new TaskWorkflowRunner({
     db: getDb(),
     agentExecutionHost: host,
+    taskSettingsResolver: async () => ({
+      mode: 'automatic',
+      exactAgentRuntime: 'forge/test',
+      dispatch: null,
+      timeoutMs: null,
+      sources: {
+        selectionMode: 'builtin',
+        explicitRuntime: 'builtin',
+        timeoutMs: 'builtin',
+        automatic: {},
+      },
+    }),
   }))
 }
 
@@ -58,11 +70,10 @@ ${JSON.stringify(result)}
 </foreman-task-output>`
 }
 
-function writeTask(dir: string, name: string, profile = 'test-profile'): void {
+function writeTask(dir: string, name: string): void {
   writeFileSync(
     join(dir, `${name}.task.ts`),
     `export default defineTask({
-  profile: ${JSON.stringify(profile)},
   permission: 'readonly',
   description: 'test task',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
@@ -74,11 +85,10 @@ function writeTask(dir: string, name: string, profile = 'test-profile'): void {
   )
 }
 
-function writeStructuredTask(dir: string, name: string, profile = 'test-profile'): void {
+function writeStructuredTask(dir: string, name: string): void {
   writeFileSync(
     join(dir, `${name}.task.ts`),
     `export default defineTask({
-  profile: ${JSON.stringify(profile)},
   permission: 'readonly',
   description: 'structured test task',
   input: foremanSchemas.z.object({ text: foremanSchemas.z.string() }),
