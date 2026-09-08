@@ -51,7 +51,7 @@ func TestUnauthedRichProviderSkipsShortcut(t *testing.T) {
 	}
 }
 
-func TestRenderManagedShellOnlyIncludesClaudeShortcuts(t *testing.T) {
+func TestRenderManagedShellMaterializesNoProfileShortcutsAfterRetirement(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	setFakeClientsOnPath(t, "claude")
 	setTestAuth(t, "zhipu-coding", "token-zhipu")
@@ -60,83 +60,25 @@ func TestRenderManagedShellOnlyIncludesClaudeShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(got, "agent run") {
-		t.Fatalf("managed shell should not include removed agent run passthrough shortcuts:\n%s", got)
-	}
-	if strings.Contains(got, "fg()") || strings.Contains(got, "builtin fg") {
-		t.Fatalf("managed shell should not override fg:\n%s", got)
-	}
-	// Verify core managed profiles appear in output.
-	for _, profile := range []string{"cc-glm", "cc-kimi"} {
-		if !strings.Contains(got, profile+"()") {
-			t.Fatalf("managed shell should include %s profile:\n%s", profile, got)
-		}
-	}
-	for _, profile := range []string{"codex-terra", "cb-ds", "cb-dsf"} {
-		if strings.Contains(got, profile+"()") {
-			t.Fatalf("managed shell should not include non-Claude profile %s:\n%s", profile, got)
-		}
-	}
-	// Verify none of the five removed legacy Codex ids are materialized.
-	for _, profile := range []string{"codex", "codex-high", "codex-xhigh", "codex-lite", "codex-mini"} {
-		if strings.Contains(got, profile+"()") {
-			t.Fatalf("managed shell should not include removed profile %s:\n%s", profile, got)
-		}
-	}
-}
-
-func TestCCKimiShellCCSettingsJSONUsesForgeAuthAndManagedSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	setFakeClientsOnPath(t, "claude")
-	setTestAuth(t, "kimi-coding", "token-kimi")
-
-	got, err := renderManagedShellFileFor([]string{"cc-kimi"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		`cc-kimi() {`,
-		`command wrenyard runtime shell exec 'cc-kimi' -- 'claude' 'agents' '--permission-mode' 'bypassPermissions'`,
-		`env -u ANTHROPIC_AUTH_TOKEN \`,
-		`-u ANTHROPIC_API_KEY \`,
-		`"ANTHROPIC_BASE_URL":"https://api.kimi.com/coding/"`,
-		`"ANTHROPIC_MODEL":"k3[1m]"`,
-		`"CLAUDE_CODE_SUBAGENT_MODEL":"k3[1m]"`,
-		`"ENABLE_TOOL_SEARCH":"false"`,
-		`"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"1048576"`,
-		`"CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1048576"`,
-		`"claude-opus-4-8":"k3[1m]"`,
-		`"statusLine":{"type":"command","command":"wrenyard runtime statusline --claude-code"}`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("cc-kimi shell should contain %q in:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "command forge ") {
-		t.Fatalf("cc-kimi shell must not invoke the forge command:\n%s", got)
-	}
 	for _, forbidden := range []string{
-		`token-kimi`,
-		`"ANTHROPIC_API_KEY":`,
-		`"ANTHROPIC_AUTH_TOKEN":`,
-		`ANTHROPIC_API_KEY=token-kimi`,
-		`ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`,
+		"agent run",
+		"fg()",
+		"builtin fg",
+		"--permission-mode",
+		"bypassPermissions",
 	} {
 		if strings.Contains(got, forbidden) {
-			t.Fatalf("cc-kimi shell should not inject provider env outside settings.json: %q in:\n%s", forbidden, got)
+			t.Fatalf("managed shell must not reintroduce %q passthrough or bypass wrapper:\n%s", forbidden, got)
 		}
 	}
-	for _, want := range []string{
-		`"model":"opus[1m]"`,
-		`"opus[1m]"`,
-		`"sonnet[1m]"`,
+	// Source profiles were retired: the production rendering path must not
+	// regenerate any concrete profile shortcut function or alias.
+	for _, profile := range []string{
+		"cc-glm", "cc-kimi", "gk-glm", "gk-glmf", "gk-kimi", "gk-grok",
+		"codex-terra", "cb-ds", "cb-dsf",
 	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("cc-kimi shell settings should contain 1M model variants: %q not found in:\n%s", want, got)
+		if strings.Contains(got, profile+"()") {
+			t.Fatalf("managed shell materialized retired profile function %s:\n%s", profile, got)
 		}
 	}
 }

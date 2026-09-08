@@ -10,26 +10,20 @@ import (
 	"strings"
 )
 
-// ForgeConfigCheck validates the profile manifest.
+// ForgeConfigCheck validates the profile manifest schema. An empty profile
+// manifest is expected after source profiles were retired, so zero profiles is
+// not a configuration error and profile sources are no longer reported.
 func ForgeConfigCheck(deps Dependencies) map[string]interface{} {
 	manifest, err := deps.LoadManifest()
-	if err != nil || manifest.SchemaVersion != 1 {
+	if err != nil {
 		return Check("config", "error", "Unsupported or unreadable Forge profile manifest.", nil, nil)
 	}
-	if len(manifest.Profiles) == 0 {
-		return Check("config", "error", "Forge profile manifest has no profiles.", nil, nil)
-	}
-
-	sources := deps.ManifestSources()
-	sourceSummary := map[string]int{}
-	for _, src := range sources {
-		sourceSummary[src]++
+	if manifest.SchemaVersion != 1 {
+		return Check("config", "error", "Unsupported Forge profile manifest schema.", nil, nil)
 	}
 	details := map[string]interface{}{
 		"profile_count": len(manifest.Profiles),
-		"sources":       sourceSummary,
 	}
-
 	return Check("config", "ok", "Forge profile manifest loaded.", nil, details)
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
@@ -13,10 +14,15 @@ type DispatchPlan struct {
 	Model    string                  `json:"model"`
 	Mode     string                  `json:"mode"`
 	Protocol catalog.GatewayProtocol `json:"protocol,omitempty"`
+	// ReasoningEffort mirrors the TS Catalog plan field (camelCase). It is the
+	// model's product-owned upstream reasoning effort and is materialized only
+	// for the codex client; caller-provided values win when the plan omits it.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
 // Callbacks bundles the injected root-side dependencies so the profile package
-// performs no filesystem I/O and imports nothing outside catalog.
+// performs no filesystem I/O itself. Adapter lookup stays in catalog; Grok wire
+// model identity stays in the grok package.
 type Callbacks struct {
 	Credential CredentialCallbacks
 }
@@ -55,6 +61,7 @@ func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Clien
 	out.Compatibility = CompatibilityNone
 	applyDispatchModel(out.Env, plan)
 	applyDispatchLauncherModel(&out.Launcher, plan)
+	applyCCKimiMaterialization(&out, plan)
 	if plan.Mode == "gateway" {
 		out.Credential.Value = ""
 		out.Credential.Source = "gateway"
@@ -101,11 +108,48 @@ func applyDispatchModel(env map[string]string, plan DispatchPlan) {
 		}
 	case "codex":
 		env["CODEX_MODEL"] = plan.Model
+		// Reasoning effort is declared on the TS-resolved plan; materialize it
+		// only for the codex client and only when the plan names a level, so a
+		// caller-provided value is preserved when the plan omits the field.
+		if strings.TrimSpace(plan.ReasoningEffort) != "" {
+			env["CODEX_REASONING_EFFORT"] = plan.ReasoningEffort
+		}
 	case "opencode":
 		env["OPENCODE_MODEL"] = plan.Provider + "/" + plan.Model
 	case "dsh":
 		env[catalog.EnvDSHModel] = plan.Provider + "/" + plan.Model
+	case "grok":
+		env["GROK_MODEL"] = grok.ModelID(plan.Provider, plan.Model)
 	case "cursor":
 		env[catalog.EnvCursorModel] = plan.Model
 	}
+}
+
+// applyCCKimiMaterialization moves the Claude Code + kimi-coding/k3 compatibility
+// into plan materialization: any plan that targets Claude Code over Kimi Coding
+// k3 — whether it is the legacy cc-kimi alias profile or an anonymous canonical
+// target — receives the same active-model, subagent, 1M compact/context, tool
+// search, and Claude modelOverrides values. It never synthesizes interactive
+// args, permission bypass, task budgets/timeouts, or shell behavior.
+func applyCCKimiMaterialization(out *ResolvedProfile, plan DispatchPlan) {
+	if plan.Client != "claude" || plan.Provider != "kimi-coding" || plan.Model != "k3" {
+		return
+	}
+	out.Env["ANTHROPIC_MODEL"] = "k3[1m]"
+	out.Env["CLAUDE_CODE_SUBAGENT_MODEL"] = "k3[1m]"
+	out.Env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "1048576"
+	out.Env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "1048576"
+	out.Env["ENABLE_TOOL_SEARCH"] = "false"
+	overrides := map[string]interface{}{
+		"claude-opus-4-8":   "k3[1m]",
+		"claude-sonnet-4-6": "k3[1m]",
+		"claude-haiku-4-5":  "k3[1m]",
+	}
+	if existing, ok := out.Settings["modelOverrides"].(map[string]interface{}); ok {
+		for model, active := range overrides {
+			existing[model] = active
+		}
+		return
+	}
+	out.Settings["modelOverrides"] = overrides
 }

@@ -42,7 +42,6 @@ const (
 type ForgeConfig = config.Config
 type ClientConfig = config.Client
 type ProviderOverride = config.ProviderOverride
-type ProfileRecipe = config.ProfileRecipe
 type QuotaConfig = config.Quota
 
 // --- CLI helpers ---

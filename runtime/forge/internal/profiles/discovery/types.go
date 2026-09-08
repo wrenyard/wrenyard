@@ -30,21 +30,6 @@ type EffectiveProfile struct {
 	DisplayName string
 }
 
-// PolicyProfileCandidate carries candidate profile id and the effective
-// resolution info for a policy profile view.
-type PolicyProfileCandidate struct {
-	ProfileID string
-	Effective bool
-	Reason    string
-}
-
-// PolicyProfileInfo holds the ordered candidates and effective resolution
-// information for a profile policy.
-type PolicyProfileInfo struct {
-	PolicyID   string
-	Candidates []PolicyProfileCandidate
-}
-
 // ModelDisplayInfo carries canonical model display metadata for a provider.
 type ModelDisplayInfo struct {
 	ProviderID string

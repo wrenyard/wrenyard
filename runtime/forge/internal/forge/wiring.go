@@ -14,7 +14,6 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/lifecycle/change"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/discovery"
-	profilepolicy "github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/profilepolicy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/selection"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
@@ -142,70 +141,6 @@ func profileQuotaProviderName(p profile) string {
 	return selection.ProfileQuotaProviderName(selection.ProfileFrom(p), selectionDeps())
 }
 
-// --- profilepolicy wiring ---
-
-var policyRegistry = profilepolicy.NewRegistry()
-
-func resolveProfilePolicySelection(policyName string) (string, error) {
-	deps := selection.PolicyResolutionDeps{
-		LookupPolicy: func(name string) (selection.PolicyRef, error) {
-			p, err := policyRegistry.Lookup(name)
-			if err != nil {
-				return selection.PolicyRef{}, err
-			}
-			candidates := make([]selection.PolicyCandidateRef, len(p.Candidates))
-			for i, c := range p.Candidates {
-				candidates[i] = selection.PolicyCandidateRef{
-					ProfileID: c.ProfileID,
-					Threshold: c.Threshold,
-				}
-			}
-			return selection.PolicyRef{Name: p.Name, Candidates: candidates}, nil
-		},
-		IsProfileEffective: func(profileID string) bool {
-			return isProfileEffective(profileID)
-		},
-		CanonicalPoolUsagePct: func(canonicalPool string) int {
-			return canonicalPoolUsagePct(canonicalPool)
-		},
-		CanonicalPoolForProfile: canonicalPoolForProfile,
-		MaxUsagePctOverride: func(profileID string) int {
-			return profileMaxUsageOverride(profileID)
-		},
-	}
-
-	result, err := selection.ResolveProfilePolicy(policyName, deps)
-	if err != nil {
-		return "", err
-	}
-	return result.ProfileID, nil
-}
-
-func resolveProfilePolicyCandidates(policyName string) ([]string, error) {
-	deps := selection.PolicyResolutionDeps{
-		LookupPolicy: func(name string) (selection.PolicyRef, error) {
-			p, err := policyRegistry.Lookup(name)
-			if err != nil {
-				return selection.PolicyRef{}, err
-			}
-			candidates := make([]selection.PolicyCandidateRef, len(p.Candidates))
-			for i, c := range p.Candidates {
-				candidates[i] = selection.PolicyCandidateRef{ProfileID: c.ProfileID, Threshold: c.Threshold}
-			}
-			return selection.PolicyRef{Name: p.Name, Candidates: candidates}, nil
-		},
-		IsProfileEffective:      isProfileEffective,
-		CanonicalPoolUsagePct:   canonicalPoolUsagePct,
-		CanonicalPoolForProfile: canonicalPoolForProfile,
-		MaxUsagePctOverride:     profileMaxUsageOverride,
-	}
-	result, err := selection.ResolveProfilePolicy(policyName, deps)
-	if err != nil {
-		return nil, err
-	}
-	return append([]string(nil), result.Candidates...), nil
-}
-
 func isProfileEffective(profileID string) bool {
 	manifest, err := loadManifest()
 	if err != nil {
@@ -293,35 +228,6 @@ func canonicalPoolUsagePct(canonicalPool string) int {
 	return pct
 }
 
-func canonicalPoolForProfile(profileID string) string {
-	manifest, err := loadManifest()
-	if err != nil {
-		return ""
-	}
-	profile, ok := manifest.Profiles[profileID]
-	if !ok {
-		return ""
-	}
-	module, ok := providers.Lookup(profile.Provider)
-	if !ok {
-		return ""
-	}
-	return module.Quota().Name
-}
-
-func profileMaxUsageOverride(profileID string) int {
-	cfg, _, err := LoadForgeConfig()
-	if err != nil {
-		return 0
-	}
-	if cfg.PolicyMaxUsagePct != nil {
-		if v, ok := cfg.PolicyMaxUsagePct[profileID]; ok && v > 0 {
-			return v
-		}
-	}
-	return 0
-}
-
 // --- discovery / profiles ---
 
 func isRawClaudeAliasProfile(p profile) bool {
@@ -351,7 +257,6 @@ func wiredDiscoveryProfileDeps(reg *catalog.Registry) discovery.ProfileDeps {
 		IsProfileEffective:        isProfileEffective,
 		ProfileDefinitionExists:   profileDefinitionExists,
 		ProfileAvailabilityReason: profileAvailabilityReason,
-		PolicyRegistry:            policyRegistry,
 		CanonicalPoolUsagePct:     canonicalPoolUsagePct,
 		ProfileDisplayName:        profileDisplayName,
 		ProfileIDs: func() []string {
@@ -462,23 +367,25 @@ func clientInstalled(client string) bool {
 func executionDependencies() execution.Dependencies {
 	return execution.Dependencies{
 		LoadProfile: func(name string) (execution.ProfileDefinition, bool, error) {
-			manifest, err := loadManifest()
-			if err != nil {
-				return execution.ProfileDefinition{}, false, err
-			}
-			p, ok := manifest.Profiles[name]
-			if !ok {
+			// Canonical daemon dispatch plans are the sole Go execution
+			// definition source: the legacy source manifest was retired, so
+			// every requested runtime resolves strictly from its dispatch plan.
+			// Build a minimal definition from the already-resolved plan and the
+			// registered client/provider adapters, then let ResolveProfile
+			// materialize it. A missing plan or an unknown client/provider
+			// stays unavailable with no fallback.
+			plan, planErr := dispatchPlanForProfile(name)
+			if planErr != nil {
 				return execution.ProfileDefinition{}, false, nil
 			}
-			p.Name = name
-			caps := make([]string, len(p.Capabilities))
-			copy(caps, p.Capabilities)
+			if _, err := catalogRegistryOrDefault().LookupDescriptor(plan.Client); err != nil {
+				return execution.ProfileDefinition{}, false, nil
+			}
+			if _, ok := providers.Lookup(plan.Provider); !ok {
+				return execution.ProfileDefinition{}, false, nil
+			}
 			return execution.ProfileDefinition{
-				Name: p.Name, Client: p.Client, Provider: p.Provider,
-				SecretRef: p.SecretRef, Launcher: p.Launcher, Env: p.Env,
-				Settings: p.Settings, Capabilities: caps,
-				Supports1M: p.Supports1M,
-				Deprecated: p.Deprecated, Reason: p.Reason,
+				Name: name, Client: plan.Client, Provider: plan.Provider,
 			}, true, nil
 		},
 		ClientEnabled: func(client string) bool {

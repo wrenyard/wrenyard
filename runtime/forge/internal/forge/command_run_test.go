@@ -22,23 +22,20 @@ func TestParseCommandRunArgsExactProfileSucceeds(t *testing.T) {
 	}
 }
 
-func TestParseCommandRunArgsExactPolicySucceeds(t *testing.T) {
+func TestParseCommandRunArgsRejectsProfilePolicyFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
-	setFakeClientsOnPath(t, "codex", "codebuddy")
-	// Policy resolution requires a manifest to be loadable. The embedded
-	// manifest is used automatically. Since exact profile resolution is
-	// bypassed here (it's done in resolveProfilePolicySelection), we just
-	// test parsing of --profile-policy.
-	req, resolved, err := parseCommandRunArgs([]string{"--profile-policy", "fast", "hello"})
-	if err != nil && !strings.Contains(err.Error(), "policy") {
-		t.Fatalf("unexpected error: %v", err)
+	// Named policy selection is retired: --profile-policy is not a defined
+	// flag, and the direct run path only accepts an explicit -p/--profile.
+	_, _, err := parseCommandRunArgs([]string{"--profile-policy", "fast", "hello"})
+	if err == nil {
+		t.Fatal("expected error for retired --profile-policy flag")
 	}
-	// If resolution fails at CLI level, the test still validates parsing.
-	_ = req
-	_ = resolved
+	if !strings.Contains(err.Error(), "not defined") {
+		t.Fatalf("error should report undefined flag: %v", err)
+	}
 }
 
 func TestParseCommandRunArgsMissingSelectorExit2(t *testing.T) {
@@ -60,48 +57,10 @@ func TestParseCommandRunArgsBothSelectorsExit2(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// --profile-policy is retired; an unknown flag must be rejected.
 	_, _, err := parseCommandRunArgs([]string{"-p", "codex-sol", "--profile-policy", "fast", "hello"})
 	if err == nil {
-		t.Fatal("expected error for both selectors")
-	}
-	if !strings.Contains(err.Error(), "exactly one") {
-		t.Fatalf("error should mention exactly one selector: %v", err)
-	}
-}
-
-func TestParseCommandRunArgsUnknownPolicyFails(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	_, _, err := parseCommandRunArgs([]string{"--profile-policy", "unknown", "hello"})
-	if err == nil {
-		t.Fatal("expected error for unknown policy")
-	}
-	if !strings.Contains(err.Error(), "unknown") {
-		t.Fatalf("error should mention unknown policy: %v", err)
-	}
-}
-
-func TestParseCommandRunArgsEmptyPolicyFails(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	_, _, err := parseCommandRunArgs([]string{"--profile-policy", "", "hello"})
-	if err == nil {
-		t.Fatal("expected error for empty policy")
-	}
-}
-
-func TestParseCommandRunArgsAutoPolicyFails(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	_, _, err := parseCommandRunArgs([]string{"--profile-policy", "auto", "hello"})
-	if err == nil {
-		t.Fatal("expected error for auto policy")
+		t.Fatal("expected error for retired --profile-policy flag")
 	}
 }
 

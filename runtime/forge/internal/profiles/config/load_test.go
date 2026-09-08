@@ -20,6 +20,24 @@ func TestLoadForgeConfigRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestLoadForgeConfigRejectsLegacyTopLevelProfiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{
+		"clients": {"codebuddy": {"enabled": true}},
+		"profiles": {
+			"cb-hy": {"client": "codebuddy", "provider": "codebuddy", "model": "hy4-preview"}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := LoadForgeConfig(path, EmbeddedData(), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error for legacy top-level profiles key (strict schema)")
+	}
+}
+
 func TestLoadForgeConfigAcceptsCustomProviders(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

@@ -24,9 +24,6 @@ func FillDefaults(cfg *Config, data []byte) {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderOverride{}
 	}
-	if cfg.Profiles == nil {
-		cfg.Profiles = map[string]ProfileRecipe{}
-	}
 	if cfg.CustomProviders == nil {
 		cfg.CustomProviders = map[string]CustomProvider{}
 	}

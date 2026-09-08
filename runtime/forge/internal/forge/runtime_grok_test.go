@@ -199,10 +199,13 @@ func TestGrokGatewayNeverUsesSelectedOrGlobalProviderCredential(t *testing.T) {
 func TestGrokCompletePlanEncodesEmbeddedNotesmdCapability(t *testing.T) {
 	_, _ = isolateGrokRuntimeTest(t)
 	setFakeClientsOnPath(t, "grok")
+	setTestDispatchPlan(t, "zhipu-coding/glm-5.3:gk", profilepkg.DispatchPlan{
+		Client: "grok", Provider: "zhipu-coding", Model: "glm-5.3", Mode: "gateway", Protocol: catalog.GatewayProtocolOpenAIChat,
+	})
 	for _, mode := range []catalog.PermissionMode{catalog.PermissionReadonly, catalog.PermissionEdit} {
 		t.Run(string(mode), func(t *testing.T) {
 			plan, family, err := execution.Prepare(execution.Request{
-				ProfileName: "gk-glm", Prompt: "inspect notes", WorkDir: t.TempDir(),
+				ProfileName: "zhipu-coding/glm-5.3:gk", Prompt: "inspect notes", WorkDir: t.TempDir(),
 				Permission: mode, Capabilities: []string{"notesmd"},
 			}, executionDependencies())
 			if err != nil {
