@@ -3,11 +3,6 @@
 // root package can depend on it without a cycle.
 package config
 
-import (
-	"fmt"
-	"strings"
-)
-
 // ClientEnabledReason describes why a client is or isn't usable.
 type ClientEnabledReason string
 
@@ -19,25 +14,15 @@ const (
 )
 
 // Config is the unified forge configuration — thin override schema only.
-// Unknown legacy fields are rejected at load time.
+// Unknown legacy fields, including the retired top-level profiles recipe
+// surface, are rejected at load time by strict JSON decoding.
 type Config struct {
 	Clients           map[string]Client           `json:"clients"`
 	Providers         map[string]ProviderOverride `json:"providers,omitempty"`
-	Profiles          map[string]ProfileRecipe    `json:"profiles,omitempty"`
 	Quota             Quota                       `json:"quota"`
 	CustomProviders   map[string]CustomProvider   `json:"custom_providers,omitempty"`
 	GeneratedFrom     string                      `json:"_generated_from,omitempty"`
 	PolicyMaxUsagePct map[string]int              `json:"policy_max_usage_pct,omitempty"`
-}
-
-// ProfileRecipe is the intentionally small custom-profile surface. Strict JSON
-// decoding rejects launcher/env/access and every other definition-like field.
-type ProfileRecipe struct {
-	Client       string   `json:"client"`
-	Provider     string   `json:"provider"`
-	Model        string   `json:"model"`
-	Description  string   `json:"description,omitempty"`
-	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Client holds per-client configuration.
@@ -61,29 +46,6 @@ type Quota struct {
 	SnapshotStaleMin   int `json:"snapshot_stale_min"`
 	StatuslineRenderMs int `json:"statusline_render_ms,omitempty"`
 	StatuslineFetchSec int `json:"statusline_fetch_sec,omitempty"`
-}
-
-// ValidateCapabilities checks that each capability name is non-empty after
-// trimming, preserves declared order, and rejects duplicates. It returns the
-// validated, trimmed slice with duplicates removed.
-func ValidateCapabilities(caps []string) ([]string, error) {
-	if len(caps) == 0 {
-		return nil, nil
-	}
-	seen := make(map[string]bool, len(caps))
-	out := make([]string, 0, len(caps))
-	for _, raw := range caps {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			return nil, fmt.Errorf("capability name must not be empty")
-		}
-		if seen[name] {
-			return nil, fmt.Errorf("duplicate capability %q", name)
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	return out, nil
 }
 
 // IsClientEnabled reports whether a client is enabled (default true when the

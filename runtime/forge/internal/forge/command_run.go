@@ -46,10 +46,8 @@ func parseCommandRunArgs(args []string) (execution.Request, string, error) {
 	fs.SetOutput(io.Discard)
 	var req execution.Request
 	var profileName string
-	var profilePolicy string
 	fs.StringVar(&profileName, "p", "", "")
 	fs.StringVar(&profileName, "profile", "", "")
-	fs.StringVar(&profilePolicy, "profile-policy", "", "")
 	format := string(protocol.OutputFormatText)
 	fs.StringVar(&format, "f", string(protocol.OutputFormatText), "")
 	fs.StringVar(&format, "format", string(protocol.OutputFormatText), "")
@@ -86,15 +84,15 @@ func parseCommandRunArgs(args []string) (execution.Request, string, error) {
 		return execution.Request{}, "", fmt.Errorf("forge: unsupported --format %q", req.Format)
 	}
 
-	// Enforce exactly one selector: --profile or --profile-policy.
+	// The direct run path requires an explicit profile. Named policy
+	// selection (fast/general/ultra) is retired; runtime execution receives
+	// a fully materialized plan/profile from the TS control plane.
 	profileName = strings.TrimSpace(profileName)
-	profilePolicy = strings.TrimSpace(profilePolicy)
-	if profileName == "" && profilePolicy == "" {
-		return execution.Request{}, "", fmt.Errorf("forge: profile is required via -p/--profile or --profile-policy")
+	if profileName == "" {
+		return execution.Request{}, "", fmt.Errorf("forge: profile is required via -p/--profile")
 	}
-	if profileName != "" && profilePolicy != "" {
-		return execution.Request{}, "", fmt.Errorf("forge: specify exactly one of -p/--profile or --profile-policy, not both")
-	}
+	req.ProfileName = profileName
+	req.Selector = "profile"
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	stdinText, err := readPipedStdin()
@@ -108,27 +106,7 @@ func parseCommandRunArgs(args []string) (execution.Request, string, error) {
 	req.Permission = catalog.PermissionMode(strings.TrimSpace(perm))
 	req.Clean = true
 
-	// Resolve policy if --profile-policy was used.
-	resolvedProfile := profileName
-	if resolvedProfile == "" && profilePolicy != "" {
-		candidates, err := resolveProfilePolicyCandidates(profilePolicy)
-		if err != nil {
-			return execution.Request{}, "", err
-		}
-		if len(candidates) == 0 {
-			return execution.Request{}, "", fmt.Errorf("no available profile in policy %q", profilePolicy)
-		}
-		req.PolicyName = profilePolicy
-		req.PolicyCandidates = candidates
-	}
-	if profileName != "" {
-		req.ProfileName = profileName
-		req.Selector = "profile"
-	} else {
-		req.Selector = "policy"
-	}
-
-	return req, resolvedProfile, nil
+	return req, profileName, nil
 }
 
 func hasRemovedMCPFlag(args []string) bool {

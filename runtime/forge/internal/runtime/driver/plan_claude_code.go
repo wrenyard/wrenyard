@@ -100,7 +100,7 @@ func buildClaudeCodeFromRegistry(req PlanRequest) ([]string, io.Reader, error) {
 
 	model := modelFromArgs(command)
 	if model != "" {
-		validationModel := strings.TrimPrefix(model, binding.Name+"/")
+		validationModel := registryClaudeValidationModel(model, binding)
 		if err := binding.ValidateModel(validationModel); err != nil {
 			return nil, nil, err
 		}
@@ -218,6 +218,21 @@ func registryClaudeDefaultModel(spec ProfileSpec, binding catalog.Provider) stri
 		return binding.AllowedModels[0]
 	}
 	return claudeDefaultModel(spec)
+}
+
+// registryClaudeValidationModel returns the canonical provider model to
+// validate against a binding when plan materialization has already presented a
+// client-visible model form. The kimi-coding k3 provider materializes its
+// canonical k3 model to the Claude Code client as "k3[1m]"; validation stays
+// exact on the canonical k3 while argv keeps the presented k3[1m]. The mapping
+// is scoped strictly to that provider/model: every other [1m] form or provider
+// validates exactly as presented and fails closed when the binding disallows it.
+func registryClaudeValidationModel(model string, binding catalog.Provider) string {
+	validationModel := strings.TrimPrefix(model, binding.Name+"/")
+	if binding.Name == "kimi-coding" && validationModel == "k3[1m]" {
+		return "k3"
+	}
+	return validationModel
 }
 
 // buildClaudeCodeEnv builds the isolated environment. For catalog profiles it

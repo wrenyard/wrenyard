@@ -271,9 +271,55 @@ func TestClaudeFamilyYoloRetainsDocumentedUnrestrictedBoundary(t *testing.T) {
 			if clientName == "claude" && !argsContain(plan.Command, "--dangerously-skip-permissions") || clientName == "codebuddy" && !argsContain(plan.Command, "-y") {
 				t.Fatalf("yolo production argv = %v", plan.Command)
 			}
-			if plan.Env[bashgate.ModeEnv] != "" || flagArg(plan.Command, "--settings") != "" {
-				t.Fatalf("yolo unexpectedly retained restricted hook configuration: argv=%v env=%#v", plan.Command, plan.Env)
-			}
-		})
+		if plan.Env[bashgate.ModeEnv] != "" || flagArg(plan.Command, "--settings") != "" {
+			t.Fatalf("yolo unexpectedly retained restricted hook configuration: argv=%v env=%#v", plan.Command, plan.Env)
+		}
+	})
+}
+}
+
+// TestClaudeCodeKimiK3ValidationPresentationMapping proves the registry-path
+// model validation for the kimi-coding k3 binding: a plan may present the
+// canonical k3 model to the Claude Code client as "k3[1m]", but validation must
+// stay exact on the canonical k3 (the argv k3[1m] form is preserved untouched).
+// Unrecognized [1m] models on kimi-coding and k3[1m] on any other provider are
+// validated exactly as presented and therefore fail closed.
+func TestClaudeCodeKimiK3ValidationPresentationMapping(t *testing.T) {
+	provider, err := catalog.DefaultRegistry().LookupBinding("kimi-coding")
+	if err != nil {
+		t.Fatalf("lookup kimi-coding binding: %v", err)
+	}
+
+	// k3[1m] (with or without the binding prefix in the emitted --model value)
+	// is the client-presented form of canonical k3 and must validate as k3.
+	for _, presented := range []string{"k3[1m]", "kimi-coding/k3[1m]"} {
+		validationModel := registryClaudeValidationModel(presented, provider)
+		if validationModel != "k3" {
+			t.Fatalf("kimi-coding presentation %q must validate canonical k3, got %q", presented, validationModel)
+		}
+		if err := provider.ValidateModel(validationModel); err != nil {
+			t.Fatalf("canonical k3 rejected for kimi-coding binding: %v", err)
+		}
+	}
+
+	// The mapping must not escape kimi-coding: the same [1m] presentation on a
+	// different provider stays as-presented and fails against that binding.
+	other := provider
+	other.Name = "not-kimi-coding"
+	// Renaming alone leaves the copied binding's allowlist permissive; fix the
+	// allowlist to k3 so the non-kimi fixture genuinely fails closed.
+	other.AllowedModels = []string{"k3"}
+	if validationModel := registryClaudeValidationModel("k3[1m]", other); validationModel != "k3[1m]" {
+		t.Fatalf("k3[1m] mapping escaped kimi-coding scope: %q", validationModel)
+	} else if err := other.ValidateModel(validationModel); err == nil {
+		t.Fatal("k3[1m] must fail closed on a non-kimi-coding binding")
+	}
+
+	// [1m] is not stripped generally: an unknown kimi-coding [1m] model fails
+	// closed against the k3-only binding.
+	if validationModel := registryClaudeValidationModel("k3x[1m]", provider); validationModel != "k3x[1m]" {
+		t.Fatalf("unrecognized kimi-coding [1m] model must not be stripped: %q", validationModel)
+	} else if err := provider.ValidateModel(validationModel); err == nil {
+		t.Fatal("unrecognized kimi-coding [1m] model must fail closed")
 	}
 }

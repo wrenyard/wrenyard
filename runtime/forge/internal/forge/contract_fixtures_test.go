@@ -10,8 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/manifest"
 )
 
 // setTestAuth writes a test credential into auth.json for the given provider.
@@ -189,16 +187,6 @@ func writeForgeConfig(t *testing.T, home, content string) {
 	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func embeddedProfileForTest(t *testing.T, name string) profile {
-	t.Helper()
-	m := manifest.BuiltinManifest()
-	p, ok := m.Profiles[name]
-	if !ok {
-		t.Fatalf("embedded profile %q not found", name)
-	}
-	return p
 }
 
 func writeFakeExecutable(t *testing.T, path, content string) {

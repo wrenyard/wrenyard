@@ -13,23 +13,17 @@ import (
 )
 
 func loadManifest() (profileManifest, error) {
-	cfg, _, err := LoadForgeConfig()
-	if err != nil {
-		return profileManifest{}, err
-	}
-	reg, err := catalogRegistryForConfig(cfg)
-	if err != nil {
-		return profileManifest{}, err
-	}
-	return manifest.LoadManifest(manifest.LoadDeps{Recipes: cfg.Profiles, Registry: reg})
+	// The source-owned profile manifest is empty: no concrete profiles are
+	// seeded in Go source and canonical execution resolves runtimes from
+	// daemon dispatch plans. The manifest DTO is retained only for legacy
+	// consumers that observe a schema-version-1 manifest.
+	return manifest.LoadManifest(), nil
 }
 
+// manifestSources reports the source of each known profile. The retired
+// source manifest seeds nothing, so there are no profile sources to report.
 func manifestSources() map[string]string {
-	cfg, _, err := LoadForgeConfig()
-	if err != nil {
-		return manifest.ManifestSources(manifest.LoadDeps{})
-	}
-	return manifest.ManifestSources(manifest.LoadDeps{Recipes: cfg.Profiles})
+	return map[string]string{}
 }
 
 func LoadForgeConfig() (ForgeConfig, []string, error) {

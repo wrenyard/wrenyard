@@ -146,7 +146,7 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 		t.Fatalf("codebuddy credential source = %q, want codebuddy", source)
 	}
 	wantModels := []string{
-		"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview", "minimax-m3",
+		"deepseek-v4-flash", "deepseek-v4-pro", "hy4-preview", "hy3", "minimax-m3",
 		"kimi-k3", "glm-5.3", "glm-5.3-flash",
 	}
 	models := module.Models()
@@ -171,6 +171,14 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("codebuddy exposes unexpected internal model id %q", id)
+		}
+	}
+	for _, near := range []string{"hy3-ioa", "hy3-preview"} {
+		if _, ok := models[near]; ok {
+			t.Fatalf("codebuddy exposes internal near-id %q as a public model", near)
+		}
+		if err := binding.ValidateModel(near); err == nil {
+			t.Fatalf("codebuddy must reject internal near-id %q as a public model", near)
 		}
 	}
 	if _, err := reg.LookupBinding("deepseek"); err == nil {

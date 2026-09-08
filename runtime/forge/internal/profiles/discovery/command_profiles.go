@@ -5,7 +5,6 @@ import (
 	"os"
 	"sort"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/profilepolicy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
@@ -14,7 +13,6 @@ type ProfileDeps struct {
 	IsProfileEffective          func(profileID string) bool
 	ProfileDefinitionExists     func(profileID string) bool
 	ProfileAvailabilityReason   func(profileID string) string
-	PolicyRegistry              *profilepolicy.Registry
 	CanonicalPoolUsagePct       func(canonicalPool string) int
 	ProfileDisplayName          func(profileID string) string
 	ProfileIDs                  func() []string
@@ -44,17 +42,11 @@ func ProfilesCommand(deps ProfileDeps, args []string) int {
 func profilesList(deps ProfileDeps, args []string) int {
 	if len(args) == 0 {
 		fmt.Println("Profiles:")
-		if code := profilesListProfile(deps); code != 0 {
-			return code
-		}
-		fmt.Println("Policies:")
-		return profilesListPolicy(deps)
+		return profilesListProfile(deps)
 	}
 	switch args[0] {
 	case "profile":
 		return profilesListProfile(deps)
-	case "policy":
-		return profilesListPolicy(deps)
 	default:
 		fmt.Fprintf(os.Stderr, "forge profiles list: unknown target %s\n", args[0])
 		return 2
@@ -67,9 +59,7 @@ func profilesListProfile(deps ProfileDeps) int {
 		return 0
 	}
 
-	// Collect every source-owned profile when the composition root supplies
-	// the manifest IDs. The policy walk remains as a compatibility fallback
-	// for isolated callers.
+	// Collect every effective profile supplied by the composition root.
 	seen := map[string]bool{}
 	if deps.ProfileIDs != nil {
 		for _, profileID := range deps.ProfileIDs() {
@@ -79,25 +69,6 @@ func profilesListProfile(deps ProfileDeps) int {
 			seen[profileID] = true
 			if deps.IsProfileEffective(profileID) {
 				profiles = append(profiles, EffectiveProfile{ID: profileID, DisplayName: deps.ProfileDisplayName(profileID)})
-			}
-		}
-	}
-	for _, policyID := range deps.PolicyRegistry.List() {
-		p, err := deps.PolicyRegistry.Lookup(policyID)
-		if err != nil {
-			continue
-		}
-		for _, c := range p.Candidates {
-			if seen[c.ProfileID] {
-				continue
-			}
-			seen[c.ProfileID] = true
-			if deps.IsProfileEffective(c.ProfileID) {
-				displayName := deps.ProfileDisplayName(c.ProfileID)
-				profiles = append(profiles, EffectiveProfile{
-					ID:          c.ProfileID,
-					DisplayName: displayName,
-				})
 			}
 		}
 	}
@@ -112,28 +83,6 @@ func profilesListProfile(deps ProfileDeps) int {
 	return 0
 }
 
-func profilesListPolicy(deps ProfileDeps) int {
-	policyIDs := deps.PolicyRegistry.List()
-	sort.Strings(policyIDs)
-
-	for _, pid := range policyIDs {
-		p, err := deps.PolicyRegistry.Lookup(pid)
-		if err != nil {
-			continue
-		}
-		fmt.Printf("%s:\n", pid)
-		for _, c := range p.Candidates {
-			effective := deps.IsProfileEffective(c.ProfileID)
-			status := "available"
-			if !effective {
-				status = deps.ProfileAvailabilityReason(c.ProfileID)
-			}
-			fmt.Printf("  %s: %s\n", c.ProfileID, status)
-		}
-	}
-	return 0
-}
-
 func profilesShow(deps ProfileDeps, args []string) int {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "forge profiles show: expected profile name")
@@ -141,7 +90,7 @@ func profilesShow(deps ProfileDeps, args []string) int {
 	}
 	name := args[0]
 
-	// Check whether it's a known profile ID (from built-in policies).
+	// Check whether it's a known profile ID.
 	exists := deps.ProfileDefinitionExists(name)
 	if !exists {
 		fmt.Fprintf(os.Stderr, "forge profiles show: unknown profile %s\n", name)

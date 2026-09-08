@@ -29,38 +29,6 @@ type Profile struct {
 	QuotaProvider string  `json:"quota_provider,omitempty"`
 }
 
-// ProfilePolicyResolutionResult carries the resolved profile ID and
-// policy name after a policy resolution completes.
-type ProfilePolicyResolutionResult struct {
-	ProfileID  string
-	PolicyName string
-	Candidates []string
-}
-
-// PolicyResolutionDeps is the minimum set of callbacks needed for
-// profile-policy resolution. It replaces the earlier tier-oriented
-// Policy struct and Dependencies fields.
-type PolicyResolutionDeps struct {
-	LookupPolicy            func(name string) (PolicyRef, error)
-	IsProfileEffective      func(profileID string) bool
-	CanonicalPoolUsagePct   func(canonicalPool string) int
-	CanonicalPoolForProfile func(profileID string) string
-	MaxUsagePctOverride     func(profileID string) int
-}
-
-// PolicyRef is a minimal policy reference the selection layer uses to
-// delegate to profilepolicy.
-type PolicyRef struct {
-	Name       string
-	Candidates []PolicyCandidateRef
-}
-
-// PolicyCandidateRef is a minimal per-candidate reference.
-type PolicyCandidateRef struct {
-	ProfileID string
-	Threshold int
-}
-
 // Dependencies carries the external callbacks that selection functions need
 // from the root forge package. Every callback mirrors a root-level function
 // that the selection package cannot import directly.
