@@ -289,6 +289,10 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const evaluate = (
     input: ResolveTaskDispatchInput,
     candidatePool: DispatchCandidate[],
+    // Immutable sample set preloaded by a multi-candidate caller (e.g. eligible)
+    // that wants one localSpeed source read shared by every candidate. When
+    // absent, each evaluation reads the lazy source once itself.
+    localSpeedPreload?: LocalSpeedSample[],
   ): TaskDispatchResolution => {
     const req = input.requirements
 
@@ -298,7 +302,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // gate, collapses provider/model clients (native > grok > claude/others),
     // then ranks models by expected-speed group and reference output price. A
     // concrete runtime/alias choice exists only in explicit mode.
-    const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
+    const localSpeed = localSpeedPreload ?? (deps.localSpeed ? deps.localSpeed() : undefined)
     const constrained = resolveConstrainedDispatch(catalog, candidatePool, req, localSpeed)
     if (!constrained.ok) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
@@ -450,11 +454,17 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       // choice is evaluated through the same evaluate() admission as resolve;
       // only exact (`provider/model:client`) choices are ever returned — never
       // policy aliases.
+      //
+      // Load the local speed sample set exactly once per public call and reuse
+      // that immutable array across every candidate evaluation; otherwise each
+      // evaluate() re-reads the lazy source (~one SQL read per candidate).
+      const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
       const choices: TaskDispatchChoice[] = []
       for (const candidate of pool) {
         const outcome = evaluate(
           { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
           [candidate],
+          localSpeed,
         )
         if (outcome.ok) {
           choices.push({ ...outcome.resolved, exactAgentRuntime: outcome.exactAgentRuntime })

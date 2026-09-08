@@ -334,6 +334,46 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       assert.ok(choice.reference_pricing.output_usd_per_million! <= 2)
     }
   })
+
+  it('eligible loads the localSpeed supplier once per public call, not once per candidate', async () => {
+    // Counting supplier: eligible evaluates every candidate in the (large) task
+    // pool, so the pre-optimization per-candidate localSpeed reads would invoke
+    // the source once per candidate instead of once per public call.
+    let calls = 0
+    const countingResolver = await createTaskDispatchResolver({
+      catalog: createBuiltinCatalog(),
+      runtime: createBuiltinProviderRuntime(),
+      localSpeed: () => {
+        calls += 1
+        return localSamples()
+      },
+    })
+
+    const first = countingResolver.eligible({
+      taskName: 'eligible-counted-first',
+      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(first.ok, true)
+    assert.ok(first.choices.length >= 1)
+    // One public eligible() call reads the source exactly once, whatever the
+    // number of candidates evaluated.
+    assert.equal(calls, 1)
+
+    const second = countingResolver.eligible({
+      taskName: 'eligible-counted-second',
+      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+    })
+    // A second public call refreshes the sample set exactly once more — no
+    // cross-run/global caching.
+    assert.equal(second.ok, true)
+    assert.equal(calls, 2)
+
+    // The same fresh sample set yields identical choices/eligibility per call.
+    assert.deepEqual(
+      second.choices.map((choice) => choice.exactAgentRuntime),
+      first.choices.map((choice) => choice.exactAgentRuntime),
+    )
+  })
 })
 
 describe('core task dispatch-resolver explicit mode (no-model)', () => {
