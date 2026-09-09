@@ -15,6 +15,18 @@ export type AgentRuntimePermission = 'readonly' | 'edit' | 'yolo'
 export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor'
 
 /**
+ * Private, non-persistent CodeBuddy admission binding captured from one active
+ * credential snapshot. It is deliberately separate from TaskDispatchSnapshot:
+ * these values may reach only the local Forge admission process environment
+ * and must never enter telemetry, protocol DTOs, logs, or database rows.
+ */
+export interface CodeBuddyExecutionBinding {
+  readonly expectedScope: string
+  readonly expectedEnvironment: string
+  readonly expectedWireModel: string
+}
+
+/**
  * Per-attempt dispatch snapshot captured by the daemon resolver before the first
  * agent execution. This is now the exact shared `TaskResolvedDispatch` attempt
  * snapshot produced by `@wrenyard/catalog`'s resolver and persisted by the
@@ -58,6 +70,8 @@ export interface StartAgentExecutionOptions {
   /** Per-attempt dispatch snapshot produced by the daemon resolver. Persisted
    *  by the supervisor keyed by execution_id/task_id. */
   dispatchSnapshot?: TaskDispatchSnapshot | null
+  /** Private CodeBuddy admission binding; kept in memory only. */
+  codeBuddyExecution?: CodeBuddyExecutionBinding
   /** Canonical Forge failure class, when supplied by the resolver. */
   failureClass?: ForgeFailureClass | string | null
 }

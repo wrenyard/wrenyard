@@ -665,10 +665,27 @@ export interface TaskSettingsEffective {
   max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>
 }
 
+/** Wire-owned closed resolution-failure code. Mirrors the structurally
+ *  compatible core value without importing core modules into the protocol. */
+export type TaskResolutionFailureCode =
+  | 'no_available_provider'
+  | 'price_limit'
+  | 'intelligence_requirement'
+  | 'speed_requirement'
+  | 'quota_unavailable'
+  | 'quota_insufficient'
+
+/** Wire-owned closed resolution-failure detail carried on a validation issue. */
+export interface TaskResolutionFailure {
+  code: TaskResolutionFailureCode
+  message: string
+}
+
 export interface TaskSettingsValidationIssue {
   code: string
   message: string
   field?: string
+  resolutionFailure?: TaskResolutionFailure
 }
 
 export interface TaskSettingsRuntimeReadiness {
@@ -1065,6 +1082,27 @@ const taskSettingsEffectiveSchema = {
   additionalProperties: true,
 } as const satisfies JsonSchema
 
+/** Closed additive safe resolution-failure detail carried on a validation
+ *  issue; no raw diagnostics, quotas, or numeric internals are exposed. */
+const taskSettingsResolutionFailureSchema = {
+  type: 'object',
+  required: ['code', 'message'],
+  properties: {
+    code: {
+      enum: [
+        'no_available_provider',
+        'price_limit',
+        'intelligence_requirement',
+        'speed_requirement',
+        'quota_unavailable',
+        'quota_insufficient',
+      ],
+    },
+    message: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskSettingsValidationIssueSchema = {
   type: 'object',
   required: ['code', 'message'],
@@ -1072,6 +1110,7 @@ const taskSettingsValidationIssueSchema = {
     code: { type: 'string', minLength: 1 },
     message: { type: 'string', minLength: 1 },
     field: { type: 'string', minLength: 1 },
+    resolutionFailure: taskSettingsResolutionFailureSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

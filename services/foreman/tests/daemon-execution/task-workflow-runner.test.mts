@@ -1240,10 +1240,18 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
 
     let resolverCalls = 0
     let capturedInvocation: unknown
+    const codeBuddyExecution = Object.freeze({
+      expectedScope: 'cbv1:kernel-private-scope',
+      expectedEnvironment: 'ioa',
+      expectedWireModel: 'hy3-ioa',
+    })
     const resolver: TaskRunSettingsResolver = async (params) => {
       resolverCalls += 1
       capturedInvocation = params.invocation
-      return automaticResolution('forge/settings-resolved', 42_000)
+      return {
+        ...automaticResolution('forge/settings-resolved', 42_000),
+        codeBuddyExecution,
+      }
     }
     const launchedProfiles: string[] = []
     let capturedOpts: AgentOpts | undefined
@@ -1267,11 +1275,17 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
     assert.deepEqual(capturedInvocation, invocationSettings, 'invocation layer must reach the resolver unchanged')
     assert.deepEqual(launchedProfiles, ['forge/settings-resolved'], 'only the resolved exact runtime may launch')
     assert.equal(capturedOpts?.timeoutMs, 42_000, 'resolved timeout must reach collectStructuredOutput as the total deadline')
+    assert.equal(
+      capturedOpts?.codeBuddyExecution,
+      codeBuddyExecution,
+      'the private execution binding must reach the first agent attempt unchanged',
+    )
     assert.equal(capturedOpts?.permission, 'readonly', 'permission must remain the TaskConfig permission')
     assert.ok(capturedPrompt?.includes('base dynamic prompt'), 'builtin dynamic prompt must still be present')
     // Invocation settings are never persisted: the task row input stays clean.
     const row = dbGet<{ input: string | null }>('SELECT input FROM tasks ORDER BY created_at LIMIT 1')
     assert.ok(row, 'a persisted task row must exist')
+    assert.ok(!JSON.stringify(result).includes(codeBuddyExecution.expectedScope), 'task results must not serialize the binding')
   })
 
   it('does not reintroduce an automatic stale machine pin when a settings resolver is present', async () => {

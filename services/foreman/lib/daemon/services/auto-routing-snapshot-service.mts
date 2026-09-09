@@ -46,12 +46,28 @@
  *    successful all-unknown cache).
  *
  * The only hard provider block produced here is the privacy-safe observed
- * CodeBuddy exhaustion signal: exact pool `codebuddy`, ok/non-stale row, exact
- * `1mo` window name, raw used pct exactly 100 and a finite future parsed
- * `resets_at`. Go intentionally emits this retained negative row WITHOUT
- * `fetched_at`, so it is validated without one; its cache is bounded by
- * min(now + 60s, reset). Absence, invalid or expired observations stay unknown
- * (never a block).
+ * CodeBuddy exhaustion signal projected by the neutral Go v2 list DTO: exact
+ * pool `codebuddy`, status ok, stale false, one window whose name is exactly
+ * `observed`, raw used pct exactly 100 and a finite future parsed `resets_at`.
+ * The legacy monthly `1mo` window is inert and never blocks. Go intentionally
+ * emits this retained negative row WITHOUT `fetched_at`, so it is validated
+ * without one; its cache is bounded by min(now + 60s, reset). Absence, invalid
+ * or expired observations stay unknown (never a block).
+ *
+ * Current-login scoping and caching:
+ *  - on every snapshot() request the optional CodeBuddy active-snapshot loader
+ *    is resolved afresh. Only a non-empty opaque stable scope plus its
+ *    normalized environment forms the private CodeBuddy query context that is
+ *    handed to the query source, and cached/in-flight entries are keyed by that
+ *    exact context, so a token refresh on the same account reuses quota
+ *    evidence while a login or environment change can never reuse cached or
+ *    in-flight CodeBuddy state;
+ *  - a missing or throwing snapshot, an absent stable scope, or a query failure
+ *    fails closed: no CodeBuddy context is formed, no fallback is attempted,
+ *    and no previous CodeBuddy block is reused;
+ *  - only the expected scope/environment ever reaches the query source. The
+ *    credential/token/domain/wire mapping stays inside the loader, and the
+ *    scope/environment never appear in any serialized snapshot/DTO field.
  *
  * Out of scope by construction: prices, tariffs, credits, fallback routing and
  * credentials. No network logic lives in TypeScript; the default query spawns
@@ -62,7 +78,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { queryForgeQuotaJson } from '../execution/forge-quota-query.mts';
+import { queryForgeQuotaJson, type CodeBuddyQueryContext } from '../execution/forge-quota-query.mts';
 
 import type { QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/catalog';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
@@ -75,6 +91,34 @@ const DIRECT_FRESHNESS_CAP_MS = 60_000;
 
 /** Validity of a fail-closed unknown snapshot (short-lived, never cached). */
 const UNKNOWN_SNAPSHOT_VALID_MS = 15_000;
+
+/** Cache key for snapshots with no complete CodeBuddy query context. */
+const NO_CODEBUDDY_CONTEXT_KEY = '';
+
+/**
+ * The minimal immutable current CodeBuddy active snapshot view the service
+ * consumes from its optional loader: the opaque stable scope and the normalized
+ * environment of the current login. The provider runtime's active snapshot
+ * satisfies this structurally; the service reads only these fields, never the
+ * credential/token/domain/wire mapping, and the scope/environment never appear
+ * in a serialized AutoRoutingQuotaSnapshot.
+ */
+export interface CodeBuddyActiveSnapshotView {
+  readonly stableScope: string | undefined;
+  readonly environment: string;
+  /** Read-free canonical-to-wire resolution bound to this same auth read. */
+  resolveUpstreamModel(model: string): string;
+  /** Read-free confirmed-free evaluation bound to this same auth read. */
+  freeSupply(model: string):
+    | { readonly confirmedFree: true; readonly source: string; readonly ruleId: string }
+    | undefined;
+}
+
+/** Deterministic private cache key for one CodeBuddy query context. */
+function codeBuddyContextKey(context: CodeBuddyQueryContext | undefined): string {
+  if (context === undefined) return NO_CODEBUDDY_CONTEXT_KEY;
+  return `${context.expectedScope}\u0000${context.expectedEnvironment}`;
+}
 
 // ---------------------------------------------------------------------------
 // Public snapshot shape
@@ -101,6 +145,9 @@ export interface AutoRoutingQuotaSnapshotEntry {
  *   a caller must obtain a new snapshot.
  * - `hardBlockedProviderIds`: monotonic privacy-safe observed CodeBuddy
  *   exhaustion blocks only.
+ *
+ * The private CodeBuddy query context (expected scope/environment) never
+ * appears on the snapshot or in any serialized field.
  */
 export interface AutoRoutingQuotaSnapshot {
   readonly snapshotId: string;
@@ -110,11 +157,30 @@ export interface AutoRoutingQuotaSnapshot {
   readonly hardBlockedProviderIds: readonly string[];
 }
 
+/**
+ * Private daemon routing bundle. The quota DTO remains serialization-safe;
+ * the optional active CodeBuddy snapshot is retained only in-process so one
+ * auth read can drive scope, environment, wire mapping and free eligibility.
+ */
+export interface AutoRoutingBoundQuotaSnapshot {
+  readonly snapshot: AutoRoutingQuotaSnapshot;
+  readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined;
+}
+
 export interface AutoRoutingQuotaSnapshotServiceOptions {
-  /** Query source for the raw `forge quota --json` text (defaults to the daemon spawn). */
-  queryJson?: () => Promise<string>;
+  /** Query source for the raw `forge quota --json` text (defaults to the daemon
+   *  spawn). Receives the current complete CodeBuddy expected scope/environment
+   *  context when one exists, and undefined otherwise. */
+  queryJson?: (context?: CodeBuddyQueryContext) => Promise<string>;
   /** Current time in epoch ms (defaults to Date.now). */
   now?: () => number;
+  /** Optional async loader of the current immutable CodeBuddy active snapshot,
+   *  resolved afresh on every snapshot() request. When it resolves to a
+   *  non-empty stable scope plus a normalized environment, quota queries are
+   *  scoped to that context and cache/in-flight evidence is keyed by it; a
+   *  missing/throwing snapshot or absent stable scope fails closed with no
+   *  CodeBuddy context. */
+  codeBuddySnapshot?: () => Promise<CodeBuddyActiveSnapshotView | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,13 +329,15 @@ interface BindingQuotaShape {
  * pool coverage remains incomplete/unknown.
  */
 function quotaShapeOf(binding: {
+  readonly providerId: string;
+  readonly quotaProviderId: string;
   readonly quotaPoolId?: string;
   readonly windows?: readonly { readonly windowId: string; readonly resetKind: unknown }[];
   readonly pools?: readonly {
     readonly quotaPoolId: string;
     readonly windows: readonly { readonly windowId: string; readonly resetKind: unknown }[];
   }[];
-}): BindingQuotaShape {
+}, row?: RawRow | null): BindingQuotaShape {
   const pools = binding.pools ?? [];
   if (pools.length > 0) {
     const quotaPoolIds: string[] = [];
@@ -289,13 +357,26 @@ function quotaShapeOf(binding: {
     }
     return { quotaPoolIds, targets };
   }
+  const targets: RequiredQuotaTarget[] = (binding.windows ?? []).map((window) => ({
+    id: window.windowId,
+    windowName: window.windowId,
+    resetKind: window.resetKind,
+  }));
+  // Current Codex accounts may legitimately expose only the required weekly
+  // window. A primary 5h window is conditional: absent means not applicable,
+  // while a present row must participate (including as null/unknown when its
+  // evidence is invalid or stale). Codex Spark has its own explicit 5h+7d
+  // binding and never enters this special case.
+  if (
+    binding.providerId === 'codex'
+    && binding.quotaProviderId === 'codex'
+    && row?.windows.some((window) => window.name === '5h')
+  ) {
+    targets.unshift({ id: '5h', windowName: '5h', resetKind: 'full_cycle' });
+  }
   return {
     quotaPoolId: binding.quotaPoolId,
-    targets: (binding.windows ?? []).map((window) => ({
-      id: window.windowId,
-      windowName: window.windowId,
-      resetKind: window.resetKind,
-    })),
+    targets,
   };
 }
 
@@ -336,20 +417,30 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
   return { remainingPercent, observedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS, replenishmentKind };
 }
 
-/** The CodeBuddy retained negative reset time, or null when it is invalid. */
+/**
+ * The CodeBuddy retained negative reset time, or null when it is invalid.
+ *
+ * Matches the exact neutral Go v2 projection: pool `codebuddy`, status ok,
+ * stale false, one window whose name is exactly `observed`, raw used pct
+ * exactly 100 and a finite future parsed `resets_at`. The legacy monthly
+ * `1mo` window is inert and never blocks.
+ */
 function codebuddyExhaustionReset(row: RawRow): number | null {
   if (row.pool !== 'codebuddy') return null;
   if (row.status !== 'ok') return null;
   if (row.stale !== false) return null;
-  const oneMonth = row.windows.find((window) => window.name === '1mo');
-  if (oneMonth === undefined) return null;
-  if (oneMonth.pct !== 100) return null;
-  return oneMonth.resetsAtMs; // Validated as finite-future by the caller.
+  const observed = row.windows.find((window) => window.name === 'observed');
+  if (observed === undefined) return null;
+  if (observed.pct !== 100) return null;
+  return observed.resetsAtMs; // Validated as finite-future by the caller.
 }
 
-function buildUnknownSnapshot(nowMs: number): AutoRoutingQuotaSnapshot {
+function buildUnknownSnapshot(nowMs: number, rows: readonly RawRow[] = []): AutoRoutingQuotaSnapshot {
   const entries: AutoRoutingQuotaSnapshotEntry[] = PROVIDER_QUOTA_BINDINGS.map((binding) => {
-    const shape = quotaShapeOf(binding);
+    // Preserve the conditional presence of a raw Codex 5h window even when
+    // the row itself is stale/non-ok: present-but-unusable stays an explicit
+    // null constraint rather than disappearing into a falsely complete 7d row.
+    const shape = quotaShapeOf(binding, findRow(rows, binding.quotaProviderId));
     const requiredQuota = shape.targets.map((target) => ({
       id: target.id,
       evidence: null,
@@ -372,16 +463,20 @@ function buildUnknownSnapshot(nowMs: number): AutoRoutingQuotaSnapshot {
  * valid hard block; the caller then serves a short-lived unknown snapshot so a
  * successful-but-empty report is never cached as a 60s healthy success.
  */
-function buildSnapshot(rows: readonly RawRow[], nowMs: number): AutoRoutingQuotaSnapshot | null {
+function buildSnapshot(
+  rows: readonly RawRow[],
+  nowMs: number,
+  allowCodeBuddyBlock: boolean,
+): AutoRoutingQuotaSnapshot | null {
   const entries: AutoRoutingQuotaSnapshotEntry[] = [];
   const boundaries: number[] = [];
   let hasFreshBindingEvidence = false;
 
   for (const binding of PROVIDER_QUOTA_BINDINGS) {
-    const shape = quotaShapeOf(binding);
     // Row lookup is by binding.quotaProviderId (the raw pool name). The
     // normalized pool ids are retained in output only.
     const row = findRow(rows, binding.quotaProviderId);
+    const shape = quotaShapeOf(binding, row);
     const usable = row !== null && rowUsable(row, nowMs);
     if (usable) {
       hasFreshBindingEvidence = true;
@@ -402,11 +497,15 @@ function buildSnapshot(rows: readonly RawRow[], nowMs: number): AutoRoutingQuota
   }
 
   // Privacy-safe observed CodeBuddy exhaustion is the only hard block produced
-  // here. Go emits this retained negative row WITHOUT fetched_at, so it is
-  // validated on pool/status/stale/1mo/pct100/future parsed resets_at alone.
-  // Invalid or expired observations stay unknown (no block).
+  // here. Go emits this neutral v2 retained negative row (exact `observed`
+  // window, pct 100) WITHOUT fetched_at, so it is validated on
+  // pool/status/stale/observed-window/pct100/future parsed resets_at alone;
+  // the legacy monthly `1mo` window is inert. Invalid or expired observations
+  // stay unknown (no block).
   const hardBlockedProviderIds: string[] = [];
-  const codebuddyRow = findRow(rows, 'codebuddy');
+  const codebuddyRow = allowCodeBuddyBlock
+    ? rows.find((row) => codebuddyExhaustionReset(row) !== null) ?? null
+    : null;
   const codebuddyResetAtMs = codebuddyRow === null ? null : codebuddyExhaustionReset(codebuddyRow);
   if (codebuddyResetAtMs !== null && codebuddyResetAtMs > nowMs) {
     hardBlockedProviderIds.push('codebuddy');
@@ -441,64 +540,129 @@ function deepFreeze<T>(value: T): T {
 }
 
 // ---------------------------------------------------------------------------
-// Service: cached, concurrent-fetch-deduplicated snapshot access
+// Service: current-context cached, concurrent-fetch-deduplicated snapshot access
 // ---------------------------------------------------------------------------
 
 export class AutoRoutingQuotaSnapshotService {
-  private readonly queryJson: () => Promise<string>;
+  private readonly queryJson: (context?: CodeBuddyQueryContext) => Promise<string>;
   private readonly now: () => number;
-  private cached: AutoRoutingQuotaSnapshot | null = null;
-  private inFlight: Promise<AutoRoutingQuotaSnapshot> | null = null;
+  private readonly codeBuddySnapshot: (() => Promise<CodeBuddyActiveSnapshotView | undefined>) | undefined;
+  /** Direct snapshots keyed by the private CodeBuddy query context. */
+  private readonly cachedByContext = new Map<string, AutoRoutingQuotaSnapshot>();
+  /** In-flight refreshes keyed by the same private CodeBuddy query context. */
+  private readonly inFlightByContext = new Map<string, Promise<AutoRoutingQuotaSnapshot>>();
 
   constructor(options: AutoRoutingQuotaSnapshotServiceOptions = {}) {
     this.queryJson = options.queryJson ?? queryForgeQuotaJson;
     this.now = options.now ?? (() => Date.now());
+    this.codeBuddySnapshot = options.codeBuddySnapshot;
   }
 
   /**
-   * Returns the current immutable snapshot. A fresh cached snapshot is served
-   * until its validUntilMs boundary. Concurrent callers share one in-flight
-   * query. A failed or empty refresh never serves expired old evidence and
-   * returns a short-lived all-unknown snapshot instead.
+   * Returns the current immutable snapshot for the current CodeBuddy login.
+   *
+   * The optional CodeBuddy active snapshot is resolved afresh on every call
+   * that has a loader. Only a non-empty opaque stable scope plus its
+   * normalized environment forms the private query context; cached and
+   * in-flight entries are keyed by that exact context, so a token refresh on
+   * the same account reuses evidence while a login or environment change can
+   * never reuse old cached/in-flight CodeBuddy state. Without a loader no
+   * CodeBuddy context ever exists and the service behaves synchronously, as it
+   * did before current-login scoping. A fresh cached snapshot is served until
+   * its validUntilMs boundary; concurrent callers for the same context share
+   * one in-flight query. A failed or empty refresh never serves expired old
+   * evidence and returns a short-lived all-unknown snapshot instead.
    */
-  snapshot(): Promise<AutoRoutingQuotaSnapshot> {
-    const nowMs = this.now();
-    const cached = this.cached;
-    if (cached !== null && cached.validUntilMs > nowMs) return Promise.resolve(cached);
-
-    const pending = this.inFlight;
-    if (pending !== null) return pending;
-
-    const started = this.refresh().finally(() => {
-      this.inFlight = null;
-    });
-    this.inFlight = started;
-    return started;
+  async snapshot(): Promise<AutoRoutingQuotaSnapshot> {
+    return (await this.routingSnapshot()).snapshot;
   }
 
-  private async refresh(): Promise<AutoRoutingQuotaSnapshot> {
+  /**
+   * Resolves one request-bound routing bundle. The active snapshot is loaded
+   * exactly once, then the same immutable object is returned for readiness,
+   * free-supply and canonical-to-wire evaluation while its scope/environment
+   * select the quota cache/query. Callers must never serialize the bundle.
+   */
+  async routingSnapshot(): Promise<AutoRoutingBoundQuotaSnapshot> {
+    // Keep the historical no-loader path synchronous through query start;
+    // configured loaders remain one awaited auth read per routing request.
+    const codeBuddySnapshot = this.codeBuddySnapshot === undefined
+      ? undefined
+      : await this.resolveCodeBuddySnapshot();
+    const context = this.codeBuddyContext(codeBuddySnapshot);
+    const key = codeBuddyContextKey(context);
+    const nowMs = this.now();
+    const cached = this.cachedByContext.get(key);
+    if (cached !== undefined && cached.validUntilMs > nowMs) {
+      return Object.freeze({ snapshot: cached, codeBuddySnapshot });
+    }
+
+    const pending = this.inFlightByContext.get(key);
+    if (pending !== undefined) {
+      return Object.freeze({ snapshot: await pending, codeBuddySnapshot });
+    }
+
+    const started = this.refresh(context).finally(() => {
+      this.inFlightByContext.delete(key);
+    });
+    this.inFlightByContext.set(key, started);
+    return Object.freeze({ snapshot: await started, codeBuddySnapshot });
+  }
+
+  /**
+   * Resolves the current CodeBuddy query context afresh from the active
+   * snapshot loader. Loader failures, missing/undefined snapshots, and absent
+   * (empty) stable scopes all fail closed with no CodeBuddy context; the
+   * normalized environment must also be non-empty to form a context.
+   */
+  private async resolveCodeBuddySnapshot(): Promise<CodeBuddyActiveSnapshotView | undefined> {
+    if (this.codeBuddySnapshot === undefined) return undefined;
+    try {
+      return await this.codeBuddySnapshot();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private codeBuddyContext(view: CodeBuddyActiveSnapshotView | undefined): CodeBuddyQueryContext | undefined {
+    if (view === undefined) return undefined;
+    const stableScope = view.stableScope;
+    const environment = view.environment;
+    if (typeof stableScope !== 'string' || stableScope.length === 0) return undefined;
+    if (typeof environment !== 'string' || environment.length === 0) return undefined;
+    return { expectedScope: stableScope, expectedEnvironment: environment };
+  }
+
+  private async refresh(context: CodeBuddyQueryContext | undefined): Promise<AutoRoutingQuotaSnapshot> {
     const nowMs = this.now();
     let text: string;
     try {
-      text = await this.queryJson();
+      text = await this.queryJson(context);
     } catch {
-      return this.failClosed(nowMs);
+      return this.failClosed(context);
     }
     try {
       const rows = parseQuotaReport(text);
-      const snapshot = buildSnapshot(rows, nowMs);
-      if (snapshot === null) return this.failClosed(nowMs);
-      this.cached = snapshot;
+      // Defense in depth: even an injected/misbehaving query source cannot
+      // activate a CodeBuddy negative row without a complete current scope.
+      const snapshot = buildSnapshot(rows, nowMs, context !== undefined);
+      if (snapshot === null) return this.failClosed(context, rows);
+      this.cachedByContext.set(codeBuddyContextKey(context), snapshot);
       return snapshot;
     } catch {
-      return this.failClosed(nowMs);
+      return this.failClosed(context);
     }
   }
 
-  private failClosed(nowMs: number): AutoRoutingQuotaSnapshot {
-    // Never serve expired old evidence after a failed or empty refresh; drop
-    // the cache and hand back a short-lived unknown snapshot.
-    this.cached = null;
-    return buildUnknownSnapshot(nowMs);
+  private failClosed(
+    context: CodeBuddyQueryContext | undefined,
+    rows: readonly RawRow[] = [],
+  ): AutoRoutingQuotaSnapshot {
+    // Never serve expired old evidence after a failed or empty refresh for the
+    // current context; drop only that context's cache and hand back a
+    // short-lived unknown snapshot. Other contexts (e.g. a previous login) can
+    // never be served because they are keyed separately.
+    this.cachedByContext.delete(codeBuddyContextKey(context));
+    return buildUnknownSnapshot(this.now(), rows);
   }
 }

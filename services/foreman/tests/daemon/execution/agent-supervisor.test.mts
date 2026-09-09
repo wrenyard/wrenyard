@@ -1291,7 +1291,7 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     }
   })
 
-  it('propagates the persisted task id to a promoted queued execution', async () => {
+  it('retains the private CodeBuddy binding in memory when promoting a queued execution', async () => {
     const supervisor = makeSupervisor()
 
     const blockers: Array<{ executionId: string; pid?: number }> = []
@@ -1312,6 +1312,11 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const cwd = makeTempDir('foreman-agent-supervisor-queue-promote-')
     const envPath = join(cwd, 'env.json')
     const taskId = 'task_queue_promote'
+    const codeBuddyExecution = Object.freeze({
+      expectedScope: 'cbv1:queued-private-scope',
+      expectedEnvironment: 'ioa',
+      expectedWireModel: 'hy3-ioa',
+    })
     const now = new Date().toISOString()
     db.prepare<unknown[]>(
       `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
@@ -1319,11 +1324,12 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     ).run(taskId, now, now)
 
     const handle = await supervisor.startExecution({
-      profile: 'test',
+      profile: 'codebuddy/deepseek-v3.2:cb',
       permission: 'readonly',
       cwd,
       prompt: 'queued child',
       taskId,
+      codeBuddyExecution,
     })
 
     // The execution must be queued, not launched, while all slots are occupied.
@@ -1350,6 +1356,111 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
     assert.equal(env.FOREMAN_TASK_RUN_ID, taskId, 'promoted child must receive the persisted task id')
+    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, codeBuddyExecution.expectedScope)
+    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, codeBuddyExecution.expectedEnvironment)
+    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, codeBuddyExecution.expectedWireModel)
+  })
+
+  it('validates CodeBuddy admission and injects only a complete private binding without logging it', async () => {
+    const cwd = makeTempDir('foreman-agent-supervisor-codebuddy-env-')
+    const envPath = join(cwd, 'env.json')
+    const privateValues = {
+      expectedScope: 'cbv1:admission-private-scope',
+      expectedEnvironment: 'external',
+      expectedWireModel: 'hy4-external',
+    } as const
+    const logged: unknown[] = []
+    const supervisor = new AgentExecutionSupervisor({
+      db,
+      repoWriteLocks: new RepoWriteLocks(),
+      logger: {
+        debug: (message, meta) => logged.push({ message, meta }),
+        info: (message, meta) => logged.push({ message, meta }),
+        warn: (message, meta) => logged.push({ message, meta }),
+        error: (message, meta) => logged.push({ message, meta }),
+      },
+    })
+    supervisors.push(supervisor)
+
+    const invalidBinding = {
+      expectedScope: 'cbv1:must-not-leak-scope',
+      expectedEnvironment: 'must-not-leak-environment',
+      expectedWireModel: '',
+    }
+    await assert.rejects(
+      supervisor.startExecution({
+        profile: 'codebuddy/deepseek-v3.2:cb',
+        permission: 'readonly',
+        cwd,
+        prompt: 'reject incomplete binding',
+        codeBuddyExecution: invalidBinding,
+      }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        assert.equal(message, 'CodeBuddy execution admission binding is unavailable')
+        assert.doesNotMatch(message, /must-not-leak/u)
+        return true
+      },
+    )
+
+    installFakeForgeEnvRecorder(cwd, envPath, [
+      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'codebuddy env ok' }),
+    ])
+    const inheritedKeys = [
+      'WRENYARD_CODEBUDDY_EXPECTED_SCOPE',
+      'wrenyard_codebuddy_expected_scope',
+      'Wrenyard_Codebuddy_Expected_Environment',
+      'WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL',
+    ] as const
+    const oldValues = new Map(inheritedKeys.map((key) => [key, process.env[key]]))
+    try {
+      process.env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE = 'stale-canonical-scope'
+      process.env.wrenyard_codebuddy_expected_scope = 'stale-lower-scope'
+      process.env.Wrenyard_Codebuddy_Expected_Environment = 'stale-mixed-environment'
+      process.env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL = 'stale-canonical-wire'
+
+      const handle = await supervisor.startExecution({
+        profile: 'codebuddy/deepseek-v3.2:cb',
+        permission: 'readonly',
+        cwd,
+        prompt: 'record private admission env',
+        codeBuddyExecution: privateValues,
+      })
+      assert.equal((await handle.wait()).status, 'done')
+
+      const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
+      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, privateValues.expectedScope)
+      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, privateValues.expectedEnvironment)
+      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, privateValues.expectedWireModel)
+      assert.equal(env.wrenyard_codebuddy_expected_scope, undefined)
+      assert.equal(env.Wrenyard_Codebuddy_Expected_Environment, undefined)
+
+      const serializedLogs = JSON.stringify(logged)
+      for (const value of Object.values(privateValues)) {
+        assert.ok(!serializedLogs.includes(value), 'private admission values must not enter supervisor logs')
+      }
+
+      installFakeForgeEnvRecorder(cwd, envPath, [
+        forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'non-codebuddy env ok' }),
+      ])
+      const nonCodeBuddy = await supervisor.startExecution({
+        profile: 'test',
+        permission: 'readonly',
+        cwd,
+        prompt: 'do not inject private admission env',
+        codeBuddyExecution: privateValues,
+      })
+      assert.equal((await nonCodeBuddy.wait()).status, 'done')
+      const nonCodeBuddyEnv = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
+      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, undefined)
+      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, undefined)
+      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, undefined)
+    } finally {
+      for (const [key, value] of oldValues) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
   })
 
   it('strips an inherited stale FOREMAN_TASK_RUN_ID from taskless executions', async () => {
@@ -2148,6 +2259,11 @@ writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({
   FOREMAN_TASK_RUN_ID: process.env.FOREMAN_TASK_RUN_ID,
   PATH: process.env.PATH,
   FOREMAN_ENV_TEST_SENTINEL: process.env.FOREMAN_ENV_TEST_SENTINEL,
+  WRENYARD_CODEBUDDY_EXPECTED_SCOPE: process.env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE,
+  WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT: process.env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT,
+  WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL: process.env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL,
+  wrenyard_codebuddy_expected_scope: process.env.wrenyard_codebuddy_expected_scope,
+  Wrenyard_Codebuddy_Expected_Environment: process.env.Wrenyard_Codebuddy_Expected_Environment,
 }))
 process.stdout.write(${JSON.stringify(output)})
 `, 'utf-8')

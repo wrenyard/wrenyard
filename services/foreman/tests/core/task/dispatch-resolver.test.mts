@@ -12,8 +12,10 @@ import {
   type TaskDispatchResolver,
 } from '../../../lib/core/task/dispatch-resolver.mts'
 
-// Real catalog stamped checked_at (from the builtin provider fixture).
-const CATALOG_CHECKED_AT = '2026-09-05'
+// Catalog-default speed samples are stamped checked_at (from the builtin
+// provider fixture); speed assertions use this truthful date. Catalog pricing
+// rows keep their own truthful checked_at dates, asserted inline per model.
+const SPEED_CHECKED_AT = '2026-09-09'
 // Real, injected local sample timestamp — must appear verbatim in the snapshot,
 // never a fabricated `new Date()` value.
 const LOCAL_CHECKED_AT = '2026-09-01T08:30:00.000Z'
@@ -22,6 +24,8 @@ const LOCAL_CHECKED_AT = '2026-09-01T08:30:00.000Z'
 const DSF_CB = 'codebuddy/deepseek-v4-flash:cb'
 const PRO_CB = 'codebuddy/deepseek-v4-pro:cb'
 const HY_CB = 'codebuddy/hy4-preview:cb'
+const HY3_CB = 'codebuddy/hy3:cb'
+const HY3_GK = 'codebuddy/hy3:gk'
 const GLMF_CB = 'codebuddy/glm-5.3-flash:cb'
 const LUNA_CODEX = 'codex/gpt-5.6-luna:codex'
 const LUNA_OPENAI_CB = 'openai/gpt-5.6-luna:cb'
@@ -49,11 +53,12 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     })
   })
 
-  it('automatic selection over the full task-capable candidate pool picks the cheaper Luna canonical target', () => {
+  it('automatic selection over the full task-capable candidate pool picks the cheaper eligible HY3 canonical target', () => {
     // Auto pool is every canonical task-capable candidate from the Catalog.
     // With an 80/60 floor the expected group contains the local-measured
-    // DeepSeek Flash (82.42) and Luna (107); Luna wins on reference output
-    // price (1.2 < 1.32) even though the local cb candidate is eligible.
+    // DeepSeek Flash (82.42) and the catalog-default HY3 (93.8); HY3 wins on
+    // reference output price (0.556) even though the local cb candidate is
+    // eligible.
     const resolution = resolver.resolve({
       taskName: 'auto-80-60',
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
@@ -62,27 +67,27 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolution.ok, true)
     const resolved = resolution.resolved
     // Canonical identity, not a source preset profile.
-    assert.equal(resolved.profile, LUNA_CODEX)
-    assert.equal(resolution.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(resolved.profile, HY3_CB)
+    assert.equal(resolution.exactAgentRuntime, HY3_CB)
     assert.equal(resolved.requested_agent_runtime, '')
-    assert.equal(resolved.client, 'codex')
-    assert.equal(resolved.provider, 'codex')
-    assert.equal(resolved.model, 'gpt-5.6-luna')
-    assert.equal(resolved.model_id, 'codex/gpt-5.6-luna')
+    assert.equal(resolved.client, 'codebuddy')
+    assert.equal(resolved.provider, 'codebuddy')
+    assert.equal(resolved.model, 'hy3')
+    assert.equal(resolved.model_id, 'codebuddy/hy3')
     assert.equal(resolved.mode, 'native')
-    assert.equal(resolved.intelligence, 'mid')
-    // Luna has no local sample, so the sourced catalog default is used.
+    assert.equal(resolved.intelligence, 'high')
+    // HY3 has no local sample, so the sourced catalog default is used.
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 107)
+    assert.equal(resolved.speed.effective_tps, 93.8)
     assert.equal(resolved.speed.sample_count, 0)
-    assert.equal(resolved.speed.checked_at, CATALOG_CHECKED_AT)
+    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
     assert.equal(resolved.speed.expected_tps_met, true)
     // Per-million reference pricing from the catalog, with a real source stamp.
-    assert.equal(resolved.reference_pricing.input_usd_per_million, 0.2)
-    assert.equal(resolved.reference_pricing.output_usd_per_million, 1.2)
-    assert.equal(resolved.reference_pricing.cached_input_usd_per_million, 0.02)
-    assert.equal(resolved.reference_pricing.source, 'https://developers.openai.com')
-    assert.equal(resolved.reference_pricing.checked_at, CATALOG_CHECKED_AT)
+    assert.equal(resolved.reference_pricing.input_usd_per_million, 0.139)
+    assert.equal(resolved.reference_pricing.output_usd_per_million, 0.556)
+    assert.equal(resolved.reference_pricing.cached_input_usd_per_million, 0.035)
+    assert.equal(resolved.reference_pricing.source, 'https://cloud.tencent.com/document/product/1823/130055')
+    assert.equal(resolved.reference_pricing.checked_at, '2026-09-08')
   })
 
   it('a legacy policy declaredRuntime opens the same automatic pool', () => {
@@ -98,23 +103,23 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
 
     assert.equal(withPolicy.ok, true)
     assert.equal(withPolicy.resolved.requested_agent_runtime, 'forge/fast')
-    assert.equal(withPolicy.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(withPolicy.exactAgentRuntime, HY3_CB)
     assert.equal(withAbsent.ok, true)
-    assert.equal(withAbsent.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(withAbsent.exactAgentRuntime, HY3_CB)
   })
 
   it('canonical machine preference is ignored in automatic selection', () => {
     // Same 80/60 pool. A machinePreference for a different provider/model
     // (PRO_CB) or for the same gpt-5.6-luna model over an alternate gateway
-    // client (openai/gpt-5.6-luna:cb) must not pin the pick: the native codex
-    // Luna identity wins the reference-output-price tie (1.2) over the openai
-    // gateway variant by stable canonical identity.
+    // client (openai/gpt-5.6-luna:cb) must not pin the pick: the cheaper
+    // eligible HY3 canonical target wins on reference output price (0.556) by
+    // stable canonical identity.
     const baseline = resolver.resolve({
       taskName: 'pref-ignored-baseline',
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
     })
     assert.equal(baseline.ok, true)
-    assert.equal(baseline.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(baseline.exactAgentRuntime, HY3_CB)
 
     const differentModel = resolver.resolve({
       taskName: 'pref-ignored-different-model',
@@ -122,7 +127,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
     })
     assert.equal(differentModel.ok, true)
-    assert.equal(differentModel.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(differentModel.exactAgentRuntime, HY3_CB)
 
     const sameModelAlternateClient = resolver.resolve({
       taskName: 'pref-ignored-alt-client',
@@ -130,9 +135,9 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
     })
     assert.equal(sameModelAlternateClient.ok, true)
-    assert.equal(sameModelAlternateClient.exactAgentRuntime, LUNA_CODEX)
-    assert.equal(sameModelAlternateClient.resolved.client, 'codex')
-    assert.equal(sameModelAlternateClient.resolved.provider, 'codex')
+    assert.equal(sameModelAlternateClient.exactAgentRuntime, HY3_CB)
+    assert.equal(sameModelAlternateClient.resolved.client, 'codebuddy')
+    assert.equal(sameModelAlternateClient.resolved.provider, 'codebuddy')
 
     // A legacy forge/<profile> machine preference is not a canonical dynamic
     // target at all; it is likewise ignored and the default selection applies.
@@ -142,7 +147,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
     })
     assert.equal(legacyPreference.ok, true)
-    assert.equal(legacyPreference.exactAgentRuntime, LUNA_CODEX)
+    assert.equal(legacyPreference.exactAgentRuntime, HY3_CB)
   })
 
   it('requirements.preferredRuntime is ignored in automatic selection', () => {
@@ -158,8 +163,8 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     })
 
     assert.equal(resolution.ok, true)
-    assert.equal(resolution.exactAgentRuntime, LUNA_CODEX)
-    assert.equal(resolution.resolved.client, 'codex')
+    assert.equal(resolution.exactAgentRuntime, HY3_CB)
+    assert.equal(resolution.resolved.client, 'codebuddy')
   })
 
   it('machine preference cannot bypass an exclusion of the same canonical target', () => {
@@ -218,8 +223,8 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.model, 'glm-5.3-flash')
     assert.equal(resolved.intelligence, 'high')
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 47.4)
-    assert.equal(resolved.speed.checked_at, CATALOG_CHECKED_AT)
+    assert.equal(resolved.speed.effective_tps, 73.1)
+    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.15)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 0.5)
   })
@@ -296,6 +301,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(result.ok, true)
     const choices = result.choices
     assert.ok(choices.length >= 1)
+    assert.ok(!choices.some((choice) => choice.exactAgentRuntime === HY3_GK))
     for (const choice of choices) {
       // Legacy policy strings are never returned as choices; each row is an
       // exact canonical provider/model:client target carrying full resolved
@@ -443,8 +449,8 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(resolved.protocol, 'openai_chat')
     assert.equal(resolved.intelligence, 'frontier')
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 39.2)
-    assert.equal(resolved.speed.checked_at, CATALOG_CHECKED_AT)
+    assert.equal(resolved.speed.effective_tps, 39.7)
+    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 15)
   })
 
@@ -471,6 +477,13 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(legacy.ok, false)
     assert.equal(legacy.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
     assert.ok(legacy.error.reason.length > 0)
+  })
+
+  it('explicit rejects a protocol-compatible target outside the client-provider execution contract', () => {
+    const incompatible = resolver.resolveExplicit({ taskName: 'explicit-incompatible', exactRuntime: HY3_GK })
+    assert.equal(incompatible.ok, false)
+    assert.equal(incompatible.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(incompatible.error.reason, /provider codebuddy cannot serve client grok/u)
   })
 
   it('explicit unknown provider or model returns EXPLICIT_RUNTIME_UNAVAILABLE', () => {
@@ -534,6 +547,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     for (const policy of POLICY_RUNTIMES) {
       assert.ok(!byRuntime.has(policy))
     }
+    assert.ok(!byRuntime.has(HY3_GK))
 
     for (const item of listed.items) {
       assert.match(item.exactAgentRuntime, CANONICAL_TARGET_RE)
@@ -565,5 +579,134 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     if (direct.ok) {
       assert.equal(k3.resolved?.profile, direct.resolved.profile)
     }
+  })
+})
+
+describe('core task dispatch-resolver structured failure codes (no-model)', () => {
+  let resolver: TaskDispatchResolver
+
+  beforeEach(async () => {
+    resolver = await createTaskDispatchResolver({
+      catalog: createBuiltinCatalog(),
+      runtime: createBuiltinProviderRuntime(),
+      localSpeed: localSamples,
+    })
+  })
+
+  // Deterministic candidate universe, mirroring the automatic pool. Every
+  // scenario below keeps only well-known canonical targets so the expected
+  // closed code is pinned regardless of unrelated fixture candidates.
+  const allTargets = (): string[] =>
+    resolver.listExactRuntimes({ taskName: 'codes-universe' }).items.map((item) => item.exactAgentRuntime)
+
+  const excluding = (...keep: string[]): string[] => {
+    const keepSet = new Set(keep)
+    return allTargets().filter((target) => !keepSet.has(target))
+  }
+
+  it('eligible reports price_limit when every remaining candidate exceeds the max output price', () => {
+    // PRO ($3.96/m) and K3 ($15/m) both clear the intelligence floor but trip
+    // the $2 output-price gate; the closed code is the price gate.
+    const result = resolver.eligible({
+      taskName: 'code-price-limit',
+      requirements: {
+        maxOutputUsdPerMillion: 2,
+        excludeProfileIds: excluding(PRO_CB, K3_GK),
+      } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, false)
+    const error = result.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'price_limit')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('eligible reports intelligence_requirement when every remaining candidate fails the intelligence band', () => {
+    // LUNA (mid) and PRO (high) both sit below a frontier floor, so the first
+    // real gate they trip is the intelligence band.
+    const result = resolver.eligible({
+      taskName: 'code-intelligence-band',
+      requirements: {
+        intelligenceMin: 'frontier',
+        excludeProfileIds: excluding(LUNA_CODEX, PRO_CB),
+      } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, false)
+    const error = result.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'intelligence_requirement')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('eligible reports speed_requirement when no candidate meets the minimum TPS', () => {
+    // A floor far above every trusted speed sample and catalog default drives
+    // the whole pool onto the minimum-speed gate.
+    const result = resolver.eligible({
+      taskName: 'code-speed-floor',
+      requirements: { minimumTps: 1_000_000 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, false)
+    const error = result.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'speed_requirement')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('eligible reports no_available_provider when every candidate is excluded by profile', () => {
+    const result = resolver.eligible({
+      taskName: 'code-all-excluded',
+      requirements: { excludeProfileIds: allTargets() } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, false)
+    const error = result.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'no_available_provider')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('resolve reports no_available_provider for a non-policy declared runtime', () => {
+    const resolution = resolver.resolve({
+      taskName: 'code-legacy-non-policy',
+      declaredRuntime: 'forge/codex-luna',
+      requirements: { minimumTps: 1 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(resolution.ok, false)
+    const error = resolution.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'no_available_provider')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('resolve reports speed_requirement when the whole automatic pool fails the minimum TPS gate', () => {
+    const resolution = resolver.resolve({
+      taskName: 'code-resolve-speed',
+      requirements: { minimumTps: 1_000_000 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(resolution.ok, false)
+    const error = resolution.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'speed_requirement')
+    assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('mixed singleton eliminations resolve deterministically to the cheapest candidate gate', () => {
+    // LUNA (mid) fails the frontier floor -> intelligence_requirement at
+    // $1.2/m; K3 (frontier) clears the band but fails the $2 price gate ->
+    // price_limit at $15/m. selectTaskResolutionFailure must surface LUNA's
+    // intelligence_requirement because it is the candidate the deterministic
+    // router would have ranked first had its gate passed.
+    const result = resolver.eligible({
+      taskName: 'code-mixed',
+      requirements: {
+        intelligenceMin: 'frontier',
+        maxOutputUsdPerMillion: 2,
+        excludeProfileIds: excluding(LUNA_CODEX, K3_GK),
+      } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, false)
+    const error = result.error
+    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
+    assert.equal(error.resolutionFailureCode, 'intelligence_requirement')
+    assert.match(error.message, /no eligible dispatch plan/u)
   })
 })

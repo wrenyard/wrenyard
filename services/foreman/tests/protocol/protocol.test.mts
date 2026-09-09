@@ -647,6 +647,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         intelligence: 'frontier',
         maxOutputTokens: 8192,
         capabilities: ['text', 'image'],
+        reasoningEffort: 'high',
         speed: {
           tps: 40,
           source: 'catalog',
@@ -945,6 +946,51 @@ describe('lib/protocol JSON-RPC contract', () => {
       merged: true,
       removed: true,
     })
+  })
+
+  it('accepts provider_override as a permitted resolved speed source', () => {
+    const usage = { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false }
+    const dispatchWithSpeedSource = (source: string) => ({
+      task_run_id: 'task_1234',
+      task_id: 'commit',
+      status: 'done',
+      output: { result: 'ok' },
+      resolved: {
+        requested_agent_runtime: 'agent',
+        profile: 'default',
+        client: 'claude',
+        provider: 'anthropic',
+        model: 'sonnet',
+        model_id: 'claude-sonnet-4',
+        mode: 'native',
+        speed: {
+          effective_tps: 30,
+          source,
+          sample_count: 10,
+          checked_at: '2026-01-01T00:00:00.000Z',
+          expected_tps_met: true,
+        },
+        intelligence: 'mid',
+        reference_pricing: {
+          source: 'catalog',
+          checked_at: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      usage,
+    })
+    // Every permitted resolved speed source round-trips through the wire schema.
+    for (const source of ['local_31d', 'provider_override', 'catalog_default']) {
+      const result = dispatchWithSpeedSource(source)
+      assert.deepEqual(parseMethodResult('task.run.wait', result), result)
+    }
+    // Unknown sources stay rejected; existing validation is unchanged.
+    assert.throws(
+      () => parseMethodResult('task.run.wait', dispatchWithSpeedSource('unknown_source')),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
   })
 
   it('validates taskgraph.wait params and result shapes', () => {

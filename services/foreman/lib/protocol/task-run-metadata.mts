@@ -91,7 +91,7 @@ export const taskResolvedDispatchSchema = {
       required: ['effective_tps', 'source', 'sample_count', 'checked_at', 'expected_tps_met'],
       properties: {
         effective_tps: { type: 'number' },
-        source: { enum: ['local_31d', 'catalog_default'] },
+        source: { enum: ['local_31d', 'provider_override', 'catalog_default'] },
         sample_count: { type: 'integer', minimum: 0 },
         checked_at: { type: 'string' },
         expected_tps_met: { type: 'boolean' },

@@ -359,6 +359,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     let requestedAgentRuntime: string | undefined
     let exactAgentRuntime: string | undefined
     let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
+    let codeBuddyExecution: import('../../core/operations/types.mts').CodeBuddyExecutionBinding | undefined
     let resolvedTimeoutMs: number | undefined
     if (!options.taskSettingsResolver) {
       // Pin-free legacy recovery boundary: a scheduling:'legacy' definition is
@@ -494,6 +495,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       exactAgentRuntime = canonicalTarget
       requestedAgentRuntime = canonicalTarget
       dispatchSnapshot = settingsResolution.dispatch
+      codeBuddyExecution = settingsResolution.codeBuddyExecution
       if (settingsResolution.timeoutMs !== undefined && settingsResolution.timeoutMs !== null) {
         resolvedTimeoutMs = settingsResolution.timeoutMs
       }
@@ -537,6 +539,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,
         dispatchSnapshot,
+        codeBuddyExecution,
         onDelivery: (delivery) => {
           structuredSummary = delivery.summary
         },

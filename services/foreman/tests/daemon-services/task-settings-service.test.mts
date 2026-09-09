@@ -26,9 +26,13 @@ import {
   RuntimeAliasService,
 } from '../../lib/daemon/services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../../lib/runtime-aliases/store.mts'
-import { AutoRoutingQuotaSnapshotService } from '../../lib/daemon/services/auto-routing-snapshot-service.mts'
+import {
+  AutoRoutingQuotaSnapshotService,
+  type CodeBuddyActiveSnapshotView,
+} from '../../lib/daemon/services/auto-routing-snapshot-service.mts'
 
 const CATALOG_CHECKED_AT = '2026-09-05'
+const QUOTA_T0 = 1_726_000_000_000
 
 interface ProfileFixture {
   /** Canonical `provider/model:client` run target. */
@@ -41,6 +45,7 @@ interface ProfileFixture {
   tps: number
   inputUsd: number
   outputUsd: number
+  mode?: 'native' | 'gateway'
 }
 
 const PROFILES: ProfileFixture[] = [
@@ -87,7 +92,8 @@ function resolvedChoice(profile: ProfileFixture): TaskResolvedDispatch {
     provider: profile.provider,
     model: profile.model,
     model_id: `${profile.provider}/${profile.model}`,
-    mode: 'native',
+    mode: profile.mode ?? 'native',
+    ...(profile.mode === 'gateway' ? { protocol: 'openai_chat' as const } : {}),
     speed: {
       effective_tps: profile.tps,
       source: 'catalog_default',
@@ -321,6 +327,30 @@ const CODEBUDDY_NATIVE_PROFILE: ProfileFixture = {
   outputUsd: 0.6,
 }
 
+const DEEPSEEK_FLASH_PRICING_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:cb',
+  profile: 'codebuddy-deepseek-flash',
+  client: 'cb',
+  provider: 'codebuddy',
+  model: 'deepseek-v4-flash',
+  intelligence: 'high',
+  tps: 91,
+  inputUsd: 0.44,
+  outputUsd: 1.32,
+}
+
+const DEEPSEEK_GLM_PRICE_PEER: ProfileFixture = {
+  exactAgentRuntime: 'zhipu-coding/glm-price-peer:cb',
+  profile: 'zhipu-glm-price-peer',
+  client: 'cb',
+  provider: 'zhipu-coding',
+  model: 'glm-price-peer',
+  intelligence: 'high',
+  tps: 47.4,
+  inputUsd: 0.2,
+  outputUsd: 0.5,
+}
+
 const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
   exactAgentRuntime: 'codebuddy/deepseek-v4-flash:gk',
   profile: 'codebuddy-grok',
@@ -331,6 +361,7 @@ const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
   tps: 90,
   inputUsd: 0.2,
   outputUsd: 0.6,
+  mode: 'gateway',
 }
 
 /** A different, more expensive canonical model used to prove distinct models
@@ -345,6 +376,172 @@ const CODEBUDDY_MINIMAX_PROFILE: ProfileFixture = {
   tps: 60,
   inputUsd: 0.8,
   outputUsd: 2.4,
+}
+
+const CODEBUDDY_HY3_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/hy3:cb',
+  profile: 'codebuddy-hy3',
+  client: 'cb',
+  provider: 'codebuddy',
+  model: 'hy3',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.2,
+  outputUsd: 0.6,
+}
+
+const CODEX_QUOTA_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codex/gpt-5.6-terra:codex',
+  profile: 'codex-terra-quota',
+  client: 'codex',
+  provider: 'codex',
+  model: 'gpt-5.6-terra',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 1,
+  outputUsd: 4,
+}
+
+/** Healthy Zhipu GLM-5.3-Flash candidate used to prove quota-tier ranking. Its
+ *  CodeBuddy twin below carries the same canonical model (glm-5.3-flash) with
+ *  equal truthful speed/intelligence/reference price, so the quota snapshot is
+ *  the only deciding factor. */
+const ZHIPU_GLM_FLASH_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'zhipu-coding/glm-5.3-flash:cb',
+  profile: 'zhipu-coding-glm-flash',
+  client: 'cb',
+  provider: 'zhipu-coding',
+  model: 'glm-5.3-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.5,
+  outputUsd: 1.5,
+}
+
+/** Non-confirmed-free CodeBuddy twin of ZHIPU_GLM_FLASH_PROFILE: probes
+ *  available with no free supply and has no applicable quota binding for this
+ *  model, so it stays a standard unknown rather than free. */
+const CODEBUDDY_GLM_FLASH_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codebuddy/glm-5.3-flash:cb',
+  profile: 'codebuddy-glm-flash',
+  client: 'cb',
+  provider: 'codebuddy',
+  model: 'glm-5.3-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.5,
+  outputUsd: 1.5,
+}
+
+/** Quota report carrying the privacy-safe CodeBuddy exhaustion block. */
+function codebuddyExhaustionQuotaSnapshotService(): AutoRoutingQuotaSnapshotService {
+  const resetsAt = new Date(Date.now() + 86_400_000).toISOString()
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () =>
+      Promise.resolve(
+        JSON.stringify([
+          {
+            pool: 'codebuddy',
+            status: 'ok',
+            stale: false,
+            windows: [{ name: 'observed', pct: 100, resets_at: resetsAt }],
+          },
+        ]),
+      ),
+    codeBuddySnapshot: () => Promise.resolve({
+      stableScope: 'cbv1:task-settings-test',
+      environment: 'ioa',
+      resolveUpstreamModel: (model: string) => model,
+      freeSupply: () => undefined,
+    }),
+  })
+}
+
+/** Quota report carrying the current live healthy Zhipu windows, matching the
+ *  non-secret snapshot read at 2026-09-09 13:54:53 +08:00: zhipu-coding 5h
+ *  rolling_partial at pct 1 (99% remaining, resets 2026-09-09T18:40:14.978
+ *  +08:00) and 7d full_cycle at pct 35 (65% remaining, resets 2026-09-13T10:
+ *  01:01.998 +08:00), status ok / stale false. fetched_at is pinned to that
+ *  same read instant so the raw row clears the service freshness gate. */
+function healthyZhipuQuotaSnapshotService(): AutoRoutingQuotaSnapshotService {
+  const snapshotAtMs = Date.parse('2026-09-09T13:54:53.000+08:00')
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () =>
+      Promise.resolve(
+        JSON.stringify([
+          {
+            pool: 'zhipu-coding',
+            status: 'ok',
+            stale: false,
+            fetched_at: '2026-09-09T13:54:53.000+08:00',
+            windows: [
+              { name: '5h', pct: 1, resets_at: '2026-09-09T18:40:14.978+08:00', window_minutes: 300 },
+              { name: '7d', pct: 35, resets_at: '2026-09-13T10:01:01.998+08:00', window_minutes: 10_080 },
+            ],
+          },
+        ]),
+      ),
+    now: () => snapshotAtMs,
+  })
+}
+
+function codexQuotaSnapshotService(
+  windows: Array<{ name: string; pct: number; resets_at: string; window_minutes: number }>,
+  row: { status?: string; stale?: boolean } = {},
+): AutoRoutingQuotaSnapshotService {
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.resolve(JSON.stringify([{
+      pool: 'codex',
+      status: row.status ?? 'ok',
+      stale: row.stale ?? false,
+      fetched_at: new Date(QUOTA_T0).toISOString(),
+      windows,
+    }])),
+    now: () => QUOTA_T0,
+  })
+}
+
+/** One automatic-preview failure issue (structural type, no protocol import). */
+type AutomaticUnavailableIssue = {
+  code: string
+  message: string
+  resolutionFailure?: { code: string; message: string }
+}
+
+/** Every automatic failure issue is one closed deterministic failure: the
+ *  exact resolutionFailure code plus its safe Chinese message, no raw resolver
+ *  copy, and no identity/price/TPS/secret leakage. */
+function assertClosedAutoIssue(issue: AutomaticUnavailableIssue | undefined): void {
+  assert.ok(issue)
+  assert.equal(issue.code, 'automatic_dispatch_unavailable')
+  const failure = issue.resolutionFailure
+  assert.ok(failure)
+  assert.equal(issue.message, failure.message)
+  assert.deepEqual(Object.keys(failure).sort(), ['code', 'message'])
+  const serialized = JSON.stringify(issue)
+  assert.ok(!serialized.includes('no eligible dispatch plan'))
+  assert.ok(!serialized.includes('auto-fail'))
+  assert.ok(!serialized.includes('codex'))
+  assert.ok(!serialized.includes('claude'))
+  assert.ok(!serialized.includes('gpt-'))
+  assert.ok(!serialized.includes('codebuddy'))
+  assert.ok(!serialized.includes('-ioa'))
+  assert.ok(!serialized.includes('authorization'))
+  assert.ok(!serialized.includes('secret'))
+  assert.ok(!serialized.includes('token'))
+  assert.ok(!/\d/.test(serialized))
+}
+
+/** Snapshots the single automatic row for `identity` and returns its closed
+ *  automatic_dispatch_unavailable issue (undefined when the row selected). */
+async function automaticUnavailableIssueOf(
+  service: TaskSettingsService,
+  identity: string,
+): Promise<AutomaticUnavailableIssue | undefined> {
+  const snapshot = await service.snapshot({ task_id: identity })
+  const row = snapshot.rows.find((entry) => entry.identity === identity)
+  assert.ok(row)
+  return row.issues.find((entry) => entry.code === 'automatic_dispatch_unavailable')
 }
 
 describe('daemon task-settings-service (no-model)', () => {
@@ -784,9 +981,15 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(autoFail.effective.mode.value, 'automatic')
     const autoFailIssue = autoFail.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')
     assert.ok(autoFailIssue)
-    // The unresolved automatic row keeps its concrete resolver reason and never
+    assertClosedAutoIssue(autoFailIssue)
+    // The unresolved automatic row surfaces one deterministic closed failure —
+    // the eligible rejection defaults to exact no_available_provider with its
+    // safe Chinese message, never the raw resolver English copy — and never
     // fabricates a selection or paired display labels.
-    assert.match(autoFailIssue.message, /no eligible dispatch plan for task 'auto-fail'/)
+    assert.deepEqual(autoFailIssue.resolutionFailure, {
+      code: 'no_available_provider',
+      message: '没有可用的服务商，请检查登录或凭据',
+    })
     assert.equal(autoFail.automatic_selection, undefined)
     assert.equal(autoFail.explicit, undefined)
   })
@@ -1210,6 +1413,197 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(!serialized.includes('authorization'))
   })
 
+  it('automatic selection collapses eligible client variants to the native model route before weighted ranking', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const pool = [CODEBUDDY_GROK_PROFILE, CODEBUDDY_MINIMAX_PROFILE, CODEBUDDY_NATIVE_PROFILE]
+    const seen: Array<{ client: string; provider: string; model: string }> = []
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: pool }),
+      quotaSnapshots: unknownQuotaSnapshotService(),
+      runtimeAvailability: (runtime) => {
+        seen.push(runtime)
+        return {
+          providerCredential: 'available',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: true,
+        }
+      },
+    })
+    const resolution = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { dispatch: { expectedTps: 80 } },
+    })
+    assert.deepEqual(seen, pool.map((profile) => runtimeTriple(profile)))
+    assert.equal(resolution.exactAgentRuntime, CODEBUDDY_NATIVE_PROFILE.exactAgentRuntime)
+    assert.equal(resolution.dispatch?.client, CODEBUDDY_NATIVE_PROFILE.client)
+    assert.equal(resolution.dispatch?.mode, 'native')
+  })
+
+  it('automatic CodeBuddy run uses one request-bound active snapshot for quota, free supply, and wire mapping', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    let loaderCalls = 0
+    let active: CodeBuddyActiveSnapshotView = Object.freeze({
+      stableScope: 'cbv1:account-a',
+      environment: 'ioa',
+      resolveUpstreamModel: (model: string) => `${model}-ioa`,
+      freeSupply: (_model: string) => ({
+        confirmedFree: true as const,
+        source: 'codebuddy.credential_environment',
+        ruleId: 'codebuddy.verified_hy_model_confirmed_free',
+      }),
+    })
+    const contexts: unknown[] = []
+    const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
+      codeBuddySnapshot: async () => {
+        loaderCalls += 1
+        return active
+      },
+      queryJson: (context) => {
+        contexts.push(context)
+        return Promise.resolve('[]')
+      },
+      now: () => QUOTA_T0,
+    })
+    const seenSnapshots: unknown[] = []
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_HY3_PROFILE] }),
+      quotaSnapshots,
+      runtimeAvailability: (runtime, availabilityContext) => {
+        const snapshot = availabilityContext?.codeBuddySnapshot
+        seenSnapshots.push(snapshot)
+        if (!snapshot?.stableScope) {
+          return { providerCredential: 'missing', providerLive: 'unknown', quota: 'unknown', available: false }
+        }
+        const expectedWireModel = snapshot.resolveUpstreamModel(runtime.model)
+        return {
+          providerCredential: 'available',
+          providerLive: 'available',
+          quota: 'unknown',
+          available: true,
+          ...(snapshot.freeSupply(runtime.model) ? { freeSupply: snapshot.freeSupply(runtime.model)! } : {}),
+          codeBuddyExecution: {
+            expectedScope: snapshot.stableScope,
+            expectedEnvironment: snapshot.environment,
+            expectedWireModel,
+          },
+        }
+      },
+    })
+
+    const first = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(loaderCalls, 1, 'one automatic run must read the active login exactly once')
+    assert.equal(seenSnapshots[0], active, 'readiness must receive the exact snapshot used by quota')
+    assert.deepEqual(contexts, [{ expectedScope: 'cbv1:account-a', expectedEnvironment: 'ioa' }])
+    assert.equal(first.dispatch?.auto_routing?.supply_class, 'confirmed_free')
+    assert.deepEqual(first.codeBuddyExecution, {
+      expectedScope: 'cbv1:account-a',
+      expectedEnvironment: 'ioa',
+      expectedWireModel: 'hy3-ioa',
+    })
+    // Only the private in-process carrier has the binding. Persisted/public
+    // dispatch telemetry remains free of scope/environment/wire values.
+    const serialized = JSON.stringify(first.dispatch)
+    assert.ok(!serialized.includes('cbv1:account-a'))
+    assert.ok(!serialized.includes('hy3-ioa'))
+
+    active = Object.freeze({
+      stableScope: 'cbv1:account-b',
+      environment: 'external',
+      resolveUpstreamModel: (model: string) => model,
+      freeSupply: () => undefined,
+    })
+    const second = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(loaderCalls, 2)
+    assert.equal(seenSnapshots[1], active)
+    assert.deepEqual(contexts[1], { expectedScope: 'cbv1:account-b', expectedEnvironment: 'external' })
+    assert.equal(second.dispatch?.auto_routing?.supply_class, 'standard')
+    assert.deepEqual(second.codeBuddyExecution, {
+      expectedScope: 'cbv1:account-b',
+      expectedEnvironment: 'external',
+      expectedWireModel: 'hy3',
+    })
+  })
+
+  const runCodexQuota = async (
+    windows: Array<{ name: string; pct: number; resets_at: string; window_minutes: number }>,
+    row: { status?: string; stale?: boolean } = {},
+  ) => {
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEX_QUOTA_PROFILE] }),
+      quotaSnapshots: codexQuotaSnapshotService(windows, row),
+    })
+    return service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+  }
+
+  it('Codex weekly-only evidence is complete and can truthfully be strained', async () => {
+    writeConfig({})
+    const resolution = await runCodexQuota([{
+      name: '7d', pct: 95,
+      resets_at: new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString(),
+      window_minutes: 10_080,
+    }])
+    assert.equal(resolution.dispatch?.auto_routing?.quota_tier, 'strained')
+    assert.equal(resolution.dispatch?.auto_routing?.quota_coverage_complete, true)
+  })
+
+  it('a present Codex 5h blocks when exhausted, strains when low, and permits healthy routing when healthy', async () => {
+    writeConfig({})
+    const weekly = {
+      name: '7d', pct: 20,
+      resets_at: new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString(),
+      window_minutes: 10_080,
+    }
+    await assert.rejects(
+      runCodexQuota([weekly, {
+        name: '5h', pct: 100,
+        resets_at: new Date(QUOTA_T0 + 4 * 60 * 60_000).toISOString(),
+        window_minutes: 300,
+      }]),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+    )
+    const strained = await runCodexQuota([weekly, {
+      name: '5h', pct: 95,
+      resets_at: new Date(QUOTA_T0 + 4 * 60 * 60_000).toISOString(),
+      window_minutes: 300,
+    }])
+    assert.equal(strained.dispatch?.auto_routing?.quota_tier, 'strained')
+    const healthy = await runCodexQuota([weekly, {
+      name: '5h', pct: 20,
+      resets_at: new Date(QUOTA_T0 + 4 * 60 * 60_000).toISOString(),
+      window_minutes: 300,
+    }])
+    assert.equal(healthy.dispatch?.auto_routing?.quota_tier, 'healthy')
+    assert.equal(healthy.dispatch?.auto_routing?.quota_coverage_complete, true)
+  })
+
+  it('an absent Codex 5h is ignored, while present-invalid or stale 5h evidence stays conservative unknown', async () => {
+    writeConfig({})
+    const weekly = {
+      name: '7d', pct: 20,
+      resets_at: new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString(),
+      window_minutes: 10_080,
+    }
+    const absent = await runCodexQuota([weekly])
+    assert.equal(absent.dispatch?.auto_routing?.quota_tier, 'healthy')
+    assert.equal(absent.dispatch?.auto_routing?.quota_coverage_complete, true)
+
+    const invalid = await runCodexQuota([weekly, {
+      name: '5h', pct: 20, resets_at: 'not-a-time', window_minutes: 300,
+    }])
+    assert.equal(invalid.dispatch?.auto_routing?.quota_tier, 'unknown')
+    assert.equal(invalid.dispatch?.auto_routing?.quota_coverage_complete, false)
+
+    const stale = await runCodexQuota([weekly, {
+      name: '5h', pct: 20,
+      resets_at: new Date(QUOTA_T0 + 4 * 60 * 60_000).toISOString(),
+      window_minutes: 300,
+    }], { stale: true })
+    assert.equal(stale.dispatch?.auto_routing?.quota_tier, 'unknown')
+    assert.equal(stale.dispatch?.auto_routing?.quota_coverage_complete, false)
+  })
+
   it('explicit run preflight fails on live unavailability with no second resolver call', async () => {
     writeConfig({
       tasks: {
@@ -1498,9 +1892,9 @@ describe('daemon task-settings-service (no-model)', () => {
     // proves the request-scoped memo (not the service) collapses them.
     const realQuotaService = unknownQuotaSnapshotService()
     const quotaService = {
-      snapshot: () => {
+      routingSnapshot: async () => {
         quotaCalls += 1
-        return realQuotaService.snapshot()
+        return { snapshot: await realQuotaService.snapshot(), codeBuddySnapshot: undefined }
       },
     } as unknown as AutoRoutingQuotaSnapshotService
     const service = context!.makeService({
@@ -1615,5 +2009,309 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(firstReviewParts.snapshotIds.length >= 1)
     assert.ok(secondReviewParts.snapshotIds.length >= 1)
     assert.notDeepEqual(secondReviewParts.snapshotIds, firstReviewParts.snapshotIds)
+  })
+
+  it('automatic preview maps every rejected live readiness probe to no_available_provider', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      runtimeAvailability: () => ({
+        providerCredential: 'missing',
+        providerLive: 'unavailable',
+        quota: 'unknown',
+        available: false,
+      }),
+    })
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'no_available_provider',
+      message: '没有可用的服务商，请检查登录或凭据',
+    })
+  })
+
+  it('automatic preview maps every above-cap rejection to price_limit', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { selectionMode: 'automatic', dispatch: { maxOutputUsdPerMillion: 1 } },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'price_limit',
+      message: '允许价格内没有可用模型，请调整价格上限',
+    })
+  })
+
+  it('automatic preview maps an unsatisfiable intelligence floor to intelligence_requirement', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'premium' } },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'intelligence_requirement',
+      message: '没有模型满足智能要求，请调整智能要求',
+    })
+  })
+
+  it('automatic preview maps an unsatisfiable minimum speed to speed_requirement', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { selectionMode: 'automatic', dispatch: { minimumTps: 200 } },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'speed_requirement',
+      message: '没有模型满足速度要求，请调整速度要求',
+    })
+  })
+
+  it('automatic preview maps a determinate hard-blocked provider to quota_unavailable', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE] }),
+      quotaSnapshots: codebuddyExhaustionQuotaSnapshotService(),
+    })
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'quota_unavailable',
+      message: '模型额度不可用，请检查额度状态',
+    })
+  })
+
+  it('unknown quota with a reference price at the 10 gate classifies as price_limit, never quota_unavailable', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [PROFILES[2]!] }),
+    })
+    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
+    assertClosedAutoIssue(issue)
+    assert.deepEqual(issue?.resolutionFailure, {
+      code: 'price_limit',
+      message: '允许价格内没有可用模型，请调整价格上限',
+    })
+  })
+
+  it('mixed eliminations surface the cheapest routing-relevant gate deterministically regardless of pool order', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'high' } },
+        },
+      },
+    })
+    const pool = [PROFILES[0]!, PROFILES[2]!]
+    const forward = context!.makeService({ resolver: createResolverFixture({ profiles: pool }) })
+    const forwardIssue = await automaticUnavailableIssueOf(forward, 'builtin:commit')
+    assertClosedAutoIssue(forwardIssue)
+    // The cheaper gpt-5.6-luna (mid) is eliminated by the intelligence floor
+    // while the expensive claude-opus-4 clears intelligence but trips the
+    // unknown-quota 10 reference gate. Deterministic selection prefers the
+    // elimination of the cheapest routing-relevant candidate.
+    assert.equal(forwardIssue?.resolutionFailure?.code, 'intelligence_requirement')
+    assert.equal(forwardIssue?.message, '没有模型满足智能要求，请调整智能要求')
+
+    const backward = context!.makeService({
+      resolver: createResolverFixture({ profiles: [...pool].reverse() }),
+    })
+    const backwardIssue = await automaticUnavailableIssueOf(backward, 'builtin:commit')
+    assertClosedAutoIssue(backwardIssue)
+    assert.deepEqual(backwardIssue?.resolutionFailure, forwardIssue?.resolutionFailure)
+  })
+
+  it('automatic preview ranks a healthy zhipu-coding GLM-5.3-Flash over an otherwise equal unknown non-free CodeBuddy twin', async () => {
+    writeConfig({})
+    const pool = [ZHIPU_GLM_FLASH_PROFILE, CODEBUDDY_GLM_FLASH_PROFILE]
+    const previewSelection = async (
+      profiles: ProfileFixture[],
+    ): Promise<{ exact_runtime: string; auto_routing: unknown }> => {
+      const service = context!.makeService({
+        resolver: createResolverFixture({ profiles }),
+        quotaSnapshots: healthyZhipuQuotaSnapshotService(),
+      })
+      const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+      const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+      assert.ok(commit)
+      // Both candidates are otherwise gate-eligible non-confirmed-free twins of
+      // the same canonical model glm-5.3-flash with equal truthful
+      // speed/intelligence/reference price, so the quota tier is the deciding
+      // factor. CodeBuddy has no applicable quota binding for this model and
+      // probes available with no free supply, keeping it a standard unknown.
+      assert.deepEqual(commit.issues, [])
+      const selection = commit.automatic_selection
+      assert.ok(selection)
+      return {
+        exact_runtime: selection.exact_runtime,
+        auto_routing: selection.resolved.auto_routing,
+      }
+    }
+
+    const forward = await previewSelection(pool)
+    assert.equal(forward.exact_runtime, ZHIPU_GLM_FLASH_PROFILE.exactAgentRuntime)
+    assert.notEqual(forward.exact_runtime, CODEBUDDY_GLM_FLASH_PROFILE.exactAgentRuntime)
+    // The healthy Zhipu decision is standard supply (never confirmed-free)
+    // with quota tier healthy, complete coverage, and trusted headroom from
+    // the live windows (5h pct 1 / 99% remaining; 7d pct 35 / 65% remaining).
+    const routing = forward.auto_routing
+    assert.ok(routing && typeof routing === 'object')
+    const decision = routing as Record<string, unknown>
+    assert.equal(decision.supply_class, 'standard')
+    assert.equal(decision.quota_tier, 'healthy')
+    assert.equal(decision.quota_coverage_complete, true)
+    assert.equal(decision.quota_headroom_trusted, true)
+
+    // Reversed candidate input order leaves the decision unchanged: the healthy
+    // Zhipu candidate still outranks the otherwise equal unknown CodeBuddy twin.
+    const backward = await previewSelection([...pool].reverse())
+    assert.equal(backward.exact_runtime, ZHIPU_GLM_FLASH_PROFILE.exactAgentRuntime)
+    assert.notEqual(backward.exact_runtime, CODEBUDDY_GLM_FLASH_PROFILE.exactAgentRuntime)
+  })
+
+  it('prices automatic DeepSeek Flash from the request horizon without discount bypass or stale post-cut gating', async () => {
+    const previewAt = async (
+      at: string,
+      timeoutMs: number,
+      cap: number,
+    ) => {
+      const nowMs = Date.parse(at)
+      writeConfig({
+        tasks: {
+          settings: {
+            global: {
+              selectionMode: 'automatic',
+              timeoutMs,
+              maxAutoOutputUsdPerMillion: cap,
+              dispatch: { expectedTps: 1, minimumTps: 1 },
+            },
+          },
+        },
+      })
+      const service = context!.makeService({
+        resolver: createResolverFixture({ profiles: [DEEPSEEK_FLASH_PRICING_PROFILE] }),
+        quotaSnapshots: unknownQuotaSnapshotService(() => nowMs),
+        now: () => nowMs,
+      })
+      const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+      const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
+      assert.ok(row)
+      return row
+    }
+
+    const preOffPeak = await previewAt('2026-09-09T04:30:00.000Z', 120_000, 1.32)
+    assert.equal(preOffPeak.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.32)
+    assert.equal(preOffPeak.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 0.66)
+    assert.equal(preOffPeak.automatic_selection?.resolved.reference_pricing.output_usd_per_million, 0.66)
+
+    const crossing = await previewAt('2026-09-10T03:59:59.999Z', 1, 1.32)
+    assert.equal(crossing.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.32)
+    assert.equal(crossing.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 1.32)
+    assert.match(crossing.automatic_selection?.resolved.reference_pricing.source ?? '', /api-docs.*fe-static/)
+
+    const atCut = await previewAt('2026-09-10T04:00:00.000Z', 120_000, 1.25)
+    assert.equal(atCut.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.2)
+    assert.equal(atCut.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 0.6)
+    assert.equal(atCut.automatic_selection?.resolved.reference_pricing.output_usd_per_million, 0.6)
+    assert.match(atCut.automatic_selection?.resolved.reference_pricing.source ?? '', /fe-static/)
+
+    const postPeak = await previewAt('2026-09-10T06:00:00.000Z', 120_000, 1.2)
+    assert.equal(postPeak.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.2)
+    assert.equal(postPeak.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 1.2)
+
+    const preRejected = await previewAt('2026-09-09T04:30:00.000Z', 120_000, 1.25)
+    assert.equal(preRejected.automatic_selection, undefined)
+    assert.equal(
+      preRejected.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')?.resolutionFailure?.code,
+      'price_limit',
+    )
+    const postRejected = await previewAt('2026-09-10T04:00:00.000Z', 120_000, 1.1)
+    assert.equal(postRejected.automatic_selection, undefined)
+    assert.equal(
+      postRejected.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')?.resolutionFailure?.code,
+      'price_limit',
+    )
+  })
+
+  it('uses DeepSeek horizon marginal price for ranking and retains explicit attempt pricing', async () => {
+    const selectedAt = async (at: string): Promise<string> => {
+      const nowMs = Date.parse(at)
+      writeConfig({
+        tasks: {
+          settings: {
+            global: {
+              selectionMode: 'automatic',
+              timeoutMs: 120_000,
+              maxAutoOutputUsdPerMillion: 2,
+              dispatch: { expectedTps: 1, minimumTps: 1 },
+            },
+          },
+        },
+      })
+      const service = context!.makeService({
+        resolver: createResolverFixture({ profiles: [DEEPSEEK_FLASH_PRICING_PROFILE, DEEPSEEK_GLM_PRICE_PEER] }),
+        quotaSnapshots: unknownQuotaSnapshotService(() => nowMs),
+        now: () => nowMs,
+      })
+      const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+      const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
+      assert.ok(row?.automatic_selection)
+      return row.automatic_selection.exact_runtime
+    }
+
+    assert.equal(
+      await selectedAt('2026-09-09T06:30:00.000Z'),
+      DEEPSEEK_GLM_PRICE_PEER.exactAgentRuntime,
+    )
+    assert.equal(
+      await selectedAt('2026-09-09T04:30:00.000Z'),
+      DEEPSEEK_FLASH_PRICING_PROFILE.exactAgentRuntime,
+    )
+
+    const nowMs = Date.parse('2026-09-10T04:00:00.000Z')
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'explicit',
+            explicitRuntime: { kind: 'target', target: DEEPSEEK_FLASH_PRICING_PROFILE.exactAgentRuntime },
+            timeoutMs: 120_000,
+          },
+        },
+      },
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [DEEPSEEK_FLASH_PRICING_PROFILE] }),
+      now: () => nowMs,
+    })
+    const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
+    const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
+    assert.equal(row?.explicit?.resolved?.reference_pricing.output_usd_per_million, 0.6)
+    assert.match(row?.explicit?.resolved?.reference_pricing.source ?? '', /fe-static/)
+    assert.equal(row?.explicit?.resolved?.auto_routing, undefined)
+
+    const run = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { timeoutMs: 120_000, dispatch: {} },
+    })
+    assert.equal(run.mode, 'explicit')
+    assert.ok(run.dispatch)
+    assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
+    assert.match(run.dispatch.reference_pricing.source, /fe-static/)
+    assert.equal(run.dispatch.auto_routing, undefined)
   })
 })

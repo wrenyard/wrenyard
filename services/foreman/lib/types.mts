@@ -19,6 +19,8 @@ export interface AgentOpts {
   requestedAgentRuntime?: string
   /** Per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
+  /** Private non-persistent CodeBuddy admission binding. */
+  codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
   /** Canonical Forge failure class, when classified by the runtime. */
   failureClass?: import('./core/task/failure.mts').ForgeFailureClass | string | null
 }
@@ -140,6 +142,9 @@ export interface TaskRunSettingsResolution {
   exactAgentRuntime: string | null
   /** Resolved dispatch snapshot produced by the daemon resolver for this run. */
   dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null
+  /** Private CodeBuddy admission binding captured with this resolution. Never
+   * persisted or projected through public task settings/telemetry DTOs. */
+  codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
   /** Effective total task timeout after all layer merges. */
   timeoutMs: number | null
   /** Per-field winning source layer. */

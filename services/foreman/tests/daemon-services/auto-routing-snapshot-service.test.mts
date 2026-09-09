@@ -13,11 +13,21 @@
  * fail-closed missing/invalid/stale/future/over-60s observations, strict
  * rejection of an invented-field source, exact replenishment semantics from
  * binding window constraints (full-cycle carries reset pace; rolling/unknown
- * never invent one), the CodeBuddy retained block validated without
- * fetched_at (cache bounded by min(now+60s, reset); invalid/expired never
- * block), short-lived unknown snapshots for successful-but-empty reports, deep
- * immutability, single-flight deduplication, cache boundaries, expiry refresh
- * and the failed-refresh contract (expired evidence is never served).
+ * never invent one), the neutral Go v2 CodeBuddy retained block (exact
+ * `observed` window, pct 100, future reset; legacy `1mo` inert) validated
+ * without fetched_at (cache bounded by min(now+60s, reset); invalid/expired
+ * never block), short-lived unknown snapshots for successful-but-empty
+ * reports, deep immutability, single-flight deduplication, cache boundaries,
+ * expiry refresh and the failed-refresh contract (expired evidence is never
+ * served).
+ *
+ * Current-login binding is covered by injecting an immutable fake CodeBuddy
+ * active snapshot loader: the query callback receives only the expected
+ * scope/environment, same-scope token refresh reuses cached evidence, scope or
+ * environment switches bypass cached and in-flight CodeBuddy state, missing/
+ * throwing/stableScope-less snapshots fail closed, and no credential/token/
+ * scope/environment/domain/wire mapping ever reaches a query or a serialized
+ * DTO.
  */
 
 import assert from 'node:assert/strict';
@@ -25,9 +35,11 @@ import { test } from 'node:test';
 
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
 
+import type { CodeBuddyQueryContext } from '../../lib/daemon/execution/forge-quota-query.mts';
 import {
   AutoRoutingQuotaSnapshotService,
   type AutoRoutingQuotaSnapshot,
+  type CodeBuddyActiveSnapshotView,
 } from '../../lib/daemon/services/auto-routing-snapshot-service.mts';
 
 const T0 = 1_726_000_000_000;
@@ -65,6 +77,14 @@ function reportJson(rows: unknown[]): string {
 function serviceFor(rows: unknown[], now: () => number = () => T0): AutoRoutingQuotaSnapshotService {
   return new AutoRoutingQuotaSnapshotService({
     queryJson: () => Promise.resolve(reportJson(rows)),
+    now,
+  });
+}
+
+function scopedServiceFor(rows: unknown[], now: () => number = () => T0): AutoRoutingQuotaSnapshotService {
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.resolve(reportJson(rows)),
+    codeBuddySnapshot: () => Promise.resolve(fakeCodeBuddySnapshot({ stableScope: 'cbv1:test-scope' })),
     now,
   });
 }
@@ -191,18 +211,39 @@ function codebuddyRow(
     pool: 'codebuddy',
     status: 'ok',
     stale: false,
-    // Intentionally NO fetched_at: Go emits this retained negative row without it.
+    // Intentionally NO fetched_at: the neutral Go v2 projection emits this
+    // retained negative row without it.
     windows: [
       {
-        name: '1mo',
+        name: 'observed',
         pct: 100,
         resets_at: iso(T0 + 3_600_000),
-        window_minutes: MONTH_MINUTES,
         ...windowOverrides,
       },
     ],
     ...rowOverrides,
   };
+}
+
+/** Minimal immutable fake CodeBuddy active snapshot. The credentialValue is a
+ *  private token stand-in that must never reach a query context or a
+ *  serialized DTO; only stableScope/environment are meaningful to the service. */
+interface FakeCodeBuddySnapshot extends CodeBuddyActiveSnapshotView {
+  readonly credentialValue?: string;
+}
+
+function fakeCodeBuddySnapshot(overrides: {
+  stableScope?: string;
+  environment?: string;
+  credentialValue?: string;
+} = {}): FakeCodeBuddySnapshot {
+  return Object.freeze({
+    stableScope: overrides.stableScope,
+    environment: overrides.environment ?? 'ioa',
+    resolveUpstreamModel: (model: string) => model,
+    freeSupply: () => undefined,
+    ...(overrides.credentialValue !== undefined ? { credentialValue: overrides.credentialValue } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +308,282 @@ test('maps every canonical binding from quotaProviderId rows and derives evidenc
   );
 
   assert.deepEqual(snapshot.hardBlockedProviderIds, []);
+});
+
+// ---------------------------------------------------------------------------
+// Binding-driven Kimi shape: 5h + 7d only, no monthly requirement
+// ---------------------------------------------------------------------------
+
+test('a fresh kimi-coding row with only 5h/7d gives k3 complete coverage and a raw 1mo stays inert', async () => {
+  const binding = PROVIDER_QUOTA_BINDINGS.find(
+    (candidate) => candidate.providerId === 'kimi-coding' && candidate.modelId === 'k3',
+  );
+  assert.ok(binding, 'expected a kimi-coding/k3 binding');
+  assert.deepEqual(binding!.windows!.map((window) => window.windowId), ['5h', '7d']);
+
+  // No monthly window is emitted or required; a stray raw 1mo is unrelated.
+  const rows: FixtureRow[] = [
+    {
+      pool: 'kimi-coding',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 4, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+        { name: '1mo', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES },
+      ],
+    },
+  ];
+  const snapshot = await serviceFor(rows).snapshot();
+  const entry = entryFor(snapshot, 'kimi-coding', 'k3');
+  assert.deepEqual(
+    entry.requiredQuota.map((constraint) => constraint.id),
+    ['5h', '7d'],
+  );
+  const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
+  const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
+  assert.ok(five, '5h must carry fresh evidence');
+  assert.ok(seven, '7d must carry fresh evidence');
+  assert.equal(five!.remainingPercent, 100);
+  assert.equal(five!.replenishmentKind, 'rolling_partial');
+  assert.ok(!('resetAtMs' in five!), '5h rolling_partial must not invent a reset time');
+  assert.equal(seven!.remainingPercent, 96);
+  assert.equal(seven!.replenishmentKind, 'full_cycle');
+  assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
+  assert.equal(seven!.windowMs, 10_080 * 60_000);
+  // A usable row still yields the 60s freshness cache.
+  assert.equal(snapshot.validUntilMs, T0 + 60_000);
+});
+
+test('missing, stale, or invalid retained kimi windows stay null/incomplete while an exhausted 7d stays preserved', async () => {
+  // Missing the retained 7d window: that constraint is an explicit null.
+  const missing7d: FixtureRow[] = [
+    {
+      pool: 'kimi-coding',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [{ name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 }],
+    },
+  ];
+  const no7d = await serviceFor(missing7d).snapshot();
+  assert.equal(evidenceFor(no7d, 'kimi-coding', 'k3', '7d').constraint.evidence, null);
+  assert.equal(evidenceFor(no7d, 'kimi-coding', 'k3', '5h').constraint.evidence!.remainingPercent, 100);
+
+  // A stale row leaves every retained kimi window null (fail closed).
+  const stale: FixtureRow[] = [
+    {
+      pool: 'kimi-coding',
+      status: 'ok',
+      stale: true,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 4, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const staleSnapshot = await serviceFor(stale).snapshot();
+  for (const windowId of ['5h', '7d']) {
+    assert.equal(
+      evidenceFor(staleSnapshot, 'kimi-coding', 'k3', windowId).constraint.evidence,
+      null,
+      `${windowId} must be null on a stale row`,
+    );
+  }
+  assert.equal(staleSnapshot.validUntilMs, T0 + 15_000);
+
+  // Invalid retained 7d reset keeps only 5h: 7d is null, coverage incomplete.
+  const garbage: FixtureRow[] = [
+    {
+      pool: 'kimi-coding',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 4, resets_at: 'not-a-time', window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const invalid = await serviceFor(garbage).snapshot();
+  assert.equal(evidenceFor(invalid, 'kimi-coding', 'k3', '7d').constraint.evidence, null);
+
+  // Exhausted (pct 100) retained 7d evidence is preserved for catalog policy.
+  const exhausted: FixtureRow[] = [
+    {
+      pool: 'kimi-coding',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 100, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const preserved = await serviceFor(exhausted).snapshot();
+  const sevenEx = evidenceFor(preserved, 'kimi-coding', 'k3', '7d').constraint.evidence;
+  assert.ok(sevenEx, 'exhausted retained 7d evidence must be preserved');
+  assert.equal(sevenEx!.remainingPercent, 0);
+  assert.equal(sevenEx!.replenishmentKind, 'full_cycle');
+});
+
+// ---------------------------------------------------------------------------
+// Binding-driven Zhipu shape: shared zhipu-coding row, rolling 5h + weekly 7d
+// ---------------------------------------------------------------------------
+
+test('a fresh zhipu-coding row gives both glm-5.3 and glm-5.3-flash measured remaining percents with truthful replenishment semantics', async () => {
+  const zhipuBindings = PROVIDER_QUOTA_BINDINGS.filter(
+    (candidate) => candidate.providerId === 'zhipu-coding',
+  );
+  assert.deepEqual(
+    zhipuBindings.map((binding) => binding.modelId).sort(),
+    ['glm-5.3', 'glm-5.3-flash'],
+  );
+  for (const binding of zhipuBindings) {
+    assert.equal(binding.quotaProviderId, 'zhipu-coding');
+    assert.deepEqual(binding.windows!.map((window) => window.windowId), ['5h', '7d']);
+  }
+
+  // One shared zhipu-coding pool row; reset/window values are the raw row's own.
+  const rows: FixtureRow[] = [
+    {
+      pool: 'zhipu-coding',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 2, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 35, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const snapshot = await serviceFor(rows).snapshot();
+  for (const binding of zhipuBindings) {
+    const entry = entryFor(snapshot, binding.providerId, binding.modelId);
+    assert.equal(entry.quotaPoolId, binding.quotaPoolId);
+    assert.deepEqual(
+      entry.requiredQuota.map((constraint) => constraint.id),
+      ['5h', '7d'],
+    );
+    const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
+    const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
+    assert.ok(five, `${binding.modelId} must carry 5h evidence`);
+    assert.ok(seven, `${binding.modelId} must carry 7d evidence`);
+    // Measured remaining percentages are preserved exactly.
+    assert.equal(five!.remainingPercent, 98);
+    assert.equal(five!.replenishmentKind, 'rolling_partial');
+    assert.ok(!('resetAtMs' in five!), '5h rolling_partial must not invent a reset time');
+    assert.ok(!('windowMs' in five!), '5h rolling_partial must not invent a window length');
+    assert.equal(seven!.remainingPercent, 65);
+    assert.equal(seven!.replenishmentKind, 'full_cycle');
+    assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
+    assert.equal(seven!.windowMs, 10_080 * 60_000);
+  }
+  assert.deepEqual(snapshot.hardBlockedProviderIds, []);
+});
+
+// ---------------------------------------------------------------------------
+// Codex: required weekly baseline plus conditional primary 5h; Spark separate
+// ---------------------------------------------------------------------------
+
+test('a codex 7d-only row is complete, while a present primary 5h participates', async () => {
+  const codexBindings = PROVIDER_QUOTA_BINDINGS.filter((candidate) => candidate.providerId === 'codex');
+  assert.ok(codexBindings.length > 0);
+  const weeklyOnly: FixtureRow[] = [{
+    pool: 'codex',
+    status: 'ok',
+    stale: false,
+    fetched_at: iso(T0),
+    windows: [{ name: '7d', pct: 72, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
+  }];
+  const baseline = await serviceFor(weeklyOnly).snapshot();
+  for (const binding of codexBindings) {
+    const entry = entryFor(baseline, binding.providerId, binding.modelId);
+    assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['7d']);
+    assert.equal(entry.requiredQuota[0]!.evidence!.remainingPercent, 28);
+  }
+
+  const rows: FixtureRow[] = [
+    {
+      pool: 'codex',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 72, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const snapshot = await serviceFor(rows).snapshot();
+  for (const binding of codexBindings) {
+    const entry = entryFor(snapshot, binding.providerId, binding.modelId);
+    assert.equal(entry.quotaPoolId, binding.quotaPoolId);
+    assert.deepEqual(
+      entry.requiredQuota.map((constraint) => constraint.id),
+      ['5h', '7d'],
+    );
+    const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
+    const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
+    assert.ok(five, `${binding.modelId} must carry present 5h evidence`);
+    assert.ok(seven, `${binding.modelId} must carry required 7d evidence`);
+    assert.equal(five!.remainingPercent, 80);
+    assert.equal(five!.replenishmentKind, 'full_cycle');
+    assert.equal(five!.resetAtMs, Date.parse(iso(T0 + 3_600_000)));
+    assert.equal(five!.windowMs, 300 * 60_000);
+    assert.equal(seven!.remainingPercent, 28);
+    assert.equal(seven!.replenishmentKind, 'full_cycle');
+    assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
+    assert.equal(seven!.windowMs, 10_080 * 60_000);
+  }
+  assert.equal(snapshot.validUntilMs, T0 + 60_000);
+  assert.deepEqual(snapshot.hardBlockedProviderIds, []);
+});
+
+test('a present invalid or stale codex 5h stays an explicit conservative unknown; an absent 5h is ignored', async () => {
+  const modelId = 'gpt-5.6-sol';
+  const absent = await serviceFor([{
+    pool: 'codex', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: [{ name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
+  }]).snapshot();
+  assert.deepEqual(entryFor(absent, 'codex', modelId).requiredQuota.map((entry) => entry.id), ['7d']);
+
+  const invalid = await serviceFor([{
+    pool: 'codex', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: [
+      { name: '5h', pct: 20, resets_at: 'not-a-time', window_minutes: 300 },
+      { name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+    ],
+  }]).snapshot();
+  assert.equal(evidenceFor(invalid, 'codex', modelId, '5h').constraint.evidence, null);
+  assert.notEqual(evidenceFor(invalid, 'codex', modelId, '7d').constraint.evidence, null);
+
+  const stale = await serviceFor([{
+    pool: 'codex', status: 'ok', stale: true, fetched_at: iso(T0),
+    windows: [
+      { name: '5h', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+      { name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+    ],
+  }]).snapshot();
+  assert.equal(evidenceFor(stale, 'codex', modelId, '5h').constraint.evidence, null);
+  assert.equal(evidenceFor(stale, 'codex', modelId, '7d').constraint.evidence, null);
+});
+
+test('codex-spark reads its separate row and requires both 5h and 7d', async () => {
+  const snapshot = await serviceFor([{
+    pool: 'codex-spark', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: [
+      { name: '5h', pct: 10, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+      { name: '7d', pct: 30, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+    ],
+  }]).snapshot();
+  const entry = entryFor(snapshot, 'codex-spark', 'gpt-5.3-codex-spark');
+  assert.equal(entry.quotaPoolId, 'codex-spark-models');
+  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['5h', '7d']);
+  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.evidence?.remainingPercent), [90, 70]);
 });
 
 // ---------------------------------------------------------------------------
@@ -336,7 +653,7 @@ test('codebuddy/hy3 unknown snapshot keeps both empty pools required with null e
 
 test('a raw codebuddy pct100 retained block never turns the empty HY3 pools into healthy evidence', async () => {
   const rows = [codebuddyRow()];
-  const snapshot = await serviceFor(rows).snapshot();
+  const snapshot = await scopedServiceFor(rows).snapshot();
   // The observed CodeBuddy exhaustion still hard-blocks the pool...
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
   // ...but HY3 family+monthly pools remain required unknown constraints with
@@ -474,12 +791,18 @@ test('stale, non-ok, future and missing fetched_at rows all yield short unknown 
   ];
 
   for (const scenario of cases) {
-    const snapshot = await serviceFor(scenario.rows).snapshot();
+    const snapshot = await scopedServiceFor(scenario.rows).snapshot();
     const { constraint } = evidenceFor(snapshot, binding.providerId, binding.modelId, windowId);
     assert.equal(constraint.evidence, null, scenario.name);
     assert.equal(snapshot.validUntilMs, T0 + 15_000, scenario.name);
     assert.deepEqual(snapshot.hardBlockedProviderIds, [], scenario.name);
   }
+});
+
+test('a context-less query can never activate even a well-formed observed CodeBuddy row', async () => {
+  const snapshot = await serviceFor([codebuddyRow()]).snapshot();
+  assert.deepEqual(snapshot.hardBlockedProviderIds, []);
+  assert.equal(snapshot.validUntilMs, T0 + 15_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -628,24 +951,24 @@ test('a missing required window stays an explicit null constraint', async () => 
 });
 
 // ---------------------------------------------------------------------------
-// CodeBuddy hard block: retained negative row WITHOUT fetched_at
+// CodeBuddy hard block: neutral v2 observed projection WITHOUT fetched_at
 // ---------------------------------------------------------------------------
 
 test('CodeBuddy pct100 with future ISO reset hard-blocks without any fetched_at', async () => {
-  const snapshot = await serviceFor([codebuddyRow()]).snapshot();
+  const snapshot = await scopedServiceFor([codebuddyRow()]).snapshot();
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
   // Far-future reset: the retained block is bounded by the now + 60s cap.
   assert.equal(snapshot.validUntilMs, T0 + 60_000);
 });
 
 test('the CodeBuddy cache boundary respects the reset when it is inside the 60s cap', async () => {
-  const snapshot = await serviceFor([codebuddyRow({}, { resets_at: iso(T0 + 30_000) })]).snapshot();
+  const snapshot = await scopedServiceFor([codebuddyRow({}, { resets_at: iso(T0 + 30_000) })]).snapshot();
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
   assert.equal(snapshot.validUntilMs, T0 + 30_000, 'bounded by min(now+60s, reset)');
 });
 
 test('a stale fetched_at on the CodeBuddy retained row is ignored for the block', async () => {
-  const snapshot = await serviceFor([
+  const snapshot = await scopedServiceFor([
     codebuddyRow({ fetched_at: iso(T0 - 120_000) }, { resets_at: iso(T0 + 3_600_000) }),
   ]).snapshot();
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
@@ -658,12 +981,13 @@ test('CodeBuddy absence, invalid or expired observations never hard-block', asyn
     { name: 'pct 99', rows: [codebuddyRow({}, { pct: 99 })] },
     { name: 'pct string', rows: [codebuddyRow({}, { pct: '100' })] },
     { name: 'wrong window name', rows: [codebuddyRow({}, { name: '1h' })] },
+    { name: 'legacy 1mo window', rows: [codebuddyRow({}, { name: '1mo' })] },
     { name: 'expired reset', rows: [codebuddyRow({}, { resets_at: iso(T0 - 1_000) })] },
     { name: 'missing reset', rows: [codebuddyRow({}, { resets_at: undefined })] },
     { name: 'garbage reset', rows: [codebuddyRow({}, { resets_at: 'not-a-time' })] },
     { name: 'status error', rows: [codebuddyRow({ status: 'error' })] },
     { name: 'stale row', rows: [codebuddyRow({ stale: true })] },
-    { name: 'no 1mo window', rows: [codebuddyRow({ windows: [] })] },
+    { name: 'no observed window', rows: [codebuddyRow({ windows: [] })] },
   ];
 
   for (const scenario of cases) {
@@ -830,10 +1154,23 @@ test('a failed refresh never serves expired old evidence and returns a short-liv
   }
 });
 
-test('the snapshot DTO carries no credentials', async () => {
+test('the snapshot DTO carries no credentials, scope, environment, domain, or wire mapping', async () => {
   const rows = rowsForAllBindings(T0);
   rows.push(codebuddyRow());
   const direct = await serviceFor(rows).snapshot();
+
+  // A scoped snapshot derived through an injected current-login loader: the
+  // private credential token, stable scope, and environment must never reach
+  // the serialized DTO even though the query was scoped to them.
+  const token = 'codebuddy-bearer-placeholder';
+  const scope = 'cbv1:opaque-scope-digest';
+  const environment = 'ioa';
+  const scoped = await new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.resolve(reportJson(rows)),
+    codeBuddySnapshot: () => Promise.resolve(fakeCodeBuddySnapshot({ stableScope: scope, environment, credentialValue: token })),
+    now: () => T0,
+  }).snapshot();
+  assert.deepEqual(scoped.hardBlockedProviderIds, ['codebuddy']);
 
   const rejecting = new AutoRoutingQuotaSnapshotService({
     queryJson: () => Promise.reject(new Error('boom')),
@@ -855,26 +1192,246 @@ test('the snapshot DTO carries no credentials', async () => {
       'authorization',
       'password',
       'bearer',
+      'scope',
+      'environment',
+      'domain',
+      'wire',
+      'wire_model',
     ].map((key) => key.toLowerCase().replace(/[^a-z0-9]/g, '')),
   );
 
-  const assertNoCredentialKeys = (value: unknown, path: string): void => {
+  const assertNoPrivateKeys = (value: unknown, path: string): void => {
     if (Array.isArray(value)) {
       for (const [index, item] of value.entries()) {
-        assertNoCredentialKeys(item, `${path}[${index}]`);
+        assertNoPrivateKeys(item, `${path}[${index}]`);
       }
       return;
     }
     if (value !== null && typeof value === 'object') {
       for (const [key, nested] of Object.entries(value)) {
         const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-        assert.ok(!forbiddenKeys.has(normalized), `DTO must not carry a credential key at ${path}.${key}`);
-        assertNoCredentialKeys(nested, `${path}.${key}`);
+        assert.ok(!forbiddenKeys.has(normalized), `DTO must not carry a private key at ${path}.${key}`);
+        assertNoPrivateKeys(nested, `${path}.${key}`);
       }
     }
   };
 
-  for (const snapshot of [direct, unknown]) {
-    assertNoCredentialKeys(JSON.parse(JSON.stringify(snapshot)), '$');
+  for (const snapshot of [direct, scoped, unknown]) {
+    const serialized = JSON.stringify(snapshot);
+    assert.ok(!serialized.includes(token), 'DTO must not carry the CodeBuddy credential token value');
+    assert.ok(!serialized.includes(scope), 'DTO must not carry the CodeBuddy stable scope value');
+    assert.ok(!serialized.includes(environment), 'DTO must not carry the CodeBuddy environment value');
+    assertNoPrivateKeys(JSON.parse(serialized), '$');
   }
+});
+
+// ---------------------------------------------------------------------------
+// Neutral Go v2 CodeBuddy projection and current-login binding
+// ---------------------------------------------------------------------------
+
+test('the neutral observed pct100 window with a finite future reset blocks while a legacy 1mo window stays inert', async () => {
+  const blocked = await scopedServiceFor([codebuddyRow()]).snapshot();
+  assert.deepEqual(blocked.hardBlockedProviderIds, ['codebuddy']);
+  assert.equal(blocked.validUntilMs, T0 + 60_000);
+
+  // Legacy unsupported monthly semantics are inert: a codebuddy row that only
+  // carries a 1mo pct100 window is not an observed v2 projection and never
+  // blocks.
+  const legacy: FixtureRow[] = [
+    {
+      pool: 'codebuddy',
+      status: 'ok',
+      stale: false,
+      windows: [{ name: '1mo', pct: 100, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES }],
+    },
+  ];
+  const inert = await scopedServiceFor(legacy).snapshot();
+  assert.deepEqual(inert.hardBlockedProviderIds, []);
+  assert.equal(inert.validUntilMs, T0 + 15_000);
+});
+
+test('the query callback receives only the expected scope/environment, never the snapshot or its credential', async () => {
+  const token = 'codebuddy-bearer-placeholder';
+  const scope = 'cbv1:opaque-scope-digest';
+  const received: Array<CodeBuddyQueryContext | undefined> = [];
+  const service = new AutoRoutingQuotaSnapshotService({
+    queryJson: (context) => {
+      received.push(context);
+      return Promise.resolve(reportJson([codebuddyRow()]));
+    },
+    codeBuddySnapshot: () => Promise.resolve(
+      fakeCodeBuddySnapshot({ stableScope: scope, environment: 'ioa', credentialValue: token }),
+    ),
+    now: () => T0,
+  });
+  const snapshot = await service.snapshot();
+  // Only the two private expected values reach the query source.
+  assert.deepEqual(received, [{ expectedScope: scope, expectedEnvironment: 'ioa' }]);
+  assert.ok(!JSON.stringify(received).includes(token), 'query context must not carry the credential token');
+  assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
+});
+
+test('a token refresh on the same stable scope/environment reuses cached evidence', async () => {
+  const scope = 'cbv1:same-account';
+  let loaderCalls = 0;
+  let queryCalls = 0;
+  const loader = () => {
+    loaderCalls += 1;
+    // Token refresh changes the credential value but never the opaque scope.
+    const credentialValue = loaderCalls === 1 ? 'token-v1' : 'token-v2';
+    return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: scope, environment: 'ioa', credentialValue }));
+  };
+  const service = new AutoRoutingQuotaSnapshotService({
+    queryJson: () => {
+      queryCalls += 1;
+      return Promise.resolve(reportJson([codebuddyRow()]));
+    },
+    codeBuddySnapshot: loader,
+    now: () => T0,
+  });
+
+  const first = await service.snapshot();
+  assert.equal(queryCalls, 1);
+  assert.deepEqual(first.hardBlockedProviderIds, ['codebuddy']);
+
+  const second = await service.snapshot();
+  assert.equal(loaderCalls, 2, 'the current snapshot loader must be resolved afresh on every request');
+  assert.equal(queryCalls, 1, 'same-scope evidence must be reused across a token refresh');
+  assert.equal(second, first, 'the cached snapshot must be served for the identical context');
+});
+
+test('a scope or environment switch bypasses the cached snapshot and re-queries with the new context', async () => {
+  let loaderCalls = 0;
+  const loader = () => {
+    loaderCalls += 1;
+    if (loaderCalls === 1) return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-a', environment: 'ioa' }));
+    if (loaderCalls === 2) return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-b', environment: 'ioa' }));
+    return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-b', environment: 'cloudhosted' }));
+  };
+  const contexts: Array<CodeBuddyQueryContext | undefined> = [];
+  let queryCalls = 0;
+  const queryJson = (context?: CodeBuddyQueryContext) => {
+    contexts.push(context);
+    queryCalls += 1;
+    if (context?.expectedScope === 'cbv1:scope-a' && context?.expectedEnvironment === 'ioa') {
+      return Promise.resolve(reportJson([codebuddyRow()]));
+    }
+    return Promise.resolve(reportJson([]));
+  };
+  const service = new AutoRoutingQuotaSnapshotService({ queryJson, codeBuddySnapshot: loader, now: () => T0 });
+
+  const scopeA = await service.snapshot();
+  assert.equal(queryCalls, 1);
+  assert.deepEqual(scopeA.hardBlockedProviderIds, ['codebuddy']);
+
+  // Scope switch: the old scoped snapshot is still within its freshness window
+  // but must not be served for a different login.
+  const scopeB = await service.snapshot();
+  assert.equal(queryCalls, 2, 'a scope switch must re-query instead of reusing the cached CodeBuddy block');
+  assert.notEqual(scopeB, scopeA);
+  assert.deepEqual(scopeB.hardBlockedProviderIds, []);
+
+  // Environment switch on the same scope must also bypass the cached evidence.
+  const envB = await service.snapshot();
+  assert.equal(queryCalls, 3, 'an environment switch must re-query instead of reusing the cached CodeBuddy block');
+  assert.notEqual(envB, scopeB);
+  assert.deepEqual(envB.hardBlockedProviderIds, []);
+  assert.deepEqual(contexts, [
+    { expectedScope: 'cbv1:scope-a', expectedEnvironment: 'ioa' },
+    { expectedScope: 'cbv1:scope-b', expectedEnvironment: 'ioa' },
+    { expectedScope: 'cbv1:scope-b', expectedEnvironment: 'cloudhosted' },
+  ]);
+});
+
+const flushMicrotasks = async (): Promise<void> => {
+  for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+};
+
+test('a scope or environment switch bypasses an in-flight CodeBuddy query', async () => {
+  const heldQueries: Array<(text: string) => void> = [];
+  const contexts: Array<CodeBuddyQueryContext | undefined> = [];
+  let queryCalls = 0;
+  const queryJson = (context?: CodeBuddyQueryContext) => {
+    queryCalls += 1;
+    contexts.push(context);
+    if (context?.expectedEnvironment === 'ioa') {
+      return new Promise<string>((resolve) => {
+        heldQueries.push(resolve);
+      });
+    }
+    return Promise.resolve(reportJson([]));
+  };
+  let resolveLoader!: (view: CodeBuddyActiveSnapshotView | undefined) => void;
+  const service = new AutoRoutingQuotaSnapshotService({
+    queryJson,
+    codeBuddySnapshot: () => new Promise<CodeBuddyActiveSnapshotView | undefined>((resolve) => {
+      resolveLoader = resolve;
+    }),
+    now: () => T0,
+  });
+
+  // The ioa-scoped refresh starts and stays in flight.
+  const first = service.snapshot();
+  resolveLoader(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-a', environment: 'ioa' }));
+  await flushMicrotasks();
+  assert.equal(queryCalls, 1, 'the ioa-scoped query must be in flight');
+
+  // The login environment changes to cloudhosted while the ioa query is still
+  // pending: the new request must not join the in-flight ioa refresh.
+  const second = service.snapshot();
+  resolveLoader(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-b', environment: 'cloudhosted' }));
+  const secondSnapshot = await second;
+  assert.equal(queryCalls, 2, 'an environment switch must bypass the in-flight CodeBuddy query');
+  assert.deepEqual(secondSnapshot.hardBlockedProviderIds, []);
+
+  // Releasing the stale ioa query only settles the first request.
+  heldQueries[0]!(reportJson([codebuddyRow()]));
+  const firstSnapshot = await first;
+  assert.deepEqual(firstSnapshot.hardBlockedProviderIds, ['codebuddy']);
+  assert.notEqual(firstSnapshot, secondSnapshot);
+  assert.deepEqual(contexts, [
+    { expectedScope: 'cbv1:scope-a', expectedEnvironment: 'ioa' },
+    { expectedScope: 'cbv1:scope-b', expectedEnvironment: 'cloudhosted' },
+  ]);
+});
+
+test('a missing, undefined, throwing, or stableScope-less current snapshot fails closed and never reuses a previous CodeBuddy block', async () => {
+  const runScenario = async (secondLoad: () => Promise<CodeBuddyActiveSnapshotView | undefined>): Promise<void> => {
+    let loaderCalls = 0;
+    const loader = () => {
+      loaderCalls += 1;
+      if (loaderCalls === 1) {
+        return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: 'cbv1:first', environment: 'ioa' }));
+      }
+      return secondLoad();
+    };
+    const contexts: Array<CodeBuddyQueryContext | undefined> = [];
+    let queryCalls = 0;
+    const queryJson = (context?: CodeBuddyQueryContext) => {
+      queryCalls += 1;
+      contexts.push(context);
+      // A context-less (standalone) query cannot observe any CodeBuddy row.
+      if (context === undefined) return Promise.resolve(reportJson([]));
+      return Promise.resolve(reportJson([codebuddyRow()]));
+    };
+    const service = new AutoRoutingQuotaSnapshotService({ queryJson, codeBuddySnapshot: loader, now: () => T0 });
+
+    const blocked = await service.snapshot();
+    assert.deepEqual(blocked.hardBlockedProviderIds, ['codebuddy'], 'the first scoped snapshot must block');
+
+    // The previous scoped block is still cached, but the current snapshot is
+    // gone: the request must fail closed and re-query without any CodeBuddy
+    // context rather than reuse the previous block.
+    const failed = await service.snapshot();
+    assert.equal(queryCalls, 2, 'a lost current snapshot must re-query without a CodeBuddy context');
+    assert.equal(contexts[1], undefined, 'a lost current snapshot must not form a CodeBuddy context');
+    assert.deepEqual(failed.hardBlockedProviderIds, [], 'a lost current snapshot must not reuse a previous CodeBuddy block');
+    assert.notEqual(failed, blocked);
+  };
+
+  await runScenario(() => Promise.resolve(undefined));
+  await runScenario(() => Promise.reject(new Error('codebuddy snapshot loader exploded')));
+  await runScenario(() => Promise.resolve(
+    fakeCodeBuddySnapshot({ stableScope: undefined, environment: 'ioa', credentialValue: 'token' }),
+  ));
 });

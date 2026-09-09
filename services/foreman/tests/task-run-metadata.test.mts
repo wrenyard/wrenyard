@@ -472,6 +472,29 @@ test('executions primary key is aliased to execution_id and joined', () => {
   })
 })
 
+test('persisted provider_override speed source parses and surfaces intact', () => {
+  withDb((db) => {
+    const task = 'task-speed-provider-override'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
+    seedDispatch(db, 'e1', task, {
+      ...fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
+      speed_source: 'provider_override',
+    })
+
+    const { usage, resolved } = readTaskRunMetadata(task)
+
+    assert.ok(resolved, 'provider_override speed metadata must parse into a resolved dispatch')
+    assert.equal(resolved!.speed.source, 'provider_override')
+    assert.equal(resolved!.speed.effective_tps, 30)
+    assert.equal(resolved!.speed.sample_count, 10)
+    assert.equal(resolved!.speed.expected_tps_met, true)
+    assert.equal(usage.attempt_count, 1)
+  })
+})
+
 test('valid auto_routing payload reprojects onto the resolved automatic dispatch', () => {
   withDb((db) => {
     const task = 'task-ar-valid'
