@@ -150,6 +150,14 @@ ${JSON.stringify(data)}
           listExactRuntimes() {
             throw new Error('resolver must not run without requirements')
           },
+          displayLabels({ provider, model }) {
+            const title = (id: string): string =>
+              id
+                .split(/[-_]/)
+                .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                .join(' ')
+            return { provider, providerDisplayName: title(provider), model, modelDisplayName: title(model) }
+          },
         },
         primitives: {
           agent: async () => {

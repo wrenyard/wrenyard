@@ -4,6 +4,7 @@ import type { CandidateInput } from '@wrenyard/catalog'
 import {
   NoEligiblePlanError,
   type TaskDispatchChoice,
+  type TaskDispatchDisplayLabels,
   type TaskDispatchResolver,
 } from '../../core/task/dispatch-resolver.mts'
 import { TaskService } from '../../core/task/service.mts'
@@ -382,6 +383,12 @@ export class TaskSettingsService {
     model: string
   }): TaskSettingsRuntimeTriple {
     return { client: resolved.client, provider: resolved.provider, model: resolved.model }
+  }
+
+  /** Authoritative Catalog display labels of an already-resolved dispatch pair;
+   *  undefined when the provider/model is not in the Catalog. */
+  private displayLabelsOf(resolved: { provider: string; model: string }): TaskDispatchDisplayLabels | undefined {
+    return this.resolver.displayLabels({ provider: resolved.provider, model: resolved.model })
   }
 
   /** Maps a non-persistent public snake_case invocation layer into the canonical
@@ -832,7 +839,16 @@ export class TaskSettingsService {
           })
           if (explicitResolution.ok) {
             resolvedTarget = explicitResolution.exactAgentRuntime
-            resolved = explicitResolution.resolved
+            // Attach the paired authoritative Catalog display labels to the
+            // resolved dispatch snapshot; canonical ids stay authoritative.
+            const labels = this.displayLabelsOf(explicitResolution.resolved)
+            resolved = labels
+              ? {
+                  ...explicitResolution.resolved,
+                  provider_display_name: labels.providerDisplayName,
+                  model_display_name: labels.modelDisplayName,
+                }
+              : explicitResolution.resolved
             readiness = await this.runtimeReadiness(
               summary.name,
               explicitResolution.exactAgentRuntime,
@@ -865,9 +881,18 @@ export class TaskSettingsService {
           maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
         }, previewMemo)
         if (selection.ok) {
+          // Attach the paired authoritative Catalog display labels to the
+          // selected automatic dispatch; canonical ids stay authoritative.
+          const labels = this.displayLabelsOf(selection.dispatch)
           automaticSelection = {
             exact_runtime: selection.exactAgentRuntime,
-            resolved: selection.dispatch,
+            resolved: labels
+              ? {
+                  ...selection.dispatch,
+                  provider_display_name: labels.providerDisplayName,
+                  model_display_name: labels.modelDisplayName,
+                }
+              : selection.dispatch,
             reason: selection.reason,
           }
         } else {

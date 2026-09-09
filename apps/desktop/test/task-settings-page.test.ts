@@ -236,7 +236,7 @@ test('shell-window validates the bounded task settings DTO at the IPC boundary',
   assert.doesNotMatch(win, /saveTaskPreference|requested_agent_runtime|agentRuntime|bare_task_name|machine_global/);
 });
 
-test('HTML exposes three compact rows with alias-or-inline combobox, no additional-instruction UI', async () => {
+test('HTML exposes exactly three compact rows with seconds timeout and template preview, no additional-instruction UI', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
   assert.match(html, /id="tasks-page"/);
@@ -245,9 +245,13 @@ test('HTML exposes three compact rows with alias-or-inline combobox, no addition
   assert.match(html, /id="tasks-detail"/);
   assert.match(html, /id="tasks-detail-name"/);
   assert.match(html, /id="tasks-detail-identity"/);
-  // Row one: mode. Row two: timeout with ※ reset. Row three (explicit only): combobox + help.
-  assert.match(html, /id="tasks-mode"><option value="">继承<\/option><option value="automatic">自动选择<\/option><option value="explicit">指定运行时<\/option>/);
-  assert.match(html, /id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承"/);
+  // Row one: two-mode selection (automatic/explicit only). Row two: seconds timeout
+  // with visible 秒 unit and ※ reset. Row three (explicit only): combobox + help.
+  assert.match(html, /<select id="tasks-mode">\s*<option value="automatic">自动选择<\/option>\s*<option value="explicit">指定运行时<\/option>\s*<\/select>/u);
+  assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
+  assert.match(html, /id="tasks-timeout" type="number" min="1" step="1" placeholder="继承"/);
+  assert.doesNotMatch(html, /id="tasks-timeout"[^>]*step="1000"/u);
+  assert.match(html, /id="tasks-timeout-unit"[^>]*>秒</);
   assert.match(html, /id="tasks-timeout-reset"/);
   assert.match(html, /id="tasks-timeout-effective">—</);
   assert.match(html, /class="tasks-setting-row tasks-explicit-row" id="tasks-explicit-row" hidden/);
@@ -258,8 +262,13 @@ test('HTML exposes three compact rows with alias-or-inline combobox, no addition
   assert.match(html, /id="tasks-reset"[^>]*>重置</);
   assert.match(html, /id="tasks-save"[^>]*>套用</);
   assert.match(html, /id="tasks-refresh"/);
-  // Removed surface: multi-row form, additional-instructions editor, and template preview.
-  assert.doesNotMatch(html, /tasks-instructions|tasks-preview|tasks-model-select|tasks-runtime-field|附加指令|指令模板预览/);
+  // Restored read-only static template preview below the title band.
+  assert.match(html, /id="tasks-preview-title">指令模板预览<\/h3>/);
+  assert.match(html, /id="tasks-preview"/);
+  assert.match(html, /id="tasks-detail-runtime"/);
+  assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
+  // Removed surface: multi-row form, additional-instructions editor, and catalog picks.
+  assert.doesNotMatch(html, /tasks-instructions|tasks-model-select|tasks-runtime-field|附加指令/);
   assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-intelligence-min|tasks-intelligence-max|tasks-max-output-price/);
   // The stats ledger page is untouched by this task.
   assert.match(html, /id="stats-task-runs-list"/);
@@ -285,12 +294,13 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /function updateTasksRowVisibility\(\): void \{\s*tasksExplicitRow\.hidden = tasksModeSelect\.value !== 'explicit';\s*\}/);
   assert.match(app, /function renderTimeoutEffective\(row: TaskSettingsTaskRow\): void/);
   assert.match(app, /tasksTimeoutEffective\.classList\.add\('is-dim'\)/);
-  assert.match(app, /function buildLayerPatch\(layer: TaskSettingsLayer, modeValue: string, runtimeValue: string, timeoutValue: string\): TaskSettingsPatch/);
+  assert.match(app, /function buildLayerPatch\(row: TaskSettingsTaskRow, modeValue: string, runtimeValue: string, timeoutValue: string\): TaskSettingsPatch/);
   assert.match(app, /if \(mode === 'explicit'\) \{\s*const runtime = referenceFromRuntimeInput\(runtimeValue\);/);
   assert.match(app, /async function saveTaskTimeoutReset\(\): Promise<void>/);
   assert.match(app, /commitTaskSave\(\{ timeout_ms: null \}\)/);
   assert.match(app, /'mode', 'explicit_runtime', 'timeout_ms', 'automatic'/);
-  assert.doesNotMatch(app, /tasksInstructionsInput|renderTasksPreview|tasksModelSelect|renderTasksChoiceOptions|tasksChoiceLabel|resolvedAdditionalInstructionsContent|renderRichText\(/);
+  // No additional-instructions editor or catalog candidate synthesis surfaces exist.
+  assert.doesNotMatch(app, /tasksInstructionsInput|tasksModelSelect|renderTasksChoiceOptions|tasksChoiceLabel|resolvedAdditionalInstructionsContent/);
   assert.doesNotMatch(app, /exactAgentRuntime|runtime_choices|resolved_runtime|additional_instructions|patch\.automatic|includeAutomatic/);
   // CAS conflict reloads authoritative state and re-applies only remaining visible fields.
   assert.match(app, /reloadTasksAuthoritative\(\)/);
@@ -311,19 +321,19 @@ test('renderer builds 内置/项目 hierarchy with authoritative labels and stab
   assert.match(app, /void selectTasksFile\(row\.identity\)/);
 });
 
-test('detail header shows display name, stable exact id, and runtime rationale in the existing paragraph only', async () => {
+test('detail header shows display name, stable exact id, and resolved provider/model labels in the title band', async () => {
   const app = await rendererSource();
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(app, /tasksDetailName\.textContent = row\.display_name;/);
   assert.match(app, /tasksDetailIdentity\.textContent = row\.identity;/);
-  // The existing tasks-detail-runtime paragraph keeps rendering and now surfaces
-  // the automatic_selection resolved runtime plus its safe reason.
-  assert.match(app, /tasksDetailRuntime\.textContent = /);
-  assert.match(app, /row\.automatic_selection\?\.resolved\?\.runtime/);
+  // The title band resolves Provider · Model labels from the daemon dispatch and
+  // surfaces a concrete issue/reason otherwise — never a permanent fallback pin.
+  assert.match(app, /resolved\.provider_display_name \?\? resolved\.provider/);
+  assert.match(app, /resolved\.model_display_name \?\? resolved\.model/);
   assert.match(app, /row\.automatic_selection\?\.reason/);
-  // Explicit rows keep the daemon-resolved runtime fallback.
-  assert.match(app, /row\.explicit\?\.resolved\?\.runtime \?\? '未解析'/);
+  assert.doesNotMatch(app, /'未解析'/u);
   assert.doesNotMatch(app, /exactAgentRuntime/);
+  assert.doesNotMatch(app, /tasksPreviewTitle/);
   // Additive only: the Task page still has exactly three editable setting rows
   // and no new automatic-selection row or editable control.
   assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 3);
@@ -389,6 +399,49 @@ test('renderer wires the Model Supply auto cap with global-scope CAS, zero/null 
   assert.match(app, /autoCapSaveButton\.disabled = true;\s*autoCapInput\.disabled = true;/);
   // Quota navigation loads the authoritative snapshot.
   assert.match(app, /if \(page === 'quota'\) \{\s*await refreshQuota\(false\);\s*await loadRuntimeAliases\(\);\s*await loadAutoCapState\(\);\s*\}/);
+});
+
+test('task settings acceptance locks the post-fix surface: two-mode select with automatic default, seconds timeout round-trip and ※ reset, static template preview, and resolved provider/model labels', async () => {
+  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
+  const app = await rendererSource();
+  const css = await readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8');
+  const contract = readFileSync(join(desktopRoot, 'src', 'shell-contract.ts'), 'utf8');
+  const resolvedDispatch = contract.slice(
+    contract.indexOf('export interface TaskResolvedDispatch'),
+    contract.indexOf('TaskSettingsInstructionSegment'),
+  );
+
+  // Mode selection is exactly automatic/explicit: the rejected third empty 继承 option is gone,
+  // and an unset/legacy user layer renders as automatic instead of an empty inherit pin.
+  assert.match(
+    html,
+    /<select id="tasks-mode">\s*<option value="automatic">自动选择<\/option>\s*<option value="explicit">指定运行时<\/option>\s*<\/select>/u,
+  );
+  assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
+  assert.match(app, /tasksModeSelect\.value = row\.user_task\.mode \?\? 'automatic';/u);
+  assert.doesNotMatch(app, /row\.user_task\.mode \?\? ''/u);
+
+  // Timeout is rendered and edited in seconds at the UI boundary only; 900000 ms shows as 900 秒,
+  // the save path converts back to ms, and the ※ button clears just this layer's timeout override.
+  assert.doesNotMatch(html, /id="tasks-timeout"[^>]*step="1000"/u);
+  assert.doesNotMatch(app, /毫秒/u);
+  assert.match(app, /1000/u);
+  assert.match(app, /commitTaskSave\(\{ timeout_ms: null \}\)/u);
+
+  // The read-only builtin instruction-template preview is restored below the title, with text and
+  // replaceable placeholders rendered as distinct segments (styled placeholder visuals in CSS).
+  assert.match(html, /id="tasks-preview-title">指令模板预览<\/h3>/u);
+  assert.match(html, /id="tasks-preview"/u);
+  assert.match(app, /row\.builtin\.instruction_template/u);
+  assert.match(app, /kind === 'placeholder'/u);
+  assert.match(css, /tasks-preview/u);
+
+  // The settings DTO exposes authoritative provider/model display labels on the daemon-resolved
+  // dispatch so the title-left state is never just a permanent 未解析 raw fallback.
+  assert.match(resolvedDispatch, /provider_display_name/u);
+  assert.match(resolvedDispatch, /model_display_name/u);
+  assert.match(app, /provider_display_name/u);
+  assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
 });
 
 function preloadSource(): string {

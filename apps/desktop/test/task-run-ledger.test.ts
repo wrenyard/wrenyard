@@ -26,13 +26,13 @@ function ledgerRegion(): string {
   return appSource.slice(start, end);
 }
 
-test('recent-run ledger is a five-column authoritative table without dense cells or fabricated telemetry', () => {
+test('recent-run ledger is a six-column authoritative table without dense cells or fabricated telemetry', () => {
   const body = ledgerRegion();
 
-  // Exact five headers in exact order.
+  // Exact six headers in exact order, 完成时间 last.
   assert.ok(
-    body.includes("tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度'])"),
-    'five exact headers in order (状态, 中文任务名, 模型, ↑输入 / ↓输出, 速度)',
+    body.includes("tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '完成时间'])"),
+    'six exact headers in order (状态, 中文任务名, 模型, ↑输入 / ↓输出, 速度, 完成时间)',
   );
 
   // Old dense 8-column ledger and estimate/prose columns are gone.
@@ -62,6 +62,43 @@ test('recent-run ledger is a five-column authoritative table without dense cells
   // No compact-token formatter and no selection-speed evidence inside the renderer.
   assert.ok(!body.includes('formatCompactTokenCount'), 'no compact token formatter in the ledger renderer');
   assert.ok(!body.includes('.speed') && !body.includes('speed.'), 'no selection-speed evidence in the ledger renderer');
+});
+
+test('recent-run ledger completion-time column is terminal-only canonical finishedAt with no clock fallback', () => {
+  const body = ledgerRegion();
+
+  const start = body.indexOf('function taskRunCompletionTimeCell');
+  const end = body.indexOf('function renderTaskRuns', start);
+  assert.ok(start >= 0 && end > start, 'taskRunCompletionTimeCell must precede renderTaskRuns in app.ts');
+  const cell = body.slice(start, end);
+
+  // Only done/failed/cancelled/interrupted read the canonical finishedAt.
+  assert.ok(cell.includes("run.status === 'done' || run.status === 'failed'"), 'done/failed are terminal');
+  assert.ok(cell.includes("run.status === 'cancelled' || run.status === 'interrupted'"), 'cancelled/interrupted are terminal');
+  for (const active of ['queued', 'running', 'unknown']) {
+    assert.ok(!cell.includes(`'${active}'`), `active state ${active} is never a completion-time source`);
+  }
+
+  // Valid terminal values render compact text and a full localized tooltip.
+  assert.ok(cell.includes('formatTaskCompletionTime('), 'compact completion text uses formatTaskCompletionTime');
+  assert.ok(cell.includes('formatTaskCompletionTimeTooltip('), 'full localized tooltip uses formatTaskCompletionTimeTooltip');
+
+  // The helper reads status and finishedAt only; no clock/timer fallback.
+  const runReferences: string[] = cell.match(/run\.[A-Za-z_$]+/g) ?? [];
+  assert.ok(runReferences.includes('run.status') && runReferences.includes('run.finishedAt'), 'cell reads status and finishedAt only');
+  for (const reference of runReferences) {
+    assert.ok(
+      reference === 'run.status' || reference === 'run.finishedAt',
+      `stray run reference ${reference} must not feed the completion-time cell`,
+    );
+  }
+  for (const fallback of ['startedAt', 'updatedAt', 'Date.now', 'new Date']) {
+    assert.ok(!cell.includes(fallback), `no ${fallback} fallback in the completion-time cell`);
+  }
+
+  // Exactly one completion-time cell per run, one rendered row per entry.
+  assert.ok((body.match(/taskRunCompletionTimeCell\(run\)/g) ?? []).length === 1, 'each ledger run row appends exactly one completion-time cell');
+  assert.ok((body.match(/return row;/g) ?? []).length === 1, 'ledger keeps exactly one rendered row per runs.map entry');
 });
 
 test('recent-run ledger resolves display names only through authoritative TaskSettings identities', () => {
@@ -96,16 +133,24 @@ test('recent-run ledger resolves display names only through authoritative TaskSe
   assert.ok(ledger.includes('taskDisplayNames.get(identity) ?? run.taskId'), 'settings miss renders the exact task identifier');
 });
 
-test('recent-run ledger panel is plain markup with wrapping five-column styles', () => {
+test('recent-run ledger panel is plain markup with wrapping six-column styles', () => {
   // index.html: the panel keeps only its title and simplified table; the
   // reference-cost disclaimer/legend is gone.
   assert.ok(htmlSource.includes('近期 Task 消耗'), 'panel title remains');
   assert.ok(htmlSource.includes('id="stats-task-runs-list"'), 'panel table remains');
   assert.ok(!htmlSource.includes('参考费用为估算，非账单'), 'reference-cost disclaimer legend is removed');
 
-  // app.css: five-column grid, readable wrapping for long names/model ids,
-  // no orphaned 8-column selectors or forced min-width.
-  assert.ok(cssSource.includes('#stats-task-runs-list .table-row { grid-template-columns: 34px'), 'five-column grid for the ledger rows');
+  // app.css: six-column grid with the completion-time track last, readable
+  // wrapping for long names/model ids, last three columns right aligned, no
+  // orphaned 8-column selectors or forced min-width.
+  assert.ok(
+    cssSource.includes('#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(0, 1.3fr) minmax(0, 1.05fr) minmax(112px, .9fr) 88px minmax(96px, .72fr);'),
+    'six-column grid for the ledger rows',
+  );
+  assert.ok(
+    cssSource.includes('#stats-task-runs-list .table-row > :nth-last-child(3), #stats-task-runs-list .table-row > :nth-last-child(2), #stats-task-runs-list .table-row > :last-child'),
+    'last three ledger columns are right aligned',
+  );
   assert.ok(cssSource.includes('white-space: normal'), 'long task names and model ids wrap naturally');
   assert.ok(cssSource.includes('overflow-wrap: anywhere'), 'unbounded content wraps without ellipsis truncation');
   assert.ok(!cssSource.includes('min-width: 760px'), 'no forced mobile min-width rule for the old 8-column table');
@@ -114,8 +159,8 @@ test('recent-run ledger panel is plain markup with wrapping five-column styles',
 
 test('recent-run ledger model cell renders paired Catalog display labels joined by a middle dot only', () => {
   const start = appSource.indexOf('function taskRunModelCell');
-  const end = appSource.indexOf('function renderTaskRuns', start);
-  assert.ok(start >= 0 && end > start, 'taskRunModelCell must precede renderTaskRuns in app.ts');
+  const end = appSource.indexOf('function taskRunCompletionTimeCell', start);
+  assert.ok(start >= 0 && end > start, 'taskRunModelCell must precede taskRunCompletionTimeCell in app.ts');
   const body = appSource.slice(start, end);
 
   assert.ok(

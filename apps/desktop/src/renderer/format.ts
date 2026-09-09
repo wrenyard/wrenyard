@@ -31,3 +31,42 @@ export function formatBuildTime(value: string | undefined, timeZone?: string): s
     ...(timeZone ? { timeZone } : {}),
   }).format(date);
 }
+
+function parseTaskCompletionTime(value: string | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString() === value ? date : null;
+}
+
+export function formatTaskCompletionTime(value: string | undefined, timeZone?: string): string {
+  const date = parseTaskCompletionTime(value);
+  if (!date) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
+
+export function formatTaskCompletionTimeTooltip(
+  value: string | undefined,
+  timeZone?: string,
+): string {
+  const date = parseTaskCompletionTime(value);
+  if (!date) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+    hour12: false,
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}

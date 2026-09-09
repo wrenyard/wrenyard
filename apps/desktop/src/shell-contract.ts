@@ -527,6 +527,10 @@ export interface TaskResolvedDispatch {
   model: string;
   model_id?: string;
   profile?: string;
+  /** Paired authoritative Catalog provider display label; present only when the daemon resolves both labels. */
+  provider_display_name?: string;
+  /** Paired authoritative unified Catalog model display label; present only when the daemon resolves both labels. */
+  model_display_name?: string;
 }
 
 /**

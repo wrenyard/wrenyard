@@ -392,49 +392,60 @@
 
           <section class="tasks-detail" id="tasks-detail" aria-labelledby="tasks-detail-name" hidden>
             <header class="tasks-detail-head">
-              <div class="tasks-detail-heading">
+              <div class="tasks-detail-title">
                 <p class="eyebrow">TASK SETTINGS</p>
                 <h2 id="tasks-detail-name">—</h2>
                 <p class="tasks-detail-identity" id="tasks-detail-identity">—</p>
-                <p class="tasks-detail-runtime" id="tasks-detail-runtime">未解析</p>
+                <p class="tasks-detail-runtime" id="tasks-detail-runtime"></p>
+              </div>
+
+              <div class="tasks-control-group" aria-label="任务设置控制">
+                <div class="tasks-rows">
+                  <div class="tasks-setting-row tasks-mode-row">
+                    <label for="tasks-mode">选择方式</label>
+                    <span class="tasks-setting-control">
+                      <select id="tasks-mode">
+                        <option value="automatic">自动选择</option>
+                        <option value="explicit">指定运行时</option>
+                      </select>
+                    </span>
+                    <span class="tasks-mode-effective" id="tasks-mode-effective">—</span>
+                  </div>
+                  <div class="tasks-setting-row">
+                    <label for="tasks-timeout">总执行时限</label>
+                    <span class="tasks-setting-control tasks-timeout-control">
+                      <input id="tasks-timeout" type="number" min="1" step="1" placeholder="继承" aria-describedby="tasks-timeout-unit" />
+                      <span class="tasks-timeout-unit" id="tasks-timeout-unit" aria-hidden="true">秒</span>
+                      <button class="tasks-reset-flag" id="tasks-timeout-reset" type="button" title="仅重置本行超时覆盖" aria-label="重置本行超时">※</button>
+                    </span>
+                    <span class="tasks-effective-hint" id="tasks-timeout-effective">—</span>
+                  </div>
+                  <div class="tasks-setting-row tasks-explicit-row" id="tasks-explicit-row" hidden>
+                    <label for="tasks-runtime">指定运行时</label>
+                    <span class="tasks-setting-control tasks-runtime-control">
+                      <input id="tasks-runtime" type="text" spellcheck="false" autocomplete="off" list="tasks-runtime-suggestions" placeholder="别名，或 provider/model:client" aria-describedby="tasks-runtime-help-tooltip" />
+                      <datalist id="tasks-runtime-suggestions"></datalist>
+                      <button class="tasks-help-trigger" id="tasks-runtime-help" type="button" aria-label="运行时写法帮助">?</button>
+                      <span class="tasks-help-tooltip" id="tasks-runtime-help-tooltip" role="tooltip">填已保存别名，或直接写 provider/model:client（例如 anthropic/claude-sonnet-4:cc）。匹配已保存别名时按别名保存，否则按内联目标保存。</span>
+                    </span>
+                  </div>
+                </div>
+
+                <div class="tasks-control-actions">
+                  <span class="tasks-detail-note">“自动选择”会清除本层显式运行时；※ 只重置本行超时。</span>
+                  <div class="tasks-form-actions">
+                    <button class="secondary-button" id="tasks-reset" type="button">重置</button>
+                    <button class="primary-button" id="tasks-save" type="button">套用</button>
+                  </div>
+                </div>
+                <span class="tasks-error" id="tasks-error" role="alert"></span>
               </div>
             </header>
 
-            <div class="tasks-rows">
-              <div class="tasks-setting-row">
-                <label for="tasks-mode">选择方式</label>
-                <span class="tasks-setting-control">
-                  <select id="tasks-mode"><option value="">继承</option><option value="automatic">自动选择</option><option value="explicit">指定运行时</option></select>
-                </span>
-              </div>
-              <div class="tasks-setting-row">
-                <label for="tasks-timeout">总执行时限</label>
-                <span class="tasks-setting-control tasks-timeout-control">
-                  <input id="tasks-timeout" type="number" min="1" step="1000" placeholder="继承" />
-                  <button class="tasks-reset-flag" id="tasks-timeout-reset" type="button" title="仅重置本行超时覆盖" aria-label="重置本行超时">※</button>
-                </span>
-                <span class="tasks-effective-hint" id="tasks-timeout-effective">—</span>
-              </div>
-              <div class="tasks-setting-row tasks-explicit-row" id="tasks-explicit-row" hidden>
-                <label for="tasks-runtime">指定运行时</label>
-                <span class="tasks-setting-control tasks-runtime-control">
-                  <input id="tasks-runtime" type="text" spellcheck="false" autocomplete="off" list="tasks-runtime-suggestions" placeholder="别名，或 provider/model:client" aria-describedby="tasks-runtime-help-tooltip" />
-                  <datalist id="tasks-runtime-suggestions"></datalist>
-                  <button class="tasks-help-trigger" id="tasks-runtime-help" type="button" aria-label="运行时写法帮助">?</button>
-                  <span class="tasks-help-tooltip" id="tasks-runtime-help-tooltip" role="tooltip">填已保存别名，或直接写 provider/model:client（例如 anthropic/claude-sonnet-4:cc）。匹配已保存别名时按别名保存，否则按内联目标保存。</span>
-                </span>
-              </div>
-            </div>
-
-            <footer class="tasks-detail-actions">
-              <span class="tasks-detail-note">“自动选择”会清除本层显式运行时；重置只删除当前任务层的覆盖，※ 只重置本行超时。</span>
-              <div class="tasks-form-actions">
-                <button class="secondary-button" id="tasks-reset" type="button">重置</button>
-                <button class="primary-button" id="tasks-save" type="button">套用</button>
-              </div>
-            </footer>
-
-            <span class="tasks-error" id="tasks-error" role="alert"></span>
+            <section class="tasks-preview" aria-labelledby="tasks-preview-title">
+              <h3 class="tasks-preview-title" id="tasks-preview-title">指令模板预览</h3>
+              <div class="tasks-preview-body" id="tasks-preview" aria-live="polite"></div>
+            </section>
           </section>
         </div>
       </section>

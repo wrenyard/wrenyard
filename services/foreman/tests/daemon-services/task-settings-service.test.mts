@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import {
   ExplicitRuntimeUnavailableError,
   NoEligiblePlanError,
+  type TaskDispatchDisplayLabels,
   type TaskDispatchResolver,
 } from '../../lib/core/task/dispatch-resolver.mts'
 import type { TaskResolvedDispatch } from '../../lib/task-run-metadata-types.mts'
@@ -108,6 +109,25 @@ function runtimeTriple(profile: ProfileFixture): { client: string; provider: str
   return { client: profile.client, provider: profile.provider, model: profile.model }
 }
 
+/** Deterministic fixture Catalog display labels for a resolved canonical
+ *  provider/model pair, mirroring the production Catalog projection: the
+ *  provider must be a registered fixture profile or no label exists. Pure and
+ *  read-only — it never admits, ranks, probes, falls back, or recurses back
+ *  into the resolver, so it cannot introduce a resolution loop. */
+function catalogDisplayLabels(provider: string, model: string): TaskDispatchDisplayLabels {
+  const title = (id: string): string =>
+    id
+      .split(/[-_]/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  return {
+    provider,
+    providerDisplayName: title(provider),
+    model,
+    modelDisplayName: title(model),
+  }
+}
+
 interface ResolverFixtureOptions {
   /** exact runtimes intentionally unavailable per task name. */
   unavailable?: Record<string, string>
@@ -178,6 +198,12 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
             }
         }),
       }
+    },
+    displayLabels(input) {
+      const known = pool.some(
+        (profile) => profile.provider === input.provider && profile.model === input.model,
+      )
+      return known ? catalogDisplayLabels(input.provider, input.model) : undefined
     },
   }
 }
@@ -742,13 +768,26 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.deepEqual(commit.issues, [])
     // An automatic row carries no explicit row (no fabricated explicit state).
     assert.equal(commit.explicit, undefined)
+    // The automatic preview projection pairs the canonical provider/model ids
+    // with the fixture Catalog's deterministic provider/model display labels.
+    const autoResolved = commit.automatic_selection?.resolved
+    assert.ok(autoResolved)
+    assert.equal(autoResolved.provider, 'codex')
+    assert.equal(autoResolved.model, 'gpt-5.6-luna')
+    assert.equal(autoResolved.provider_display_name, 'Codex')
+    assert.equal(autoResolved.model_display_name, 'Gpt 5.6 Luna')
 
     // auto-fail resolves through the same automatic resolver path and stays as
     // a row with a structured unavailable issue (never dropped).
     const autoFail = snapshot.rows.find((row) => row.identity === 'builtin:auto-fail')
     assert.ok(autoFail)
     assert.equal(autoFail.effective.mode.value, 'automatic')
-    assert.ok(autoFail.issues.some((issue) => issue.code === 'automatic_dispatch_unavailable'))
+    const autoFailIssue = autoFail.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')
+    assert.ok(autoFailIssue)
+    // The unresolved automatic row keeps its concrete resolver reason and never
+    // fabricates a selection or paired display labels.
+    assert.match(autoFailIssue.message, /no eligible dispatch plan for task 'auto-fail'/)
+    assert.equal(autoFail.automatic_selection, undefined)
     assert.equal(autoFail.explicit, undefined)
   })
 
@@ -784,6 +823,12 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(explicit.readiness.runtime, PROFILES[1]!.exactAgentRuntime)
     assert.equal(explicit.readiness.daemon, 'accepting')
     assert.equal(explicit.readiness.available, true)
+    // The resolved explicit projection pairs the canonical provider/model ids
+    // with the fixture Catalog's deterministic provider/model display labels.
+    assert.equal(explicit.resolved?.provider, 'codex')
+    assert.equal(explicit.resolved?.model, 'gpt-6.0-nova')
+    assert.equal(explicit.resolved?.provider_display_name, 'Codex')
+    assert.equal(explicit.resolved?.model_display_name, 'Gpt 6.0 Nova')
     // No legacy runtime choice / resolved-runtime enumeration leaks.
     assert.equal('runtime_choices' in commit, false)
     assert.equal('resolved_runtime' in commit, false)
@@ -844,6 +889,11 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(explicit.resolved, null)
     assert.equal(explicit.readiness, null)
     assert.ok(commit.issues.some((issue) => issue.code === 'explicit_runtime_unavailable'))
+    // The unresolved explicit row keeps the resolver's concrete reason and never
+    // fabricates resolved metadata or paired display labels.
+    const unavailableIssue = commit.issues.find((issue) => issue.code === 'explicit_runtime_unavailable')
+    assert.ok(unavailableIssue)
+    assert.match(unavailableIssue.message, /runtime is unavailable/)
     // Automatic mode was never used as a fallback.
     assert.equal(commit.effective.mode.value, 'explicit')
 

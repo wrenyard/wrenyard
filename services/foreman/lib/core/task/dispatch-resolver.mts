@@ -164,6 +164,24 @@ export interface TaskDispatchExactRuntimeListItem {
 /** Synchronous enumeration result; always `ok: true`. */
 export type TaskDispatchExactRuntimeListResult = { ok: true; items: TaskDispatchExactRuntimeListItem[] }
 
+/** Input for the read-only Catalog display-label projection. */
+export interface TaskDispatchDisplayLabelsInput {
+  provider: string
+  model: string
+}
+
+/** Authoritative Catalog display labels of an already-resolved canonical pair. */
+export interface TaskDispatchDisplayLabels {
+  /** Canonical provider id of the resolved pair. */
+  provider: string
+  /** Authoritative Catalog provider display label. */
+  providerDisplayName: string
+  /** Canonical model id of the resolved pair. */
+  model: string
+  /** Authoritative unified Catalog model display label. */
+  modelDisplayName: string
+}
+
 export interface TaskDispatchResolver {
   resolve(input: ResolveTaskDispatchInput): TaskDispatchResolution
   /**
@@ -191,6 +209,15 @@ export interface TaskDispatchResolver {
    * truthfully. Synchronous and side-effect free: no inference and no network.
    */
   listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult
+
+  /**
+   * Read-only Catalog-backed display-label projection for an already-resolved
+   * canonical provider/model pair. Returns the authoritative provider display
+   * label and the unified model display label; undefined when the provider is
+   * not registered in the Catalog. This projection never admits, ranks,
+   * probes quota/readiness, falls back, or changes dispatch semantics.
+   */
+  displayLabels(input: TaskDispatchDisplayLabelsInput): TaskDispatchDisplayLabels | undefined
 }
 
 function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['reference_pricing'] {
@@ -523,6 +550,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         }
       }
       return { ok: true, items }
+    },
+
+    displayLabels(input: TaskDispatchDisplayLabelsInput): TaskDispatchDisplayLabels | undefined {
+      const providerDefinition = catalog.provider(input.provider)
+      if (!providerDefinition) return undefined
+      const modelDefinition = providerDefinition.models.find((model) => model.id === input.model)
+      return {
+        provider: input.provider,
+        providerDisplayName: providerDefinition.displayName,
+        model: input.model,
+        modelDisplayName: modelDefinition?.displayName ?? input.model,
+      }
     },
   }
 }
