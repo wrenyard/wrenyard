@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,53 @@ func TestLoadForgeConfigRejectsLegacyTopLevelProfiles(t *testing.T) {
 	_, _, err := LoadForgeConfig(path, EmbeddedData(), &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected error for legacy top-level profiles key (strict schema)")
+	}
+}
+
+func TestLoadForgeConfigAcceptsDaemonOwnedRuntimeAliasFieldsWithoutInterpretingThem(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{
+		"revision": 7,
+		"aliases": {
+			"codex-sol": "codex/gpt-5.6-sol:codex",
+			"invalid-entry-preserved-for-daemon": {"unexpected": true}
+		},
+		"clients": {"codex": {"enabled": false}}
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadForgeConfig(path, EmbeddedData(), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadForgeConfig with daemon-owned alias fields: %v", err)
+	}
+	if cfg.RuntimeAliasRevision != 7 {
+		t.Fatalf("RuntimeAliasRevision = %d, want 7", cfg.RuntimeAliasRevision)
+	}
+	if len(cfg.RuntimeAliases) != 2 {
+		t.Fatalf("RuntimeAliases len = %d, want 2", len(cfg.RuntimeAliases))
+	}
+	if cfg.IsClientEnabled("codex") {
+		t.Fatal("existing Forge config fields must still load beside daemon-owned aliases")
+	}
+	roundTrip, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal shared config: %v", err)
+	}
+	var persisted map[string]json.RawMessage
+	if err := json.Unmarshal(roundTrip, &persisted); err != nil {
+		t.Fatalf("parse round-tripped shared config: %v", err)
+	}
+	if string(persisted["revision"]) != "7" {
+		t.Fatalf("round-tripped revision = %s, want 7", persisted["revision"])
+	}
+	var aliases map[string]json.RawMessage
+	if err := json.Unmarshal(persisted["aliases"], &aliases); err != nil {
+		t.Fatalf("parse round-tripped aliases: %v", err)
+	}
+	if string(aliases["codex-sol"]) != `"codex/gpt-5.6-sol:codex"` || string(aliases["invalid-entry-preserved-for-daemon"]) != `{"unexpected":true}` {
+		t.Fatalf("round-tripped aliases changed: %s", persisted["aliases"])
 	}
 }
 

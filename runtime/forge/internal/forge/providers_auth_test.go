@@ -1050,7 +1050,7 @@ func scopeTestHome(t *testing.T) string {
 
 func codebuddySyntheticProductAttributes() map[string]interface{} {
 	return map[string]interface{}{
-		"internalDomain":    []string{"internal.corp.test", "*.internal.corp.test"},
+		"internalDomain":    []string{"enterprise.example.test", "*.enterprise.example.test"},
 		"iOADomain":         []string{"*.ioa.auth.test"},
 		"cloudHostedDomain": []string{"cloud.console.test", "*.cloud.console.test"},
 		"externalDomain":    []string{"public.example", "*.public.example"},
@@ -1125,7 +1125,7 @@ func TestCodeBuddyActiveScopeRealTopLevelAccountCanonicalVector(t *testing.T) {
 			"accessToken":  "synthetic-access-token",
 			"refreshToken": "synthetic-refresh-token",
 			"expiration":   9999999999999,
-			"domain":       "alice.internal.corp.test",
+			"domain":       "alice.enterprise.example.test",
 		},
 		"account": map[string]interface{}{
 			"uid":            "uid-1111",
@@ -1149,10 +1149,10 @@ func TestCodeBuddyActiveScopeRealTopLevelAccountCanonicalVector(t *testing.T) {
 
 	// Canonical TS payload: keys in the exact order id, enterpriseId,
 	// accountType, idp, domain, environment, hashed as cbv1:<sha256> over the
-	// JSON {"id":"uid-1111","enterpriseId":"ent-123","accountType":"corp","idp":"idp-synthetic","domain":"alice.internal.corp.test","environment":"internal"}.
+	// JSON {"id":"uid-1111","enterpriseId":"ent-123","accountType":"corp","idp":"idp-synthetic","domain":"alice.enterprise.example.test","environment":"internal"}.
 	// The digest is pinned as a fixed literal anchor so any cross-language
 	// drift in field order, normalization, or payload contents breaks here.
-	const wantScope = "cbv1:27bd540a6e4165ecf2deda7e031a0d10769969bbb1b0c1bc3943647f5f28e175"
+	const wantScope = "cbv1:84c83a54126ac8dbc9fca6986aae90c527e462d4490f2ab5c4c749bf7720b6f6"
 	if res.Scope != wantScope {
 		t.Fatalf("scope=%q want canonical digest %q", res.Scope, wantScope)
 	}
@@ -1161,7 +1161,7 @@ func TestCodeBuddyActiveScopeRealTopLevelAccountCanonicalVector(t *testing.T) {
 	joined := res.Scope + " " + res.Environment
 	for _, forbidden := range []string{
 		"uid-1111", "uin-2222", "oneid-3333", "ent-123", "idp-synthetic",
-		"alice.internal.corp.test", "synthetic-access-token",
+		"alice.enterprise.example.test", "synthetic-access-token",
 		"synthetic-refresh-token", "Alice Developer", "c2VjcmV0",
 	} {
 		if strings.Contains(joined, forbidden) {
@@ -1178,10 +1178,10 @@ func TestCodeBuddyActiveScopeEnvironmentClassification(t *testing.T) {
 		wantOK  bool
 		payload string
 	}{
-		{"internal exact attribute", "internal.corp.test", "internal", true, `{"id":"uid-c","domain":"internal.corp.test","environment":"internal"}`},
-		{"internal wildcard one label", "west.internal.corp.test", "internal", true, `{"id":"uid-c","domain":"west.internal.corp.test","environment":"internal"}`},
-		{"internal wildcard never crosses dots", "deep.west.internal.corp.test", "", false, ""},
-		{"case sensitive exact", "Internal.Corp.Test", "", false, ""},
+		{"internal exact attribute", "enterprise.example.test", "internal", true, `{"id":"uid-c","domain":"enterprise.example.test","environment":"internal"}`},
+		{"internal wildcard one label", "west.enterprise.example.test", "internal", true, `{"id":"uid-c","domain":"west.enterprise.example.test","environment":"internal"}`},
+		{"internal wildcard never crosses dots", "deep.west.enterprise.example.test", "", false, ""},
+		{"case sensitive exact", "Enterprise.Example.Test", "", false, ""},
 		{"ioa wildcard one label", "alice.ioa.auth.test", "ioa", true, `{"id":"uid-c","domain":"alice.ioa.auth.test","environment":"ioa"}`},
 		{"cloudhosted exact attribute", "cloud.console.test", "cloudhosted", true, `{"id":"uid-c","domain":"cloud.console.test","environment":"cloudhosted"}`},
 		{"cloudhosted wildcard one label", "eu.cloud.console.test", "cloudhosted", true, `{"id":"uid-c","domain":"eu.cloud.console.test","environment":"cloudhosted"}`},
@@ -1228,36 +1228,36 @@ func TestCodeBuddyActiveScopeDomainMatchSemantics(t *testing.T) {
 	}{
 		{
 			name:       "wildcard never matches across dot labels",
-			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
-			domain:     "deep.west.internal.corp.test",
+			attributes: map[string]interface{}{"internalDomain": "*.enterprise.example.test"},
+			domain:     "deep.west.enterprise.example.test",
 			wantEnv:    "",
 			wantOK:     false,
 		},
 		{
 			name:       "wildcard matches one label",
-			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
-			domain:     "west.internal.corp.test",
+			attributes: map[string]interface{}{"internalDomain": "*.enterprise.example.test"},
+			domain:     "west.enterprise.example.test",
 			wantEnv:    "internal",
 			wantOK:     true,
 		},
 		{
 			name:       "matching is case sensitive on the domain",
-			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
-			domain:     "West.Internal.Corp.Test",
+			attributes: map[string]interface{}{"internalDomain": "*.enterprise.example.test"},
+			domain:     "West.Enterprise.Example.Test",
 			wantEnv:    "",
 			wantOK:     false,
 		},
 		{
 			name:       "matching is case sensitive on the pattern",
-			attributes: map[string]interface{}{"internalDomain": "*.Internal.Corp.Test"},
-			domain:     "west.internal.corp.test",
+			attributes: map[string]interface{}{"internalDomain": "*.Enterprise.Example.Test"},
+			domain:     "west.enterprise.example.test",
 			wantEnv:    "",
 			wantOK:     false,
 		},
 		{
 			name:       "exact equality is case sensitive",
-			attributes: map[string]interface{}{"internalDomain": "Internal.Corp.Test"},
-			domain:     "Internal.Corp.Test",
+			attributes: map[string]interface{}{"internalDomain": "Enterprise.Example.Test"},
+			domain:     "Enterprise.Example.Test",
 			wantEnv:    "internal",
 			wantOK:     true,
 		},
@@ -1313,7 +1313,7 @@ func TestCodeBuddyActiveScopeFiniteNumericUIDNormalization(t *testing.T) {
 	writeScopeAuthFile(t, home, map[string]interface{}{
 		"auth": map[string]interface{}{
 			"accessToken": "synthetic-scope-token",
-			"domain":      "internal.corp.test",
+			"domain":      "enterprise.example.test",
 		},
 		"account": map[string]interface{}{
 			"uid":          123456789,
@@ -1330,7 +1330,7 @@ func TestCodeBuddyActiveScopeFiniteNumericUIDNormalization(t *testing.T) {
 	}
 	// Numeric identity fields are normalized with JavaScript String(number)
 	// decimal semantics before hashing.
-	const canonicalPayload = `{"id":"123456789","enterpriseId":"1700","domain":"internal.corp.test","environment":"internal"}`
+	const canonicalPayload = `{"id":"123456789","enterpriseId":"1700","domain":"enterprise.example.test","environment":"internal"}`
 	if want := cbv1Scope(t, canonicalPayload); res.Scope != want {
 		t.Fatalf("scope=%q want %q", res.Scope, want)
 	}
@@ -1375,7 +1375,7 @@ func TestCodeBuddyActiveScopeStableAcrossTokenRotation(t *testing.T) {
 			"accessToken":  "token-version-one",
 			"refreshToken": "refresh-version-one",
 			"expiration":   1700000000001,
-			"domain":       "team.internal.corp.test",
+			"domain":       "team.enterprise.example.test",
 		},
 		"account": map[string]interface{}{
 			"uid":          "uid-stable-7",
@@ -1407,7 +1407,7 @@ func TestCodeBuddyActiveScopeStableAcrossTokenRotation(t *testing.T) {
 			"accessToken":  "token-version-two-rotated",
 			"refreshToken": "refresh-version-two-rotated",
 			"expiration":   1700000009999,
-			"domain":       "team.internal.corp.test",
+			"domain":       "team.enterprise.example.test",
 		},
 		"account": map[string]interface{}{
 			"uid":          "uid-stable-7",
@@ -1440,7 +1440,7 @@ func TestCodeBuddyActiveScopeChangesOnAccountAndEnvironmentSwitch(t *testing.T) 
 	}
 
 	// Environment switch: same account id, different auth domain.
-	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-a", "internal.corp.test"))
+	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-a", "enterprise.example.test"))
 	internal := resolver.CodeBuddyActiveScope()
 	if !internal.OK || internal.Environment != "internal" {
 		t.Fatalf("expected internal scope, got %+v", internal)
@@ -1450,7 +1450,7 @@ func TestCodeBuddyActiveScopeChangesOnAccountAndEnvironmentSwitch(t *testing.T) 
 	}
 
 	// Account switch: different stable account id, same environment.
-	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-b", "internal.corp.test"))
+	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-b", "enterprise.example.test"))
 	other := resolver.CodeBuddyActiveScope()
 	if !other.OK || other.Environment != "internal" {
 		t.Fatalf("expected internal scope for second account, got %+v", other)
@@ -1461,7 +1461,7 @@ func TestCodeBuddyActiveScopeChangesOnAccountAndEnvironmentSwitch(t *testing.T) 
 }
 
 func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
-	validAuth := codebuddyScopeAuth("uid-fail", "internal.corp.test")
+	validAuth := codebuddyScopeAuth("uid-fail", "enterprise.example.test")
 	cases := []struct {
 		name    string
 		product func() string
@@ -1480,7 +1480,7 @@ func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
 				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
 			},
 			auth: func(t *testing.T, home string) {
-				payload := codebuddyScopeAuth("uid-fail", "internal.corp.test")
+				payload := codebuddyScopeAuth("uid-fail", "enterprise.example.test")
 				delete(payload["auth"].(map[string]interface{}), "accessToken")
 				writeScopeAuthFile(t, home, payload)
 			},
@@ -1493,7 +1493,7 @@ func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
 			auth: func(t *testing.T, home string) {
 				writeScopeAuthFile(t, home, map[string]interface{}{
 					"accessToken": "synthetic-scope-token",
-					"domain":      "internal.corp.test",
+					"domain":      "enterprise.example.test",
 					"account": map[string]interface{}{
 						"uid": "uid-fail",
 					},
@@ -1509,7 +1509,7 @@ func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
 				writeScopeAuthFile(t, home, map[string]interface{}{
 					"auth": map[string]interface{}{
 						"accessToken": "synthetic-scope-token",
-						"domain":      "internal.corp.test",
+						"domain":      "enterprise.example.test",
 					},
 					"account": map[string]interface{}{
 						"name": "No Stable Id",
@@ -1526,7 +1526,7 @@ func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
 				writeScopeAuthFile(t, home, map[string]interface{}{
 					"auth": map[string]interface{}{
 						"accessToken": "synthetic-scope-token",
-						"domain":      "internal.corp.test",
+						"domain":      "enterprise.example.test",
 					},
 					"uid":          "root-uid",
 					"enterpriseId": "root-ent",
@@ -1543,7 +1543,7 @@ func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
 					"auth": map[string]interface{}{
 						"accessToken": "synthetic-scope-token",
 					},
-					"domain": "internal.corp.test",
+					"domain": "enterprise.example.test",
 					"account": map[string]interface{}{
 						"uid": "uid-fail",
 					},

@@ -3,6 +3,8 @@
 // root package can depend on it without a cycle.
 package config
 
+import "encoding/json"
+
 // ClientEnabledReason describes why a client is or isn't usable.
 type ClientEnabledReason string
 
@@ -23,6 +25,12 @@ type Config struct {
 	CustomProviders   map[string]CustomProvider   `json:"custom_providers,omitempty"`
 	GeneratedFrom     string                      `json:"_generated_from,omitempty"`
 	PolicyMaxUsagePct map[string]int              `json:"policy_max_usage_pct,omitempty"`
+	// RuntimeAliasRevision and RuntimeAliases belong to the daemon-owned alias
+	// store that shares this top-level document. Forge recognizes them so its
+	// strict decoder can coexist with the store, but never interprets alias
+	// targets or uses them as execution profiles.
+	RuntimeAliasRevision int64                      `json:"revision,omitempty"`
+	RuntimeAliases       map[string]json.RawMessage `json:"aliases,omitempty"`
 }
 
 // Client holds per-client configuration.

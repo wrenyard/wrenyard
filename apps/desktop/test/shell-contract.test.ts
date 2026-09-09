@@ -97,7 +97,6 @@ function automaticSelectionRow(): TaskSettingsTaskRow {
         exclude_profile_ids: { value: null, source: 'builtin' },
         exclude_client_ids: { value: null, source: 'builtin' },
         exclude_provider_ids: { value: null, source: 'builtin' },
-        preferred_runtime: { value: null, source: 'builtin' },
       },
     },
     automatic_selection: {
@@ -198,14 +197,13 @@ test('TaskSettingsSnapshot rows mirror the current daemon wire DTO', () => {
         exclude_profile_ids: { value: null, source: 'builtin' },
         exclude_client_ids: { value: null, source: 'builtin' },
         exclude_provider_ids: { value: null, source: 'builtin' },
-        preferred_runtime: { value: null, source: 'builtin' },
       },
     },
     explicit: { resolved },
     issues: [],
   };
   const snapshot: TaskSettingsSnapshot = {
-    config_path: '/Users/me/.wrenyard/tasks/config.json',
+    config_path: '/var/tmp/example-user/.wrenyard/tasks/config.json',
     revision: 'global-rev',
     user_global: {
       mode: 'automatic',
@@ -216,7 +214,7 @@ test('TaskSettingsSnapshot rows mirror the current daemon wire DTO', () => {
     rows: [row],
     aliases: [{ name: 'cc-fast', target: 'anthropic/claude-sonnet-4:cc' }],
   };
-  assert.equal(snapshot.config_path, '/Users/me/.wrenyard/tasks/config.json');
+  assert.equal(snapshot.config_path, '/var/tmp/example-user/.wrenyard/tasks/config.json');
   assert.equal(snapshot.revision, 'global-rev');
   assert.equal(snapshot.aliases[0]?.name, 'cc-fast');
   assert.equal(snapshot.aliases[0]?.target, 'anthropic/claude-sonnet-4:cc');

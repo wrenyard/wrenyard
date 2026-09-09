@@ -91,7 +91,6 @@ export const TASK_DISPATCH_FIELDS = [
   'excludeClientIds',
   'excludeProviderIds',
   'requiredCapabilities',
-  'preferredRuntime',
 ] as const
 
 export type TaskDispatchField = (typeof TASK_DISPATCH_FIELDS)[number]
@@ -109,7 +108,6 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   excludeClientIds: ['excludeClientIds', 'exclude_client_ids'],
   excludeProviderIds: ['excludeProviderIds', 'exclude_provider_ids'],
   requiredCapabilities: ['requiredCapabilities', 'required_capabilities'],
-  preferredRuntime: ['preferredRuntime', 'preferred_runtime'],
 }
 
 const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
@@ -129,10 +127,6 @@ const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'excludeClientIds',
   'excludeProviderIds',
   'requiredCapabilities',
-])
-
-const RUNTIME_OBJECT_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
-  'preferredRuntime',
 ])
 
 const INTELLIGENCE_TIERS: ReadonlySet<string> = new Set([
@@ -344,19 +338,6 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
       continue
     }
 
-    if (RUNTIME_OBJECT_FIELDS.has(field)) {
-      if (!isPlainObject(value)) fail(scope, `dispatch.${field} must be an object`)
-      const runtime = value as Record<string, unknown>
-      const keys = ['client', 'provider', 'model'] as const
-      if (keys.some((key) => typeof runtime[key] !== 'string' || !(runtime[key] as string).trim())) {
-        fail(scope, `dispatch.${field} must contain non-empty client, provider, and model strings`)
-      }
-      out.preferredRuntime = {
-        client: (runtime.client as string).trim(),
-        provider: (runtime.provider as string).trim(),
-        model: (runtime.model as string).trim(),
-      }
-    }
   }
 
   if (

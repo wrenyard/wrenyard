@@ -20,6 +20,14 @@ files:
   - package.json
   - resources/icon.png
   - resources/icon-256.png
+  # Drop file kinds that cannot participate in the packaged runtime. Do not
+  # exclude dependency directories by generic names such as doc/ or test/:
+  # packages may place production modules there. License/notice files remain.
+  - "!**/*.map"
+  - "!**/*.d.ts"
+  - "!**/*.d.mts"
+  - "!**/*.d.cts"
+  - "!dist/types/**"
 
 extraResources:
   - from: ../../packages/dsh-shell

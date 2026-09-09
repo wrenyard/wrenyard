@@ -72,6 +72,7 @@ import type {
   TaskRunSettingsResolution,
 } from '../../types.mts'
 import type { CodeBuddyExecutionBinding } from '../../core/operations/types.mts'
+import type { ForgeProviderReadinessSnapshot } from '../execution/forge-provider-readiness-query.mts'
 
 export type {
   TaskRunSettingsLayerName,
@@ -165,15 +166,30 @@ export interface TaskSettingsProviderAvailability {
  * callback must fail closed instead of loading a different credential. */
 export interface TaskSettingsRuntimeAvailabilityContext {
   readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined
+  /** One request/evaluation-bound Forge status sample for native providers.
+   *  Null means the bounded status read failed and callers must stay unknown;
+   *  absence of the context means explicit-mode callers may load one fresh. */
+  readonly nativeProviderReadiness: ForgeProviderReadinessSnapshot | null
+}
+
+/** Internal resolved target for a readiness probe. Mode is required so a
+ * native login can never be promoted into Gateway route availability. */
+export interface TaskSettingsRuntimeAvailabilityTarget extends TaskSettingsRuntimeTriple {
+  mode: 'native' | 'gateway'
 }
 
 /** Non-billable live provider credential/route availability probe input: the
- *  resolved client/provider/model triple of an already-selected canonical
+ *  resolved client/provider/model/mode target of an already-selected canonical
  *  target. Never carries user config or alias state. */
 export type TaskSettingsRuntimeAvailabilityCallback = (
-  runtime: TaskSettingsRuntimeTriple,
+  runtime: TaskSettingsRuntimeAvailabilityTarget,
   context?: TaskSettingsRuntimeAvailabilityContext,
 ) => Promise<TaskSettingsProviderAvailability> | TaskSettingsProviderAvailability
+
+/** One bounded Forge provider-list status read. No credentials cross this
+ * boundary; TaskSettings only binds the immutable result to one evaluation. */
+export type TaskSettingsNativeProviderReadinessCallback =
+  () => Promise<ForgeProviderReadinessSnapshot>
 
 export interface TaskSettingsDaemonStatus {
   accepting: boolean
@@ -200,6 +216,9 @@ export interface TaskSettingsServiceOptions {
   daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   /** Optional non-billable live provider credential/route availability probe. */
   runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
+  /** Optional authoritative non-inference native provider status source. It is
+   * sampled once only when an evaluation contains native Codex/Cursor choices. */
+  nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
   /** Daemon-owned immutable automatic-routing quota snapshot service shared by
    *  every automatic selection (run and snapshot row preview). Snapshot row
    *  preview takes one immutable snapshot per request; every other selection
@@ -368,6 +387,7 @@ export class TaskSettingsService {
   private readonly definitions: TaskSettingsDefinitionSource
   private readonly daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   private readonly runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
+  private readonly nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
   private readonly now: () => number
 
@@ -379,6 +399,7 @@ export class TaskSettingsService {
     this.definitions = options.definitions ?? createWorkspaceDefinitionSource(options.workspaceRoot)
     this.daemonAvailability = options.daemonAvailability
     this.runtimeAvailability = options.runtimeAvailability
+    this.nativeProviderReadiness = options.nativeProviderReadiness
     this.quotaSnapshots = options.quotaSnapshots
     this.now = options.now ?? (() => Date.now())
   }
@@ -406,14 +427,20 @@ export class TaskSettingsService {
     return resolved.target
   }
 
-  /** Client/provider/model triple of an already-resolved dispatch snapshot,
+  /** Client/provider/model/mode target of an already-resolved dispatch snapshot,
    *  used only for the non-billable live readiness probes. */
   private static tripleOf(resolved: {
     client: string
     provider: string
     model: string
-  }): TaskSettingsRuntimeTriple {
-    return { client: resolved.client, provider: resolved.provider, model: resolved.model }
+    mode: 'native' | 'gateway'
+  }): TaskSettingsRuntimeAvailabilityTarget {
+    return {
+      client: resolved.client,
+      provider: resolved.provider,
+      model: resolved.model,
+      mode: resolved.mode,
+    }
   }
 
   /** Authoritative Catalog display labels of an already-resolved dispatch pair;
@@ -1002,7 +1029,7 @@ export class TaskSettingsService {
   private async runtimeReadiness(
     taskName: string,
     exactRuntime: string,
-    runtime: TaskSettingsRuntimeTriple,
+    runtime: TaskSettingsRuntimeAvailabilityTarget,
   ): Promise<TaskSettingsRuntimeReadiness> {
     const issues: TaskSettingsValidationIssue[] = []
     const daemonReport = this.daemonAvailability ? await this.daemonAvailability() : undefined
@@ -1054,7 +1081,7 @@ export class TaskSettingsService {
   private async assertLiveRuntimeAvailability(
     taskId: string,
     runtimeId: string,
-    triple: { client: string; provider: string; model: string },
+    triple: TaskSettingsRuntimeAvailabilityTarget,
   ): Promise<TaskSettingsProviderAvailability | undefined> {
     if (this.daemonAvailability) {
       const daemon = await this.daemonAvailability()
@@ -1082,7 +1109,7 @@ export class TaskSettingsService {
    *  resolved evidence is shared by every automatic row in the request. The
    *  run/save-preflight paths pass no memo and keep probing fresh per call. */
   private async previewRuntimeAvailability(
-    runtime: TaskSettingsRuntimeTriple,
+    runtime: TaskSettingsRuntimeAvailabilityTarget,
     previewMemo?: AutomaticPreviewMemo,
     context?: TaskSettingsRuntimeAvailabilityContext,
   ): Promise<TaskSettingsProviderAvailability | undefined> {
@@ -1100,9 +1127,11 @@ export class TaskSettingsService {
   /** One immutable automatic selection: the shared quota/free/cap/client
    *  policy path used by both resolveForRun and automatic snapshot row preview.
    *
-   *  Exactly one AutoRoutingQuotaSnapshot is obtained per call; when a
-   *  request-scoped preview memo is supplied (snapshot rows only) that snapshot
-   *  is shared by every automatic row in the same request. Static hard gates
+   *  Exactly one AutoRoutingQuotaSnapshot is obtained per call. When eligible
+   *  native Codex/Cursor choices exist, exactly one bounded Forge provider
+   *  readiness snapshot is also obtained; both immutable samples are bound to
+   *  the same evaluation. With a request-scoped preview memo (snapshot rows),
+   *  those samples are shared by every relevant automatic row. Static hard gates
    *  come from `resolver.eligible`; every exact choice is then filtered through
    *  the live runtimeAvailability callback before ranking (absent callback
    *  stays backward-compatible available; `available: false` is excluded) and
@@ -1120,19 +1149,6 @@ export class TaskSettingsService {
     params: AutomaticSelectionParams,
     previewMemo?: AutomaticPreviewMemo,
   ): Promise<AutomaticSelectionResult> {
-    const quotaPromise = previewMemo?.quota
-      ?? (this.quotaSnapshots
-        ? this.quotaSnapshots.routingSnapshot()
-        : Promise.resolve(null))
-    if (previewMemo !== undefined) previewMemo.quota = quotaPromise
-    const boundSnapshot: AutoRoutingBoundQuotaSnapshot | null = await quotaPromise
-    const snapshot: AutoRoutingQuotaSnapshot | null = boundSnapshot?.snapshot ?? null
-    const availabilityContext: TaskSettingsRuntimeAvailabilityContext = {
-      codeBuddySnapshot: boundSnapshot?.codeBuddySnapshot,
-    }
-    const nowMs = snapshot ? snapshot.nowMs : this.now()
-    const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
-
     // Automatic price admission is finalized below from the request-time
     // horizon snapshot. Omitting only the price ceiling here lets a scheduled
     // DeepSeek tariff replace stale Catalog metadata; every non-DeepSeek
@@ -1140,6 +1156,38 @@ export class TaskSettingsService {
     const { maxOutputUsdPerMillion: _catalogPriceCeiling, ...intrinsicRequirements } = params.requirements
     const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: intrinsicRequirements })
     if (!eligible.ok) return { ok: false, error: eligible.error }
+
+    const quotaPromise = previewMemo?.quota
+      ?? (this.quotaSnapshots
+        ? this.quotaSnapshots.routingSnapshot()
+        : Promise.resolve(null))
+    if (previewMemo !== undefined) previewMemo.quota = quotaPromise
+
+    const needsNative = needsNativeProviderReadiness(eligible.choices)
+    let nativeReadinessPromise: Promise<ForgeProviderReadinessSnapshot | null> = Promise.resolve(null)
+    if (needsNative && this.nativeProviderReadiness !== undefined) {
+      nativeReadinessPromise = previewMemo?.nativeProviderReadiness
+        ?? Promise.resolve()
+          .then(() => this.nativeProviderReadiness!())
+          .catch(() => null)
+      if (previewMemo !== undefined) previewMemo.nativeProviderReadiness = nativeReadinessPromise
+    }
+
+    // Start the independent non-inference samples together and bind both
+    // completed immutable results to every readiness decision in this
+    // selection. A failed native sample remains explicit null/unknown and is
+    // never retried or replaced inside the evaluation.
+    const [boundSnapshot, nativeProviderReadiness]: [
+      AutoRoutingBoundQuotaSnapshot | null,
+      ForgeProviderReadinessSnapshot | null,
+    ] = await Promise.all([quotaPromise, nativeReadinessPromise])
+    const snapshot: AutoRoutingQuotaSnapshot | null = boundSnapshot?.snapshot ?? null
+    const availabilityContext: TaskSettingsRuntimeAvailabilityContext = {
+      codeBuddySnapshot: boundSnapshot?.codeBuddySnapshot,
+      nativeProviderReadiness,
+    }
+    const nowMs = snapshot ? snapshot.nowMs : this.now()
+    const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
 
     // Structured actual eliminations, recorded at the exact stage that empties
     // the surviving pool; deterministic selection never parses error text.
@@ -1426,14 +1474,18 @@ interface AutomaticPreviewMemo {
   /** Immutable quota snapshot promise for this request, created on the first
    *  automatic row that needs one and reused by the rest of the rows. */
   quota?: Promise<AutoRoutingBoundQuotaSnapshot | null>
+  /** One immutable authoritative native-provider status sample shared by all
+   * relevant automatic rows in this snapshot request. Null is a sampled
+   * failure and must never trigger a second query or optimistic fallback. */
+  nativeProviderReadiness?: Promise<ForgeProviderReadinessSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
 }
 
 /** Canonical string key of a resolved runtime triple used to dedupe identical
  *  non-billable readiness probes within one snapshot request. */
-function runtimeTripleKey(runtime: { client: string; provider: string; model: string }): string {
-  return `${runtime.provider}/${runtime.model}:${runtime.client}`
+function runtimeTripleKey(runtime: TaskSettingsRuntimeAvailabilityTarget): string {
+  return `${runtime.provider}/${runtime.model}:${runtime.client}#${runtime.mode}`
 }
 
 type AutomaticSelectionResult =
@@ -1503,6 +1555,17 @@ function automaticClientPreference(choice: TaskDispatchChoice): number {
   if (choice.mode === 'native') return 0
   if (choice.client === 'grok') return 1
   return 2
+}
+
+/** Only exact native Codex/Cursor-client candidates require the authoritative
+ * Forge provider-status sample. This intentionally keys on the native client,
+ * not the Catalog provider id: codex-spark shares the `codex` credential
+ * resolver and native client while retaining its distinct quota provider id.
+ * Gateway variants never consume native login state. */
+function needsNativeProviderReadiness(choices: readonly TaskDispatchChoice[]): boolean {
+  return choices.some((choice) =>
+    choice.mode === 'native' && (choice.client === 'codex' || choice.client === 'cursor'),
+  )
 }
 
 const DEEPSEEK_SAFETY_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1_000
@@ -1668,7 +1731,6 @@ interface TaskSettingsEffectiveAutomaticDto {
   exclude_profile_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_client_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_provider_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
-  preferred_runtime: { value: TaskSettingsRuntimeTriple | null; source: TaskSettingsSourceLayer }
 }
 
 function toEffectiveAutomatic(

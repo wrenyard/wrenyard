@@ -154,6 +154,43 @@ function seedExecutionResolved(id: string, profile: string, resolvedProfile: str
 }
 
 /**
+ * Seeds a persisted task_run_attempt_dispatch snapshot for an execution so the
+ * row surfaces a canonical provider/model/model_id identity in today/window
+ * model rankings. `taskRunId` must be an existing tasks.id. `client` is accepted
+ * only for coverage and is never part of the grouping key.
+ */
+function seedAttemptDispatch(
+  executionId: string,
+  taskRunId: string,
+  provider: string,
+  model: string,
+  modelId: string,
+  client = 'codebuddy',
+): void {
+  const fixedTs = '2024-01-01T00:00:00.000Z'
+  dbRun(
+    `INSERT INTO task_run_attempt_dispatch (
+       execution_id, task_run_id, requested_agent_runtime, profile, client, provider,
+       model, model_id, mode, protocol, intelligence,
+       speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
+       speed_expected_tps_met,
+       reference_pricing_input, reference_pricing_output,
+       reference_pricing_source, reference_pricing_checked_at, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'native', NULL, 'mid', ?, ?, ?, ?, 1, ?, ?, 'catalog', ?, ?, ?)`,
+    executionId,
+    taskRunId,
+    'forge/codebuddy',
+    provider,
+    client,
+    provider,
+    model,
+    modelId,
+    45, 'catalog_default', 7, fixedTs,
+    0.2, 1.2, fixedTs, fixedTs, fixedTs,
+  )
+}
+
+/**
  * Seeds a completed task run that carries a full modern
  * task_run_attempt_dispatch snapshot (optionally with a persisted
  * auto_routing decision), so the run surfaces a `resolved` dispatch in the
@@ -355,10 +392,9 @@ describe('stats-query readStatsSummary', () => {
     seedDispatch(today, 5)
     const result = readStatsSummary({ days: 1, limit: 10 }, now)
     assert.equal(result.today.dispatchCount, 5)
-    assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].profile, 'unknown')
-    assert.equal(result.byProfile[0].dispatchCount, 5)
-    assert.equal(result.byProfile[0].totalTokens, 0)
+    // Dispatch-only events carry no canonical model snapshot, so they are
+    // omitted from the model ranking (overall today totals still count them).
+    assert.equal(result.byProfile.length, 0)
     assert.equal(result.byTask.length, 1)
     assert.equal(result.byTask[0].taskName, 'unknown')
     assert.equal(result.byTask[0].dispatchCount, 5)
@@ -376,10 +412,8 @@ describe('stats-query readStatsSummary', () => {
     assert.equal(result.today.inputTokens, 300)
     assert.equal(result.today.outputTokens, 125)
     assert.equal(result.today.totalTokens, 425)
-    assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].inputTokens, 300)
-    assert.equal(result.byProfile[0].outputTokens, 125)
-    assert.equal(result.byProfile[0].totalTokens, 425)
+    // turn_usage-only rows carry no canonical model snapshot → omitted.
+    assert.equal(result.byProfile.length, 0)
     assert.equal(result.byTask.length, 1)
     assert.equal(result.byTask[0].inputTokens, 300)
     assert.equal(result.byTask[0].outputTokens, 125)
@@ -408,10 +442,8 @@ describe('stats-query readStatsSummary', () => {
     assert.ok(todayBucket)
     assert.equal(todayBucket.inputTokens, 320)
     assert.equal(todayBucket.totalTokens, 440)
-    // profile grouping
-    assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].inputTokens, 320)
-    assert.equal(result.byProfile[0].totalTokens, 440)
+    // model ranking: no canonical dispatch snapshot seeded → omitted today
+    assert.equal(result.byProfile.length, 0)
     // task grouping
     assert.equal(result.byTask.length, 1)
     assert.equal(result.byTask[0].inputTokens, 320)
@@ -461,17 +493,19 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('groups by execution profile with unknown fallback', () => {
+  it('uses provider-local model identity with the deprecated profile alias when no shared mapping exists', () => {
     initTestDb()
     const now = new Date()
     const today = localDayKey(now)
     seedTask('task-commit', 'commit', today, 'done')
     seedExecution('exec-1', 'coding', 'task-commit')
+    seedAttemptDispatch('exec-1', 'task-commit', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
     seedDispatch(today, 1, 'exec-1', 'task-commit')
     seedTurnUsage(today, 50, 25, 'exec-1', 'task-commit')
     const result = readStatsSummary({ days: 1, limit: 10 }, now)
     assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].profile, 'coding')
+    assert.equal(result.byProfile[0].model, 'codebuddy/deepseek-v4-flash')
+    assert.equal(result.byProfile[0].profile, 'codebuddy/deepseek-v4-flash')
     assert.equal(result.byProfile[0].dispatchCount, 1)
     assert.equal(result.byProfile[0].totalTokens, 75)
     closeTestDb()
@@ -507,11 +541,14 @@ describe('stats-query readStatsSummary', () => {
     seedTask('task-2', 'task-b', today, 'done')
     seedExecution('exec-1', 'profile-a', 'task-1')
     seedExecution('exec-2', 'profile-b', 'task-2')
+    seedAttemptDispatch('exec-1', 'task-1', 'codebuddy', 'model-a', 'codebuddy/model-a')
+    seedAttemptDispatch('exec-2', 'task-2', 'cursor', 'model-b', 'cursor/model-b')
     seedTurnUsage(today, 100, 0, 'exec-1', 'task-1')
     seedTurnUsage(yesterday, 5, 0, 'exec-2', 'task-2')
     const result = readStatsSummary({ days: 2, limit: 1 }, now)
     assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].profile, 'profile-a')
+    assert.equal(result.byProfile[0].model, 'codebuddy/model-a')
+    assert.equal(result.byProfile[0].profile, 'codebuddy/model-a')
     assert.equal(result.byTask.length, 1)
     assert.equal(result.byTask[0].taskName, 'task-a')
     closeTestDb()
@@ -564,7 +601,7 @@ describe('stats-query readStatsSummary', () => {
     const today = localDayKey(now)
     seedDispatch(today, 1)
     const result = readStatsSummary({ days: 5, limit: 1 }, now)
-    assert.equal(result.byProfile.length, 1)
+    assert.equal(result.byProfile.length, 0)
     assert.equal(result.byTask.length, 1)
     assert.equal(result.daily.length, 5)
     closeTestDb()
@@ -580,12 +617,12 @@ describe('stats-query readStatsSummary', () => {
       seedTurnUsage(today, 1, 0, `exec-${i}`, `task-${i}`)
     }
     const result = readStatsSummary({ days: 7, limit: 50 }, now)
-    assert.equal(result.byProfile.length, 50)
+    assert.equal(result.byProfile.length, 0)
     assert.equal(result.byTask.length, 50)
     closeTestDb()
   })
 
-  it('applies deterministic tie ordering by profile ascending', () => {
+  it('applies deterministic tie ordering by model ascending', () => {
     initTestDb()
     const now = new Date()
     const today = localDayKey(now)
@@ -593,12 +630,16 @@ describe('stats-query readStatsSummary', () => {
     seedTask('task-y', 'task-y', today, 'done')
     seedExecution('exec-a', 'beta', 'task-x')
     seedExecution('exec-b', 'alpha', 'task-y')
+    seedAttemptDispatch('exec-a', 'task-x', 'codebuddy', 'beta-model', 'codebuddy/beta-model')
+    seedAttemptDispatch('exec-b', 'task-y', 'codebuddy', 'alpha-model', 'codebuddy/alpha-model')
     seedTurnUsage(today, 100, 0, 'exec-a', 'task-x')
     seedTurnUsage(today, 100, 0, 'exec-b', 'task-y')
     const result = readStatsSummary({ days: 1, limit: 10 }, now)
     assert.equal(result.byProfile.length, 2)
-    assert.equal(result.byProfile[0].profile, 'alpha')
-    assert.equal(result.byProfile[1].profile, 'beta')
+    assert.equal(result.byProfile[0].model, 'codebuddy/alpha-model')
+    assert.equal(result.byProfile[0].profile, 'codebuddy/alpha-model')
+    assert.equal(result.byProfile[1].model, 'codebuddy/beta-model')
+    assert.equal(result.byProfile[1].profile, 'codebuddy/beta-model')
     closeTestDb()
   })
 
@@ -619,7 +660,7 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('treats blank, whitespace, and missing-execution profile as unknown', () => {
+  it('omits rows whose canonical model identity is missing or blank', () => {
     initTestDb()
     const now = new Date()
     const today = localDayKey(now)
@@ -632,9 +673,8 @@ describe('stats-query readStatsSummary', () => {
     seedDispatch(today, 1, 'exec-2', 'task-2')
     seedDispatch(today, 1, undefined, 'task-3')
     const result = readStatsSummary({ days: 1, limit: 10 }, now)
-    assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].profile, 'unknown')
-    assert.equal(result.byProfile[0].dispatchCount, 3)
+    // No canonical dispatch snapshot → no eligible model ranking rows.
+    assert.equal(result.byProfile.length, 0)
     closeTestDb()
   })
 
@@ -791,7 +831,7 @@ describe('stats-query readStatsSummary', () => {
     const today = localDayKey(now)
     seedDispatch(today, 1)
     const result = readStatsSummary({ days: 5, limit: 1 }, now)
-    assert.equal(result.byProfile.length, 1)
+    assert.equal(result.byProfile.length, 0)
     assert.equal(result.byTask.length, 1)
     assert.equal(result.daily.length, 5)
     closeTestDb()
@@ -825,17 +865,20 @@ describe('stats-query readStatsSummary', () => {
     // Data from yesterday
     seedTask('task-y', 'yesterday-task', '2026-07-18', 'done')
     seedExecution('exec-y', 'yesterday-profile', 'task-y')
+    seedAttemptDispatch('exec-y', 'task-y', 'codebuddy', 'yesterday-model', 'codebuddy/yesterday-model')
     seedDispatch('2026-07-18', 5, 'exec-y', 'task-y')
     seedTurnUsage('2026-07-18', 500, 100, 'exec-y', 'task-y')
     // Data from today
     seedTask('task-t', 'today-task', '2026-07-19', 'done')
     seedExecution('exec-t', 'today-profile', 'task-t')
+    seedAttemptDispatch('exec-t', 'task-t', 'cursor', 'today-model', 'cursor/today-model')
     seedDispatch('2026-07-19', 2, 'exec-t', 'task-t')
     seedTurnUsage('2026-07-19', 50, 10, 'exec-t', 'task-t')
     const result = readStatsSummary({ days: 2, limit: 10 }, fixedNow)
     // Rankings only contain today's data
     assert.equal(result.byProfile.length, 1)
-    assert.equal(result.byProfile[0].profile, 'today-profile')
+    assert.equal(result.byProfile[0].model, 'cursor/today-model')
+    assert.equal(result.byProfile[0].profile, 'cursor/today-model')
     assert.equal(result.byProfile[0].dispatchCount, 2)
     assert.equal(result.byTask.length, 1)
     assert.equal(result.byTask[0].taskName, 'today-task')
@@ -1094,12 +1137,13 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('groups only resolved profiles and omits NULL resolved_profile rows', () => {
+  it('groups only canonical-model dispatches and omits identity-less rows while keeping totals', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
     seedTask('task-resolved', 'commit', today, 'done')
     seedExecutionResolved('exec-resolved', 'policy-a', 'coding', 'task-resolved')
+    seedAttemptDispatch('exec-resolved', 'task-resolved', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
     seedDispatch(today, 2, 'exec-resolved', 'task-resolved')
     seedTurnUsage(today, 100, 50, 'exec-resolved', 'task-resolved')
 
@@ -1112,10 +1156,10 @@ describe('stats-query readStatsSummary', () => {
     const windows = result.windows
     assert.ok(windows)
     for (const w of windows) {
-      assert.equal(w.dispatchCount, 5, `${w.period} dispatchCount includes unresolved dispatches`)
+      assert.equal(w.dispatchCount, 5, `${w.period} dispatchCount includes identity-less dispatches`)
       assert.equal(w.totalTokens, 180, `${w.period} totalTokens includes all usage`)
-      assert.equal(w.byProfile.length, 1, `${w.period} groups only resolved profiles`)
-      assert.deepEqual(w.byProfile[0], { profile: 'coding', runCount: 2, totalTokens: 150 })
+      assert.equal(w.byProfile.length, 1, `${w.period} groups only canonical-model dispatches`)
+      assert.deepEqual(w.byProfile[0], { profile: 'codebuddy/deepseek-v4-flash', model: 'codebuddy/deepseek-v4-flash', runCount: 2, totalTokens: 150 })
     }
     closeTestDb()
   })
@@ -1126,6 +1170,7 @@ describe('stats-query readStatsSummary', () => {
     const today = '2026-07-19'
     seedTask('task-tps', 'commit', today, 'done')
     seedExecutionResolved('exec-tps', 'policy-a', 'coding', 'task-tps')
+    seedAttemptDispatch('exec-tps', 'task-tps', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
     // Valid agent_turn_v1 usage: contributes to the TPS numerator and denominator
     seedUsageWithDuration(today, 30, 2000, 4000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
     seedUsageWithDuration(today, 30, 1000, 1000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
@@ -1152,6 +1197,7 @@ describe('stats-query readStatsSummary', () => {
     const today = '2026-07-19'
     seedTask('task-notps', 'commit', today, 'done')
     seedExecutionResolved('exec-notps', 'policy-a', 'coding', 'task-notps')
+    seedAttemptDispatch('exec-notps', 'task-notps', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
     seedTurnUsage(today, 100, 50, 'exec-notps', 'task-notps')
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
@@ -1309,22 +1355,23 @@ describe('stats-query readStatsSummary', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
-    const seedProfile = (id: string, profile: string, tokens: number): void => {
+    const seedModel = (id: string, model: string, tokens: number): void => {
       seedTask(`task-${id}`, `task-${id}`, today, 'done')
-      seedExecutionResolved(`exec-${id}`, `policy-${id}`, profile, `task-${id}`)
+      seedExecutionResolved(`exec-${id}`, `policy-${id}`, model, `task-${id}`)
+      seedAttemptDispatch(`exec-${id}`, `task-${id}`, 'codebuddy', model, `codebuddy/${model}`)
       seedDispatch(today, 1, `exec-${id}`, `task-${id}`)
       seedTurnUsage(today, tokens, 0, `exec-${id}`, `task-${id}`)
     }
-    seedProfile('a', 'profile-a', 100)
-    seedProfile('b', 'profile-b', 300)
-    seedProfile('c', 'profile-c', 200)
+    seedModel('a', 'model-a', 100)
+    seedModel('b', 'model-b', 300)
+    seedModel('c', 'model-c', 200)
 
     const result = readStatsSummary({ days: 31, limit: 2 }, fixedNow)
     const byProfile = result.windows?.[0].byProfile
     assert.ok(byProfile)
     assert.equal(byProfile.length, 2)
-    assert.deepEqual(byProfile[0], { profile: 'profile-b', runCount: 1, totalTokens: 300 })
-    assert.deepEqual(byProfile[1], { profile: 'profile-c', runCount: 1, totalTokens: 200 })
+    assert.deepEqual(byProfile[0], { profile: 'codebuddy/model-b', model: 'codebuddy/model-b', runCount: 1, totalTokens: 300 })
+    assert.deepEqual(byProfile[1], { profile: 'codebuddy/model-c', model: 'codebuddy/model-c', runCount: 1, totalTokens: 200 })
     closeTestDb()
   })
 
@@ -1781,6 +1828,259 @@ describe('stats-query readStatsSummary', () => {
     assert.equal(queuedRun.status, 'queued')
     assert.equal('finished_at' in queuedRun, false, 'queued runs omit finished_at')
     assert.equal('started_at' in queuedRun, false, 'queued runs without an execution omit started_at')
+    closeTestDb()
+  })
+
+  it('merges explicit shared canonical identity across different provider route ids', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'codebuddy', 'kimi-k3', 'codebuddy/kimi-k3', 'codebuddy')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTurnUsage(today, 100, 50, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'kimi-coding', 'k3', 'kimi-coding/k3', 'claude')
+    seedDispatch(today, 2, 'exec-b', 'task-b')
+    seedTurnUsage(today, 200, 80, 'exec-b', 'task-b')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider, model) => ({
+        provider_display_name: provider === 'codebuddy' ? 'CodeBuddy' : 'Kimi Coding',
+        model_display_name: model === 'k3' ? 'Kimi K3' : 'Kimi-K3',
+        stats_model_key: 'canonical:kimi-k3',
+        stats_model_id: 'kimi-k3',
+        stats_model_display_name: 'Kimi K3',
+      }),
+    })
+    // Both today and every window surface one shared canonical Kimi K3 row.
+    assert.equal(result.byProfile.length, 1, 'explicit canonical identity merges different provider route ids')
+    const item = result.byProfile[0]
+    assert.equal(item.model, 'kimi-k3')
+    assert.equal(item.profile, 'kimi-k3')
+    assert.equal(item.dispatchCount, 3, 'dispatches summed across providers')
+    assert.equal(item.inputTokens, 300)
+    assert.equal(item.outputTokens, 130)
+    assert.equal(item.totalTokens, 430)
+    for (const w of result.windows ?? []) {
+      assert.equal(w.byProfile.length, 1)
+      assert.equal(w.byProfile[0].model, 'kimi-k3')
+      assert.equal(w.byProfile[0].runCount, 3)
+      assert.equal(w.byProfile[0].totalTokens, 430)
+    }
+    closeTestDb()
+  })
+
+  it('keeps equal raw model ids provider-local unless both routes explicitly share a canonical identity', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'provider-a', 'same-id', 'provider-a/same-id')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'provider-b', 'same-id', 'provider-b/same-id')
+    seedDispatch(today, 1, 'exec-b', 'task-b')
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider) => ({
+        provider_display_name: provider,
+        model_display_name: 'Coincidental Label',
+        // An un-namespaced key is rejected and cannot force unrelated routes
+        // into the same group.
+        stats_model_key: 'same-id',
+        stats_model_id: 'same-id',
+        stats_model_display_name: 'Coincidental Label',
+      }),
+    })
+    assert.deepEqual(result.byProfile.map((row) => row.model).sort(), [
+      'provider-a/same-id',
+      'provider-b/same-id',
+    ])
+    assert.equal(result.windows?.[0].byProfile.length, 2)
+    closeTestDb()
+  })
+
+  it('keeps dated and unversioned model routes separate even when display labels are equal', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTurnUsage(today, 100, 10, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'tokenhub', 'deepseek-v4-flash-202605', 'tokenhub/deepseek-v4-flash-202605')
+    seedDispatch(today, 1, 'exec-b', 'task-b')
+    seedTurnUsage(today, 100, 10, 'exec-b', 'task-b')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider, model) => {
+        if ((provider === 'codebuddy' && model === 'deepseek-v4-flash')
+          || (provider === 'tokenhub' && model === 'deepseek-v4-flash-202605')) {
+          return { provider_display_name: provider, model_display_name: 'DeepSeek V4 Flash' }
+        }
+        return undefined
+      },
+    })
+    assert.equal(result.byProfile.length, 2, 'dated and unversioned routes stay separate rows')
+    const models = result.byProfile.map((r) => r.model).sort()
+    assert.deepEqual(models, ['codebuddy/deepseek-v4-flash', 'tokenhub/deepseek-v4-flash-202605'])
+    for (const r of result.byProfile) assert.equal(r.model_display_name, 'DeepSeek V4 Flash')
+    closeTestDb()
+  })
+
+  it('omits missing or inconsistent identity without changing totals and never infers from resolved_profile or model_id', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    // Eligible: surfaces in the model rankings.
+    seedTask('task-ok', 'ok', today, 'done')
+    seedExecutionResolved('exec-ok', 'policy-ok', 'coding', 'task-ok')
+    seedAttemptDispatch('exec-ok', 'task-ok', 'codebuddy', 'good-model', 'codebuddy/good-model')
+    seedDispatch(today, 2, 'exec-ok', 'task-ok')
+    seedTurnUsage(today, 100, 50, 'exec-ok', 'task-ok')
+    // Inconsistent identity: model_id does not match provider/model → omitted.
+    seedTask('task-bad', 'bad', today, 'done')
+    seedExecutionResolved('exec-bad', 'policy-bad', 'coding', 'task-bad')
+    seedAttemptDispatch('exec-bad', 'task-bad', 'codebuddy', 'bare-model', 'codebuddy/DIFFERENT-model')
+    seedDispatch(today, 1, 'exec-bad', 'task-bad')
+    seedTurnUsage(today, 20, 10, 'exec-bad', 'task-bad')
+    // resolved_profile only (no dispatch snapshot): must not create a model row.
+    seedTask('task-rp', 'rp', today, 'done')
+    seedExecutionResolved('exec-rp', 'policy-rp', 'good-model', 'task-rp')
+    seedDispatch(today, 1, 'exec-rp', 'task-rp')
+    seedTurnUsage(today, 30, 15, 'exec-rp', 'task-rp')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    for (const w of result.windows ?? []) {
+      assert.equal(w.dispatchCount, 4, 'overall dispatch count still includes omitted rows')
+      assert.equal(w.totalTokens, 150 + 30 + 45, 'overall totalTokens still includes omitted usage')
+      assert.equal(w.byProfile.length, 1, 'only the eligible model row surfaces')
+      assert.deepEqual(w.byProfile[0], { profile: 'codebuddy/good-model', model: 'codebuddy/good-model', runCount: 2, totalTokens: 150 })
+    }
+    assert.equal(result.byProfile.length, 1)
+    closeTestDb()
+  })
+
+  it('weighted TPS ignores failure, no-usage, zero-output, zero-duration, and invalid-contract samples', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-tps', 'tps', today, 'done')
+    seedExecutionResolved('exec-tps', 'policy', 'coding', 'task-tps')
+    seedAttemptDispatch('exec-tps', 'task-tps', 'codebuddy', 'm', 'codebuddy/m')
+    // Valid contract: drives TPS (output 1000, duration 2000).
+    seedUsageWithDuration(today, 10, 1000, 2000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
+    // Zero-output valid contract: excluded from the TPS numerator/denominator.
+    seedUsageWithDuration(today, 10, 0, 1000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
+    // Zero-duration valid contract: excluded.
+    seedUsageWithDuration(today, 10, 500, 0, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
+    // Invalid contract (v0): excluded.
+    seedUsageWithDuration(today, 10, 500, 500, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v0')
+    // Wrong token scope: excluded.
+    seedUsageWithDuration(today, 10, 500, 500, 'model_output', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
+    // Plain turn_usage with no TPS contract: excluded from TPS, still in totalTokens.
+    seedTurnUsage(today, 10, 500, 'exec-tps', 'task-tps')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    const row = result.windows?.[0].byProfile[0]
+    assert.ok(row)
+    // totalTokens counts every turn_usage (including the zero-output sample); TPS excludes zero-output.
+    assert.equal(row.totalTokens, 10 * 6 + 1000 + 0 + 500 * 4)
+    // Only the single valid sample drives the weighted TPS: 1000 * 1000 / 2000 = 500.
+    assert.equal(row.averageTps, 500)
+    closeTestDb()
+  })
+
+  it('emits model_display_name only when every contributing provider resolves to the same model name', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'codebuddy', 'shared', 'codebuddy/shared')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'cursor', 'shared', 'cursor/shared')
+    seedDispatch(today, 1, 'exec-b', 'task-b')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider, model) => {
+        if (model !== 'shared') return undefined
+        return {
+          provider_display_name: provider === 'codebuddy' ? 'CodeBuddy' : 'Cursor',
+          model_display_name: provider === 'codebuddy' ? 'Flash' : 'Different',
+          stats_model_key: 'canonical:shared-v1',
+          stats_model_id: 'shared-v1',
+          stats_model_display_name: provider === 'codebuddy' ? 'Flash' : 'Different',
+        }
+      },
+    })
+    assert.equal(result.byProfile.length, 1)
+    const item = result.byProfile[0]
+    assert.equal('model_display_name' in item, false, 'conflicting provider model names suppress the model display name')
+    assert.deepEqual(item.provider_display_names, ['CodeBuddy', 'Cursor'])
+    const wrow = result.windows?.[0].byProfile[0]
+    assert.ok(wrow)
+    assert.equal('model_display_name' in wrow, false)
+    assert.deepEqual(wrow.provider_display_names, ['CodeBuddy', 'Cursor'])
+    closeTestDb()
+  })
+
+  it('emits model_display_name when all contributing providers resolve to the same model name', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'codebuddy', 'shared', 'codebuddy/shared')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'cursor', 'shared', 'cursor/shared')
+    seedDispatch(today, 1, 'exec-b', 'task-b')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider, model) => {
+        if (model !== 'shared') return undefined
+        return {
+          provider_display_name: provider === 'codebuddy' ? 'CodeBuddy' : 'Cursor',
+          model_display_name: 'Flash',
+          stats_model_key: 'canonical:shared-v1',
+          stats_model_id: 'shared-v1',
+          stats_model_display_name: 'Flash',
+        }
+      },
+    })
+    assert.equal(result.byProfile.length, 1)
+    assert.equal(result.byProfile[0].model_display_name, 'Flash')
+    assert.deepEqual(result.byProfile[0].provider_display_names, ['CodeBuddy', 'Cursor'])
+    closeTestDb()
+  })
+
+  it('de-duplicates exact provider display names deterministically for a model', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    seedTask('task-a', 'ta', today, 'done')
+    seedExecution('exec-a', 'pa', 'task-a')
+    seedAttemptDispatch('exec-a', 'task-a', 'codebuddy', 'm', 'codebuddy/m')
+    seedDispatch(today, 1, 'exec-a', 'task-a')
+    seedTask('task-b', 'tb', today, 'done')
+    seedExecution('exec-b', 'pb', 'task-b')
+    seedAttemptDispatch('exec-b', 'task-b', 'codebuddy', 'm', 'codebuddy/m')
+    seedDispatch(today, 1, 'exec-b', 'task-b')
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow, {
+      resolveDisplayNames: (provider) => provider === 'codebuddy'
+        ? { provider_display_name: 'CodeBuddy', model_display_name: 'M' }
+        : undefined,
+    })
+    assert.equal(result.byProfile.length, 1)
+    assert.deepEqual(result.byProfile[0].provider_display_names, ['CodeBuddy'], 'same provider name is de-duplicated')
+    assert.equal(result.byProfile[0].model_display_name, 'M')
+    assert.deepEqual(result.windows?.[0].byProfile[0].provider_display_names, ['CodeBuddy'])
     closeTestDb()
   })
 })

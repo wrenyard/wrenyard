@@ -133,7 +133,14 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   const schema = compileSchema(opts.outputSchema)
   assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
   const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
-  const maxResumeAttempts = opts.maxResumeAttempts ?? 3
+  // ── Permission-aware resume budget ──
+  // Only a capability-free readonly task may recover through structured-output
+  // resume. Capability packs can inject Bash or external tools whose mutation
+  // risk is not classified here, so any selected capability is conservatively
+  // one-shot alongside edit, yolo, and absent permissions.
+  const mutationCapable = opts.permission !== 'readonly' || (opts.capabilities?.length ?? 0) > 0
+  const configuredResumeAttempts = opts.maxResumeAttempts ?? 3
+  const maxResumeAttempts = mutationCapable ? 0 : configuredResumeAttempts
   let lastValidationErrors: string[] | undefined
   let lastOutputExcerpt: string | undefined
   let lastActivity: string | undefined
@@ -239,6 +246,23 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   const validationErrors = lastValidationErrors ?? []
   const rawExcerpt = lastOutputExcerpt ?? ''
   const hasPlaceholderErrors = validationErrors.some((e) => e.includes('placeholder'))
+
+  // When a mutation-capable run does not return valid structured output, the
+  // outcome is unverifiable: a prior attempt may already have changed task
+  // targets, so we must not infer success from a clean tree or a stable HEAD.
+  // We surface machine-readable evidence so downstream callers (and humans) know
+  // the action is unverified and side effects may have occurred, and we add a
+  // remediation that forbids automatic retry.
+  const unverifiedEvidence: Record<string, unknown> = mutationCapable
+    ? { outcome_unverified: true, side_effects_may_have_occurred: true }
+    : {}
+  const remediationBase = validationErrors.length > 0
+    ? `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema. Fix protocol, JSON, or schema errors and retry.`
+    : `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema.`
+  const remediation = mutationCapable
+    ? `${remediationBase} The action outcome is UNVERIFIED and side effects may have occurred: inspect the exact task targets and the captured evidence before any explicit retry, and never retry automatically. Do not infer success from a clean working tree or a stable HEAD.`
+    : remediationBase
+
   const gateErr = new GateFailureError('post', 'output-schema',
     'valid Foreman structured output delivery block matching schema',
     rawExcerpt
@@ -246,6 +270,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         'raw output excerpt captured',
         ...(hasPlaceholderErrors ? ['placeholder result rejected'] : []),
         ...(validationErrors.length > 0 ? [`${validationErrors.length} structured output errors`] : []),
+        ...(mutationCapable ? ['mutation-capable run did not retry structured delivery'] : []),
       ].join('; ')
       : 'no valid Foreman structured output delivery block',
     {
@@ -253,10 +278,9 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         schema: schema.schema,
         validation_errors: validationErrors,
         raw_excerpt: rawExcerpt.slice(0, 2000),
+        ...unverifiedEvidence,
       },
-      remediation: validationErrors.length > 0
-        ? `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema. Fix protocol, JSON, or schema errors and retry.`
-        : `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema.`,
+      remediation,
       retryable: false,
     },
   )

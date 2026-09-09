@@ -391,7 +391,6 @@ describe('workspace definition registry', () => {
       intelligenceMin: 'high',
       maxOutputUsdPerMillion: 5,
       requiredCapabilities: ['text'],
-      preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
     }
     writeFileSync(join(projectDir, 'modern.task.ts'), `export default defineTask({
   permission: 'readonly',
@@ -401,7 +400,6 @@ describe('workspace definition registry', () => {
     intelligenceMin: 'high',
     maxOutputUsdPerMillion: 5,
     requiredCapabilities: ['text'],
-    preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
   },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
@@ -429,6 +427,31 @@ describe('workspace definition registry', () => {
     assert.equal('agentRuntime' in described, false)
     assert.equal('profile' in described, false)
     assert.deepEqual(described.dispatch, dispatch)
+  })
+
+  it('rejects removed preferredRuntime dispatch declarations with an explicit-mode migration message', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'preferred.task.ts'), `export default defineTask({
+  permission: 'readonly',
+  dispatch: {
+    expectedTps: 20,
+    preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
+  },
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => 'preferred',
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+    const errors = getLoadErrors(workspace)
+    assert.equal(resolveTaskTarget('preferred', workspace, 'app'), null)
+    assert.ok(errors.some((error) =>
+      error.load_error.includes('dispatch.preferredRuntime is no longer supported')
+      && error.load_error.includes('explicit mode')),
+    errors.map((error) => error.load_error).join('; '))
   })
 
   it('rejects active project Task agentRuntime declarations as unsupported by the TaskConfig contract', async () => {

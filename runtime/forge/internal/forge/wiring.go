@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/dsh"
@@ -22,7 +21,6 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/execution"
 	profilepkg "github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
 )
 
@@ -141,108 +139,6 @@ func profileQuotaProviderName(p profile) string {
 	return selection.ProfileQuotaProviderName(selection.ProfileFrom(p), selectionDeps())
 }
 
-func isProfileEffective(profileID string) bool {
-	manifest, err := loadManifest()
-	if err != nil {
-		return false
-	}
-	p, ok := manifest.Profiles[profileID]
-	if !ok {
-		return false
-	}
-	p.Name = profileID
-	sp := selection.ProfileFrom(p)
-	if p.Client != "" && selection.ClientUsability(p.Client, selectionDeps()) != selection.ClientOK {
-		return false
-	}
-	if !selection.ProfileCredentialAvailable(sp, selectionDeps()) {
-		return false
-	}
-	return true
-}
-
-func profileAvailabilityReason(profileID string) string {
-	manifest, err := loadManifest()
-	if err != nil {
-		return "manifest_load_error"
-	}
-	p, ok := manifest.Profiles[profileID]
-	if !ok {
-		return "definition_not_found"
-	}
-	p.Name = profileID
-	sp := selection.ProfileFrom(p)
-	if p.Client != "" {
-		usability := selection.ClientUsability(p.Client, selectionDeps())
-		if usability == selection.ClientDisabledByConfig {
-			return "client_disabled_by_config"
-		}
-		if usability != selection.ClientOK {
-			return "client_not_installed"
-		}
-	}
-	if !selection.ProfileCredentialAvailable(sp, selectionDeps()) {
-		return "provider_auth_missing"
-	}
-	return "available"
-}
-
-func profileDefinitionExists(profileID string) bool {
-	manifest, err := loadManifest()
-	if err != nil {
-		return false
-	}
-	_, ok := manifest.Profiles[profileID]
-	return ok
-}
-
-func profileDisplayName(profileID string) string {
-	manifest, err := loadManifest()
-	if err != nil {
-		return profileID
-	}
-	if p, ok := manifest.Profiles[profileID]; ok {
-		if p.Description != "" {
-			return p.Description
-		}
-		if p.Provider != "" {
-			return p.Provider
-		}
-	}
-	return profileID
-}
-
-func canonicalPoolUsagePct(canonicalPool string) int {
-	if canonicalPool == "" {
-		return -1
-	}
-	cachePath := filepath.Join(forgeDataDir(), "quota", canonicalPool+".json")
-	q, ok := quota.ReadCache(cachePath)
-	if !ok {
-		return 0
-	}
-	if q.Used == nil || q.Total == nil || *q.Total <= 0 {
-		return 0
-	}
-	pct := int((*q.Used / *q.Total) * 100)
-	return pct
-}
-
-// --- discovery / profiles ---
-
-func isRawClaudeAliasProfile(p profile) bool {
-	return p.Provider == "anthropic"
-}
-
-func profilesCommand(args []string) int {
-	reg, err := loadCatalogRegistry()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	return discovery.ProfilesCommand(wiredDiscoveryProfileDeps(reg), args)
-}
-
 func providersCommand(args []string) int {
 	reg, err := loadCatalogRegistry()
 	if err != nil {
@@ -250,38 +146,6 @@ func providersCommand(args []string) int {
 		return 1
 	}
 	return discovery.ProvidersCommand(wiredDiscoveryProviderDeps(reg), args)
-}
-
-func wiredDiscoveryProfileDeps(reg *catalog.Registry) discovery.ProfileDeps {
-	return discovery.ProfileDeps{
-		IsProfileEffective:        isProfileEffective,
-		ProfileDefinitionExists:   profileDefinitionExists,
-		ProfileAvailabilityReason: profileAvailabilityReason,
-		CanonicalPoolUsagePct:     canonicalPoolUsagePct,
-		ProfileDisplayName:        profileDisplayName,
-		ProfileIDs: func() []string {
-			manifest, err := loadManifest()
-			if err != nil {
-				return nil
-			}
-			ids := make([]string, 0, len(manifest.Profiles))
-			for id := range manifest.Profiles {
-				ids = append(ids, id)
-			}
-			sort.Strings(ids)
-			return ids
-		},
-		CatalogRegistry: reg,
-		CatalogBindingAllowedModels: func(reg *catalog.Registry, client, provider string) []string {
-			_, binding, err := reg.ResolveBinding(client, provider)
-			if err != nil {
-				return nil
-			}
-			return binding.AllowedModels
-		},
-		HasFlag:   func(args []string, flag string) bool { return hasFlag(args, flag) },
-		PrintJSON: func(value interface{}) int { return printJSON(value) },
-	}
 }
 
 func wiredDiscoveryProviderDeps(reg *catalog.Registry) discovery.ProviderDeps {

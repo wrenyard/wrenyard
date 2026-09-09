@@ -29,6 +29,10 @@ import { createTaskGraphService } from './services/taskgraph-service.mts'
 import { TaskGraphService } from '../core/taskgraph/index.mts'
 import { TaskSettingsService } from './services/task-settings-service.mts'
 import { AutoRoutingQuotaSnapshotService } from './services/auto-routing-snapshot-service.mts'
+import {
+  evaluateForgeNativeRouteReadiness,
+  queryForgeProviderReadiness,
+} from './execution/forge-provider-readiness-query.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
@@ -330,6 +334,11 @@ async function startForemanDaemonWithRuntime(
   const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService({
     codeBuddySnapshot: loadCurrentCodeBuddySnapshot,
   })
+  // Authoritative, non-inference native auth/readiness comes from Forge's
+  // existing provider resolver. The safe projection carries only id/auth_ok;
+  // TaskSettings invokes it once per relevant evaluation and never receives a
+  // native credential or promotes native auth into Gateway support.
+  const loadNativeProviderReadiness = () => queryForgeProviderReadiness()
   // One daemon-owned TaskSettingsService shares the already-created resolver,
   // the single alias owner, the shared quota snapshot service, and the
   // authoritative config path; no second catalog/resolver/alias store is
@@ -341,6 +350,7 @@ async function startForemanDaemonWithRuntime(
     resolver: taskDispatchResolver,
     aliases: runtimeAliasService,
     quotaSnapshots: autoRoutingQuotaSnapshots,
+    nativeProviderReadiness: loadNativeProviderReadiness,
     // Non-billable readiness: real daemon admission status (never a paid probe)
     // plus the current provider credential/route availability. Unknown quota is
     // surfaced as `unknown` — never fabricated as available or zero. Exact
@@ -354,12 +364,55 @@ async function startForemanDaemonWithRuntime(
       accepting: runtime.dispatchControl.status().accepting,
       known: true,
     }),
-    runtimeAvailability: async ({ provider, model }, availabilityContext) => {
+    runtimeAvailability: async ({ client, provider, model, mode }, availabilityContext) => {
       const providerDef = runtime.catalog.provider(provider)
       if (!providerDef) {
         return {
           providerCredential: 'unknown',
           providerLive: 'unknown',
+          quota: 'unknown',
+          available: false,
+        }
+      }
+      if (providerDef.credentialResolver === 'codex' || providerDef.credentialResolver === 'cursor') {
+        // A request-bound automatic context contains the one status sample for
+        // that evaluation (null means its bounded query failed). Explicit-mode
+        // checks have no context and take one fresh sample here. In either case
+        // the actual native runtime remains the credential authority and
+        // revalidates the login when execution starts.
+        let readiness = availabilityContext?.nativeProviderReadiness ?? undefined
+        if (availabilityContext === undefined) {
+          try {
+            readiness = await loadNativeProviderReadiness()
+          } catch {
+            readiness = undefined
+          }
+        }
+        const state = evaluateForgeNativeRouteReadiness(readiness, {
+          credentialResolverId: providerDef.credentialResolver,
+          client,
+          mode,
+          nativeClients: providerDef.nativeClients ?? [],
+        })
+        if (state === 'available') {
+          return {
+            providerCredential: 'available',
+            providerLive: 'available',
+            quota: 'unknown',
+            available: true,
+          }
+        }
+        if (state === 'missing') {
+          return {
+            providerCredential: 'missing',
+            providerLive: 'unknown',
+            quota: 'unknown',
+            available: false,
+          }
+        }
+        return {
+          providerCredential: 'unknown',
+          providerLive: state === 'unsupported' ? 'unavailable' : 'unknown',
           quota: 'unknown',
           available: false,
         }
@@ -571,9 +624,15 @@ async function startForemanDaemonWithRuntime(
       const modelDisplayName = model.displayName
       if (typeof providerDisplayName !== 'string' || providerDisplayName.trim() === '') return undefined
       if (typeof modelDisplayName !== 'string' || modelDisplayName.trim() === '') return undefined
+      const canonicalModel = model.canonicalModel
+      const statsModelId = canonicalModel?.id ?? `${providerId}/${modelId}`
+      const statsModelDisplayName = canonicalModel?.displayName ?? modelDisplayName
       return {
         provider_display_name: providerDisplayName.trim(),
         model_display_name: modelDisplayName.trim(),
+        stats_model_key: canonicalModel ? `canonical:${statsModelId}` : `provider-local:${statsModelId}`,
+        stats_model_id: statsModelId,
+        stats_model_display_name: statsModelDisplayName.trim(),
       }
     },
     shutdown: async (reason) => {

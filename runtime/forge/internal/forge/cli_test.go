@@ -45,6 +45,12 @@ func TestRunHelpShowsDirectRuntime(t *testing.T) {
 	if !strings.Contains(stdout, "forge -p <profile> --permission <mode> -C <abs-dir>") {
 		t.Fatalf("expected top-level help to show direct runtime usage, got: %s", stdout)
 	}
+	if !strings.Contains(stdout, "Forge runtime CLI") || strings.Contains(stdout, "Forge workflow CLI") {
+		t.Fatalf("expected current runtime CLI branding, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "profiles list") || strings.Contains(stdout, "profiles show") || strings.Contains(stdout, "profile policies") {
+		t.Fatalf("top-level help must not advertise retired profiles commands, got: %s", stdout)
+	}
 	if !strings.Contains(stdout, "[-r <native_session_id>]") {
 		t.Fatalf("expected top-level help to show direct resume flag, got: %s", stdout)
 	}
@@ -56,6 +62,17 @@ func TestRunHelpShowsDirectRuntime(t *testing.T) {
 	}
 	if strings.Contains(stdout, "target: ccb") {
 		t.Fatalf("top-level help should not mention removed ccb doctor target, got: %s", stdout)
+	}
+}
+
+func TestRunProfilesCommandIsRemoved(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if code := Run([]string{"profiles", "list"}, "forge"); code != 2 {
+			t.Fatalf("expected exit code 2 for removed profiles command, got %d", code)
+		}
+	})
+	if !strings.Contains(stderr, `unknown command "profiles"`) {
+		t.Fatalf("expected removed profiles command to be unknown, got stderr: %s", stderr)
 	}
 }
 
@@ -72,11 +89,11 @@ func TestRunForgeMCPCommandIsRemoved(t *testing.T) {
 
 func TestRunAmbiguousCommandPrefixErrors(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		if code := Run([]string{"p"}, "forge"); code != 2 {
+		if code := Run([]string{"s"}, "forge"); code != 2 {
 			t.Fatalf("expected exit code 2 for ambiguous prefix, got %d", code)
 		}
 	})
-	if !strings.Contains(stderr, "forge: ambiguous command p") {
+	if !strings.Contains(stderr, "forge: ambiguous command s") {
 		t.Fatalf("expected ambiguous command error, got stderr: %s", stderr)
 	}
 }

@@ -41,7 +41,6 @@ function automaticEffective(mode: TaskSettingsMode = 'automatic', reference: Tas
       exclude_profile_ids: { value: null, source: 'builtin' as const },
       exclude_client_ids: { value: null, source: 'builtin' as const },
       exclude_provider_ids: { value: null, source: 'builtin' as const },
-      preferred_runtime: { value: null, source: 'builtin' as const },
     },
   };
 }
@@ -111,7 +110,7 @@ function explicitRow(): TaskSettingsTaskRow {
 
 function taskSnapshot(revision = 'rev-1'): TaskSettingsSnapshot {
   return {
-    config_path: '/Users/me/.wrenyard/tasks/config.json',
+    config_path: '/var/tmp/example-user/.wrenyard/tasks/config.json',
     revision,
     user_global: { automatic: null },
     rows: [automaticRow(), explicitRow()],
@@ -318,6 +317,61 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string \}/);
 });
 
+test('renderer edits inherited mode and runtime from the effective baseline without creating incidental pins', async () => {
+  const app = await rendererSource();
+  const populateStart = app.indexOf('function populateTaskForm');
+  const populateEnd = app.indexOf('function renderTasksTemplatePreview', populateStart);
+  assert.ok(populateStart >= 0 && populateEnd > populateStart);
+  const populateBody = app.slice(populateStart, populateEnd);
+  assert.match(populateBody, /applyTasksModeSelection\(row\.effective\.mode\.value\)/);
+  assert.match(populateBody, /explicitReferenceText\(row\.effective\.explicit_runtime\.value\)/);
+  assert.doesNotMatch(populateBody, /row\.user_task\.mode \?\? 'automatic'/);
+  assert.doesNotMatch(populateBody, /explicitReferenceText\(row\.user_task\.explicit_runtime\)/);
+
+  const buildStart = app.indexOf('function buildLayerPatch');
+  const buildEnd = app.indexOf('function resetPatch', buildStart);
+  assert.ok(buildStart >= 0 && buildEnd > buildStart);
+  const buildBody = app.slice(buildStart, buildEnd);
+  assert.match(buildBody, /const effectiveMode = row\.effective\.mode\.value;/);
+  assert.match(buildBody, /const modeChanged = effectiveMode !== mode;/);
+  assert.match(buildBody, /if \(modeChanged\) patch\.mode = mode;/);
+  assert.match(buildBody, /explicitReferencesEqual\(row\.effective\.explicit_runtime\.value, runtime\)/);
+  assert.match(buildBody, /else if \(modeChanged && layer\.explicit_runtime\)/);
+  assert.match(buildBody, /if \(\(layer\.timeout_ms \?\? null\) !== timeout\) patch\.timeout_ms = timeout;/);
+
+  // An inherited global explicit selection is represented with an empty
+  // per-task layer. The form must still show the effective values; a timeout
+  // save then compares mode/reference with those values and writes only timeout.
+  const inheritedReference: TaskSettingsExplicitReference = { kind: 'alias', name: 'kimi-k3' };
+  const inheritedRow: TaskSettingsTaskRow = {
+    ...automaticRow(),
+    user_task: {},
+    effective: {
+      ...automaticEffective('explicit', inheritedReference),
+      mode: { value: 'explicit', source: 'user_global' },
+      explicit_runtime: { value: inheritedReference, source: 'user_global' },
+    },
+    explicit: { resolved: null },
+    issues: [{
+      code: 'no_available_provider',
+      message: '继承的别名当前不可用',
+      resolutionFailure: { code: 'no_available_provider', message: '继承的别名当前不可用' },
+    }],
+  };
+  assert.deepEqual(inheritedRow.user_task, {});
+  assert.equal(inheritedRow.effective.mode.value, 'explicit');
+  assert.deepEqual(inheritedRow.effective.explicit_runtime.value, inheritedReference);
+  assert.equal(inheritedRow.effective.mode.source, 'user_global');
+  assert.equal(inheritedRow.issues[0]?.code, 'no_available_provider', 'invalid inherited reference remains warning evidence');
+
+  const resetStart = app.indexOf('function resetPatch');
+  const resetEnd = app.indexOf('function tasksModeDisplayLabel', resetStart);
+  const resetBody = app.slice(resetStart, resetEnd);
+  assert.match(resetBody, /for \(const field of \['mode', 'explicit_runtime', 'timeout_ms', 'automatic'\] as const\)/);
+  assert.doesNotMatch(resetBody, /row\.effective/,
+    'reset deletes only per-task overrides so the next snapshot returns to global effective values');
+});
+
 test('renderer builds 内置/项目 hierarchy with authoritative labels and stable identity leaves', async () => {
   const app = await rendererSource();
   assert.match(app, /tasksList\.replaceChildren\(\)/);
@@ -428,12 +482,13 @@ test('task settings acceptance locks the post-fix surface: two-mode select with 
   );
 
   // Mode selection is exactly automatic/explicit: the rejected third empty 继承 option is gone,
-  // an unset/legacy user layer renders as automatic instead of an empty inherit pin, and the
-  // mode control is the themed listbox, not a native select.
+  // inherited values render from the daemon-owned effective result without creating a per-task
+  // pin, and the mode control is the themed listbox, not a native select.
   assert.doesNotMatch(html, /<select id="tasks-mode">/u);
   assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
   assert.doesNotMatch(app, /tasksModeSelect/u);
-  assert.match(app, /applyTasksModeSelection\(row\.user_task\.mode \?\? 'automatic'\);/u);
+  assert.match(app, /applyTasksModeSelection\(row\.effective\.mode\.value\);/u);
+  assert.match(app, /explicitReferenceText\(row\.effective\.explicit_runtime\.value\);/u);
   assert.doesNotMatch(app, /row\.user_task\.mode \?\? ''/u);
 
   // Timeout is rendered and edited in seconds at the UI boundary only; 900000 ms shows as 900 秒,

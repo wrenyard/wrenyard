@@ -13,8 +13,8 @@ interface GatewayConnectionFixture {
 const connectionTokenA = 'gtw_connection_token_a';
 const connectionTokenB = 'gtw_connection_token_b';
 const defaultEndpoints = {
-  api: 'https://gw.internal.example.test/v1',
-  events: 'https://gw.internal.example.test/events',
+  api: 'https://gw.restricted.example.test/v1',
+  events: 'https://gw.restricted.example.test/events',
 };
 const defaultModels = ['model-alpha', 'model-beta', 'model-gamma'];
 
@@ -48,10 +48,10 @@ test('a different token changes the gateway identity', () => {
 test('changing any endpoint changes the gateway identity', () => {
   const left = connectionFixture();
   const changedApi = connectionFixture({
-    endpoints: { ...defaultEndpoints, api: 'https://gw.internal.example.test/v2' },
+    endpoints: { ...defaultEndpoints, api: 'https://gw.restricted.example.test/v2' },
   });
   const changedEvents = connectionFixture({
-    endpoints: { ...defaultEndpoints, events: 'https://gw.internal.example.test/v2-events' },
+    endpoints: { ...defaultEndpoints, events: 'https://gw.restricted.example.test/v2-events' },
   });
   assert.equal(sameGatewayIdentity(left, changedApi), false);
   assert.equal(sameGatewayIdentity(left, changedEvents), false);
@@ -64,7 +64,7 @@ test('changing a model identity changes the gateway identity', () => {
 });
 
 test('gateway identity comparison is symmetric', () => {
-  const left = connectionFixture({ endpoints: { ...defaultEndpoints, api: 'https://gw.internal.example.test/v2' } });
+  const left = connectionFixture({ endpoints: { ...defaultEndpoints, api: 'https://gw.restricted.example.test/v2' } });
   const right = connectionFixture();
   assert.equal(sameGatewayIdentity(left, right), false);
   assert.equal(sameGatewayIdentity(right, left), false);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { beforeEach, describe, it } from 'node:test'
+import { Catalog } from '@wrenyard/catalog'
 import {
   createBuiltinCatalog,
   createBuiltinProviderRuntime,
@@ -41,6 +42,48 @@ function localSamples(): LocalSpeedSample[] {
 }
 
 const CANONICAL_TARGET_RE = /^[^/\s]+\/[^:\s]+:[a-z]+$/u
+
+async function createSpeedOverrideResolver(
+  defaultTps: number,
+  overrideTps: number,
+  localSpeed: LocalSpeedSample[] = [],
+): Promise<TaskDispatchResolver> {
+  const catalog = new Catalog()
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true })
+  catalog.registerProvider({
+    id: 'p',
+    displayName: 'P',
+    credentialResolver: 'forge-managed',
+    models: [{
+      id: 'm',
+      displayName: 'M',
+      intelligence: 'mid',
+      speed: { tps: defaultTps, source: 'default-bench', checkedAt: '2026-09-01' },
+      pricing: {
+        inputUsdPerMillion: 1,
+        cachedInputUsdPerMillion: 0.5,
+        outputUsdPerMillion: 2,
+        source: 'fixture',
+        checkedAt: '2026-09-01',
+      },
+    }],
+    modelSpeedOverrides: {
+      m: { tps: overrideTps, source: 'override-bench', checkedAt: '2026-09-02' },
+    },
+    protocols: [{
+      protocol: 'openai_chat',
+      endpoint: 'https://p.example/v1/chat/completions',
+      authScheme: 'bearer',
+    }],
+  })
+  const runtime: ProviderRuntime = {
+    credential: async () => undefined,
+    resolveUpstreamModel: (_provider, model) => model,
+    publicResponseModel: (_provider, _model, _upstreamModel, publicModel) => publicModel,
+    configureApiKey: async () => {},
+  }
+  return createTaskDispatchResolver({ catalog, runtime, localSpeed: () => localSpeed })
+}
 
 describe('core task dispatch-resolver automatic mode (no-model)', () => {
   let resolver: TaskDispatchResolver
@@ -148,23 +191,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     })
     assert.equal(legacyPreference.ok, true)
     assert.equal(legacyPreference.exactAgentRuntime, HY3_CB)
-  })
-
-  it('requirements.preferredRuntime is ignored in automatic selection', () => {
-    // A requirements-level preferredRuntime naming the openai gateway Luna
-    // variant must not override the deterministic automatic ordering.
-    const resolution = resolver.resolve({
-      taskName: 'req-pref-ignored',
-      requirements: {
-        expectedTps: 80,
-        minimumTps: 60,
-        preferredRuntime: { client: 'codebuddy', provider: 'openai', model: 'gpt-5.6-luna' },
-      } satisfies TaskDispatchRequirements,
-    })
-
-    assert.equal(resolution.ok, true)
-    assert.equal(resolution.exactAgentRuntime, HY3_CB)
-    assert.equal(resolution.resolved.client, 'codebuddy')
   })
 
   it('machine preference cannot bypass an exclusion of the same canonical target', () => {
@@ -687,6 +713,62 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
     assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
     assert.equal(error.resolutionFailureCode, 'speed_requirement')
     assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('uses a below-floor provider override instead of an above-floor model default in diagnostics', async () => {
+    const overrideResolver = await createSpeedOverrideResolver(100, 10)
+    const result = overrideResolver.resolve({
+      taskName: 'override-below-floor',
+      requirements: { minimumTps: 50 },
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.error.resolutionFailureCode, 'speed_requirement')
+  })
+
+  it('uses an above-floor provider override instead of a below-floor model default for admission', async () => {
+    const overrideResolver = await createSpeedOverrideResolver(10, 100)
+    const result = overrideResolver.resolve({
+      taskName: 'override-above-floor',
+      requirements: { minimumTps: 50 },
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(result.resolved.speed.source, 'provider_override')
+    assert.equal(result.resolved.speed.effective_tps, 100)
+  })
+
+  it('lets a usable exact local sample win over the provider override', async () => {
+    const overrideResolver = await createSpeedOverrideResolver(100, 10, [{
+      profileId: 'p/m:cb',
+      tps: 80,
+      sampleCount: 2,
+      checkedAt: '2026-09-03',
+    }])
+    const result = overrideResolver.resolve({
+      taskName: 'local-wins',
+      requirements: { minimumTps: 50 },
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(result.resolved.speed.source, 'local_31d')
+    assert.equal(result.resolved.speed.effective_tps, 80)
+  })
+
+  it('ignores an unusable local sample and reports the provider override gate', async () => {
+    const overrideResolver = await createSpeedOverrideResolver(100, 10, [{
+      profileId: 'p/m:cb',
+      tps: 999,
+      sampleCount: 0,
+      checkedAt: '2026-09-03',
+    }])
+    const result = overrideResolver.resolve({
+      taskName: 'invalid-local-falls-back',
+      requirements: { minimumTps: 50 },
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.error.resolutionFailureCode, 'speed_requirement')
   })
 
   it('mixed singleton eliminations resolve deterministically to the cheapest candidate gate', () => {
