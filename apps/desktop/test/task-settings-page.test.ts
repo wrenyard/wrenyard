@@ -247,8 +247,14 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.match(html, /id="tasks-detail-identity"/);
   // Row one: two-mode selection (automatic/explicit only). Row two: seconds timeout
   // with visible 秒 unit and ※ reset. Row three (explicit only): combobox + help.
-  assert.match(html, /<select id="tasks-mode">\s*<option value="automatic">自动选择<\/option>\s*<option value="explicit">指定运行时<\/option>\s*<\/select>/u);
+  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
   assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
+  assert.match(html, /<button[^>]*id="tasks-mode-trigger"[^>]*aria-haspopup="listbox"[^>]*aria-expanded="false"[^>]*aria-controls="tasks-mode-list"/u);
+  assert.match(html, /id="tasks-mode-popover"[^>]*hidden/u);
+  assert.match(html, /id="tasks-mode-list" role="listbox"/u);
+  assert.match(html, /role="option" data-mode="automatic"[^>]*aria-selected="true"[^>]*>自动选择<\/button>/u);
+  assert.match(html, /role="option" data-mode="explicit"[^>]*aria-selected="false"[^>]*>指定运行时<\/button>/u);
+  assert.match(html, /id="tasks-resolution-tooltip" role="tooltip" hidden/u);
   assert.match(html, /id="tasks-timeout" type="number" min="1" step="1" placeholder="继承"/);
   assert.doesNotMatch(html, /id="tasks-timeout"[^>]*step="1000"/u);
   assert.match(html, /id="tasks-timeout-unit"[^>]*>秒</);
@@ -290,8 +296,11 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /function populateRuntimeSuggestions\(\): void/);
   assert.match(app, /for \(const entry of taskSettings\?\.aliases \?\? \[\]\)/);
   assert.match(app, /option\.value = entry\.name;/);
-  // Compact rows: mode, timeout (※ only timeout), conditional explicit combobox.
-  assert.match(app, /function updateTasksRowVisibility\(\): void \{\s*tasksExplicitRow\.hidden = tasksModeSelect\.value !== 'explicit';\s*\}/);
+  // Compact rows: mode listbox (automatic/explicit only), timeout (※ only timeout),
+  // conditional explicit combobox. The native select is fully removed.
+  assert.doesNotMatch(app, /tasksModeSelect/u);
+  assert.match(app, /function applyTasksModeSelection\(mode: TaskSettingsMode\): void/);
+  assert.match(app, /tasksExplicitRow\.hidden = mode !== 'explicit';/);
   assert.match(app, /function renderTimeoutEffective\(row: TaskSettingsTaskRow\): void/);
   assert.match(app, /tasksTimeoutEffective\.classList\.add\('is-dim'\)/);
   assert.match(app, /function buildLayerPatch\(row: TaskSettingsTaskRow, modeValue: string, runtimeValue: string, timeoutValue: string\): TaskSettingsPatch/);
@@ -306,7 +315,7 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
   assert.match(app, /草稿仍保留/);
-  assert.match(app, /interface TaskFormDraft \{ mode: string; runtime: string; timeout: string \}/);
+  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string \}/);
 });
 
 test('renderer builds 内置/项目 hierarchy with authoritative labels and stable identity leaves', async () => {
@@ -325,12 +334,15 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   const app = await rendererSource();
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(app, /tasksDetailName\.textContent = row\.display_name;/);
-  assert.match(app, /tasksDetailIdentity\.textContent = row\.identity;/);
-  // The title band resolves Provider · Model labels from the daemon dispatch and
-  // surfaces a concrete issue/reason otherwise — never a permanent fallback pin.
-  assert.match(app, /resolved\.provider_display_name \?\? resolved\.provider/);
-  assert.match(app, /resolved\.model_display_name \?\? resolved\.model/);
-  assert.match(app, /row\.automatic_selection\?\.reason/);
+  assert.match(app, /function taskIdentityLabel\(identity: string\): string/);
+  assert.match(app, /identity\.startsWith\('builtin:'\)/);
+  assert.match(app, /tasksDetailIdentity\.textContent = taskIdentityLabel\(row\.identity\);/);
+  // The title band resolves to a clean display-label identity on success only;
+  // unresolved rows hide the line rather than surfacing raw ids or issue prose.
+  assert.match(app, /resolved\.provider_display_name/);
+  assert.match(app, /resolved\.model_display_name/);
+  assert.match(app, /function renderTasksDetailRuntime\(row: TaskSettingsTaskRow\): void/);
+  assert.match(app, /tasksDetailRuntime\.hidden = line === '';/);
   assert.doesNotMatch(app, /'未解析'/u);
   assert.doesNotMatch(app, /exactAgentRuntime/);
   assert.doesNotMatch(app, /tasksPreviewTitle/);
@@ -340,13 +352,17 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   assert.doesNotMatch(html, /automatic-selection-row|tasks-auto-selection|id="tasks-automatic"/);
 });
 
-test('issue indicator is a focusable, accessible marker on tree leaves', async () => {
+test('issue indicator is a focusable marker bound to the structured resolution failure tooltip only', async () => {
   const app = await rendererSource();
   assert.match(app, /indicator\.className = 'tasks-issue-indicator';/);
   assert.match(app, /indicator\.textContent = '!';/);
   assert.match(app, /indicator\.tabIndex = 0;/);
-  assert.match(app, /indicator\.title = issues\.join\('\\n'\);/);
-  assert.match(app, /indicator\.setAttribute\('aria-label', `需要处理：\$\{issues\.join\('；'\)\}`\);/);
+  assert.match(app, /function taskResolutionFailureMessage\(row: TaskSettingsTaskRow\): string \| null/);
+  assert.match(app, /candidate\.resolutionFailure !== undefined/);
+  assert.match(app, /indicator\.setAttribute\('aria-describedby', 'tasks-resolution-tooltip'\);/);
+  assert.doesNotMatch(app, /indicator\.title/);
+  assert.match(app, /showTasksResolutionTooltip\(indicator, failureMessage\)/);
+  assert.match(app, /hideTasksResolutionTooltip\);/);
 });
 
 test('tasks page is full-height with independently scrollable tree and detail panes', async () => {
@@ -412,13 +428,12 @@ test('task settings acceptance locks the post-fix surface: two-mode select with 
   );
 
   // Mode selection is exactly automatic/explicit: the rejected third empty 继承 option is gone,
-  // and an unset/legacy user layer renders as automatic instead of an empty inherit pin.
-  assert.match(
-    html,
-    /<select id="tasks-mode">\s*<option value="automatic">自动选择<\/option>\s*<option value="explicit">指定运行时<\/option>\s*<\/select>/u,
-  );
+  // an unset/legacy user layer renders as automatic instead of an empty inherit pin, and the
+  // mode control is the themed listbox, not a native select.
+  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
   assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
-  assert.match(app, /tasksModeSelect\.value = row\.user_task\.mode \?\? 'automatic';/u);
+  assert.doesNotMatch(app, /tasksModeSelect/u);
+  assert.match(app, /applyTasksModeSelection\(row\.user_task\.mode \?\? 'automatic'\);/u);
   assert.doesNotMatch(app, /row\.user_task\.mode \?\? ''/u);
 
   // Timeout is rendered and edited in seconds at the UI boundary only; 900000 ms shows as 900 秒,
@@ -442,6 +457,95 @@ test('task settings acceptance locks the post-fix surface: two-mode select with 
   assert.match(resolvedDispatch, /model_display_name/u);
   assert.match(app, /provider_display_name/u);
   assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
+});
+
+test('task settings renderer uses the themed mode listbox, stripped identity, clean runtime line, failure-only fixed tooltip, and no redundant copy', async () => {
+  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
+  const app = await rendererSource();
+  const css = await readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8');
+  const tasksStart = html.indexOf('product-page tasks-page');
+  const tasksEnd = html.indexOf('provider-dialog-backdrop');
+  assert.ok(tasksStart > 0 && tasksEnd > tasksStart);
+  const tasksMarkup = html.slice(tasksStart, tasksEnd);
+
+  // Mode selection is the accepted Desktop-themed listbox, never a native
+  // #tasks-mode <select>. The listbox trigger/list live inside the Task markup
+  // and expose exactly two options (automatic/explicit).
+  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
+  assert.doesNotMatch(tasksMarkup, /<select/u);
+  assert.match(tasksMarkup, /id="tasks-mode-trigger"[^>]+aria-haspopup="listbox"[^>]+aria-expanded="false"[^>]+aria-controls="tasks-mode-list"/u);
+  assert.match(tasksMarkup, /id="tasks-mode-trigger-label">自动选择</u);
+  assert.match(tasksMarkup, /id="tasks-mode-list" role="listbox"/u);
+  assert.match(tasksMarkup, /role="option" data-mode="automatic"[^>]*aria-selected="true"[^>]*tabindex="-1"/u);
+  assert.match(tasksMarkup, /role="option" data-mode="explicit"[^>]*aria-selected="false"[^>]*tabindex="-1"/u);
+  assert.match(tasksMarkup, /id="tasks-mode-popover" hidden/u);
+  assert.match(tasksMarkup, /id="tasks-resolution-tooltip" role="tooltip" hidden/u);
+
+  // Trigger and listbox behavior is fully wired: click toggle/select, outside
+  // pointer and focusout close, roving ArrowDown/ArrowUp/Home/End with wrap,
+  // Enter/Space select, Tab close, and Escape close+refocus that stops
+  // propagation so the page-level Escape navigation never fires.
+  assert.match(app, /tasksModeTrigger\.addEventListener\('click', \(\) => toggleTasksModePopover\(false\)\);/u);
+  assert.match(app, /document\.addEventListener\('pointerdown'/u);
+  assert.match(app, /tasksModeTrigger\.addEventListener\('focusout'/u);
+  assert.match(app, /window\.addEventListener\('resize', \(\) => closeTasksModePopover\(\)\);/u);
+  assert.match(app, /window\.addEventListener\('scroll', \(event\) =>/u);
+  assert.match(app, /event\.key === 'ArrowDown'/u);
+  assert.match(app, /event\.key === 'ArrowUp'/u);
+  assert.match(app, /event\.key === 'Home'/u);
+  assert.match(app, /event\.key === 'End'/u);
+  assert.match(app, /event\.key === 'Enter' \|\| event\.key === ' '/u);
+  assert.match(app, /event\.key === 'Escape'/u);
+  assert.match(app, /event\.key === 'Tab'\) closeTasksModePopover\(\);/u);
+  assert.match(app, /candidate\.tabIndex = candidate === option \? 0 : -1;/u);
+  assert.match(app, /% options\.length/u);
+  assert.match(app, /event\.stopPropagation\(\);/u);
+  assert.match(app, /closeTasksModePopover\(true\);/u);
+
+  // Popover and tooltip are body-level fixed surfaces styled outside the panes.
+  assert.match(css, /\.tasks-mode-popover \{[^}]*position: fixed;[^}]*z-index: 30;[^}]*max-height:/u);
+  assert.match(css, /\.tasks-resolution-tooltip \{[^}]*position: fixed;[^}]*pointer-events: none;/u);
+
+  // The visible detail identity never prints the raw stable id verbatim, so a
+  // builtin row can no longer surface a literal `builtin:` prefix.
+  assert.doesNotMatch(app, /tasksDetailIdentity\.textContent = row\.identity;/u);
+  assert.doesNotMatch(app, /textContent = row\.identity;/u);
+  assert.match(app, /function taskIdentityLabel\(identity: string\): string/u);
+  assert.match(app, /identity\.startsWith\('builtin:'\)/u);
+
+  // The persistent runtime line is a clean success identity only: no automatic
+  // selection reason prose is appended and no raw English resolution issue text
+  // is promoted onto the line. The label derives strictly from display names.
+  assert.doesNotMatch(app, /row\.automatic_selection\?\.reason/u);
+  assert.doesNotMatch(app, /\$\{reason\}/u);
+  assert.doesNotMatch(app, /issues\[0\]/u);
+  assert.doesNotMatch(app, /自动选择暂无可用运行时/u);
+  assert.doesNotMatch(app, /resolved\.provider_display_name \?\? resolved\.provider/u);
+  assert.match(app, /if \(!resolved\) return null;/u);
+  assert.match(app, /const provider = resolved\.provider_display_name;/u);
+  assert.match(app, /const model = resolved\.model_display_name;/u);
+  assert.match(app, /return resolvedTaskLabel\(resolved\) \?\? '';/u);
+  assert.match(app, /tasksDetailRuntime\.hidden = line === '';/u);
+
+  // Tree-leaf warning markers never use native title tooltips; failure detail is
+  // owned by a fixed tooltip, and markers render only for the structured failure.
+  assert.doesNotMatch(app, /indicator\.title = issues\.join\('\\n'\);/u);
+  assert.doesNotMatch(app, /indicator\.title/u);
+  assert.match(app, /candidate\.resolutionFailure !== undefined/u);
+  assert.match(app, /issue\?\.resolutionFailure\?\.message/u);
+  assert.match(app, /indicator\.setAttribute\('aria-describedby', 'tasks-resolution-tooltip'\);/u);
+  assert.match(app, /indicator\.addEventListener\('pointerenter'/u);
+  assert.match(app, /indicator\.addEventListener\('pointerleave', hideTasksResolutionTooltip\);/u);
+  assert.match(app, /indicator\.addEventListener\('focus'/u);
+  assert.match(app, /indicator\.addEventListener\('blur', hideTasksResolutionTooltip\);/u);
+  assert.match(app, /function showTasksResolutionTooltip\(marker: HTMLElement, message: string\): void/u);
+  assert.doesNotMatch(app, /issues\.join/u);
+
+  // Redundant explanatory subtitles/copy around the compact controls are gone.
+  assert.doesNotMatch(tasksMarkup, /设置当前任务的运行方式与总时限/u);
+  assert.doesNotMatch(tasksMarkup, /tasks-detail-note/u);
+  assert.doesNotMatch(tasksMarkup, /id="tasks-mode-effective"/u);
+  assert.doesNotMatch(tasksMarkup, /本层未固定/u);
 });
 
 function preloadSource(): string {

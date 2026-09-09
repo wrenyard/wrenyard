@@ -551,3 +551,40 @@ test('stats snapshot projects paired Catalog display labels only when the server
   assert.equal(raw.resolvedProviderDisplayName, undefined);
   assert.equal(raw.resolvedModelDisplayName, undefined);
 });
+
+test('stats snapshot retains provider_override speed source exactly and still rejects unknown sources', async () => {
+  const snapshot = await buildStatsSnapshot(async (method) => {
+    if (method === 'stats.today') throw new Error('method unavailable');
+    return {
+      source: 'sqlite',
+      today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
+      daily: [],
+      byProfile: [],
+      byTask: [],
+      windows: [],
+      recentRuns: [
+        {
+          task_run_id: 'run-provider-override',
+          task: 'edit',
+          resolved: { speed: { effective_tps: 21.5, source: 'provider_override', sample_count: null, expected_tps_met: true } },
+          usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0.001, reference_cost_complete: true },
+        },
+        {
+          task_run_id: 'run-unknown-source',
+          task: 'build',
+          resolved: { speed: { effective_tps: 9, source: 'made_up_source', sample_count: null, expected_tps_met: null } },
+          usage: { completeness: 'complete', attempt_count: 1, usage_event_count: 1, reference_cost_usd: 0, reference_cost_complete: true },
+        },
+      ],
+    };
+  });
+
+  assert.equal(snapshot.recentTaskRuns.length, 2);
+
+  const overrideRun = snapshot.recentTaskRuns[0];
+  assert.deepEqual(overrideRun.speed, { effectiveTps: 21.5, source: 'provider_override', sampleCount: null, expectedTpsMet: true });
+
+  const unknownRun = snapshot.recentTaskRuns[1];
+  // Unknown sources are still rejected rather than fabricated.
+  assert.equal(unknownRun.speed, undefined);
+});

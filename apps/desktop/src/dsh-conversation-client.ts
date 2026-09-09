@@ -199,21 +199,19 @@ function modelSelectionSnapshot(
 }
 
 /**
- * Validate and project DSH's advisory per-session model directory. When
- * `configuredProviderIds` is supplied, only providers whose credentials were
- * actually passed to the DSH child are advertised.
+ * Validate and project DSH's `groups` + `failures` arrays into the strict
+ * product model directory. Shared between the per-session projection (which
+ * also carries `current`/`routable`) and the host-scoped draft projection
+ * (groups/failures only). When `configured` is supplied, only providers whose
+ * credentials were actually passed to the DSH child are advertised.
  */
-export function projectConversationModels(
-  value: unknown,
-  configuredProviderIds?: readonly string[],
-): ConversationModelsSnapshot {
-  if (!isObject(value) || !isObject(value.current) || !Array.isArray(value.groups) || !Array.isArray(value.failures)) {
+function projectModelGroups(
+  value: Record<string, unknown>,
+  configured?: ReadonlySet<string>,
+): { groups: ConversationModelGroupSnapshot[]; failures: string[] } {
+  if (!Array.isArray(value.groups) || !Array.isArray(value.failures)) {
     throw new Error('DSH 模型目录格式无效');
   }
-  if (typeof value.routable !== 'boolean') throw new Error('DSH 模型目录缺少 routable');
-  const configured = configuredProviderIds === undefined
-    ? undefined
-    : new Set(configuredProviderIds);
   const groups = value.groups.map((rawGroup, groupIndex): ConversationModelGroupSnapshot => {
     if (!isObject(rawGroup) || !Array.isArray(rawGroup.models)) throw new Error(`DSH 模型目录第 ${groupIndex + 1} 组格式无效`);
     const provider = requiredString(rawGroup.id, `groups[${groupIndex}].id`);
@@ -248,11 +246,58 @@ export function projectConversationModels(
     const message = asString(failure.message);
     return message ? [`${name}: ${message}`] : [];
   });
+  return { groups, failures };
+}
+
+/**
+ * Validate and project DSH's advisory per-session model directory. When
+ * `configuredProviderIds` is supplied, only providers whose credentials were
+ * actually passed to the DSH child are advertised. This projection stays
+ * strict about `current` and `routable`: it is only used for `session.models`.
+ */
+export function projectConversationModels(
+  value: unknown,
+  configuredProviderIds?: readonly string[],
+): ConversationModelsSnapshot {
+  if (!isObject(value) || !isObject(value.current)) throw new Error('DSH 模型目录格式无效');
+  if (typeof value.routable !== 'boolean') throw new Error('DSH 模型目录缺少 routable');
+  const configured = configuredProviderIds === undefined
+    ? undefined
+    : new Set(configuredProviderIds);
+  const { groups, failures } = projectModelGroups(value, configured);
   return {
     status: 'ready',
     groups,
     current: modelSelectionSnapshot(value.current, groups, configured),
     routable: value.routable,
+    ...(failures.length > 0 ? { message: failures.join('；').slice(0, 1_000) } : {}),
+  };
+}
+
+/**
+ * Project the host-scoped draft catalog returned by `llm.models`. DSH
+ * 0.1.1-rc.2 sends only `groups` and `failures` — there is no `current`
+ * selection and no `routable` flag. The picker is therefore seeded without
+ * ever fabricating a current model, and `routable` is derived from whether at
+ * least one advertised, configured model is present.
+ */
+export function projectHostModels(
+  value: unknown,
+  configuredProviderIds?: readonly string[],
+): ConversationModelsSnapshot {
+  if (!isObject(value)) throw new Error('DSH 模型目录格式无效');
+  const configured = configuredProviderIds === undefined
+    ? undefined
+    : new Set(configuredProviderIds);
+  const { groups, failures } = projectModelGroups(value, configured);
+  // Every option that survived configured-provider filtering is both
+  // advertised by the host catalog and backed by credentials passed to DSH.
+  const routable = groups.some((group) => group.models.length > 0);
+  return {
+    status: 'ready',
+    groups,
+    current: undefined,
+    routable,
     ...(failures.length > 0 ? { message: failures.join('；').slice(0, 1_000) } : {}),
   };
 }
@@ -426,12 +471,19 @@ export class DshConversationClient {
 
   async start(): Promise<void> {
     await this.refreshIndex();
-    const first = [...this.sessions.values()].find((session) => !session.blank)
-      ?? [...this.sessions.values()][0];
+    // A host-created blank session is only reusable implementation state for
+    // the first send; it is not yet a product conversation and must not appear
+    // selected in the fresh draft UI.
+    const first = [...this.sessions.values()].find((session) => !session.blank);
     if (first) {
       this.selectedSessionId = first.sessionId;
       await this.loadHistory(first.sessionId);
       await this.refreshModels(first.sessionId);
+    } else {
+      // Fresh workspace with no durable session: load the host-scoped draft
+      // model catalog via llm.models so the picker is ready before any session
+      // is created. No session.create is issued here.
+      await this.refreshModels();
     }
     this.openStream('events.mux');
     this.openStream('events.host');
@@ -501,46 +553,67 @@ export class DshConversationClient {
   }
 
   async selectModel(provider: string, model: string): Promise<ConversationSnapshot> {
-    const sessionId = this.selectedSessionId;
-    if (!sessionId) throw new Error('请先新建会话');
     const option = this.models.groups
       .find((group) => group.provider === provider)
       ?.models.find((candidate) => candidate.model === model);
     if (!option) throw new Error('所选模型不在当前 DSH 模型目录中');
-    if (this.models.current?.provider === provider && this.models.current.model === model) return this.snapshot();
 
-    const generation = ++this.modelGeneration;
-    this.models = { ...this.models, status: 'loading', message: undefined };
-    this.notify();
-    try {
-      const value = await this.rpc('session.selectModel', {
-        sessionId,
-        provider,
-        model,
-        ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
-      });
-      if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
-      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return this.snapshot();
-      this.models = {
-        ...this.models,
-        status: 'ready',
-        current: modelSelectionSnapshot(value.selected, this.models.groups, this.configuredProviderIds),
-        routable: true,
-        message: undefined,
-      };
+    // Existing-session path: persist the choice through session.selectModel.
+    const sessionId = this.selectedSessionId;
+    if (sessionId) {
+      if (this.models.current?.provider === provider && this.models.current.model === model) return this.snapshot();
+
+      const generation = ++this.modelGeneration;
+      this.models = { ...this.models, status: 'loading', message: undefined };
       this.notify();
-      return this.snapshot();
-    } catch (error) {
-      if (generation === this.modelGeneration && sessionId === this.selectedSessionId) {
+      try {
+        const value = await this.rpc('session.selectModel', {
+          sessionId,
+          provider,
+          model,
+          ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+        });
+        if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
+        if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return this.snapshot();
         this.models = {
           ...this.models,
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
+          status: 'ready',
+          current: modelSelectionSnapshot(value.selected, this.models.groups, this.configuredProviderIds),
+          routable: true,
+          message: undefined,
         };
         this.notify();
+        return this.snapshot();
+      } catch (error) {
+        if (generation === this.modelGeneration && sessionId === this.selectedSessionId) {
+          this.models = {
+            ...this.models,
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          };
+          this.notify();
+        }
+        throw error;
       }
-      throw error;
     }
+
+    // Draft path (no durable session yet): keep the choice in memory only and
+    // reflect it in the snapshot current selection. Never call session.selectModel
+    // or session.create here; the first send materializes exactly one session.
+    const selected = modelSelectionSnapshot(
+      { provider, model, ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}) },
+      this.models.groups,
+      this.configuredProviderIds,
+    );
+    this.pendingDraftModel = { provider, model };
+    this.models = {
+      ...this.models,
+      status: 'ready',
+      current: selected,
+      routable: this.models.routable,
+    };
+    this.notify();
+    return this.snapshot();
   }
 
   async send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
@@ -716,17 +789,25 @@ export class DshConversationClient {
     };
   }
 
-  private async refreshModels(sessionId: string): Promise<void> {
+  /**
+   * Load the model catalog. With a `sessionId` the per-session directory comes
+   * from `session.models`; without one the host-scoped draft catalog comes from
+   * `llm.models`. Both share the same strict projection path, so the picker is
+   * identically shaped before and after a session exists.
+   */
+  private async refreshModels(sessionId?: string): Promise<void> {
     const generation = ++this.modelGeneration;
     this.models = { ...this.models, status: 'loading', message: undefined };
     this.notify();
     try {
       const next = await this.fetchModels(sessionId);
-      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
+      if (generation !== this.modelGeneration) return;
+      if (sessionId && sessionId !== this.selectedSessionId) return;
       this.models = next;
       this.notify();
     } catch (error) {
-      if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return;
+      if (generation !== this.modelGeneration) return;
+      if (sessionId && sessionId !== this.selectedSessionId) return;
       this.models = {
         ...this.models,
         status: 'error',
@@ -736,8 +817,9 @@ export class DshConversationClient {
     }
   }
 
-  private async fetchModels(sessionId: string): Promise<ConversationModelsSnapshot> {
-    const value = await this.rpc('session.models', { sessionId });
+  private async fetchModels(sessionId?: string): Promise<ConversationModelsSnapshot> {
+    const value = await this.rpc(sessionId ? 'session.models' : 'llm.models', sessionId ? { sessionId } : {});
+    if (!sessionId) return projectHostModels(value, [...this.configuredProviderIds]);
     let next = projectConversationModels(value, [...this.configuredProviderIds]);
     const repair = isObject(value)
       ? persistedModelSelectionRepair(value.current, next.groups)

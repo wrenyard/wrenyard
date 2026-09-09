@@ -16,6 +16,7 @@ import type {
   RuntimeAliasSnapshot,
   TaskSettingsExplicitReference,
   TaskSettingsLayer,
+  TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
@@ -72,9 +73,12 @@ const tasksDetail = requireElement<HTMLElement>('tasks-detail');
 const tasksDetailName = requireElement<HTMLElement>('tasks-detail-name');
 const tasksDetailIdentity = requireElement<HTMLElement>('tasks-detail-identity');
 const tasksDetailRuntime = requireElement<HTMLElement>('tasks-detail-runtime');
-const tasksModeEffective = requireElement<HTMLElement>('tasks-mode-effective');
 const tasksPreview = requireElement<HTMLElement>('tasks-preview');
-const tasksModeSelect = requireElement<HTMLSelectElement>('tasks-mode');
+const tasksModeTrigger = requireElement<HTMLButtonElement>('tasks-mode-trigger');
+const tasksModeTriggerLabel = requireElement<HTMLElement>('tasks-mode-trigger-label');
+const tasksModePopover = requireElement<HTMLElement>('tasks-mode-popover');
+const tasksModeList = requireElement<HTMLElement>('tasks-mode-list');
+const tasksResolutionTooltip = requireElement<HTMLElement>('tasks-resolution-tooltip');
 const tasksTimeoutInput = requireElement<HTMLInputElement>('tasks-timeout');
 const tasksTimeoutEffective = requireElement<HTMLElement>('tasks-timeout-effective');
 const tasksTimeoutReset = requireElement<HTMLButtonElement>('tasks-timeout-reset');
@@ -138,6 +142,8 @@ let currentClientSnapshot: ClientConfigurationSnapshotDto | null = null;
 let taskSettings: TaskSettingsSnapshot | null = null;
 let tasksSelectedTaskId: string | null = null;
 let tasksSaveBusy = false;
+/** In-memory two-mode selection; only ever 'automatic' or 'explicit'. */
+let tasksModeValue: TaskSettingsMode = 'automatic';
 let runtimeAliases: RuntimeAliasSnapshot | null = null;
 let aliasBusy = false;
 /** Authoritative task.settings snapshot backing the Model Supply global auto cap control. */
@@ -1089,13 +1095,13 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
     totalTokens: item.totalTokens,
   }));
   if (rows.length === 0) {
-    list.replaceChildren(emptyRow('暂无具名运行配置'));
+    list.replaceChildren(emptyRow('暂无模型统计'));
     return;
   }
   list.replaceChildren(
-    tableHeader(['配置', '运行', 'Token', '平均 TPS']),
+    tableHeader(['模型', '运行', 'Token', '平均 TPS']),
     ...rows.slice(0, 12).map((row) => tableRow([
-      row.name,
+      modelStatsLabel(snapshot, row.name),
       formatCount(row.runCount),
       formatCompactTokenCount(row.totalTokens),
       'averageTps' in row && typeof row.averageTps === 'number' ? row.averageTps.toFixed(2) : '—',
@@ -1218,14 +1224,42 @@ function taskRunCell(value: string): HTMLElement {
 /** Model cell: paired Catalog display-name labels only. A run missing either
  *  label (or an alias-only history row) renders the dash placeholder; raw
  *  resolved model id/model/profile/provider/client values are never shown. */
-function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
+function taskRunModelLabel(run: TaskRunSnapshot): string | null {
   const provider = run.resolvedProviderDisplayName;
   const model = run.resolvedModelDisplayName;
   if (provider === undefined || provider === null || provider.length === 0
     || model === undefined || model === null || model.length === 0) {
-    return taskRunCell('-');
+    return null;
   }
-  return taskRunCell(`${provider} · ${model}`);
+  return `${provider} · ${model}`;
+}
+
+function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
+  return taskRunCell(taskRunModelLabel(run) ?? '-');
+}
+
+/** Exact same-snapshot projection for model statistics. Historical aliases
+ *  and incomplete/inconsistent rows stay unknown; conflicting labels for one
+ *  canonical runtime are ambiguous instead of guessed. */
+function modelStatsLabel(snapshot: StatsSnapshot, profile: string): string {
+  const labels = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const run of snapshot.recentTaskRuns) {
+    const resolvedProfile = run.resolvedProfile;
+    const provider = run.resolvedProvider;
+    const model = run.resolvedModel;
+    const label = taskRunModelLabel(run);
+    if (!resolvedProfile || !provider || !model || label === null) continue;
+    if (!resolvedProfile.startsWith(`${provider}/${model}:`)) continue;
+    const existing = labels.get(resolvedProfile);
+    if (existing !== undefined && existing !== label) {
+      labels.delete(resolvedProfile);
+      ambiguous.add(resolvedProfile);
+      continue;
+    }
+    if (!ambiguous.has(resolvedProfile)) labels.set(resolvedProfile, label);
+  }
+  return labels.get(profile) ?? '-';
 }
 
 /** Completion-time cell: only the canonical finishedAt of a terminal run is
@@ -1290,6 +1324,10 @@ function syncPeriodButtons(): void {
 }
 
 function renderPage(page: ShellPage): void {
+  if (page !== 'tasks') {
+    closeTasksModePopover();
+    hideTasksResolutionTooltip();
+  }
   currentPage = page;
   document.documentElement.dataset.page = page;
   const pages: Array<[ShellPage, HTMLButtonElement, HTMLElement]> = [
@@ -1417,8 +1455,10 @@ function tasksSelectedRow(): TaskSettingsTaskRow | null {
   return taskSettings.rows.find((row) => row.identity === tasksSelectedTaskId) ?? null;
 }
 
-function taskIssues(row: TaskSettingsTaskRow): string[] {
-  return [...new Set(row.issues.map((issue) => issue.message))];
+/** First structured resolution-failure message on the row, or null when none. */
+function taskResolutionFailureMessage(row: TaskSettingsTaskRow): string | null {
+  const issue = row.issues.find((candidate) => candidate.resolutionFailure !== undefined);
+  return issue?.resolutionFailure?.message ?? null;
 }
 
 function tasksCategoryHeader(label: string, count: number, level: number): HTMLElement {
@@ -1454,14 +1494,18 @@ function tasksTreeLeaf(row: TaskSettingsTaskRow, level: number): HTMLElement {
   label.className = 'tasks-tree-label';
   label.textContent = row.display_name;
   leaf.append(label);
-  const issues = taskIssues(row);
-  if (issues.length > 0) {
+  const failureMessage = taskResolutionFailureMessage(row);
+  if (failureMessage !== null) {
     const indicator = document.createElement('span');
     indicator.className = 'tasks-issue-indicator';
     indicator.textContent = '!';
     indicator.tabIndex = 0;
-    indicator.title = issues.join('\n');
-    indicator.setAttribute('aria-label', `需要处理：${issues.join('；')}`);
+    indicator.setAttribute('aria-describedby', 'tasks-resolution-tooltip');
+    indicator.setAttribute('aria-label', '运行时解析失败，聚焦查看原因');
+    indicator.addEventListener('pointerenter', () => showTasksResolutionTooltip(indicator, failureMessage));
+    indicator.addEventListener('pointerleave', hideTasksResolutionTooltip);
+    indicator.addEventListener('focus', () => showTasksResolutionTooltip(indicator, failureMessage));
+    indicator.addEventListener('blur', hideTasksResolutionTooltip);
     indicator.addEventListener('click', (event) => event.stopPropagation());
     leaf.append(indicator);
   }
@@ -1475,6 +1519,7 @@ function tasksTreeLeaf(row: TaskSettingsTaskRow, level: number): HTMLElement {
 }
 
 function renderTasksList(): void {
+  hideTasksResolutionTooltip();
   const rows = taskSettings?.rows ?? [];
   tasksList.replaceChildren();
   if (!taskSettings) {
@@ -1524,33 +1569,39 @@ function renderTasksDetail(): void {
   }
   tasksDetail.hidden = false;
   tasksDetailName.textContent = row.display_name;
-  tasksDetailIdentity.textContent = row.identity;
-  tasksDetailRuntime.textContent = taskRuntimeLine(row);
+  tasksDetailIdentity.textContent = taskIdentityLabel(row.identity);
+  renderTasksDetailRuntime(row);
   populateTaskForm(row);
 }
 
-/** Paired resolved Provider · Model labels; falls back to canonical ids when the
- *  snapshot predates the authoritative display labels. */
-function resolvedTaskLabel(resolved: { provider: string; model: string; provider_display_name?: string; model_display_name?: string } | null | undefined): string | null {
+/** Visible detail identity: only the leading `builtin:` prefix is stripped so a
+ *  builtin row reads as its plain name; row.identity stays the internal key. */
+function taskIdentityLabel(identity: string): string {
+  return identity.startsWith('builtin:') ? identity.slice('builtin:'.length) : identity;
+}
+
+/** Paired resolved Provider · Model display labels; null unless both exist, so
+ *  raw canonical ids are never promoted onto the product line. */
+function resolvedTaskLabel(resolved: { provider_display_name?: string; model_display_name?: string } | null | undefined): string | null {
   if (!resolved) return null;
-  const provider = resolved.provider_display_name ?? resolved.provider;
-  const model = resolved.model_display_name ?? resolved.model;
+  const provider = resolved.provider_display_name;
+  const model = resolved.model_display_name;
+  if (!provider || !model) return null;
   return `${provider} · ${model}`;
 }
 
-/** Title-band runtime line: resolved Provider · Model labels when available, a
- *  concrete issue/unavailable reason otherwise — never a bare fallback pin. */
+/** Title-band runtime line: clean display-label identity on success only. Failure
+ *  or unavailable rows return '' so the caller hides the line entirely. */
 function taskRuntimeLine(row: TaskSettingsTaskRow): string {
   const mode = row.effective.mode.value;
   const resolved = mode === 'automatic' ? row.automatic_selection?.resolved : row.explicit?.resolved;
-  const label = resolvedTaskLabel(resolved ?? undefined);
-  if (label) {
-    const reason = mode === 'automatic' ? row.automatic_selection?.reason : undefined;
-    return reason ? `${label}（${reason}）` : label;
-  }
-  const issues = taskIssues(row);
-  if (issues.length > 0) return issues[0]!;
-  return mode === 'automatic' ? '自动选择暂无可用运行时' : '指定运行时暂不可用';
+  return resolvedTaskLabel(resolved) ?? '';
+}
+
+function renderTasksDetailRuntime(row: TaskSettingsTaskRow): void {
+  const line = taskRuntimeLine(row);
+  tasksDetailRuntime.textContent = line;
+  tasksDetailRuntime.hidden = line === '';
 }
 
 /** Render text for a stored explicit reference: alias name or inline target. */
@@ -1627,8 +1678,15 @@ function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
   tasksTimeoutReset.disabled = tasksSaveBusy || override === undefined || override === null;
 }
 
-function renderTasksModeSource(row: TaskSettingsTaskRow): void {
-  tasksModeEffective.textContent = row.user_task.mode === undefined ? '本层未固定（沿用默认）' : '本层已固定';
+function populateTaskForm(row: TaskSettingsTaskRow): void {
+  applyTasksModeSelection(row.user_task.mode ?? 'automatic');
+  tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
+  tasksRuntimeInput.value = explicitReferenceText(row.user_task.explicit_runtime);
+  populateRuntimeSuggestions();
+  renderTimeoutEffective(row);
+  renderTasksTemplatePreview(row);
+  tasksSaveButton.disabled = tasksSaveBusy;
+  tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
 }
 
 /** Read-only static instruction-template preview. Text is emitted through safe
@@ -1659,23 +1717,6 @@ function renderTasksTemplatePreview(row: TaskSettingsTaskRow): void {
   }
 }
 
-function populateTaskForm(row: TaskSettingsTaskRow): void {
-  tasksModeSelect.value = row.user_task.mode ?? 'automatic';
-  renderTasksModeSource(row);
-  tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
-  tasksRuntimeInput.value = explicitReferenceText(row.user_task.explicit_runtime);
-  populateRuntimeSuggestions();
-  renderTimeoutEffective(row);
-  renderTasksTemplatePreview(row);
-  updateTasksRowVisibility();
-  tasksSaveButton.disabled = tasksSaveBusy;
-  tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
-}
-
-function updateTasksRowVisibility(): void {
-  tasksExplicitRow.hidden = tasksModeSelect.value !== 'explicit';
-}
-
 /** Builds the per-task layer patch from the visible controls. The mode baseline
  *  is the effective two-mode value: a legacy row without a user mode simply
  *  shows 自动选择 and is never silently pinned just because the user saved other
@@ -1703,6 +1744,121 @@ function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
     if (layer[field] !== undefined) patch[field] = null as never;
   }
   return patch;
+}
+
+/** Fixed display label for the two supported run modes. */
+function tasksModeDisplayLabel(mode: TaskSettingsMode): string {
+  return mode === 'automatic' ? '自动选择' : '指定运行时';
+}
+
+/** The two listbox option buttons, in DOM (automatic, explicit) order. */
+function tasksModeOptionButtons(): HTMLButtonElement[] {
+  return Array.from(tasksModeList.querySelectorAll<HTMLButtonElement>('button[role="option"]'));
+}
+
+/** Applies the in-memory mode value to the trigger label, listbox selection and
+ *  explicit-row visibility; the mode is never pinned until the user saves it. */
+function applyTasksModeSelection(mode: TaskSettingsMode): void {
+  tasksModeValue = mode;
+  tasksModeTriggerLabel.textContent = tasksModeDisplayLabel(mode);
+  for (const option of tasksModeOptionButtons()) {
+    option.setAttribute('aria-selected', String(option.dataset.mode === mode));
+  }
+  tasksExplicitRow.hidden = mode !== 'explicit';
+}
+
+function currentTasksModeOption(): HTMLButtonElement | undefined {
+  return tasksModeOptionButtons().find((option) => option.dataset.mode === tasksModeValue);
+}
+
+function tasksModeFocusedOption(): HTMLButtonElement | undefined {
+  const focused = document.activeElement;
+  return focused instanceof HTMLButtonElement && tasksModeList.contains(focused) ? focused : undefined;
+}
+
+function setTasksModeRovingFocus(option: HTMLButtonElement | null | undefined): void {
+  for (const candidate of tasksModeOptionButtons()) candidate.tabIndex = candidate === option ? 0 : -1;
+  if (option) option.focus({ preventScroll: true });
+}
+
+/** Roving index helper: wrap at both ends (ArrowUp/ArrowDown), Home/End jump. */
+function moveTasksModeFocus(key: string): void {
+  const options = tasksModeOptionButtons();
+  if (options.length === 0) return;
+  const current = tasksModeFocusedOption();
+  let index = current !== undefined
+    ? options.indexOf(current)
+    : Math.max(0, options.findIndex((option) => option.dataset.mode === tasksModeValue));
+  if (key === 'ArrowDown') index = (index + 1) % options.length;
+  else if (key === 'ArrowUp') index = (index - 1 + options.length) % options.length;
+  else if (key === 'Home') index = 0;
+  else if (key === 'End') index = options.length - 1;
+  setTasksModeRovingFocus(options[index]);
+}
+
+/** Fixed viewport placement below the trigger; flips above and clamps to edges.
+ *  The popover is a body-level sibling, so neither Task pane can clip it. */
+function positionTasksModePopover(): void {
+  const rect = tasksModeTrigger.getBoundingClientRect();
+  tasksModePopover.style.width = `${Math.max(rect.width, 160)}px`;
+  const height = tasksModePopover.offsetHeight;
+  let top = rect.bottom + 6;
+  if (top + height > window.innerHeight - 8 && rect.top - height - 6 >= 8) {
+    top = rect.top - height - 6;
+  }
+  top = Math.max(8, top);
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - tasksModePopover.offsetWidth - 8));
+  tasksModePopover.style.top = `${top}px`;
+  tasksModePopover.style.left = `${left}px`;
+}
+
+function openTasksModePopover(focusSelected: boolean): void {
+  tasksModePopover.hidden = false;
+  tasksModeTrigger.setAttribute('aria-expanded', 'true');
+  positionTasksModePopover();
+  if (focusSelected) {
+    const selected = currentTasksModeOption();
+    if (selected) setTasksModeRovingFocus(selected);
+  }
+}
+
+function closeTasksModePopover(refocusTrigger = false): void {
+  if (!tasksModePopover.hidden) {
+    tasksModePopover.hidden = true;
+    tasksModeTrigger.setAttribute('aria-expanded', 'false');
+    for (const option of tasksModeOptionButtons()) option.tabIndex = -1;
+  }
+  if (refocusTrigger) tasksModeTrigger.focus({ preventScroll: true });
+}
+
+function toggleTasksModePopover(focusSelected: boolean): void {
+  if (tasksModePopover.hidden) openTasksModePopover(focusSelected);
+  else closeTasksModePopover();
+}
+
+function selectTasksModeOption(mode: TaskSettingsMode): void {
+  applyTasksModeSelection(mode);
+  closeTasksModePopover();
+  tasksModeTrigger.focus({ preventScroll: true });
+}
+
+/** Body-level resolution tooltip: fixed, viewport-clamped to the marker rect. */
+function showTasksResolutionTooltip(marker: HTMLElement, message: string): void {
+  tasksResolutionTooltip.textContent = message;
+  tasksResolutionTooltip.hidden = false;
+  const markerRect = marker.getBoundingClientRect();
+  const tooltipRect = tasksResolutionTooltip.getBoundingClientRect();
+  let top = markerRect.bottom + 8;
+  if (top + tooltipRect.height > window.innerHeight - 8 && markerRect.top - tooltipRect.height - 8 >= 8) {
+    top = markerRect.top - tooltipRect.height - 8;
+  }
+  const left = Math.max(8, Math.min(markerRect.left, window.innerWidth - tooltipRect.width - 8));
+  tasksResolutionTooltip.style.left = `${left}px`;
+  tasksResolutionTooltip.style.top = `${top}px`;
+}
+
+function hideTasksResolutionTooltip(): void {
+  tasksResolutionTooltip.hidden = true;
 }
 
 /** Re-reads one task over the existing scoped snapshot path and splices its row
@@ -1735,10 +1891,15 @@ async function selectTasksFile(taskId: string): Promise<void> {
   }
 }
 
-/** Explicit loading state while the scoped selected-task fetch is in flight. */
+/** Explicit loading state while the scoped selected-task fetch is in flight.
+ *  The runtime line is unhidden only for the loading readout; the post-fetch
+ *  render hides it again whenever no resolved identity succeeded. */
 function setTasksDetailLoading(loading: boolean): void {
   tasksDetail.setAttribute('aria-busy', String(loading));
-  if (loading) tasksDetailRuntime.textContent = '读取任务设置…';
+  if (loading) {
+    tasksDetailRuntime.hidden = false;
+    tasksDetailRuntime.textContent = '读取任务设置…';
+  }
   tasksSaveButton.disabled = tasksSaveBusy || loading;
   tasksResetButton.disabled = tasksSaveBusy || loading;
 }
@@ -1824,7 +1985,7 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
 async function saveTaskLayer(reset = false): Promise<void> {
   const row = tasksSelectedRow();
   if (!row || tasksSaveBusy) return;
-  const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row, tasksModeSelect.value, tasksRuntimeInput.value, tasksTimeoutInput.value);
+  const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row, tasksModeValue, tasksRuntimeInput.value, tasksTimeoutInput.value);
   await commitTaskSave(patch);
 }
 
@@ -1835,15 +1996,14 @@ async function saveTaskTimeoutReset(): Promise<void> {
   await commitTaskSave({ timeout_ms: null });
 }
 
-interface TaskFormDraft { mode: string; runtime: string; timeout: string }
+interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string }
 function readTaskDraft(): TaskFormDraft {
-  return { mode: tasksModeSelect.value, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value };
+  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value };
 }
 function applyTaskDraft(draft: TaskFormDraft): void {
-  tasksModeSelect.value = draft.mode;
+  applyTasksModeSelection(draft.mode);
   tasksRuntimeInput.value = draft.runtime;
   tasksTimeoutInput.value = draft.timeout;
-  updateTasksRowVisibility();
 }
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
@@ -2069,7 +2229,80 @@ window.addEventListener('keydown', (event) => {
 });
 
 tasksRefresh.addEventListener('click', () => void loadTasks());
-tasksModeSelect.addEventListener('change', () => updateTasksRowVisibility());
+// App-themed mode listbox: click toggle/select, outside pointer/focus close,
+// roving keyboard navigation, and Escape close + refocus that never bubbles.
+tasksModeTrigger.addEventListener('click', () => toggleTasksModePopover(false));
+tasksModeList.addEventListener('click', (event) => {
+  if (!(event.target instanceof HTMLButtonElement)) return;
+  const mode = event.target.dataset.mode;
+  if (mode !== 'automatic' && mode !== 'explicit') return;
+  event.stopPropagation();
+  selectTasksModeOption(mode);
+});
+tasksModeList.addEventListener('keydown', (event) => {
+  if (!(event instanceof KeyboardEvent)) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+    event.preventDefault();
+    event.stopPropagation();
+    moveTasksModeFocus(event.key);
+    return;
+  }
+  if (event.key === 'Enter' || event.key === ' ') {
+    const option = tasksModeFocusedOption();
+    if (!option) return;
+    const mode = option.dataset.mode;
+    if (mode !== 'automatic' && mode !== 'explicit') return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectTasksModeOption(mode);
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeTasksModePopover(true);
+    return;
+  }
+  if (event.key === 'Tab') closeTasksModePopover();
+});
+tasksModeTrigger.addEventListener('keydown', (event) => {
+  if (!(event instanceof KeyboardEvent)) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    toggleTasksModePopover(true);
+    return;
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+    event.preventDefault();
+    if (tasksModePopover.hidden) openTasksModePopover(true);
+    else moveTasksModeFocus(event.key);
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeTasksModePopover(true);
+    return;
+  }
+  if (event.key === 'Tab') closeTasksModePopover();
+});
+tasksModeTrigger.addEventListener('focusout', (event) => {
+  if (tasksModePopover.hidden) return;
+  const next = event.relatedTarget;
+  if (next instanceof Node && (next === tasksModeTrigger || tasksModePopover.contains(next))) return;
+  closeTasksModePopover();
+});
+document.addEventListener('pointerdown', (event) => {
+  if (tasksModePopover.hidden || !(event.target instanceof Node)) return;
+  if (tasksModeTrigger.contains(event.target) || tasksModePopover.contains(event.target)) return;
+  closeTasksModePopover();
+});
+window.addEventListener('resize', () => closeTasksModePopover());
+window.addEventListener('scroll', (event) => {
+  if (tasksModePopover.hidden || !(event.target instanceof Node)) return;
+  if (event.target === tasksModePopover || tasksModePopover.contains(event.target)) return;
+  closeTasksModePopover();
+}, true);
 tasksSaveButton.addEventListener('click', () => void saveTaskLayer());
 tasksResetButton.addEventListener('click', () => void saveTaskLayer(true));
 tasksTimeoutReset.addEventListener('click', () => void saveTaskTimeoutReset());
