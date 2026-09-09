@@ -158,11 +158,34 @@ button, input, select { accent-color: var(--moss-deep); }
 .tasks-control-group .tasks-setting-row { min-width: 0; display: grid; grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 9px; min-height: 40px; padding: 5px 10px; background: rgba(255, 250, 240, .55); }
 .tasks-control-group .tasks-setting-row label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .tasks-setting-control { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
-.tasks-setting-control input, .tasks-setting-control select { height: 28px; min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 11px; font-weight: 500; }
-.tasks-mode-row .tasks-setting-control { width: 100%; }
-.tasks-setting-control select { width: 100%; }
+.tasks-setting-control input { height: 28px; min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 11px; font-weight: 500; }
+.tasks-mode-row .tasks-setting-control { grid-column: 2 / -1; }
+.tasks-mode-trigger {
+  min-height: 28px;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 8px 0 9px;
+  color: var(--ink);
+  background: #fffaf0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.tasks-mode-trigger:hover:not(:disabled), .tasks-mode-trigger[aria-expanded="true"] { border-color: #b9aa82; background: #fffdf7; }
+.tasks-mode-trigger:focus-visible { border-color: var(--moss-deep); box-shadow: 0 0 0 2px rgba(94, 124, 70, .12); outline: none; }
+.tasks-mode-trigger:disabled { color: #9f927d; background: var(--paper-deep); cursor: default; }
+.tasks-mode-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tasks-mode-chevron { width: 6px; height: 6px; flex: 0 0 auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.tasks-mode-trigger[aria-expanded="true"] .tasks-mode-chevron { transform: translateY(2px) rotate(225deg); }
 .tasks-explicit-row[hidden] { display: none; }
-.tasks-mode-effective, .tasks-effective-hint { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.tasks-effective-hint { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .tasks-effective-hint.is-dim { color: var(--muted); }
 .tasks-effective-hint.is-override { color: var(--ink-soft); font-weight: 700; }
 .tasks-timeout-control { position: relative; }
@@ -178,10 +201,58 @@ button, input, select { accent-color: var(--moss-deep); }
 .tasks-help-tooltip { position: absolute; z-index: 14; right: 0; top: calc(100% + 6px); width: max-content; max-width: min(300px, 60vw); padding: 8px 10px; border: 1px solid #403930; border-radius: 5px; color: var(--paper); background: var(--rail); font-size: 10px; font-weight: 500; line-height: 1.55; box-shadow: 0 10px 26px rgba(41, 37, 31, .22); opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity 90ms ease 160ms, transform 90ms ease 160ms; }
 .tasks-help-trigger:hover + .tasks-help-tooltip, .tasks-help-trigger:focus-visible + .tasks-help-tooltip { opacity: 1; transform: translateY(0); }
 .tasks-control-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
-.tasks-detail-note { margin-right: auto; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .tasks-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .tasks-control-actions .primary-button, .tasks-control-actions .secondary-button { min-height: 28px; padding: 0 11px; font-size: 11px; }
 .tasks-error { min-height: 16px; display: block; color: var(--terracotta); font-size: 10px; line-height: 1.5; }
+
+/* App-themed mode listbox popover and resolution tooltip: body-level fixed
+   surfaces (JS supplies top/left/width), so Task panes never clip them. */
+.tasks-mode-popover {
+  position: fixed;
+  z-index: 30;
+  max-height: min(220px, 42vh);
+  overflow-y: auto;
+  border: 1px solid #bfb08b;
+  border-radius: 7px;
+  padding: 5px;
+  background: #fffaf0;
+  box-shadow: 0 18px 44px rgba(49, 39, 28, .2);
+}
+.tasks-mode-list { display: flex; flex-direction: column; gap: 3px; outline: 0; }
+.tasks-mode-option {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+.tasks-mode-option:hover:not(:disabled) { border-color: rgba(212, 201, 168, .78); background: rgba(247, 239, 216, .74); }
+.tasks-mode-option:focus-visible { border-color: var(--moss-deep); background: rgba(123, 160, 91, .08); box-shadow: 0 0 0 1px rgba(94, 124, 70, .12); outline: none; }
+.tasks-mode-option[aria-selected="true"] { color: var(--ink); background: #f8f0dc; box-shadow: inset 2px 0 var(--moss-deep); }
+.tasks-resolution-tooltip {
+  position: fixed;
+  z-index: 40;
+  max-width: min(300px, 62vw);
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  border: 1px solid #403930;
+  border-radius: 5px;
+  color: var(--paper);
+  background: var(--rail);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.55;
+  box-shadow: 0 10px 26px rgba(41, 37, 31, .22);
+  pointer-events: none;
+}
 
 /* Static read-only instruction-template preview with styled placeholder tokens */
 .tasks-preview { display: grid; gap: 8px; border: 1px dashed rgba(212, 201, 168, .9); border-radius: 6px; padding: 11px 13px; background: rgba(255, 250, 240, .45); }
@@ -200,9 +271,8 @@ button, input, select { accent-color: var(--moss-deep); }
   .tasks-layout { grid-template-columns: 1fr; grid-template-rows: 250px minmax(0, 1fr); }
   .tasks-list-pane { max-height: none; }
   .tasks-control-group .tasks-setting-row { grid-template-columns: 86px minmax(0, 1fr); }
-  .tasks-mode-effective, .tasks-effective-hint { grid-column: 2; }
+  .tasks-effective-hint { grid-column: 2; }
   .tasks-control-actions { align-items: stretch; flex-direction: column; }
-  .tasks-detail-note { margin-right: 0; }
 }
 
 /* Desktop-owned DSH conversation surface */

@@ -5,6 +5,7 @@ import {
   persistedModelSelectionRepair,
   projectConversationHistory,
   projectConversationModels,
+  projectHostModels,
 } from '../src/dsh-conversation-client.js';
 
 function entry(type: string, seq: number, data: Record<string, unknown>) {
@@ -439,6 +440,36 @@ test('model projection rejects malformed DSH directory responses', () => {
   );
 });
 
+test('host model projection accepts the DSH 0.1.1-rc.2 llm.models shape without inventing a current', () => {
+  const models = projectHostModels(hostModelDirectory(), ['wrenyard']);
+  assert.equal(models.status, 'ready');
+  assert.equal(models.current, undefined, 'the host catalog must never fabricate a current selection');
+  assert.equal(models.routable, true, 'routable derives from an advertised, configured model');
+  assert.equal(models.groups.length, 1);
+  assert.equal(models.groups[0]?.models.length, 2);
+});
+
+test('host model projection marks routable false when no advertised configured model exists', () => {
+  const models = projectHostModels({
+    groups: [{
+      id: 'legacy-provider',
+      name: 'Legacy',
+      models: [{ id: 'legacy-model', name: 'Legacy Model' }],
+    }],
+    failures: [],
+  }, ['wrenyard']);
+  assert.equal(models.current, undefined);
+  assert.equal(models.routable, false);
+});
+
+test('per-session model projection must not accept the host-only groups/failures payload', () => {
+  assert.throws(
+    () => projectConversationModels(hostModelDirectory()),
+    /DSH 模型目录格式无效/,
+    'llm.models must never be parsed as session.models',
+  );
+});
+
 test('run_task card stays pending and without taskRun before the terminal result', () => {
   const items = projectConversationHistory([
     entry('tool/call', 1, { callId: 'call-run-1', name: 'run_task', arguments: '{"task_id":"task-abc"}' }),
@@ -678,6 +709,22 @@ function modelDirectory(current = 'codebuddy/deepseek-v4-flash') {
   };
 }
 
+// The exact host response shape for llm.models in DSH 0.1.1-rc.2: only groups
+// and failures, no current selection and no routable flag.
+function hostModelDirectory() {
+  return {
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [
+        { id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
+      ],
+    }],
+    failures: [],
+  };
+}
+
 test('New is a local reset and repeated New or empty send creates no durable session', async () => {
   const { client, state } = conversationClientHarness();
   state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
@@ -811,4 +858,143 @@ test('first send reapplies the prior advertised logical model before prompting',
   ]);
   assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview');
   assert.equal(calls[3].payload.sessionId, 'new-model');
+});
+
+test('empty workspace start loads the catalog via llm.models without creating a session', async () => {
+  const { client, state } = conversationClientHarness();
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    if (method === 'session.list') return { items: [] };
+    if (method === 'workspace.list') return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
+    if (method === 'llm.models') return hostModelDirectory();
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.start();
+
+  assert.ok(calls.includes('llm.models'), 'empty workspace must fetch the host catalog via llm.models');
+  assert.equal(calls.some((method) => method === 'session.create'), false, 'no durable session is created on empty start');
+  const snapshot = client.snapshot();
+  assert.equal(snapshot.selectedSessionId, undefined);
+  assert.equal(snapshot.models.status, 'ready');
+  assert.ok(snapshot.models.groups.length > 0, 'the draft model directory is populated');
+  assert.equal(snapshot.models.current, undefined, 'the draft catalog must not invent a current selection');
+  assert.equal(snapshot.models.routable, true, 'routable is derived from an advertised configured model');
+});
+
+test('draft model selection updates only the in-memory selection without persistence', async () => {
+  const { client, state } = conversationClientHarness();
+  state.rpc = async (method) => {
+    if (method === 'session.list') return { items: [] };
+    if (method === 'workspace.list') return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
+    if (method === 'llm.models') return hostModelDirectory();
+    throw new Error(`unexpected ${method}`);
+  };
+  await client.start();
+
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    throw new Error(`unexpected ${method}`);
+  };
+
+  const snapshot = await client.selectModel('wrenyard', 'codebuddy/hy4-preview');
+
+  assert.deepEqual(calls, [], 'draft selection must not issue any persistence RPC');
+  assert.equal(snapshot.selectedSessionId, undefined);
+  assert.equal(snapshot.models.current?.model, 'codebuddy/hy4-preview', 'the draft current selection is reflected');
+});
+
+test('first send materializes exactly one session with the draft selection then prompts', async () => {
+  const { client, state } = conversationClientHarness();
+  state.rpc = async (method) => {
+    if (method === 'session.list') return { items: [] };
+    if (method === 'workspace.list') return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
+    if (method === 'llm.models') return hostModelDirectory();
+    throw new Error(`unexpected ${method}`);
+  };
+  await client.start();
+  await client.selectModel('wrenyard', 'codebuddy/hy4-preview');
+
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.create') return { sessionId: 'new-draft' };
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.selectModel') return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' } };
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.send('首条消息');
+
+  assert.equal(calls.filter((call) => call.method === 'session.create').length, 1, 'exactly one session is created');
+  assert.deepEqual(
+    calls.map((call) => call.method).slice(0, 4),
+    ['session.create', 'session.models', 'session.selectModel', 'session.prompt'],
+  );
+  assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview', 'the exact draft choice is applied before prompting');
+  const snapshot = client.snapshot();
+  assert.equal(snapshot.selectedSessionId, 'new-draft');
+  assert.equal(snapshot.models.current?.model, 'codebuddy/hy4-preview');
+});
+
+test('host-created blank session stays hidden until first send reuses it', async () => {
+  const { client, state } = conversationClientHarness();
+  state.rpc = async (method) => {
+    if (method === 'session.list') {
+      return { items: [{ sessionId: 'blank-1', updatedAt: 1, running: false, blank: true }] };
+    }
+    if (method === 'workspace.list') {
+      return { items: [{ workspaceId: 'workspace-1', sessionIds: ['blank-1'] }] };
+    }
+    if (method === 'llm.models') return hostModelDirectory();
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.start();
+  assert.equal(client.snapshot().selectedSessionId, undefined);
+  assert.deepEqual(client.snapshot().sessions, [], 'blank host state must not appear as a conversation');
+
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.send('开始');
+  assert.equal(calls.some((call) => call.method === 'session.create'), false);
+  assert.equal(calls.find((call) => call.method === 'session.prompt')?.payload.sessionId, 'blank-1');
+  assert.equal(client.snapshot().selectedSessionId, 'blank-1');
+});
+
+test('repeated New and empty send remain non-persistent before the first message', async () => {
+  const { client, state } = conversationClientHarness();
+  state.rpc = async (method) => {
+    if (method === 'session.list') return { items: [] };
+    if (method === 'workspace.list') return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
+    if (method === 'llm.models') return hostModelDirectory();
+    throw new Error(`unexpected ${method}`);
+  };
+  await client.start();
+
+  await client.create();
+  await client.create();
+  await assert.rejects(client.send('   '), /消息不能为空/);
+
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    throw new Error(`unexpected ${method}`);
+  };
+
+  const snapshot = client.snapshot();
+  assert.deepEqual(calls, [], 'New and empty send create no durable session or persistence RPC');
+  assert.equal(snapshot.selectedSessionId, undefined);
+  assert.equal(snapshot.models.status, 'ready', 'the catalog is retained through New');
 });

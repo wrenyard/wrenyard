@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   buildTaskRunSummaryLines,
   groupConversationItems,
@@ -9,6 +12,11 @@ import {
   shouldFollowConversationTail,
 } from '../src/renderer/conversation.js';
 import type { ConversationItemSnapshot, TaskRunSnapshot } from '../src/shell-contract.js';
+
+const rendererSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'conversation.ts'),
+  'utf8',
+);
 
 test('Markdown tables are parsed as headers and body rows', () => {
   assert.deepEqual(
@@ -203,4 +211,30 @@ test('run_task summary labels catalog-default selection speed', () => {
   const map = toLineMap(run);
   assert.equal(map['选择速度（估算）'], '7（来源：目录默认）');
   assert.equal(map['参考费用（估算）'], '$0.5000');
+});
+
+test('run_task summary labels provider-override selection speed', () => {
+  const run: TaskRunSnapshot = {
+    taskRunId: 'run-5',
+    taskId: 'edit',
+    speed: { effectiveTps: 21.5, source: 'provider_override', sampleCount: null, expectedTpsMet: true },
+    usage: { completeness: 'complete', attemptCount: 1, usageEventCount: 1, referenceCostUsd: 0.5, referenceCostComplete: true },
+  };
+
+  const map = toLineMap(run);
+  assert.equal(map['选择速度（估算）'], '21.5（来源：服务商覆盖）');
+});
+
+test('renderer offers pre-session model selection for a ready draft', () => {
+  // The obsolete copy that forced users to create a conversation before they
+  // could pick a model must be gone from the source.
+  assert.equal(rendererSource.includes('新建会话后选择模型'), false, 'obsolete no-session copy must be removed');
+
+  // The picker enable gate must no longer disable solely because no session is
+  // selected; a ready draft with advertised options should be selectable.
+  assert.equal(
+    rendererSource.includes('|| !snapshot.selectedSessionId'),
+    false,
+    'picker must not be disabled solely for a missing selected session',
+  );
 });

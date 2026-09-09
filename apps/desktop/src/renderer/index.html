@@ -180,7 +180,7 @@
 
         <div class="ledger-columns">
           <section class="ledger-panel" aria-labelledby="profile-title">
-            <div class="panel-heading"><h2 id="profile-title">运行配置</h2></div>
+            <div class="panel-heading"><h2 id="profile-title">模型统计</h2></div>
             <div class="ledger-table" id="stats-profile-list"></div>
           </section>
           <section class="ledger-panel" aria-labelledby="task-title">
@@ -377,7 +377,6 @@
           <div>
             <p class="eyebrow">TASK SETTINGS</p>
             <h1 id="tasks-title">任务</h1>
-            <p>设置当前任务的运行方式与总时限；指定运行时可用别名或内联目标，本层未覆盖的字段会沿用既有设置。</p>
           </div>
           <button class="secondary-button" id="tasks-refresh" type="button">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
@@ -402,14 +401,13 @@
               <div class="tasks-control-group" aria-label="任务设置控制">
                 <div class="tasks-rows">
                   <div class="tasks-setting-row tasks-mode-row">
-                    <label for="tasks-mode">选择方式</label>
+                    <label id="tasks-mode-label">选择方式</label>
                     <span class="tasks-setting-control">
-                      <select id="tasks-mode">
-                        <option value="automatic">自动选择</option>
-                        <option value="explicit">指定运行时</option>
-                      </select>
+                      <button class="tasks-mode-trigger" id="tasks-mode-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tasks-mode-list" aria-labelledby="tasks-mode-label tasks-mode-trigger-label">
+                        <span class="tasks-mode-trigger-label" id="tasks-mode-trigger-label">自动选择</span>
+                        <span class="tasks-mode-chevron" aria-hidden="true"></span>
+                      </button>
                     </span>
-                    <span class="tasks-mode-effective" id="tasks-mode-effective">—</span>
                   </div>
                   <div class="tasks-setting-row">
                     <label for="tasks-timeout">总执行时限</label>
@@ -432,7 +430,6 @@
                 </div>
 
                 <div class="tasks-control-actions">
-                  <span class="tasks-detail-note">“自动选择”会清除本层显式运行时；※ 只重置本行超时。</span>
                   <div class="tasks-form-actions">
                     <button class="secondary-button" id="tasks-reset" type="button">重置</button>
                     <button class="primary-button" id="tasks-save" type="button">套用</button>
@@ -449,6 +446,14 @@
           </section>
         </div>
       </section>
+
+      <div class="tasks-mode-popover" id="tasks-mode-popover" hidden>
+        <div class="tasks-mode-list" id="tasks-mode-list" role="listbox" aria-labelledby="tasks-mode-label">
+          <button class="tasks-mode-option" id="tasks-mode-option-automatic" type="button" role="option" data-mode="automatic" aria-selected="true" tabindex="-1">自动选择</button>
+          <button class="tasks-mode-option" id="tasks-mode-option-explicit" type="button" role="option" data-mode="explicit" aria-selected="false" tabindex="-1">指定运行时</button>
+        </div>
+      </div>
+      <div class="tasks-resolution-tooltip" id="tasks-resolution-tooltip" role="tooltip" hidden></div>
 
       <div class="provider-dialog-backdrop" id="provider-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title" aria-hidden="true" hidden>
         <div class="provider-dialog-card">

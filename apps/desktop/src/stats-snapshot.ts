@@ -323,7 +323,7 @@ function readBoolean(value: unknown): boolean | null {
 }
 
 function readSpeedSource(value: unknown): TaskRunSpeedEvidence['source'] | null {
-  return value === 'local_31d' || value === 'catalog_default' ? value : null;
+  return value === 'local_31d' || value === 'provider_override' || value === 'catalog_default' ? value : null;
 }
 
 function readCompleteness(value: unknown): TaskRunUsage['completeness'] | null {

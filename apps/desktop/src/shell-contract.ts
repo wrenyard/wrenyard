@@ -207,7 +207,7 @@ export interface TaskRunSpeedEvidence {
   /** Selection-time expected throughput (tokens per second). */
   effectiveTps: number;
   /** Where the selection estimate came from. Invalid evidence is omitted as a whole. */
-  source: 'local_31d' | 'catalog_default';
+  source: 'local_31d' | 'provider_override' | 'catalog_default';
   /** Number of local samples behind the selection estimate, when known. */
   sampleCount: number | null;
   /** Whether actual throughput is expected to meet the selection estimate, when known. */
@@ -511,11 +511,19 @@ export interface TaskSettingsEffective {
   automatic: TaskSettingsEffectiveAutomatic;
 }
 
+/** Structured automatic-resolution failure detail the daemon attaches to an issue. */
+export interface TaskSettingsResolutionFailure {
+  code: 'no_available_provider' | 'price_limit' | 'intelligence_requirement' | 'speed_requirement' | 'quota_unavailable' | 'quota_insufficient';
+  message: string;
+}
+
 /** A validation problem surfaced by the daemon. */
 export interface TaskSettingsValidationIssue {
   code: string;
   message: string;
   field?: string;
+  /** Closed structured resolution failure; present only on resolution-failure issues. */
+  resolutionFailure?: TaskSettingsResolutionFailure;
 }
 
 /** A daemon-owned resolved dispatch projection for an explicit reference. */

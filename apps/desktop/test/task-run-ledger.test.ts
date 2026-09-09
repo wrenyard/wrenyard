@@ -158,14 +158,14 @@ test('recent-run ledger panel is plain markup with wrapping six-column styles', 
 });
 
 test('recent-run ledger model cell renders paired Catalog display labels joined by a middle dot only', () => {
-  const start = appSource.indexOf('function taskRunModelCell');
-  const end = appSource.indexOf('function taskRunCompletionTimeCell', start);
-  assert.ok(start >= 0 && end > start, 'taskRunModelCell must precede taskRunCompletionTimeCell in app.ts');
+  const start = appSource.indexOf('function taskRunModelLabel');
+  const end = appSource.indexOf('function modelStatsLabel', start);
+  assert.ok(start >= 0 && end > start, 'model label helpers must precede modelStatsLabel in app.ts');
   const body = appSource.slice(start, end);
 
   assert.ok(
-    body.includes('function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {'),
-    'model cell renders through a dedicated helper',
+    body.includes('function taskRunModelLabel(run: TaskRunSnapshot): string | null {'),
+    'paired display labels are resolved through a reusable helper',
   );
   // Only the two paired server-provided display-name fields feed the cell.
   assert.ok(body.includes('run.resolvedProviderDisplayName'), 'provider display label is read from the run row');
@@ -173,7 +173,8 @@ test('recent-run ledger model cell renders paired Catalog display labels joined 
   // Both labels are rendered as one label joined by a middle dot.
   assert.ok(body.includes(' · '), 'paired display names are joined by a middle dot');
   // A missing half or an alias-only history row renders the dash placeholder.
-  assert.ok(body.includes("taskRunCell('-')"), 'incomplete display pair falls back to the dash placeholder');
+  assert.ok(body.includes('return null;'), 'incomplete display pair remains unknown');
+  assert.ok(body.includes("taskRunCell(taskRunModelLabel(run) ?? '-')"), 'model cell renders the dash placeholder');
 
   // The helper body touches only the display-name properties of the run: no raw
   // resolved model id/model/profile/client/provider value may feed the cell.
@@ -185,4 +186,26 @@ test('recent-run ledger model cell renders paired Catalog display labels joined 
       `raw resolved identity reference ${reference} must not feed the model cell`,
     );
   }
+});
+
+test('model statistics uses exact recent-run display labels without exposing profiles or guessing aliases', () => {
+  assert.ok(htmlSource.includes('<h2 id="profile-title">模型统计</h2>'), 'card heading is 模型统计');
+  const renderStart = appSource.indexOf('function renderProfiles');
+  const renderEnd = appSource.indexOf('function renderTasks', renderStart);
+  const renderBody = appSource.slice(renderStart, renderEnd);
+  assert.ok(renderBody.includes("tableHeader(['模型', '运行', 'Token', '平均 TPS'])"), 'first column is 模型');
+  assert.ok(renderBody.includes("emptyRow('暂无模型统计')"), 'empty state names model statistics');
+  assert.ok(renderBody.includes('modelStatsLabel(snapshot, row.name)'), 'profile identity is projected through the bounded helper');
+  assert.ok(!renderBody.includes("row.name,"), 'raw profile never feeds the visible first cell');
+
+  const labelStart = appSource.indexOf('function modelStatsLabel');
+  const labelEnd = appSource.indexOf('function taskRunCompletionTimeCell', labelStart);
+  const labelBody = appSource.slice(labelStart, labelEnd);
+  assert.ok(labelBody.includes('snapshot.recentTaskRuns'), 'mapping uses only the same stats snapshot');
+  assert.ok(labelBody.includes('run.resolvedProfile'), 'mapping requires an exact resolved profile');
+  assert.ok(labelBody.includes('run.resolvedProvider'), 'mapping requires the canonical provider');
+  assert.ok(labelBody.includes('run.resolvedModel'), 'mapping requires the canonical model');
+  assert.ok(labelBody.includes('startsWith(`${provider}/${model}:`)'), 'profile/provider/model must be internally consistent');
+  assert.ok(labelBody.includes('ambiguous.add(resolvedProfile)'), 'conflicting labels become ambiguous');
+  assert.ok(labelBody.includes("return labels.get(profile) ?? '-'"), 'unknown and alias-only buckets render a dash');
 });

@@ -397,8 +397,12 @@ export function buildTaskRunSummaryLines(taskRun: TaskRunSnapshot): TaskRunSumma
   else if (usage.completeness === 'unavailable') lines.push({ label: '成本完整性', value: '不可用' });
 
   if (taskRun.speed) {
-    const source = taskRun.speed.source === 'local_31d' ? '本机 31 天' : '目录默认';
-    lines.push({ label: '选择速度（估算）', value: `${taskRun.speed.effectiveTps}（来源：${source}）` });
+    const speedSources = {
+      local_31d: '本机 31 天',
+      provider_override: '服务商覆盖',
+      catalog_default: '目录默认',
+    } as const;
+    lines.push({ label: '选择速度（估算）', value: `${taskRun.speed.effectiveTps}（来源：${speedSources[taskRun.speed.source]}）` });
   }
 
   return lines;
@@ -655,14 +659,13 @@ export class ConversationView {
     if (groupNodes.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'conversation-model-empty';
-      empty.textContent = snapshot.selectedSessionId
-        ? directory.status === 'loading' ? '读取模型…' : '暂无可选模型'
-        : '新建会话后选择模型';
+      empty.textContent = directory.status === 'loading'
+        ? '读取模型…'
+        : snapshot.selectedSessionId ? '暂无可选模型' : '选择模型后开始对话';
       groupNodes.push(empty);
     }
     this.modelList.replaceChildren(...groupNodes);
     const unavailable = snapshot.status !== 'ready'
-      || !snapshot.selectedSessionId
       || directory.status === 'loading'
       || this.modelOptions.length === 0;
     // DSH emits a transient loading snapshot while it applies a model change.
@@ -674,9 +677,9 @@ export class ConversationView {
     this.modelTrigger.disabled = unavailable && !transientLoading;
     this.modelTrigger.setAttribute('aria-disabled', String(unavailable || this.busy));
     const current = directory.current;
-    const placeholder = snapshot.selectedSessionId
-      ? directory.status === 'loading' ? '读取模型…' : '选择模型'
-      : '新建会话后选择模型';
+    const placeholder = directory.status === 'loading'
+      ? '读取模型…'
+      : snapshot.selectedSessionId ? '选择模型' : '选择模型后开始对话';
     this.modelName.textContent = current?.label ?? placeholder;
     this.modelProvider.hidden = !current;
     this.modelTriggerSignal.hidden = !current;

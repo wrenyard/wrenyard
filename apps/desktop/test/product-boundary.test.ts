@@ -123,6 +123,29 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.doesNotMatch(shellWindow, /docsList|docsRead|docsSave|docsDirty|WorkspaceDoc/);
 });
 
+test('Task page owns an app-themed mode listbox and never regresses to a native select', async () => {
+  const [renderer, rendererScript] = await Promise.all([
+    readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8'),
+    readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
+  ]);
+  // Task mode selection is the same application-themed listbox contract as the
+  // conversation model picker: an aria-haspopup trigger, a role=listbox, no native select.
+  assert.match(renderer, /id="tasks-mode-trigger"[^>]+aria-haspopup="listbox"/);
+  assert.match(renderer, /id="tasks-mode-list" role="listbox"/);
+  assert.doesNotMatch(renderer, /<select id="tasks-mode">/);
+  // The renderer carries the required pointer and keyboard outside-close behavior.
+  assert.match(rendererScript, /document\.addEventListener\('pointerdown'/);
+  assert.match(rendererScript, /event\.key === 'ArrowDown'/);
+  assert.match(rendererScript, /event\.key === 'ArrowUp'/);
+  assert.match(rendererScript, /event\.key === 'Home'/);
+  assert.match(rendererScript, /event\.key === 'End'/);
+  assert.match(rendererScript, /event\.key === 'Enter'/);
+  assert.match(rendererScript, /event\.key === ' '/);
+  assert.match(rendererScript, /event\.key === 'Tab'/);
+  assert.match(rendererScript, /event\.key === 'Escape'/);
+  assert.match(rendererScript, /stopPropagation\(\)/);
+});
+
 test('Pet entrypoint remains a headless companion without product UI ownership', async () => {
   const [main, preload, packageJson] = await Promise.all([
     readFile(join(petRoot, 'src', 'main', 'index.ts'), 'utf8'),
