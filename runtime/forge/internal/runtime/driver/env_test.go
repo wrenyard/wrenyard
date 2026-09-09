@@ -238,3 +238,72 @@ func countEnvKey(entries []string, key string, caseInsensitive bool) int {
 	}
 	return count
 }
+
+// TestBuildChildEnvStripsCodeBuddyPrivateAdmissionContext proves that the
+// three Forge-private CodeBuddy admission context vars are stripped from both
+// inherited and planned inputs, case-insensitively even when
+// caseInsensitive=false, on both yolo and restricted permission modes, while
+// benign planned credential/model env may still be supplied unchanged.
+func TestBuildChildEnvStripsCodeBuddyPrivateAdmissionContext(t *testing.T) {
+	inherited := []string{
+		"WRENYARD_CODEBUDDY_EXPECTED_SCOPE=inherited-scope",
+		"wrenyard_codebuddy_expected_environment=inherited-env",
+		"WrEnYaRd_CoDeBuDdY_ExPeCtEd_WiRe_MoDeL=inherited-wire",
+		"WRENYARD_CODEBUDDY_EXPECTED_SCOPE_EXTRA=not-private",
+		"PATH=/usr/bin",
+	}
+	planned := map[string]string{
+		"WRENYARD_CODEBUDDY_EXPECTED_SCOPE":       "planned-scope",
+		"wrenyard_codebuddy_expected_environment": "planned-env",
+		"WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL":  "planned-wire",
+		"CODEX_API_KEY":                           "planned-credential",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL":          "planned-model",
+		"FORGE_TEST_BENIGN_VAR":                   "planned-benign",
+	}
+	for _, tc := range []struct {
+		name string
+		mode catalog.PermissionMode
+	}{
+		{name: "yolo", mode: catalog.PermissionYolo},
+		{name: "restricted", mode: catalog.PermissionReadonly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, insensitive := range []bool{false, true} {
+				label := "case-insensitive"
+				if !insensitive {
+					label = "case-sensitive"
+				}
+				t.Run(label, func(t *testing.T) {
+					rendered := buildChildEnvForPermission(planned, inherited, insensitive, tc.mode, "/dev/null")
+					joined := strings.Join(rendered, "\n")
+					for _, private := range []string{
+						"inherited-scope", "inherited-env", "inherited-wire",
+						"planned-scope", "planned-env", "planned-wire",
+					} {
+						if strings.Contains(joined, private) {
+							t.Fatalf("CodeBuddy private admission context value %q survived in %s mode (case-insensitive=%v):\n%s", private, tc.name, insensitive, joined)
+						}
+					}
+					env := envListToMap(rendered)
+					if _, ok := env["WRENYARD_CODEBUDDY_EXPECTED_SCOPE"]; ok {
+						t.Fatalf("mode=%s: expected WRENYARD_CODEBUDDY_EXPECTED_SCOPE stripped from planned/inherited env", tc.name)
+					}
+					if got := env["WRENYARD_CODEBUDDY_EXPECTED_SCOPE_EXTRA"]; got != "not-private" {
+						t.Fatalf("mode=%s: similar-but-public key must stay inherited, got %q", tc.name, got)
+					}
+					// Benign planned credential/model env keeps the existing
+					// planned-overlay behavior unchanged.
+					if got := env["CODEX_API_KEY"]; got != "planned-credential" {
+						t.Fatalf("mode=%s: planned CODEX_API_KEY = %q, want planned-credential", tc.name, got)
+					}
+					if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "planned-model" {
+						t.Fatalf("mode=%s: planned ANTHROPIC_DEFAULT_SONNET_MODEL = %q, want planned-model", tc.name, got)
+					}
+					if got := env["FORGE_TEST_BENIGN_VAR"]; got != "planned-benign" {
+						t.Fatalf("mode=%s: planned benign var = %q, want planned-benign", tc.name, got)
+					}
+				})
+			}
+		})
+	}
+}

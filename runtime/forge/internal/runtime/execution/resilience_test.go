@@ -15,7 +15,6 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/observedquota"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
 )
@@ -1327,9 +1326,12 @@ func TestRunStartedAndAttemptStartedAddConcreteClient(t *testing.T) {
 // codeBuddyIOAResilienceDeps builds deterministic execution dependencies for a
 // CodeBuddy profile that selects the given --model id. The launcher default
 // args place the model into the planned argv exactly as a real dispatch would.
-func codeBuddyIOAResilienceDeps(t *testing.T, clock *testClock, runner ChildRunner, model string) Dependencies {
+// It also returns the observed-quota root so tests can assert directly on the
+// filesystem that no observed state file is ever created.
+func codeBuddyIOAResilienceDeps(t *testing.T, clock *testClock, runner ChildRunner, model string) (Dependencies, string) {
 	t.Helper()
 	d := newFakeDeps(t)
+	observedRoot := filepath.Join(t.TempDir(), "observed")
 	d.loadProfile = func(name string) (ProfileDefinition, bool, error) {
 		return ProfileDefinition{
 			Name: name, Client: "codebuddy",
@@ -1345,11 +1347,11 @@ func codeBuddyIOAResilienceDeps(t *testing.T, clock *testClock, runner ChildRunn
 	}
 	d.Dependencies.Clock = clock
 	d.Dependencies.StateRoot = t.TempDir()
-	d.Dependencies.ObservedQuotaRoot = filepath.Join(t.TempDir(), "observed")
+	d.Dependencies.ObservedQuotaRoot = observedRoot
 	d.Dependencies.JitterFn = func(time.Duration) time.Duration { return 0 }
 	d.Dependencies.Sleeper = &recordingSleeper{clock: clock}
 	d.Dependencies.Runner = runner
-	return d.Dependencies
+	return d.Dependencies, observedRoot
 }
 
 func billingCycleDenialEvents() []protocol.Event {
@@ -1359,14 +1361,24 @@ func billingCycleDenialEvents() []protocol.Event {
 	}}}
 }
 
-// TestExecuteCodeBuddyIOABillingExhaustionPersistsProviderStateAndNextMonthCircuit
-// verifies the qualifying dispatch: a CodeBuddy transcript that selected an
-// -ioa model and hit exact monthly billing-cycle exhaustion writes the canonical
-// provider state and holds the exact-profile circuit until the next local
-// calendar month, not one hour.
-func TestExecuteCodeBuddyIOABillingExhaustionPersistsProviderStateAndNextMonthCircuit(t *testing.T) {
+// assertNoObservedQuotaWrite proves on the filesystem that no observed quota
+// state was written under root: a missing root directory means no store write
+// could have happened, rather than relying on a store's interpretation.
+func assertNoObservedQuotaWrite(t *testing.T, root string) {
+	t.Helper()
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("observed quota state must not be written: root=%q stat err=%v", root, err)
+	}
+}
+
+// TestExecuteCodeBuddyIOABillingDenialOpensOneHourCircuitWithoutObservedState
+// verifies that a CodeBuddy dispatch whose transcript selected an -ioa wire
+// model and hit an exact billing-cycle denial keeps execution-only resilience:
+// the hard profile circuit opens for one hour and no observed quota state file
+// is created anywhere on disk.
+func TestExecuteCodeBuddyIOABillingDenialOpensOneHourCircuitWithoutObservedState(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
-	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+	deps, observedRoot := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
 		return ChildResult{Status: "failed", ExitCode: 1, Events: billingCycleDenialEvents()}
 	}, "deepseek-v4-ioa")
 
@@ -1374,36 +1386,27 @@ func TestExecuteCodeBuddyIOABillingExhaustionPersistsProviderStateAndNextMonthCi
 	if err == nil || result.Status != "failed" {
 		t.Fatalf("result=%+v err=%v want failed denial", result, err)
 	}
-
-	want := observedquota.NextLocalMonthStart(clock.Now())
-	store := observedquota.NewStore(deps.ObservedQuotaRoot)
-	record, ok := store.Active(observedquota.ProviderCodeBuddy, clock.Now())
-	if !ok {
-		t.Fatal("qualifying -ioa denial must persist the canonical provider exhaustion state")
-	}
-	if !record.ResetsAt.Equal(want) {
-		t.Fatalf("observed resets_at=%v want next local month start %v", record.ResetsAt, want)
-	}
-	if record.ReasonCode != observedquota.ReasonMonthlyQuotaExhausted || !record.Exhausted {
-		t.Fatalf("observed record=%+v", record)
-	}
+	assertNoObservedQuotaWrite(t, observedRoot)
 
 	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-ioa")
 	if !check.Open || check.Record.ReasonCode != CircuitReasonHardProfileLimit {
 		t.Fatalf("cb-ioa circuit=%+v want open hard-profile-limit circuit", check)
 	}
-	if check.Record.UnlockAt != want.Format(time.RFC3339) {
-		t.Fatalf("circuit unlock=%q want next local month start %q", check.Record.UnlockAt, want.Format(time.RFC3339))
+	if check.Record.RetryCount != 0 {
+		t.Fatalf("cb-ioa retry_count=%d want 0 (immediate circuit)", check.Record.RetryCount)
+	}
+	if want := clock.Now().Add(time.Hour).Format(time.RFC3339); check.Record.UnlockAt != want {
+		t.Fatalf("cb-ioa unlock=%q want one-hour unlock %q", check.Record.UnlockAt, want)
 	}
 }
 
-// TestExecuteOfficialCodeBuddyModelBillingDenialKeepsExistingBehavior verifies
-// that an official CodeBuddy model id retains current behavior: the hard
-// profile circuit still opens after one hour, but no provider exhaustion state
-// is ever written.
-func TestExecuteOfficialCodeBuddyModelBillingDenialKeepsExistingBehavior(t *testing.T) {
+// TestExecuteOfficialCodeBuddyModelBillingDenialOpensOneHourCircuitWithoutObservedState
+// verifies that an official CodeBuddy model id hitting the same exact
+// billing-cycle denial behaves identically: the one-hour hard profile circuit
+// opens and no observed quota state file is created.
+func TestExecuteOfficialCodeBuddyModelBillingDenialOpensOneHourCircuitWithoutObservedState(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
-	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+	deps, observedRoot := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
 		return ChildResult{Status: "failed", ExitCode: 1, Events: billingCycleDenialEvents()}
 	}, "deepseek-v4")
 
@@ -1411,26 +1414,24 @@ func TestExecuteOfficialCodeBuddyModelBillingDenialKeepsExistingBehavior(t *test
 	if err == nil || result.Status != "failed" {
 		t.Fatalf("result=%+v err=%v want failed denial", result, err)
 	}
+	assertNoObservedQuotaWrite(t, observedRoot)
 
-	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
-		t.Fatal("official CodeBuddy model must not create the provider exhaustion state")
-	}
 	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-official")
-	if !check.Open {
-		t.Fatalf("official denial must still open the profile circuit: %+v", check)
+	if !check.Open || check.Record.ReasonCode != CircuitReasonHardProfileLimit {
+		t.Fatalf("cb-official circuit=%+v want open hard-profile-limit circuit", check)
 	}
 	if want := clock.Now().Add(time.Hour).Format(time.RFC3339); check.Record.UnlockAt != want {
-		t.Fatalf("official denial unlock=%q want existing one-hour behavior %q", check.Record.UnlockAt, want)
+		t.Fatalf("cb-official unlock=%q want one-hour unlock %q", check.Record.UnlockAt, want)
 	}
 }
 
-// TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState verifies that a
-// structured CodeBuddy frequency-limit 429 (recoverable, with a reset time)
-// opens the structured-recovery circuit but never creates monthly provider
-// state, even when the -ioa model is selected.
-func TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState(t *testing.T) {
+// TestExecuteCodeBuddyStructured429OpensStructuredRecoveryCircuitWithoutObservedState
+// verifies that a structured CodeBuddy frequency-limit 429 (recoverable, with
+// a reset time) opens the structured-recovery circuit and creates no observed
+// quota state file, even when the -ioa wire model is selected.
+func TestExecuteCodeBuddyStructured429OpensStructuredRecoveryCircuitWithoutObservedState(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
-	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+	deps, observedRoot := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
 		return ChildResult{Status: "done", ExitCode: 0, Events: []protocol.Event{{Type: "message", Data: map[string]any{
 			"role": "assistant",
 			"text": "429 您的使用量已超出频率限制，将在 2026-07-12 15:00:00 UTC+8 重置，您也可以切换其他模型继续使用。 (eae0465ed7664c40bcb0bb7f08afb8ca/1d37242c-c2ea-4c31-812a-2b2cd1e13a92)",
@@ -1441,24 +1442,22 @@ func TestExecuteCodeBuddyStructured429DoesNotWriteMonthlyState(t *testing.T) {
 	if err == nil || result.Status != "failed" {
 		t.Fatalf("result=%+v err=%v want failed 429", result, err)
 	}
+	assertNoObservedQuotaWrite(t, observedRoot)
 
-	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
-		t.Fatal("structured 429 must not create the provider exhaustion state")
-	}
 	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-429")
 	if !check.Open || check.Record.ReasonCode != CircuitReasonStructuredRecovery {
 		t.Fatalf("cb-429 circuit=%+v want open structured-recovery circuit", check)
 	}
 }
 
-// TestExecuteCodeBuddyIOAMixedTransientBillingCycleDoesNotPersistMonthlyState
-// verifies that an -ioa CodeBuddy model whose terminal error combines the
-// exact billing-cycle phrase with transient 429/rate-limit/retry-after text is
-// a mixed implicit error: it must not write observed monthly provider state or
-// create the next-month hard circuit.
-func TestExecuteCodeBuddyIOAMixedTransientBillingCycleDoesNotPersistMonthlyState(t *testing.T) {
+// TestExecuteCodeBuddyMixedBillingTransientStaysTransientWithoutObservedState
+// verifies that a CodeBuddy error combining the exact billing-cycle phrase
+// with transient 429/rate-limit/retry-after text is a mixed implicit error:
+// it stays transient, never opens a hard-profile circuit, and never creates
+// observed quota state.
+func TestExecuteCodeBuddyMixedBillingTransientStaysTransientWithoutObservedState(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
-	deps := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
+	deps, observedRoot := codeBuddyIOAResilienceDeps(t, clock, func(_ context.Context, _ AttemptRequest) ChildResult {
 		return ChildResult{Status: "failed", ExitCode: 1, Events: []protocol.Event{{Type: protocol.EventRunFinished, Data: map[string]any{
 			"status": "failed",
 			"error":  "429 rate limit: You've reached your usage limit for this billing cycle. Retry-after: 30 seconds.",
@@ -1469,16 +1468,10 @@ func TestExecuteCodeBuddyIOAMixedTransientBillingCycleDoesNotPersistMonthlyState
 	if err == nil || result.Status != "failed" {
 		t.Fatalf("result=%+v err=%v want failed mixed transient error", result, err)
 	}
+	assertNoObservedQuotaWrite(t, observedRoot)
 
-	if _, ok := observedquota.NewStore(deps.ObservedQuotaRoot).Active(observedquota.ProviderCodeBuddy, clock.Now()); ok {
-		t.Fatal("mixed monthly+transient denial must not create the provider exhaustion state")
-	}
 	check := NewCircuitStore(deps.StateRoot, clock).Check("cb-mixed")
-	nextMonth := observedquota.NextLocalMonthStart(clock.Now()).Format(time.RFC3339)
 	if check.Open && check.Record.ReasonCode == CircuitReasonHardProfileLimit {
-		t.Fatalf("cb-mixed circuit=%+v must not be a hard-limit circuit", check)
-	}
-	if check.Open && check.Record.UnlockAt == nextMonth {
-		t.Fatalf("cb-mixed circuit=%+v must not unlock at next local month start %q", check, nextMonth)
+		t.Fatalf("cb-mixed circuit=%+v must not be a hard-profile-limit circuit", check)
 	}
 }

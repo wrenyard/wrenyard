@@ -9,7 +9,6 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/observedquota"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
 )
 
@@ -461,20 +460,12 @@ func executeProfile(ctx context.Context, req Request, profileName string, deps D
 		}
 		if classification.ImmediateCircuit {
 			now := clockFor(deps).Now()
+			// Every immediate hard-profile denial, including an exact
+			// CodeBuddy billing-cycle denial, uses the standard one-hour
+			// exact-profile circuit. No transcript text or wire-model suffix
+			// may create observed provider quota state or choose a guessed
+			// next-month unlock.
 			unlock := now.Add(time.Hour)
-			// Only a CodeBuddy transcript that selected an -ioa model id and
-			// was classified as exact monthly billing-cycle exhaustion records
-			// the canonical provider exhaustion state and holds the exact
-			// profile circuit until the first instant of the next local
-			// calendar month. Official CodeBuddy models, other providers,
-			// structured 429 recovery, access termination, and all other hard
-			// limits keep the existing one-hour behavior.
-			if classification.MonthlyExhaustion && plan.TranscriptFamily == "codebuddy" && codeBuddyIOAModelSelected(plan.Command) {
-				unlock = observedquota.NextLocalMonthStart(now)
-				_ = observedquota.NewStore(deps.ObservedQuotaRoot).Write(
-					observedquota.MonthlyExhaustion(observedquota.ProviderCodeBuddy, now, unlock),
-				)
-			}
 			record := makeCircuitRecord(profileName, classification.Classification, CircuitReasonHardProfileLimit, retry, now, unlock)
 			persisted := NewCircuitStore(deps.StateRoot, clockFor(deps)).Write(profileName, record)
 			outcome.circuit = &record
@@ -674,22 +665,6 @@ func makeCircuitRecord(profile string, classification Classification, reason str
 		OpenedAt: opened.UTC().Format(time.RFC3339), UnlockAt: unlock.UTC().Format(time.RFC3339),
 		Classification: classification, ReasonCode: reason, RetryCount: retryCount,
 	}
-}
-
-// codeBuddyIOAModelSelected reports whether the planned CodeBuddy argv selects
-// a model id ending in -ioa. Only such a transcript may create the observed
-// monthly exhaustion provider state. The model is inspected in-memory without
-// logging or persisting argv or the model id.
-func codeBuddyIOAModelSelected(command []string) bool {
-	for i, arg := range command {
-		if arg == "--model" && i+1 < len(command) {
-			return strings.HasSuffix(strings.TrimSpace(command[i+1]), "-ioa")
-		}
-		if strings.HasPrefix(arg, "--model=") {
-			return strings.HasSuffix(strings.TrimSpace(strings.TrimPrefix(arg, "--model=")), "-ioa")
-		}
-	}
-	return false
 }
 
 func circuitOpenedData(profile string, record CircuitRecord, persisted bool) map[string]any {

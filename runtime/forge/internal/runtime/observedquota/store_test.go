@@ -9,53 +9,140 @@ import (
 	"time"
 )
 
-func TestWriteReadRoundTrip(t *testing.T) {
+func writeRawState(t *testing.T, root, name, content string) {
+	t.Helper()
+	path := filepath.Join(root, name+".json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteReadScopedRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
-	resetsAt := NextLocalMonthStart(now)
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	store := NewStore(root)
 
-	record := MonthlyExhaustion(ProviderCodeBuddy, now, resetsAt)
+	record := ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:scope-abc123", observedAt, resetsAt)
 	if !store.Write(record) {
-		t.Fatal("write must succeed for a valid record")
+		t.Fatal("write must succeed for a valid scoped record")
 	}
 	got, ok := store.Read(ProviderCodeBuddy)
 	if !ok {
 		t.Fatal("read must succeed after write")
 	}
+	if got.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version=%d want %d", got.SchemaVersion, SchemaVersion)
+	}
 	if got.Provider != ProviderCodeBuddy || !got.Exhausted {
 		t.Fatalf("record=%+v", got)
 	}
-	if !got.ObservedAt.Equal(now) || !got.ResetsAt.Equal(resetsAt) {
-		t.Fatalf("record timestamps=%+v want observed=%v resets=%v", got, now, resetsAt)
+	if got.Scope != "cbv1:scope-abc123" {
+		t.Fatalf("scope=%q", got.Scope)
 	}
-	if got.ReasonCode != ReasonMonthlyQuotaExhausted || got.SchemaVersion != SchemaVersion {
-		t.Fatalf("record=%+v", got)
+	if !got.ObservedAt.Equal(observedAt) || !got.ResetsAt.Equal(resetsAt) {
+		t.Fatalf("record timestamps=%+v want observed=%v resets=%v", got, observedAt, resetsAt)
+	}
+	if got.ReasonCode != ReasonQuotaExhausted {
+		t.Fatalf("reason code=%q want %q", got.ReasonCode, ReasonQuotaExhausted)
 	}
 }
 
-func TestRecordExpiresAtNextLocalMonthStart(t *testing.T) {
+func TestActiveScopedRequiresExactScopeMatch(t *testing.T) {
 	root := t.TempDir()
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.Local)
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	store := NewStore(root)
 
-	resetsAt := NextLocalMonthStart(now)
-	want := time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local).UTC()
-	if !resetsAt.Equal(want) {
-		t.Fatalf("NextLocalMonthStart(%v)=%v want %v", now, resetsAt, want)
-	}
-
-	if !store.Write(MonthlyExhaustion(ProviderCodeBuddy, now, resetsAt)) {
+	if !store.Write(ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:scope-exact", observedAt, resetsAt)) {
 		t.Fatal("write must succeed")
 	}
-	if _, ok := store.Active(ProviderCodeBuddy, resetsAt.Add(-time.Second)); !ok {
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exact", observedAt); !ok {
+		t.Fatal("exact scope must be active before resets_at")
+	}
+
+	// A mismatched scope must stay inactive and leave the evidence file
+	// byte-identical.
+	path := filepath.Join(root, "codebuddy.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-other", observedAt); ok {
+		t.Fatal("mismatched scope must not be active")
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "", observedAt); ok {
+		t.Fatal("empty scope must never be active")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("inactive reads must not modify the evidence file")
+	}
+}
+
+func TestActiveScopedExpiresAtAuthoritativeResetsAt(t *testing.T) {
+	root := t.TempDir()
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	store := NewStore(root)
+
+	if !store.Write(ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:scope-exp", observedAt, resetsAt)) {
+		t.Fatal("write must succeed")
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exp", resetsAt.Add(-time.Second)); !ok {
 		t.Fatal("record must be active strictly before resets_at")
 	}
-	if _, ok := store.Active(ProviderCodeBuddy, resetsAt); ok {
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exp", resetsAt); ok {
 		t.Fatal("record must stop projecting exactly at resets_at")
 	}
-	if _, ok := store.Active(ProviderCodeBuddy, resetsAt.Add(time.Minute)); ok {
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exp", resetsAt.Add(time.Minute)); ok {
 		t.Fatal("record must stop projecting after resets_at")
+	}
+
+	// The same exact scope stays active across time within the window.
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exp", observedAt); !ok {
+		t.Fatal("record must be active at observed time")
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:scope-exp", observedAt.Add(time.Hour)); !ok {
+		t.Fatal("same scope must remain active within the reset window")
+	}
+}
+
+func TestLegacySchemaV1IsReadableButInert(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	writeRawState(t, root, ProviderCodeBuddy,
+		`{"schema_version":1,"provider":"codebuddy","exhausted":true,"observed_at":"2026-08-30T10:00:00Z","resets_at":"2026-09-30T00:00:00Z","reason_code":"monthly_quota_exhausted"}`)
+
+	path := filepath.Join(root, "codebuddy.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, ok := store.Read(ProviderCodeBuddy)
+	if !ok {
+		t.Fatal("legacy schema-v1 monthly record must parse strictly through Read")
+	}
+	if record.SchemaVersion != 1 || record.Scope != "" {
+		t.Fatalf("legacy record=%+v", record)
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "", time.Now()); ok {
+		t.Fatal("legacy v1 record must never be active")
+	}
+	if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:anything", time.Now()); ok {
+		t.Fatal("legacy v1 record must never be active regardless of scope")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("strict legacy reads must preserve the v1 evidence byte-identically")
 	}
 }
 
@@ -63,38 +150,50 @@ func TestReadFailsOpenOnCorruption(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root)
 
-	// Malformed JSON, unknown fields, and wrong schema version all fail open.
+	observed := "2026-08-30T10:00:00Z"
+	resets := "2026-09-30T00:00:00Z"
+	base := func(extra string) string {
+		return `{"schema_version":2,"provider":"codebuddy","exhausted":true,"scope":"cbv1:ab","observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"quota_exhausted"` + extra + `}`
+	}
 	for name, content := range map[string]string{
-		"garbage":        `{not json`,
-		"unknown key":    `{"schema_version":1,"provider":"codebuddy","exhausted":true,"observed_at":"2026-08-30T10:00:00Z","resets_at":"2026-09-01T00:00:00Z","reason_code":"monthly_quota_exhausted","model":"secret-model"}`,
-		"trailing json":  `{"schema_version":1,"provider":"codebuddy","exhausted":true,"observed_at":"2026-08-30T10:00:00Z","resets_at":"2026-09-01T00:00:00Z","reason_code":"monthly_quota_exhausted"}{}`,
-		"wrong provider": `{"schema_version":1,"provider":"other","exhausted":true,"observed_at":"2026-08-30T10:00:00Z","resets_at":"2026-09-01T00:00:00Z","reason_code":"monthly_quota_exhausted"}`,
-		"wrong version":  `{"schema_version":99,"provider":"codebuddy","exhausted":true,"observed_at":"2026-08-30T10:00:00Z","resets_at":"2026-09-01T00:00:00Z","reason_code":"monthly_quota_exhausted"}`,
+		"garbage":       `{not json`,
+		"unknown key":   base(`,"model":"secret-model"`),
+		"trailing json": base(``) + `{}`,
+		"wrong provider": `{"schema_version":2,"provider":"other","exhausted":true,"scope":"cbv1:ab","observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"quota_exhausted"}`,
+		"wrong version": `{"schema_version":99,"provider":"codebuddy","exhausted":true,"scope":"cbv1:ab","observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"quota_exhausted"}`,
+		"empty scope": `{"schema_version":2,"provider":"codebuddy","exhausted":true,"scope":"","observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"quota_exhausted"}`,
+		"no scope": `{"schema_version":2,"provider":"codebuddy","exhausted":true,"observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"quota_exhausted"}`,
+		"wrong reason": `{"schema_version":2,"provider":"codebuddy","exhausted":true,"scope":"cbv1:ab","observed_at":"` +
+			observed + `","resets_at":"` + resets + `","reason_code":"monthly_quota_exhausted"}`,
+		"invalid time": `{"schema_version":2,"provider":"codebuddy","exhausted":true,"scope":"cbv1:ab","observed_at":"` +
+			resets + `","resets_at":"` + observed + `","reason_code":"quota_exhausted"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(root, "codebuddy.json")
-			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeRawState(t, root, ProviderCodeBuddy, content)
 			if record, ok := store.Read(ProviderCodeBuddy); ok {
 				t.Fatalf("corrupt record read unexpectedly: %+v", record)
 			}
-			if _, ok := store.Active(ProviderCodeBuddy, time.Now()); ok {
+			if _, ok := store.ActiveScoped(ProviderCodeBuddy, "cbv1:ab", time.Now()); ok {
 				t.Fatal("corrupt record must never project as active")
 			}
-			os.Remove(path)
+			os.Remove(filepath.Join(root, "codebuddy.json"))
 		})
 	}
 
-	// Missing file fails open too.
 	if _, ok := store.Read("missing-provider"); ok {
 		t.Fatal("missing record must fail open")
 	}
 }
 
-func TestRecordPrivacyShape(t *testing.T) {
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
-	record := MonthlyExhaustion(ProviderCodeBuddy, now, NextLocalMonthStart(now))
+func TestRecordPrivacyShapeScoped(t *testing.T) {
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	record := ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:ab12cd34", observedAt, resetsAt)
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +207,7 @@ func TestRecordPrivacyShape(t *testing.T) {
 		keys = append(keys, key)
 	}
 	allowed := map[string]bool{
-		"schema_version": true, "provider": true, "exhausted": true,
+		"schema_version": true, "provider": true, "exhausted": true, "scope": true,
 		"observed_at": true, "resets_at": true, "reason_code": true,
 	}
 	if len(keys) != len(allowed) {
@@ -120,7 +219,10 @@ func TestRecordPrivacyShape(t *testing.T) {
 		}
 	}
 	text := string(data)
-	for _, forbidden := range []string{"error", "model", "profile", "session", "credential", "auth", "command", "prompt", "token"} {
+	for _, forbidden := range []string{
+		"error", "model", "profile", "session", "credential", "auth", "command",
+		"prompt", "token", "account", "domain", "identity",
+	} {
 		if strings.Contains(strings.ToLower(text), forbidden) {
 			t.Fatalf("record leaks privacy-sensitive field %q: %s", forbidden, text)
 		}
@@ -130,12 +232,12 @@ func TestRecordPrivacyShape(t *testing.T) {
 func TestRootOverrideIsolation(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
-	resetsAt := NextLocalMonthStart(now)
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 
 	storeA := NewStore(rootA)
 	storeB := NewStore(rootB)
-	if !storeA.Write(MonthlyExhaustion(ProviderCodeBuddy, now, resetsAt)) {
+	if !storeA.Write(ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:scope-root", observedAt, resetsAt)) {
 		t.Fatal("write to root A must succeed")
 	}
 	if _, ok := storeB.Read(ProviderCodeBuddy); ok {
@@ -149,17 +251,22 @@ func TestRootOverrideIsolation(t *testing.T) {
 func TestInvalidRecordsAreRejected(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root)
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
-	resetsAt := NextLocalMonthStart(now)
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 
 	for name, record := range map[string]Record{
-		"not exhausted":  {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: false, ObservedAt: now, ResetsAt: resetsAt, ReasonCode: ReasonMonthlyQuotaExhausted},
-		"wrong version":  {SchemaVersion: 99, Provider: ProviderCodeBuddy, Exhausted: true, ObservedAt: now, ResetsAt: resetsAt, ReasonCode: ReasonMonthlyQuotaExhausted},
-		"empty provider": {SchemaVersion: SchemaVersion, Exhausted: true, ObservedAt: now, ResetsAt: resetsAt, ReasonCode: ReasonMonthlyQuotaExhausted},
-		"no reason":      {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, ObservedAt: now, ResetsAt: resetsAt},
-		"wrong reason":   {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, ObservedAt: now, ResetsAt: resetsAt, ReasonCode: "other"},
-		"invalid reset":  {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, ObservedAt: now, ResetsAt: now, ReasonCode: ReasonMonthlyQuotaExhausted},
-		"path traversal": {SchemaVersion: SchemaVersion, Provider: "../escape", Exhausted: true, ObservedAt: now, ResetsAt: resetsAt, ReasonCode: ReasonMonthlyQuotaExhausted},
+		"not exhausted": {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: false, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
+		"empty scope":   {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
+		"wrong version": {SchemaVersion: 99, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
+		"legacy version": {SchemaVersion: 1, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonMonthlyQuotaExhausted},
+		"empty provider": {SchemaVersion: SchemaVersion, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
+		"no reason":      {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt},
+		"wrong reason":   {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: "other"},
+		"zero observed":  {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
+		"zero reset":     {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ReasonCode: ReasonQuotaExhausted},
+		"reset not after": {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: observedAt, ReasonCode: ReasonQuotaExhausted},
+		"reset before":   {SchemaVersion: SchemaVersion, Provider: ProviderCodeBuddy, Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: observedAt.Add(-time.Hour), ReasonCode: ReasonQuotaExhausted},
+		"path traversal": {SchemaVersion: SchemaVersion, Provider: "../escape", Exhausted: true, Scope: "cbv1:x", ObservedAt: observedAt, ResetsAt: resetsAt, ReasonCode: ReasonQuotaExhausted},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if store.Write(record) {
@@ -200,9 +307,10 @@ func TestDefaultRootIsXDGAware(t *testing.T) {
 
 func TestAtomicWriteUsesMode0600(t *testing.T) {
 	root := t.TempDir()
-	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	observedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	resetsAt := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	store := NewStore(root)
-	if !store.Write(MonthlyExhaustion(ProviderCodeBuddy, now, NextLocalMonthStart(now))) {
+	if !store.Write(ConfirmedExhaustion(ProviderCodeBuddy, "cbv1:scope-mode", observedAt, resetsAt)) {
 		t.Fatal("write must succeed")
 	}
 	info, err := os.Stat(filepath.Join(root, "codebuddy.json"))

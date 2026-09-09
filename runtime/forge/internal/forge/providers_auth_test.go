@@ -1,7 +1,9 @@
 package forge
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1023,4 +1025,571 @@ func forgeCatalogAuthResolver(providerID string) (auth.CredentialResolverKind, b
 		return "", false
 	}
 	return source, true
+}
+
+// === CodeBuddyActiveScope tests ===
+//
+// All fixtures below use synthetic identity/domain values only.
+
+// cbv1Scope computes the documented canonical digest: SHA-256 over the UTF-8
+// string "cbv1:" + payloadJSON, where payloadJSON has keys in the exact TS
+// insertion order id, enterpriseId?, accountType?, idp?, domain?, environment.
+func cbv1Scope(t *testing.T, payloadJSON string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte("cbv1:" + payloadJSON))
+	return "cbv1:" + hex.EncodeToString(sum[:])
+}
+
+func scopeTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	setupForgedHome(t, home)
+	t.Setenv("HOME", home)
+	return home
+}
+
+func codebuddySyntheticProductAttributes() map[string]interface{} {
+	return map[string]interface{}{
+		"internalDomain":    []string{"internal.corp.test", "*.internal.corp.test"},
+		"iOADomain":         []string{"*.ioa.auth.test"},
+		"cloudHostedDomain": []string{"cloud.console.test", "*.cloud.console.test"},
+		"externalDomain":    []string{"public.example", "*.public.example"},
+	}
+}
+
+func writeScopeProductConfig(t *testing.T, attributes map[string]interface{}) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "product.json")
+	cfg := map[string]interface{}{
+		"authentication": map[string]interface{}{
+			"attributes": attributes,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeScopeAuthFile(t *testing.T, home string, payload map[string]interface{}) {
+	t.Helper()
+	dir := codebuddyTestAuthDir(t, home)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "Tencent-Cloud.coding-copilot.info")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newScopeResolver(t *testing.T, productPath string) *auth.ProviderAuthStatusResolver {
+	t.Helper()
+	resolver := auth.NewProviderAuthStatusResolver(
+		codebuddyCatalogAuthResolver,
+		forgeDataDir,
+		userHome,
+	)
+	resolver.CodeBuddyProductPath = productPath
+	return resolver
+}
+
+// codebuddyScopeAuth returns a minimal synthetic auth payload in the real
+// nested shape: the access token and domain live under "auth" while the active
+// account object sits at the top level.
+func codebuddyScopeAuth(uid, domain string) map[string]interface{} {
+	return map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken": "synthetic-scope-token",
+			"domain":      domain,
+		},
+		"account": map[string]interface{}{
+			"uid": uid,
+		},
+	}
+}
+
+func TestCodeBuddyActiveScopeRealTopLevelAccountCanonicalVector(t *testing.T) {
+	home := scopeTestHome(t)
+	productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+	writeScopeAuthFile(t, home, map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken":  "synthetic-access-token",
+			"refreshToken": "synthetic-refresh-token",
+			"expiration":   9999999999999,
+			"domain":       "alice.internal.corp.test",
+		},
+		"account": map[string]interface{}{
+			"uid":            "uid-1111",
+			"uin":            "uin-2222",
+			"oneidAccountId": "oneid-3333",
+			"enterpriseId":   "ent-123",
+			"accountType":    "corp",
+			"idp":            "idp-synthetic",
+			"name":           "Alice Developer",
+			"avatar":         "data:image/png;base64,c2VjcmV0",
+		},
+	})
+
+	res := newScopeResolver(t, productPath).CodeBuddyActiveScope()
+	if !res.OK {
+		t.Fatalf("expected ok, got %+v", res)
+	}
+	if res.Environment != "internal" {
+		t.Fatalf("environment=%q want internal", res.Environment)
+	}
+
+	// Canonical TS payload: keys in the exact order id, enterpriseId,
+	// accountType, idp, domain, environment, hashed as cbv1:<sha256> over the
+	// JSON {"id":"uid-1111","enterpriseId":"ent-123","accountType":"corp","idp":"idp-synthetic","domain":"alice.internal.corp.test","environment":"internal"}.
+	// The digest is pinned as a fixed literal anchor so any cross-language
+	// drift in field order, normalization, or payload contents breaks here.
+	const wantScope = "cbv1:27bd540a6e4165ecf2deda7e031a0d10769969bbb1b0c1bc3943647f5f28e175"
+	if res.Scope != wantScope {
+		t.Fatalf("scope=%q want canonical digest %q", res.Scope, wantScope)
+	}
+
+	// The scope must never leak raw identity or domain material.
+	joined := res.Scope + " " + res.Environment
+	for _, forbidden := range []string{
+		"uid-1111", "uin-2222", "oneid-3333", "ent-123", "idp-synthetic",
+		"alice.internal.corp.test", "synthetic-access-token",
+		"synthetic-refresh-token", "Alice Developer", "c2VjcmV0",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("scope/environment leaked %q: %s", forbidden, joined)
+		}
+	}
+}
+
+func TestCodeBuddyActiveScopeEnvironmentClassification(t *testing.T) {
+	cases := []struct {
+		name    string
+		domain  string
+		wantEnv string
+		wantOK  bool
+		payload string
+	}{
+		{"internal exact attribute", "internal.corp.test", "internal", true, `{"id":"uid-c","domain":"internal.corp.test","environment":"internal"}`},
+		{"internal wildcard one label", "west.internal.corp.test", "internal", true, `{"id":"uid-c","domain":"west.internal.corp.test","environment":"internal"}`},
+		{"internal wildcard never crosses dots", "deep.west.internal.corp.test", "", false, ""},
+		{"case sensitive exact", "Internal.Corp.Test", "", false, ""},
+		{"ioa wildcard one label", "alice.ioa.auth.test", "ioa", true, `{"id":"uid-c","domain":"alice.ioa.auth.test","environment":"ioa"}`},
+		{"cloudhosted exact attribute", "cloud.console.test", "cloudhosted", true, `{"id":"uid-c","domain":"cloud.console.test","environment":"cloudhosted"}`},
+		{"cloudhosted wildcard one label", "eu.cloud.console.test", "cloudhosted", true, `{"id":"uid-c","domain":"eu.cloud.console.test","environment":"cloudhosted"}`},
+		{"external exact attribute", "public.example", "external", true, `{"id":"uid-c","domain":"public.example","environment":"external"}`},
+		{"external wildcard one label", "alice.public.example", "external", true, `{"id":"uid-c","domain":"alice.public.example","environment":"external"}`},
+		{"unrecognized environment fails closed", "random.example.test", "", false, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := scopeTestHome(t)
+			productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-c", tc.domain))
+
+			res := newScopeResolver(t, productPath).CodeBuddyActiveScope()
+			if res.OK != tc.wantOK {
+				t.Fatalf("ok=%v want %v (res=%+v)", res.OK, tc.wantOK, res)
+			}
+			if !tc.wantOK {
+				if res.Scope != "" || res.Environment != "" {
+					t.Fatalf("failed-closed result must carry no scope/environment: %+v", res)
+				}
+				return
+			}
+			if res.Environment != tc.wantEnv {
+				t.Fatalf("environment=%q want %q", res.Environment, tc.wantEnv)
+			}
+			// Absent optional keys are omitted while key order is preserved
+			// (id, then domain, then environment).
+			if want := cbv1Scope(t, tc.payload); res.Scope != want {
+				t.Fatalf("scope=%q want %q", res.Scope, want)
+			}
+		})
+	}
+}
+
+func TestCodeBuddyActiveScopeDomainMatchSemantics(t *testing.T) {
+	cases := []struct {
+		name       string
+		attributes map[string]interface{}
+		domain     string
+		wantEnv    string
+		wantOK     bool
+	}{
+		{
+			name:       "wildcard never matches across dot labels",
+			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
+			domain:     "deep.west.internal.corp.test",
+			wantEnv:    "",
+			wantOK:     false,
+		},
+		{
+			name:       "wildcard matches one label",
+			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
+			domain:     "west.internal.corp.test",
+			wantEnv:    "internal",
+			wantOK:     true,
+		},
+		{
+			name:       "matching is case sensitive on the domain",
+			attributes: map[string]interface{}{"internalDomain": "*.internal.corp.test"},
+			domain:     "West.Internal.Corp.Test",
+			wantEnv:    "",
+			wantOK:     false,
+		},
+		{
+			name:       "matching is case sensitive on the pattern",
+			attributes: map[string]interface{}{"internalDomain": "*.Internal.Corp.Test"},
+			domain:     "west.internal.corp.test",
+			wantEnv:    "",
+			wantOK:     false,
+		},
+		{
+			name:       "exact equality is case sensitive",
+			attributes: map[string]interface{}{"internalDomain": "Internal.Corp.Test"},
+			domain:     "Internal.Corp.Test",
+			wantEnv:    "internal",
+			wantOK:     true,
+		},
+		{
+			name:       "question mark retains regex quantifier semantics",
+			attributes: map[string]interface{}{"externalDomain": "*.lab?.public.example"},
+			domain:     "edge.lab.public.example",
+			wantEnv:    "external",
+			wantOK:     true,
+		},
+		{
+			name:       "question mark quantifier may omit preceding character",
+			attributes: map[string]interface{}{"externalDomain": "*.lab?.public.example"},
+			domain:     "edge.la.public.example",
+			wantEnv:    "external",
+			wantOK:     true,
+		},
+		{
+			name:       "question mark is not matched literally",
+			attributes: map[string]interface{}{"externalDomain": "*.lab?.public.example"},
+			domain:     "edge.lab?.public.example",
+			wantEnv:    "",
+			wantOK:     false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := scopeTestHome(t)
+			productPath := writeScopeProductConfig(t, tc.attributes)
+			writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-m", tc.domain))
+
+			res := newScopeResolver(t, productPath).CodeBuddyActiveScope()
+			if res.OK != tc.wantOK {
+				t.Fatalf("ok=%v want %v (res=%+v)", res.OK, tc.wantOK, res)
+			}
+			if !tc.wantOK {
+				if res.Scope != "" || res.Environment != "" {
+					t.Fatalf("failed-closed result must carry no scope/environment: %+v", res)
+				}
+				return
+			}
+			if res.Environment != tc.wantEnv {
+				t.Fatalf("environment=%q want %q", res.Environment, tc.wantEnv)
+			}
+		})
+	}
+}
+
+func TestCodeBuddyActiveScopeFiniteNumericUIDNormalization(t *testing.T) {
+	home := scopeTestHome(t)
+	productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+	writeScopeAuthFile(t, home, map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken": "synthetic-scope-token",
+			"domain":      "internal.corp.test",
+		},
+		"account": map[string]interface{}{
+			"uid":          123456789,
+			"enterpriseId": 1700,
+		},
+	})
+
+	res := newScopeResolver(t, productPath).CodeBuddyActiveScope()
+	if !res.OK {
+		t.Fatalf("expected ok for numeric uid, got %+v", res)
+	}
+	if res.Environment != "internal" {
+		t.Fatalf("environment=%q want internal", res.Environment)
+	}
+	// Numeric identity fields are normalized with JavaScript String(number)
+	// decimal semantics before hashing.
+	const canonicalPayload = `{"id":"123456789","enterpriseId":"1700","domain":"internal.corp.test","environment":"internal"}`
+	if want := cbv1Scope(t, canonicalPayload); res.Scope != want {
+		t.Fatalf("scope=%q want %q", res.Scope, want)
+	}
+}
+
+func TestCodeBuddyActiveScopeLegacyNestedFallback(t *testing.T) {
+	home := scopeTestHome(t)
+	productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+	writeScopeAuthFile(t, home, map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken":  "nested-access-token",
+			"domain":       "alice.ioa.auth.test",
+			"enterpriseId": "ent-nested",
+			"accountType":  "corp",
+			"idp":          "idp-nested",
+			"account": map[string]interface{}{
+				"uin":            "uin-nested-42",
+				"oneidAccountId": "oneid-nested-77",
+			},
+		},
+	})
+
+	res := newScopeResolver(t, productPath).CodeBuddyActiveScope()
+	if !res.OK {
+		t.Fatalf("expected ok for legacy nested shape, got %+v", res)
+	}
+	if res.Environment != "ioa" {
+		t.Fatalf("environment=%q want ioa", res.Environment)
+	}
+	// No uid present: uin must resolve as the stable account id.
+	want := cbv1Scope(t, `{"id":"uin-nested-42","enterpriseId":"ent-nested","accountType":"corp","idp":"idp-nested","domain":"alice.ioa.auth.test","environment":"ioa"}`)
+	if res.Scope != want {
+		t.Fatalf("scope=%q want %q", res.Scope, want)
+	}
+}
+
+func TestCodeBuddyActiveScopeStableAcrossTokenRotation(t *testing.T) {
+	home := scopeTestHome(t)
+	productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+	writeScopeAuthFile(t, home, map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken":  "token-version-one",
+			"refreshToken": "refresh-version-one",
+			"expiration":   1700000000001,
+			"domain":       "team.internal.corp.test",
+		},
+		"account": map[string]interface{}{
+			"uid":          "uid-stable-7",
+			"enterpriseId": "ent-rotate",
+			"accountType":  "corp",
+			"idp":          "idp-rotate",
+		},
+	})
+
+	reads := 0
+	resolver := newScopeResolver(t, productPath)
+	resolver.ReadFile = func(p string) ([]byte, error) {
+		reads++
+		return os.ReadFile(p)
+	}
+
+	first := resolver.CodeBuddyActiveScope()
+	if !first.OK {
+		t.Fatalf("expected ok, got %+v", first)
+	}
+	if reads != 1 {
+		t.Fatalf("expected exactly one auth-file read, got %d", reads)
+	}
+
+	// Rotate access/refresh tokens and expiry: same account and domain must
+	// yield a byte-identical scope.
+	writeScopeAuthFile(t, home, map[string]interface{}{
+		"auth": map[string]interface{}{
+			"accessToken":  "token-version-two-rotated",
+			"refreshToken": "refresh-version-two-rotated",
+			"expiration":   1700000009999,
+			"domain":       "team.internal.corp.test",
+		},
+		"account": map[string]interface{}{
+			"uid":          "uid-stable-7",
+			"enterpriseId": "ent-rotate",
+			"accountType":  "corp",
+			"idp":          "idp-rotate",
+		},
+	})
+	second := resolver.CodeBuddyActiveScope()
+	if !second.OK {
+		t.Fatalf("expected ok after rotation, got %+v", second)
+	}
+	if reads != 2 {
+		t.Fatalf("expected exactly one auth-file read per call, got %d", reads)
+	}
+	if second.Scope != first.Scope || second.Environment != first.Environment {
+		t.Fatalf("token rotation changed scope/environment: %+v -> %+v", first, second)
+	}
+}
+
+func TestCodeBuddyActiveScopeChangesOnAccountAndEnvironmentSwitch(t *testing.T) {
+	home := scopeTestHome(t)
+	productPath := writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+	resolver := newScopeResolver(t, productPath)
+
+	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-a", "alice.ioa.auth.test"))
+	ioa := resolver.CodeBuddyActiveScope()
+	if !ioa.OK || ioa.Environment != "ioa" {
+		t.Fatalf("expected ioa scope, got %+v", ioa)
+	}
+
+	// Environment switch: same account id, different auth domain.
+	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-a", "internal.corp.test"))
+	internal := resolver.CodeBuddyActiveScope()
+	if !internal.OK || internal.Environment != "internal" {
+		t.Fatalf("expected internal scope, got %+v", internal)
+	}
+	if internal.Scope == ioa.Scope {
+		t.Fatal("domain/environment switch must change the scope")
+	}
+
+	// Account switch: different stable account id, same environment.
+	writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-b", "internal.corp.test"))
+	other := resolver.CodeBuddyActiveScope()
+	if !other.OK || other.Environment != "internal" {
+		t.Fatalf("expected internal scope for second account, got %+v", other)
+	}
+	if other.Scope == internal.Scope {
+		t.Fatal("account switch must change the scope")
+	}
+}
+
+func TestCodeBuddyActiveScopeFailsClosed(t *testing.T) {
+	validAuth := codebuddyScopeAuth("uid-fail", "internal.corp.test")
+	cases := []struct {
+		name    string
+		product func() string
+		auth    func(t *testing.T, home string)
+	}{
+		{
+			name: "missing auth file",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {},
+		},
+		{
+			name: "missing access token",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				payload := codebuddyScopeAuth("uid-fail", "internal.corp.test")
+				delete(payload["auth"].(map[string]interface{}), "accessToken")
+				writeScopeAuthFile(t, home, payload)
+			},
+		},
+		{
+			name: "top-level token and domain are not read",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, map[string]interface{}{
+					"accessToken": "synthetic-scope-token",
+					"domain":      "internal.corp.test",
+					"account": map[string]interface{}{
+						"uid": "uid-fail",
+					},
+				})
+			},
+		},
+		{
+			name: "missing stable account id",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, map[string]interface{}{
+					"auth": map[string]interface{}{
+						"accessToken": "synthetic-scope-token",
+						"domain":      "internal.corp.test",
+					},
+					"account": map[string]interface{}{
+						"name": "No Stable Id",
+					},
+				})
+			},
+		},
+		{
+			name: "direct root identity is not read",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, map[string]interface{}{
+					"auth": map[string]interface{}{
+						"accessToken": "synthetic-scope-token",
+						"domain":      "internal.corp.test",
+					},
+					"uid":          "root-uid",
+					"enterpriseId": "root-ent",
+				})
+			},
+		},
+		{
+			name: "top-level domain is not read",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, map[string]interface{}{
+					"auth": map[string]interface{}{
+						"accessToken": "synthetic-scope-token",
+					},
+					"domain": "internal.corp.test",
+					"account": map[string]interface{}{
+						"uid": "uid-fail",
+					},
+				})
+			},
+		},
+		{
+			name: "missing product config",
+			product: func() string {
+				return filepath.Join(t.TempDir(), "no-such-product.json")
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, validAuth)
+			},
+		},
+		{
+			name: "missing product attributes",
+			product: func() string {
+				return writeScopeProductConfig(t, map[string]interface{}{})
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, validAuth)
+			},
+		},
+		{
+			name: "unrecognized environment",
+			product: func() string {
+				return writeScopeProductConfig(t, codebuddySyntheticProductAttributes())
+			},
+			auth: func(t *testing.T, home string) {
+				writeScopeAuthFile(t, home, codebuddyScopeAuth("uid-fail", "random.example.test"))
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := scopeTestHome(t)
+			tc.auth(t, home)
+			res := newScopeResolver(t, tc.product()).CodeBuddyActiveScope()
+			if res.OK {
+				t.Fatalf("expected fail-closed result, got %+v", res)
+			}
+			if res.Scope != "" || res.Environment != "" {
+				t.Fatalf("failed result must not expose partial scope/environment: %+v", res)
+			}
+		})
+	}
 }

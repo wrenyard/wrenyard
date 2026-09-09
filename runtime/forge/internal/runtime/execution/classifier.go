@@ -58,17 +58,14 @@ type AttemptClassification struct {
 	Classification  Classification
 	RecoveryAt      *time.Time
 	NativeSessionID string
-	// ImmediateCircuit marks a verified hard subscription/account denial
-	// (for example an explicit billing-cycle quota exhaustion) that was
-	// classified as profile_specific_limit. Retrying such denials is
-	// pointless, so the orchestrator opens the profile circuit immediately.
+	// ImmediateCircuit marks a verified hard subscription/account denial (for
+	// example an exact billing-cycle denial with no transient conflict) that
+	// was classified as profile_specific_limit. Retrying such denials is
+	// pointless, so the orchestrator opens the profile circuit immediately
+	// with the standard one-hour resilience window. The classifier emits only
+	// execution resilience decisions and never claims provider quota facts or
+	// reset calendars.
 	ImmediateCircuit bool
-	// MonthlyExhaustion is true only for exact billing-cycle quota exhaustion
-	// phrasing. It is independent of the generic hard circuit signal: access
-	// termination, 429, generic quota, generic rate-limit, and temporary
-	// wording never set it, so an observed monthly provider state can never be
-	// created from recoverable errors or terminated access.
-	MonthlyExhaustion bool
 }
 
 // ClassifyAttempt classifies only normalized downstream events. The explicit
@@ -117,19 +114,20 @@ func ClassifyAttempt(events []protocol.Event, now time.Time) AttemptClassificati
 	if sawDone {
 		return AttemptClassification{Classification: ClassificationNone, NativeSessionID: latestNativeSessionID(events)}
 	}
-	monthlyExhaustion := monthlyQuotaExhaustionSignal(joined)
-
 	if explicit := firstExplicitClass(fields); explicit != "" {
 		result.Classification = explicit
 	} else {
 		switch {
-		case monthlyExhaustion:
+		case billingCyclePhraseSignal(joined) && !transientConflictSignal(joined):
+			// An exact billing-cycle denial without a conflicting transient
+			// marker is an unambiguous profile-specific limit. This is an
+			// execution decision only; it asserts no provider quota facts or
+			// reset calendar.
 			result.Classification = ClassificationProfileSpecificLimit
-		case monthlyPhraseSignal(joined) && transientConflictSignal(joined):
+		case billingCyclePhraseSignal(joined) && transientConflictSignal(joined):
 			// A message that combines the exact billing-cycle phrase with a
 			// transient marker is a mixed implicit error: transient for
-			// classification, never monthly exhaustion, never an immediate
-			// hard circuit.
+			// classification and never an immediate hard circuit.
 			result.Classification = ClassificationTransientProvider
 		case profileSpecificSignal(joined):
 			result.Classification = ClassificationProfileSpecificLimit
@@ -148,7 +146,6 @@ func ClassifyAttempt(events []protocol.Event, now time.Time) AttemptClassificati
 	if result.Classification == ClassificationProfileSpecificLimit && hardProfileLimitSignal(joined) {
 		result.ImmediateCircuit = true
 	}
-	result.MonthlyExhaustion = monthlyExhaustion
 	return result
 }
 
@@ -213,7 +210,7 @@ func profileSpecificSignal(text string) bool {
 }
 
 // hardProfileLimitSignal recognizes exact hard subscription/account denials
-// where retrying is pointless: explicit billing-cycle quota exhaustion and
+// where retrying is pointless: the exact billing-cycle denial phrase and
 // terminated account access. The billing-cycle phrases count as hard only when
 // no conflicting transient marker is present; access termination is always
 // hard. It matches only precise denial phrases, never generic quota,
@@ -222,14 +219,14 @@ func hardProfileLimitSignal(text string) bool {
 	if strings.Contains(text, "access terminated") {
 		return true
 	}
-	return monthlyPhraseSignal(text) && !transientConflictSignal(text)
+	return billingCyclePhraseSignal(text) && !transientConflictSignal(text)
 }
 
-// monthlyPhraseSignal matches only the exact billing-cycle exhaustion phrases
+// billingCyclePhraseSignal matches only the exact billing-cycle denial phrases
 // regardless of surrounding context. Callers combine it with
-// transientConflictSignal to separate unambiguous monthly exhaustion from
+// transientConflictSignal to separate an unambiguous billing-cycle denial from
 // mixed implicit errors.
-func monthlyPhraseSignal(text string) bool {
+func billingCyclePhraseSignal(text string) bool {
 	for _, phrase := range []string{
 		"you've reached your usage limit for this billing cycle",
 		"you have reached your usage limit for this billing cycle",
@@ -244,9 +241,9 @@ func monthlyPhraseSignal(text string) bool {
 
 // transientConflictSignal recognizes transient provider markers that, when
 // combined with the exact billing-cycle phrase, make the message a mixed
-// implicit error rather than unambiguous monthly exhaustion. It deliberately
-// excludes "try again later" because the canonical 403 monthly denial itself
-// contains that wording.
+// implicit error rather than an unambiguous billing-cycle denial. It
+// deliberately excludes "try again later" because the canonical 403 denial
+// itself contains that wording.
 func transientConflictSignal(text string) bool {
 	for _, signal := range []string{
 		"429", "rate limit", "rate_limit", "too many requests", "503",
@@ -259,16 +256,6 @@ func transientConflictSignal(text string) bool {
 		}
 	}
 	return false
-}
-
-// monthlyQuotaExhaustionSignal recognizes only unambiguous billing-cycle quota
-// exhaustion: the exact phrase with no conflicting transient marker present. A
-// message that combines the exact phrase with 429/rate-limit/timeout or
-// retry-after wording is a mixed implicit error and must never set monthly
-// exhaustion. Access termination, generic quota, generic rate-limit, and
-// temporary wording are likewise excluded.
-func monthlyQuotaExhaustionSignal(text string) bool {
-	return monthlyPhraseSignal(text) && !transientConflictSignal(text)
 }
 
 func transientProviderSignal(text string) bool {

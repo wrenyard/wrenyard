@@ -3,10 +3,13 @@ package forge
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	profilepkg "github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
 )
 
@@ -17,7 +20,7 @@ func TestMain(m *testing.M) {
       "codex-terra":{"client":"codex","provider":"codex","model":"gpt-5.6-terra","mode":"native"},
       "codex-luna":{"client":"codex","provider":"codex","model":"gpt-5.6-luna","mode":"native"},
       "codex-spark":{"client":"codex","provider":"codex-spark","model":"gpt-5.3-codex-spark","mode":"native"},
-      "cb-hy":{"client":"codebuddy","provider":"codebuddy","model":"hy4-preview-ioa","mode":"native"},
+      "cb-hy":{"client":"codebuddy","provider":"codebuddy","model":"hy4-preview","mode":"native"},
       "cb-ds":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4-pro","mode":"native"},
       "cb-dsf":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4-flash","mode":"native"},
       "cb-minimax":{"client":"codebuddy","provider":"codebuddy","model":"minimax-m3","mode":"native"},
@@ -275,4 +278,369 @@ func TestLoadProfileGLMSplitRouteCanonicalPlanOnly(t *testing.T) {
 			t.Fatalf("LoadProfile(%q) = found (client %q provider %q), want unavailable: the canonical plan is absent and cc-glmf must not be used as a fallback", canonical, def.Client, def.Provider)
 		}
 	})
+}
+
+// --- CodeBuddy native-plan admission fixtures ---
+
+// codeBuddyAuthFixturePath mirrors the native CodeBuddy auth file location the
+// auth resolver reads for the current platform.
+func codeBuddyAuthFixturePath(home string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "CodeBuddyExtension", "Data", "Public", "auth", "Tencent-Cloud.coding-copilot.info")
+	case "windows":
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData == "" {
+			localAppData = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(localAppData, "CodeBuddyExtension", "Data", "Public", "auth", "Tencent-Cloud.coding-copilot.info")
+	default:
+		return filepath.Join(home, ".local", "share", "CodeBuddyExtension", "Data", "Public", "auth", "Tencent-Cloud.coding-copilot.info")
+	}
+}
+
+// codeBuddyAuthFileJSON renders a synthetic native CodeBuddy auth file body.
+// An empty uid omits the stable account identity so the active scope fails
+// closed.
+func codeBuddyAuthFileJSON(domain, uid, accessToken string) []byte {
+	auth := map[string]interface{}{
+		"accessToken": accessToken,
+		"domain":      domain,
+	}
+	payload := map[string]interface{}{"auth": auth}
+	if uid != "" {
+		payload["account"] = map[string]interface{}{"uid": uid}
+	}
+	raw, _ := json.Marshal(payload)
+	return raw
+}
+
+// writeCodeBuddyAuthFile overwrites a synthetic native CodeBuddy auth file.
+func writeCodeBuddyAuthFile(t *testing.T, authPath, domain, uid, accessToken string) {
+	t.Helper()
+	if err := os.WriteFile(authPath, codeBuddyAuthFileJSON(domain, uid, accessToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeCodeBuddyAuthFixture plants a synthetic native CodeBuddy auth file and
+// a product.json classifying the four environments, then points the process
+// at them via HOME/USERPROFILE/LOCALAPPDATA and ACC_PRODUCT_CONFIG_PATH. It
+// returns the auth file path so tests can simulate an account switch or token
+// refresh between dispatch calls.
+func writeCodeBuddyAuthFixture(t *testing.T, domain, uid, accessToken string) string {
+	t.Helper()
+	home := t.TempDir()
+	authPath := codeBuddyAuthFixturePath(home)
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeCodeBuddyAuthFile(t, authPath, domain, uid, accessToken)
+
+	product := map[string]interface{}{
+		"authentication": map[string]interface{}{
+			"attributes": map[string]interface{}{
+				"internalDomain":    "internal.example.com",
+				"iOADomain":         "ioa.example.com",
+				"cloudHostedDomain": "cloud.example.com",
+				"externalDomain":    "external.example.com",
+			},
+		},
+	}
+	productRaw, err := json.Marshal(product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productPath := filepath.Join(t.TempDir(), "product.json")
+	if err := os.WriteFile(productPath, productRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	t.Setenv("ACC_PRODUCT_CONFIG_PATH", productPath)
+	return authPath
+}
+
+// seedCodeBuddyNativePlan seeds a native codebuddy dispatch plan for a profile
+// id with a canonical model.
+func seedCodeBuddyNativePlan(t *testing.T, profileID, model string) {
+	t.Helper()
+	setTestDispatchPlan(t, profileID, profilepkg.DispatchPlan{
+		Client: "codebuddy", Provider: "codebuddy", Model: model, Mode: "native",
+	})
+}
+
+// setCodeBuddyExpectedTuple binds the private expected CodeBuddy admission
+// tuple through the driver env names.
+func setCodeBuddyExpectedTuple(t *testing.T, scope, environment, wireModel string) {
+	t.Helper()
+	t.Setenv(driver.CodeBuddyExpectedScopeEnv, scope)
+	t.Setenv(driver.CodeBuddyExpectedEnvironmentEnv, environment)
+	t.Setenv(driver.CodeBuddyExpectedWireModelEnv, wireModel)
+}
+
+// clearCodeBuddyExpectedTuple empties the private expected CodeBuddy admission
+// tuple so missing-context tests are hermetic.
+func clearCodeBuddyExpectedTuple(t *testing.T) {
+	t.Helper()
+	t.Setenv(driver.CodeBuddyExpectedScopeEnv, "")
+	t.Setenv(driver.CodeBuddyExpectedEnvironmentEnv, "")
+	t.Setenv(driver.CodeBuddyExpectedWireModelEnv, "")
+}
+
+func TestDispatchPlanCodeBuddyIOAAdmissionMaterializesWireModels(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-1", "tok-a")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK || active.Environment != "ioa" || active.Scope == "" {
+		t.Fatalf("synthetic ioa fixture must resolve an active ioa scope, got %+v", active)
+	}
+
+	assertAdmitted := func(label, model, wantWire string) {
+		t.Helper()
+		profileID := "cb-bind-ioa-" + label
+		seedCodeBuddyNativePlan(t, profileID, model)
+		setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, wantWire)
+		plan, err := dispatchPlanForProfile(profileID)
+		if err != nil {
+			t.Fatalf("%s: canonical model %s must be admitted in the ioa environment: %v", label, model, err)
+		}
+		if plan.Model != wantWire {
+			t.Fatalf("%s: plan model = %q, want exact wire id %q", label, plan.Model, wantWire)
+		}
+	}
+
+	cases := []struct{ label, canonical, wire string }{
+		{"deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-flash-ioa"},
+		{"deepseek-v4-pro", "deepseek-v4-pro", "deepseek-v4-pro-ioa"},
+		{"hy4-preview", "hy4-preview", "hy4-preview-ioa"},
+		{"hy3", "hy3", "hy3-ioa"},
+		{"minimax-m3", "minimax-m3", "minimax-m3-ioa"},
+	}
+	for _, tc := range cases {
+		assertAdmitted(tc.label, tc.canonical, tc.wire)
+	}
+
+	// Already-wire models remain unchanged under ioa.
+	assertAdmitted("already-wire", "hy4-preview-ioa", "hy4-preview-ioa")
+
+	// Non-iOA models stay canonical under ioa.
+	assertAdmitted("kimi-k3", "kimi-k3", "kimi-k3")
+}
+
+func TestDispatchPlanCodeBuddyExternalAdmissionKeepsCanonicalModel(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "external.example.com", "uid-ext", "tok-ext")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK || active.Environment != "external" || active.Scope == "" {
+		t.Fatalf("synthetic external fixture must resolve an active external scope, got %+v", active)
+	}
+	profileID := "cb-bind-external-hy4-preview"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	// External/non-iOA leaves the model canonical, so the expected wire equals
+	// the canonical model.
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview")
+	plan, err := dispatchPlanForProfile(profileID)
+	if err != nil {
+		t.Fatalf("canonical model in an external environment must be admitted: %v", err)
+	}
+	if plan.Model != "hy4-preview" {
+		t.Fatalf("external plan model = %q, want unchanged canonical hy4-preview", plan.Model)
+	}
+}
+
+func TestDispatchPlanCodeBuddyTokenRefreshKeepsStableIdentityAdmitted(t *testing.T) {
+	authPath := writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-refresh", "tok-1")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK {
+		t.Fatalf("synthetic fixture must resolve an active scope, got %+v", active)
+	}
+	profileID := "cb-bind-refresh"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview-ioa")
+	plan, err := dispatchPlanForProfile(profileID)
+	if err != nil {
+		t.Fatalf("first admission must succeed: %v", err)
+	}
+	if plan.Model != "hy4-preview-ioa" {
+		t.Fatalf("plan model = %q, want hy4-preview-ioa", plan.Model)
+	}
+
+	// Refresh the access token: same stable identity, domain, and environment,
+	// so the scope is unchanged and the plan stays admitted.
+	writeCodeBuddyAuthFile(t, authPath, "ioa.example.com", "uid-refresh", "tok-2")
+	plan, err = dispatchPlanForProfile(profileID)
+	if err != nil {
+		t.Fatalf("token refresh with a stable identity must remain admitted: %v", err)
+	}
+	if plan.Model != "hy4-preview-ioa" {
+		t.Fatalf("post-refresh plan model = %q, want hy4-preview-ioa", plan.Model)
+	}
+}
+
+func TestDispatchPlanCodeBuddyAccountSwitchFailsClosed(t *testing.T) {
+	authPath := writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-a", "tok-a")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK {
+		t.Fatalf("synthetic fixture must resolve an active scope, got %+v", active)
+	}
+	profileID := "cb-bind-account-switch"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err != nil {
+		t.Fatalf("first admission must succeed: %v", err)
+	}
+
+	// Switch account: a different stable identity on the same domain changes
+	// the opaque scope, so the next admission must fail closed.
+	writeCodeBuddyAuthFile(t, authPath, "ioa.example.com", "uid-b", "tok-b")
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("account/scope switch must fail closed before materialization")
+	}
+}
+
+func TestDispatchPlanCodeBuddyEnvironmentSwitchFailsClosed(t *testing.T) {
+	authPath := writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-env", "tok-env")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK || active.Environment != "ioa" {
+		t.Fatalf("synthetic ioa fixture must resolve ioa, got %+v", active)
+	}
+	profileID := "cb-bind-env-switch"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err != nil {
+		t.Fatalf("initial ioa admission must succeed: %v", err)
+	}
+
+	// Switch the active login to an external domain while keeping the stable
+	// account id. The expected tuple remains bound to the prior ioa snapshot,
+	// so the next admission must fail before plan materialization.
+	writeCodeBuddyAuthFile(t, authPath, "external.example.com", "uid-env", "tok-external")
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("active-login environment switch must fail closed before materialization")
+	}
+}
+
+func TestDispatchPlanCodeBuddyExpectedWireMismatchFailsClosed(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-wire", "tok-wire")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK {
+		t.Fatalf("synthetic fixture must resolve an active scope, got %+v", active)
+	}
+	profileID := "cb-bind-wire-mismatch"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	// Scope and environment match, but the expected wire model is for a
+	// different canonical plan.
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "deepseek-v4-pro-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("expected-wire mismatch must fail closed before materialization")
+	}
+}
+
+func TestDispatchPlanCodeBuddyMissingContextFailsClosed(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-missing", "tok-missing")
+	profileID := "cb-bind-missing-context"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+
+	// Complete tuple absent.
+	clearCodeBuddyExpectedTuple(t)
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("missing private expected tuple must fail closed")
+	}
+
+	// Partial tuple: only the environment is bound.
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK {
+		t.Fatalf("synthetic fixture must resolve an active scope, got %+v", active)
+	}
+	clearCodeBuddyExpectedTuple(t)
+	t.Setenv(driver.CodeBuddyExpectedEnvironmentEnv, active.Environment)
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("a partial private expected tuple must fail closed")
+	}
+}
+
+func TestDispatchPlanCodeBuddyMissingStableIdentityFailsClosed(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", "", "tok-no-id")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if active.OK {
+		t.Fatalf("fixture without a stable account identity must resolve nothing, got %+v", active)
+	}
+	profileID := "cb-bind-no-stable-id"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, "cbv1:anything", "ioa", "hy4-preview-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("missing stable identity must fail closed before materialization")
+	}
+}
+
+func TestDispatchPlanCodeBuddyUnclassifiedEnvironmentFailsClosed(t *testing.T) {
+	writeCodeBuddyAuthFixture(t, "nomatch.example.com", "uid-unclassified", "tok")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if active.OK {
+		t.Fatalf("unclassified environment must resolve nothing, got %+v", active)
+	}
+	profileID := "cb-bind-unclassified"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, "cbv1:anything", "ioa", "hy4-preview-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err == nil {
+		t.Fatal("an unclassified environment must fail closed before materialization")
+	}
+}
+
+func TestDispatchPlanCodeBuddyErrorsHidePrivateValues(t *testing.T) {
+	authPath := writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-priv", "tok-priv")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK {
+		t.Fatalf("synthetic fixture must resolve an active scope, got %+v", active)
+	}
+	profileID := "cb-bind-privacy"
+	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview-ioa")
+	if _, err := dispatchPlanForProfile(profileID); err != nil {
+		t.Fatalf("first admission must succeed: %v", err)
+	}
+
+	// Force an account-switch failure, then assert the error exposes none of
+	// the private values.
+	writeCodeBuddyAuthFile(t, authPath, "ioa.example.com", "uid-priv-2", "tok-priv-2")
+	_, err := dispatchPlanForProfile(profileID)
+	if err == nil {
+		t.Fatal("account switch must fail closed")
+	}
+	for _, private := range []string{
+		active.Scope, "ioa", "ioa.example.com", "uid-priv", "uid-priv-2",
+		"hy4-preview-ioa", "hy4-preview", "WRENYARD_CODEBUDDY_EXPECTED_SCOPE",
+		"WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT", "WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL",
+	} {
+		if strings.Contains(err.Error(), private) {
+			t.Fatalf("admission error leaked private value %q: %v", private, err)
+		}
+	}
+}
+
+func TestDispatchPlanNonCodeBuddyPlansUnaffectedByMissingContext(t *testing.T) {
+	clearCodeBuddyExpectedTuple(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+
+	profileID := "cb-unaffected-codex"
+	setTestDispatchPlan(t, profileID, profilepkg.DispatchPlan{
+		Client: "codex", Provider: "codex", Model: "gpt-5.6-terra", Mode: "native",
+	})
+	plan, err := dispatchPlanForProfile(profileID)
+	if err != nil {
+		t.Fatalf("non-CodeBuddy native plan must stay available without admission context: %v", err)
+	}
+	if plan.Model != "gpt-5.6-terra" {
+		t.Fatalf("non-CodeBuddy plan model = %q, want unchanged gpt-5.6-terra", plan.Model)
+	}
+
+	// A gateway plan also stays byte-for-byte unchanged.
+	gateway, err := dispatchPlanForProfile("cc-kimi")
+	if err != nil {
+		t.Fatalf("gateway plan must stay available without admission context: %v", err)
+	}
+	if gateway.Client != "claude" || gateway.Provider != "kimi-coding" || gateway.Model != "k3" {
+		t.Fatalf("gateway plan mutated without admission context: %#v", gateway)
+	}
 }

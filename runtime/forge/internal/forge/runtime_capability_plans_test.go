@@ -14,12 +14,18 @@ import (
 
 func setupClaudeFamilyCapabilityPlans(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	isolateCodebuddyTestEnvironment(t, home)
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", "uid-capability-plans", "synthetic-capability-token")
+	home := userHome()
+	t.Setenv("FORGE_DSH_BIN", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	setFakeClientsOnPath(t, "claude", "codebuddy")
 	setTestAuth(t, "zhipu-coding", "capability-plan-zhipu")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK || active.Environment != "ioa" || active.Scope == "" {
+		t.Fatalf("synthetic capability-plan CodeBuddy fixture did not resolve: %+v", active)
+	}
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "hy4-preview-ioa")
 	writeCapabilitiesManifest(t, home, `{
   "mcp-only":{"description":"MCP only","mcp_servers":{"capserver":{"command":"cap-server","args":["--stdio"]}}},
   "bash-only":{"description":"Bash only","bash":{"cap":["cap-reader *"]}},
