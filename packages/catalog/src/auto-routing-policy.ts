@@ -14,10 +14,26 @@
 // Exported constants
 // ---------------------------------------------------------------------------
 
-/** Final score weights (P price, Q quota headroom, S speed, I intelligence). */
+/**
+ * Final score weights. P + S together form one unified economic allocation:
+ * (P + S) weights the marginal speed/price exchange term of the score, while Q
+ * weights quota headroom quality and I weights intelligence. Individual values
+ * are kept unchanged for compatibility with prior releases.
+ */
 export const SCORE_WEIGHTS = { P: 0.55, Q: 0.3, S: 0.1, I: 0.05 } as const;
 
-/** Minimum headroom advantage required for a more expensive candidate to challenge the cheapest set. */
+/**
+ * Marginal exchange rate embedded in the score: +1 TPS of effective speed is
+ * worth USD 0.01 per M output tokens (and +100 TPS is worth USD 1 per M).
+ */
+export const SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS = 0.01;
+
+/**
+ * @deprecated Kept exported only as a compatibility constant from the
+ * superseded cheapest-set admission gate. Same-tier ranking no longer uses a
+ * cheapest-set prefilter or any HEADROOM_CHALLENGE_MIN_GAP challenge rule;
+ * every candidate is ranked by one deterministic descending score instead.
+ */
 export const HEADROOM_CHALLENGE_MIN_GAP = 0.5;
 
 /** Neutral headroom used whenever evidence is genuinely unknown. */
@@ -234,13 +250,20 @@ export interface CandidateAssessment {
   supplyClass: SupplyClass;
   confirmedFreeSupplyApplied: boolean;
   confirmedFreeSupplyEvidence: { source: string; ruleId: string } | null;
-  /** Raw headroom H used for conservative ranking and challenges. */
+  /** Raw headroom H feeding the quota headroom factor Q. */
   headroom: number;
   /** Quota headroom factor Q used in the score (may blend verified efficiency). */
   quotaQuality: number;
+  /** Diagnostic price factor; kept as a public field but no longer ranked. */
   priceFactor: number;
+  /** Diagnostic expected-saturated speed factor; kept as a public field but no longer ranked. */
   speedFactor: number;
+  /** Intelligence factor I used in the score. */
   intelligenceFactor: number;
+  /**
+   * Unified ranking score (see SCORE_WEIGHTS/SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS).
+   * A ranking utility, not a price or a bill, so it may be negative.
+   */
   score: number;
   verifiedEfficiency: number | null;
   coverageComplete: boolean;
@@ -316,13 +339,6 @@ function compareLex(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
-}
-
-function withoutItem<T>(items: readonly T[], item: T): T[] {
-  const out = items.slice();
-  const index = out.indexOf(item);
-  if (index >= 0) out.splice(index, 1);
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -813,7 +829,7 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
   }
 
   // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,
-  // or extreme eligibility. It is applied only while every field is valid and
+  // or any eligibility gate. It is applied only while every field is valid and
   // nonempty and the interval covers [now, now + timeout]; with no required
   // quota constraint there is no quota to blend against, so Q stays neutral.
   // A bare numeric credit is never accepted as evidence.
@@ -866,8 +882,10 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
             EFFICIENCY_EVIDENCE_WEIGHT * verifiedEfficiency
         );
 
-  // Price factor: P = 1 when the routed price is zero, otherwise
-  // 1 - ln(1 + routingPrice) / ln(1 + cap), safe when cap is zero.
+  // Diagnostic-only price factor (public field, no longer ranked): P = 1 when
+  // the routed price is zero, otherwise 1 - ln(1 + routingPrice) / ln(1 + cap),
+  // safe when cap is zero. The unified economic term below (P + S) replaces P
+  // for ranking; P stays only for observability.
   let priceFactor: number;
   if (routingPriceUsdPerM <= 0) {
     priceFactor = 1;
@@ -879,8 +897,11 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     );
   }
 
-  // Speed factor: S = 1 when expected does not beat the minimum, else the
-  // effective headroom over minimum relative to expected.
+  // Diagnostic-only speed factor (public field, no longer ranked): S = 1 when
+  // expected does not beat the minimum, else the effective headroom over
+  // minimum relative to expected. Ranking instead uses raw effectiveTps via the
+  // unified economic term below, so speeds above expectedTps still matter even
+  // when this diagnostic saturates at 1.
   let speedFactor: number;
   if (candidate.expectedTps <= candidate.minimumTps) {
     speedFactor = 1;
@@ -904,10 +925,17 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     );
   }
 
+  // Unified economic ranking score. It is a ranking utility, never a price or
+  // a bill, so it may legitimately be negative. P + S are one economic
+  // allocation weighting the marginal exchange of +1 TPS for USD 0.01/M
+  // (0.01 * raw effectiveTps - routingPriceUsdPerM); Q adds quota headroom
+  // quality and I adds intelligence. priceFactor/speedFactor above are
+  // diagnostic-only and no longer appear in the score.
   const score =
-    SCORE_WEIGHTS.P * priceFactor +
+    (SCORE_WEIGHTS.P + SCORE_WEIGHTS.S) *
+      (SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS * candidate.effectiveTps -
+        routingPriceUsdPerM) +
     SCORE_WEIGHTS.Q * quotaQuality +
-    SCORE_WEIGHTS.S * speedFactor +
     SCORE_WEIGHTS.I * intelligenceFactor;
 
   const assessment: CandidateAssessment = {
@@ -941,92 +969,20 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
 // ---------------------------------------------------------------------------
 
 /**
- * Rank a single tier conservatively and deterministically.
- *
- * Iteratively, the cheapest set (all remaining candidates whose routed price
- * is minimal) enters the contender pool. A more expensive candidate may also
- * enter only when it and every cheapest-baseline candidate have trustworthy
- * complete headroom AND its headroom exceeds the cheapest set's maximum by
- * at least HEADROOM_CHALLENGE_MIN_GAP. Unknowns carry neutral, untrusted
- * headroom, so they can never challenge via a fabricated H.
- *
- * Each iteration the highest score (canonicalId ascending as tie-break) is
- * selected, removed, and the process repeats until the tier is fully ranked.
+ * Rank a single tier deterministically by one descending-score pass over every
+ * candidate. There is no cheapest-set prefilter and no
+ * HEADROOM_CHALLENGE_MIN_GAP admission gate: the unified score already prices
+ * the marginal speed/price exchange plus quota headroom quality and
+ * intelligence, so a single ordering ranks the whole tier. Stable ties resolve
+ * by canonicalId then snapshotId ascending.
  */
 function rankTier(candidates: readonly CandidateAssessment[]): CandidateAssessment[] {
-  let remaining = candidates.slice();
-  const ranked: CandidateAssessment[] = [];
-
-  while (remaining.length > 0) {
-    let minPrice = Number.POSITIVE_INFINITY;
-    for (const candidate of remaining) {
-      if (candidate.routingPriceUsdPerM < minPrice) {
-        minPrice = candidate.routingPriceUsdPerM;
-      }
-    }
-
-    // Exact numeric equality partitions the cheapest set: a more expensive
-    // candidate is never grouped as equal to the minimum routed price.
-    const cheapest: CandidateAssessment[] = [];
-    const others: CandidateAssessment[] = [];
-    for (const candidate of remaining) {
-      if (candidate.routingPriceUsdPerM === minPrice) {
-        cheapest.push(candidate);
-      } else {
-        others.push(candidate);
-      }
-    }
-
-    // An extreme challenger needs complete, trusted headroom on itself and on
-    // every cheapest baseline candidate; unknown/incomplete evidence cannot
-    // support a challenge, and only an exact >= HEADROOM_CHALLENGE_MIN_GAP
-    // advantage over the cheapest baseline maximum qualifies.
-    const baselineTrusted = cheapest.every(
-      (candidate) => candidate.headroomTrusted && candidate.coverageComplete
-    );
-    let baselineMaxHeadroom = Number.NEGATIVE_INFINITY;
-    for (const candidate of cheapest) {
-      if (candidate.headroom > baselineMaxHeadroom) {
-        baselineMaxHeadroom = candidate.headroom;
-      }
-    }
-
-    const contenders = cheapest.slice();
-    if (baselineTrusted) {
-      others.sort(
-        (a, b) =>
-          a.routingPriceUsdPerM - b.routingPriceUsdPerM ||
-          compareLex(a.canonicalId, b.canonicalId) ||
-          compareLex(a.snapshotId, b.snapshotId)
-      );
-      for (const candidate of others) {
-        if (
-          candidate.headroomTrusted &&
-          candidate.coverageComplete &&
-          candidate.headroom - baselineMaxHeadroom >= HEADROOM_CHALLENGE_MIN_GAP
-        ) {
-          contenders.push(candidate);
-        }
-      }
-    }
-
-    contenders.sort(
-      (a, b) =>
-        b.score - a.score ||
-        compareLex(a.canonicalId, b.canonicalId) ||
-        compareLex(a.snapshotId, b.snapshotId)
-    );
-
-    const winner = contenders[0];
-    if (winner === undefined) {
-      // Unreachable: the cheapest set is non-empty and always contends.
-      break;
-    }
-    ranked.push(winner);
-    remaining = withoutItem(remaining, winner);
-  }
-
-  return ranked;
+  return candidates.slice().sort(
+    (a, b) =>
+      b.score - a.score ||
+      compareLex(a.canonicalId, b.canonicalId) ||
+      compareLex(a.snapshotId, b.snapshotId)
+  );
 }
 
 function toRankedCandidate(
@@ -1063,7 +1019,7 @@ function toRankedCandidate(
  *
  * Confirmed-free accepted candidates are ranked before standard supply. Within
  * each supply class, candidates keep strict tier order (healthy, unknown,
- * strained); each tier is ranked by the iterative conservative algorithm above.
+ * strained); each tier is ranked by the single descending-score pass above.
  * Rejected candidates are returned with machine-readable reasons.
  */
 export function rankAutoRoutingCandidates(

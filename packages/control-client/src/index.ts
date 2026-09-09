@@ -76,6 +76,7 @@ export interface WrenyardGatewayModel {
   intelligence?: 'low' | 'mid' | 'high' | 'frontier' | 'premium';
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
   speed?: WrenyardGatewayModelSpeed;
   pricing?: WrenyardGatewayModelPricing;
 }
@@ -127,7 +128,7 @@ export interface WrenyardTaskReferencePricing {
 /** Mirrors the frozen snake_case wire DTO `TaskResolvedSpeed`. */
 export interface WrenyardTaskResolvedSpeed {
   effective_tps: number;
-  source: 'local_31d' | 'catalog_default';
+  source: 'local_31d' | 'provider_override' | 'catalog_default';
   sample_count: number;
   checked_at: string;
   expected_tps_met: boolean;

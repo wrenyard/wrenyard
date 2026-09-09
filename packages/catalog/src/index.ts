@@ -39,7 +39,7 @@ export interface ModelPricing {
   checkedAt: string;
 }
 
-export type SpeedSource = 'local_31d' | 'catalog_default';
+export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
 
 export interface ModelSpeedMeta {
   tps: number;
@@ -70,7 +70,7 @@ export interface ModelDefinition {
   reasoningEffort?: ReasoningEffort;
   maxOutputTokens?: number;
   capabilities?: readonly ModelCapability[];
-  speed?: ModelSpeedMeta;
+  speed: ModelSpeedMeta;
   pricing?: ModelPricing;
 }
 
@@ -132,6 +132,9 @@ export interface ProviderDefinition {
   nativeClients?: readonly string[];
   protocols?: readonly ProtocolCapability[];
   modelAliases?: Readonly<Record<string, string>>;
+  // Canonical model speed overrides keyed by exact declared model id; alias keys
+  // and unknown model keys are rejected at registration.
+  modelSpeedOverrides?: Readonly<Record<string, ModelSpeedMeta>>;
   credentialResolver: CredentialResolver;
   defaultModel?: string;
   quotaProvider?: string;
@@ -142,6 +145,10 @@ export interface ClientDefinition {
   id: string;
   nativeProvider?: string;
   gatewayProtocols: readonly GatewayProtocol[];
+  // Provider-level execution boundaries that cannot be expressed by protocol
+  // compatibility alone. A listed provider may still be native to another
+  // client, but this client must never receive it as a gateway run.
+  unsupportedGatewayProviders?: readonly string[];
   // Task-capable clients are enumerated as derived task dispatch candidates.
   // Parseable public run syntax alone does not make a client task-capable.
   taskCapable?: boolean;
@@ -177,6 +184,37 @@ function requireID(kind: string, value: string): void {
   }
 }
 
+// Every speed evidence entry that registers into the catalog must carry a finite
+// positive tps and non-empty source/checkedAt strings, whether it is a model's
+// required default speed or a canonical modelSpeedOverride.
+function validateSpeedMeta(speed: ModelSpeedMeta | undefined, label: string): void {
+  if (!speed) {
+    throw new Error(`${label} is missing required speed metadata`);
+  }
+  if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
+    throw new Error(`${label} speed tps must be finite and greater than zero`);
+  }
+  if (typeof speed.source !== 'string' || speed.source.trim().length === 0) {
+    throw new Error(`${label} speed source must be a non-empty string`);
+  }
+  if (typeof speed.checkedAt !== 'string' || speed.checkedAt.trim().length === 0) {
+    throw new Error(`${label} speed checkedAt must be a non-empty string`);
+  }
+}
+
+// A local sample is usable only when it carries a finite positive tps, a positive
+// integer sample count, and a non-empty checkedAt timestamp.
+function isUsableLocalSample(sample: LocalSpeedSample): boolean {
+  return (
+    Number.isFinite(sample.tps) &&
+    sample.tps > 0 &&
+    Number.isInteger(sample.sampleCount) &&
+    sample.sampleCount > 0 &&
+    typeof sample.checkedAt === 'string' &&
+    sample.checkedAt.trim().length > 0
+  );
+}
+
 export class Catalog {
   private readonly providersByID = new Map<string, ProviderDefinition>();
   private readonly clientsByID = new Map<string, ClientDefinition>();
@@ -188,12 +226,26 @@ export class Catalog {
     for (const model of provider.models) {
       if (!model.id.trim()) throw new Error(`provider ${provider.id} has an empty model id`);
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
+      // A model's default speed is required: a registration without one is
+      // rejected up front, before any further validation.
+      validateSpeedMeta(model.speed, `provider ${provider.id} model ${model.id}`);
       modelIDs.add(model.id);
     }
     for (const [alias, target] of Object.entries(provider.modelAliases ?? {})) {
       if (!alias.trim()) throw new Error(`provider ${provider.id} has an empty model alias`);
       if (modelIDs.has(alias)) throw new Error(`provider ${provider.id} model alias collides with model ${alias}`);
       if (!modelIDs.has(target)) throw new Error(`provider ${provider.id} model alias ${alias} targets unknown model ${target}`);
+    }
+    // Canonical speed overrides may only reference exact declared model ids. Alias
+    // keys and unknown model keys are rejected, and every override must satisfy the
+    // same evidence requirements as a model's required default speed.
+    for (const [modelID, override] of Object.entries(provider.modelSpeedOverrides ?? {})) {
+      if (!modelIDs.has(modelID)) {
+        throw new Error(
+          `provider ${provider.id} model speed override ${JSON.stringify(modelID)} must reference an exact canonical model id`,
+        );
+      }
+      validateSpeedMeta(override, `provider ${provider.id} model speed override ${modelID}`);
     }
     const protocols = new Set<GatewayProtocol>();
     for (const capability of provider.protocols ?? []) {
@@ -211,6 +263,14 @@ export class Catalog {
   registerClient(client: ClientDefinition): void {
     requireID('client', client.id);
     if (this.clientsByID.has(client.id)) throw new Error(`duplicate client: ${client.id}`);
+    const unsupportedProviders = new Set<string>();
+    for (const providerID of client.unsupportedGatewayProviders ?? []) {
+      requireID('unsupported gateway provider', providerID);
+      if (unsupportedProviders.has(providerID)) {
+        throw new Error(`client ${client.id} has duplicate unsupported gateway provider ${providerID}`);
+      }
+      unsupportedProviders.add(providerID);
+    }
     this.clientsByID.set(client.id, client);
   }
 
@@ -311,6 +371,9 @@ export class Catalog {
     if (provider.nativeClients?.includes(clientID)) {
       return { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effort };
     }
+    if (client.unsupportedGatewayProviders?.includes(providerID)) {
+      throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
+    }
     const protocol = client.gatewayProtocols.find((candidate) =>
       provider.protocols?.some((capability) => capability.protocol === candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
@@ -352,7 +415,8 @@ export function resolveConstrainedDispatch(
       continue;
     }
     const provider = catalog.provider(plan.provider);
-    const modelDef = provider?.models.find((entry) => entry.id === plan.model);
+    if (!provider) continue;
+    const modelDef = provider.models.find((entry) => entry.id === plan.model);
     if (!modelDef) continue;
 
     // Canonical-alias exclusion: a candidate supplied via an alias must not
@@ -388,8 +452,14 @@ export function resolveConstrainedDispatch(
       if (modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) continue;
     }
 
-    // Speed evidence: prefer a per-profile local 31-day agent_turn_v1 sample, else catalog default.
-    const local = localSpeed?.find((s) => s.profileId === candidate.profileId);
+    // Speed evidence tiers in exact precedence order: the first usable
+    // exact-profile local 31-day agent_turn_v1 sample, then the canonical provider
+    // modelSpeedOverride, then the model default speed. A local sample is
+    // matched only by exact candidate profileId and is never reinterpreted through
+    // an alias onto another profile.
+    const local = localSpeed?.find(
+      (sample) => sample.profileId === candidate.profileId && isUsableLocalSample(sample),
+    );
     let speed: SpeedEvidence;
     if (local) {
       speed = {
@@ -399,17 +469,24 @@ export function resolveConstrainedDispatch(
         checkedAt: local.checkedAt,
         sampleCount: local.sampleCount,
       };
-    } else if (modelDef.speed) {
-      speed = {
-        source: 'catalog_default',
-        tps: modelDef.speed.tps,
-        checkedAt: modelDef.speed.checkedAt,
-      };
     } else {
-      speed = { source: 'catalog_default', tps: 0, checkedAt: undefined };
+      const override = provider.modelSpeedOverrides?.[modelDef.id];
+      if (override) {
+        speed = {
+          source: 'provider_override',
+          tps: override.tps,
+          checkedAt: override.checkedAt,
+        };
+      } else {
+        speed = {
+          source: 'catalog_default',
+          tps: modelDef.speed.tps,
+          checkedAt: modelDef.speed.checkedAt,
+        };
+      }
     }
 
-    // Hard constraint: minimum TPS. Fail closed when required speed evidence is missing.
+    // Hard constraint: minimum TPS against the resolved evidence tier.
     if (requirements.minimumTps !== undefined && speed.tps < requirements.minimumTps) continue;
 
     // expectedTps satisfaction semantics: explicit ratio, clamped to 1.

@@ -6,6 +6,8 @@ import {
   isDynamicFast,
   type DispatchCandidate,
   type ModelCapability,
+  type ModelDefinition,
+  type ModelSpeedMeta,
   type TaskDispatchRequirements,
   formatRunSyntax,
   parseRunSyntax,
@@ -13,12 +15,16 @@ import {
   resolveRunSyntax,
 } from '../src/index.ts';
 
+function speedFixture(tps = 40, source = 'benchmark-fixture', checkedAt = '2026-09-05'): ModelSpeedMeta {
+  return { tps, source, checkedAt };
+}
+
 test('native routing wins over a shared gateway protocol', () => {
   const catalog = new Catalog();
   catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    nativeClients: ['native'], models: [{ id: 'm', displayName: 'M' }],
+    nativeClients: ['native'], models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://example.com/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.equal(catalog.resolveRun('native', 'vendor', 'm').mode, 'native');
@@ -29,7 +35,7 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
   catalog.registerClient({ id: 'client', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M' }],
+    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://secret.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.equal(catalog.listGatewayModels('openai_chat')[0]?.publicId, 'vendor/m');
@@ -47,10 +53,9 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     tps: number,
     outUsd: number | undefined,
     capabilities: readonly ModelCapability[] = ['text'] as readonly ModelCapability[],
-    withSpeed = true,
   ) => ({
     id, displayName: id, intelligence, capabilities,
-    ...(withSpeed ? { speed: { tps, source: `benchmark-${id}`, checkedAt: '2026-09-05' } } : {}),
+    speed: { tps, source: `benchmark-${id}`, checkedAt: '2026-09-05' },
     ...(outUsd !== undefined
       ? { pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: outUsd, source: 'spec', checkedAt: '2026-09-05' } }
       : {}),
@@ -59,7 +64,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
       mk('mfast', 'mid', 50, 2),
-      mk('mpremium', 'premium', 20, 50, ['text'], true),
+      mk('mpremium', 'premium', 20, 50, ['text']),
       mk('mmid', 'high', 30, 5),
       mk('mslow', 'mid', 5, 1),
       mk('mlow', 'low', 40, 3),
@@ -67,7 +72,6 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
       mk('mnointel', undefined, 50, 2),
       mk('mtextonly', 'mid', 50, 2, ['text']),
       mk('mvision', 'mid', 50, 4, ['text', 'image']),
-      mk('mnospeed', 'mid', 0, 2, ['text'], false),
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -86,7 +90,6 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     { profileId: 'nointel', client: 'c1', provider: 'p', model: 'mnointel' },
     { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
     { profileId: 'vision', client: 'c1', provider: 'p', model: 'mvision' },
-    { profileId: 'nospeed', client: 'c1', provider: 'p', model: 'mnospeed' },
   ];
   return { catalog, candidates };
 }
@@ -209,14 +212,77 @@ test('missing intelligence metadata fails closed under an intelligence requireme
   void candidates;
 });
 
-test('missing speed metadata fails closed under a minimum-TPS requirement', () => {
-  const { catalog, candidates } = buildDispatchCatalog();
-  const onlyNoSpeed: DispatchCandidate[] = [{ profileId: 'nospeed', client: 'c1', provider: 'p', model: 'mnospeed' }];
-  const result = resolveConstrainedDispatch(catalog, onlyNoSpeed, { minimumTps: 10 });
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, 'no-eligible-candidate');
-  void catalog;
-  void candidates;
+test('registerProvider rejects a model missing its required speed default', () => {
+  const catalog = new Catalog();
+  // ModelDefinition.speed is required: a model without a default speed must be
+  // rejected at registration. No dispatch may ever fall back to a synthetic zero.
+  assert.throws(
+    () => catalog.registerProvider({
+      id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+      models: [{ id: 'm', displayName: 'M' } as ModelDefinition],
+      protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+    }),
+    /speed/,
+  );
+});
+
+test('registerProvider rejects non-positive, non-finite, and empty-evidence default speeds', () => {
+  const catalog = new Catalog();
+  const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
+  const invalid: ModelSpeedMeta[] = [
+    { tps: 0, source: 'bench', checkedAt: '2026-09-05' },
+    { tps: -1, source: 'bench', checkedAt: '2026-09-05' },
+    { tps: Number.NaN, source: 'bench', checkedAt: '2026-09-05' },
+    { tps: Number.POSITIVE_INFINITY, source: 'bench', checkedAt: '2026-09-05' },
+    { tps: 40, source: '', checkedAt: '2026-09-05' },
+    { tps: 40, source: 'bench', checkedAt: '' },
+    { tps: 40, source: '   ', checkedAt: '2026-09-05' },
+    { tps: 40, source: 'bench', checkedAt: '   ' },
+  ];
+  for (const speed of invalid) {
+    assert.throws(
+      () => catalog.registerProvider({
+        id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+        models: [{ id: 'm', displayName: 'M', speed }],
+        protocols,
+      }),
+      /speed/,
+    );
+  }
+});
+
+test('registerProvider validates modelSpeedOverrides evidence and exact canonical keys only', () => {
+  const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
+  const canonicalModel = { id: 'glm-5.3', displayName: 'GLM 5.3', speed: speedFixture(40) };
+  const register = (extra: object) => new Catalog().registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [canonicalModel],
+    protocols,
+    ...extra,
+  });
+
+  // A valid override for the exact canonical model id is accepted.
+  register({ modelSpeedOverrides: { 'glm-5.3': { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } });
+
+  // An alias key is not a canonical model id and is rejected.
+  assert.throws(
+    () => register({ modelAliases: { 'legacy-glm': 'glm-5.3' }, modelSpeedOverrides: { 'legacy-glm': { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } }),
+    /exact canonical model/,
+  );
+  // An unknown model key is rejected.
+  assert.throws(
+    () => register({ modelSpeedOverrides: { nope: { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } }),
+    /exact canonical model/,
+  );
+  // Override evidence must satisfy the same rules as a model default speed.
+  assert.throws(
+    () => register({ modelSpeedOverrides: { 'glm-5.3': { tps: 0, source: 'override-bench', checkedAt: '2026-09-06' } } }),
+    /speed/,
+  );
+  assert.throws(
+    () => register({ modelSpeedOverrides: { 'glm-5.3': { tps: 90, source: '', checkedAt: '2026-09-06' } } }),
+    /speed/,
+  );
 });
 
 test('per-profile local 31-day samples are accepted individually with sample count', () => {
@@ -238,6 +304,108 @@ test('per-profile local 31-day samples are accepted individually with sample cou
   assert.equal(midResult.selected.speed.profileId, 'mid');
   assert.equal(midResult.selected.speed.sampleCount, 20);
   assert.equal(midResult.selected.speed.checkedAt, '2026-09-04');
+});
+
+function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCandidate; defaultModel: DispatchCandidate } {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [
+      { id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
+      { id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
+    ],
+    modelSpeedOverrides: { m: { tps: 60, source: 'override-bench', checkedAt: '2026-09-06' } },
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  return {
+    catalog,
+    overrideModel: { profileId: 'p/m:c1', client: 'c1', provider: 'p', model: 'm' },
+    defaultModel: { profileId: 'p/n:c1', client: 'c1', provider: 'p', model: 'n' },
+  };
+}
+
+test('exact speed precedence is local_31d over provider_override over catalog_default', () => {
+  const { catalog, overrideModel, defaultModel } = buildSpeedTierCatalog();
+
+  // No local sample and no override for n: the required model default is used.
+  const catalogDefault = resolveConstrainedDispatch(catalog, [defaultModel], {});
+  assert.equal(catalogDefault.ok, true);
+  assert.equal(catalogDefault.selected.speed.source, 'catalog_default');
+  assert.equal(catalogDefault.selected.speed.tps, 20);
+
+  // No local sample: the exact canonical provider override wins over the default.
+  const providerOverride = resolveConstrainedDispatch(catalog, [overrideModel], {});
+  assert.equal(providerOverride.ok, true);
+  assert.equal(providerOverride.selected.speed.source, 'provider_override');
+  assert.equal(providerOverride.selected.speed.tps, 60);
+  assert.equal(providerOverride.selected.speed.checkedAt, '2026-09-06');
+
+  // A usable exact-profile local sample outranks the provider override.
+  const localSample = resolveConstrainedDispatch(catalog, [overrideModel], {}, [
+    { profileId: 'p/m:c1', tps: 90, sampleCount: 31, checkedAt: '2026-09-07' },
+  ]);
+  assert.equal(localSample.ok, true);
+  assert.equal(localSample.selected.speed.source, 'local_31d');
+  assert.equal(localSample.selected.speed.tps, 90);
+  assert.equal(localSample.selected.speed.profileId, 'p/m:c1');
+});
+
+test('invalid local samples fall through to the canonical speed tiers', () => {
+  const { catalog, overrideModel, defaultModel } = buildSpeedTierCatalog();
+  const invalid: Array<{ tps: number; sampleCount: number; checkedAt: string }> = [
+    { tps: 0, sampleCount: 31, checkedAt: '2026-09-07' },
+    { tps: -5, sampleCount: 31, checkedAt: '2026-09-07' },
+    { tps: Number.POSITIVE_INFINITY, sampleCount: 31, checkedAt: '2026-09-07' },
+    { tps: Number.NaN, sampleCount: 31, checkedAt: '2026-09-07' },
+    { tps: 90, sampleCount: 0, checkedAt: '2026-09-07' },
+    { tps: 90, sampleCount: 1.5, checkedAt: '2026-09-07' },
+    { tps: 90, sampleCount: 31, checkedAt: '' },
+    { tps: 90, sampleCount: 31, checkedAt: '   ' },
+  ];
+  for (const sample of invalid) {
+    // An unusable exact-profile sample is skipped; the provider override applies.
+    const viaOverride = resolveConstrainedDispatch(catalog, [overrideModel], {}, [{ profileId: 'p/m:c1', ...sample }]);
+    assert.equal(viaOverride.ok, true);
+    assert.equal(viaOverride.selected.speed.source, 'provider_override');
+    assert.equal(viaOverride.selected.speed.tps, 60);
+
+    // A model without an override falls through to its required default speed.
+    const viaDefault = resolveConstrainedDispatch(catalog, [defaultModel], {}, [{ profileId: 'p/n:c1', ...sample }]);
+    assert.equal(viaDefault.ok, true);
+    assert.equal(viaDefault.selected.speed.source, 'catalog_default');
+    assert.equal(viaDefault.selected.speed.tps, 20);
+  }
+});
+
+test('unusable alias-profile local samples are not reinterpreted onto canonical profiles', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    modelAliases: { 'legacy-glm': 'glm-5.3' },
+    models: [{ id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) }],
+    modelSpeedOverrides: { 'glm-5.3': { tps: 70, source: 'override-bench', checkedAt: '2026-09-06' } },
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  const aliasCandidate: DispatchCandidate = { profileId: 'legacy-glm:cc', client: 'c1', provider: 'p', model: 'legacy-glm' };
+  const canonicalCandidate: DispatchCandidate = { profileId: 'glm-5.3:cc', client: 'c1', provider: 'p', model: 'glm-5.3' };
+  const local = [
+    { profileId: 'legacy-glm:cc', tps: 0, sampleCount: 10, checkedAt: '2026-09-05' },
+    { profileId: 'glm-5.3:cc', tps: 95, sampleCount: 10, checkedAt: '2026-09-05' },
+  ];
+  // The unusable alias-profile sample is ignored and the alias candidate is not
+  // remapped onto the canonical profile's usable sample: it falls through to the
+  // canonical provider override instead.
+  const viaAlias = resolveConstrainedDispatch(catalog, [aliasCandidate], {}, local);
+  assert.equal(viaAlias.ok, true);
+  assert.equal(viaAlias.selected.speed.source, 'provider_override');
+  assert.equal(viaAlias.selected.speed.tps, 70);
+  // The canonical candidate matches its own valid exact-profile sample.
+  const viaCanonical = resolveConstrainedDispatch(catalog, [canonicalCandidate], {}, local);
+  assert.equal(viaCanonical.ok, true);
+  assert.equal(viaCanonical.selected.speed.source, 'local_31d');
+  assert.equal(viaCanonical.selected.speed.tps, 95);
 });
 
 test('strict dynamic-fast boundary is tps greater than 80, not 80', () => {
@@ -495,7 +663,7 @@ test('codex/gpt-6-astra:cc parses to the claude client yet still fails resolutio
   catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
   catalog.registerProvider({
     id: 'codex', displayName: 'Codex', credentialResolver: 'codex',
-    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra' }],
+    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codex.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   // Parseable identity is not proof of compatibility: resolution fails closed.
@@ -508,7 +676,7 @@ test('a compatible target resolves exactly through Catalog.resolveRun with no fa
   catalog.registerProvider({
     id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
     nativeClients: ['claude'],
-    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4' }],
+    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', speed: speedFixture() }],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-4:cc');
@@ -526,14 +694,14 @@ function buildTaskCatalog(): Catalog {
     id: 'anthropic-api', displayName: 'Anthropic', credentialResolver: 'forge-managed',
     modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
     models: [
-      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5' },
-      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true },
+      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', speed: speedFixture() },
+      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true, speed: speedFixture() },
     ],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   catalog.registerProvider({
     id: 'vendor-api', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M' }],
+    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return catalog;
@@ -581,6 +749,35 @@ test('task candidate enumeration excludes incompatible client/provider pairs', (
   assert.ok(!keys.some((key) => key.endsWith(':codex')));
   assert.throws(() => catalog.resolveRun('claude', 'vendor-api', 'm'), /cannot serve client claude/);
   assert.throws(() => catalog.resolveRun('codex', 'vendor-api', 'm'), /cannot serve client codex/);
+});
+
+test('client gateway provider boundaries reject protocol-compatible but unexecutable pairs', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({
+    id: 'grok',
+    gatewayProtocols: ['openai_chat'],
+    unsupportedGatewayProviders: ['codebuddy'],
+    taskCapable: true,
+  });
+  catalog.registerProvider({
+    id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
+    models: [{ id: 'hy3', displayName: 'HY3', speed: speedFixture() }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://codebuddy.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  assert.throws(() => catalog.resolveRun('grok', 'codebuddy', 'hy3'), /cannot serve client grok/);
+  assert.ok(!catalog.enumerateTaskCandidates().some((candidate) => candidate.profileId === 'codebuddy/hy3:gk'));
+});
+
+test('client gateway provider boundaries reject duplicate declarations', () => {
+  const catalog = new Catalog();
+  assert.throws(
+    () => catalog.registerClient({
+      id: 'grok',
+      gatewayProtocols: ['openai_chat'],
+      unsupportedGatewayProviders: ['codebuddy', 'codebuddy'],
+    }),
+    /duplicate unsupported gateway provider codebuddy/,
+  );
 });
 
 test('task candidate enumeration never emits model alias duplicates', () => {
