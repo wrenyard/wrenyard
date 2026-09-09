@@ -3,16 +3,19 @@ import { Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTie
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
 const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
+const SRC_TENCENT_DS_IDMAP = 'https://cloud.tencent.com/document/product/1823/132248';
 const SRC_OPENAI = 'https://developers.openai.com';
+const SRC_OPENAI_SPARK = 'https://www.openai.com/index/introducing-gpt-5-3-codex-spark/';
 const SRC_AA_DEEPSEEK = 'https://artificialanalysis.ai/models/deepseek-v4-flash/';
+const SRC_AA_DEEPSEEK_PRO = 'https://artificialanalysis.ai/models/deepseek-v4-pro/';
 const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
 const SRC_AA_KIMI = 'https://artificialanalysis.ai/models/kimi-k3/';
 const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
 const SRC_AA_GLMF = 'https://artificialanalysis.ai/models/glm-5-3-flash/';
-const SRC_CONSERVATIVE = 'conservative estimate; public benchmark basis';
-const SRC_AA_LUNA = 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna';
-const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol/';
+const SRC_AA_LUNA = 'https://artificialanalysis.ai/models/gpt-5-6-luna-xhigh/';
+const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol-xhigh/';
 const DEFAULT_CHECKED_AT = '2026-09-05';
+const SPEED_CHECKED_AT = '2026-09-09';
 
 const clients: readonly ClientDefinition[] = [
   { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true },
@@ -20,11 +23,30 @@ const clients: readonly ClientDefinition[] = [
   { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true },
   { id: 'cursor', nativeProvider: 'cursor', gatewayProtocols: ['openai_chat'], taskCapable: true },
   { id: 'dsh', gatewayProtocols: ['openai_chat'] },
-  { id: 'grok', nativeProvider: 'spacex-ai', gatewayProtocols: ['openai_chat'], taskCapable: true },
+  {
+    id: 'grok',
+    nativeProvider: 'spacex-ai',
+    gatewayProtocols: ['openai_chat'],
+    unsupportedGatewayProviders: ['codebuddy'],
+    taskCapable: true,
+  },
   { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
 ];
 
-const model = (id: string, displayName: string, contextWindow?: number, maxTokens?: number): ModelDefinition => ({
+/**
+ * Shared provider-level gateway boundary for built-in clients. Protocol
+ * compatibility is evaluated separately; this helper carries only known
+ * execution restrictions that protocol metadata cannot express.
+ */
+export function isBuiltinClientGatewayProviderSupported(clientID: string, providerID: string): boolean {
+  const client = clients.find((candidate) => candidate.id === clientID);
+  return client !== undefined && !client.unsupportedGatewayProviders?.includes(providerID);
+}
+
+type RawModelDefinition = Omit<ModelDefinition, 'speed'> & { speed?: ModelSpeedMeta };
+type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly RawModelDefinition[] };
+
+const model = (id: string, displayName: string, contextWindow?: number, maxTokens?: number): RawModelDefinition => ({
   id, displayName,
   ...(contextWindow ? { contextWindow } : {}),
   ...(maxTokens ? { maxTokens } : {}),
@@ -35,7 +57,7 @@ const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer')
 const anthropic = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'anthropic_messages' as const, endpoint, authScheme });
 
-const builtinProviders: readonly ProviderDefinition[] = [
+const builtinProviders: readonly RawProviderDefinition[] = [
   {
     id: 'anthropic', displayName: 'Claude Subscription', credentialResolver: 'claude',
     nativeClients: ['claude'], models: [], quotaProvider: 'anthropic', useClientBinary: true,
@@ -240,11 +262,75 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
   },
 };
 
+function speedDefault(
+  tps: number,
+  source: string,
+  basis: string,
+  conservative = false,
+): ModelSpeedMeta {
+  return {
+    tps,
+    source,
+    checkedAt: SPEED_CHECKED_AT,
+    basis,
+    ...(conservative ? { conservative: true } : {}),
+  };
+}
+
+// External/public throughput is a catalog baseline only. A valid exact-profile
+// local agent_turn_v1 sample supersedes it, as does an exact provider override.
+// Keys are exact registered model ids; aliases are never used for lookup.
+const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
+  'MiniMax-M2.7': speedDefault(60, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7.'),
+  'MiniMax-M2.7-highspeed': speedDefault(100, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7-highspeed.'),
+  'MiniMax-M3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis median output speed for MiniMax M3; exact registered case-preserving API id.'),
+  'claude-fable-5': speedDefault(63.3, 'https://artificialanalysis.ai/models/claude-fable-5/', 'Artificial Analysis output-speed measurement for Claude Fable 5.'),
+  'claude-haiku-4-5-20251001': speedDefault(80.6, 'https://artificialanalysis.ai/models/claude-4-5-haiku/', 'Artificial Analysis output-speed measurement for Claude Haiku 4.5; registered id is the dated Anthropic API id.'),
+  'claude-opus-5': speedDefault(50, 'https://artificialanalysis.ai/models/claude-opus-5-xhigh/', 'Artificial Analysis output-speed baseline for Claude Opus 5 xhigh.'),
+  'claude-sonnet-5': speedDefault(60, 'https://artificialanalysis.ai/models/claude-sonnet-5-non-reasoning/', 'Artificial Analysis output-speed baseline for Claude Sonnet 5 non-reasoning.'),
+  'composer-2.5': speedDefault(40, 'user-specified', 'User-selected Wrenyard baseline for exact standard cursor/composer-2.5; no measured source and not composer-2.5-fast.'),
+  'cursor-grok-4.6-high': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
+  'deepseek-v4-flash': speedDefault(125.7, SRC_AA_DEEPSEEK, 'Artificial Analysis output-speed measurement for DeepSeek V4 Flash.'),
+  'deepseek-v4-flash-202605': speedDefault(125.7, SRC_AA_DEEPSEEK, `Artificial Analysis DeepSeek V4 Flash output speed; Tencent documents exact 202605 id mapping at ${SRC_TENCENT_DS_IDMAP}.`),
+  'deepseek-v4-pro': speedDefault(76.9, SRC_AA_DEEPSEEK_PRO, 'Artificial Analysis output-speed measurement for DeepSeek V4 Pro.'),
+  'deepseek-v4-pro-202606': speedDefault(76.9, SRC_AA_DEEPSEEK_PRO, `Artificial Analysis DeepSeek V4 Pro output speed; Tencent documents exact 202606 id mapping at ${SRC_TENCENT_DS_IDMAP}.`),
+  'deepseek/deepseek-v4-flash-vision-exp': speedDefault(120.1, 'https://artificialanalysis.ai/models/deepseek-v4-flash-vision/', `Artificial Analysis output-speed measurement for DeepSeek V4 Flash Vision; Tencent documents the exact registered id at ${SRC_TENCENT_DS_IDMAP}.`),
+  'doubao-seed-2-0-lite-260215': speedDefault(35.1, 'https://aihubmix.com/compare/doubao-seed-2-0-lite-260215/qwen3.8-max-preview', 'AIHubMix public rolling output-throughput measurement for the exact dated Doubao model.'),
+  'glm-4.7-flash': speedDefault(102.5, 'https://artificialanalysis.ai/models/glm-4-7-flash/', 'Artificial Analysis output-speed measurement for GLM-4.7 Flash.'),
+  'glm-5-turbo': speedDefault(42, 'https://openrouter.ai/z-ai/glm-5-turbo/pricing', 'OpenRouter public output-throughput snapshot for exact GLM-5 Turbo.'),
+  'glm-5.2': speedDefault(62.8, 'https://artificialanalysis.ai/models/glm-5-2/', 'Artificial Analysis output-speed measurement for GLM-5.2.'),
+  'glm-5.3': speedDefault(63.7, 'https://artificialanalysis.ai/models/glm-5-3/', 'Artificial Analysis output-speed measurement for GLM-5.3.'),
+  'glm-5.3-flash': speedDefault(73.1, SRC_AA_GLMF, 'Artificial Analysis output-speed measurement for GLM-5.3 Flash.'),
+  'gpt-5.3-codex-spark': speedDefault(1000, SRC_OPENAI_SPARK, 'OpenAI reports more than 1000 tokens/s on Cerebras; 1000 is the conservative catalog lower bound.', true),
+  'gpt-5.4': speedDefault(139.6, 'https://artificialanalysis.ai/models/gpt-5-4/', 'Artificial Analysis output-speed measurement for GPT-5.4.'),
+  'gpt-5.4-mini': speedDefault(218.5, 'https://artificialanalysis.ai/models/gpt-5-4-mini/', 'Artificial Analysis output-speed measurement for GPT-5.4 Mini.'),
+  'gpt-5.5': speedDefault(88.9, 'https://artificialanalysis.ai/models/gpt-5-5/', 'Artificial Analysis output-speed measurement for GPT-5.5.'),
+  'gpt-5.6-luna': speedDefault(107, SRC_AA_LUNA, 'Artificial Analysis output-speed measurement for GPT-5.6 Luna xhigh, matching the registered effort.'),
+  'gpt-5.6-sol': speedDefault(63.2, SRC_AA_SOL, 'Artificial Analysis output-speed measurement for GPT-5.6 Sol xhigh, matching the registered effort.'),
+  'gpt-5.6-terra': speedDefault(98.4, 'https://artificialanalysis.ai/models/gpt-5-6-terra-xhigh/', 'Artificial Analysis output-speed measurement for GPT-5.6 Terra xhigh, matching the registered effort.'),
+  'gpt-6-astra': speedDefault(50.6, 'https://artificialanalysis.ai/models/gpt-6-astra-xhigh/', 'Artificial Analysis output-speed measurement for GPT-6 Astra xhigh, matching the registered effort.'),
+  'grok-4.5': speedDefault(57.5, 'https://artificialanalysis.ai/models/grok-4-5/', 'Artificial Analysis output-speed measurement for Grok 4.5.'),
+  hy3: speedDefault(93.8, 'https://artificialanalysis.ai/models/hy3/', 'Artificial Analysis output-speed measurement for Tencent Hunyuan HY3.'),
+  'hy4-preview': speedDefault(38, 'https://openrouter.ai/tencent/hy4-preview', 'OpenRouter public provider throughput for exact Tencent HY4 Preview.'),
+  k3: speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis Kimi K3 output speed; k3 is the exact registered Kimi Coding route id for that documented model.'),
+  'kimi-k2.5': speedDefault(39.9, 'https://artificialanalysis.ai/models/kimi-k2-5/providers', 'Artificial Analysis minimum current provider output speed for Kimi K2.5; retained for the registered decommissioned model.'),
+  'kimi-k2.6': speedDefault(56.3, 'https://artificialanalysis.ai/models/kimi-k2-6/', 'Artificial Analysis output-speed measurement for Kimi K2.6.'),
+  'kimi-k3': speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis output-speed measurement for Kimi K3.'),
+  'minimax-m2.7': speedDefault(71.3, 'https://artificialanalysis.ai/models/minimax-m2-7/', 'Artificial Analysis output-speed measurement for MiniMax M2.7.'),
+  'minimax-m3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis output-speed measurement for MiniMax M3.'),
+  'qwen3-coder-next': speedDefault(128, 'https://artificialanalysis.ai/models/qwen3-coder-next/', 'Artificial Analysis output-speed measurement for Qwen3 Coder Next.'),
+  'qwen3-coder-plus': speedDefault(29, 'https://openrouter.ai/qwen/qwen3-coder-plus/providers', 'OpenRouter public one-week P50 average output throughput for exact Qwen3 Coder Plus.'),
+  'qwen3.5-plus': speedDefault(54, 'https://openrouter.ai/qwen/qwen3.5-plus-02-15/providers', 'OpenRouter output throughput for the dated Qwen3.5 Plus release used by the current Qwen3.5 Plus alias.'),
+  'qwen3.6-plus': speedDefault(56.1, 'https://artificialanalysis.ai/models/qwen3-6-plus/', 'Artificial Analysis output-speed measurement for Qwen3.6 Plus.'),
+  'qwen3.7-flash': speedDefault(111.12, 'https://www.respan.ai/models/openrouter/qwen/qwen3.7-flash', 'Respan public real-traffic output-throughput measurement for exact Qwen3.7 Flash.'),
+  'qwen3.7-plus': speedDefault(56.2, 'https://artificialanalysis.ai/models/qwen3-7-plus/', 'Artificial Analysis output-speed measurement for Qwen3.7 Plus.'),
+  'qwen3.8-max': speedDefault(39.4, 'https://artificialanalysis.ai/models/qwen3-8-max/', 'Artificial Analysis output-speed measurement for Qwen3.8 Max.'),
+};
+
 type ModelMeta = {
   intelligence?: IntelligenceTier;
   reasoningEffort?: ReasoningEffort;
   capabilities: readonly ModelCapability[];
-  speed?: ModelSpeedMeta;
   maxOutputTokens?: number;
   pricing?: ModelPricing;
 };
@@ -253,13 +339,11 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'deepseek-v4-flash': {
     intelligence: 'mid',
     capabilities: ['text'],
-    speed: { tps: 140, source: SRC_AA_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
     pricing: { inputUsdPerMillion: 0.44, cachedInputUsdPerMillion: 0.014, outputUsdPerMillion: 1.32, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
   },
   'deepseek-v4-pro': {
     intelligence: 'high',
     capabilities: ['text'],
-    speed: { tps: 35, source: SRC_CONSERVATIVE, checkedAt: DEFAULT_CHECKED_AT, conservative: true },
     pricing: { inputUsdPerMillion: 1.32, cachedInputUsdPerMillion: 0.044, outputUsdPerMillion: 3.96, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
   },
   'hy4-preview': {
@@ -290,8 +374,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     reasoningEffort: 'xhigh',
     intelligence: 'frontier',
     capabilities: ['text', 'image'],
-    // External decode default from Artificial Analysis; superseded by a local agent_turn_v1 measured profile when present.
-    speed: { tps: 74.4, source: SRC_AA_SOL, checkedAt: DEFAULT_CHECKED_AT, basis: 'external decode catalog default; distinct from local agent_turn_v1, which overrides' },
     pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.6-terra': {
@@ -304,49 +386,47 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
-    // External decode default from Artificial Analysis (minimum of current listed effort speeds); superseded by a local agent_turn_v1 measured profile when present.
-    speed: { tps: 107, source: SRC_AA_LUNA, checkedAt: DEFAULT_CHECKED_AT, basis: 'external decode catalog default (minimum of current listed effort speeds); distinct from local agent_turn_v1, which overrides' },
     pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'kimi-k3': {
     intelligence: 'frontier',
     capabilities: ['text', 'image'],
-    speed: { tps: 39.2, source: SRC_AA_KIMI, checkedAt: DEFAULT_CHECKED_AT },
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'k3': {
     intelligence: 'frontier',
     capabilities: ['text', 'image'],
-    speed: { tps: 39.2, source: SRC_AA_KIMI, checkedAt: DEFAULT_CHECKED_AT },
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'glm-5.3': {
     intelligence: 'high',
     capabilities: ['text'],
-    speed: { tps: 35, source: SRC_CONSERVATIVE, checkedAt: DEFAULT_CHECKED_AT, conservative: true },
     pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'glm-5.3-flash': {
     intelligence: 'high',
     capabilities: ['text'],
-    speed: { tps: 47.4, source: SRC_AA_GLMF, checkedAt: DEFAULT_CHECKED_AT },
     pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.03, outputUsdPerMillion: 0.50, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
   },
 };
 
-function withMeta(def: ModelDefinition): ModelDefinition {
+function withMeta(def: RawModelDefinition): ModelDefinition {
+  const speed = def.speed ?? MODEL_SPEED_DEFAULTS[def.id];
+  if (!speed) {
+    throw new Error(`built-in model ${def.id} is missing required default speed metadata`);
+  }
   const meta = MODEL_METADATA[def.id];
   if (!meta) {
-    return { ...def, capabilities: def.capabilities ?? ['text'] };
+    return { ...def, capabilities: def.capabilities ?? ['text'], speed };
   }
   return {
     ...def,
-    ...(meta.intelligence ? { intelligence: meta.intelligence } : {}),
-    ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
-    capabilities: meta.capabilities,
-    ...(meta.speed ? { speed: meta.speed } : {}),
-    ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
-    ...(meta.pricing ? { pricing: meta.pricing } : {}),
+    intelligence: def.intelligence ?? meta.intelligence,
+    reasoningEffort: def.reasoningEffort ?? meta.reasoningEffort,
+    capabilities: def.capabilities ?? meta.capabilities,
+    speed,
+    maxOutputTokens: def.maxOutputTokens ?? meta.maxOutputTokens,
+    pricing: def.pricing ?? meta.pricing,
   };
 }
 

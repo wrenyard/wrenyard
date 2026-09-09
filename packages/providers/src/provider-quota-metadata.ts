@@ -60,6 +60,7 @@ function windowConstraint(
   resetKind: QuotaResetKind,
   evidence: QuotaEvidenceKind,
   evidenceRef: string,
+  checkedAt = '2026-09-08',
 ): ProviderQuotaWindowConstraint {
   return Object.freeze({
     windowId,
@@ -67,7 +68,7 @@ function windowConstraint(
     resetKind,
     evidence,
     evidenceRef,
-    checkedAt: '2026-09-08',
+    checkedAt,
   });
 }
 
@@ -87,18 +88,86 @@ function zhipuCodingWindows(): readonly ProviderQuotaWindowConstraint[] {
   return Object.freeze([
     windowConstraint(
       '5h',
-      'unproven',
-      'provider_parser',
-      'runtime/forge/internal/usage/quota/bigmodel.go',
+      'rolling_partial',
+      'official_docs',
+      'https://docs.bigmodel.cn/cn/coding-plan/overview',
+      '2026-09-09',
     ),
     windowConstraint(
       '7d',
-      'unproven',
-      'provider_parser',
-      'runtime/forge/internal/usage/quota/bigmodel.go',
+      'full_cycle',
+      'official_docs',
+      'https://docs.bigmodel.cn/cn/coding-plan/overview',
+      '2026-09-09',
     ),
   ]);
 }
+
+/** Fresh frozen windows array for each codex binding (no aliasing). */
+function codexWindows(): readonly ProviderQuotaWindowConstraint[] {
+  return Object.freeze([
+    windowConstraint(
+      '7d',
+      'full_cycle',
+      'provider_parser',
+      'runtime/forge/internal/usage/quota/codex.go',
+      '2026-09-09',
+    ),
+  ]);
+}
+
+/** Codex Spark has its own raw pool and currently reports both reset windows. */
+function codexSparkWindows(): readonly ProviderQuotaWindowConstraint[] {
+  return Object.freeze([
+    windowConstraint(
+      '5h',
+      'full_cycle',
+      'provider_parser',
+      'runtime/forge/internal/usage/quota/codex.go',
+      '2026-09-09',
+    ),
+    windowConstraint(
+      '7d',
+      'full_cycle',
+      'provider_parser',
+      'runtime/forge/internal/usage/quota/codex.go',
+      '2026-09-09',
+    ),
+  ]);
+}
+
+/**
+ * Builds one frozen codex-family single-pool binding with a fresh windows
+ * array. The provider id, raw Forge row, normalized pool, and required windows
+ * are explicit so Codex Spark cannot be accidentally folded into Codex.
+ */
+function codexSubscriptionBinding(
+  providerId: string,
+  modelId: string,
+  quotaProviderId = 'codex',
+  quotaPoolId = 'codex-models',
+  windows: readonly ProviderQuotaWindowConstraint[] = codexWindows(),
+): ProviderQuotaBinding {
+  return Object.freeze({
+    providerId,
+    modelId,
+    quotaProviderId,
+    quotaPoolId,
+    windows,
+  });
+}
+
+/** Current codex subscription model ids billed to the shared codex quota. */
+const CODEX_SUBSCRIPTION_MODEL_IDS: readonly string[] = Object.freeze([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.3-codex-spark',
+  'gpt-6-astra',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+]);
 
 export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.freeze([
   Object.freeze({
@@ -129,12 +198,6 @@ export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.f
       ),
       windowConstraint(
         '7d',
-        'full_cycle',
-        'official_docs',
-        'https://www.kimi.com/code/docs/en/kimi-code/membership.html',
-      ),
-      windowConstraint(
-        '1mo',
         'full_cycle',
         'official_docs',
         'https://www.kimi.com/code/docs/en/kimi-code/membership.html',
@@ -170,6 +233,22 @@ export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.f
       poolConstraint('codebuddy-monthly', []),
     ]),
   }),
+  // Codex subscription quota: every current codex-provider model consumes the
+  // Forge `codex` row. The weekly `7d` window is always required. Some current
+  // accounts legitimately expose only that window; when a primary `5h` window
+  // is present the snapshot layer conditionally includes it, so exhausted or
+  // strained primary quota still participates without making absent 5h data
+  // incomplete (checked 2026-09-09).
+  ...CODEX_SUBSCRIPTION_MODEL_IDS.map((modelId) => codexSubscriptionBinding('codex', modelId)),
+  // Codex Spark is a separate provider/pool. Its current raw `codex-spark` row
+  // reports both 5h and 7d, and both are required for complete coverage.
+  codexSubscriptionBinding(
+    'codex-spark',
+    'gpt-5.3-codex-spark',
+    'codex-spark',
+    'codex-spark-models',
+    codexSparkWindows(),
+  ),
 ]);
 
 /** Exact providerId + modelId lookup. Returns the matching binding or undefined. */

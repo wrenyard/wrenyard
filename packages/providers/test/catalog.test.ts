@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltinCatalog, deriveTaskDispatchPlans } from '../src/index.ts';
+import {
+  BUILTIN_PROVIDERS,
+  createBuiltinCatalog,
+  deriveTaskDispatchPlans,
+  isBuiltinClientGatewayProviderSupported,
+} from '../src/index.ts';
 
 test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
@@ -26,6 +31,13 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
   const legacy = catalog.resolveGatewayModel('openai_chat', 'codebuddy/hy4-preview-ioa');
   assert.equal(legacy.model.id, 'hy4-preview');
   assert.equal(legacy.publicId, 'codebuddy/hy4-preview');
+  assert.throws(
+    () => catalog.resolveRun('grok', 'codebuddy', 'hy3'),
+    /provider codebuddy cannot serve client grok/,
+    'Grok strict-SSE incompatibility is an exact run-combination boundary, not a protocol capability',
+  );
+  assert.equal(isBuiltinClientGatewayProviderSupported('grok', 'codebuddy'), false);
+  assert.equal(isBuiltinClientGatewayProviderSupported('grok', 'zhipu-coding'), true);
 });
 
 test('derived task plans key representative native and gateway combinations canonically', () => {
@@ -63,6 +75,8 @@ test('derived task plans key representative native and gateway combinations cano
   assert.deepEqual(plans['spacex-ai/grok-4.5:gk'], {
     client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native',
   });
+  assert.equal(plans['codebuddy/hy3:gk'], undefined);
+  assert.equal(plans['codebuddy/deepseek-v4-flash:gk'], undefined);
 });
 
 test('derived task plans carry canonical keys only — no legacy profile, policy, or alias ids', () => {
@@ -147,7 +161,7 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.deepEqual(flash.capabilities, ['text']);
   assert.equal(flash.pricing?.source.includes('catalog-default'), false);
   // External decode benchmark, distinct from any local agent_turn_v1 measurement.
-  assert.equal(flash.speed?.tps, 140);
+  assert.equal(flash.speed?.tps, 125.7);
   assert.equal(flash.speed?.source, 'https://artificialanalysis.ai/models/deepseek-v4-flash/');
   assert.notEqual(flash.speed?.source.includes('local'), true);
 
@@ -166,7 +180,7 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(glmf.pricing?.source, 'https://docs.z.ai/guides/overview/pricing');
   assert.equal(glmf.intelligence, 'high');
   assert.deepEqual(glmf.capabilities, ['text']);
-  assert.equal(glmf.speed?.tps, 47.4);
+  assert.equal(glmf.speed?.tps, 73.1);
   assert.equal(glmf.speed?.source, 'https://artificialanalysis.ai/models/glm-5-3-flash/');
 
   // Kimi K3 / k3 share official pricing and fallback decode benchmark.
@@ -176,24 +190,25 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k3.pricing?.cachedInputUsdPerMillion, 0.30);
   assert.equal(k3.pricing?.outputUsdPerMillion, 15);
   assert.equal(k3.pricing?.source, 'https://www.kimi.com/en/blog/kimi-k3');
-  assert.equal(k3.speed?.tps, 39.2);
+  assert.equal(k3.speed?.tps, 39.7);
   assert.equal(k3.speed?.source, 'https://artificialanalysis.ai/models/kimi-k3/');
   const k3Coding = catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'k3')!;
   assert.equal(k3Coding.pricing?.inputUsdPerMillion, 3);
   assert.equal(k3Coding.pricing?.outputUsdPerMillion, 15);
-  assert.equal(k3Coding.speed?.tps, 39.2);
+  assert.equal(k3Coding.speed?.tps, 39.7);
 
   // Hy4 preview carries the Tencent reference price.
   const hy = codebuddy.models.find((entry) => entry.id === 'hy4-preview')!;
   assert.equal(hy.pricing?.outputUsdPerMillion, 2.501);
   assert.equal(hy.pricing?.source, 'https://intl.cloud.tencent.com/zh/document/product/1300/78937');
 
-  // HY3 is canonical (no preview/suffix aliases), high/text, no static speed,
-  // and carries the official Tencent TokenHub-derived nonzero reference price.
+  // HY3 is canonical (no preview/suffix aliases), high/text, and carries
+  // independent speed plus official Tencent TokenHub-derived price evidence.
   const hy3 = codebuddy.models.find((entry) => entry.id === 'hy3')!;
   assert.equal(hy3.intelligence, 'high');
   assert.deepEqual(hy3.capabilities, ['text']);
-  assert.equal(hy3.speed, undefined);
+  assert.equal(hy3.speed.tps, 93.8);
+  assert.match(hy3.speed.source, /^https:\/\//u);
   assert.equal(hy3.pricing?.inputUsdPerMillion, 0.139);
   assert.equal(hy3.pricing?.cachedInputUsdPerMillion, 0.035);
   assert.equal(hy3.pricing?.outputUsdPerMillion, 0.556);
@@ -201,35 +216,43 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(hy3.pricing?.checkedAt, '2026-09-08');
 });
 
-test('unverified conservative speeds stay absent and local evidence can later override', () => {
-  const catalog = createBuiltinCatalog();
-  const codebuddy = catalog.provider('codebuddy')!;
-  const codex = catalog.provider('codex')!;
-  // These had arbitrary SRC_CONSERVATIVE TPS removed; absence stays unknown.
-  for (const id of ['hy4-preview', 'hy3']) {
-    assert.equal(codebuddy.models.find((entry) => entry.id === id)!.speed, undefined, `${id} speed must be absent`);
-  }
-  // Terra and Astra still carry no sourced speed; only Luna/Sol gained sourced fallbacks.
-  for (const id of ['gpt-6-astra', 'gpt-5.6-terra']) {
-    assert.equal(codex.models.find((entry) => entry.id === id)!.speed, undefined, `${id} speed must be absent`);
-  }
-  // External benchmark speeds are source-tagged so a local agent_turn_v1
-  // measurement (SpeedSource local_31d) could later supersede them at the Catalog layer.
-  const flash = codebuddy.models.find((entry) => entry.id === 'deepseek-v4-flash')!;
-  assert.ok(flash.speed?.source.startsWith('https://'));
-  assert.notEqual(flash.speed?.source.includes('local'), true);
+test('every registered built-in model has a valid authoritative speed default', () => {
+  const entries = BUILTIN_PROVIDERS.flatMap((provider) =>
+    provider.models.map((model) => ({ provider: provider.id, model })),
+  );
+  const uniqueIds = new Set(entries.map(({ model }) => model.id));
+  assert.equal(uniqueIds.size, 44, 'the complete exact registered model-id inventory is covered');
 
-  // GPT-5.6 Sol: sourced external decode default (Artificial Analysis) — no local measurement fabricated.
-  const sol = codex.models.find((entry) => entry.id === 'gpt-5.6-sol')!;
-  assert.equal(sol.speed?.tps, 74.4);
-  assert.equal(sol.speed?.source, 'https://artificialanalysis.ai/models/gpt-5-6-sol/');
-  assert.notEqual(sol.speed?.source.includes('local'), true);
+  for (const { provider, model } of entries) {
+    assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);
+    assert.ok(model.speed.source.trim(), `${provider}/${model.id} needs speed provenance`);
+    assert.ok(model.speed.checkedAt.trim(), `${provider}/${model.id} needs speed checkedAt`);
+    assert.ok(model.speed.basis?.trim(), `${provider}/${model.id} needs a reviewable speed basis`);
+    if (provider === 'cursor' && model.id === 'composer-2.5') {
+      assert.equal(model.speed.tps, 40);
+      assert.equal(model.speed.source, 'user-specified');
+      assert.match(model.speed.basis!, /exact standard cursor\/composer-2\.5/u);
+      assert.doesNotMatch(model.speed.basis!, /external benchmark/u);
+      assert.match(model.speed.basis!, /not composer-2\.5-fast/u);
+    } else {
+      assert.match(model.speed.source, /^https:\/\//u, `${provider}/${model.id} needs a public evidence URL`);
+    }
+  }
 
-  // GPT-5.6 Luna: sourced external decode default (Artificial Analysis, minimum of current listed effort speeds).
-  const luna = codex.models.find((entry) => entry.id === 'gpt-5.6-luna')!;
-  assert.equal(luna.speed?.tps, 107);
-  assert.equal(luna.speed?.source, 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna');
-  assert.notEqual(luna.speed?.source.includes('local'), true);
+  // A repeated exact id must resolve to the same model default on every provider;
+  // provider-specific differences belong in modelSpeedOverrides instead.
+  for (const id of uniqueIds) {
+    const speeds = entries.filter(({ model }) => model.id === id).map(({ model }) => model.speed);
+    for (const candidate of speeds.slice(1)) assert.deepEqual(candidate, speeds[0], `${id} defaults diverged`);
+  }
+
+  const representative = new Map(entries.map(({ model }) => [model.id, model.speed.tps]));
+  assert.equal(representative.get('gpt-5.3-codex-spark'), 1000);
+  assert.equal(representative.get('gpt-5.6-terra'), 98.4);
+  assert.equal(representative.get('deepseek-v4-pro-202606'), 76.9);
+  assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
+  assert.equal(representative.get('qwen3.7-flash'), 111.12);
+  assert.equal(representative.get('doubao-seed-2-0-lite-260215'), 35.1);
 });
 
 test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', () => {
