@@ -711,6 +711,16 @@ export interface TaskSettingsBuiltinMetadata {
   dispatch: TaskSettingsAutomaticDispatch
 }
 
+/** Task-settings-resolved dispatch augmented with additive authoritative
+ *  Catalog display labels. Canonical ids and every existing wire field are
+ *  kept; the display labels are optional and always travel as a pair. */
+export type TaskSettingsResolvedDispatch = TaskResolvedDispatch & {
+  /** Authoritative Catalog provider display label; paired with `model_display_name`. */
+  provider_display_name?: string
+  /** Authoritative unified Catalog model display label; paired with `provider_display_name`. */
+  model_display_name?: string
+}
+
 export interface TaskSettingsExplicitRow {
   /** Stored structural selection: a runtime alias or an inline exact run target.
    *  Never a copied resolved client/provider/model triple. */
@@ -719,7 +729,7 @@ export interface TaskSettingsExplicitRow {
    *  `reference` resolves; null when it cannot resolve without fallback. */
   resolved_target: string | null
   /** Exact resolved dispatch of the canonical target; null while unresolved. */
-  resolved: TaskResolvedDispatch | null
+  resolved: TaskSettingsResolvedDispatch | null
   /** Non-billable live readiness of the resolved exact runtime. */
   readiness: TaskSettingsRuntimeReadiness | null
 }
@@ -732,8 +742,9 @@ export interface TaskSettingsExplicitRow {
 export interface TaskSettingsAutomaticSelection {
   /** Canonical exact run target of the selected automatic dispatch. */
   exact_runtime: string
-  /** Exact resolved automatic dispatch including the safe auto_routing decision. */
-  resolved: TaskResolvedDispatch
+  /** Exact resolved automatic dispatch including the safe auto_routing decision
+   *  and the additive authoritative Catalog display labels. */
+  resolved: TaskSettingsResolvedDispatch
   /** Safe human-readable reason for the automatic selection. */
   reason: string
 }
@@ -1156,6 +1167,17 @@ const taskSettingsBuiltinMetadataSchema = {
   additionalProperties: true,
 } as const satisfies JsonSchema
 
+/** Backward-compatible resolved-dispatch wire schema extended with the additive
+ *  Catalog display labels (all original fields and shape are kept). */
+const taskSettingsResolvedDispatchSchema = {
+  ...taskResolvedDispatchSchema,
+  properties: {
+    ...taskResolvedDispatchSchema.properties,
+    provider_display_name: { type: 'string', minLength: 1 },
+    model_display_name: { type: 'string', minLength: 1 },
+  },
+} as const satisfies JsonSchema
+
 const taskSettingsExplicitRowSchema = {
   type: 'object',
   required: ['reference', 'resolved_target', 'resolved', 'readiness'],
@@ -1163,7 +1185,7 @@ const taskSettingsExplicitRowSchema = {
     reference: taskSettingsExplicitReferenceSchema,
     resolved_target: nullableStringSchema,
     resolved: {
-      anyOf: [taskResolvedDispatchSchema, { type: 'null' }],
+      anyOf: [taskSettingsResolvedDispatchSchema, { type: 'null' }],
     },
     readiness: {
       anyOf: [taskSettingsRuntimeReadinessSchema, { type: 'null' }],
@@ -1205,12 +1227,15 @@ const taskSettingsAutoRoutingDecisionSchema = {
 } as const satisfies JsonSchema
 
 /** Resolved dispatch wire schema extended with the additive safe auto_routing
- *  decision (backward compatible: all original fields and shape are kept). */
+ *  decision and the additive Catalog display labels (backward compatible: all
+ *  original fields and shape are kept). */
 const taskSettingsAutomaticResolvedDispatchSchema = {
   ...taskResolvedDispatchSchema,
   properties: {
     ...taskResolvedDispatchSchema.properties,
     auto_routing: taskSettingsAutoRoutingDecisionSchema,
+    provider_display_name: { type: 'string', minLength: 1 },
+    model_display_name: { type: 'string', minLength: 1 },
   },
 } as const satisfies JsonSchema
 

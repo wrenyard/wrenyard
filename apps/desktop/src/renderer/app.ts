@@ -33,7 +33,7 @@ import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
-import { formatBuildTime, formatCompactTokenCount, formatTaskDuration } from './format.js';
+import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, formatTaskCompletionTimeTooltip, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 
 declare global {
@@ -72,6 +72,8 @@ const tasksDetail = requireElement<HTMLElement>('tasks-detail');
 const tasksDetailName = requireElement<HTMLElement>('tasks-detail-name');
 const tasksDetailIdentity = requireElement<HTMLElement>('tasks-detail-identity');
 const tasksDetailRuntime = requireElement<HTMLElement>('tasks-detail-runtime');
+const tasksModeEffective = requireElement<HTMLElement>('tasks-mode-effective');
+const tasksPreview = requireElement<HTMLElement>('tasks-preview');
 const tasksModeSelect = requireElement<HTMLSelectElement>('tasks-mode');
 const tasksTimeoutInput = requireElement<HTMLInputElement>('tasks-timeout');
 const tasksTimeoutEffective = requireElement<HTMLElement>('tasks-timeout-effective');
@@ -1226,6 +1228,16 @@ function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
   return taskRunCell(`${provider} · ${model}`);
 }
 
+/** Completion-time cell: only the canonical finishedAt of a terminal run is
+ *  shown; active and unknown runs plus missing/invalid stamps render '-'. */
+function taskRunCompletionTimeCell(run: TaskRunSnapshot): HTMLElement {
+  const terminal = run.status === 'done' || run.status === 'failed'
+    || run.status === 'cancelled' || run.status === 'interrupted';
+  const cell = taskRunCell(terminal ? formatTaskCompletionTime(run.finishedAt) : '-');
+  if (terminal) cell.title = formatTaskCompletionTimeTooltip(run.finishedAt);
+  return cell;
+}
+
 function renderTaskRuns(snapshot: StatsSnapshot): void {
   const list = requireElement('stats-task-runs-list');
   const runs = snapshot.recentTaskRuns;
@@ -1234,7 +1246,7 @@ function renderTaskRuns(snapshot: StatsSnapshot): void {
     return;
   }
   list.replaceChildren(
-    tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度']),
+    tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '完成时间']),
     ...runs.slice(0, 50).map((run) => {
       const active = run.status === 'queued' || run.status === 'running';
       const inputTokens = active || run.usage.inputTokens === undefined
@@ -1254,6 +1266,7 @@ function renderTaskRuns(snapshot: StatsSnapshot): void {
         taskRunModelCell(run),
         taskRunCell(`${inputTokens} / ${outputTokens}`),
         taskRunCell(speedLabel),
+        taskRunCompletionTimeCell(run),
       );
       return row;
     }),
@@ -1512,16 +1525,32 @@ function renderTasksDetail(): void {
   tasksDetail.hidden = false;
   tasksDetailName.textContent = row.display_name;
   tasksDetailIdentity.textContent = row.identity;
-  const automaticRuntime = row.automatic_selection?.resolved?.runtime;
-  const automaticReason = row.automatic_selection?.reason;
-  tasksDetailRuntime.textContent = row.effective.mode.value === 'automatic'
-    ? automaticRuntime
-      ? automaticReason
-        ? `${automaticRuntime}（${automaticReason}）`
-        : automaticRuntime
-      : '未解析'
-    : (row.explicit?.resolved?.runtime ?? '未解析');
+  tasksDetailRuntime.textContent = taskRuntimeLine(row);
   populateTaskForm(row);
+}
+
+/** Paired resolved Provider · Model labels; falls back to canonical ids when the
+ *  snapshot predates the authoritative display labels. */
+function resolvedTaskLabel(resolved: { provider: string; model: string; provider_display_name?: string; model_display_name?: string } | null | undefined): string | null {
+  if (!resolved) return null;
+  const provider = resolved.provider_display_name ?? resolved.provider;
+  const model = resolved.model_display_name ?? resolved.model;
+  return `${provider} · ${model}`;
+}
+
+/** Title-band runtime line: resolved Provider · Model labels when available, a
+ *  concrete issue/unavailable reason otherwise — never a bare fallback pin. */
+function taskRuntimeLine(row: TaskSettingsTaskRow): string {
+  const mode = row.effective.mode.value;
+  const resolved = mode === 'automatic' ? row.automatic_selection?.resolved : row.explicit?.resolved;
+  const label = resolvedTaskLabel(resolved ?? undefined);
+  if (label) {
+    const reason = mode === 'automatic' ? row.automatic_selection?.reason : undefined;
+    return reason ? `${label}（${reason}）` : label;
+  }
+  const issues = taskIssues(row);
+  if (issues.length > 0) return issues[0]!;
+  return mode === 'automatic' ? '自动选择暂无可用运行时' : '指定运行时暂不可用';
 }
 
 /** Render text for a stored explicit reference: alias name or inline target. */
@@ -1566,29 +1595,78 @@ function populateRuntimeSuggestions(): void {
   }
 }
 
+/** ms -> whole-seconds display text ('' when no override at this layer). */
+function msToSecondsText(value: number | null | undefined): string {
+  return value === undefined || value === null ? '' : String(Math.round(value / 1000));
+}
+
+/** Whole-seconds user input -> ms wire value (null clears this layer override). */
+function secondsToMilliseconds(value: string): number | null {
+  if (value.trim() === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('总执行时限必须是正数');
+  return Math.round(parsed * 1000);
+}
+
 function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
   const override = row.user_task.timeout_ms;
   const effective = row.effective.timeout_ms.value;
   if (override !== undefined && override !== null) {
-    tasksTimeoutEffective.textContent = `本层覆盖 ${override.toLocaleString('zh-CN')} 毫秒`;
+    tasksTimeoutEffective.textContent = `本层覆盖 ${msToSecondsText(override)} 秒`;
     tasksTimeoutEffective.classList.remove('is-dim');
     tasksTimeoutEffective.classList.add('is-override');
+  } else if (effective !== undefined && effective !== null) {
+    tasksTimeoutEffective.textContent = `继承 ${msToSecondsText(effective)} 秒`;
+    tasksTimeoutEffective.classList.add('is-dim');
+    tasksTimeoutEffective.classList.remove('is-override');
   } else {
-    tasksTimeoutEffective.textContent = effective !== undefined && effective !== null
-      ? `继承 ${effective.toLocaleString('zh-CN')} 毫秒`
-      : '继承（未设置）';
+    tasksTimeoutEffective.textContent = '继承（未设置）';
     tasksTimeoutEffective.classList.add('is-dim');
     tasksTimeoutEffective.classList.remove('is-override');
   }
   tasksTimeoutReset.disabled = tasksSaveBusy || override === undefined || override === null;
 }
 
+function renderTasksModeSource(row: TaskSettingsTaskRow): void {
+  tasksModeEffective.textContent = row.user_task.mode === undefined ? '本层未固定（沿用默认）' : '本层已固定';
+}
+
+/** Read-only static instruction-template preview. Text is emitted through safe
+ *  text nodes; placeholders become styled tokens. Nothing is executed here and
+ *  no runtime prompt is generated. */
+function renderTasksTemplatePreview(row: TaskSettingsTaskRow): void {
+  const container = tasksPreview;
+  container.replaceChildren();
+  const segments = row.builtin.instruction_template ?? [];
+  if (segments.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'tasks-preview-empty';
+    empty.textContent = '该任务没有可预览的指令模板。';
+    container.append(empty);
+    return;
+  }
+  for (const segment of segments) {
+    const item = document.createElement('span');
+    if (segment.kind === 'text') {
+      item.className = 'tasks-preview-segment tasks-preview-text';
+      item.textContent = segment.text;
+    } else if (segment.kind === 'placeholder') {
+      item.className = 'tasks-preview-segment tasks-preview-placeholder';
+      item.textContent = segment.label;
+    }
+    item.title = segment.source;
+    container.append(item);
+  }
+}
+
 function populateTaskForm(row: TaskSettingsTaskRow): void {
-  tasksModeSelect.value = row.user_task.mode ?? '';
-  tasksTimeoutInput.value = row.user_task.timeout_ms?.toString() ?? '';
+  tasksModeSelect.value = row.user_task.mode ?? 'automatic';
+  renderTasksModeSource(row);
+  tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
   tasksRuntimeInput.value = explicitReferenceText(row.user_task.explicit_runtime);
   populateRuntimeSuggestions();
   renderTimeoutEffective(row);
+  renderTasksTemplatePreview(row);
   updateTasksRowVisibility();
   tasksSaveButton.disabled = tasksSaveBusy;
   tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
@@ -1598,25 +1676,23 @@ function updateTasksRowVisibility(): void {
   tasksExplicitRow.hidden = tasksModeSelect.value !== 'explicit';
 }
 
-function positiveNumber(value: string, label: string): number | null {
-  if (value.trim() === '') return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label}必须是正数`);
-  return parsed;
-}
-
-function buildLayerPatch(layer: TaskSettingsLayer, modeValue: string, runtimeValue: string, timeoutValue: string): TaskSettingsPatch {
+/** Builds the per-task layer patch from the visible controls. The mode baseline
+ *  is the effective two-mode value: a legacy row without a user mode simply
+ *  shows 自动选择 and is never silently pinned just because the user saved other
+ *  fields. Timeout is entered in whole seconds and converted back to ms. */
+function buildLayerPatch(row: TaskSettingsTaskRow, modeValue: string, runtimeValue: string, timeoutValue: string): TaskSettingsPatch {
+  const layer = row.user_task;
+  const mode = modeValue as 'automatic' | 'explicit';
   const patch: TaskSettingsPatch = {};
-  const mode = modeValue as '' | 'automatic' | 'explicit';
-  if ((layer.mode ?? '') !== mode) patch.mode = mode === '' ? null : mode;
+  if ((layer.mode ?? 'automatic') !== mode) patch.mode = mode;
   if (mode === 'explicit') {
     const runtime = referenceFromRuntimeInput(runtimeValue);
     if (!explicitReferencesEqual(layer.explicit_runtime, runtime)) patch.explicit_runtime = runtime;
   } else if (layer.explicit_runtime) {
-    // Automatic/inherited saves clear only this layer's explicit reference.
+    // Switching away from explicit clears only this layer's stored reference.
     patch.explicit_runtime = null;
   }
-  const timeout = positiveNumber(timeoutValue, '总执行时限');
+  const timeout = secondsToMilliseconds(timeoutValue);
   if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
   return patch;
 }
@@ -1629,12 +1705,51 @@ function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
   return patch;
 }
 
+/** Re-reads one task over the existing scoped snapshot path and splices its row
+ *  into the cached snapshot without re-fetching the whole row list. */
 async function selectTasksFile(taskId: string): Promise<void> {
   if (tasksSelectedTaskId === taskId) return;
   tasksSelectedTaskId = taskId;
   renderTasksList();
-  renderTasksDetail();
   setTasksError('');
+  const cached = tasksSelectedRow();
+  if (!cached) {
+    tasksDetail.hidden = true;
+    return;
+  }
+  tasksDetail.hidden = false;
+  renderTasksDetail();
+  setTasksDetailLoading(true);
+  try {
+    // Scoped authoritative row fetch: only this task is re-read and the single
+    // returned row is spliced into the cached snapshot — never a full-list
+    // refetch waterfall per selection.
+    const scoped = await window.wrenyardShell.getTaskSettings(cached.project, cached.identity);
+    applyTaskSettingsSnapshot(scoped);
+    renderTasksList();
+  } catch (error) {
+    setTasksError(`读取失败：${tasksErrorMessage(error)}`);
+  } finally {
+    setTasksDetailLoading(false);
+    if (tasksSelectedRow()) renderTasksDetail();
+  }
+}
+
+/** Explicit loading state while the scoped selected-task fetch is in flight. */
+function setTasksDetailLoading(loading: boolean): void {
+  tasksDetail.setAttribute('aria-busy', String(loading));
+  if (loading) tasksDetailRuntime.textContent = '读取任务设置…';
+  tasksSaveButton.disabled = tasksSaveBusy || loading;
+  tasksResetButton.disabled = tasksSaveBusy || loading;
+}
+
+/** Splices a scoped single-row snapshot into the cached full snapshot so the
+ *  task tree is never replaced by one filtered row. */
+function applyTaskSettingsSnapshot(snapshot: TaskSettingsSnapshot): void {
+  const rows = new Map<string, TaskSettingsTaskRow>();
+  for (const row of taskSettings?.rows ?? []) rows.set(row.identity, row);
+  for (const row of snapshot.rows) rows.set(row.identity, row);
+  taskSettings = { ...snapshot, rows: [...rows.values()] };
 }
 
 async function loadTasks(): Promise<void> {
@@ -1684,8 +1799,9 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   setTasksError('');
   try {
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
-    taskSettings = await window.wrenyardShell.saveTaskSettings({ scope: 'task', task_id: row.identity, ...(row.project ? { project: row.project } : {}), expected_revision: taskSettings.revision, patch });
-    if (!taskSettings.rows.some((candidate) => candidate.identity === row.identity)) tasksSelectedTaskId = taskSettings.rows[0]?.identity ?? null;
+    const saved = await window.wrenyardShell.saveTaskSettings({ scope: 'task', task_id: row.identity, ...(row.project ? { project: row.project } : {}), expected_revision: taskSettings.revision, patch });
+    applyTaskSettingsSnapshot(saved);
+    if (!tasksSelectedRow()) tasksSelectedTaskId = taskSettings?.rows[0]?.identity ?? null;
     renderTasksList();
     renderTasksDetail();
   } catch (error) {
@@ -1708,7 +1824,7 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
 async function saveTaskLayer(reset = false): Promise<void> {
   const row = tasksSelectedRow();
   if (!row || tasksSaveBusy) return;
-  const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row.user_task, tasksModeSelect.value, tasksRuntimeInput.value, tasksTimeoutInput.value);
+  const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row, tasksModeSelect.value, tasksRuntimeInput.value, tasksTimeoutInput.value);
   await commitTaskSave(patch);
 }
 

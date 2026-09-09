@@ -1698,4 +1698,89 @@ describe('stats-query readStatsSummary', () => {
     assert.deepEqual(parseMethodResult('stats.summary', result), result)
     closeTestDb()
   })
+
+  it('keeps one ledger row per run with tasks.ended_at authoritative and earliest started_at', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
+    const hour = 3600_000
+    const iso = (ms: number): string => new Date(ms).toISOString()
+
+    // Terminal runs carry distinct created_at/ended_at; active runs carry no
+    // ended_at. created_at always deliberately differs from ended_at so no
+    // created/updated fallback could satisfy the terminal finished_at asserts.
+    const doneEnded = iso(todayStart.getTime() + 10 * hour)
+    const failedEnded = iso(todayStart.getTime() + 6 * hour)
+    const cancelledEnded = iso(todayStart.getTime() + 7.5 * hour)
+    seedTaskWithProject('ledger-done', 'commit', 'done', iso(todayStart.getTime() + 8 * hour), doneEnded, null, 'builtin')
+    seedTaskWithProject('ledger-failed', 'review', 'failed', iso(todayStart.getTime() + 5 * hour), failedEnded, null, 'builtin')
+    seedTaskWithProject('ledger-cancelled', 'deploy', 'cancelled', iso(todayStart.getTime() + 7 * hour), cancelledEnded, null, 'builtin')
+    seedTaskWithProject('ledger-running', 'build', 'running', iso(todayStart.getTime() + 11 * hour), null, null, 'builtin')
+    seedTaskWithProject('ledger-queued', 'test', 'queued', iso(todayStart.getTime() + 12 * hour), null, null, 'builtin')
+
+    // Two attempts on the same done run with different started_at values; the
+    // earliest one must be projected onto the single ledger row. The queued run
+    // deliberately has no execution at all.
+    const doneEarliestStart = iso(todayStart.getTime() + 8.25 * hour)
+    const runningStart = iso(todayStart.getTime() + 11.5 * hour)
+    const seedExecStarted = (id: string, taskId: string, status: string, startedAt: string): void => {
+      dbRun(
+        `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, started_at, created_at, updated_at)
+         VALUES (?, ?, ?, 'edit', '/tmp', 'prompt', ?, ?, ?, ?)`,
+        id,
+        taskId,
+        'codebuddy',
+        status,
+        startedAt,
+        startedAt,
+        startedAt,
+      )
+    }
+    seedExecStarted('exec-done-1', 'ledger-done', 'done', doneEarliestStart)
+    seedExecStarted('exec-done-2', 'ledger-done', 'done', iso(todayStart.getTime() + 8.5 * hour))
+    seedExecStarted('exec-failed', 'ledger-failed', 'failed', iso(todayStart.getTime() + 5.5 * hour))
+    seedExecStarted('exec-cancelled', 'ledger-cancelled', 'cancelled', iso(todayStart.getTime() + 7.25 * hour))
+    seedExecStarted('exec-running', 'ledger-running', 'running', runningStart)
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    const runs = result.recentRuns
+    assert.ok(runs, 'expected recentRuns for the seeded task runs')
+    assert.equal(runs.length, 5)
+    const byRunId = new Map(runs.map((run) => [run.task_run_id, run]))
+    assert.equal(
+      runs.filter((run) => run.task_run_id === 'ledger-done').length,
+      1,
+      'two executions must collapse to exactly one ledger row for the done run',
+    )
+
+    const doneRun = byRunId.get('ledger-done')
+    assert.ok(doneRun)
+    assert.equal(doneRun.status, 'done')
+    assert.equal(doneRun.finished_at, doneEnded, 'done finished_at is the authoritative tasks.ended_at')
+    assert.equal(doneRun.started_at, doneEarliestStart, 'started_at is the earliest execution.started_at across both attempts')
+    assert.equal(doneRun.usage.attempt_count, 2, 'usage counts both attempts while the ledger keeps one row')
+
+    const failedRun = byRunId.get('ledger-failed')
+    assert.ok(failedRun)
+    assert.equal(failedRun.status, 'failed')
+    assert.equal(failedRun.finished_at, failedEnded, 'failed finished_at is the authoritative tasks.ended_at')
+
+    const cancelledRun = byRunId.get('ledger-cancelled')
+    assert.ok(cancelledRun)
+    assert.equal(cancelledRun.status, 'cancelled')
+    assert.equal(cancelledRun.finished_at, cancelledEnded, 'cancelled finished_at is the authoritative tasks.ended_at')
+
+    const runningRun = byRunId.get('ledger-running')
+    assert.ok(runningRun)
+    assert.equal(runningRun.status, 'running')
+    assert.equal('finished_at' in runningRun, false, 'running runs omit finished_at')
+    assert.equal(runningRun.started_at, runningStart, 'running started_at is projected from its execution')
+
+    const queuedRun = byRunId.get('ledger-queued')
+    assert.ok(queuedRun)
+    assert.equal(queuedRun.status, 'queued')
+    assert.equal('finished_at' in queuedRun, false, 'queued runs omit finished_at')
+    assert.equal('started_at' in queuedRun, false, 'queued runs without an execution omit started_at')
+    closeTestDb()
+  })
 })
