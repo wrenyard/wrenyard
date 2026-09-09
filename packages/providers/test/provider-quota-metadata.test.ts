@@ -29,17 +29,17 @@ test('Cursor Grok maps only to the cursor-models pool with a single raw Cursor/f
   assert.equal(window.checkedAt, '2026-09-08');
 });
 
-test('Kimi k3 requires all three raw windows 5h/7d/1mo with distinct reset kinds', () => {
+test('Kimi k3 requires exactly the two raw windows 5h rolling_partial and 7d full_cycle, never 1mo', () => {
   const binding = findProviderQuotaBinding('kimi-coding', 'k3');
   assert.ok(binding);
   const windows = binding.windows;
   assert.ok(windows);
   assert.equal(binding.quotaProviderId, 'kimi-coding');
   assert.equal(binding.quotaPoolId, 'kimi-membership-coding');
-  assert.deepEqual(windows.map((window) => window.windowId), ['5h', '7d', '1mo']);
+  assert.deepEqual(windows.map((window) => window.windowId), ['5h', '7d']);
   assert.deepEqual(
     windows.map((window) => window.resetKind),
-    ['rolling_partial', 'full_cycle', 'full_cycle'],
+    ['rolling_partial', 'full_cycle'],
   );
   for (const window of windows) {
     assert.equal(window.required, true);
@@ -49,16 +49,22 @@ test('Kimi k3 requires all three raw windows 5h/7d/1mo with distinct reset kinds
   }
 });
 
-test('omitting the monthly window from an observed set leaves k3 coverage incomplete', () => {
+test('k3 needs no monthly window: observed 5h/7d is complete and a raw monthly stays inert', () => {
   const binding = findProviderQuotaBinding('kimi-coding', 'k3');
   assert.ok(binding);
-  assert.deepEqual(uncoveredWindows(binding, ['5h', '7d']), ['1mo']);
-  assert.equal(uncoveredWindows(binding, ['5h', '7d']).length, 1);
+  // 5h + 7d alone fully covers the retained k3 windows; 1mo is not required.
+  assert.deepEqual(uncoveredWindows(binding, ['5h', '7d']), []);
+  assert.equal(uncoveredWindows(binding, ['5h', '7d']).length, 0);
   assert.deepEqual(uncoveredWindows(binding, ['5h', '7d', '1mo']), []);
   assert.equal(uncoveredWindows(binding, ['5h', '7d', '1mo']).length, 0);
+  // Dropping either retained window still leaves coverage incomplete.
+  assert.deepEqual(uncoveredWindows(binding, ['5h']), ['7d']);
+  assert.equal(uncoveredWindows(binding, ['5h']).length, 1);
+  assert.deepEqual(uncoveredWindows(binding, ['7d']), ['5h']);
+  assert.equal(uncoveredWindows(binding, ['7d']).length, 1);
 });
 
-test('both zhipu-coding models map to zhipu-coding-tokens with unproven 5h/7d windows', () => {
+test('both zhipu-coding models share the zhipu-coding-tokens pool with evidence-backed 5h rolling and 7d full-cycle windows', () => {
   for (const modelId of ['glm-5.3', 'glm-5.3-flash']) {
     const binding = findProviderQuotaBinding('zhipu-coding', modelId);
     assert.ok(binding, `missing binding for ${modelId}`);
@@ -67,14 +73,76 @@ test('both zhipu-coding models map to zhipu-coding-tokens with unproven 5h/7d wi
     assert.equal(binding.quotaProviderId, 'zhipu-coding');
     assert.equal(binding.quotaPoolId, 'zhipu-coding-tokens');
     assert.deepEqual(windows.map((window) => window.windowId), ['5h', '7d']);
+    assert.deepEqual(
+      windows.map((window) => window.resetKind),
+      ['rolling_partial', 'full_cycle'],
+    );
     for (const window of windows) {
       assert.equal(window.required, true);
-      assert.equal(window.resetKind, 'unproven');
-      assert.equal(window.evidence, 'provider_parser');
-      assert.equal(window.evidenceRef, 'runtime/forge/internal/usage/quota/bigmodel.go');
-      assert.equal(window.checkedAt, '2026-09-08');
+      assert.equal(window.evidence, 'official_docs');
+      assert.equal(window.evidenceRef, 'https://docs.bigmodel.cn/cn/coding-plan/overview');
+      assert.equal(window.checkedAt, '2026-09-09');
     }
   }
+});
+
+test('every current codex model maps to the codex row with the required weekly window', () => {
+  const expected: ReadonlyArray<readonly [string, string]> = [
+    ['codex', 'gpt-5.6-sol'],
+    ['codex', 'gpt-5.6-terra'],
+    ['codex', 'gpt-5.6-luna'],
+    ['codex', 'gpt-5.3-codex-spark'],
+    ['codex', 'gpt-6-astra'],
+    ['codex', 'gpt-5.5'],
+    ['codex', 'gpt-5.4'],
+    ['codex', 'gpt-5.4-mini'],
+  ];
+  for (const [providerId, modelId] of expected) {
+    const binding = findProviderQuotaBinding(providerId, modelId);
+    assert.ok(binding, `missing binding for ${providerId}/${modelId}`);
+    assert.equal(binding.providerId, providerId);
+    assert.equal(binding.modelId, modelId);
+    assert.equal(binding.quotaProviderId, 'codex');
+    assert.equal(binding.quotaPoolId, 'codex-models');
+    const windows = binding.windows;
+    assert.ok(windows);
+    assert.deepEqual(windows.map((window) => window.windowId), ['7d']);
+    for (const window of windows) {
+      assert.equal(window.required, true);
+      assert.equal(window.resetKind, 'full_cycle');
+      assert.equal(window.evidence, 'provider_parser');
+      assert.equal(window.evidenceRef, 'runtime/forge/internal/usage/quota/codex.go');
+      assert.equal(window.checkedAt, '2026-09-09');
+    }
+    assert.equal(binding.pools, undefined);
+  }
+  // No codex-family bindings beyond the current model sets.
+  const codexFamily = PROVIDER_QUOTA_BINDINGS.filter(
+    (binding) => binding.providerId === 'codex',
+  );
+  assert.deepEqual(
+    codexFamily.map((binding) => [binding.providerId, binding.modelId]).sort(),
+    expected.map(([providerId, modelId]) => [providerId, modelId]).sort(),
+  );
+});
+
+test('codex metadata keeps weekly-only baseline complete and leaves conditional 5h to snapshot evidence', () => {
+  const binding = findProviderQuotaBinding('codex', 'gpt-5.6-sol');
+  assert.ok(binding);
+  assert.deepEqual(uncoveredWindows(binding, ['7d']), []);
+  assert.deepEqual(uncoveredWindows(binding, ['5h', '7d']), []);
+  assert.deepEqual(uncoveredWindows(binding, ['5h']), ['7d']);
+});
+
+test('codex-spark stays on its separate raw pool with both 5h and 7d required', () => {
+  const binding = findProviderQuotaBinding('codex-spark', 'gpt-5.3-codex-spark');
+  assert.ok(binding);
+  assert.equal(binding.quotaProviderId, 'codex-spark');
+  assert.equal(binding.quotaPoolId, 'codex-spark-models');
+  assert.deepEqual(binding.windows?.map((window) => window.windowId), ['5h', '7d']);
+  assert.deepEqual(binding.windows?.map((window) => window.resetKind), ['full_cycle', 'full_cycle']);
+  assert.deepEqual(uncoveredWindows(binding, ['5h', '7d']), []);
+  assert.deepEqual(uncoveredWindows(binding, ['7d']), ['5h']);
 });
 
 test('unsupported providers, models, and near variants return undefined', () => {
@@ -155,7 +223,7 @@ test('codebuddy/hy3 near ids and unrelated models stay unmatched', () => {
 test('existing single-pool bindings keep exact top-level pool fields', () => {
   for (const [providerId, modelId, quotaPoolId, expectedWindows] of [
     ['cursor', 'cursor-grok-4.6-high', 'cursor-models', ['Cursor']],
-    ['kimi-coding', 'k3', 'kimi-membership-coding', ['5h', '7d', '1mo']],
+    ['kimi-coding', 'k3', 'kimi-membership-coding', ['5h', '7d']],
     ['zhipu-coding', 'glm-5.3', 'zhipu-coding-tokens', ['5h', '7d']],
     ['zhipu-coding', 'glm-5.3-flash', 'zhipu-coding-tokens', ['5h', '7d']],
   ] as const) {
