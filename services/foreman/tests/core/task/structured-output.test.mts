@@ -762,25 +762,24 @@ describe('core task structured-output', () => {
       'the original agent error text must be preserved')
   })
 
-  it('forwards selected capabilities to first attempt and retry', async () => {
+  it('forwards selected capabilities to the first attempt without resuming it', async () => {
     const seenCaps: Array<readonly string[] | undefined> = []
     const agent: StructuredOutputAgent = async (_profile, _prompt, opts) => {
       seenCaps.push((opts as { capabilities?: readonly string[] } | undefined)?.capabilities)
-      if (seenCaps.length === 1) {
-        return { output: 'invalid output', status: 'done', nativeSessionId: 'native_cap' }
-      }
-      return { output: xmlOutput({ label: 'cap forwarded' }), status: 'done' }
+      return { output: 'invalid output', status: 'done', nativeSessionId: 'native_cap' }
     }
 
-    const result = await collectWithAgent(agent, {
-      maxResumeAttempts: 1,
-      capabilities: ['browser-use', 'computer-use'],
-    })
+    await assert.rejects(
+      () => collectWithAgent(agent, {
+        maxResumeAttempts: 1,
+        capabilities: ['browser-use', 'computer-use'],
+      }),
+      (error: unknown) => error instanceof GateFailureError
+        && (error.failure.evidence as Record<string, unknown> | undefined)?.outcome_unverified === true,
+    )
 
-    assert.deepEqual(result, { label: 'cap forwarded' })
-    assert.equal(seenCaps.length, 2, 'should have 2 attempts')
+    assert.equal(seenCaps.length, 1, 'a capability-bearing attempt must be one-shot')
     assert.deepEqual(seenCaps[0], ['browser-use', 'computer-use'], 'first attempt must have capabilities')
-    assert.deepEqual(seenCaps[1], ['browser-use', 'computer-use'], 'retry attempt must preserve capabilities')
   })
 
   it('passes capabilities without throwing when no capabilities provided', async () => {
@@ -791,6 +790,95 @@ describe('core task structured-output', () => {
 
     assert.deepEqual(result, { label: 'no caps' })
   })
+
+  it('invokes edit permission at most once despite maxResumeAttempts>0 and marks output unverified', async () => {
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_edit_unverified' }
+      }, { maxResumeAttempts: 2, permission: 'edit' })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1, 'edit permission must be one-shot regardless of maxResumeAttempts')
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+    const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
+    assert.ok(evidence)
+    assert.equal(evidence.outcome_unverified, true)
+    assert.equal(evidence.side_effects_may_have_occurred, true)
+    assert.match(caughtErr.failure.remediation ?? '', /UNVERIFIED/u)
+    assert.match(caughtErr.failure.remediation ?? '', /never retry automatically/u)
+    assert.match(caughtErr.failure.remediation ?? '', /clean working tree or a stable HEAD/u)
+  })
+
+  it('invokes yolo permission at most once despite maxResumeAttempts>0 and marks output unverified', async () => {
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_yolo_unverified' }
+      }, { maxResumeAttempts: 3, permission: 'yolo' })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1, 'yolo permission must be one-shot regardless of maxResumeAttempts')
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+    const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
+    assert.ok(evidence)
+    assert.equal(evidence.outcome_unverified, true)
+    assert.equal(evidence.side_effects_may_have_occurred, true)
+  })
+
+  it('treats an absent permission conservatively as mutation-capable and cannot resume', async () => {
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_missing_perm' }
+      }, { maxResumeAttempts: 2, permission: undefined })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1, 'absent permission must be one-shot, never resuming')
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+    const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
+    assert.ok(evidence)
+    assert.equal(evidence.outcome_unverified, true)
+    assert.equal(evidence.side_effects_may_have_occurred, true)
+  })
+
+  it('still resumes successfully for readonly permission and preserves the native session', async () => {
+    let calls = 0
+    const resumeIds: Array<string | undefined> = []
+    const result = await collectWithAgent(async (_profile, _prompt, opts) => {
+      calls += 1
+      resumeIds.push((opts as { resume?: string } | undefined)?.resume)
+      if (calls === 1) {
+        return {
+          output: 'missing strict JSON on first attempt',
+          status: 'done',
+          nativeSessionId: 'native_readonly_retry',
+        }
+      }
+      return {
+        output: xmlOutput({ label: 'readonly repaired' }),
+        status: 'done',
+        nativeSessionId: 'native_readonly_retry',
+      }
+    }, { maxResumeAttempts: 1, permission: 'readonly' })
+
+    assert.equal(calls, 2, 'readonly permission must still use configured resume attempts')
+    assert.deepEqual(resumeIds, [undefined, 'native_readonly_retry'])
+    assert.deepEqual(result, { label: 'readonly repaired' })
+  })
+
 })
 
 function labelSchema(): StructuredOutputJsonSchema {
@@ -833,6 +921,7 @@ function collectWithAgent(
     outputSchema: labelSchema(),
     timeoutMs: 1000,
     maxResumeAttempts: 0,
+    permission: 'readonly',
     runAgent: agent,
     ...overrides,
   })

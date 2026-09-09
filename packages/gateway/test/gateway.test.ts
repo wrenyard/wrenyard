@@ -12,7 +12,11 @@ function fixture(
   const catalog = new Catalog();
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'public', displayName: 'Public' }],
+    models: [{
+      id: 'public',
+      displayName: 'Public',
+      speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
+    }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://upstream.test/v1/chat/completions', authScheme: 'bearer' }],
   });
   return createModelGateway({

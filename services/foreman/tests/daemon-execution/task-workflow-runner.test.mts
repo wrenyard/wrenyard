@@ -882,8 +882,9 @@ describe('daemon execution timeout', { concurrency: false }, () => {
     })
 
     assert.equal(result.status, 'done')
-    assert.equal(capturedTimeoutMs, 900000,
-      'structured tasks should pass the structured collector default timeout when TaskConfig omits it',
+    assert.ok(
+      capturedTimeoutMs !== undefined && capturedTimeoutMs <= 900000 && capturedTimeoutMs >= 899000,
+      `structured tasks should pass the remaining collector default timeout when TaskConfig omits it; got ${String(capturedTimeoutMs)}`,
     )
   })
 })
@@ -1345,5 +1346,116 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
       /settings resolution exploded/,
     )
     assert.equal(agentCalls, 0, 'no agent may launch when settings resolution fails')
+  })
+})
+
+// ── Structured-output recovery permission boundary (real kernel) ──────────
+
+describe('structured-output recovery permission boundary', { concurrency: false }, () => {
+  it('runs an edit task one-shot and persists unverified structured failure evidence', async () => {
+    const workspace = makeTempDir('foreman-edit-unverified-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(
+      join(projectDir, 'edit-unverified.task.ts'),
+      `export default defineTask({
+  permission: 'edit',
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'make the edit',
+})
+`,
+      'utf-8',
+    )
+    await discoverTasks(workspace)
+
+    let agentCalls = 0
+    let mutationCounter = 0
+    const agent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+      agentCalls += 1
+      mutationCounter += 1
+      // Malformed/missing structured delivery, but advertises a resumable native
+      // session as if it had done real work.
+      return {
+        output: 'missing delivery block after a mutation',
+        status: 'done',
+        nativeSessionId: 'native_edit_kernel',
+      }
+    }
+
+    await assert.rejects(
+      () => executeTask('edit-unverified', undefined, {
+        workspaceRoot: workspace,
+        primitives: { agent },
+      }),
+      /output-schema/u,
+    )
+
+    assert.equal(agentCalls, 1, 'edit permission must invoke the agent exactly once')
+    assert.equal(mutationCounter, 1, 'mutation-capable side effects must not be repeated')
+
+    const row = readTaskRowByTemplate('edit-unverified')
+    assert.ok(row, 'a persisted task row must exist')
+    assert.equal(row?.status, 'failed', 'invalid structured output must fail the task')
+    assert.equal(row?.output, '', 'failed structured delivery must not persist usable output')
+    assert.equal(row?.failure_category, 'gate_failed', 'structured output failure is a gate failure')
+    const errMsg = JSON.parse(row?.error_message ?? '{}') as {
+      phase?: string
+      gate_id?: string
+      retryable?: boolean
+      evidence?: { outcome_unverified?: boolean; side_effects_may_have_occurred?: boolean }
+    }
+    assert.equal(errMsg.phase, 'post')
+    assert.equal(errMsg.gate_id, 'output-schema')
+    assert.equal(errMsg.retryable, false)
+    assert.equal(errMsg.evidence?.outcome_unverified, true, 'mutation-capable failure must be unverified')
+    assert.equal(errMsg.evidence?.side_effects_may_have_occurred, true, 'side effects may have occurred')
+  })
+
+  it('passes readonly permission through and resumes successfully on the kernel', async () => {
+    const workspace = makeTempDir('foreman-readonly-resume-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(
+      join(projectDir, 'readonly-resume.task.ts'),
+      `export default defineTask({
+  permission: 'readonly',
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'read only inspect',
+})
+`,
+      'utf-8',
+    )
+    await discoverTasks(workspace)
+
+    let agentCalls = 0
+    const agent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+      agentCalls += 1
+      if (agentCalls === 1) {
+        return {
+          output: 'missing delivery block on first attempt',
+          status: 'done',
+          nativeSessionId: 'native_readonly_kernel',
+        }
+      }
+      return {
+        output: textOutput('done'),
+        status: 'done',
+        nativeSessionId: 'native_readonly_kernel',
+      }
+    }
+
+    const result = await executeTask('readonly-resume', undefined, {
+      workspaceRoot: workspace,
+      primitives: { agent },
+    })
+
+    assert.equal(result.status, 'done', 'readonly must recover through the structured retry')
+    assert.equal(agentCalls, 2, 'readonly must resume after the first invalid delivery')
+    const row = readTaskRowByTemplate('readonly-resume')
+    assert.ok(row, 'a persisted task row must exist')
+    assert.equal(row?.status, 'done')
+    assert.equal(row?.failure_category, null)
   })
 })

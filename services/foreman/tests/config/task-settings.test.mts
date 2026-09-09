@@ -392,6 +392,17 @@ describe('normalizeTaskSettingsLayer validation', () => {
     assert.deepEqual(effective.dispatch, {})
   })
 
+  it('drops historical preferredRuntime dispatch keys instead of treating them as a current setting', () => {
+    const layer = normalizeTaskSettingsLayer({
+      timeoutMs: 5000,
+      dispatch: {
+        preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-sol' },
+        preferred_runtime: { client: 'claude', provider: 'kimi-coding', model: 'k3' },
+      },
+    } as unknown as TaskSettingsLayer)
+    assert.deepEqual(layer, { timeoutMs: 5000 })
+  })
+
   it('throws on unknown selectionMode and malformed dispatch', () => {
     assert.throws(
       () => normalizeTaskSettingsLayer({ selectionMode: 'manual' }),

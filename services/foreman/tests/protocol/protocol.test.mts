@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { createModelGateway } from '@wrenyard/gateway'
+import { createBuiltinCatalog } from '@wrenyard/providers'
 import {
   INVALID_PARAMS,
   INVALID_REQUEST,
@@ -204,8 +206,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       invocation_settings: targetLayer,
     })
 
-    // Automatic mode with dispatch constraints round-trips too; the automatic
-    // preferred_runtime stays a resolved client/provider/model triple.
+    // Automatic mode with dispatch constraints round-trips too.
     const automaticLayer = {
       mode: 'automatic',
       timeout_ms: 120_000,
@@ -213,7 +214,6 @@ describe('lib/protocol JSON-RPC contract', () => {
         expected_tps: 30,
         intelligence_min: 'mid',
         intelligence_max: 'premium',
-        preferred_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
       },
     }
     assert.deepEqual(parseMethodParams('task.run.create', {
@@ -245,6 +245,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       { timeout_ms: -5 },
       { timeout_ms: '42000' },
       { mode: 'automatic', automatic: { intelligence_min: 'extreme' } },
+      { mode: 'automatic', automatic: { preferred_runtime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' } } },
     ]
     for (const invocation_settings of malformedLayers) {
       assert.throws(
@@ -681,7 +682,6 @@ describe('lib/protocol JSON-RPC contract', () => {
         excludeProfileIds: ['profile-old'],
         excludeClientIds: ['client-old'],
         excludeProviderIds: ['provider-old'],
-        preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-luna' },
       },
     }
     assert.deepEqual(parseMethodResult('task.definition.list', [dispatchSummary]), [dispatchSummary])
@@ -946,6 +946,32 @@ describe('lib/protocol JSON-RPC contract', () => {
       merged: true,
       removed: true,
     })
+  })
+
+  it('validates an actual builtin gateway connection without leaking canonical model metadata', async () => {
+    const catalog = createBuiltinCatalog()
+    assert.ok(catalog.providers().some((provider) => provider.models.some((model) => model.canonicalModel)))
+    const gateway = createModelGateway({
+      catalog,
+      fetch: async () => new Response(),
+      providers: {
+        credential: async () => ({ value: 'test-credential' }),
+        configureApiKey: async () => undefined,
+        resolveUpstreamModel: (_provider, model) => model,
+        publicResponseModel: (_provider, model) => model,
+      },
+    })
+    try {
+      const connection = {
+        ...await gateway.connection('http://127.0.0.1:4000'),
+        token: 'gateway-token',
+      }
+      assert.ok(connection.models.length > 0)
+      assert.ok(connection.models.every((model) => !('canonicalModel' in model)))
+      assert.deepEqual(parseMethodResult('gateway.connection', connection), connection)
+    } finally {
+      await gateway.close()
+    }
   })
 
   it('accepts provider_override as a permitted resolved speed source', () => {
@@ -1394,7 +1420,6 @@ describe('lib/protocol JSON-RPC contract', () => {
             exclude_profile_ids: { value: null, source: 'system' },
             exclude_client_ids: { value: null, source: 'system' },
             exclude_provider_ids: { value: null, source: 'system' },
-            preferred_runtime: { value: null, source: 'system' },
           },
         },
         issues: [],
@@ -1913,7 +1938,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         totalTokens: 1500,
         outcomes: { done: 3, failed: 1, cancelled: 0 },
       },
-      byProfile: [{ profile: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
+      byProfile: [{ profile: 'coding', model: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       byTask: [{ taskName: 'commit', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       daily: [{ dayKey: '2026-07-19', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500, outcomes: { done: 2, failed: 0, cancelled: 0 } }],
     }), {
@@ -1928,7 +1953,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         totalTokens: 1500,
         outcomes: { done: 3, failed: 1, cancelled: 0 },
       },
-      byProfile: [{ profile: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
+      byProfile: [{ profile: 'coding', model: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       byTask: [{ taskName: 'commit', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       daily: [{ dayKey: '2026-07-19', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500, outcomes: { done: 2, failed: 0, cancelled: 0 } }],
     })
@@ -1979,7 +2004,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         totalTokens: 1500,
         outcomes: { done: 3, failed: 1, cancelled: 0 },
       },
-      byProfile: [{ profile: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
+      byProfile: [{ profile: 'coding', model: 'coding', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       byTask: [{ taskName: 'commit', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500 }],
       daily: [{ dayKey: '2026-07-19', dispatchCount: 5, inputTokens: 1000, outputTokens: 500, totalTokens: 1500, outcomes: { done: 2, failed: 0, cancelled: 0 } }],
       totalTaskDurationMs: 7200000,
@@ -2003,7 +2028,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         totalTokens: 0,
         outcomes: { done: 0, failed: 0, cancelled: 0 },
       },
-      byProfile: [],
+      byProfile: [{ profile: 'legacy-only', dispatchCount: 1, inputTokens: 2, outputTokens: 3, totalTokens: 5 }],
       byTask: [],
       daily: [],
     }

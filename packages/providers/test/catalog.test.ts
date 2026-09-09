@@ -263,3 +263,63 @@ test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', 
   assert.equal(plans['codebuddy/kimi-k3:cb'].model, 'kimi-k3');
   assert.equal(plans['codex/gpt-5.6-sol:codex'].model, 'gpt-5.6-sol');
 });
+
+test('shared canonical model metadata is explicit, version-exact, and label-consistent', () => {
+  const catalog = createBuiltinCatalog();
+  const route = (provider: string, model: string) =>
+    catalog.provider(provider)!.models.find((entry) => entry.id === model)!;
+
+  // Kimi documents `k3` as Kimi K3 and separately exposes `kimi-k3` as the
+  // same display-prefixed identity; every exact K3 route shares one model row.
+  for (const [provider, model] of [
+    ['codebuddy', 'kimi-k3'],
+    ['cursor', 'kimi-k3'],
+    ['kimi-coding', 'k3'],
+  ] as const) {
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'kimi-k3', displayName: 'Kimi K3' });
+  }
+
+  // MiniMax and Tencent's official model tables identify these exact versions
+  // despite the provider-specific casing of their API ids.
+  for (const [provider, model] of [
+    ['codebuddy', 'minimax-m3'],
+    ['minimax', 'MiniMax-M3'],
+    ['minimax-coding', 'MiniMax-M3'],
+  ] as const) {
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m3', displayName: 'MiniMax M3' });
+  }
+  for (const [provider, model] of [
+    ['minimax', 'MiniMax-M2.7'],
+    ['minimax-coding', 'MiniMax-M2.7'],
+    ['tokenhub', 'minimax-m2.7'],
+  ] as const) {
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m2.7', displayName: 'MiniMax M2.7' });
+  }
+
+  assert.deepEqual(route('codebuddy', 'hy4-preview').canonicalModel, {
+    id: 'hunyuan-hy4-preview',
+    displayName: 'Hunyuan HY4 Preview',
+  });
+  assert.deepEqual(route('tokenhub', 'hy4-preview').canonicalModel, route('codebuddy', 'hy4-preview').canonicalModel);
+
+  // Dated DeepSeek routes are distinct versions. Current provider aliases and
+  // matching marketing labels must never fold their historical usage into an
+  // unversioned route.
+  assert.equal(route('codebuddy', 'deepseek-v4-flash').canonicalModel, undefined);
+  assert.equal(route('tokenhub', 'deepseek-v4-flash-202605').canonicalModel, undefined);
+  assert.equal(route('codebuddy', 'deepseek-v4-pro').canonicalModel, undefined);
+  assert.equal(route('tokenhub', 'deepseek-v4-pro-202606').canonicalModel, undefined);
+
+  const groups = new Map<string, Set<string>>();
+  for (const provider of BUILTIN_PROVIDERS) {
+    for (const model of provider.models) {
+      if (!model.canonicalModel) continue;
+      const labels = groups.get(model.canonicalModel.id) ?? new Set<string>();
+      labels.add(model.canonicalModel.displayName);
+      groups.set(model.canonicalModel.id, labels);
+    }
+  }
+  for (const [id, labels] of groups) {
+    assert.equal(labels.size, 1, `${id} must have one canonical display-name source`);
+  }
+});

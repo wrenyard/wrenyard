@@ -1093,6 +1093,8 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
     name: item.name,
     runCount: item.dispatchCount,
     totalTokens: item.totalTokens,
+    ...(item.modelDisplayName !== undefined ? { modelDisplayName: item.modelDisplayName } : {}),
+    ...(item.providerDisplayNames !== undefined ? { providerDisplayNames: item.providerDisplayNames } : {}),
   }));
   if (rows.length === 0) {
     list.replaceChildren(emptyRow('暂无模型统计'));
@@ -1100,12 +1102,28 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
   }
   list.replaceChildren(
     tableHeader(['模型', '运行', 'Token', '平均 TPS']),
-    ...rows.slice(0, 12).map((row) => tableRow([
-      modelStatsLabel(snapshot, row.name),
-      formatCount(row.runCount),
-      formatCompactTokenCount(row.totalTokens),
-      'averageTps' in row && typeof row.averageTps === 'number' ? row.averageTps.toFixed(2) : '—',
-    ], 'profile-row')),
+    ...rows.slice(0, 12).map((row) => {
+      // The main cell shows only the unified short model display name from the
+      // server; when it is absent we render a safe dash, never a raw id.
+      const displayName = row.modelDisplayName && row.modelDisplayName.length > 0 ? row.modelDisplayName : '-';
+      const rowElement = tableRow([
+        displayName,
+        formatCount(row.runCount),
+        formatCompactTokenCount(row.totalTokens),
+        'averageTps' in row && typeof row.averageTps === 'number' ? row.averageTps.toFixed(2) : '—',
+      ], 'profile-row');
+      const firstCell = rowElement.firstElementChild as HTMLElement | null;
+      if (firstCell) {
+        const providers = row.providerDisplayNames;
+        const distinct = Array.isArray(providers)
+          ? [...new Set(providers.filter((name): name is string => typeof name === 'string' && name.length > 0))]
+          : [];
+        // Provider display names are exposed only in the tooltip; never in the
+        // main cell text and never as raw identity ids.
+        firstCell.title = distinct.length > 0 ? `提供方：${distinct.join('、')}` : '-';
+      }
+      return rowElement;
+    }),
   );
 }
 
@@ -1236,30 +1254,6 @@ function taskRunModelLabel(run: TaskRunSnapshot): string | null {
 
 function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
   return taskRunCell(taskRunModelLabel(run) ?? '-');
-}
-
-/** Exact same-snapshot projection for model statistics. Historical aliases
- *  and incomplete/inconsistent rows stay unknown; conflicting labels for one
- *  canonical runtime are ambiguous instead of guessed. */
-function modelStatsLabel(snapshot: StatsSnapshot, profile: string): string {
-  const labels = new Map<string, string>();
-  const ambiguous = new Set<string>();
-  for (const run of snapshot.recentTaskRuns) {
-    const resolvedProfile = run.resolvedProfile;
-    const provider = run.resolvedProvider;
-    const model = run.resolvedModel;
-    const label = taskRunModelLabel(run);
-    if (!resolvedProfile || !provider || !model || label === null) continue;
-    if (!resolvedProfile.startsWith(`${provider}/${model}:`)) continue;
-    const existing = labels.get(resolvedProfile);
-    if (existing !== undefined && existing !== label) {
-      labels.delete(resolvedProfile);
-      ambiguous.add(resolvedProfile);
-      continue;
-    }
-    if (!ambiguous.has(resolvedProfile)) labels.set(resolvedProfile, label);
-  }
-  return labels.get(profile) ?? '-';
 }
 
 /** Completion-time cell: only the canonical finishedAt of a terminal run is
@@ -1679,9 +1673,12 @@ function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
 }
 
 function populateTaskForm(row: TaskSettingsTaskRow): void {
-  applyTasksModeSelection(row.user_task.mode ?? 'automatic');
+  // The controls edit the effective two-mode contract, not a synthetic
+  // per-task default. This keeps inherited global explicit selections visible
+  // while still leaving the per-task layer empty until the user changes them.
+  applyTasksModeSelection(row.effective.mode.value);
   tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
-  tasksRuntimeInput.value = explicitReferenceText(row.user_task.explicit_runtime);
+  tasksRuntimeInput.value = explicitReferenceText(row.effective.explicit_runtime.value);
   populateRuntimeSuggestions();
   renderTimeoutEffective(row);
   renderTasksTemplatePreview(row);
@@ -1724,13 +1721,21 @@ function renderTasksTemplatePreview(row: TaskSettingsTaskRow): void {
 function buildLayerPatch(row: TaskSettingsTaskRow, modeValue: string, runtimeValue: string, timeoutValue: string): TaskSettingsPatch {
   const layer = row.user_task;
   const mode = modeValue as 'automatic' | 'explicit';
+  const effectiveMode = row.effective.mode.value;
+  const modeChanged = effectiveMode !== mode;
   const patch: TaskSettingsPatch = {};
-  if ((layer.mode ?? 'automatic') !== mode) patch.mode = mode;
+  // Compare visible edits with the effective baseline. Saving a timeout while
+  // inheriting global explicit mode therefore does not create a task mode pin;
+  // choosing automatic under that same global value does create the necessary
+  // per-task automatic override.
+  if (modeChanged) patch.mode = mode;
   if (mode === 'explicit') {
     const runtime = referenceFromRuntimeInput(runtimeValue);
-    if (!explicitReferencesEqual(layer.explicit_runtime, runtime)) patch.explicit_runtime = runtime;
-  } else if (layer.explicit_runtime) {
+    if (!explicitReferencesEqual(row.effective.explicit_runtime.value, runtime)) patch.explicit_runtime = runtime;
+  } else if (modeChanged && layer.explicit_runtime) {
     // Switching away from explicit clears only this layer's stored reference.
+    // A timeout-only save in an already-automatic row leaves dormant inherited
+    // or per-task reference data untouched.
     patch.explicit_runtime = null;
   }
   const timeout = secondsToMilliseconds(timeoutValue);

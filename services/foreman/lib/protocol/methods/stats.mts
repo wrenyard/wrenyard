@@ -63,7 +63,19 @@ export interface StatsTodayItem {
 }
 
 export interface ProfileRankingItem {
+  /**
+   * Deprecated legacy alias equal to `model` (the shared canonical id or the
+   * provider/model identity for an unmapped route). Retained
+   * so old clients can still parse a `profile` field; new clients should read
+   * `model`.
+   */
   profile: string
+  /** Shared canonical model id, or provider/model for an unmapped exact route. */
+  model: string
+  /** Optional exact short model display name resolved from the current Catalog. */
+  model_display_name?: string
+  /** Optional sorted, de-duplicated provider display names for the tooltip. */
+  provider_display_names?: string[]
   dispatchCount: number
   inputTokens: number
   outputTokens: number
@@ -102,7 +114,19 @@ export interface TaskWindowRow {
 }
 
 export interface StatsWindowProfileRow {
+  /**
+   * Deprecated legacy alias equal to `model` (the shared canonical id or the
+   * provider/model identity for an unmapped route). Retained
+   * so old clients can still parse a `profile` field; new clients should read
+   * `model`.
+   */
   profile: string
+  /** Shared canonical model id, or provider/model for an unmapped exact route. */
+  model: string
+  /** Optional exact short model display name resolved from the current Catalog. */
+  model_display_name?: string
+  /** Optional sorted, de-duplicated provider display names for the tooltip. */
+  provider_display_names?: string[]
   runCount: number
   totalTokens: number
   averageTps?: number
@@ -205,9 +229,17 @@ const statsWindowSummarySchema = {
       type: 'array',
       items: {
         type: 'object',
+        // `model` is additive. Current producers always emit it, while the
+        // protocol validator still accepts older profile-only responses.
         required: ['profile', 'runCount', 'totalTokens'],
         properties: {
           profile: { type: 'string' },
+          model: { type: 'string' },
+          model_display_name: { type: 'string' },
+          provider_display_names: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+          },
           runCount: { type: 'integer', minimum: 0 },
           totalTokens: { type: 'number', minimum: 0 },
           averageTps: { type: 'number', minimum: 0 },
@@ -264,9 +296,17 @@ export const statsSummaryResultSchema = {
       type: 'array',
       items: {
         type: 'object',
+        // `model` is additive. Current producers always emit it, while the
+        // protocol validator still accepts older profile-only responses.
         required: ['profile', 'dispatchCount', 'inputTokens', 'outputTokens', 'totalTokens'],
         properties: {
           profile: { type: 'string' },
+          model: { type: 'string' },
+          model_display_name: { type: 'string' },
+          provider_display_names: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+          },
           dispatchCount: { type: 'integer', minimum: 0 },
           inputTokens: { type: 'number', minimum: 0 },
           outputTokens: { type: 'number', minimum: 0 },

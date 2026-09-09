@@ -132,7 +132,21 @@ function parseOutcomes(value: unknown, allowRunning: boolean): StatsOutcomesSnap
 
 function parseProfileRanking(value: unknown): StatsRankingSnapshot | null {
   const record = asRecord(value);
-  return record ? parseRanking(record, 'profile') : null;
+  if (!record) return null;
+  const model = readString(record.model);
+  // Prefer the canonical model identity; fall back to the legacy profile name
+  // for older payloads that only carry `profile`.
+  const name = model ?? readString(record.profile);
+  const dispatchCount = readCount(record.dispatchCount);
+  const totalTokens = readCount(record.totalTokens);
+  if (name === null || dispatchCount === null || totalTokens === null) return null;
+  const result: StatsRankingSnapshot = { name, dispatchCount, totalTokens };
+  if (model !== null) result.model = model;
+  const modelDisplayName = readString(record.model_display_name);
+  if (modelDisplayName !== null) result.modelDisplayName = modelDisplayName;
+  const providerDisplayNames = parseProviderDisplayNames(record.provider_display_names);
+  if (providerDisplayNames !== null) result.providerDisplayNames = providerDisplayNames;
+  return result;
 }
 
 function parseTaskRanking(value: unknown): StatsRankingSnapshot | null {
@@ -177,12 +191,35 @@ function parseWindow(value: unknown): StatsWindowSnapshot | null {
 function parseWindowProfile(value: unknown): StatsWindowSnapshot['byProfile'][number] | null {
   const record = asRecord(value);
   if (!record) return null;
-  const name = readString(record.profile);
+  const model = readString(record.model);
+  // Prefer the canonical model identity; fall back to the legacy profile name
+  // for older payloads that only carry `profile`.
+  const name = model ?? readString(record.profile);
   const runCount = readCount(record.runCount);
   const totalTokens = readCount(record.totalTokens);
   const averageTps = readCount(record.averageTps);
   if (name === null || runCount === null || totalTokens === null) return null;
-  return { name, runCount, totalTokens, ...(averageTps !== null ? { averageTps } : {}) };
+  const result: StatsWindowSnapshot['byProfile'][number] = { name, runCount, totalTokens };
+  if (model !== null) result.model = model;
+  if (averageTps !== null) result.averageTps = averageTps;
+  const modelDisplayName = readString(record.model_display_name);
+  if (modelDisplayName !== null) result.modelDisplayName = modelDisplayName;
+  const providerDisplayNames = parseProviderDisplayNames(record.provider_display_names);
+  if (providerDisplayNames !== null) result.providerDisplayNames = providerDisplayNames;
+  return result;
+}
+
+function parseProviderDisplayNames(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length === 0 || item.length > 256) continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result.length > 0 ? result : null;
 }
 
 function parseWindowTask(value: unknown): StatsWindowSnapshot['byTask'][number] | null {

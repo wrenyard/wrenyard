@@ -83,7 +83,6 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'exclude_profile_ids',
   'exclude_client_ids',
   'exclude_provider_ids',
-  'preferred_runtime',
 ]);
 const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'frontier', 'premium']);
 const TASK_SETTINGS_CAPABILITY_VALUES = new Set(['text', 'image']);
@@ -182,7 +181,6 @@ function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false):
       }
     }
   }
-  if (automatic.preferred_runtime !== undefined && !(allowFieldReset && automatic.preferred_runtime === null)) validateExplicitReferenceValue(automatic.preferred_runtime);
 }
 
 /**

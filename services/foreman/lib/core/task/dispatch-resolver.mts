@@ -36,9 +36,8 @@ import {
  * resolved runtime task plans: an absent declaredRuntime or a legacy policy
  * string (fast/general/ultra) opens the full task-capable candidate pool and a
  * non-policy legacy `forge/<profile>` declaration no longer maps to any source
- * preset and fails closed. A machine/global `machinePreference` and a
- * `requirements.preferredRuntime` are ignored by automatic selection: a
- * concrete runtime/alias choice exists only in explicit mode. Every candidate
+ * preset and fails closed. A machine/global `machinePreference` is ignored by
+ * automatic selection: a concrete runtime/alias choice exists only in explicit mode. Every candidate
  * passes the same hard gates, then `resolveConstrainedDispatch` collapses
  * provider/model clients (native > grok > claude/others) and ranks the models.
  * `resolveConstrainedDispatch` is the sole filter/order; this
@@ -203,8 +202,8 @@ export interface TaskDispatchResolver {
   /**
    * Resolves one EXACT canonical dynamic target, bypassing every automatic
    * selection constraint (expected/minimum speed, intelligence range,
-   * reference-price ceiling, automatic exclusion lists, preferredRuntime,
-   * machine preference, and ranking) and applying only intrinsic availability
+   * reference-price ceiling, automatic exclusion lists, machine preference,
+   * and ranking) and applying only intrinsic availability
    * plus optional required capabilities. Failure is terminal: an unavailable,
    * unknown, non-task-capable, policy, capability-incompatible, or non-truthful
    * target returns `ExplicitRuntimeUnavailableError` and never falls back to
@@ -349,7 +348,8 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return { code: 'no_available_provider' }
     }
     const provider = catalog.provider(plan.provider)
-    const modelDef = provider?.models.find((entry) => entry.id === plan.model)
+    if (!provider) return { code: 'no_available_provider' }
+    const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider' }
     const priceUsdPerMillion = modelDef.pricing?.outputUsdPerMillion
     const atGate = (code: TaskResolutionFailureCode): TaskResolutionElimination => ({ code, priceUsdPerMillion })
@@ -383,8 +383,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       }
     }
 
-    const local = localSpeed?.find((sample) => sample.profileId === candidate.profileId)
-    const speedTps = local ? local.tps : modelDef.speed ? modelDef.speed.tps : 0
+    const local = localSpeed?.find((sample) =>
+      sample.profileId === candidate.profileId
+      && Number.isFinite(sample.tps)
+      && sample.tps > 0
+      && Number.isInteger(sample.sampleCount)
+      && sample.sampleCount > 0
+      && typeof sample.checkedAt === 'string'
+      && sample.checkedAt.trim().length > 0,
+    )
+    const speedTps = local?.tps
+      ?? provider.modelSpeedOverrides?.[modelDef.id]?.tps
+      ?? modelDef.speed.tps
     if (requirements.minimumTps !== undefined && speedTps < requirements.minimumTps) {
       return atGate('speed_requirement')
     }
@@ -414,8 +424,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   ): TaskDispatchResolution => {
     const req = input.requirements
 
-    // machinePreference and requirements.preferredRuntime are ignored for
-    // automatic selection: a machine/global concrete runtime is never parsed
+    // machinePreference is ignored for automatic selection: a machine/global concrete runtime is never parsed
     // into a preferred candidate. resolveConstrainedDispatch applies every hard
     // gate, collapses provider/model clients (native > grok > claude/others),
     // then ranks models by expected-speed group and reference output price. A
@@ -498,8 +507,8 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // runtime plan/credential route, and can yield truthful resolved dispatch
   // metadata) plus the caller's required capabilities. None of the automatic
   // selection machinery runs here: no expected/minimum speed, no intelligence
-  // range, no reference-price ceiling, no exclusion lists, no preferredRuntime,
-  // no machine preference, and no ranking. A failure is terminal — the explicit
+  // range, no reference-price ceiling, no exclusion lists, no machine preference,
+  // and no ranking. A failure is terminal — the explicit
   // error is returned and no other candidate is ever evaluated as a fallback.
   const evaluateExplicitTarget = (
     taskName: string,

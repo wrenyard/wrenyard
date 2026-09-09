@@ -290,6 +290,75 @@ test('stats snapshot retains runs with unknown cost and never fabricates a speed
   assert.equal(zeroAndBad.speed, undefined);
 });
 
+test('stats snapshot parses additive model/display/provider fields and prefers model over legacy profile', async () => {
+  const snapshot = await buildStatsSnapshot(async (method) => {
+    if (method === 'stats.today') throw new Error('method unavailable');
+    return {
+      source: 'sqlite',
+      today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
+      daily: [],
+      byProfile: [
+        {
+          model: 'kimi/kimi-k2',
+          profile: 'legacy-fallback',
+          dispatchCount: 8,
+          inputTokens: 1,
+          outputTokens: 2,
+          totalTokens: 3,
+          model_display_name: 'Kimi K2',
+          provider_display_names: ['Kimi', 'Kimi', 'Moonshot'],
+        },
+        { profile: 'old-only', dispatchCount: 4, totalTokens: 2 },
+      ],
+      byTask: [],
+      windows: [
+        {
+          period: '24h',
+          startAt: today.startAt,
+          endAt: today.endAt,
+          dispatchCount: 12,
+          totalTokens: 3_900,
+          byProfile: [
+            {
+              model: 'kimi/kimi-k3',
+              profile: 'legacy-p',
+              runCount: 8,
+              totalTokens: 3_000,
+              averageTps: 12.5,
+              model_display_name: 'Kimi K3',
+              provider_display_names: ['Kimi', 'Moonshot', 'Kimi'],
+            },
+          ],
+          taskStats: {
+            totalDurationMs: 120_000,
+            byTask: [],
+            builtinTotalDurationMs: 80_000,
+            byBuiltinTask: [],
+          },
+        },
+      ],
+    };
+  });
+
+  assert.equal(snapshot.byProfile.length, 2);
+  // model is preferred over the legacy profile for the internal identity
+  assert.equal(snapshot.byProfile[0].name, 'kimi/kimi-k2');
+  assert.equal(snapshot.byProfile[0].model, 'kimi/kimi-k2');
+  assert.equal(snapshot.byProfile[0].modelDisplayName, 'Kimi K2');
+  // provider names are de-duplicated deterministically, preserving order
+  assert.deepEqual(snapshot.byProfile[0].providerDisplayNames, ['Kimi', 'Moonshot']);
+  // old profile-only payload stays parseable but never acquires a guessed display name
+  assert.equal(snapshot.byProfile[1].name, 'old-only');
+  assert.equal(snapshot.byProfile[1].model, undefined);
+  assert.equal(snapshot.byProfile[1].modelDisplayName, undefined);
+  assert.equal(snapshot.byProfile[1].providerDisplayNames, undefined);
+
+  const windowProfile = snapshot.windows[0].byProfile[0];
+  assert.equal(windowProfile.name, 'kimi/kimi-k3');
+  assert.equal(windowProfile.modelDisplayName, 'Kimi K3');
+  assert.deepEqual(windowProfile.providerDisplayNames, ['Kimi', 'Moonshot']);
+});
+
 test('stats snapshot tolerates missing recentRuns and malformed rows', async () => {
   const snapshot = await buildStatsSnapshot(async (method) => {
     if (method === 'stats.today') throw new Error('method unavailable');

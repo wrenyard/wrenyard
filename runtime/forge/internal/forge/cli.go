@@ -66,8 +66,6 @@ func Run(args []string, prog string) int {
 	}
 
 	switch command {
-	case "profiles":
-		return profilesCommand(args[1:])
 	case "providers":
 		return providersCommand(args[1:])
 	case "auth":
@@ -90,7 +88,6 @@ func Run(args []string, prog string) int {
 }
 
 var topLevelCommands = []string{
-	"profiles",
 	"providers",
 	"auth",
 	"shell",
@@ -121,7 +118,7 @@ func resolveTopLevelCommand(input string) (string, bool, bool) {
 }
 
 func printHelp(prog string) {
-	fmt.Fprintf(os.Stdout, `Forge workflow CLI
+	fmt.Fprintf(os.Stdout, `Forge runtime CLI
 
 FLAGS
   --version                Show forge version
@@ -132,11 +129,6 @@ DIRECT RUNTIME
                            Run one synchronous agent turn without Forge-managed session state
 
 COMMANDS
-  profiles list            List effective profiles and profile policies
-  profiles list profile    List only effective active profiles
-  profiles list policy     List only profile policies with candidate/effective resolution info
-  profiles show <name>     Show profile availability details
-
   providers list           List canonical built-in providers with binding/auth state
   providers auth login <name>   Store credentials for a provider
   providers auth logout <name>  Remove credentials for a provider

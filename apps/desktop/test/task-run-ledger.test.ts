@@ -159,8 +159,8 @@ test('recent-run ledger panel is plain markup with wrapping six-column styles', 
 
 test('recent-run ledger model cell renders paired Catalog display labels joined by a middle dot only', () => {
   const start = appSource.indexOf('function taskRunModelLabel');
-  const end = appSource.indexOf('function modelStatsLabel', start);
-  assert.ok(start >= 0 && end > start, 'model label helpers must precede modelStatsLabel in app.ts');
+  const end = appSource.indexOf('function taskRunCompletionTimeCell', start);
+  assert.ok(start >= 0 && end > start, 'model label helper must precede taskRunModelCell in app.ts');
   const body = appSource.slice(start, end);
 
   assert.ok(
@@ -188,24 +188,26 @@ test('recent-run ledger model cell renders paired Catalog display labels joined 
   }
 });
 
-test('model statistics uses exact recent-run display labels without exposing profiles or guessing aliases', () => {
+test('model statistics renders server-provided model display name with provider tooltip only', () => {
   assert.ok(htmlSource.includes('<h2 id="profile-title">模型统计</h2>'), 'card heading is 模型统计');
   const renderStart = appSource.indexOf('function renderProfiles');
   const renderEnd = appSource.indexOf('function renderTasks', renderStart);
   const renderBody = appSource.slice(renderStart, renderEnd);
   assert.ok(renderBody.includes("tableHeader(['模型', '运行', 'Token', '平均 TPS'])"), 'first column is 模型');
   assert.ok(renderBody.includes("emptyRow('暂无模型统计')"), 'empty state names model statistics');
-  assert.ok(renderBody.includes('modelStatsLabel(snapshot, row.name)'), 'profile identity is projected through the bounded helper');
-  assert.ok(!renderBody.includes("row.name,"), 'raw profile never feeds the visible first cell');
+  // First cell reads only the server-provided display name; no raw ids.
+  assert.ok(renderBody.includes('modelDisplayName'), 'model statistics reads the server model display name');
+  assert.ok(!renderBody.includes("row.name,"), 'raw profile/model identity never feeds the visible first cell');
+  assert.ok(renderBody.includes("'-'"), 'absent display name renders a dash');
+  // Provider display names appear only as a concise tooltip, never in main text.
+  assert.ok(renderBody.includes('提供方：'), 'provider display names are exposed as a concise tooltip');
+  // No fuzzy recent-ledger mapping remains.
+  assert.ok(!renderBody.includes('recentTaskRuns'), 'model statistics no longer scans recentTaskRuns');
+  assert.ok(!renderBody.includes('resolvedProfile'), 'model statistics never uses resolvedProfile prefix matching');
+  assert.ok(!appSource.includes('function modelStatsLabel'), 'temporary modelStatsLabel helper is removed');
 
-  const labelStart = appSource.indexOf('function modelStatsLabel');
-  const labelEnd = appSource.indexOf('function taskRunCompletionTimeCell', labelStart);
-  const labelBody = appSource.slice(labelStart, labelEnd);
-  assert.ok(labelBody.includes('snapshot.recentTaskRuns'), 'mapping uses only the same stats snapshot');
-  assert.ok(labelBody.includes('run.resolvedProfile'), 'mapping requires an exact resolved profile');
-  assert.ok(labelBody.includes('run.resolvedProvider'), 'mapping requires the canonical provider');
-  assert.ok(labelBody.includes('run.resolvedModel'), 'mapping requires the canonical model');
-  assert.ok(labelBody.includes('startsWith(`${provider}/${model}:`)'), 'profile/provider/model must be internally consistent');
-  assert.ok(labelBody.includes('ambiguous.add(resolvedProfile)'), 'conflicting labels become ambiguous');
-  assert.ok(labelBody.includes("return labels.get(profile) ?? '-'"), 'unknown and alias-only buckets render a dash');
+  // recent Task rows still render the paired Provider · Model display names, unchanged.
+  const ledger = ledgerRegion();
+  assert.ok(ledger.includes('function taskRunModelLabel(run: TaskRunSnapshot): string | null {'), 'paired display labels helper exists');
+  assert.ok(ledger.includes(' · '), 'paired display names are joined by a middle dot');
 });

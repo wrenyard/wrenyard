@@ -1,4 +1,4 @@
-import { Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
+import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
@@ -46,10 +46,41 @@ export function isBuiltinClientGatewayProviderSupported(clientID: string, provid
 type RawModelDefinition = Omit<ModelDefinition, 'speed'> & { speed?: ModelSpeedMeta };
 type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly RawModelDefinition[] };
 
-const model = (id: string, displayName: string, contextWindow?: number, maxTokens?: number): RawModelDefinition => ({
+// Shared identities are deliberately opt-in. Each entry represents an exact,
+// evidence-backed model version exposed through more than one provider route;
+// an unlisted route remains provider-local even when its raw id happens to
+// match another provider's id. This registry is the single canonical label
+// source for model-only statistics.
+const CANONICAL_MODELS = {
+  'claude-opus-5': { id: 'claude-opus-5', displayName: 'Claude Opus 5' },
+  'glm-5.3': { id: 'glm-5.3', displayName: 'GLM-5.3' },
+  'glm-5.3-flash': { id: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash' },
+  'gpt-5.3-codex-spark': { id: 'gpt-5.3-codex-spark', displayName: 'GPT-5.3 Codex Spark' },
+  'gpt-5.6-luna': { id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna' },
+  'gpt-5.6-sol': { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
+  'gpt-5.6-terra': { id: 'gpt-5.6-terra', displayName: 'GPT-5.6 Terra' },
+  'hunyuan-hy4-preview': { id: 'hunyuan-hy4-preview', displayName: 'Hunyuan HY4 Preview' },
+  'kimi-k2.6': { id: 'kimi-k2.6', displayName: 'Kimi K2.6' },
+  'kimi-k3': { id: 'kimi-k3', displayName: 'Kimi K3' },
+  'minimax-m2.7': { id: 'minimax-m2.7', displayName: 'MiniMax M2.7' },
+  'minimax-m2.7-highspeed': { id: 'minimax-m2.7-highspeed', displayName: 'MiniMax M2.7 Highspeed' },
+  'minimax-m3': { id: 'minimax-m3', displayName: 'MiniMax M3' },
+  'qwen3-coder-next': { id: 'qwen3-coder-next', displayName: 'Qwen3 Coder Next' },
+  'qwen3.5-plus': { id: 'qwen3.5-plus', displayName: 'Qwen3.5 Plus' },
+  'qwen3.7-plus': { id: 'qwen3.7-plus', displayName: 'Qwen3.7 Plus' },
+} as const satisfies Readonly<Record<string, CanonicalModelDefinition>>;
+
+const model = (
+  id: string,
+  displayName: string,
+  contextWindow?: number,
+  maxTokens?: number,
+  canonicalModel?: CanonicalModelDefinition,
+): RawModelDefinition => ({
   id, displayName,
   ...(contextWindow ? { contextWindow } : {}),
   ...(maxTokens ? { maxTokens } : {}),
+  ...(canonicalModel ? { canonicalModel } : {}),
 });
 
 const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
@@ -67,7 +98,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     defaultModel: 'claude-sonnet-5',
     models: [
       { ...model('claude-fable-5', 'Claude Fable 5', 1_000_000, 131_072), family: 'claude', supports1MContext: true },
-      { ...model('claude-opus-5', 'Claude Opus 5', 1_000_000, 131_072), family: 'claude', claudeTier: 'opus', supports1MContext: true },
+      { ...model('claude-opus-5', 'Claude Opus 5', 1_000_000, 131_072, CANONICAL_MODELS['claude-opus-5']), family: 'claude', claudeTier: 'opus', supports1MContext: true },
       { ...model('claude-sonnet-5', 'Claude Sonnet 5', 1_000_000, 131_072), family: 'claude', claudeTier: 'sonnet', supports1MContext: true },
       { ...model('claude-haiku-4-5-20251001', 'Claude Haiku 4.5', 200_000, 64_000), family: 'claude', claudeTier: 'haiku' },
     ],
@@ -79,12 +110,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     models: [
       model('deepseek-v4-flash', 'DeepSeek V4 Flash'),
       model('deepseek-v4-pro', 'DeepSeek V4 Pro'),
-      model('hy4-preview', 'HY4 Preview'),
+      model('hy4-preview', 'HY4 Preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']),
       model('hy3', 'HY3'),
-      model('minimax-m3', 'MiniMax M3'),
-      model('kimi-k3', 'Kimi K3'),
-      model('glm-5.3', 'GLM-5.3'),
-      model('glm-5.3-flash', 'GLM-5.3 Flash'),
+      model('minimax-m3', 'MiniMax M3', undefined, undefined, CANONICAL_MODELS['minimax-m3']),
+      model('kimi-k3', 'Kimi K3', undefined, undefined, CANONICAL_MODELS['kimi-k3']),
+      model('glm-5.3', 'GLM-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']),
+      model('glm-5.3-flash', 'GLM-5.3 Flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']),
     ],
     modelAliases: { 'hy4-preview-ioa': 'hy4-preview' },
     protocols: [openAI('https://copilot.tencent.com/v2/chat/completions')],
@@ -93,11 +124,11 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     id: 'codex', displayName: 'Codex Subscription', credentialResolver: 'codex',
     nativeClients: ['codex'], defaultModel: 'gpt-5.6-sol', quotaProvider: 'codex',
     models: [
-      model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072),
-      model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072),
-      model('gpt-5.6-luna', 'GPT-5.6 Luna', 1_050_000, 131_072),
+      model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol']),
+      model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra']),
+      model('gpt-5.6-luna', 'GPT-5.6 Luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna']),
       model('gpt-6-astra', 'GPT-6 Astra', 1_050_000, 128_000),
-      model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark'),
+      model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark']),
       model('gpt-5.5', 'GPT-5.5'), model('gpt-5.4', 'GPT-5.4'), model('gpt-5.4-mini', 'GPT-5.4 Mini'),
     ],
     modelAliases: { 'codex-astra': 'gpt-6-astra' },
@@ -105,17 +136,17 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   {
     id: 'codex-spark', displayName: 'Codex Spark', credentialResolver: 'codex',
     nativeClients: ['codex'], defaultModel: 'gpt-5.3-codex-spark', quotaProvider: 'codex-spark',
-    models: [{ ...model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark'), taskOnly: true }],
+    models: [{ ...model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark']), taskOnly: true }],
   },
   {
     id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
     defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
-    models: [model('composer-2.5', 'Composer 2.5', 200_000), model('cursor-grok-4.6-high', 'Grok 4.6 High', 256_000), model('kimi-k3', 'Kimi K3', 1_048_576), model('claude-opus-5', 'Claude Opus 5', 300_000)],
+    models: [model('composer-2.5', 'Composer 2.5', 200_000), model('cursor-grok-4.6-high', 'Grok 4.6 High', 256_000), model('kimi-k3', 'Kimi K3', 1_048_576, undefined, CANONICAL_MODELS['kimi-k3']), model('claude-opus-5', 'Claude Opus 5', 300_000, undefined, CANONICAL_MODELS['claude-opus-5'])],
   },
   {
     id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'forge-managed',
     defaultModel: 'k3', quotaProvider: 'kimi-coding',
-    models: [model('k3', 'Kimi K3', 1_048_576, 32_768)],
+    models: [model('k3', 'Kimi K3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'])],
     protocols: [
       openAI('https://api.kimi.com/coding/v1/chat/completions'),
       anthropic('https://api.kimi.com/coding/v1/messages'),
@@ -123,22 +154,22 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'minimax', displayName: 'MiniMax Open Platform', credentialResolver: 'forge-managed', defaultModel: 'MiniMax-M3',
-    models: [model('MiniMax-M3', 'MiniMax M3', 1_000_000, 131_072), model('MiniMax-M2.7', 'MiniMax M2.7', 204_800, 32_768), model('MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 204_800, 32_768)],
+    models: [model('MiniMax-M3', 'MiniMax M3', 1_000_000, 131_072, CANONICAL_MODELS['minimax-m3']), model('MiniMax-M2.7', 'MiniMax M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7-highspeed'])],
     protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   },
   {
     id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'forge-managed', defaultModel: 'MiniMax-M3',
-    models: [model('MiniMax-M3', 'MiniMax M3', 1_000_000, 131_072), model('MiniMax-M2.7', 'MiniMax M2.7', 204_800, 32_768), model('MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 204_800, 32_768)],
+    models: [model('MiniMax-M3', 'MiniMax M3', 1_000_000, 131_072, CANONICAL_MODELS['minimax-m3']), model('MiniMax-M2.7', 'MiniMax M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7-highspeed'])],
     protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   },
   {
     id: 'moonshot', displayName: 'Moonshot API', credentialResolver: 'forge-managed', defaultModel: 'kimi-k2.6',
-    models: [model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768), model('kimi-k2.5', 'Kimi K2.5', 262_144, 32_768)],
+    models: [model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('kimi-k2.5', 'Kimi K2.5', 262_144, 32_768)],
     protocols: [openAI('https://api.moonshot.cn/v1/chat/completions')],
   },
   {
     id: 'openai', displayName: 'OpenAI API', credentialResolver: 'forge-managed', defaultModel: 'gpt-5.6-sol',
-    models: [model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072), model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072), model('gpt-5.6-luna', 'GPT-5.6 Luna', 1_050_000, 131_072)],
+    models: [model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol']), model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra']), model('gpt-5.6-luna', 'GPT-5.6 Luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'])],
     protocols: [
       openAI('https://api.openai.com/v1/chat/completions'),
       { protocol: 'openai_responses', endpoint: 'https://api.openai.com/v1/responses', authScheme: 'bearer' },
@@ -149,12 +180,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'qwen', displayName: 'Qwen Model Studio', credentialResolver: 'forge-managed', defaultModel: 'qwen3.7-plus',
-    models: [model('qwen3.8-max', 'Qwen3.8 Max', 1_000_000, 131_072), model('qwen3.7-plus', 'Qwen3.7 Plus', 1_000_000, 131_072), model('qwen3.7-flash', 'Qwen3.7 Flash', 1_000_000, 131_072), model('qwen3-coder-next', 'Qwen3 Coder Next', 262_144, 32_768)],
+    models: [model('qwen3.8-max', 'Qwen3.8 Max', 1_000_000, 131_072), model('qwen3.7-plus', 'Qwen3.7 Plus', 1_000_000, 131_072, CANONICAL_MODELS['qwen3.7-plus']), model('qwen3.7-flash', 'Qwen3.7 Flash', 1_000_000, 131_072), model('qwen3-coder-next', 'Qwen3 Coder Next', 262_144, 32_768, CANONICAL_MODELS['qwen3-coder-next'])],
     protocols: [openAI('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'), anthropic('https://dashscope.aliyuncs.com/apps/anthropic/v1/messages')],
   },
   {
     id: 'qwen-coding', displayName: 'Qwen Coding Plan', credentialResolver: 'forge-managed', defaultModel: 'qwen3.7-plus',
-    models: [model('qwen3.7-plus', 'Qwen3.7 Plus', 1_000_000, 131_072), model('qwen3.6-plus', 'Qwen3.6 Plus', 1_000_000, 131_072), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_000_000, 131_072), model('qwen3-coder-next', 'Qwen3 Coder Next', 262_144, 32_768), model('qwen3-coder-plus', 'Qwen3 Coder Plus', 1_000_000, 131_072)],
+    models: [model('qwen3.7-plus', 'Qwen3.7 Plus', 1_000_000, 131_072, CANONICAL_MODELS['qwen3.7-plus']), model('qwen3.6-plus', 'Qwen3.6 Plus', 1_000_000, 131_072), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_000_000, 131_072, CANONICAL_MODELS['qwen3.5-plus']), model('qwen3-coder-next', 'Qwen3 Coder Next', 262_144, 32_768, CANONICAL_MODELS['qwen3-coder-next']), model('qwen3-coder-plus', 'Qwen3 Coder Plus', 1_000_000, 131_072)],
     protocols: [openAI('https://coding.dashscope.aliyuncs.com/v1/chat/completions'), anthropic('https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages')],
   },
   {
@@ -163,7 +194,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'tokenhub', displayName: 'Tencent Cloud TokenHub', credentialResolver: 'forge-managed', defaultModel: 'deepseek-v4-flash-202605',
-    models: [model('hy4-preview', 'Hunyuan HY4 Preview', 262_144, 32_768), model('deepseek-v4-flash-202605', 'DeepSeek V4 Flash', 1_048_576, 393_216), model('deepseek-v4-pro-202606', 'DeepSeek V4 Pro', 1_048_576, 393_216), model('deepseek/deepseek-v4-flash-vision-exp', 'DeepSeek V4 Flash Vision', 1_048_576, 393_216), model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768), model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768), model('minimax-m2.7', 'MiniMax M2.7', 204_800, 32_768), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_048_576, 32_768)],
+    models: [model('hy4-preview', 'Hunyuan HY4 Preview', 262_144, 32_768, CANONICAL_MODELS['hunyuan-hy4-preview']), model('deepseek-v4-flash-202605', 'DeepSeek V4 Flash', 1_048_576, 393_216), model('deepseek-v4-pro-202606', 'DeepSeek V4 Pro', 1_048_576, 393_216), model('deepseek/deepseek-v4-flash-vision-exp', 'DeepSeek V4 Flash Vision', 1_048_576, 393_216), model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']), model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('minimax-m2.7', 'MiniMax M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_048_576, 32_768, CANONICAL_MODELS['qwen3.5-plus'])],
     protocols: [openAI('https://tokenhub.tencentmaas.com/v1/chat/completions'), anthropic('https://tokenhub.tencentmaas.com/v1/messages', 'x-api-key')],
   },
   {
@@ -178,7 +209,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'zhipu-coding', displayName: 'Zhipu Coding', credentialResolver: 'forge-managed', defaultModel: 'glm-5.3', quotaProvider: 'zhipu-coding',
-    models: [model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768)],
+    models: [model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash'])],
     protocols: [openAI('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'), anthropic('https://open.bigmodel.cn/api/anthropic/v1/messages')],
   },
 ];

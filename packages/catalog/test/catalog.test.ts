@@ -35,10 +35,17 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
   catalog.registerClient({ id: 'client', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    models: [{
+      id: 'm',
+      displayName: 'M',
+      canonicalModel: { id: 'shared-m', displayName: 'Shared M' },
+      speed: speedFixture(),
+    }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://secret.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.equal(catalog.listGatewayModels('openai_chat')[0]?.publicId, 'vendor/m');
+  const gatewayModel = catalog.listGatewayModels('openai_chat')[0];
+  assert.equal(gatewayModel?.publicId, 'vendor/m');
+  assert.equal(gatewayModel && 'canonicalModel' in gatewayModel, false);
   assert.deepEqual(catalog.resolveRun('client', 'vendor', 'm'), {
     client: 'client', provider: 'vendor', model: 'm', mode: 'gateway', protocol: 'openai_chat',
   });
@@ -127,17 +134,6 @@ test('explicit exclusions across all candidates yield no eligible result', () =>
   assert.equal(byProfile.ok, false);
   const byProvider = resolveConstrainedDispatch(catalog, candidates, { excludeProviderIds: ['p'] });
   assert.equal(byProvider.ok, false);
-});
-
-test('preferred runtime cannot bypass a hard constraint', () => {
-  const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, {
-    maxOutputUsdPerMillion: 4,
-    preferredRuntime: { client: 'c1', provider: 'p', model: 'mpremium' },
-  });
-  assert.equal(result.ok, true);
-  assert.notEqual(result.selected.plan.model, 'mpremium');
-  assert.ok((result.selected.model.pricing?.outputUsdPerMillion ?? Infinity) <= 4);
 });
 
 test('local 31-day agent_turn_v1 speed overrides catalog default truthfully', () => {
@@ -249,6 +245,60 @@ test('registerProvider rejects non-positive, non-finite, and empty-evidence defa
       /speed/,
     );
   }
+});
+
+test('registerProvider validates shared canonical model identity atomically', () => {
+  const catalog = new Catalog();
+  const provider = (
+    id: string,
+    displayName: string,
+    canonicalDisplayName: string,
+    endpoint = `https://${id}.example/v1/chat/completions`,
+  ) => ({
+    id,
+    displayName,
+    credentialResolver: 'forge-managed' as const,
+    models: [{
+      id: 'route-model',
+      displayName: `${displayName} route`,
+      canonicalModel: { id: 'shared-model-v1', displayName: canonicalDisplayName },
+      speed: speedFixture(),
+    }],
+    protocols: [{ protocol: 'openai_chat' as const, endpoint, authScheme: 'bearer' as const }],
+  });
+
+  catalog.registerProvider(provider('first', 'First', 'Shared Model V1'));
+  catalog.registerProvider(provider('second', 'Second', 'Shared Model V1'));
+  assert.throws(
+    () => catalog.registerProvider(provider('conflict', 'Conflict', 'Different Model')),
+    /conflicting display names/,
+  );
+  assert.equal(catalog.provider('conflict'), undefined, 'a conflicting provider is not partially registered');
+
+  // Validation after canonical metadata must also be atomic: the invalid HTTP
+  // endpoint must not retain a staged display name for a later valid provider.
+  assert.throws(
+    () => catalog.registerProvider({
+      ...provider('invalid', 'Invalid', 'Shared Model V1', 'http://invalid.example/v1'),
+      models: [{
+        id: 'other-route',
+        displayName: 'Other route',
+        canonicalModel: { id: 'atomic-model-v1', displayName: 'Staged Bad Name' },
+        speed: speedFixture(),
+      }],
+    }),
+    /must use https/,
+  );
+  catalog.registerProvider({
+    ...provider('valid', 'Valid', 'Shared Model V1'),
+    models: [{
+      id: 'other-route',
+      displayName: 'Other route',
+      canonicalModel: { id: 'atomic-model-v1', displayName: 'Committed Good Name' },
+      speed: speedFixture(),
+    }],
+  });
+  assert.ok(catalog.provider('valid'));
 });
 
 test('registerProvider validates modelSpeedOverrides evidence and exact canonical keys only', () => {
@@ -426,18 +476,17 @@ test('strict dynamic-fast boundary is tps greater than 80, not 80', () => {
   assert.equal(result.selected.plan.model, 'mmid');
 });
 
-test('vision capability is a hard gate that a preferred text-only candidate cannot bypass', () => {
+test('vision capability is a hard gate', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, {
     requiredCapabilities: ['image'],
-    preferredRuntime: { client: 'c1', provider: 'p', model: 'mtextonly' },
   });
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mvision');
   assert.notEqual(result.selected.plan.model, 'mtextonly');
 });
 
-test('same-speed-group lower price wins before declared preference', () => {
+test('same-speed-group lower price wins deterministically', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const subset: DispatchCandidate[] = [
     { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
@@ -445,19 +494,17 @@ test('same-speed-group lower price wins before declared preference', () => {
   ];
   const result = resolveConstrainedDispatch(catalog, subset, {
     expectedTps: 40,
-    preferredRuntime: { client: 'c1', provider: 'p', model: 'mvision' },
   });
   // mtextonly (out 2) and mvision (out 4) both meet expectedTps 40; lower price wins.
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mtextonly');
 });
 
-test('all fallbacks obey constraints when the preferred candidate is hard-filtered', () => {
+test('combined capability and price constraints admit only compliant candidates', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, {
     requiredCapabilities: ['image'],
     maxOutputUsdPerMillion: 10,
-    preferredRuntime: { client: 'c1', provider: 'p', model: 'mtextonly' },
   });
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mvision');
@@ -567,38 +614,6 @@ test('with no native route the grok client beats claude for the same provider/mo
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.client, 'grok');
   assert.equal(result.selected.plan.mode, 'gateway');
-});
-
-test('preferredRuntime cannot force an alternate client or a different provider/model in automatic selection', () => {
-  const { catalog, candidates } = buildDispatchCatalog();
-  const tied: DispatchCandidate[] = [
-    ...candidates,
-    { profileId: 'alt', client: 'c1', provider: 'p2', model: 'z' },
-  ];
-  const local = [{ profileId: 'alt', tps: 50, sampleCount: 10, checkedAt: '2026-09-05' }];
-  // z (p2) and mfast (p) share speed and reference output price; stable canonical
-  // identity chooses p/mfast. A preferredRuntime naming z must not change the pick.
-  const baseline = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, local);
-  assert.equal(baseline.ok, true);
-  assert.equal(baseline.selected.plan.provider, 'p');
-  assert.equal(baseline.selected.plan.model, 'mfast');
-
-  const differentProviderModel = resolveConstrainedDispatch(catalog, tied, {
-    expectedTps: 40,
-    preferredRuntime: { client: 'c1', provider: 'p2', model: 'z' },
-  }, local);
-  assert.equal(differentProviderModel.ok, true);
-  assert.deepEqual(differentProviderModel.selected.plan, baseline.selected.plan);
-
-  // A preferredRuntime naming the gateway client for a model that has a usable
-  // native route cannot override the deterministic native choice.
-  const { catalog: dual, native, codebuddyGateway } = buildDualRouteCatalog();
-  const alternateClient = resolveConstrainedDispatch(dual, [native, codebuddyGateway], {
-    preferredRuntime: { client: 'codebuddy', provider: 'vendor', model: 'm' },
-  });
-  assert.equal(alternateClient.ok, true);
-  assert.equal(alternateClient.selected.plan.client, 'claude');
-  assert.equal(alternateClient.selected.plan.mode, 'native');
 });
 
 test('automatic selection stays deterministic when candidate declaration order is reversed', () => {

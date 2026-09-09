@@ -634,13 +634,18 @@ export class AutoRoutingQuotaSnapshotService {
   }
 
   private async refresh(context: CodeBuddyQueryContext | undefined): Promise<AutoRoutingQuotaSnapshot> {
-    const nowMs = this.now();
     let text: string;
     try {
       text = await this.queryJson(context);
     } catch {
       return this.failClosed(context);
     }
+    // Evaluate provider observations against the time at which the asynchronous
+    // sample completed. Forge stamps each provider row as that provider
+    // finishes, so sampling `now` before the query would incorrectly classify
+    // ordinary rows produced during a slow refresh as future evidence. This
+    // still rejects genuine clock-skewed future timestamps in rowUsable().
+    const nowMs = this.now();
     try {
       const rows = parseQuotaReport(text);
       // Defense in depth: even an injected/misbehaving query source cannot

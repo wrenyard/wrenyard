@@ -211,6 +211,13 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
       )
     }
   }
+  for (const removedKey of ['preferredRuntime', 'preferred_runtime'] as const) {
+    if (removedKey in raw) {
+      throw new Error(
+        `${sourcePath} task config dispatch.${removedKey} is no longer supported; choose explicit mode with an alias or exact target through Task Settings`,
+      )
+    }
+  }
 
   const {
     expectedTps,
@@ -223,7 +230,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeProfileIds,
     excludeClientIds,
     excludeProviderIds,
-    preferredRuntime,
   } = raw
 
   // The dispatch object must contain at least one recognized hard requirement.
@@ -281,20 +287,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   if (maxOutputUsdPerMillion !== undefined) {
     if (typeof maxOutputUsdPerMillion !== 'number' || !Number.isFinite(maxOutputUsdPerMillion) || maxOutputUsdPerMillion <= 0) {
       throw new Error(`${sourcePath} task config dispatch.maxOutputUsdPerMillion must be a positive number`)
-    }
-  }
-
-  if (preferredRuntime !== undefined) {
-    if (preferredRuntime === null || typeof preferredRuntime !== 'object' || Array.isArray(preferredRuntime)) {
-      throw new Error(`${sourcePath} task config dispatch.preferredRuntime must be an object { client, provider, model }`)
-    }
-    const preferred = preferredRuntime as Record<string, unknown>
-    const keys = Object.keys(preferred)
-    if (keys.length !== 3 || !keys.every((key) => key === 'client' || key === 'provider' || key === 'model')
-      || typeof preferred.client !== 'string' || preferred.client.length === 0
-      || typeof preferred.provider !== 'string' || preferred.provider.length === 0
-      || typeof preferred.model !== 'string' || preferred.model.length === 0) {
-      throw new Error(`${sourcePath} task config dispatch.preferredRuntime must contain only non-empty client, provider, and model strings`)
     }
   }
 

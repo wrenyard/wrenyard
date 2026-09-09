@@ -23,13 +23,6 @@ type ProviderRef struct {
 	Source  string
 }
 
-// EffectiveProfile represents a profile that is currently available and
-// dispatchable for discovery listing.
-type EffectiveProfile struct {
-	ID          string
-	DisplayName string
-}
-
 // ModelDisplayInfo carries canonical model display metadata for a provider.
 type ModelDisplayInfo struct {
 	ProviderID string

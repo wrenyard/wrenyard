@@ -150,7 +150,14 @@ export interface StatsDailySnapshot {
 }
 
 export interface StatsRankingSnapshot {
+  /** Canonical internal identity: a server `model` when provided, else the legacy `profile`/`taskName`. */
   name: string;
+  /** Canonical model identity carried by newer payloads; absent on legacy profile-only rows. */
+  model?: string;
+  /** Exact unified Catalog model display label; absent when the server does not supply one. */
+  modelDisplayName?: string;
+  /** Exact Catalog provider display names backing this row, de-duplicated by the server. */
+  providerDisplayNames?: string[];
   dispatchCount: number;
   totalTokens: number;
 }
@@ -166,7 +173,14 @@ export interface StatsWindowSnapshot {
   totalDurationMs: number;
   builtinTotalDurationMs: number;
   byProfile: Array<{
+    /** Canonical internal identity: a server `model` when provided, else the legacy `profile`. */
     name: string;
+    /** Canonical model identity carried by newer payloads; absent on legacy profile-only rows. */
+    model?: string;
+    /** Exact unified Catalog model display label; absent when the server does not supply one. */
+    modelDisplayName?: string;
+    /** Exact Catalog provider display names backing this row, de-duplicated by the server. */
+    providerDisplayNames?: string[];
     runCount: number;
     totalTokens: number;
     averageTps?: number;
@@ -442,7 +456,6 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_profile_ids?: readonly string[];
   exclude_client_ids?: readonly string[];
   exclude_provider_ids?: readonly string[];
-  preferred_runtime?: TaskSettingsExplicitReference;
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -498,7 +511,6 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>;
-  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
 }
 
 /** Effective settings of one task, each value tagged with its source layer. */

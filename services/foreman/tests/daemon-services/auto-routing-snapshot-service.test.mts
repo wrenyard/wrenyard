@@ -848,6 +848,57 @@ test('a 30s-old row still yields evidence but bounds the cache to its remaining 
   );
 });
 
+test('evaluates a slow asynchronous refresh at completion and caches one consistent snapshot', async () => {
+  let calls = 0;
+  let current = T0;
+  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
+  const windowId = binding.windows![0]!.windowId;
+  const service = new AutoRoutingQuotaSnapshotService({
+    queryJson: async () => {
+      calls += 1;
+      current += 5_000;
+      return reportJson(rowsForBinding(binding, { pct: 20, fetchedAtMs: current }));
+    },
+    now: () => current,
+  });
+
+  const first = await service.snapshot();
+  const evidence = evidenceFor(first, binding.providerId, binding.modelId, windowId).constraint.evidence;
+  assert.notEqual(evidence, null, 'a row stamped while the async query runs is fresh at completion');
+  assert.equal(first.nowMs, T0 + 5_000);
+  assert.equal(evidence!.observedAtMs, first.nowMs);
+  assert.equal(first.validUntilMs, first.nowMs + 60_000);
+
+  current += 30_000;
+  const second = await service.snapshot();
+  assert.equal(calls, 1, 'a still-fresh completion-time snapshot is served from cache');
+  assert.equal(second, first);
+  assert.equal(second.nowMs, T0 + 5_000);
+  assert.equal(second.validUntilMs, T0 + 65_000);
+});
+
+test('still rejects a timestamp genuinely in the future after an asynchronous refresh completes', async () => {
+  let current = T0;
+  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
+  const windowId = binding.windows![0]!.windowId;
+  const service = new AutoRoutingQuotaSnapshotService({
+    queryJson: async () => {
+      current += 5_000;
+      return reportJson(rowsForBinding(binding, { pct: 20, fetchedAtMs: current + 1 }));
+    },
+    now: () => current,
+  });
+
+  const snapshot = await service.snapshot();
+  assert.equal(snapshot.nowMs, T0 + 5_000);
+  assert.equal(snapshot.validUntilMs, snapshot.nowMs + 15_000);
+  assert.equal(
+    evidenceFor(snapshot, binding.providerId, binding.modelId, windowId).constraint.evidence,
+    null,
+    'post-completion future clock skew must remain fail-closed',
+  );
+});
+
 test('a report with only an unrelated fresh pool is a short unknown, not a 60s cache', async () => {
   const unrelated: FixtureRow[] = [
     { pool: 'some-other-pool', status: 'ok', stale: false, fetched_at: iso(T0), windows: [] },

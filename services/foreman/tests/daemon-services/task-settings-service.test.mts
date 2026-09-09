@@ -20,6 +20,7 @@ import {
   type TaskSettingsDaemonAvailabilityCallback,
   type TaskSettingsDefinitionSource,
   type TaskSettingsRuntimeAvailabilityCallback,
+  type TaskSettingsRuntimeAvailabilityTarget,
 } from '../../lib/daemon/services/task-settings-service.mts'
 import {
   AliasNotFoundError,
@@ -30,6 +31,10 @@ import {
   AutoRoutingQuotaSnapshotService,
   type CodeBuddyActiveSnapshotView,
 } from '../../lib/daemon/services/auto-routing-snapshot-service.mts'
+import {
+  evaluateForgeNativeRouteReadiness,
+  type ForgeProviderReadinessSnapshot,
+} from '../../lib/daemon/execution/forge-provider-readiness-query.mts'
 
 const CATALOG_CHECKED_AT = '2026-09-05'
 const QUOTA_T0 = 1_726_000_000_000
@@ -111,8 +116,13 @@ function resolvedChoice(profile: ProfileFixture): TaskResolvedDispatch {
   }
 }
 
-function runtimeTriple(profile: ProfileFixture): { client: string; provider: string; model: string } {
-  return { client: profile.client, provider: profile.provider, model: profile.model }
+function runtimeTriple(profile: ProfileFixture): TaskSettingsRuntimeAvailabilityTarget {
+  return {
+    client: profile.client,
+    provider: profile.provider,
+    model: profile.model,
+    mode: profile.mode ?? 'native',
+  }
 }
 
 /** Deterministic fixture Catalog display labels for a resolved canonical
@@ -400,6 +410,18 @@ const CODEX_QUOTA_PROFILE: ProfileFixture = {
   tps: 90,
   inputUsd: 1,
   outputUsd: 4,
+}
+
+const CODEX_SPARK_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'codex-spark/gpt-5.3-codex-spark:codex',
+  profile: 'codex-spark-native',
+  client: 'codex',
+  provider: 'codex-spark',
+  model: 'gpt-5.3-codex-spark',
+  intelligence: 'frontier',
+  tps: 90,
+  inputUsd: 0.1,
+  outputUsd: 1,
 }
 
 /** Healthy Zhipu GLM-5.3-Flash candidate used to prove quota-tier ranking. Its
@@ -724,6 +746,47 @@ describe('daemon task-settings-service (no-model)', () => {
     const afterSettings = afterTasks.settings as Record<string, unknown>
     assert.equal((afterSettings as { byTask?: unknown }).byTask, undefined)
     assert.deepEqual(afterSettings.global, { timeoutMs: 800_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('ignores historical preferredRuntime and removes it when that settings layer is rewritten', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          byTask: {
+            'builtin:commit': {
+              timeoutMs: 60_000,
+              dispatch: {
+                minimumTps: 20,
+                preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-sol' },
+              },
+            },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+    const commitBefore = before.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commitBefore)
+    assert.deepEqual(commitBefore.user_task, {
+      timeout_ms: 60_000,
+      automatic: { minimum_tps: 20 },
+    })
+    assert.equal(JSON.stringify(commitBefore).includes('preferred'), false)
+
+    await service.save({
+      scope: 'task',
+      task_id: 'builtin:commit',
+      expected_revision: before.revision,
+      patch: { timeout_ms: 90_000 },
+    })
+
+    const tasks = readConfig().tasks as { settings: { byTask: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.byTask['builtin:commit'], {
+      timeoutMs: 90_000,
+      dispatch: { minimumTps: 20 },
+    })
     assert.equal(tempResidue().length, 0)
   })
 
@@ -1370,7 +1433,7 @@ describe('daemon task-settings-service (no-model)', () => {
 
   it('automatic runs probe live availability once per exact choice before ranking and never again after selection', async () => {
     writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
-    const seen: Array<{ client: string; provider: string; model: string }> = []
+    const seen: TaskSettingsRuntimeAvailabilityTarget[] = []
     const daemonCalls: number[] = []
     const service = context!.makeService({
       daemonAvailability: () => {
@@ -1416,7 +1479,7 @@ describe('daemon task-settings-service (no-model)', () => {
   it('automatic selection collapses eligible client variants to the native model route before weighted ranking', async () => {
     writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
     const pool = [CODEBUDDY_GROK_PROFILE, CODEBUDDY_MINIMAX_PROFILE, CODEBUDDY_NATIVE_PROFILE]
-    const seen: Array<{ client: string; provider: string; model: string }> = []
+    const seen: TaskSettingsRuntimeAvailabilityTarget[] = []
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: pool }),
       quotaSnapshots: unknownQuotaSnapshotService(),
@@ -1536,6 +1599,170 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     return service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
   }
+
+  const availabilityFromNativeSnapshot: TaskSettingsRuntimeAvailabilityCallback = (runtime, availabilityContext) => {
+    const credentialResolverId = runtime.provider === 'codex-spark' ? 'codex' : runtime.provider
+    const state = evaluateForgeNativeRouteReadiness(
+      availabilityContext?.nativeProviderReadiness ?? undefined,
+      {
+        credentialResolverId,
+        client: runtime.client,
+        mode: runtime.mode,
+        nativeClients: credentialResolverId === 'codex'
+          ? ['codex']
+          : credentialResolverId === 'cursor' ? ['cursor'] : [],
+      },
+    )
+    if (state === 'available') {
+      return { providerCredential: 'available', providerLive: 'available', quota: 'unknown', available: true }
+    }
+    if (state === 'missing') {
+      return { providerCredential: 'missing', providerLive: 'unknown', quota: 'unknown', available: false }
+    }
+    return {
+      providerCredential: 'unknown',
+      providerLive: state === 'unsupported' ? 'unavailable' : 'unknown',
+      quota: 'unknown',
+      available: false,
+    }
+  }
+
+  it('binds one fresh native readiness sample per run and observes login changes and query errors', async () => {
+    writeConfig({})
+    let nativeCalls = 0
+    let next: ForgeProviderReadinessSnapshot | Error = {
+      sampledAtMs: QUOTA_T0,
+      authByProvider: Object.freeze({ codex: true }),
+    }
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEX_QUOTA_PROFILE] }),
+      quotaSnapshots: codexQuotaSnapshotService([{
+        name: '7d', pct: 20,
+        resets_at: new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString(),
+        window_minutes: 10_080,
+      }]),
+      nativeProviderReadiness: async () => {
+        nativeCalls += 1
+        if (next instanceof Error) throw next
+        return next
+      },
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+
+    const authenticated = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(authenticated.exactAgentRuntime, CODEX_QUOTA_PROFILE.exactAgentRuntime)
+    assert.equal(authenticated.dispatch?.auto_routing?.quota_coverage_complete, true)
+    assert.equal(nativeCalls, 1)
+
+    next = { sampledAtMs: QUOTA_T0 + 1, authByProvider: Object.freeze({ codex: false }) }
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'no_available_provider',
+    )
+    assert.equal(nativeCalls, 2, 'the next evaluation must not reuse the previous login state')
+
+    next = new Error('provider status unavailable')
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'no_available_provider',
+    )
+    assert.equal(nativeCalls, 3)
+  })
+
+  it('samples shared Codex readiness for the distinct codex-spark provider id', async () => {
+    writeConfig({})
+    let nativeCalls = 0
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE] }),
+      quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
+      nativeProviderReadiness: async () => {
+        nativeCalls += 1
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+      },
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+
+    const resolved = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolved.exactAgentRuntime, CODEX_SPARK_PROFILE.exactAgentRuntime)
+    assert.equal(nativeCalls, 1, 'the native codex client must trigger one shared readiness sample')
+  })
+
+  it('shares Codex auth but keeps blocked codex-spark quota independent from healthy Codex quota', async () => {
+    writeConfig({})
+    let nativeCalls = 0
+    const resets5h = new Date(QUOTA_T0 + 3 * 60 * 60_000).toISOString()
+    const resets7d = new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString()
+    const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
+      queryJson: () => Promise.resolve(JSON.stringify([
+        {
+          pool: 'codex',
+          status: 'ok',
+          stale: false,
+          fetched_at: new Date(QUOTA_T0).toISOString(),
+          windows: [{ name: '7d', pct: 20, resets_at: resets7d, window_minutes: 10_080 }],
+        },
+        {
+          pool: 'codex-spark',
+          status: 'ok',
+          stale: false,
+          fetched_at: new Date(QUOTA_T0).toISOString(),
+          windows: [
+            { name: '5h', pct: 100, resets_at: resets5h, window_minutes: 300 },
+            { name: '7d', pct: 100, resets_at: resets7d, window_minutes: 10_080 },
+          ],
+        },
+      ])),
+      now: () => QUOTA_T0,
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE, CODEX_QUOTA_PROFILE] }),
+      quotaSnapshots,
+      nativeProviderReadiness: async () => {
+        nativeCalls += 1
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+      },
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+
+    const resolved = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolved.exactAgentRuntime, CODEX_QUOTA_PROFILE.exactAgentRuntime)
+    assert.equal(resolved.dispatch?.auto_routing?.quota_coverage_complete, true)
+    assert.equal(nativeCalls, 1, 'both provider ids must share one Codex auth sample only')
+  })
+
+  it('requires quota independently even when native Codex auth is available', async () => {
+    writeConfig({})
+    const expensiveCodex = { ...CODEX_QUOTA_PROFILE, outputUsd: 12 }
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [expensiveCodex] }),
+      quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
+      nativeProviderReadiness: () => Promise.resolve({
+        sampledAtMs: QUOTA_T0,
+        authByProvider: Object.freeze({ codex: true }),
+      }),
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'price_limit',
+    )
+  })
+
+  it('does not sample Forge native readiness when no native Codex/Cursor candidate is eligible', async () => {
+    writeConfig({})
+    let nativeCalls = 0
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_PROFILE] }),
+      quotaSnapshots: healthyZhipuQuotaSnapshotService(),
+      nativeProviderReadiness: async () => {
+        nativeCalls += 1
+        throw new Error('must not be called')
+      },
+    })
+    const result = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(result.exactAgentRuntime, ZHIPU_GLM_FLASH_PROFILE.exactAgentRuntime)
+    assert.equal(nativeCalls, 0)
+  })
 
   it('Codex weekly-only evidence is complete and can truthfully be strained', async () => {
     writeConfig({})
@@ -1887,7 +2114,8 @@ describe('daemon task-settings-service (no-model)', () => {
   it('automatic preview rows reuse quota and credential evidence within one snapshot request only', async () => {
     writeConfig({})
     let quotaCalls = 0
-    const probeTriples: Array<{ client: string; provider: string; model: string }> = []
+    let nativeReadinessCalls = 0
+    const probeTriples: TaskSettingsRuntimeAvailabilityTarget[] = []
     // The quota service itself does not cache, so counting snapshot() calls
     // proves the request-scoped memo (not the service) collapses them.
     const realQuotaService = unknownQuotaSnapshotService()
@@ -1899,6 +2127,10 @@ describe('daemon task-settings-service (no-model)', () => {
     } as unknown as AutoRoutingQuotaSnapshotService
     const service = context!.makeService({
       quotaSnapshots: quotaService,
+      nativeProviderReadiness: async () => {
+        nativeReadinessCalls += 1
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+      },
       runtimeAvailability: (runtime) => {
         probeTriples.push(runtime)
         return {
@@ -1916,6 +2148,7 @@ describe('daemon task-settings-service (no-model)', () => {
     // most once across all automatic rows.
     const first = await service.snapshot({})
     assert.equal(quotaCalls, 1)
+    assert.equal(nativeReadinessCalls, 1)
     assert.deepEqual(probeTriples, PROFILES.map((profile) => runtimeTriple(profile)))
     assert.equal(first.rows.filter((row) => row.automatic_selection !== undefined).length, 2)
 
@@ -1940,14 +2173,17 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(commit.automatic_selection.exact_runtime, commitRun.exactAgentRuntime)
     assert.equal(review.automatic_selection.exact_runtime, reviewRun.exactAgentRuntime)
     assert.deepEqual(commit.issues, [])
+    assert.equal(nativeReadinessCalls, 3, 'each run takes one fresh native readiness sample')
 
     // The memo is request-scoped and never leaks: a second snapshot request
     // performs fresh request-scoped probes again (one quota snapshot, one probe
     // per canonical runtime) while the chosen semantics stay identical.
     quotaCalls = 0
+    nativeReadinessCalls = 0
     probeTriples.length = 0
     const second = await service.snapshot({})
     assert.equal(quotaCalls, 1)
+    assert.equal(nativeReadinessCalls, 1)
     assert.deepEqual(probeTriples, PROFILES.map((profile) => runtimeTriple(profile)))
     const secondCommit = second.rows.find((row) => row.identity === 'builtin:commit')
     const secondReview = second.rows.find((row) => row.identity === 'builtin:review')

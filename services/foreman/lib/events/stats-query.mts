@@ -24,6 +24,10 @@ interface StatsEventRow {
   profile: string | null
   resolved_profile: string | null
   template: string | null
+  /** Persisted canonical dispatch identity from task_run_attempt_dispatch. */
+  provider: string | null
+  model: string | null
+  model_id: string | null
 }
 
 interface StatsTaskIntervalRow {
@@ -93,10 +97,130 @@ export interface TaskRunLedgerRow {
 export type TaskRunDisplayNameResolver = (
   providerId: string,
   modelId: string,
-) => { provider_display_name: string; model_display_name: string } | undefined
+) => {
+  provider_display_name: string
+  model_display_name: string
+  /** Namespaced internal grouping key (`canonical:` or `provider-local:`). */
+  stats_model_key?: string
+  /** Public stable model identity emitted by model-only rankings. */
+  stats_model_id?: string
+  /** Provider-independent label for a shared identity, or the exact route label. */
+  stats_model_display_name?: string
+} | undefined
 
 export interface StatsQueryOptions {
   resolveDisplayNames?: TaskRunDisplayNameResolver
+}
+
+interface ModelDisplayTarget {
+  model_display_name?: string
+  provider_display_names?: string[]
+}
+
+interface ModelRankAccumulator {
+  model: string
+  dispatchCount: number
+  inputTokens: number
+  outputTokens: number
+  modelDisplayNames: Set<string>
+  providerDisplayNames: Set<string>
+}
+
+interface WindowModelAccumulator {
+  model: string
+  runCount: number
+  inputTokens: number
+  outputTokens: number
+  tpsOutputTokens: number
+  tpsDurationMs: number
+  modelDisplayNames: Set<string>
+  providerDisplayNames: Set<string>
+}
+
+interface PersistedModelIdentity {
+  provider: string
+  model: string
+}
+
+interface StatsModelIdentity {
+  /** Namespaced internal key; never exposed in the protocol. */
+  key: string
+  /** Shared canonical id, or provider/model for an unmapped local identity. */
+  model: string
+  modelDisplayName?: string
+  providerDisplayName?: string
+}
+
+/**
+ * Conservative canonical-model identity check for the today/window model
+ * rankings. A dispatch row is eligible only when its persisted
+ * task_run_attempt_dispatch exposes non-empty provider, model, and model_id, and
+ * model_id is exactly `provider + '/' + model`. Missing pieces, mismatched ids,
+ * or any fallback to resolved_profile/profile/display names are never tolerated,
+ * and no missing component is derived. Returns the exact persisted pair when
+ * eligible, otherwise undefined so the row is omitted.
+ */
+function eligibleModelIdentity(row: {
+  provider: string | null
+  model: string | null
+  model_id: string | null
+}): PersistedModelIdentity | undefined {
+  if (!row.provider || !row.model || !row.model_id) return undefined
+  const p = row.provider.trim()
+  const m = row.model.trim()
+  const mid = row.model_id.trim()
+  if (p === '' || m === '' || mid === '') return undefined
+  if (mid !== `${p}/${m}`) return undefined
+  return { provider: p, model: m }
+}
+
+/**
+ * Resolves an eligible persisted pair into a model-only stats identity. Shared
+ * grouping is accepted only from an explicit namespaced Catalog result. Any
+ * absent or malformed mapping stays provider-local, so equal raw model strings
+ * from unrelated providers can never collide. Exact current aliases are never
+ * consulted here and cannot reinterpret historical rows.
+ */
+function resolveStatsModelIdentity(
+  persisted: PersistedModelIdentity,
+  resolveDisplayNames: TaskRunDisplayNameResolver | undefined,
+): StatsModelIdentity {
+  const localModel = `${persisted.provider}/${persisted.model}`
+  const resolved = resolveDisplayNames?.(persisted.provider, persisted.model)
+  const providerDisplayName = nonBlankString(resolved?.provider_display_name)
+  const routeDisplayName = nonBlankString(resolved?.model_display_name)
+  const statsKey = nonBlankString(resolved?.stats_model_key)
+  const statsModel = nonBlankString(resolved?.stats_model_id)
+  const statsDisplayName = nonBlankString(resolved?.stats_model_display_name)
+  const hasNamespacedKey = statsKey === `canonical:${statsModel}`
+    || statsKey === `provider-local:${statsModel}`
+  if (statsKey && hasNamespacedKey && statsModel && statsDisplayName) {
+    return { key: statsKey, model: statsModel, modelDisplayName: statsDisplayName, ...(providerDisplayName ? { providerDisplayName } : {}) }
+  }
+  return {
+    key: `provider-local:${localModel}`,
+    model: localModel,
+    ...(routeDisplayName ? { modelDisplayName: routeDisplayName } : {}),
+    ...(providerDisplayName ? { providerDisplayName } : {}),
+  }
+}
+
+function nonBlankString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
+function recordModelDisplay(source: ModelRankAccumulator | WindowModelAccumulator, identity: StatsModelIdentity): void {
+  if (identity.modelDisplayName) source.modelDisplayNames.add(identity.modelDisplayName)
+  if (identity.providerDisplayName) source.providerDisplayNames.add(identity.providerDisplayName)
+}
+
+function applyModelDisplay(source: ModelRankAccumulator | WindowModelAccumulator, target: ModelDisplayTarget): void {
+  if (source.providerDisplayNames.size > 0) {
+    target.provider_display_names = [...source.providerDisplayNames].sort()
+  }
+  if (source.modelDisplayNames.size === 1) {
+    target.model_display_name = [...source.modelDisplayNames][0]
+  }
 }
 
 /**
@@ -175,11 +299,13 @@ export function readStatsSummary(
 
   // One bounded events query over the longest requested projection.
   const allEventsRows = dbQuery<StatsEventRow>(
-    `SELECT e.type, e.data, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template
+    `SELECT e.type, e.data, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template,
+            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id
      FROM events e INDEXED BY idx_event_created_at
      LEFT JOIN executions ex ON e.execution_id = ex.id
      LEFT JOIN tasks t ON e.task_id = t.id
      LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id
+     LEFT JOIN task_run_attempt_dispatch tra ON e.execution_id = tra.execution_id
      WHERE e.type IN ('dispatch', 'turn_usage')
        AND e.created_at >= ? AND e.created_at < ?`,
     fullStartIso,
@@ -278,15 +404,29 @@ export function readStatsSummary(
   // --- TODAY RANKINGS: filter the full event set to today only ---
   const todayRows = allEventsRows.filter((row) => localDayKeyOf(row.created_at) === todayWindow.dayKey)
 
-  // --- byProfile: group by execution profile ---
-  const profileMap = new Map<string, { dispatchCount: number; inputTokens: number; outputTokens: number }>()
+  // --- byProfile: group by explicit shared canonical identity when the exact
+  // persisted provider/model route declares one; otherwise retain a namespaced
+  // provider-local identity. `profile` remains the deprecated output alias equal
+  // to `model`. Ineligible historical rows are omitted from model rankings (but
+  // still counted in overall totals above).
+  const modelMap = new Map<string, ModelRankAccumulator>()
   for (const row of todayRows) {
-    const profile = (row.profile && row.profile.trim()) ? row.profile.trim() : 'unknown'
-    let g = profileMap.get(profile)
+    const persisted = eligibleModelIdentity(row)
+    if (!persisted) continue
+    const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
+    let g = modelMap.get(identity.key)
     if (!g) {
-      g = { dispatchCount: 0, inputTokens: 0, outputTokens: 0 }
-      profileMap.set(profile, g)
+      g = {
+        model: identity.model,
+        dispatchCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        modelDisplayNames: new Set<string>(),
+        providerDisplayNames: new Set<string>(),
+      }
+      modelMap.set(identity.key, g)
     }
+    recordModelDisplay(g, identity)
     if (row.type === 'dispatch') {
       g.dispatchCount++
     } else if (row.type === 'turn_usage') {
@@ -297,18 +437,23 @@ export function readStatsSummary(
     }
   }
 
-  const byProfile: ProfileRankingItem[] = [...profileMap.entries()]
-    .map(([profile, g]) => ({
-      profile,
-      dispatchCount: g.dispatchCount,
-      inputTokens: g.inputTokens,
-      outputTokens: g.outputTokens,
-      totalTokens: g.inputTokens + g.outputTokens,
-    }))
+  const byProfile: ProfileRankingItem[] = [...modelMap.entries()]
+    .map(([, g]) => {
+      const item: ProfileRankingItem = {
+        profile: g.model,
+        model: g.model,
+        dispatchCount: g.dispatchCount,
+        inputTokens: g.inputTokens,
+        outputTokens: g.outputTokens,
+        totalTokens: g.inputTokens + g.outputTokens,
+      }
+      applyModelDisplay(g, item)
+      return item
+    })
     .sort((a, b) => {
       const diff = b.totalTokens - a.totalTokens
       if (diff !== 0) return diff
-      return a.profile.localeCompare(b.profile)
+      return a.model.localeCompare(b.model)
     })
     .slice(0, limit)
 
@@ -371,6 +516,7 @@ export function readStatsSummary(
     taskIntervalRows,
     now,
     limit,
+    resolveDisplayNames: options.resolveDisplayNames,
   })
 
   return {
@@ -553,16 +699,20 @@ function normalizeResolvedProfile(profile: string | null): string | undefined {
  * A turn_usage event contributes to the profile average TPS only when it
  * carries the exact three-field versioned contract: token_scope exactly
  * 'agent_turn', duration_scope exactly 'agent_turn', and tps_contract exactly
- * 'agent_turn_v1', with output_tokens an integer >= 0 and a finite, positive
- * duration_ms. The single weighted formula
+ * 'agent_turn_v1', with output_tokens a strictly positive integer and a
+ * finite, positive duration_ms. The single weighted formula
  *   1000 * sum(output_tokens) / sum(duration_ms)
  * stays client-agnostic and applies only to the common contract; legacy and
- * unversioned events never contribute to the TPS numerator/denominator.
+ * unversioned events never contribute to the TPS numerator/denominator. A
+ * zero-output sample is excluded from the TPS numerator and denominator even
+ * when its contract and duration are otherwise valid, so failures, no-usage,
+ * zero-output, zero-duration, and invalid-contract samples never skew the
+ * weighted average.
  */
 function parseAgentTurnUsage(data: JsonRecord): { outputTokens: number; durationMs: number } | undefined {
   const outputTokens = data.output_tokens
   const durationMs = data.duration_ms
-  const validOutputTokens = typeof outputTokens === 'number' && Number.isInteger(outputTokens) && outputTokens >= 0
+  const validOutputTokens = typeof outputTokens === 'number' && Number.isInteger(outputTokens) && outputTokens > 0
   const validDurationMs = typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
   const validContract = data.token_scope === 'agent_turn'
     && data.duration_scope === 'agent_turn'
@@ -593,6 +743,7 @@ function buildWindows(options: {
   taskIntervalRows: StatsTaskIntervalRow[]
   now: Date
   limit: number
+  resolveDisplayNames?: TaskRunDisplayNameResolver
 }): StatsWindowSummary[] {
   const specs: Array<{ period: StatsPeriod; startAt: string; endAt: string }> = [
     { period: '24h', startAt: options.todayWindow.startAt, endAt: options.todayWindow.endAt },
@@ -606,26 +757,33 @@ function buildWindow(
   period: StatsPeriod,
   startAt: string,
   endAt: string,
-  options: { allEventsRows: StatsEventRow[]; taskIntervalRows: StatsTaskIntervalRow[]; limit: number },
+  options: {
+    allEventsRows: StatsEventRow[]
+    taskIntervalRows: StatsTaskIntervalRow[]
+    limit: number
+    resolveDisplayNames?: TaskRunDisplayNameResolver
+  },
 ): StatsWindowSummary {
   const startMs = new Date(startAt).getTime()
   const endMs = new Date(endAt).getTime()
   let dispatchCount = 0
   let totalTokens = 0
-  const profileMap = new Map<
-    string,
-    { runCount: number; inputTokens: number; outputTokens: number; tpsOutputTokens: number; tpsDurationMs: number }
-  >()
+  // Group by an explicit shared identity or a namespaced provider-local one;
+  // `profile` is later emitted as the legacy alias equal to the model. Ineligible
+  // rows are omitted from model rankings but still counted in totals.
+  const modelMap = new Map<string, WindowModelAccumulator>()
 
   for (const row of options.allEventsRows) {
     const tsMs = new Date(row.created_at).getTime()
     if (!Number.isFinite(tsMs) || tsMs < startMs || tsMs >= endMs) continue
 
+    const persisted = eligibleModelIdentity(row)
     if (row.type === 'dispatch') {
       dispatchCount++
-      const profile = normalizeResolvedProfile(row.resolved_profile)
-      if (!profile) continue
-      const g = ensureWindowProfile(profileMap, profile)
+      if (!persisted) continue
+      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
+      const g = ensureWindowModel(modelMap, identity)
+      recordModelDisplay(g, identity)
       g.runCount++
     } else if (row.type === 'turn_usage') {
       const data = parseJsonValue(row.data)
@@ -634,9 +792,10 @@ function buildWindow(
       const inputTokens = fullInputTokens(record)
       const outputTokens = nonNegativeNumber(record.output_tokens)
       totalTokens += inputTokens + outputTokens
-      const profile = normalizeResolvedProfile(row.resolved_profile)
-      if (!profile) continue
-      const g = ensureWindowProfile(profileMap, profile)
+      if (!persisted) continue
+      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
+      const g = ensureWindowModel(modelMap, identity)
+      recordModelDisplay(g, identity)
       g.inputTokens += inputTokens
       g.outputTokens += outputTokens
       const usage = parseAgentTurnUsage(record)
@@ -647,10 +806,11 @@ function buildWindow(
     }
   }
 
-  const byProfile: StatsWindowProfileRow[] = [...profileMap.entries()]
-    .map(([profile, g]) => {
+  const byProfile: StatsWindowProfileRow[] = [...modelMap.entries()]
+    .map(([, g]) => {
       const item: StatsWindowProfileRow = {
-        profile,
+        profile: g.model,
+        model: g.model,
         runCount: g.runCount,
         totalTokens: g.inputTokens + g.outputTokens,
       }
@@ -658,12 +818,13 @@ function buildWindow(
         const averageTps = (1000 * g.tpsOutputTokens) / g.tpsDurationMs
         if (Number.isFinite(averageTps)) item.averageTps = averageTps
       }
+      applyModelDisplay(g, item)
       return item
     })
     .sort((a, b) => {
       const diff = b.totalTokens - a.totalTokens
       if (diff !== 0) return diff
-      return a.profile.localeCompare(b.profile)
+      return a.model.localeCompare(b.model)
     })
     .slice(0, options.limit)
 
@@ -672,14 +833,23 @@ function buildWindow(
   return { period, startAt, endAt, dispatchCount, totalTokens, byProfile, taskStats }
 }
 
-function ensureWindowProfile(
-  profileMap: Map<string, { runCount: number; inputTokens: number; outputTokens: number; tpsOutputTokens: number; tpsDurationMs: number }>,
-  profile: string,
-): { runCount: number; inputTokens: number; outputTokens: number; tpsOutputTokens: number; tpsDurationMs: number } {
-  let g = profileMap.get(profile)
+function ensureWindowModel(
+  modelMap: Map<string, WindowModelAccumulator>,
+  identity: StatsModelIdentity,
+): WindowModelAccumulator {
+  let g = modelMap.get(identity.key)
   if (!g) {
-    g = { runCount: 0, inputTokens: 0, outputTokens: 0, tpsOutputTokens: 0, tpsDurationMs: 0 }
-    profileMap.set(profile, g)
+    g = {
+      model: identity.model,
+      runCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      tpsOutputTokens: 0,
+      tpsDurationMs: 0,
+      modelDisplayNames: new Set<string>(),
+      providerDisplayNames: new Set<string>(),
+    }
+    modelMap.set(identity.key, g)
   }
   return g
 }

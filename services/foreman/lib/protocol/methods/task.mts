@@ -39,11 +39,6 @@ export interface TaskDispatchRequirements {
   excludeProfileIds?: readonly string[]
   excludeClientIds?: readonly string[]
   excludeProviderIds?: readonly string[]
-  preferredRuntime?: {
-    client: string
-    provider: string
-    model: string
-  }
 }
 
 export interface TaskDefinitionSummary {
@@ -246,16 +241,6 @@ const taskDispatchRequirementsSchema = {
     excludeProfileIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeClientIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeProviderIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-    preferredRuntime: {
-      type: 'object',
-      required: ['client', 'provider', 'model'],
-      properties: {
-        client: { type: 'string', minLength: 1 },
-        provider: { type: 'string', minLength: 1 },
-        model: { type: 'string', minLength: 1 },
-      },
-      additionalProperties: false,
-    },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -575,11 +560,10 @@ export type TaskSettingsSourceLayer =
   | 'user_task'
   | 'invocation'
 
-/** One exact resolved runtime triple used only where automatic dispatch
- *  preference or resolved provider readiness genuinely needs
- *  client/provider/model. Never a user selection: explicit mode stores a
- *  structural reference instead, and execution resolves it to a canonical
- *  run target. */
+/** One exact resolved runtime triple used only where automatic selection or
+ *  resolved provider readiness genuinely needs client/provider/model. Never a
+ *  user selection: explicit mode stores a structural reference instead, and
+ *  execution resolves it to a canonical run target. */
 export interface TaskSettingsRuntimeTriple {
   client: string
   provider: string
@@ -608,7 +592,6 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_profile_ids?: readonly string[]
   exclude_client_ids?: readonly string[]
   exclude_provider_ids?: readonly string[]
-  preferred_runtime?: TaskSettingsRuntimeTriple
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -653,7 +636,6 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>
-  preferred_runtime: TaskSettingsSourcedValue<TaskSettingsRuntimeTriple | null>
 }
 
 export interface TaskSettingsEffective {
@@ -833,17 +815,6 @@ const taskSettingsSourceLayerSchema = {
   enum: ['system', 'builtin', 'user_global', 'user_task', 'invocation'],
 } as const satisfies JsonSchema
 
-const taskSettingsRuntimeTripleSchema = {
-  type: 'object',
-  required: ['client', 'provider', 'model'],
-  properties: {
-    client: { type: 'string', minLength: 1 },
-    provider: { type: 'string', minLength: 1 },
-    model: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 const taskSettingsAliasReferenceSchema = {
   type: 'object',
   required: ['kind', 'name'],
@@ -895,9 +866,8 @@ export const taskSettingsAutomaticDispatchSchema = {
     exclude_profile_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_client_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_provider_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
-    preferred_runtime: taskSettingsRuntimeTripleSchema,
   },
-  additionalProperties: true,
+  additionalProperties: false,
 } as const satisfies JsonSchema
 
 const taskSettingsNullableAutomaticSchema = {
@@ -917,7 +887,6 @@ const taskSettingsAutomaticPatchSchema = {
     exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_client_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_provider_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
-    preferred_runtime: { anyOf: [taskSettingsRuntimeTripleSchema, { type: 'null' }] },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -1028,16 +997,6 @@ const taskSettingsSourcedIntelligenceSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsSourcedPreferredRuntimeSchema = {
-  type: 'object',
-  required: ['value', 'source'],
-  properties: {
-    value: { anyOf: [taskSettingsRuntimeTripleSchema, { type: 'null' }] },
-    source: taskSettingsSourceLayerSchema,
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 const taskSettingsEffectiveAutomaticSchema = {
   type: 'object',
   required: [
@@ -1051,7 +1010,6 @@ const taskSettingsEffectiveAutomaticSchema = {
     'exclude_profile_ids',
     'exclude_client_ids',
     'exclude_provider_ids',
-    'preferred_runtime',
   ],
   properties: {
     expected_tps: taskSettingsSourcedNullableNumberSchema,
@@ -1064,7 +1022,6 @@ const taskSettingsEffectiveAutomaticSchema = {
     exclude_profile_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_client_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_provider_ids: taskSettingsSourcedNullableStringArraySchema,
-    preferred_runtime: taskSettingsSourcedPreferredRuntimeSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

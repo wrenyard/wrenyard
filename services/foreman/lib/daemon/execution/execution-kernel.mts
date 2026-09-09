@@ -345,9 +345,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
 
     const definition = target.definition as TaskDefinition
     config = definition.config
-    // A soft runtime override preference is read separately from any declared
-    // runtime; it influences the automatic resolver's preferredRuntime only and
-    // can never relax, skip, or bypass a hard dispatch requirement. Active Task
+    // A legacy soft runtime override preference is read separately from any
+    // declared runtime. Automatic selection currently ignores it, so it can
+    // never relax, skip, or bypass a hard dispatch requirement. Active Task
     // definitions never declare a fixed runtime pin.
     const runtimeOverridePreference = taskRuntimeOverridePreference(target.name)
 

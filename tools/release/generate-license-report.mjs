@@ -68,14 +68,62 @@ export function parseLicensesOutput(output) {
   return normalizeEntries(parsed);
 }
 
-export function stripAbsolutePaths(entry) {
-  const out = { ...entry };
-  for (const [key, value] of Object.entries(out)) {
-    if (typeof value === 'string' && (value.startsWith('/') || value.includes(homedir()) || /^[A-Za-z]:[\\/]/.test(value))) {
-      delete out[key];
-    }
+function isSensitiveAbsolutePath(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.startsWith('/')
+    || trimmed.includes(homedir())
+    || /^[A-Za-z]:[\\/]/.test(trimmed);
+}
+
+/** Recursively removes absolute-path string values from license metadata.
+ * pnpm currently reports install paths in nested `paths[]` arrays, so a
+ * top-level-only object copy is not a sufficient release boundary. Object
+ * fields are omitted and array elements are filtered; license text and other
+ * attribution data are otherwise preserved verbatim. */
+function sanitizeLicenseValue(value) {
+  if (typeof value === 'string') return isSensitiveAbsolutePath(value) ? undefined : value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeLicenseValue(item))
+      .filter((item) => item !== undefined);
   }
-  return out;
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      const sanitized = sanitizeLicenseValue(item);
+      if (sanitized !== undefined) out[key] = sanitized;
+    }
+    return out;
+  }
+  return value;
+}
+
+export function stripAbsolutePaths(entry) {
+  return sanitizeLicenseValue(entry) ?? {};
+}
+
+/** Fails closed if a generated report still contains an absolute local path.
+ * The error reports only a count, never the path value. */
+export function assertNoAbsolutePaths(value) {
+  let count = 0;
+  const visit = (item) => {
+    if (typeof item === 'string') {
+      if (isSensitiveAbsolutePath(item)) count += 1;
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) visit(child);
+      return;
+    }
+    if (item && typeof item === 'object') {
+      for (const child of Object.values(item)) visit(child);
+    }
+  };
+  visit(value);
+  if (count > 0) {
+    throw new Error(`generate-license-report: generated report contains ${count} absolute path value(s)`);
+  }
 }
 
 export function compareVersions(a, b) {
@@ -127,6 +175,7 @@ export function main(argv = process.argv.slice(2)) {
   try {
     const entries = parseLicensesOutput(runLicensesCommand(root));
     const report = buildReport(entries);
+    assertNoAbsolutePaths(report);
     const outputFile = path.resolve(root, outputRel);
     mkdirSync(path.dirname(outputFile), { recursive: true });
     writeFileSync(outputFile, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

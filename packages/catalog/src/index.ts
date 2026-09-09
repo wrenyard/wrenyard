@@ -57,9 +57,20 @@ export interface SpeedEvidence {
   sampleCount?: number;
 }
 
+/**
+ * Provider-independent identity for an exact, evidence-backed model version.
+ * Routes without this metadata remain provider-local; callers must never infer
+ * equivalence from a raw provider model id or display label.
+ */
+export interface CanonicalModelDefinition {
+  id: string;
+  displayName: string;
+}
+
 export interface ModelDefinition {
   id: string;
   displayName: string;
+  canonicalModel?: CanonicalModelDefinition;
   contextWindow?: number;
   maxTokens?: number;
   taskOnly?: boolean;
@@ -85,9 +96,6 @@ export interface TaskDispatchRequirements {
   excludeProfileIds?: readonly string[];
   excludeClientIds?: readonly string[];
   excludeProviderIds?: readonly string[];
-  // Retained for interface compatibility but ignored by automatic constrained
-  // dispatch: a concrete runtime/alias preference exists only in explicit mode.
-  preferredRuntime?: { client: string; provider: string; model: string };
 }
 
 export interface DispatchCandidate {
@@ -154,10 +162,10 @@ export interface ClientDefinition {
   taskCapable?: boolean;
 }
 
-export interface PublicGatewayModel extends ModelDefinition {
+export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
   publicId: string;
-}
+};
 
 export interface ResolvedGatewayModel {
   provider: ProviderDefinition;
@@ -218,17 +226,37 @@ function isUsableLocalSample(sample: LocalSpeedSample): boolean {
 export class Catalog {
   private readonly providersByID = new Map<string, ProviderDefinition>();
   private readonly clientsByID = new Map<string, ClientDefinition>();
+  private readonly canonicalModelNamesByID = new Map<string, string>();
 
   registerProvider(provider: ProviderDefinition): void {
     requireID('provider', provider.id);
     if (this.providersByID.has(provider.id)) throw new Error(`duplicate provider: ${provider.id}`);
     const modelIDs = new Set<string>();
+    // Stage shared identity entries locally. They are committed only after the
+    // whole provider (including aliases, speed overrides, and protocols) has
+    // validated, so a failed registration cannot poison later registrations.
+    const stagedCanonicalModels = new Map<string, string>();
     for (const model of provider.models) {
       if (!model.id.trim()) throw new Error(`provider ${provider.id} has an empty model id`);
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
       // A model's default speed is required: a registration without one is
       // rejected up front, before any further validation.
       validateSpeedMeta(model.speed, `provider ${provider.id} model ${model.id}`);
+      if (model.canonicalModel) {
+        requireID('canonical model', model.canonicalModel.id);
+        const displayName = model.canonicalModel.displayName.trim();
+        if (displayName === '') {
+          throw new Error(`canonical model ${model.canonicalModel.id} has an empty display name`);
+        }
+        const registeredName = stagedCanonicalModels.get(model.canonicalModel.id)
+          ?? this.canonicalModelNamesByID.get(model.canonicalModel.id);
+        if (registeredName !== undefined && registeredName !== displayName) {
+          throw new Error(
+            `canonical model ${model.canonicalModel.id} has conflicting display names: ${JSON.stringify(registeredName)} and ${JSON.stringify(displayName)}`,
+          );
+        }
+        stagedCanonicalModels.set(model.canonicalModel.id, displayName);
+      }
       modelIDs.add(model.id);
     }
     for (const [alias, target] of Object.entries(provider.modelAliases ?? {})) {
@@ -256,6 +284,9 @@ export class Catalog {
       if (!capability.endpoint.startsWith('https://')) {
         throw new Error(`provider ${provider.id} endpoint must use https`);
       }
+    }
+    for (const [canonicalModelID, displayName] of stagedCanonicalModels) {
+      this.canonicalModelNamesByID.set(canonicalModelID, displayName);
     }
     this.providersByID.set(provider.id, provider);
   }
@@ -331,7 +362,23 @@ export class Catalog {
       .filter((provider) => provider.protocols?.some((entry) => entry.protocol === protocol))
       .flatMap((provider) => provider.models
         .filter((model) => !model.taskOnly)
-        .map((model) => ({ ...model, provider: provider.id, publicId: `${provider.id}/${model.id}` })));
+        .map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          provider: provider.id,
+          publicId: `${provider.id}/${model.id}`,
+          speed: model.speed,
+          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          ...(model.family === undefined ? {} : { family: model.family }),
+          ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
+          ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
+          ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
+          ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
+          ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
+          ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
+          ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
+        })));
   }
 
   resolveGatewayModel(protocol: GatewayProtocol, publicID: string): ResolvedGatewayModel {
@@ -506,7 +553,8 @@ export function resolveConstrainedDispatch(
   // provider/model the single representative client is chosen deterministically:
   // a Catalog-native plan first; when no native plan is eligible, the grok
   // gateway client before claude and the remaining gateway clients; then the
-  // stable client id. preferredRuntime never participates in automatic selection.
+  // stable client id. Concrete runtime selection belongs to explicit mode and
+  // never participates in automatic selection.
   const byProviderModel = new Map<string, DispatchResolution[]>();
   for (const entry of eligible) {
     const key = `${entry.plan.provider}/${entry.plan.model}`;
@@ -534,8 +582,7 @@ export function resolveConstrainedDispatch(
     // Deterministic ordering across the collapsed model representatives:
     // expected-speed group first (meets expectedTps), then lower reference
     // output price first, then stable canonical provider/model identity. No
-    // concrete declared preference is consulted, so a preferredRuntime cannot
-    // alter the automatic client or provider/model outcome.
+    // concrete runtime selection is consulted in automatic mode.
     const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
     const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
     if (aMeets !== bMeets) return aMeets ? -1 : 1;
