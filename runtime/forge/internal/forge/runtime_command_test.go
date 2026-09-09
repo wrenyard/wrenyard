@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+func bindCodeBuddyDirectRunFixture(t *testing.T, uid, wireModel string) {
+	t.Helper()
+	writeCodeBuddyAuthFixture(t, "ioa.example.com", uid, "synthetic-direct-run-token")
+	active := authStatusResolver().CodeBuddyActiveScope()
+	if !active.OK || active.Environment != "ioa" || active.Scope == "" {
+		t.Fatalf("synthetic direct-run CodeBuddy fixture did not resolve: %+v", active)
+	}
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, wireModel)
+}
+
 func TestParseDirectRunRejectsDashDashPromptEscape(t *testing.T) {
 	_, err := parseDirectRunArgs([]string{"-p", "codex", "--", "hello"})
 	if err == nil {
@@ -123,6 +133,7 @@ func TestDirectRunCBKimiSelectsCodeBuddyWithKimiK3(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("FORGE_REPO_DIR", t.TempDir())
 	setFakeClientsOnPath(t, "codebuddy")
+	bindCodeBuddyDirectRunFixture(t, "uid-direct-kimi", "kimi-k3")
 
 	plan, err := buildDirectRunPlan(directPlanInput{Profile: "cb-kimi", Prompt: "work", CWD: t.TempDir()})
 	if err != nil {
@@ -169,6 +180,7 @@ func TestDirectRunCBHYUsesDaemonResolvedUpstreamModel(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("FORGE_REPO_DIR", t.TempDir())
 	setFakeClientsOnPath(t, "codebuddy")
+	bindCodeBuddyDirectRunFixture(t, "uid-direct-hy", "hy4-preview-ioa")
 
 	plan, err := buildDirectRunPlan(directPlanInput{Profile: "cb-hy", Prompt: "work", CWD: t.TempDir()})
 	if err != nil {

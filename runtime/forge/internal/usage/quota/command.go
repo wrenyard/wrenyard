@@ -44,6 +44,20 @@ type CommandDeps struct {
 	// ResolveSuperGrokAuthSources returns readable native Grok auth.json paths
 	// in precedence order. Nil/empty means the local login is not configured.
 	ResolveSuperGrokAuthSources func() []string
+	// CodeBuddyExpectedScope is the expected opaque CodeBuddy execution/quota
+	// scope bound by the calling Foreman context. CodeBuddy is projected only
+	// when this and CodeBuddyExpectedEnvironment are both non-empty and the
+	// current resolver returns the exact same scope and environment.
+	CodeBuddyExpectedScope string
+	// CodeBuddyExpectedEnvironment is the expected normalized CodeBuddy
+	// environment bound by the calling Foreman context.
+	CodeBuddyExpectedEnvironment string
+	// CodeBuddyActiveScope independently resolves the current CodeBuddy login's
+	// opaque scope and normalized environment. ok=false (or empty values) means
+	// no current login can be resolved and CodeBuddy must be omitted. This
+	// package never imports the auth package; the resolver is provided by the
+	// caller.
+	CodeBuddyActiveScope func() (scope, environment string, ok bool)
 }
 
 // ConfigInfo is a neutral view of the forge config for quota commands.
@@ -432,33 +446,46 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 	return 0
 }
 
-// observedCodeBuddyEntry projects the canonical CodeBuddy provider from an
-// active, locally observed monthly exhaustion record. The window is a truthful
-// 0%-remaining monthly window carrying the friendly Chinese message and the
-// reset time. A nil/absent/expired record yields no entry.
+// observedCodeBuddyEntry projects the canonical CodeBuddy provider from the
+// locally observed, current-scoped schema-v2 exhaustion record. It appears
+// only when the bound expected scope+environment are non-empty, the caller's
+// current resolver independently returns ok with the exact same
+// scope+environment, and the store holds a matching, unexpired schema-v2
+// record. The window is a neutral truthful 0%-remaining window named observed
+// carrying the authoritative resets_at and a concise Chinese message. Legacy
+// v1 and mismatched records stay inert; nil context always yields no entry.
 func observedCodeBuddyEntry(deps CommandDeps) (poolEntry, bool) {
+	expectedScope := strings.TrimSpace(deps.CodeBuddyExpectedScope)
+	expectedEnvironment := strings.TrimSpace(deps.CodeBuddyExpectedEnvironment)
+	if expectedScope == "" || expectedEnvironment == "" || deps.CodeBuddyActiveScope == nil {
+		return poolEntry{}, false
+	}
+	currentScope, currentEnvironment, ok := deps.CodeBuddyActiveScope()
+	if !ok || strings.TrimSpace(currentScope) == "" || strings.TrimSpace(currentEnvironment) == "" {
+		return poolEntry{}, false
+	}
+	if currentScope != expectedScope || currentEnvironment != expectedEnvironment {
+		return poolEntry{}, false
+	}
 	store := observedquota.NewStore(deps.ObservedQuotaRoot)
-	record, ok := store.Active(observedquota.ProviderCodeBuddy, timeNow())
+	record, ok := store.ActiveScoped(observedquota.ProviderCodeBuddy, currentScope, timeNow())
 	if !ok {
 		return poolEntry{}, false
 	}
 	label := CanonicalLabel(observedquota.ProviderCodeBuddy)
 	resetsAt := record.ResetsAt
 	window := Window{
-		Name: "1mo", Pct: 100, ResetsAt: &resetsAt, WindowMinutes: 43200,
+		Name: "observed", Pct: 100, ResetsAt: &resetsAt,
 	}
-	pace, reset := PaceAndResetJSON([]Window{window})
 	q := Quota{Provider: observedquota.ProviderCodeBuddy, Label: label, Windows: []Window{window}}
 	return poolEntry{
 		Pool:        observedquota.ProviderCodeBuddy,
 		Label:       label,
 		Status:      "ok",
 		Windows:     quotaWindowsJSON([]Window{window}),
-		Pace:        pace,
-		Reset:       reset,
 		DisplayLine: DisplayLine(q),
 		Message: fmt.Sprintf(
-			"CodeBuddy 本月计费周期额度已耗尽，将于 %s 重置，请下月再试。",
+			"CodeBuddy 额度已耗尽，重置时间为 %s，届时将自动恢复。",
 			resetsAt.In(time.Local).Format("2006-01-02 15:04"),
 		),
 	}, true

@@ -5167,35 +5167,47 @@ func TestCanonicalPoolsExcludeCodeBuddy(t *testing.T) {
 	}
 }
 
-func TestQuotaListAllObservedCodeBuddyActiveExhaustion(t *testing.T) {
+// findObservedCodeBuddyEntry returns the codebuddy pool entry from a parsed
+// quota list, or nil when the projection was omitted.
+func findObservedCodeBuddyEntry(entries []map[string]any) map[string]any {
+	for _, e := range entries {
+		if pool, _ := e["pool"].(string); pool == "codebuddy" {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestQuotaListAllObservedCodeBuddyProjectsExactScopedContext proves that an
+// exact matching expected/current scope+environment projects one neutral
+// observed window with authoritative resets_at and 0% remaining, without any
+// fabricated window_minutes, monthly semantics, or privacy leak.
+func TestQuotaListAllObservedCodeBuddyProjectsExactScopedContext(t *testing.T) {
 	setFixedNow(t)
+	now := fixedNow()
 	tmpDir := t.TempDir()
 	observedRoot := filepath.Join(tmpDir, "observed")
-
-	resetsAt := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
+	const scope = "cbv1:opaque-scope-digest"
+	resetsAt := now.Add(48 * time.Hour)
 	store := observedquota.NewStore(observedRoot)
-	if !store.Write(observedquota.MonthlyExhaustion(observedquota.ProviderCodeBuddy, fixedNow(), resetsAt)) {
-		t.Fatal("seed observed exhaustion record")
+	if !store.Write(observedquota.ConfirmedExhaustion(observedquota.ProviderCodeBuddy, scope, now.Add(-time.Hour), resetsAt)) {
+		t.Fatal("seed observed schema-v2 exhaustion record")
 	}
 
 	deps := testQuotaCommandDeps(tmpDir)
 	deps.ObservedQuotaRoot = observedRoot
 	deps.ProviderForOverride = noNetworkProviderFor()
+	deps.CodeBuddyExpectedScope = scope
+	deps.CodeBuddyExpectedEnvironment = "ioa"
+	deps.CodeBuddyActiveScope = func() (string, string, bool) { return scope, "ioa", true }
 
 	entries, code := captureQuotaListAllJSON(t, deps)
 	if code != 0 {
 		t.Fatalf("quotaListAll exit code = %d, want 0", code)
 	}
-
-	var cb map[string]any
-	for _, e := range entries {
-		if pool, _ := e["pool"].(string); pool == "codebuddy" {
-			cb = e
-			break
-		}
-	}
+	cb := findObservedCodeBuddyEntry(entries)
 	if cb == nil {
-		t.Fatalf("active observed exhaustion must project a codebuddy entry: %#v", entries)
+		t.Fatalf("exact-scoped observed exhaustion must project a codebuddy entry: %#v", entries)
 	}
 	if label, _ := cb["label"].(string); label != "CodeBuddy" {
 		t.Fatalf("codebuddy label=%v want CodeBuddy", cb["label"])
@@ -5203,39 +5215,168 @@ func TestQuotaListAllObservedCodeBuddyActiveExhaustion(t *testing.T) {
 	if status, _ := cb["status"].(string); status != "ok" {
 		t.Fatalf("codebuddy status=%v want ok", cb["status"])
 	}
-
+	if _, has := cb["pace"]; has {
+		t.Fatal("codebuddy entry must not fabricate a pace anchor")
+	}
 	windows, _ := cb["windows"].([]any)
 	if len(windows) != 1 {
-		t.Fatalf("codebuddy windows=%v want one monthly window", windows)
+		t.Fatalf("codebuddy windows=%v want one neutral observed window", windows)
 	}
 	w0 := windows[0].(map[string]any)
-	if name, _ := w0["name"].(string); name != "1mo" {
-		t.Fatalf("codebuddy window name=%v want 1mo", w0["name"])
+	if name, _ := w0["name"].(string); name != "observed" {
+		t.Fatalf("codebuddy window name=%v want observed", w0["name"])
+	}
+	if _, has := w0["window_minutes"]; has {
+		t.Fatalf("codebuddy window must not fabricate window_minutes: %#v", w0)
 	}
 	assertJSONFloat(t, w0, "pct", 100)
 	assertJSONFloat(t, w0, "remaining_pct", 0)
 	if resetsAtRaw, _ := w0["resets_at"].(string); resetsAtRaw != resetsAt.Format(time.RFC3339) {
-		t.Fatalf("codebuddy resets_at=%v want %v", w0["resets_at"], resetsAt.Format(time.RFC3339))
+		t.Fatalf("codebuddy resets_at=%v want authoritative %v", w0["resets_at"], resetsAt.Format(time.RFC3339))
 	}
 
 	message, _ := cb["message"].(string)
-	if !strings.Contains(message, "CodeBuddy 本月计费周期额度已耗尽") || !strings.Contains(message, "重置") {
-		t.Fatalf("codebuddy message=%q want friendly Chinese exhaustion message", message)
+	for _, want := range []string{"CodeBuddy 额度已耗尽", "重置时间"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("codebuddy message=%q must contain %q", message, want)
+		}
+	}
+	for _, forbidden := range []string{"本月", "下月", "1mo", "month"} {
+		if strings.Contains(message, forbidden) {
+			t.Fatalf("codebuddy message=%q must not claim %q", message, forbidden)
+		}
 	}
 
-	reset, ok := cb["reset"].(map[string]any)
-	if !ok {
-		t.Fatalf("codebuddy reset=%v want reset projection", cb["reset"])
-	}
-	if at, _ := reset["at"].(string); at != resetsAt.Format(time.RFC3339) {
-		t.Fatalf("codebuddy reset.at=%v want %v", reset["at"], resetsAt.Format(time.RFC3339))
-	}
-	if in, _ := reset["in"].(string); in == "" {
-		t.Fatal("codebuddy reset.in must be non-empty")
-	}
 	displayLine, _ := cb["display_line"].(string)
-	if !strings.Contains(displayLine, "0% remain") || !strings.Contains(displayLine, "reset") {
-		t.Fatalf("codebuddy display_line=%q want truthful 0%% remain and reset", displayLine)
+	if !strings.Contains(displayLine, "observed") || !strings.Contains(displayLine, "0% remain") {
+		t.Fatalf("codebuddy display_line=%q want observed window with 0%% remain", displayLine)
+	}
+
+	// Privacy: the serialized entry must not contain the scope digest, the
+	// environment label, or any private admission env name/value.
+	serialized, err := json.Marshal(cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{scope, "ioa", "WRENYARD_CODEBUDDY_EXPECTED_SCOPE", "WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT", "WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL"} {
+		if strings.Contains(string(serialized), private) {
+			t.Fatalf("codebuddy serialized output leaked %q: %s", private, serialized)
+		}
+	}
+}
+
+// TestQuotaListAllObservedCodeBuddyOmittedWhenContextMissingOrMismatched
+// proves CodeBuddy is omitted when expected context is absent, the resolver is
+// missing, or expected and current scope/environment disagree.
+func TestQuotaListAllObservedCodeBuddyOmittedWhenContextMissingOrMismatched(t *testing.T) {
+	setFixedNow(t)
+	now := fixedNow()
+	const scope = "cbv1:opaque-scope-digest"
+	const otherScope = "cbv1:different-scope-digest"
+	resetsAt := now.Add(24 * time.Hour)
+
+	seedRecord := func(tt *testing.T, root string) {
+		tt.Helper()
+		store := observedquota.NewStore(root)
+		if !store.Write(observedquota.ConfirmedExhaustion(observedquota.ProviderCodeBuddy, scope, now.Add(-time.Hour), resetsAt)) {
+			tt.Fatal("seed observed schema-v2 exhaustion record")
+		}
+	}
+	newDeps := func(tt *testing.T, root string) CommandDeps {
+		deps := testQuotaCommandDeps(tt.TempDir())
+		deps.ObservedQuotaRoot = root
+		deps.ProviderForOverride = noNetworkProviderFor()
+		return deps
+	}
+	assertOmitted := func(tt *testing.T, deps CommandDeps, name string) {
+		tt.Helper()
+		entries, code := captureQuotaListAllJSON(tt, deps)
+		if code != 0 {
+			tt.Fatalf("%s: quotaListAll exit code = %d, want 0", name, code)
+		}
+		if cb := findObservedCodeBuddyEntry(entries); cb != nil {
+			tt.Fatalf("%s: codebuddy must be omitted: %#v", name, cb)
+		}
+	}
+
+	t.Run("missing expected scope and environment", func(t *testing.T) {
+		root := t.TempDir()
+		seedRecord(t, root)
+		deps := newDeps(t, root)
+		deps.CodeBuddyExpectedScope = ""
+		deps.CodeBuddyExpectedEnvironment = ""
+		deps.CodeBuddyActiveScope = func() (string, string, bool) { return scope, "ioa", true }
+		assertOmitted(t, deps, "missing expected scope and environment")
+	})
+
+	t.Run("missing resolver callback", func(t *testing.T) {
+		root := t.TempDir()
+		seedRecord(t, root)
+		deps := newDeps(t, root)
+		deps.CodeBuddyExpectedScope = scope
+		deps.CodeBuddyExpectedEnvironment = "ioa"
+		deps.CodeBuddyActiveScope = nil
+		assertOmitted(t, deps, "missing resolver callback")
+	})
+
+	t.Run("expected/current scope mismatch", func(t *testing.T) {
+		root := t.TempDir()
+		seedRecord(t, root)
+		deps := newDeps(t, root)
+		deps.CodeBuddyExpectedScope = otherScope
+		deps.CodeBuddyExpectedEnvironment = "ioa"
+		deps.CodeBuddyActiveScope = func() (string, string, bool) { return scope, "ioa", true }
+		assertOmitted(t, deps, "expected/current scope mismatch")
+	})
+
+	t.Run("environment mismatch", func(t *testing.T) {
+		root := t.TempDir()
+		seedRecord(t, root)
+		deps := newDeps(t, root)
+		deps.CodeBuddyExpectedScope = scope
+		deps.CodeBuddyExpectedEnvironment = "cloudhosted"
+		deps.CodeBuddyActiveScope = func() (string, string, bool) { return scope, "ioa", true }
+		assertOmitted(t, deps, "environment mismatch")
+	})
+
+	t.Run("resolver reports not ok", func(t *testing.T) {
+		root := t.TempDir()
+		seedRecord(t, root)
+		deps := newDeps(t, root)
+		deps.CodeBuddyExpectedScope = scope
+		deps.CodeBuddyExpectedEnvironment = "ioa"
+		deps.CodeBuddyActiveScope = func() (string, string, bool) { return "", "", false }
+		assertOmitted(t, deps, "resolver reports not ok")
+	})
+}
+
+func TestQuotaListAllObservedCodeBuddyOmittedAfterExpiry(t *testing.T) {
+	setFixedNow(t)
+	now := fixedNow()
+	tmpDir := t.TempDir()
+	observedRoot := filepath.Join(tmpDir, "observed")
+
+	// The schema-v2 record expired before the fixed now: resets_at is in the
+	// past but still after observed_at so the store accepts it.
+	expiredAt := now.Add(-24 * time.Hour)
+	store := observedquota.NewStore(observedRoot)
+	if !store.Write(observedquota.ConfirmedExhaustion(observedquota.ProviderCodeBuddy, "cbv1:opaque-scope-digest", expiredAt.Add(-24*time.Hour), expiredAt)) {
+		t.Fatal("seed expired observed exhaustion record")
+	}
+
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ObservedQuotaRoot = observedRoot
+	deps.ProviderForOverride = noNetworkProviderFor()
+	deps.CodeBuddyExpectedScope = "cbv1:opaque-scope-digest"
+	deps.CodeBuddyExpectedEnvironment = "ioa"
+	deps.CodeBuddyActiveScope = func() (string, string, bool) { return "cbv1:opaque-scope-digest", "ioa", true }
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+	if cb := findObservedCodeBuddyEntry(entries); cb != nil {
+		t.Fatalf("expired observed state must omit codebuddy: %#v", cb)
 	}
 }
 
@@ -5245,42 +5386,47 @@ func TestQuotaListAllObservedCodeBuddyOmittedWhenAbsent(t *testing.T) {
 	deps := testQuotaCommandDeps(tmpDir)
 	deps.ObservedQuotaRoot = filepath.Join(tmpDir, "observed")
 	deps.ProviderForOverride = noNetworkProviderFor()
+	deps.CodeBuddyExpectedScope = "cbv1:opaque-scope-digest"
+	deps.CodeBuddyExpectedEnvironment = "ioa"
+	deps.CodeBuddyActiveScope = func() (string, string, bool) { return "cbv1:opaque-scope-digest", "ioa", true }
 
 	entries, code := captureQuotaListAllJSON(t, deps)
 	if code != 0 {
 		t.Fatalf("quotaListAll exit code = %d, want 0", code)
 	}
-	for _, e := range entries {
-		if pool, _ := e["pool"].(string); pool == "codebuddy" {
-			t.Fatalf("absent observed state must omit codebuddy: %#v", e)
-		}
+	if cb := findObservedCodeBuddyEntry(entries); cb != nil {
+		t.Fatalf("absent observed state must omit codebuddy: %#v", cb)
 	}
 }
 
-func TestQuotaListAllObservedCodeBuddyOmittedAfterExpiry(t *testing.T) {
+// TestQuotaListAllObservedCodeBuddyLegacyV1Inert proves a raw legacy schema-v1
+// monthly record stays readable but inert: even with an exact matching current
+// scoped context the projection omits CodeBuddy.
+func TestQuotaListAllObservedCodeBuddyLegacyV1Inert(t *testing.T) {
 	setFixedNow(t)
 	tmpDir := t.TempDir()
 	observedRoot := filepath.Join(tmpDir, "observed")
-
-	// The record expired before the fixed now: resets_at is in the past.
-	expiredAt := fixedNow().Add(-24 * time.Hour)
-	store := observedquota.NewStore(observedRoot)
-	if !store.Write(observedquota.MonthlyExhaustion(observedquota.ProviderCodeBuddy, fixedNow().Add(-48*time.Hour), expiredAt)) {
-		t.Fatal("seed expired observed exhaustion record")
+	raw := `{"schema_version":1,"provider":"codebuddy","exhausted":true,"observed_at":"2025-01-14T10:00:00Z","resets_at":"2025-01-20T00:00:00Z","reason_code":"monthly_quota_exhausted"}`
+	if err := os.MkdirAll(observedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(observedRoot, "codebuddy.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	deps := testQuotaCommandDeps(tmpDir)
 	deps.ObservedQuotaRoot = observedRoot
 	deps.ProviderForOverride = noNetworkProviderFor()
+	deps.CodeBuddyExpectedScope = "cbv1:opaque-scope-digest"
+	deps.CodeBuddyExpectedEnvironment = "ioa"
+	deps.CodeBuddyActiveScope = func() (string, string, bool) { return "cbv1:opaque-scope-digest", "ioa", true }
 
 	entries, code := captureQuotaListAllJSON(t, deps)
 	if code != 0 {
 		t.Fatalf("quotaListAll exit code = %d, want 0", code)
 	}
-	for _, e := range entries {
-		if pool, _ := e["pool"].(string); pool == "codebuddy" {
-			t.Fatalf("expired observed state must omit codebuddy: %#v", e)
-		}
+	if cb := findObservedCodeBuddyEntry(entries); cb != nil {
+		t.Fatalf("legacy v1 observed state must stay inert and omit codebuddy: %#v", cb)
 	}
 }
 

@@ -557,6 +557,78 @@ func dispatchPlanForProfile(profileID string) (profilepkg.DispatchPlan, error) {
 	if !ok {
 		return profilepkg.DispatchPlan{}, fmt.Errorf("dispatch plan for profile %q is unavailable", profileID)
 	}
+	// Native CodeBuddy plans are revalidated against the current login on
+	// every admission so a stale cross-environment wire model can never run.
+	if isCodeBuddyNativePlan(plan) {
+		return bindCodeBuddyDispatchPlan(plan)
+	}
+	return plan, nil
+}
+
+// codeBuddyIOAEnvironment is the normalized observed CodeBuddy environment in
+// which canonical CodeBuddy models execute under their -ioa wire identity.
+const codeBuddyIOAEnvironment = "ioa"
+
+// codeBuddyCanonicalToWireModel mirrors the TypeScript runtime mapping from
+// canonical CodeBuddy models to their -ioa wire identity. It is applied only
+// in the ioa environment; already-wire models and non-iOA models are never
+// rewritten.
+var codeBuddyCanonicalToWireModel = map[string]string{
+	"deepseek-v4-flash": "deepseek-v4-flash-ioa",
+	"deepseek-v4-pro":   "deepseek-v4-pro-ioa",
+	"hy4-preview":       "hy4-preview-ioa",
+	"hy3":               "hy3-ioa",
+	"minimax-m3":        "minimax-m3-ioa",
+}
+
+// codeBuddyWireModel derives the wire model for a canonical CodeBuddy model
+// under a normalized observed environment. Only the ioa environment remaps the
+// five canonical models to their -ioa wire identity; any other environment,
+// already-wire model, or non-iOA model is left unchanged.
+func codeBuddyWireModel(environment, model string) string {
+	if environment != codeBuddyIOAEnvironment {
+		return model
+	}
+	if wire, ok := codeBuddyCanonicalToWireModel[model]; ok {
+		return wire
+	}
+	return model
+}
+
+// isCodeBuddyNativePlan reports whether a plan is a native CodeBuddy execution
+// plan whose client and provider both resolve through CodeBuddy.
+func isCodeBuddyNativePlan(plan profilepkg.DispatchPlan) bool {
+	return plan.Client == "codebuddy" && plan.Provider == "codebuddy" &&
+		plan.Mode == "native"
+}
+
+// bindCodeBuddyDispatchPlan fails a native CodeBuddy dispatch plan closed
+// unless the complete private expected tuple (opaque scope, normalized
+// environment, and expected wire model, supplied through the Forge-private
+// driver env names) matches the current login resolved independently from
+// current auth/product state via CodeBuddyActiveScope. On success it returns a
+// copy whose Model has been replaced in memory with the wire model derived
+// from the current environment and the plan's canonical model. Errors are
+// generic and never contain actual or expected scope, environment, domain,
+// account, token, or wire values.
+func bindCodeBuddyDispatchPlan(plan profilepkg.DispatchPlan) (profilepkg.DispatchPlan, error) {
+	expectedScope := strings.TrimSpace(os.Getenv(driver.CodeBuddyExpectedScopeEnv))
+	expectedEnvironment := strings.TrimSpace(os.Getenv(driver.CodeBuddyExpectedEnvironmentEnv))
+	expectedWire := strings.TrimSpace(os.Getenv(driver.CodeBuddyExpectedWireModelEnv))
+	if expectedScope == "" || expectedEnvironment == "" || expectedWire == "" {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan is unavailable: login context is missing")
+	}
+	current := authStatusResolver().CodeBuddyActiveScope()
+	if !current.OK || strings.TrimSpace(current.Scope) == "" || strings.TrimSpace(current.Environment) == "" {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan is unavailable: current login could not be resolved")
+	}
+	if current.Scope != expectedScope || current.Environment != expectedEnvironment {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan does not match the current login")
+	}
+	if wire := codeBuddyWireModel(current.Environment, plan.Model); wire != expectedWire {
+		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan does not match the current environment")
+	}
+	plan.Model = codeBuddyWireModel(current.Environment, plan.Model)
 	return plan, nil
 }
 

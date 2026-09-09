@@ -9,6 +9,30 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
+// CodeBuddyExpectedScopeEnv, CodeBuddyExpectedEnvironmentEnv, and
+// CodeBuddyExpectedWireModelEnv are Forge-private CodeBuddy admission context
+// names. They carry the expected opaque scope, normalized environment, and
+// expected wire model that Forge binds native CodeBuddy dispatch plans to the
+// current login. They are Forge-private: every case variant is stripped from
+// inherited parent environments and rejected from planned overlays on every
+// platform and permission mode, so none of the private values can reach a
+// child process.
+const (
+	CodeBuddyExpectedScopeEnv       = "WRENYARD_CODEBUDDY_EXPECTED_SCOPE"
+	CodeBuddyExpectedEnvironmentEnv = "WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT"
+	CodeBuddyExpectedWireModelEnv   = "WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL"
+)
+
+// codeBuddyPrivateEnvKey reports whether key is any case variant of a
+// Forge-private CodeBuddy admission context name. The match is always
+// case-insensitive, independent of the platform's env case sensitivity.
+func codeBuddyPrivateEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	return upper == CodeBuddyExpectedScopeEnv ||
+		upper == CodeBuddyExpectedEnvironmentEnv ||
+		upper == CodeBuddyExpectedWireModelEnv
+}
+
 // IsClaudeDefaultModelEnv reports whether key is an ANTHROPIC_DEFAULT_*_MODEL*
 // environment variable that forge internally manages for Claude profile model
 // resolution (shared predicate — single source of truth).
@@ -98,8 +122,12 @@ func buildChildEnvForPermission(planned map[string]string, environ []string, cas
 		if !ok {
 			continue
 		}
-		// 2. Drop forge-managed denylist keys (and ANTHROPIC_DEFAULT_*_MODEL*).
+		// 2. Drop forge-managed denylist keys (and ANTHROPIC_DEFAULT_*_MODEL*),
+		// plus Forge-private CodeBuddy admission context in any case variant.
 		if deny[normalizeEnvKey(key, caseInsensitive)] {
+			continue
+		}
+		if codeBuddyPrivateEnvKey(key) {
 			continue
 		}
 		if restricted && restrictedConfigurationInjectionKey(key, caseInsensitive) {
@@ -121,6 +149,11 @@ func buildChildEnvForPermission(planned map[string]string, environ []string, cas
 	// 3. Overlay planned entries (case-insensitive replacement on Windows).
 	for pk, pv := range planned {
 		if restricted && restrictedConfigurationInjectionKey(pk, caseInsensitive) {
+			continue
+		}
+		// Forge-private CodeBuddy admission context is rejected from planned
+		// overlays on every platform and permission mode.
+		if codeBuddyPrivateEnvKey(pk) {
 			continue
 		}
 		if caseInsensitive {

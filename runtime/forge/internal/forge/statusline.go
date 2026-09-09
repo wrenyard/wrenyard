@@ -7,6 +7,7 @@ import (
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
 )
@@ -25,6 +26,15 @@ func quotaCommand(args []string) int {
 		CodexBarEnabled:      sl.CodexBarEnabled,
 		ResolveSuperGrokAuthSources: func() []string {
 			return grok.ReadableOAuthSources(forgeDataDir(), userHome())
+		},
+		CodeBuddyExpectedScope:       os.Getenv(driver.CodeBuddyExpectedScopeEnv),
+		CodeBuddyExpectedEnvironment: os.Getenv(driver.CodeBuddyExpectedEnvironmentEnv),
+		CodeBuddyActiveScope: func() (string, string, bool) {
+			// Independent current-auth truth: never treat the bound expected
+			// environment as observed truth. The values are not logged or
+			// exposed here.
+			active := authStatusResolver().CodeBuddyActiveScope()
+			return active.Scope, active.Environment, active.OK
 		},
 	}
 	return quota.Command(deps, args)
