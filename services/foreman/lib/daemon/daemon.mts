@@ -38,7 +38,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
-import { createBuiltinCatalog, createBuiltinProviderRuntime, resolveRuntimeTaskPlans } from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, deriveTaskDispatchPlans } from '@wrenyard/providers'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { readTrustedSpeedSamples31d } from '../events/stats-query.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
@@ -305,10 +305,31 @@ async function startForemanDaemonWithRuntime(
   // settings resolves alias references freshly through the same instance.
   const runtimeAliasStore = new RuntimeAliasStore()
   const runtimeAliasService = new RuntimeAliasService(runtimeAliasStore)
+  // One private current-CodeBuddy-active-snapshot loader bound to the catalog
+  // codebuddy provider definition and the existing provider runtime. Every
+  // snapshot() request and every exact-codebuddy readiness probe resolves the
+  // current login/environment afresh through runtime.codeBuddySnapshot — never
+  // a startup-frozen credential or a stale CodeBuddy login/environment wire
+  // remap. When no codebuddy provider exists or the runtime exposes no
+  // snapshot loader, the loader resolves to undefined so CodeBuddy closes
+  // closed everywhere.
+  const codebuddyProviderDef = catalog.provider('codebuddy')
+  const loadCurrentCodeBuddySnapshot = async () => {
+    if (codebuddyProviderDef === undefined) return undefined
+    const snapshotLoader = providerRuntime.codeBuddySnapshot
+    if (snapshotLoader === undefined) return undefined
+    return snapshotLoader(codebuddyProviderDef)
+  }
   // One daemon-owned immutable automatic-routing quota snapshot service. All
   // automatic selections (TaskSettingsService run + preview) share this single
-  // instance so quota evidence/caching never diverges between paths.
-  const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService()
+  // instance so quota evidence/caching never diverges between paths. The
+  // private current-CodeBuddy loader is injected so the service scopes quota
+  // queries to the current login/environment and keys its cache by that
+  // context; the daemon-owned WRENYARD_DISPATCH_PLANS_JSON stays canonical and
+  // never freezes a CodeBuddy login/environment wire remap at startup.
+  const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService({
+    codeBuddySnapshot: loadCurrentCodeBuddySnapshot,
+  })
   // One daemon-owned TaskSettingsService shares the already-created resolver,
   // the single alias owner, the shared quota snapshot service, and the
   // authoritative config path; no second catalog/resolver/alias store is
@@ -322,15 +343,18 @@ async function startForemanDaemonWithRuntime(
     quotaSnapshots: autoRoutingQuotaSnapshots,
     // Non-billable readiness: real daemon admission status (never a paid probe)
     // plus the current provider credential/route availability. Unknown quota is
-    // surfaced as `unknown` — never fabricated as available or zero. The
-    // privacy-safe confirmed-free supply fact for an already-read credential is
-    // included without any token/domain/upstream suffix; no paid/model probes
-    // are ever issued.
+    // surfaced as `unknown` — never fabricated as available or zero. Exact
+    // CodeBuddy readiness is bound to one fresh current CodeBuddyActiveSnapshot
+    // (see runtimeAvailability), and every other provider keeps the existing
+    // credential/route path. The privacy-safe confirmed-free supply fact for an
+    // already-read credential plus the exact selected runtime model is included
+    // without any token/scope/environment/domain/upstream suffix; no paid/model
+    // probes are ever issued.
     daemonAvailability: () => ({
       accepting: runtime.dispatchControl.status().accepting,
       known: true,
     }),
-    runtimeAvailability: async ({ provider }) => {
+    runtimeAvailability: async ({ provider, model }, availabilityContext) => {
       const providerDef = runtime.catalog.provider(provider)
       if (!providerDef) {
         return {
@@ -340,11 +364,58 @@ async function startForemanDaemonWithRuntime(
           available: false,
         }
       }
+      if (providerDef.id === 'codebuddy') {
+        // Exact codebuddy readiness uses exactly one fresh immutable
+        // CodeBuddyActiveSnapshot for the current login/environment. Absent or
+        // throwing loads and snapshots without an opaque stable scope fail
+        // closed (reported missing); confirmed-free is derived only through
+        // that same snapshot.freeSupply(model). There is no fallback to
+        // credential()/freeSupply(), and no credential, stable scope,
+        // environment, domain, token, or wire model is exposed on the report.
+        let activeSnapshot = availabilityContext?.codeBuddySnapshot
+        if (availabilityContext === undefined) {
+          try {
+            activeSnapshot = await loadCurrentCodeBuddySnapshot()
+          } catch {
+            activeSnapshot = undefined
+          }
+        }
+        if (activeSnapshot === undefined || activeSnapshot.stableScope === undefined) {
+          return {
+            providerCredential: 'missing',
+            providerLive: 'unknown',
+            quota: 'unknown',
+            available: false,
+          }
+        }
+        const wireModel = activeSnapshot.resolveUpstreamModel(model)
+        if (!wireModel) {
+          return {
+            providerCredential: 'missing',
+            providerLive: 'unknown',
+            quota: 'unknown',
+            available: false,
+          }
+        }
+        const freeSupply = activeSnapshot.freeSupply(model)
+        return {
+          providerCredential: 'available',
+          providerLive: 'available',
+          quota: 'unknown',
+          available: true,
+          ...(freeSupply ? { freeSupply } : {}),
+          codeBuddyExecution: {
+            expectedScope: activeSnapshot.stableScope,
+            expectedEnvironment: activeSnapshot.environment,
+            expectedWireModel: wireModel,
+          },
+        }
+      }
       const credential = await runtime.providerRuntime.credential(providerDef)
       const available = credential !== undefined
       const freeSupply = credential === undefined
         ? undefined
-        : runtime.providerRuntime.freeSupply?.(providerDef, credential)
+        : runtime.providerRuntime.freeSupply?.(providerDef, model, credential)
       return {
         providerCredential: available ? 'available' : 'missing',
         providerLive: available ? 'available' : 'unknown',
@@ -855,10 +926,16 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   // Catalog + provider runtime are the single source of truth for the daemon.
   // Canonical task dispatch plans and the deterministic resolver are derived
   // here (not in the runtime bootstrap) so the runner is wired with a fully
-  // constructed resolver, and the gateway/RPC surfaces reuse the same instances.
+  // constructed resolver, and the gateway/RPC surfaces reuse the same
+  // instances. Plans are derived from the catalog alone
+  // (deriveTaskDispatchPlans) rather than resolved against a loaded credential
+  // set (resolveRuntimeTaskPlans): the daemon-owned dispatch plans and the
+  // installed WRENYARD_DISPATCH_PLANS_JSON stay canonical and never freeze a
+  // CodeBuddy login/environment wire remap at startup — the current login is
+  // bound afresh when a CodeBuddy dispatch plan is actually used.
   const catalog = createBuiltinCatalog()
   const providerRuntime = createBuiltinProviderRuntime()
-  const dispatchPlans = await resolveRuntimeTaskPlans(catalog, providerRuntime)
+  const dispatchPlans = deriveTaskDispatchPlans(catalog)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,

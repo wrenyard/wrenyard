@@ -235,6 +235,42 @@ describe('core task structured-output', () => {
     assert.deepEqual(result, { label: 'done after retry' })
   })
 
+  it('forwards the same private CodeBuddy execution binding to the initial attempt and retry', async () => {
+    const codeBuddyExecution = Object.freeze({
+      expectedScope: 'cbv1:retry-private-scope',
+      expectedEnvironment: 'ioa',
+      expectedWireModel: 'hy3-ioa',
+    })
+    const seenBindings: Array<unknown> = []
+    let calls = 0
+
+    const result = await collectWithAgent(async (_profile, _prompt, opts) => {
+      calls += 1
+      seenBindings.push(opts?.codeBuddyExecution)
+      if (calls === 1) {
+        return {
+          output: 'missing delivery block',
+          status: 'done',
+          nativeSessionId: 'native_codebuddy_binding',
+          resolvedProfile: 'codebuddy/deepseek-v3.2:cb',
+        }
+      }
+      return {
+        output: xmlOutput({ label: 'binding preserved' }),
+        status: 'done',
+        nativeSessionId: 'native_codebuddy_binding',
+      }
+    }, {
+      maxResumeAttempts: 1,
+      codeBuddyExecution,
+    })
+
+    assert.deepEqual(result, { label: 'binding preserved' })
+    assert.equal(calls, 2)
+    assert.equal(seenBindings[0], codeBuddyExecution)
+    assert.equal(seenBindings[1], codeBuddyExecution)
+  })
+
   it('rejects fenced bare JSON because XML delivery is required', async () => {
     let caughtErr: unknown
     try {

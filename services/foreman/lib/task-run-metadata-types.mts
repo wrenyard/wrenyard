@@ -9,7 +9,7 @@ export type TaskUsageCompleteness = 'complete' | 'partial' | 'unavailable'
 
 export interface TaskResolvedSpeed {
   effective_tps: number
-  source: 'local_31d' | 'catalog_default'
+  source: 'local_31d' | 'provider_override' | 'catalog_default'
   sample_count: number
   checked_at: string
   expected_tps_met: boolean

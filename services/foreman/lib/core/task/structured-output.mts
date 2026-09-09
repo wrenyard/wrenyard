@@ -87,6 +87,8 @@ export interface StructuredOutputOptions {
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded
    *  unchanged on the initial attempt and on every structured retry. */
   dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
+  /** Private CodeBuddy admission binding, forwarded unchanged to every attempt. */
+  codeBuddyExecution?: import('../operations/types.mts').CodeBuddyExecutionBinding
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -103,6 +105,8 @@ export interface StructuredOutputAgentOptions {
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded unchanged on every structured retry. */
   dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
+  /** Private CodeBuddy admission binding, unchanged across retries/resume. */
+  codeBuddyExecution?: import('../operations/types.mts').CodeBuddyExecutionBinding
 }
 
 export interface StructuredOutputAgentResult {
@@ -181,6 +185,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           writePaths: opts.writePaths,
           requestedAgentRuntime: opts.requestedAgentRuntime,
           dispatchSnapshot: opts.dispatchSnapshot,
+          codeBuddyExecution: opts.codeBuddyExecution,
         },
       )
     lastExecutionId = terminal.executionId ?? lastExecutionId

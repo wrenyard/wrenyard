@@ -7,10 +7,15 @@ import type {
   SpeedEvidence,
   TaskDispatchRequirements,
 } from '@wrenyard/catalog'
-import { formatRunSyntax, parseRunSyntax, resolveConstrainedDispatch } from '@wrenyard/catalog'
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveConstrainedDispatch } from '@wrenyard/catalog'
 import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { parseAgentRuntime } from '../agent-runtime.mts'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
+import {
+  selectTaskResolutionFailure,
+  type TaskResolutionElimination,
+  type TaskResolutionFailureCode,
+} from './task-resolution-failure.mts'
 
 /**
  * Canonical daemon-side task dispatch resolver.
@@ -46,6 +51,9 @@ export class NoEligiblePlanError extends Error {
     readonly taskName: string,
     readonly candidates: ReadonlyArray<{ profileId: string; client: string; provider: string; model: string }>,
     readonly requirements: TaskDispatchRequirements,
+    /** Closed machine code of the real gate that eliminated the plan. Defaults
+     *  to no_available_provider so legacy/test callers keep the historic error. */
+    readonly resolutionFailureCode: TaskResolutionFailureCode = 'no_available_provider',
   ) {
     super(`no eligible dispatch plan for task '${taskName}'`)
     this.name = 'NoEligiblePlanError'
@@ -309,6 +317,89 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // canonical target, so plan lookups use this identity directly.
   const canonicalTargetOf = (candidate: DispatchCandidate): string => candidate.profileId
 
+  // Diagnostic-only first-real-gate classifier. resolveConstrainedDispatch is
+  // the authoritative filter/order; after it rejects a candidate this mirror
+  // replays its per-candidate hard gates in the exact same order and reports
+  // which real gate eliminated the candidate as one structured closed code. It
+  // never admits, rejects, sorts, changes gates, or parses exception text — the
+  // code is attached only after the authoritative rejection happened.
+  const eliminationForCandidate = (
+    candidate: DispatchCandidate,
+    requirements: TaskDispatchRequirements,
+    localSpeed?: readonly LocalSpeedSample[],
+  ): TaskResolutionElimination | undefined => {
+    const excludedModels = requirements.excludeModelIds ?? []
+    const excludedProfiles = requirements.excludeProfileIds ?? []
+    const excludedClients = requirements.excludeClientIds ?? []
+    const excludedProviders = requirements.excludeProviderIds ?? []
+    if (
+      excludedModels.includes(candidate.model)
+      || excludedProfiles.includes(candidate.profileId)
+      || excludedClients.includes(candidate.client)
+      || excludedProviders.includes(candidate.provider)
+    ) {
+      return { code: 'no_available_provider' }
+    }
+
+    let plan: { client: string; provider: string; model: string }
+    try {
+      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
+    } catch {
+      // Unresolvable plan mirrors the authoritative continue: no truthful path.
+      return { code: 'no_available_provider' }
+    }
+    const provider = catalog.provider(plan.provider)
+    const modelDef = provider?.models.find((entry) => entry.id === plan.model)
+    if (!modelDef) return { code: 'no_available_provider' }
+    const priceUsdPerMillion = modelDef.pricing?.outputUsdPerMillion
+    const atGate = (code: TaskResolutionFailureCode): TaskResolutionElimination => ({ code, priceUsdPerMillion })
+
+    // Canonical-alias model exclusion mirrors the same post-resolution gate.
+    if (excludedModels.includes(plan.model)) return atGate('no_available_provider')
+
+    const requiredCapabilities = requirements.requiredCapabilities ?? []
+    if (requiredCapabilities.length > 0) {
+      const capabilities = modelDef.capabilities ?? []
+      const missing = requiredCapabilities.some((capability) => !capabilities.includes(capability))
+      if (missing) return atGate('no_available_provider')
+    }
+
+    if (requirements.intelligenceMin || requirements.intelligenceMax) {
+      const intelligence = modelDef.intelligence
+      if (intelligence === undefined) return atGate('intelligence_requirement')
+      const intelligenceMin = requirements.intelligenceMin
+      const intelligenceMax = requirements.intelligenceMax
+      if (intelligenceMin !== undefined && INTELLIGENCE_ORDER[intelligence] < INTELLIGENCE_ORDER[intelligenceMin]) {
+        return atGate('intelligence_requirement')
+      }
+      if (intelligenceMax !== undefined && INTELLIGENCE_ORDER[intelligence] > INTELLIGENCE_ORDER[intelligenceMax]) {
+        return atGate('intelligence_requirement')
+      }
+    }
+
+    if (requirements.maxOutputUsdPerMillion !== undefined) {
+      if (!modelDef.pricing || modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+        return atGate('price_limit')
+      }
+    }
+
+    const local = localSpeed?.find((sample) => sample.profileId === candidate.profileId)
+    const speedTps = local ? local.tps : modelDef.speed ? modelDef.speed.tps : 0
+    if (requirements.minimumTps !== undefined && speedTps < requirements.minimumTps) {
+      return atGate('speed_requirement')
+    }
+    return undefined
+  }
+
+  // Reference output price of a rejected candidate, used only so
+  // selectTaskResolutionFailure can surface the elimination of the candidate
+  // the deterministic router would have ranked first had it passed its gate.
+  const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
+    const provider = catalog.provider(candidate.provider)
+    const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
+    return modelDef?.pricing?.outputUsdPerMillion
+  }
+
   // Single authoritative evaluation. `resolve` selection and the `eligible`
   // projection both run this exact code path (same candidate admission, same
   // `resolveConstrainedDispatch` hard filters, same runtime-plan and evidence
@@ -332,7 +423,17 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const localSpeed = localSpeedPreload ?? (deps.localSpeed ? deps.localSpeed() : undefined)
     const constrained = resolveConstrainedDispatch(catalog, candidatePool, req, localSpeed)
     if (!constrained.ok) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+      // The authoritative filter rejected the whole pool. Attach one structured
+      // closed code: every rejected candidate replays its real first gate and
+      // selectTaskResolutionFailure deterministically keeps the elimination of
+      // the candidate the router would have ranked first.
+      const eliminations: TaskResolutionElimination[] = []
+      for (const candidate of candidatePool) {
+        const elimination = eliminationForCandidate(candidate, req, localSpeed)
+        if (elimination) eliminations.push(elimination)
+      }
+      const failure = selectTaskResolutionFailure(eliminations)
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, failure?.code) }
     }
 
     const selected = constrained.selected
@@ -353,7 +454,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // target and any upstream alias stays runtime-internal.
     const runtimePlan = runtimePlans[canonicalTarget]
     if (!runtimePlan) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'no_available_provider') }
     }
 
     // Fail-closed. Constrained tasks always set speed, intelligence, and
@@ -361,12 +462,12 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // Fabricating any of these is never allowed.
     const speed = selected.speed
     if (!speed.checkedAt) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'speed_requirement') }
     }
     const verifiedSpeed = { ...speed, checkedAt: speed.checkedAt }
     const model = selected.model
     if (!model.intelligence) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
     const pricing = model.pricing
     if (
@@ -375,7 +476,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       || pricing.outputUsdPerMillion === undefined
       || !pricing.checkedAt
     ) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req) }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
     }
 
     const resolved = toResolvedDispatch(
@@ -487,6 +588,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       // evaluate() re-reads the lazy source (~one SQL read per candidate).
       const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
       const choices: TaskDispatchChoice[] = []
+      const eliminations: TaskResolutionElimination[] = []
       for (const candidate of pool) {
         const outcome = evaluate(
           { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
@@ -495,9 +597,31 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         )
         if (outcome.ok) {
           choices.push({ ...outcome.resolved, exactAgentRuntime: outcome.exactAgentRuntime })
+        } else {
+          // The rejected singleton already carries its closed gate code. Keep
+          // its reference output price alongside so a no-choice outcome can
+          // deterministically surface the most routing-relevant elimination.
+          // Excluded/unresolvable candidates (no_available_provider) carry no
+          // bounded routing price, mirroring the classifier's own eliminations.
+          eliminations.push({
+            code: outcome.error.resolutionFailureCode,
+            priceUsdPerMillion:
+              outcome.error.resolutionFailureCode === 'no_available_provider'
+                ? undefined
+                : referenceOutputPriceOf(candidate),
+          })
         }
       }
-      return { ok: true, choices }
+      if (choices.length > 0) return { ok: true, choices }
+
+      // No candidate survived the same evaluate() admission resolve() applies.
+      // Surface exactly one structured closed code, chosen deterministically
+      // across every rejected singleton.
+      const failure = selectTaskResolutionFailure(eliminations)
+      return {
+        ok: false,
+        error: new NoEligiblePlanError(input.taskName, pool, input.requirements, failure?.code),
+      }
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {

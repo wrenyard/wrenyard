@@ -21,6 +21,7 @@ export interface GatewayConnectionResult {
     intelligence?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
     speed?: {
       tps: number
       source: string
@@ -63,6 +64,7 @@ export const gatewayConnectionResultSchema = {
           intelligence: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
+          reasoningEffort: { enum: ['low', 'medium', 'high', 'xhigh'] },
           speed: {
             type: 'object',
             required: ['tps', 'source', 'checkedAt'],

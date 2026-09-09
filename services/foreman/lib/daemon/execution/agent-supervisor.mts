@@ -15,10 +15,12 @@ import { redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { RepoWriteLocks, requiresRepoWriteLock } from './repo-write-locks.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
+import { parseRunSyntax } from '@wrenyard/catalog'
 import type {
   AgentExecutionHost,
   AgentRuntimePermission,
   ClientFamily,
+  CodeBuddyExecutionBinding,
   ExecutionHandle,
   ExecutionRecord,
   ExecutionResult,
@@ -105,6 +107,8 @@ interface RegistryEntry {
   cwd: string
   permission: AgentRuntimePermission
   writePaths?: readonly string[]
+  /** Private admission-only binding retained in memory while queued. */
+  codeBuddyExecution?: CodeBuddyExecutionBinding
   child?: ChildProcess
   pid?: number
   pgid?: number
@@ -551,6 +555,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       cwd: opts.cwd,
       permission: opts.permission,
       writePaths: opts.writePaths ? [...opts.writePaths] : undefined,
+      codeBuddyExecution: isCodeBuddyExecution(opts) && opts.codeBuddyExecution
+        ? Object.freeze({ ...opts.codeBuddyExecution })
+        : undefined,
       cancelRequested: false,
       shutdownRequested: false,
       timedOut: false,
@@ -606,7 +613,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         capabilities: opts.capabilities,
         // The authoritative task run id is always derived from `opts.taskId`, whether the
         // execution launched immediately or was reconstructed from a persisted execution row.
-        env: resolveTaskAgentEnv(process.env, opts.taskId),
+        env: resolveTaskAgentEnv(
+          process.env,
+          opts.taskId,
+          entry.codeBuddyExecution,
+        ),
       })
     } catch (error) {
       this.terminalizeStartingFailure(entry, error)
@@ -1463,14 +1474,37 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 }
 
-function resolveTaskAgentEnv(env: NodeJS.ProcessEnv, taskRunId?: string): NodeJS.ProcessEnv {
+const CODEBUDDY_EXPECTED_SCOPE_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_SCOPE'
+const CODEBUDDY_EXPECTED_ENVIRONMENT_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT'
+const CODEBUDDY_EXPECTED_WIRE_MODEL_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL'
+const CODEBUDDY_PRIVATE_ENV_NAMES = new Set([
+  CODEBUDDY_EXPECTED_SCOPE_ENV,
+  CODEBUDDY_EXPECTED_ENVIRONMENT_ENV,
+  CODEBUDDY_EXPECTED_WIRE_MODEL_ENV,
+].map((name) => name.toLowerCase()))
+
+function resolveTaskAgentEnv(
+  env: NodeJS.ProcessEnv,
+  taskRunId?: string,
+  codeBuddyExecution?: CodeBuddyExecutionBinding,
+): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
   // Forge child unchanged, then drop any stale inherited task context...
   const next: NodeJS.ProcessEnv = { ...env }
   delete next.FOREMAN_TASK_RUN_ID
+  // ...and every case variant of the private CodeBuddy admission tuple. Only a
+  // validated binding for an exact CodeBuddy execution is injected below.
+  for (const key of Object.keys(next)) {
+    if (CODEBUDDY_PRIVATE_ENV_NAMES.has(key.toLowerCase())) delete next[key]
+  }
   // ...and inject the authoritative current task run id only when one exists.
   if (taskRunId) {
     next.FOREMAN_TASK_RUN_ID = taskRunId
+  }
+  if (codeBuddyExecution) {
+    next[CODEBUDDY_EXPECTED_SCOPE_ENV] = codeBuddyExecution.expectedScope
+    next[CODEBUDDY_EXPECTED_ENVIRONMENT_ENV] = codeBuddyExecution.expectedEnvironment
+    next[CODEBUDDY_EXPECTED_WIRE_MODEL_ENV] = codeBuddyExecution.expectedWireModel
   }
   return next
 }
@@ -1734,7 +1768,36 @@ function assertStartExecutionOpts(opts: StartExecutionOpts): void {
   if (opts.clientFamily !== undefined && !isClientFamily(opts.clientFamily)) {
     throw new Error(`Invalid client family '${opts.clientFamily}'`)
   }
+  if (isCodeBuddyExecution(opts) && !validCodeBuddyExecutionBinding(opts.codeBuddyExecution)) {
+    // Generic by design: no expected/current scope, environment, or wire value
+    // may enter an error string or log record.
+    throw new Error('CodeBuddy execution admission binding is unavailable')
+  }
   assertValidTimeoutMs(opts.timeoutMs, 'startExecution timeoutMs')
+}
+
+function isCodeBuddyExecution(opts: StartExecutionOpts): boolean {
+  const snapshot = opts.dispatchSnapshot
+  if (snapshot?.provider === 'codebuddy' && snapshot.client === 'codebuddy' && snapshot.mode === 'native') {
+    return true
+  }
+  try {
+    const parsed = parseRunSyntax(opts.profile)
+    return parsed.provider === 'codebuddy' && parsed.client === 'codebuddy'
+  } catch {
+    return false
+  }
+}
+
+function validCodeBuddyExecutionBinding(
+  binding: CodeBuddyExecutionBinding | undefined,
+): binding is CodeBuddyExecutionBinding {
+  if (binding === undefined) return false
+  const values = [binding.expectedScope, binding.expectedEnvironment, binding.expectedWireModel]
+  if (!values.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0'))) {
+    return false
+  }
+  return ['internal', 'ioa', 'cloudhosted', 'external', 'unknown'].includes(binding.expectedEnvironment)
 }
 
 function optsFromRow(row: ExecutionRecord): StartExecutionOpts {

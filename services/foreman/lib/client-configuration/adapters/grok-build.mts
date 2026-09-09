@@ -1,3 +1,4 @@
+import { isBuiltinClientGatewayProviderSupported } from '@wrenyard/providers'
 import { assertApplyPlan, assertRestorePlan, sameJson, selectModels } from '../adapter-common.mts'
 import { applyFileTransaction, assertPlanDigest, readFileSnapshot } from '../files.mts'
 import { patchOwnedToml, snapshotOwnedToml, tomlString, type OwnedTomlState } from '../toml-owned.mts'
@@ -15,7 +16,8 @@ import type {
 } from '../types.mts'
 
 const PROTOCOL_PRIORITY: readonly GatewayProtocol[] = ['openai_responses', 'openai_chat', 'anthropic_messages']
-const GROK_MODEL_COMPATIBLE = (model: ClientGatewayModel): boolean => model.provider !== 'codebuddy'
+const GROK_MODEL_COMPATIBLE = (model: ClientGatewayModel): boolean =>
+  isBuiltinClientGatewayProviderSupported('grok', model.provider)
 
 interface GrokOwnedState {
   configExists: boolean

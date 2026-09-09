@@ -2,11 +2,23 @@ import { createHash } from 'node:crypto'
 import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates } from '@wrenyard/catalog'
 import type { CandidateInput } from '@wrenyard/catalog'
 import {
+  resolveDeepSeekReferencePricing,
+  type DeepSeekPricingModel,
+  type DeepSeekReferencePricing,
+} from '@wrenyard/providers'
+import {
   NoEligiblePlanError,
   type TaskDispatchChoice,
   type TaskDispatchDisplayLabels,
   type TaskDispatchResolver,
 } from '../../core/task/dispatch-resolver.mts'
+import {
+  codeFromCatalogExclusion,
+  selectTaskResolutionFailure,
+  taskResolutionFailure,
+  type TaskResolutionElimination,
+  type TaskResolutionFailureCode,
+} from '../../core/task/task-resolution-failure.mts'
 import { TaskService } from '../../core/task/service.mts'
 import { resolveTaskTarget } from '../../workspace/definition-registry.mts'
 import { discoverProjects } from '../../core/project/loader.mts'
@@ -33,7 +45,9 @@ import type {
 } from '../../task-run-metadata-types.mts'
 import {
   AutoRoutingQuotaSnapshotService,
+  type AutoRoutingBoundQuotaSnapshot,
   type AutoRoutingQuotaSnapshot,
+  type CodeBuddyActiveSnapshotView,
 } from './auto-routing-snapshot-service.mts'
 import type {
   TaskSettingsAutomaticDispatch,
@@ -57,6 +71,7 @@ import type {
   TaskRunSettingsParams,
   TaskRunSettingsResolution,
 } from '../../types.mts'
+import type { CodeBuddyExecutionBinding } from '../../core/operations/types.mts'
 
 export type {
   TaskRunSettingsLayerName,
@@ -139,6 +154,17 @@ export interface TaskSettingsProviderAvailability {
    *  account/environment is not confirmed free (external/cloudhosted/unknown/
    *  missing credential/other providers). */
   freeSupply?: { confirmedFree: true; source: string; ruleId: string }
+  /** Private execution admission tuple derived from the same current
+   * CodeBuddy snapshot as readiness/free supply. Never serialized into task
+   * settings previews, routing decisions, or persisted dispatch metadata. */
+  codeBuddyExecution?: CodeBuddyExecutionBinding
+}
+
+/** Request-bound private availability context. Presence is significant: an
+ * explicit undefined snapshot means current-login resolution failed and the
+ * callback must fail closed instead of loading a different credential. */
+export interface TaskSettingsRuntimeAvailabilityContext {
+  readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined
 }
 
 /** Non-billable live provider credential/route availability probe input: the
@@ -146,6 +172,7 @@ export interface TaskSettingsProviderAvailability {
  *  target. Never carries user config or alias state. */
 export type TaskSettingsRuntimeAvailabilityCallback = (
   runtime: TaskSettingsRuntimeTriple,
+  context?: TaskSettingsRuntimeAvailabilityContext,
 ) => Promise<TaskSettingsProviderAvailability> | TaskSettingsProviderAvailability
 
 export interface TaskSettingsDaemonStatus {
@@ -178,6 +205,8 @@ export interface TaskSettingsServiceOptions {
    *  preview takes one immutable snapshot per request; every other selection
    *  call takes its own. */
   quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  /** Injectable request clock for deterministic pricing snapshots. */
+  now?: () => number
 }
 
 /** Typed CAS failure: the caller's expected_revision no longer matches the file. */
@@ -340,6 +369,7 @@ export class TaskSettingsService {
   private readonly daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   private readonly runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  private readonly now: () => number
 
   constructor(options: TaskSettingsServiceOptions) {
     this.configPath = options.configPath
@@ -350,6 +380,7 @@ export class TaskSettingsService {
     this.daemonAvailability = options.daemonAvailability
     this.runtimeAvailability = options.runtimeAvailability
     this.quotaSnapshots = options.quotaSnapshots
+    this.now = options.now ?? (() => Date.now())
   }
 
   /** The authoritative config path this daemon-owned service reads and writes. */
@@ -487,15 +518,23 @@ export class TaskSettingsService {
       // readiness check shared by automatic runs and snapshot/save preflight,
       // run once against the canonical target resolveExplicit selected;
       // failure never falls back to another candidate.
-      await this.assertLiveRuntimeAvailability(
+      const availability = await this.assertLiveRuntimeAvailability(
         params.taskName,
         explicitResolution.exactAgentRuntime,
         TaskSettingsService.tripleOf(explicitResolution.resolved),
       )
+      const dispatch = withDeepSeekAttemptPricing(
+        explicitResolution.resolved,
+        this.now(),
+        effective.timeoutMs,
+      )
       return {
         mode: 'explicit',
         exactAgentRuntime: explicitResolution.exactAgentRuntime,
-        dispatch: explicitResolution.resolved,
+        dispatch,
+        ...(availability?.codeBuddyExecution
+          ? { codeBuddyExecution: availability.codeBuddyExecution }
+          : {}),
         timeoutMs: effective.timeoutMs,
         sources: toRunSources(effective.sources),
       }
@@ -518,6 +557,9 @@ export class TaskSettingsService {
       mode: 'automatic',
       exactAgentRuntime: selection.exactAgentRuntime,
       dispatch: selection.dispatch,
+      ...(selection.codeBuddyExecution
+        ? { codeBuddyExecution: selection.codeBuddyExecution }
+        : {}),
       timeoutMs: effective.timeoutMs,
       sources: toRunSources(effective.sources),
     }
@@ -841,14 +883,19 @@ export class TaskSettingsService {
             resolvedTarget = explicitResolution.exactAgentRuntime
             // Attach the paired authoritative Catalog display labels to the
             // resolved dispatch snapshot; canonical ids stay authoritative.
-            const labels = this.displayLabelsOf(explicitResolution.resolved)
+            const priced = withDeepSeekAttemptPricing(
+              explicitResolution.resolved,
+              this.now(),
+              effective.timeoutMs,
+            )
+            const labels = this.displayLabelsOf(priced)
             resolved = labels
               ? {
-                  ...explicitResolution.resolved,
+                  ...priced,
                   provider_display_name: labels.providerDisplayName,
                   model_display_name: labels.modelDisplayName,
                 }
-              : explicitResolution.resolved
+              : priced
             readiness = await this.runtimeReadiness(
               summary.name,
               explicitResolution.exactAgentRuntime,
@@ -896,13 +943,22 @@ export class TaskSettingsService {
             reason: selection.reason,
           }
         } else {
+          // One closed deterministic failure: the exact code the real gate
+          // recorded plus its safe Chinese message — never resolver error text.
+          const failure = taskResolutionFailure(selection.error.resolutionFailureCode)
           issues.push({
             code: 'automatic_dispatch_unavailable',
-            message: selection.error.message,
+            message: failure.message,
+            resolutionFailure: failure,
           })
         }
-      } catch (error) {
-        issues.push({ code: 'automatic_dispatch_unavailable', message: messageOf(error) })
+      } catch {
+        const failure = taskResolutionFailure('no_available_provider')
+        issues.push({
+          code: 'automatic_dispatch_unavailable',
+          message: failure.message,
+          resolutionFailure: failure,
+        })
       }
     }
 
@@ -999,7 +1055,7 @@ export class TaskSettingsService {
     taskId: string,
     runtimeId: string,
     triple: { client: string; provider: string; model: string },
-  ): Promise<void> {
+  ): Promise<TaskSettingsProviderAvailability | undefined> {
     if (this.daemonAvailability) {
       const daemon = await this.daemonAvailability()
       if (!daemon.accepting && daemon.known !== false) {
@@ -1015,7 +1071,9 @@ export class TaskSettingsService {
           `provider '${triple.provider}' is not currently available`,
         )
       }
+      return availability
     }
+    return undefined
   }
 
   /** Non-billable live provider credential/route readiness for one canonical
@@ -1026,13 +1084,14 @@ export class TaskSettingsService {
   private async previewRuntimeAvailability(
     runtime: TaskSettingsRuntimeTriple,
     previewMemo?: AutomaticPreviewMemo,
+    context?: TaskSettingsRuntimeAvailabilityContext,
   ): Promise<TaskSettingsProviderAvailability | undefined> {
     if (!this.runtimeAvailability) return undefined
-    if (previewMemo === undefined) return await this.runtimeAvailability(runtime)
+    if (previewMemo === undefined) return await this.runtimeAvailability(runtime, context)
     const key = runtimeTripleKey(runtime)
     let memoized = previewMemo.availability.get(key)
     if (memoized === undefined) {
-      memoized = Promise.resolve(this.runtimeAvailability(runtime))
+      memoized = Promise.resolve(this.runtimeAvailability(runtime, context))
       previewMemo.availability.set(key, memoized)
     }
     return await memoized
@@ -1063,28 +1122,50 @@ export class TaskSettingsService {
   ): Promise<AutomaticSelectionResult> {
     const quotaPromise = previewMemo?.quota
       ?? (this.quotaSnapshots
-        ? this.quotaSnapshots.snapshot()
+        ? this.quotaSnapshots.routingSnapshot()
         : Promise.resolve(null))
     if (previewMemo !== undefined) previewMemo.quota = quotaPromise
-    const snapshot: AutoRoutingQuotaSnapshot | null = await quotaPromise
-    const nowMs = snapshot ? snapshot.nowMs : Date.now()
+    const boundSnapshot: AutoRoutingBoundQuotaSnapshot | null = await quotaPromise
+    const snapshot: AutoRoutingQuotaSnapshot | null = boundSnapshot?.snapshot ?? null
+    const availabilityContext: TaskSettingsRuntimeAvailabilityContext = {
+      codeBuddySnapshot: boundSnapshot?.codeBuddySnapshot,
+    }
+    const nowMs = snapshot ? snapshot.nowMs : this.now()
     const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
 
-    const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: params.requirements })
+    // Automatic price admission is finalized below from the request-time
+    // horizon snapshot. Omitting only the price ceiling here lets a scheduled
+    // DeepSeek tariff replace stale Catalog metadata; every non-DeepSeek
+    // candidate is still checked against the same static reference by policy.
+    const { maxOutputUsdPerMillion: _catalogPriceCeiling, ...intrinsicRequirements } = params.requirements
+    const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: intrinsicRequirements })
     if (!eligible.ok) return { ok: false, error: eligible.error }
 
+    // Structured actual eliminations, recorded at the exact stage that empties
+    // the surviving pool; deterministic selection never parses error text.
+    const eliminations: TaskResolutionElimination[] = []
     const probed: AutomaticProbeEntry[] = []
     for (const choice of eligible.choices) {
-      if (blocked.has(choice.provider)) continue
+      if (blocked.has(choice.provider)) {
+        // A determinate hard-blocked provider is a real quota gate.
+        eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(choice)))
+        continue
+      }
       const availability = await this.previewRuntimeAvailability(
         TaskSettingsService.tripleOf(choice),
         previewMemo,
+        availabilityContext,
       )
-      if (availability === undefined || availability.available) probed.push({ choice, availability })
+      if (availability !== undefined && !availability.available) {
+        // The live readiness probe rejected the exact choice: no available provider.
+        eliminations.push({ code: 'no_available_provider' })
+        continue
+      }
+      probed.push({ choice, availability })
     }
     const collapsed = collapseAutomaticChoices(probed)
     if (collapsed.length === 0) {
-      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+      return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
 
     const caps: number[] = []
@@ -1094,8 +1175,14 @@ export class TaskSettingsService {
     if (params.maxAutoOutputUsdPerMillion !== undefined) {
       caps.push(params.maxAutoOutputUsdPerMillion)
     }
+    const deepSeekPricing = new Map<string, DeepSeekAutomaticPricing>()
+    for (const entry of collapsed) {
+      const pricing = deepSeekAutomaticPricingOf(entry.choice, nowMs, params.timeoutMs)
+      if (pricing !== undefined) deepSeekPricing.set(entry.choice.exactAgentRuntime, pricing)
+    }
     const finiteReferences = collapsed
-      .map((entry) => entry.choice.reference_pricing.output_usd_per_million)
+      .map((entry) => deepSeekPricing.get(entry.choice.exactAgentRuntime)?.safetyOutputUsdPerM
+        ?? entry.choice.reference_pricing.output_usd_per_million)
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0)
     const capUsdPerM = caps.length > 0
       ? Math.min(...caps)
@@ -1117,21 +1204,44 @@ export class TaskSettingsService {
 
     const inputs: CandidateInput[] = []
     for (const entry of collapsed) {
-      const candidate = toAutomaticCandidateInput(entry, context)
-      if (candidate !== null) inputs.push(candidate)
+      const pricing = deepSeekPricing.get(entry.choice.exactAgentRuntime)
+      const candidate = toAutomaticCandidateInput(entry, context, pricing)
+      if (candidate === null) {
+        const referenceUsdPerM = pricing?.safetyOutputUsdPerM
+          ?? entry.choice.reference_pricing.output_usd_per_million
+        if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
+          eliminations.push(eliminationOf('price_limit'))
+        } else {
+          eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
+        }
+        continue
+      }
+      inputs.push(candidate)
     }
     if (inputs.length === 0) {
-      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+      return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
 
     const ranked = rankAutoRoutingCandidates(inputs)
     const best = ranked.ranked[0]
     if (!best) {
-      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+      // Every routed candidate was excluded by a real Catalog gate; each
+      // exclusion reason maps to its closed code. Unknown reasons are not a
+      // hard elimination, so they surface as no_available_provider.
+      for (const exclusion of ranked.excluded) {
+        const code = codeFromCatalogExclusion(exclusion.reason)
+        if (code === undefined) {
+          eliminations.push({ code: 'no_available_provider' })
+          continue
+        }
+        const entry = collapsed.find((candidate) => candidate.choice.exactAgentRuntime === exclusion.canonicalId)
+        eliminations.push(eliminationOf(code, boundedReferenceOutputUsdPerM(entry?.choice)))
+      }
+      return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
     const chosen = collapsed.find((entry) => entry.choice.exactAgentRuntime === best.canonicalId)
     if (!chosen) {
-      return { ok: false, error: new NoEligiblePlanError(params.taskName, [], params.requirements) }
+      return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
 
     const decision: TaskAutoRoutingDecision = {
@@ -1148,7 +1258,12 @@ export class TaskSettingsService {
       reasons: [...best.notes],
     }
     const { exactAgentRuntime: _exact, ...resolvedFields } = chosen.choice
-    const dispatch: TaskResolvedDispatch = { ...resolvedFields, auto_routing: decision }
+    const selectedPricing = deepSeekPricing.get(chosen.choice.exactAgentRuntime)
+    const dispatch: TaskResolvedDispatch = {
+      ...resolvedFields,
+      ...(selectedPricing !== undefined ? { reference_pricing: selectedPricing.attemptReferencePricing } : {}),
+      auto_routing: decision,
+    }
     const reason = `automatic selection rank ${best.rank}/${ranked.ranked.length} (${best.supplyClass}, quota tier ${best.tier})`
     return {
       ok: true,
@@ -1156,6 +1271,9 @@ export class TaskSettingsService {
       dispatch,
       decision,
       reason,
+      ...(chosen.availability?.codeBuddyExecution
+        ? { codeBuddyExecution: chosen.availability.codeBuddyExecution }
+        : {}),
     }
   }
 
@@ -1307,7 +1425,7 @@ interface AutomaticProbeEntry {
 interface AutomaticPreviewMemo {
   /** Immutable quota snapshot promise for this request, created on the first
    *  automatic row that needs one and reused by the rest of the rows. */
-  quota?: Promise<AutoRoutingQuotaSnapshot | null>
+  quota?: Promise<AutoRoutingBoundQuotaSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
 }
@@ -1325,8 +1443,9 @@ type AutomaticSelectionResult =
       dispatch: TaskResolvedDispatch
       decision: TaskAutoRoutingDecision
       reason: string
+      codeBuddyExecution?: CodeBuddyExecutionBinding
     }
-  | { ok: false; error: Error }
+  | { ok: false; error: NoEligiblePlanError }
 
 interface AutomaticSelectionContext {
   snapshotId: string
@@ -1386,6 +1505,78 @@ function automaticClientPreference(choice: TaskDispatchChoice): number {
   return 2
 }
 
+const DEEPSEEK_SAFETY_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1_000
+
+interface DeepSeekAutomaticPricing {
+  safetyOutputUsdPerM: number
+  marginalPrice: NonNullable<CandidateInput['marginalPrice']>
+  attemptReferencePricing: TaskResolvedDispatch['reference_pricing']
+}
+
+function deepSeekModelOf(dispatch: { provider: string; model: string }): DeepSeekPricingModel | undefined {
+  if (dispatch.provider !== 'codebuddy') return undefined
+  return dispatch.model === 'deepseek-v4-flash' || dispatch.model === 'deepseek-v4-pro'
+    ? dispatch.model
+    : undefined
+}
+
+function toTaskReferencePricing(pricing: DeepSeekReferencePricing): TaskResolvedDispatch['reference_pricing'] {
+  return {
+    input_usd_per_million: pricing.inputCacheMissPerMillion,
+    cached_input_usd_per_million: pricing.inputCacheHitPerMillion,
+    output_usd_per_million: pricing.outputPerMillion,
+    source: pricing.sources.join(' | '),
+    checked_at: pricing.checkedAt,
+  }
+}
+
+/** Request-time DeepSeek evidence has two deliberately distinct prices: the
+ *  applicable official peak/list price for hard admission and the worst
+ *  actual peak/off-peak price inside this attempt for ranking and costing. */
+function deepSeekAutomaticPricingOf(
+  dispatch: { provider: string; model: string },
+  nowMs: number,
+  timeoutMs: number,
+): DeepSeekAutomaticPricing | undefined {
+  const model = deepSeekModelOf(dispatch)
+  if (model === undefined) return undefined
+  const throughMs = nowMs + timeoutMs
+  const attempt = resolveDeepSeekReferencePricing({ model, currency: 'USD', at: nowMs, through: throughMs })
+  // Any seven-day interval contains every UTC weekday peak window. Extending
+  // only forward preserves the applicable tariff eras: pre-cut/crossing keeps
+  // the old higher peak, while a horizon beginning at/after the cut never
+  // reaches back into the retired table.
+  const safety = resolveDeepSeekReferencePricing({
+    model,
+    currency: 'USD',
+    at: nowMs,
+    through: Math.max(throughMs, nowMs + DEEPSEEK_SAFETY_LOOKAHEAD_MS),
+  })
+  return {
+    safetyOutputUsdPerM: safety.outputPerMillion,
+    marginalPrice: {
+      usdPerM: attempt.outputPerMillion,
+      appliesFromMs: nowMs,
+      appliesUntilMs: throughMs,
+      source: attempt.sources.join(' | '),
+      ruleId: `deepseek-official-tariff:${model}:${attempt.checkedAt}`,
+      worst_applicable: 'worst_applicable',
+    },
+    attemptReferencePricing: toTaskReferencePricing(attempt),
+  }
+}
+
+function withDeepSeekAttemptPricing(
+  dispatch: TaskResolvedDispatch,
+  nowMs: number,
+  timeoutMs: number,
+): TaskResolvedDispatch {
+  const pricing = deepSeekAutomaticPricingOf(dispatch, nowMs, timeoutMs)
+  return pricing === undefined
+    ? dispatch
+    : { ...dispatch, reference_pricing: pricing.attemptReferencePricing }
+}
+
 /** Builds one policy CandidateInput from truthful resolved dispatch evidence,
  *  the snapshot quota entry (or an empty unknown list), and the confirmed-free
  *  supply fact covering the routing timeout horizon. Returns null when the
@@ -1393,9 +1584,11 @@ function automaticClientPreference(choice: TaskDispatchChoice): number {
 function toAutomaticCandidateInput(
   entry: AutomaticProbeEntry,
   context: AutomaticSelectionContext,
+  deepSeekPricing?: DeepSeekAutomaticPricing,
 ): CandidateInput | null {
   const choice = entry.choice
-  const referenceUsdPerM = choice.reference_pricing.output_usd_per_million
+  const referenceUsdPerM = deepSeekPricing?.safetyOutputUsdPerM
+    ?? choice.reference_pricing.output_usd_per_million
   if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
     return null
   }
@@ -1421,6 +1614,7 @@ function toAutomaticCandidateInput(
     intelligenceMinRank: context.intelligenceMinRank,
     intelligenceMaxRank: context.intelligenceMaxRank,
     requiredQuota,
+    ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
     confirmedFreeSupply: freeFact
       ? {
           kind: 'confirmed_free',
@@ -1431,6 +1625,36 @@ function toAutomaticCandidateInput(
         }
       : null,
   }
+}
+
+/** Bounded candidate reference output price used only internally as the
+ *  deterministic routing relevance comparator; never serialized. */
+function boundedReferenceOutputUsdPerM(
+  choice: { reference_pricing?: { output_usd_per_million?: number | null } } | undefined,
+): number | undefined {
+  const value = choice?.reference_pricing?.output_usd_per_million
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/** Closed elimination builder: no_available_provider never carries a routing
+ *  price; every other gate keeps its bounded reference price. */
+function eliminationOf(
+  code: TaskResolutionFailureCode,
+  priceUsdPerMillion?: number,
+): TaskResolutionElimination {
+  if (code === 'no_available_provider' || priceUsdPerMillion === undefined) return { code }
+  return { code, priceUsdPerMillion }
+}
+
+/** One deterministic NoEligiblePlanError carrying the closed code of the gate
+ *  that emptied the pool. Defaults to no_available_provider when no structured
+ *  elimination was recorded (for example an empty eligible choice list). */
+function automaticSelectionFailure(
+  params: AutomaticSelectionParams,
+  eliminations: ReadonlyArray<TaskResolutionElimination>,
+): NoEligiblePlanError {
+  const code = selectTaskResolutionFailure(eliminations)?.code ?? 'no_available_provider'
+  return new NoEligiblePlanError(params.taskName, [], params.requirements, code)
 }
 
 interface TaskSettingsEffectiveAutomaticDto {

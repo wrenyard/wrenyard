@@ -309,7 +309,7 @@ function toSpeed(row: AttemptDispatchRow): TaskResolvedSpeed | undefined {
     || !Number.isFinite(row.speed_effective_tps)
     || row.speed_effective_tps < 0
     || row.speed_source == null
-    || (row.speed_source !== 'local_31d' && row.speed_source !== 'catalog_default')
+    || (row.speed_source !== 'local_31d' && row.speed_source !== 'provider_override' && row.speed_source !== 'catalog_default')
     || row.speed_sample_count == null
     || !Number.isInteger(row.speed_sample_count)
     || row.speed_sample_count < 0

@@ -26,6 +26,8 @@ export interface AgentOpts {
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('../types.mts').TaskDispatchSnapshot | null
+  /** Private non-persistent CodeBuddy admission binding. */
+  codeBuddyExecution?: import('../types.mts').CodeBuddyExecutionBinding
   /** Canonical Forge failure class supplied by the resolver. */
   failureClass?: string | null
 }
@@ -104,6 +106,7 @@ async function runAgentWithHost(
     capabilities: opts.capabilities,
     writePaths: opts.writePaths,
     dispatchSnapshot: opts.dispatchSnapshot ?? null,
+    codeBuddyExecution: opts.codeBuddyExecution,
     failureClass: opts.failureClass ?? null,
   })
 
