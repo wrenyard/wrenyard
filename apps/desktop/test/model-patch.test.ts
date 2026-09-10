@@ -29,10 +29,10 @@ const connection: WrenyardGatewayConnection = {
       maxTokens: 32768,
     },
     {
-      id: 'deepseek-v4-pro',
-      publicId: 'codebuddy/deepseek-v4-pro',
+      id: 'deepseek-v4.1-flash',
+      publicId: 'codebuddy/deepseek-v4.1-flash',
       provider: 'codebuddy',
-      displayName: 'DeepSeek V4 Pro',
+      displayName: 'DeepSeek V4.1 Flash',
     },
   ],
 };
@@ -54,7 +54,7 @@ test('renderModelPatch matches the public fdsh overlay contract', () => {
   assert.ok(raw.includes(`        apiKeyEnv: ${WRENYARD_GATEWAY_TOKEN_ENV}\n`));
   assert.ok(raw.includes(`        baseURL: "${connection.openaiChatBaseUrl}"\n`));
   assert.ok(raw.includes('          - id: zhipu-coding/glm-5.3\n'));
-  assert.ok(raw.includes('          - id: codebuddy/deepseek-v4-pro\n'));
+  assert.ok(raw.includes('          - id: codebuddy/deepseek-v4.1-flash\n'));
   assert.ok(raw.includes('            name: "GLM 5.3"\n'));
   assert.ok(raw.includes('            contextWindow: 204800\n'));
   assert.ok(raw.includes('            maxTokens: 32768\n'));

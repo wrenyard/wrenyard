@@ -13,22 +13,16 @@
  * the horizon, with `tier: 'mixed'` unless a single tuple attains all three
  * maxima.
  *
- * The deepseek-v4-flash cut becomes effective exactly at
- * DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT (2026-09-10T04:00:00.000Z): at and
- * after that instant the new, lower table applies, and the instant itself is
- * off-peak.
+ * The active model is `deepseek-flash`; rates are verified against the
+ * official DeepSeek pricing page.
  */
 
-export const DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT =
-  '2026-09-10T04:00:00.000Z';
 export const DEEPSEEK_REFERENCE_PRICE_SOURCE_URL =
   'https://api-docs.deepseek.com/quick_start/pricing/';
-export const DEEPSEEK_FLASH_PRICE_CHANGE_NOTICE_URL =
-  'https://fe-static.deepseek.com/platform/static/main.c1c89d3cec.js';
-export const DEEPSEEK_REFERENCE_PRICE_CHECKED_AT = '2026-09-09';
+export const DEEPSEEK_REFERENCE_PRICE_CHECKED_AT = '2026-09-10';
 
-/** Models that exist in the reference price table. */
-export type DeepSeekPricingModel = 'deepseek-v4-flash' | 'deepseek-v4-pro';
+/** The only model in the reference price table. */
+export type DeepSeekPricingModel = 'deepseek-flash';
 /** Currencies the reference price table is published in. */
 export type DeepSeekPricingCurrency = 'CNY' | 'USD';
 /** Off-peak / peak, or `mixed` when a closed horizon's maxima span tiers. */
@@ -51,7 +45,6 @@ export interface DeepSeekReferencePricing {
   readonly outputPerMillion: number;
   readonly includesPeak: boolean;
   readonly includesOffPeak: boolean;
-  readonly includesFlashPriceChange: boolean;
   readonly sources: readonly string[];
   readonly checkedAt: string;
 }
@@ -65,7 +58,6 @@ export interface ResolveDeepSeekReferencePricingInput {
 }
 
 type DeepSeekTierKey = 'off_peak' | 'peak';
-type DeepSeekPricingEraKey = 'pre' | 'post' | 'listed';
 
 interface DeepSeekPerMillionPrice {
   readonly inputCacheHitPerMillion: number;
@@ -78,39 +70,13 @@ interface DeepSeekTierPriceSet {
   readonly peak: DeepSeekPerMillionPrice;
 }
 
-interface DeepSeekEraPriceSet {
+interface DeepSeekCurrencyPriceSet {
   readonly CNY: DeepSeekTierPriceSet;
   readonly USD: DeepSeekTierPriceSet;
 }
 
-const FLASH_PRE_CUT_PRICES: DeepSeekEraPriceSet = {
-  CNY: {
-    off_peak: {
-      inputCacheHitPerMillion: 0.05,
-      inputCacheMissPerMillion: 1.5,
-      outputPerMillion: 4.5,
-    },
-    peak: {
-      inputCacheHitPerMillion: 0.1,
-      inputCacheMissPerMillion: 3,
-      outputPerMillion: 9,
-    },
-  },
-  USD: {
-    off_peak: {
-      inputCacheHitPerMillion: 0.007,
-      inputCacheMissPerMillion: 0.22,
-      outputPerMillion: 0.66,
-    },
-    peak: {
-      inputCacheHitPerMillion: 0.014,
-      inputCacheMissPerMillion: 0.44,
-      outputPerMillion: 1.32,
-    },
-  },
-};
-
-const FLASH_POST_CUT_PRICES: DeepSeekEraPriceSet = {
+/** Verified current deepseek-flash tariffs (official DeepSeek pricing page). */
+const FLASH_PRICES: DeepSeekCurrencyPriceSet = {
   CNY: {
     off_peak: {
       inputCacheHitPerMillion: 0.02,
@@ -137,33 +103,6 @@ const FLASH_POST_CUT_PRICES: DeepSeekEraPriceSet = {
   },
 };
 
-const PRO_LISTED_PRICES: DeepSeekEraPriceSet = {
-  CNY: {
-    off_peak: {
-      inputCacheHitPerMillion: 0.15,
-      inputCacheMissPerMillion: 4.5,
-      outputPerMillion: 13.5,
-    },
-    peak: {
-      inputCacheHitPerMillion: 0.3,
-      inputCacheMissPerMillion: 9,
-      outputPerMillion: 27,
-    },
-  },
-  USD: {
-    off_peak: {
-      inputCacheHitPerMillion: 0.022,
-      inputCacheMissPerMillion: 0.66,
-      outputPerMillion: 1.98,
-    },
-    peak: {
-      inputCacheHitPerMillion: 0.044,
-      inputCacheMissPerMillion: 1.32,
-      outputPerMillion: 3.96,
-    },
-  },
-};
-
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
@@ -176,16 +115,6 @@ const PEAK_WINDOWS: ReadonlyArray<{
   { startMs: 1 * HOUR_MS, endMs: 4 * HOUR_MS },
   { startMs: 6 * HOUR_MS, endMs: 10 * HOUR_MS },
 ];
-
-const DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT_MS = Date.parse(
-  DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT
-);
-
-interface EraRange {
-  readonly eraKey: DeepSeekPricingEraKey;
-  readonly fromMs: number;
-  readonly toMs: number;
-}
 
 interface TierPresence {
   readonly peak: boolean;
@@ -265,12 +194,7 @@ function tierPresenceInClosedRange(fromMs: number, toMs: number): TierPresence {
     const todEndMs = overlapEndMs - dayStartMs;
     for (const window of PEAK_WINDOWS) {
       if (
-        intersectsHalfOpen(
-          todStartMs,
-          todEndMs,
-          window.startMs,
-          window.endMs
-        )
+        intersectsHalfOpen(todStartMs, todEndMs, window.startMs, window.endMs)
       ) {
         peak = true;
       }
@@ -278,8 +202,7 @@ function tierPresenceInClosedRange(fromMs: number, toMs: number): TierPresence {
     // Off-peak is present unless the whole overlap sits inside one peak
     // window (an overlap spanning a window end always reaches off-peak time).
     const whollyInsideOnePeakWindow = PEAK_WINDOWS.some(
-      (window) =>
-        todStartMs >= window.startMs && todEndMs < window.endMs
+      (window) => todStartMs >= window.startMs && todEndMs < window.endMs
     );
     if (!whollyInsideOnePeakWindow) {
       offPeak = true;
@@ -288,45 +211,11 @@ function tierPresenceInClosedRange(fromMs: number, toMs: number): TierPresence {
   return { peak, offPeak };
 }
 
-/**
- * Price eras that are "true" somewhere inside [atMs, throughMs]. For flash the
- * cut at DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT splits the horizon; the
- * instant of the cut itself belongs to the post-cut era.
- */
-function eraRangesFor(
-  model: DeepSeekPricingModel,
-  atMs: number,
-  throughMs: number
-): readonly EraRange[] {
-  if (model === 'deepseek-v4-flash') {
-    const cutMs = DEEPSEEK_FLASH_PRICE_CHANGE_EFFECTIVE_AT_MS;
-    const ranges: EraRange[] = [];
-    const preToMs = Math.min(throughMs, cutMs - 1);
-    if (atMs <= preToMs) {
-      ranges.push({ eraKey: 'pre', fromMs: atMs, toMs: preToMs });
-    }
-    const postFromMs = Math.max(atMs, cutMs);
-    if (postFromMs <= throughMs) {
-      ranges.push({ eraKey: 'post', fromMs: postFromMs, toMs: throughMs });
-    }
-    return ranges;
-  }
-  return [{ eraKey: 'listed', fromMs: atMs, toMs: throughMs }];
-}
-
 function priceFor(
-  model: DeepSeekPricingModel,
   currency: DeepSeekPricingCurrency,
-  eraKey: DeepSeekPricingEraKey,
   tier: DeepSeekTierKey
 ): DeepSeekPerMillionPrice {
-  const eraPrices =
-    model === 'deepseek-v4-flash'
-      ? eraKey === 'pre'
-        ? FLASH_PRE_CUT_PRICES
-        : FLASH_POST_CUT_PRICES
-      : PRO_LISTED_PRICES;
-  return eraPrices[currency][tier];
+  return FLASH_PRICES[currency][tier];
 }
 
 /**
@@ -345,7 +234,7 @@ export function resolveDeepSeekReferencePricing(
   input: ResolveDeepSeekReferencePricingInput
 ): DeepSeekReferencePricing {
   const { model, currency, at, through } = input;
-  if (model !== 'deepseek-v4-flash' && model !== 'deepseek-v4-pro') {
+  if (model !== 'deepseek-flash') {
     throw new RangeError(
       `resolveDeepSeekReferencePricing: unsupported model "${String(model)}"`
     );
@@ -369,22 +258,13 @@ export function resolveDeepSeekReferencePricing(
     ? 'closed_horizon_max'
     : 'point_in_time';
 
-  const eras = eraRangesFor(model, atMs, throughMs);
+  const presence = tierPresenceInClosedRange(atMs, throughMs);
   const rows: ApplicableRow[] = [];
-  for (const range of eras) {
-    const presence = tierPresenceInClosedRange(range.fromMs, range.toMs);
-    if (presence.offPeak) {
-      rows.push({
-        ...priceFor(model, currency, range.eraKey, 'off_peak'),
-        tier: 'off_peak',
-      });
-    }
-    if (presence.peak) {
-      rows.push({
-        ...priceFor(model, currency, range.eraKey, 'peak'),
-        tier: 'peak',
-      });
-    }
+  if (presence.offPeak) {
+    rows.push({ ...priceFor(currency, 'off_peak'), tier: 'off_peak' });
+  }
+  if (presence.peak) {
+    rows.push({ ...priceFor(currency, 'peak'), tier: 'peak' });
   }
 
   let maxHit = Number.NEGATIVE_INFINITY;
@@ -414,28 +294,7 @@ export function resolveDeepSeekReferencePricing(
   }
   const tier: DeepSeekPricingTier = argmaxTier ?? 'mixed';
 
-  /**
-   * includesFlashPriceChange is true whenever any post-change Flash price
-   * tuple applies somewhere in the point/closed horizon — the model is Flash
-   * and the horizon's end reaches the effective cut — not only when the
-   * window spans the cut instant.
-   */
-  const includesFlashPriceChange = eras.some(
-    (range) => range.eraKey === 'post'
-  );
-
-  // Provenance follows the pricing era(s) actually in play: pre-cut Flash and
-  // Pro come from the current pricing docs, post-cut Flash comes from the
-  // announcement asset, and a Flash horizon spanning both carries both,
-  // deduplicated.
-  const eraSourceUrl: Record<DeepSeekPricingEraKey, string> = {
-    pre: DEEPSEEK_REFERENCE_PRICE_SOURCE_URL,
-    post: DEEPSEEK_FLASH_PRICE_CHANGE_NOTICE_URL,
-    listed: DEEPSEEK_REFERENCE_PRICE_SOURCE_URL,
-  };
-  const sources = Array.from(
-    new Set(eras.map((range) => eraSourceUrl[range.eraKey]))
-  );
+  const sources = [DEEPSEEK_REFERENCE_PRICE_SOURCE_URL];
 
   return Object.freeze<DeepSeekReferencePricing>({
     model,
@@ -449,7 +308,6 @@ export function resolveDeepSeekReferencePricing(
     outputPerMillion: maxOutput,
     includesPeak: rows.some((row) => row.tier === 'peak'),
     includesOffPeak: rows.some((row) => row.tier === 'off_peak'),
-    includesFlashPriceChange,
     sources: Object.freeze(Array.from(new Set(sources))),
     checkedAt: DEEPSEEK_REFERENCE_PRICE_CHECKED_AT,
   });

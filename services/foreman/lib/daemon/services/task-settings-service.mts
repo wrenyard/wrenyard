@@ -1616,10 +1616,11 @@ interface DeepSeekAutomaticPricing {
 }
 
 function deepSeekModelOf(dispatch: { provider: string; model: string }): DeepSeekPricingModel | undefined {
-  if (dispatch.provider !== 'codebuddy') return undefined
-  return dispatch.model === 'deepseek-v4-flash' || dispatch.model === 'deepseek-v4-pro'
-    ? dispatch.model
-    : undefined
+  // Only the active deepseek-flash tariff applies. Match exact CodeBuddy and
+  // TokenHub model identities; retired ids must not resolve to a price.
+  if (dispatch.provider === 'codebuddy' && dispatch.model === 'deepseek-v4.1-flash') return 'deepseek-flash'
+  if (dispatch.provider === 'tokenhub' && dispatch.model === 'deepseek/deepseek-flash') return 'deepseek-flash'
+  return undefined
 }
 
 function toTaskReferencePricing(pricing: DeepSeekReferencePricing): TaskResolvedDispatch['reference_pricing'] {

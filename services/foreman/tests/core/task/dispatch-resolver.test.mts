@@ -23,8 +23,8 @@ const SPEED_CHECKED_AT = '2026-09-09'
 const LOCAL_CHECKED_AT = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
 
 // Canonical dynamic targets (provider/model:client) for the builtin catalog.
-const DSF_CB = 'codebuddy/deepseek-v4-flash:cb'
-const PRO_CB = 'codebuddy/deepseek-v4-pro:cb'
+const DSF_CB = 'codebuddy/deepseek-v4.1-flash:cb'
+const GLM_CB = 'codebuddy/glm-5.3:cb'
 const HY_CB = 'codebuddy/hy4-preview:cb'
 const HY3_CB = 'codebuddy/hy3:cb'
 const HY3_GK = 'codebuddy/hy3:gk'
@@ -36,9 +36,9 @@ const POLICY_RUNTIMES = ['forge/fast', 'forge/general', 'forge/ultra']
 
 function localSamples(): LocalSpeedSample[] {
   return [
-    { provider: 'codebuddy', model: 'deepseek-v4-flash', tps: 82.42, sampleCount: 12, checkedAt: LOCAL_CHECKED_AT },
+    { provider: 'codebuddy', model: 'deepseek-v4.1-flash', tps: 82.42, sampleCount: 12, checkedAt: LOCAL_CHECKED_AT },
     { provider: 'codebuddy', model: 'hy4-preview', tps: 73.89, sampleCount: 9, checkedAt: LOCAL_CHECKED_AT },
-    { provider: 'codebuddy', model: 'deepseek-v4-pro', tps: 65.32, sampleCount: 7, checkedAt: LOCAL_CHECKED_AT },
+    { provider: 'codebuddy', model: 'glm-5.3', tps: 65.32, sampleCount: 7, checkedAt: LOCAL_CHECKED_AT },
   ]
 }
 
@@ -203,7 +203,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   })
 
   it('exact canonical target pin keeps Catalog identity and hides the upstream iOA route label', async () => {
-    // A fake runtime that aliases the canonical CodeBuddy deepseek-v4-flash to
+    // A fake runtime that aliases the canonical CodeBuddy deepseek-v4.1-flash to
     // its upstream iOA identity. This must NOT affect Catalog eligibility: the
     // canonical target stays selectable, while the public resolved snapshot
     // keeps canonical identity and Forge retains the private route.
@@ -211,7 +211,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     const ioaRuntime: ProviderRuntime = {
       ...baseRuntime,
       resolveUpstreamModel(provider, model) {
-        if (provider.id === 'codebuddy' && model === 'deepseek-v4-flash') return 'deepseek-v4-flash-ioa'
+        if (provider.id === 'codebuddy' && model === 'deepseek-v4.1-flash') return 'deepseek-v4.1-flash-ioa'
         return model
       },
     }
@@ -233,13 +233,13 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.profile, DSF_CB)
     assert.equal(resolution.exactAgentRuntime, DSF_CB)
     // Internal iOA route labels never leak into the public model identity.
-    assert.equal(resolved.model, 'deepseek-v4-flash')
-    assert.equal(resolved.model_id, 'codebuddy/deepseek-v4-flash')
+    assert.equal(resolved.model, 'deepseek-v4.1-flash')
+    assert.equal(resolved.model_id, 'codebuddy/deepseek-v4.1-flash')
     // Local sample drives speed; catalog drives pricing.
     assert.equal(resolved.speed.source, 'local_31d')
     assert.equal(resolved.speed.effective_tps, 82.42)
-    assert.equal(resolved.reference_pricing.input_usd_per_million, 0.44)
-    assert.equal(resolved.reference_pricing.output_usd_per_million, 1.32)
+    assert.equal(resolved.reference_pricing.input_usd_per_million, 0.3)
+    assert.equal(resolved.reference_pricing.output_usd_per_million, 1.2)
   })
 
   it('eligible policy declaration exposes exact canonical choices only, never policy aliases', () => {
@@ -345,7 +345,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
   })
 
   it('explicit resolves an exact canonical target that automatic filters exclude', () => {
-    // PRO_CB carries output $3.96/m. Automatic resolve's $2 output ceiling
+    // GLM_CB carries output $4.4/m. Automatic resolve's $2 output ceiling
     // rules it out (GLM Flash is chosen instead); explicit mode runs none of
     // those automatic filters and returns the exact target with its own
     // truthful local speed and catalog pricing.
@@ -354,21 +354,21 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
       requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(autoPrice.ok, true)
-    assert.notEqual(autoPrice.exactAgentRuntime, PRO_CB)
+    assert.notEqual(autoPrice.exactAgentRuntime, GLM_CB)
 
-    const explicit = resolver.resolveExplicit({ taskName: 'explicit-vs-auto-price', exactRuntime: PRO_CB })
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-vs-auto-price', exactRuntime: GLM_CB })
     assert.equal(explicit.ok, true)
-    assert.equal(explicit.exactAgentRuntime, PRO_CB)
+    assert.equal(explicit.exactAgentRuntime, GLM_CB)
     const resolved = explicit.resolved
-    assert.equal(resolved.profile, PRO_CB)
-    assert.equal(resolved.requested_agent_runtime, PRO_CB)
+    assert.equal(resolved.profile, GLM_CB)
+    assert.equal(resolved.requested_agent_runtime, GLM_CB)
     assert.equal(resolved.client, 'codebuddy')
-    assert.equal(resolved.model, 'deepseek-v4-pro')
-    assert.equal(resolved.intelligence, 'mid')
+    assert.equal(resolved.model, 'glm-5.3')
+    assert.equal(resolved.intelligence, 'high')
     assert.equal(resolved.speed.source, 'local_31d')
     assert.equal(resolved.speed.effective_tps, 65.32)
     assert.equal(resolved.speed.expected_tps_met, true)
-    assert.equal(resolved.reference_pricing.output_usd_per_million, 3.96)
+    assert.equal(resolved.reference_pricing.output_usd_per_million, 4.4)
   })
 
   it('explicit resolves a gateway canonical target with a required capability', () => {
@@ -460,7 +460,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
   it('explicit required capability mismatch returns EXPLICIT_RUNTIME_UNAVAILABLE', () => {
     const explicit = resolver.resolveExplicit({
       taskName: 'explicit-capability',
-      exactRuntime: DSF_CB,
+      exactRuntime: GLM_CB,
       requiredCapabilities: ['image'] as const,
     })
     assert.equal(explicit.ok, false)
@@ -483,6 +483,23 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.ok(unavailable.error.reason.length > 0)
     assert.equal(auto.ok, true)
     assert.notEqual(auto.exactAgentRuntime, 'codebuddy/minimax-m3:cb')
+  })
+
+  it('new Flash identity does not inherit old V4 speed samples or retired ids', () => {
+    // The retired deepseek-v4-flash / deepseek-v4-pro ids must not appear as
+    // exact runtimes; the new Flash target resolves to its own local sample.
+    const listed = resolver.listExactRuntimes({ taskName: 'flash-identity' })
+    assert.equal(listed.ok, true)
+    assert.ok(
+      !listed.items.some(
+        (item) => item.exactAgentRuntime.includes('deepseek-v4-flash:') || item.exactAgentRuntime.includes('deepseek-v4-pro:'),
+      ),
+    )
+    const explicit = resolver.resolveExplicit({ taskName: 'flash-identity', exactRuntime: DSF_CB })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.resolved.model, 'deepseek-v4.1-flash')
+    assert.equal(explicit.resolved.speed.source, 'local_31d')
+    assert.equal(explicit.resolved.speed.effective_tps, 82.42)
   })
 
   it('listExactRuntimes enumerates canonical dynamic targets only, never policy aliases', () => {
@@ -555,13 +572,13 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
   }
 
   it('eligible reports price_limit when every remaining candidate exceeds the max output price', () => {
-    // PRO ($3.96/m) and K3 ($15/m) both clear the intelligence floor but trip
+    // GLM ($4.4/m) and K3 ($15/m) both clear the intelligence floor but trip
     // the $2 output-price gate; the closed code is the price gate.
     const result = resolver.eligible({
       taskName: 'code-price-limit',
       requirements: {
         maxOutputUsdPerMillion: 2,
-        excludeProfileIds: excluding(PRO_CB, K3_GK),
+        excludeProfileIds: excluding(GLM_CB, K3_GK),
       } satisfies TaskDispatchRequirements,
     })
     assert.equal(result.ok, false)

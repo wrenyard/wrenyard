@@ -42,3 +42,18 @@
       name: "@wrenyard/dsh-shell"
     - id: directory-picker-pinned
       name: "@wrenyard/dsh-shell/directory-picker"
+
+# Managed native official DeepSeek catalog: only the latest V4.1 Flash model,
+# with text/image input and official limits. This retires the three
+# dependency-shipped old native DeepSeek menu entries. No api keys, baseURL or
+# thinking defaults are set here — those remain connection-only settings.
+- id: llm-deepseek
+  config:
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
+        contextWindow: 1000000
+        maxTokens: 384000
+        inputModalities:
+          - text
+          - image

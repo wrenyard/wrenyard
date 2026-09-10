@@ -146,8 +146,7 @@ test('service provider.list projects only public model metadata over IPC', async
     }
     const codebuddy = result.providers.find((provider) => provider.id === 'codebuddy')
     assert.deepEqual(codebuddy?.models.map((model) => model.id), [
-      'deepseek-v4-flash',
-      'deepseek-v4-pro',
+      'deepseek-v4.1-flash',
       'hy4-preview',
       'hy3',
       'minimax-m3',

@@ -3,11 +3,8 @@ import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type Dis
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
 const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
-const SRC_TENCENT_DS_IDMAP = 'https://cloud.tencent.com/document/product/1823/132248';
 const SRC_OPENAI = 'https://developers.openai.com';
 const SRC_OPENAI_SPARK = 'https://www.openai.com/index/introducing-gpt-5-3-codex-spark/';
-const SRC_AA_DEEPSEEK = 'https://artificialanalysis.ai/models/deepseek-v4-flash/';
-const SRC_AA_DEEPSEEK_PRO = 'https://artificialanalysis.ai/models/deepseek-v4-pro/';
 const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
 const SRC_AA_KIMI = 'https://artificialanalysis.ai/models/kimi-k3/';
 const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
@@ -127,10 +124,9 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
-    nativeClients: ['codebuddy'], defaultModel: 'deepseek-v4-flash', useClientBinary: true,
+    nativeClients: ['codebuddy'], defaultModel: 'deepseek-v4.1-flash', useClientBinary: true,
     models: [
-      model('deepseek-v4-flash', 'DeepSeek V4 Flash'),
-      model('deepseek-v4-pro', 'DeepSeek V4 Pro'),
+      model('deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', 1_000_000, 50_000),
       model('hy4-preview', 'HY4 Preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']),
       model('hy3', 'HY3'),
       model('minimax-m3', 'MiniMax M3', undefined, undefined, CANONICAL_MODELS['minimax-m3']),
@@ -214,8 +210,8 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     models: [model('grok-4.5', 'Grok 4.5', 2_000_000, 131_072)],
   },
   {
-    id: 'tokenhub', displayName: 'Tencent Cloud TokenHub', credentialResolver: 'forge-managed', defaultModel: 'deepseek-v4-flash-202605',
-    models: [model('hy4-preview', 'Hunyuan HY4 Preview', 262_144, 32_768, CANONICAL_MODELS['hunyuan-hy4-preview']), model('deepseek-v4-flash-202605', 'DeepSeek V4 Flash', 1_048_576, 393_216), model('deepseek-v4-pro-202606', 'DeepSeek V4 Pro', 1_048_576, 393_216), model('deepseek/deepseek-v4-flash-vision-exp', 'DeepSeek V4 Flash Vision', 1_048_576, 393_216), model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']), model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('minimax-m2.7', 'MiniMax M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_048_576, 32_768, CANONICAL_MODELS['qwen3.5-plus'])],
+    id: 'tokenhub', displayName: 'Tencent Cloud TokenHub', credentialResolver: 'forge-managed', defaultModel: 'deepseek/deepseek-flash',
+    models: [model('hy4-preview', 'Hunyuan HY4 Preview', 262_144, 32_768, CANONICAL_MODELS['hunyuan-hy4-preview']), model('deepseek/deepseek-flash', 'DeepSeek V4.1 Flash', 1_000_000, 384_000), model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']), model('kimi-k2.6', 'Kimi K2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('minimax-m2.7', 'MiniMax M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('qwen3.5-plus', 'Qwen3.5 Plus', 1_048_576, 32_768, CANONICAL_MODELS['qwen3.5-plus'])],
     protocols: [openAI('https://tokenhub.tencentmaas.com/v1/chat/completions'), anthropic('https://tokenhub.tencentmaas.com/v1/messages', 'x-api-key')],
   },
   {
@@ -333,6 +329,8 @@ function speedDefault(
 // local agent_turn_v1 sample supersedes it, as does an exact provider override.
 // Keys are exact registered model ids; aliases are never used for lookup.
 const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
+  'deepseek/deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). TokenHub endpoint is unmeasured; never represented as a TokenHub local agent_turn_v1 sample.' },
+  'deepseek-v4.1-flash': { tps: 200.5, source: 'local-benchmark:2026-09-10:codebuddy', checkedAt: '2026-09-10', conservative: true, basis: 'synthetic_stream_v1: six sequential 2048-token iOA requests, three non-thinking and three high-thinking; 12288 output tokens / 61.285s including first-token wait. Not agent_turn_v1; exact local Task samples supersede this baseline.' },
   'MiniMax-M2.7': speedDefault(60, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7.'),
   'MiniMax-M2.7-highspeed': speedDefault(100, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7-highspeed.'),
   'MiniMax-M3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis median output speed for MiniMax M3; exact registered case-preserving API id.'),
@@ -342,11 +340,6 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'claude-sonnet-5': speedDefault(60, 'https://artificialanalysis.ai/models/claude-sonnet-5-non-reasoning/', 'Artificial Analysis output-speed baseline for Claude Sonnet 5 non-reasoning.'),
   'composer-2.5': speedDefault(40, 'user-specified', 'User-selected Wrenyard baseline for exact standard cursor/composer-2.5; no measured source and not composer-2.5-fast.'),
   'cursor-grok-4.6-high': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
-  'deepseek-v4-flash': speedDefault(125.7, SRC_AA_DEEPSEEK, 'Artificial Analysis output-speed measurement for DeepSeek V4 Flash.'),
-  'deepseek-v4-flash-202605': speedDefault(125.7, SRC_AA_DEEPSEEK, `Artificial Analysis DeepSeek V4 Flash output speed; Tencent documents exact 202605 id mapping at ${SRC_TENCENT_DS_IDMAP}.`),
-  'deepseek-v4-pro': speedDefault(76.9, SRC_AA_DEEPSEEK_PRO, 'Artificial Analysis output-speed measurement for DeepSeek V4 Pro.'),
-  'deepseek-v4-pro-202606': speedDefault(76.9, SRC_AA_DEEPSEEK_PRO, `Artificial Analysis DeepSeek V4 Pro output speed; Tencent documents exact 202606 id mapping at ${SRC_TENCENT_DS_IDMAP}.`),
-  'deepseek/deepseek-v4-flash-vision-exp': speedDefault(120.1, 'https://artificialanalysis.ai/models/deepseek-v4-flash-vision/', `Artificial Analysis output-speed measurement for DeepSeek V4 Flash Vision; Tencent documents the exact registered id at ${SRC_TENCENT_DS_IDMAP}.`),
   'doubao-seed-2-0-lite-260215': speedDefault(35.1, 'https://aihubmix.com/compare/doubao-seed-2-0-lite-260215/qwen3.8-max-preview', 'AIHubMix public rolling output-throughput measurement for the exact dated Doubao model.'),
   'glm-4.7-flash': speedDefault(102.5, 'https://artificialanalysis.ai/models/glm-4-7-flash/', 'Artificial Analysis output-speed measurement for GLM-4.7 Flash.'),
   'glm-5-turbo': speedDefault(42, 'https://openrouter.ai/z-ai/glm-5-turbo/pricing', 'OpenRouter public output-throughput snapshot for exact GLM-5 Turbo.'),
@@ -389,17 +382,17 @@ type ModelMeta = {
 };
 
 const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
-  'deepseek-v4-flash': {
+  'deepseek-v4.1-flash': {
     intelligence: 'mid',
-    capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 0.44, cachedInputUsdPerMillion: 0.014, outputUsdPerMillion: 1.32, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_DEEPSEEK, checkedAt: INTEL_CHECKED_AT, status: 'product_provisional', indexVersion: 'v4.3', score: 35, reasoningConfiguration: 'max', basis: 'AA max; route version/effort not pinned' },
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'user-selected mid tier pending independent V4.1 benchmark' },
   },
-  'deepseek-v4-pro': {
+  'deepseek/deepseek-flash': {
     intelligence: 'mid',
-    capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 1.32, cachedInputUsdPerMillion: 0.044, outputUsdPerMillion: 3.96, source: SRC_DEEPSEEK, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_DEEPSEEK_PRO, checkedAt: INTEL_CHECKED_AT, status: 'product_provisional', indexVersion: 'v4.3', score: 36, reasoningConfiguration: 'max' },
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'user-selected mid tier pending independent V4.1 benchmark' },
   },
   'hy4-preview': {
     intelligence: 'mid',

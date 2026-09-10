@@ -121,21 +121,19 @@ test('CodeBuddy keeps the legacy flat native token shape as a read-only fallback
   assert.deepEqual(await runtime.credential(provider), { value: 'flat-codebuddy-token' });
 });
 
-test('CodeBuddy iOA routing uses the bundled domain matcher and only the five confirmed upstream ids', async () => {
+test('CodeBuddy iOA routing uses the bundled domain matcher and only the four confirmed upstream ids', async () => {
   const runtime = codeBuddyRuntime('tenant.alpha.test');
   const provider = createBuiltinCatalog().provider('codebuddy')!;
   const credential = await runtime.credential(provider);
   assert.ok(credential);
 
   assert.deepEqual(Object.fromEntries([
-    'deepseek-v4-flash',
-    'deepseek-v4-pro',
+    'deepseek-v4.1-flash',
     'hy4-preview',
     'hy3',
     'minimax-m3',
   ].map((model) => [model, runtime.resolveUpstreamModel(provider, model, credential)])), {
-    'deepseek-v4-flash': 'deepseek-v4-flash-ioa',
-    'deepseek-v4-pro': 'deepseek-v4-pro-ioa',
+    'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
     'hy4-preview': 'hy4-preview-ioa',
     'hy3': 'hy3-ioa',
     'minimax-m3': 'minimax-m3-ioa',
@@ -184,8 +182,9 @@ test('runtime task plans compile canonical targets and keep CodeBuddy iOA remap 
   const logical = deriveTaskDispatchPlans(catalog);
   assert.equal(logical['codebuddy/hy4-preview:cb']?.model, 'hy4-preview');
   assert.equal(logical['codebuddy/hy3:cb']?.model, 'hy3');
-  assert.equal(logical['codebuddy/deepseek-v4-pro:cb']?.model, 'deepseek-v4-pro');
-  assert.equal(logical['codebuddy/deepseek-v4-flash:cb']?.model, 'deepseek-v4-flash');
+  assert.equal(logical['codebuddy/deepseek-v4.1-flash:cb']?.model, 'deepseek-v4.1-flash');
+  assert.equal(logical['codebuddy/deepseek-v4-pro:cb'], undefined);
+  assert.equal(logical['codebuddy/deepseek-v4-flash:cb'], undefined);
   assert.equal(logical['codebuddy/minimax-m3:cb']?.model, 'minimax-m3');
   assert.equal(logical['codebuddy/kimi-k3:cb']?.model, 'kimi-k3');
   assert.equal(logical['codebuddy/glm-5.3:cb']?.model, 'glm-5.3');
@@ -194,8 +193,9 @@ test('runtime task plans compile canonical targets and keep CodeBuddy iOA remap 
   const plans = await resolveRuntimeTaskPlans(catalog, runtime);
   assert.equal(plans['codebuddy/hy4-preview:cb']?.model, 'hy4-preview-ioa');
   assert.equal(plans['codebuddy/hy3:cb']?.model, 'hy3-ioa');
-  assert.equal(plans['codebuddy/deepseek-v4-pro:cb']?.model, 'deepseek-v4-pro-ioa');
-  assert.equal(plans['codebuddy/deepseek-v4-flash:cb']?.model, 'deepseek-v4-flash-ioa');
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb']?.model, 'deepseek-v4.1-flash-ioa');
+  assert.equal(plans['codebuddy/deepseek-v4-pro:cb'], undefined);
+  assert.equal(plans['codebuddy/deepseek-v4-flash:cb'], undefined);
   assert.equal(plans['codebuddy/minimax-m3:cb']?.model, 'minimax-m3-ioa');
   assert.equal(plans['codebuddy/kimi-k3:cb']?.model, 'kimi-k3');
   assert.equal(plans['codebuddy/glm-5.3:cb']?.model, 'glm-5.3');
@@ -244,6 +244,8 @@ test('CodeBuddy paid, unrecognized, and empty models are never free even under a
     'deepseek-v4-flash-ioa',
     'deepseek-v4-pro',
     'deepseek-v4-pro-ioa',
+    'deepseek-v4.1-flash',
+    'deepseek-v4.1-flash-ioa',
     'glm-5.3',
     'glm-5.3-flash',
     'kimi-k3',
@@ -333,21 +335,18 @@ test('CodeBuddy snapshot reads the auth file exactly once and binds coherent rea
 test('CodeBuddy snapshot maps the exact IOA table and is free only for HY3/HY4 canonical and wire ids', async () => {
   const { snapshot } = await loadCodeBuddySnapshot(codeBuddySnapshotAuth());
   assert.deepEqual(Object.fromEntries([
-    'deepseek-v4-flash',
-    'deepseek-v4-pro',
+    'deepseek-v4.1-flash',
     'hy4-preview',
     'hy3',
     'minimax-m3',
   ].map((model) => [model, snapshot.resolveUpstreamModel(model)])), {
-    'deepseek-v4-flash': 'deepseek-v4-flash-ioa',
-    'deepseek-v4-pro': 'deepseek-v4-pro-ioa',
+    'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
     'hy4-preview': 'hy4-preview-ioa',
     'hy3': 'hy3-ioa',
     'minimax-m3': 'minimax-m3-ioa',
   });
   for (const model of [
-    'deepseek-v4-flash-ioa',
-    'deepseek-v4-pro-ioa',
+    'deepseek-v4.1-flash-ioa',
     'hy4-preview-ioa',
     'hy3-ioa',
     'minimax-m3-ioa',
@@ -366,6 +365,8 @@ test('CodeBuddy snapshot maps the exact IOA table and is free only for HY3/HY4 c
     'deepseek-v4-flash-ioa',
     'deepseek-v4-pro',
     'deepseek-v4-pro-ioa',
+    'deepseek-v4.1-flash',
+    'deepseek-v4.1-flash-ioa',
     'glm-5.3',
     'glm-5.3-flash',
     'kimi-k3',

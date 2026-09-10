@@ -222,7 +222,7 @@ test('model projection keeps catalog-provided labels without a Desktop model mir
         id: 'wrenyard',
         name: 'Wrenyard',
         models: [
-          { id: 'codebuddy/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+          { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
           { id: 'kimi-coding/k3', name: 'Kimi K3' },
         ],
       },
@@ -231,7 +231,7 @@ test('model projection keeps catalog-provided labels without a Desktop model mir
   });
 
   assert.deepEqual(models.groups[0]?.models.map((model) => ({ id: model.model, label: model.label })), [
-    { id: 'codebuddy/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { id: 'codebuddy/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' },
     { id: 'kimi-coding/k3', label: 'Kimi K3' },
   ]);
   assert.deepEqual(models.current, {
@@ -414,7 +414,7 @@ test('model projection keeps only the configured Gateway provider', () => {
         {
           id: 'wrenyard',
           name: 'Wrenyard',
-          models: [{ id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+          models: [{ id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }],
         },
         { id: 'legacy-provider', name: 'Legacy', models: [{ id: 'legacy-model', name: 'Legacy Model' }] },
       ],
@@ -693,7 +693,7 @@ function conversationClientHarness() {
   };
 }
 
-function modelDirectory(current = 'codebuddy/deepseek-v4-flash') {
+function modelDirectory(current = 'codebuddy/deepseek-v4.1-flash') {
   return {
     current: { provider: 'wrenyard', model: current },
     routable: true,
@@ -701,7 +701,7 @@ function modelDirectory(current = 'codebuddy/deepseek-v4-flash') {
       id: 'wrenyard',
       name: 'Wrenyard',
       models: [
-        { id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
         { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
       ],
     }],
@@ -717,7 +717,7 @@ function hostModelDirectory() {
       id: 'wrenyard',
       name: 'Wrenyard',
       models: [
-        { id: 'codebuddy/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
         { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
       ],
     }],
