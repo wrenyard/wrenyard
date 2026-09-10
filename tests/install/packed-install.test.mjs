@@ -1,7 +1,7 @@
 // End-to-end test proving that packed installs never compile on the consumer
 // machine. Optional: set WRENYARD_SKIP_PACKED_INSTALL_E2E=1 to skip the live
 // install/update cases, or run `pnpm release:e2e` locally when you want them.
-// Release CI does not run this file; publishing only packs and checksums.
+// Release CI runs these checks against the prebuilt native release artifacts.
 //
 // Build mode (WRENYARD_E2E_RELEASE_DIR unset) builds the local release
 // (desktop skipped) into a temp dir, installs the actual CLI tarball into a

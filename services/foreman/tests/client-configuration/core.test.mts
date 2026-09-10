@@ -9,6 +9,7 @@ import { InstalledClientDiscovery } from '../../lib/client-configuration/discove
 import { applyFileTransaction, readFileSnapshot } from '../../lib/client-configuration/files.mts'
 import {
   ensureGatewayCredentialHelper,
+  gatewayCredentialHelperCommand,
   loadOrCreateGatewayCredential,
 } from '../../lib/client-configuration/gateway-source.mts'
 import { JsonClientOwnershipStore } from '../../lib/client-configuration/ownership-store.mts'
@@ -40,7 +41,7 @@ test('file transaction uses private permissions and rolls back every completed r
 
   const created = join(root, 'private.json')
   await applyFileTransaction([{ path: created, content: '{}\n' }], async () => undefined)
-  assert.equal((await stat(created)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(created)).mode & 0o777, 0o600)
 })
 
 test('ownership store keeps only client-owned baseline and last-applied data', async () => {
@@ -56,7 +57,7 @@ test('ownership store keeps only client-owned baseline and last-applied data', a
     updatedAt: '2026-09-04T00:00:00.000Z',
   })
   assert.equal((await store.get('codex-shared'))?.defaultModel, 'provider/model')
-  assert.equal((await stat(path)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(path)).mode & 0o777, 0o600)
   await store.remove('codex-shared')
   assert.equal((await readFileSnapshot(path)).exists, false)
 })
@@ -68,17 +69,28 @@ test('gateway credential is stable and helper stores only the IPC lookup', async
   const second = await loadOrCreateGatewayCredential(credentialPath)
   assert.equal(second, first)
   assert.ok(first.length >= 32)
-  assert.equal((await stat(credentialPath)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(credentialPath)).mode & 0o777, 0o600)
 
-  const helperPath = join(root, 'client-configuration', 'gateway-credential-helper')
+  const helperPath = join(root, 'client-configuration', process.platform === 'win32' ? 'gateway-credential-helper.mjs' : 'gateway-credential-helper')
   await ensureGatewayCredentialHelper(helperPath, join(root, 'foreman.sock'))
   const helper = await readFile(helperPath, 'utf8')
   assert.match(helper, /gateway\.connection/)
   assert.doesNotMatch(helper, new RegExp(first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-  assert.equal((await stat(helperPath)).mode & 0o777, 0o700)
+  if (process.platform !== 'win32') assert.equal((await stat(helperPath)).mode & 0o777, 0o700)
 })
 
-test('gateway credential helper resolves the live token over local IPC', { skip: process.platform === 'win32' }, async () => {
+test('gateway credential helper command uses Node argv on Windows and the helper path on POSIX', () => {
+  const helperPath = '/opt/wrenyard/bin/gateway-credential-helper'
+  const nodePath = '/usr/bin/node'
+  const windowsArgv = gatewayCredentialHelperCommand(helperPath, nodePath, 'win32')
+  assert.deepEqual(windowsArgv, [nodePath, helperPath])
+  assert.equal(windowsArgv.includes('cmd.exe'), false)
+  assert.equal(windowsArgv.some((part) => part.endsWith('.cmd')), false)
+  assert.deepEqual(gatewayCredentialHelperCommand(helperPath, nodePath, 'linux'), [helperPath])
+  assert.deepEqual(gatewayCredentialHelperCommand(helperPath, nodePath, 'darwin'), [helperPath])
+})
+
+test('gateway credential helper resolves the live token over local IPC', async () => {
   const root = await mkdtemp(join(tmpdir(), 'wrenyard-client-helper-'))
   const endpoint = createTestIpcEndpoint('client-helper')
   const router = new RpcRouter()
@@ -93,10 +105,13 @@ test('gateway credential helper resolves the live token over local IPC', { skip:
     path: endpoint.path,
     onMessage: (message) => router.handleMessage(message),
   })
-  const helperPath = join(root, 'gateway-credential-helper')
+  const helperPath = join(root, process.platform === 'win32' ? 'gateway-credential-helper.mjs' : 'gateway-credential-helper')
   try {
     await ensureGatewayCredentialHelper(helperPath, endpoint.path)
-    const result = await execFileAsync(helperPath, [], { timeout: 2_000 })
+    const helper = await readFile(helperPath, 'utf8')
+    assert.doesNotMatch(helper, /live-gateway-token/)
+    const argv = gatewayCredentialHelperCommand(helperPath)
+    const result = await execFileAsync(argv[0], argv.slice(1), { timeout: 2_000 })
     assert.equal(result.stdout, 'live-gateway-token\n')
     assert.equal(result.stderr, '')
   } finally {

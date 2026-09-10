@@ -1132,8 +1132,9 @@ test('foreman task run --settings-json forwards invocation settings and rejects 
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
   const binary = join(repoRoot, 'bin', 'foreman.mts')
   const configDir = mkdtempSync(join(tmpdir(), 'foreman-cli-settings-config-'))
-  const socketDir = mkdtempSync(join(tmpdir(), 'foreman-cli-settings-ipc-'))
-  const socketPath = join(socketDir, 'settings.sock')
+  const endpoint = createTestIpcEndpoint('cli-settings')
+  const socketDir = endpoint.dir
+  const socketPath = endpoint.path
   tempDirs.push(configDir, socketDir)
   const port = await allocateFreeTcpPort()
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -1169,7 +1170,13 @@ test('foreman task run --settings-json forwards invocation settings and rejects 
       }
     })
   })
-  await new Promise<void>((resolve) => ipcServer.listen(socketPath, resolve))
+  await new Promise<void>((resolve, reject) => {
+    ipcServer.once('error', reject)
+    ipcServer.listen(socketPath, () => {
+      ipcServer.off('error', reject)
+      resolve()
+    })
+  })
   const configPath = join(configDir, 'config.json')
   writeJsonConfig(configPath, {
     service: { bind: `127.0.0.1:${port}`, ipc: { path: socketPath } },

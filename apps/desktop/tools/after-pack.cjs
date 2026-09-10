@@ -42,14 +42,52 @@ function assertNoForbiddenPackagedEntries(entries) {
   }
 }
 
-function localPathNeedles() {
-  return [...new Set([homedir(), tmpdir(), ROOT]
+function pathNeedles(values) {
+  return [...new Set(values
     .filter((value) => typeof value === 'string' && value.length >= 4)
-    .flatMap((value) => [value, value.replaceAll('\\', '/')]))];
+    .flatMap((value) => {
+      const variants = [value, value.replaceAll('\\', '/'), value.replaceAll('/', '\\')];
+      for (const spelling of [value, value.replaceAll('\\', '/'), value.replaceAll('/', '\\')]) {
+        for (const backslash of [spelling, spelling.replaceAll('\\', '\\\\')]) {
+          variants.push(JSON.stringify(backslash).slice(1, -1));
+        }
+      }
+      return variants;
+    }))];
+}
+
+/** Exact source-checkout/CI workspace roots. These are actionable leaks in any
+ * archive member, including dependency binaries. Callers may inject roots. */
+function buildRootNeedles(exactRoots = [ROOT]) {
+  return pathNeedles(exactRoots);
+}
+
+/** Generic per-user home/temp roots are only actionable in first-party output;
+ * public dependency binaries legitimately embed upstream CI home paths. */
+function genericHomeNeedles() {
+  return pathNeedles([homedir(), tmpdir()]);
 }
 
 function containsLocalPath(buffer, needles) {
   return needles.some((needle) => buffer.includes(Buffer.from(needle)));
+}
+
+/** node_modules members are third-party unless vendor-scoped to @wrenyard,
+ * mirroring isDependencyPath in tools/release/build-local-release.mjs. */
+function isFirstPartyArchivePath(archivePath) {
+  const segments = normalizeArchivePath(archivePath).split('/').filter(Boolean);
+  const lastModulesIndex = segments.lastIndexOf('node_modules');
+  if (lastModulesIndex === -1) return true;
+  return segments[lastModulesIndex + 1] === '@wrenyard';
+}
+
+/** Production local-path decision, exported so regression tests exercise the
+ * same branch used by assertSafeDesktopPackage. Exact checkout/output roots leak
+ * from any member; generic home/temp roots are only actionable in first-party
+ * output. */
+function containsUnsafePackagedPath(archivePath, content, exactNeedles, genericNeedles) {
+  return containsLocalPath(content, exactNeedles)
+    || (isFirstPartyArchivePath(archivePath) && containsLocalPath(content, genericNeedles));
 }
 
 function asarApi() {
@@ -279,7 +317,8 @@ async function assertSafeDesktopPackage(context) {
   assertNoForbiddenPackagedEntries(entries);
 
   const { scanText } = await import(pathToFileURL(path.join(ROOT, 'tools', 'check-secrets.mjs')).href);
-  const needles = localPathNeedles();
+  const exactNeedles = buildRootNeedles([ROOT, context.appOutDir]);
+  const genericNeedles = genericHomeNeedles();
   let localPathFindingCount = 0;
   let secretFindingCount = 0;
   for (const entry of entries) {
@@ -287,7 +326,9 @@ async function assertSafeDesktopPackage(context) {
     const stat = statFile(archivePath, normalized);
     if (stat.files) continue;
     const content = extractFile(archivePath, normalized);
-    if (containsLocalPath(content, needles)) localPathFindingCount += 1;
+    if (containsUnsafePackagedPath(normalized, content, exactNeedles, genericNeedles)) {
+      localPathFindingCount += 1;
+    }
     // Provider-token detectors are intentionally limited to first-party Desktop
     // output. Dependency examples are excluded by policy and dependency runtime
     // bytes otherwise create unactionable lexical false positives.
@@ -330,6 +371,9 @@ exports.default = async function afterPack(context) {
 
 exports.assertNoForbiddenPackagedEntries = assertNoForbiddenPackagedEntries;
 exports.assertPackagedDshStarts = assertPackagedDshStarts;
+exports.buildRootNeedles = buildRootNeedles;
 exports.containsLocalPath = containsLocalPath;
-exports.localPathNeedles = localPathNeedles;
+exports.containsUnsafePackagedPath = containsUnsafePackagedPath;
+exports.genericHomeNeedles = genericHomeNeedles;
+exports.isFirstPartyArchivePath = isFirstPartyArchivePath;
 exports.packagedPathCategory = packagedPathCategory;
