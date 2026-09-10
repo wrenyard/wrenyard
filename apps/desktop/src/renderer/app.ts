@@ -1,3 +1,4 @@
+import { inputTypeFromRow, inputTypesPatch, type TaskInputTypeValue } from '../task-input-types.js';
 import type {
   PetCompanionSettings,
   ProviderCatalogSnapshot,
@@ -17,6 +18,7 @@ import type {
   TaskSettingsExplicitReference,
   TaskSettingsLayer,
   TaskSettingsMode,
+  TaskSettingsCapability,
   TaskSettingsPatch,
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
@@ -88,6 +90,8 @@ const tasksRuntimeSuggestions = requireElement<HTMLDataListElement>('tasks-runti
 const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
 const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
+const tasksInputTypesSelect = requireElement<HTMLSelectElement>('tasks-input-types');
+const tasksInputTypesEffective = requireElement<HTMLElement>('tasks-input-types-effective');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
 const clientPlanError = requireElement<HTMLElement>('client-plan-error');
@@ -1789,6 +1793,23 @@ function secondsToMilliseconds(value: string): number | null {
   return Math.round(parsed * 1000);
 }
 
+/** Provenance label for the 输入要求 hint, mirroring the settings source layers. */
+function inputRequirementSourceLabel(source: string): string {
+  switch (source) {
+    case 'builtin': return '内置';
+    case 'user_global': return '全局';
+    case 'user_task': return '本任务';
+    case 'invocation': return '调用方';
+    case 'system': return '系统';
+    default: return '未知';
+  }
+}
+
+function capabilityLabelList(capabilities: readonly TaskSettingsCapability[] | null): string {
+  if (!capabilities || capabilities.length === 0) return '未额外限制';
+  return capabilities.map((cap) => (cap === 'text' ? '文本' : '图片')).join('和');
+}
+
 function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
   const override = row.user_task.timeout_ms;
   const effective = row.effective.timeout_ms.value;
@@ -1816,10 +1837,30 @@ function populateTaskForm(row: TaskSettingsTaskRow): void {
   tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
   tasksRuntimeInput.value = explicitReferenceText(row.effective.explicit_runtime.value);
   populateRuntimeSuggestions();
+  populateInputTypesControl(row);
   renderTimeoutEffective(row);
   renderTasksTemplatePreview(row);
   tasksSaveButton.disabled = tasksSaveBusy;
   tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
+}
+
+/** Wires the 输入要求 row: mirrors the authoritative selection, disables the
+ *  text-only option when the task definition itself requires image input (the
+ *  backend still enforces the declared requirement), and shows the effective
+ *  input requirements with their provenance. Visible in both modes. */
+function populateInputTypesControl(row: TaskSettingsTaskRow): void {
+  tasksInputTypesSelect.value = inputTypeFromRow(row);
+  tasksInputTypesSelect.disabled = tasksSaveBusy;
+  const builtinRequiresImage = (row.builtin.dispatch.required_capabilities ?? []).includes('image');
+  for (const option of Array.from(tasksInputTypesSelect.options)) {
+    option.disabled = option.value === 'text' && builtinRequiresImage;
+  }
+  const effective = row.effective.automatic.required_capabilities.value;
+  const source = row.effective.automatic.required_capabilities.source;
+  let text = `当前生效：${capabilityLabelList(effective)}（来源：${inputRequirementSourceLabel(source)}）`;
+  if (builtinRequiresImage) text += ' · 任务定义要求图片';
+  tasksInputTypesEffective.textContent = text;
+  tasksInputTypesEffective.classList.add('is-dim');
 }
 
 /** Read-only static instruction-template preview. Text is emitted through safe
@@ -2101,6 +2142,7 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   if (!taskSettings || !row || tasksSaveBusy) return;
   tasksSaveBusy = true;
   tasksSaveButton.disabled = true;
+  tasksInputTypesSelect.disabled = true;
   setTasksError('');
   try {
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
@@ -2120,6 +2162,7 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   } finally {
     tasksSaveBusy = false;
     tasksSaveButton.disabled = false;
+    tasksInputTypesSelect.disabled = false;
     tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
     const current = tasksSelectedRow();
     if (current) renderTimeoutEffective(current);
@@ -2130,6 +2173,14 @@ async function saveTaskLayer(reset = false): Promise<void> {
   const row = tasksSelectedRow();
   if (!row || tasksSaveBusy) return;
   const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row, tasksModeValue, tasksRuntimeInput.value, tasksTimeoutInput.value);
+  if (!reset) {
+    // Merge the 输入要求 pin under automatic without clobbering other layer fields
+    // (mode/reference/timeout) that buildLayerPatch may have written.
+    const inputPatch = inputTypesPatch(row.user_task.automatic?.required_capabilities, tasksInputTypesSelect.value as TaskInputTypeValue);
+    if (inputPatch.automatic) {
+      patch.automatic = { ...(patch.automatic ?? {}), ...inputPatch.automatic };
+    }
+  }
   await commitTaskSave(patch);
 }
 
@@ -2140,14 +2191,15 @@ async function saveTaskTimeoutReset(): Promise<void> {
   await commitTaskSave({ timeout_ms: null });
 }
 
-interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string }
+interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string; inputTypes: string }
 function readTaskDraft(): TaskFormDraft {
-  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value };
+  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value, inputTypes: tasksInputTypesSelect.value };
 }
 function applyTaskDraft(draft: TaskFormDraft): void {
   applyTasksModeSelection(draft.mode);
   tasksRuntimeInput.value = draft.runtime;
   tasksTimeoutInput.value = draft.timeout;
+  tasksInputTypesSelect.value = draft.inputTypes;
 }
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {

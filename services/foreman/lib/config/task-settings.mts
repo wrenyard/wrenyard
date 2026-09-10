@@ -557,6 +557,17 @@ function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): v
  * user global -> user task -> invocation); the rightmost defined value wins.
  * Inputs are normalized but never mutated.
  *
+ * `requiredCapabilities` is the single documented exception to pure
+ * rightmost-wins. A task definition's declared capabilities (the builtin Task
+ * layer) form a *hard minimum*: no user layer — global, task, or invocation,
+ * including an explicit empty array — may strip a capability the task itself
+ * requires. The effective set is the union of the task-definition minimum
+ * with the single normal rightmost winner (never every historical override),
+ * deduplicated in stable text,image order. Other fields keep exact
+ * precedence. Source provenance for `requiredCapabilities` is `builtin_task`
+ * when the declaration alone contributes (no nonempty normal winner),
+ * otherwise the highest contributing layer (the normal winner's source).
+ *
  * System defaults: mode `automatic`, total execution timeout 15 minutes.
  * Automatic mode ignores any inherited/stale explicit reference; explicit
  * mode requires one effective structural reference. References are never
@@ -601,6 +612,26 @@ export function resolveEffectiveTaskSettings(
   const dispatchSources: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>> = {}
   for (const field of TASK_DISPATCH_FIELDS) {
     const leaf = rightmostDefined(entries, (layer) => layer.dispatch?.[field])
+
+    // `requiredCapabilities` hard-minimum exception: the task-definition
+    // declaration (builtin Task layer) can never be stripped by a user layer,
+    // including an explicit []. Union only the task minimum with the single
+    // normal rightmost winner; dedupe in stable text,image order. Source is
+    // `builtin_task` when the declaration alone contributes, otherwise the
+    // highest contributing layer (the normal winner's source).
+    if (field === 'requiredCapabilities') {
+      const taskMinimum = entries.find((entry) => entry.tag === 'builtin_task')?.layer.dispatch?.requiredCapabilities ?? []
+      const normalWinner = (leaf.value ?? []) as readonly ('text' | 'image')[]
+      const merged = (['text', 'image'] as const).filter((capability) => taskMinimum.includes(capability) || normalWinner.includes(capability))
+      if (merged.length > 0 || leaf.value !== undefined) {
+        dispatch.requiredCapabilities = merged
+        dispatchSources.requiredCapabilities = normalWinner.length === 0 && taskMinimum.length > 0
+          ? 'builtin_task'
+          : leaf.source ?? 'builtin_task'
+      }
+      continue
+    }
+
     if (leaf.value !== undefined && leaf.source !== undefined) {
       ;(dispatch as Record<string, unknown>)[field] = leaf.value
       dispatchSources[field] = leaf.source

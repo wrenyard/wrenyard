@@ -245,6 +245,39 @@ test('model projection keeps catalog-provided labels without a Desktop model mir
   });
 });
 
+test('model projection derives input types from exact Catalog capabilities and leaves unknown models unresolved', () => {
+  const models = projectConversationModels({
+    current: { provider: 'wrenyard', model: 'codebuddy/deepseek-v4.1-flash' },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [
+        { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+        { id: 'kimi-coding/k3', name: 'Kimi K3' },
+        { id: 'zhipu-coding/glm-5.3', name: 'GLM-5.3' },
+        { id: 'openrouter/nex-agi/nex-n2.5-mini:free', name: 'Nex N2.5 Mini Free' },
+        { id: 'codebuddy/does-not-exist', name: 'Unknown Model' },
+      ],
+    }],
+    failures: [],
+  });
+
+  const byModel = new Map((models.groups[0]?.models ?? []).map((model) => [model.model, model]));
+  // Image + text models keep both capabilities.
+  assert.deepEqual(byModel.get('codebuddy/deepseek-v4.1-flash')?.inputTypes, ['text', 'image']);
+  assert.deepEqual(byModel.get('kimi-coding/k3')?.inputTypes, ['text', 'image']);
+  // Gateway provider prefix maps to the exact catalog provider/model (namespaced
+  // OpenRouter ids keep the slash inside the model segment).
+  assert.deepEqual(byModel.get('openrouter/nex-agi/nex-n2.5-mini:free')?.inputTypes, ['text', 'image']);
+  // Text-only models keep exactly text.
+  assert.deepEqual(byModel.get('zhipu-coding/glm-5.3')?.inputTypes, ['text']);
+  // An unmatched model stays unknown; the field is omitted rather than assumed.
+  assert.equal(byModel.get('codebuddy/does-not-exist')?.inputTypes, undefined);
+  // Current selection projection does not carry inputTypes; it is an option field.
+  assert.equal(models.current?.configured, true);
+});
+
 test('model projection migrates the retired CodeBuddy iOA selection to its advertised logical id', () => {
   const models = projectConversationModels({
     current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview-ioa' },

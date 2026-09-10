@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers';
+import { canonicalizeBuiltinPublicModelId, createBuiltinCatalog } from '@wrenyard/providers';
 import { parseTaskRunSnapshot } from './stats-snapshot.js';
 import type {
   ConversationItemSnapshot,
@@ -146,6 +146,41 @@ function canonicalConversationModel(provider: string, model: string): string {
   return canonical.startsWith(`${provider}/`) ? canonical.slice(provider.length + 1) : model;
 }
 
+/**
+ * Authoritative built-in Catalog, instantiated once. Used only to read the exact
+ * input capabilities (`text`/`image`) of a model already projected into the
+ * product directory — never to enumerate, re-merge, or fabricate models.
+ */
+const BUILTIN_CATALOG = createBuiltinCatalog();
+
+/**
+ * Project a model's exact Catalog input capabilities for a DSH directory entry.
+ * The authoritative provider/model identity comes from the built-in Catalog, not
+ * the raw DSH claim or the model name: for the `wrenyard` transport the catalog
+ * provider is the first segment of the `provider/model` public id, and for a
+ * native transport it is the DSH provider itself. Aliases are resolved through
+ * the existing canonicalizer. Capabilities are copied only when the exact model
+ * resolves in the Catalog; otherwise `undefined` is returned so the UI can fall
+ * back to a neutral label instead of assuming a model is text-only.
+ */
+function catalogInputTypes(provider: string, model: string): readonly ('text' | 'image')[] | undefined {
+  const catalogProvider = provider === 'wrenyard' && model.includes('/')
+    ? model.slice(0, model.indexOf('/'))
+    : provider;
+  const catalogModel = provider === 'wrenyard' && model.includes('/')
+    ? model.slice(model.indexOf('/') + 1)
+    : model;
+  const canonical = canonicalizeBuiltinPublicModelId(`${catalogProvider}/${catalogModel}`);
+  const separator = canonical.indexOf('/');
+  if (separator <= 0) return undefined;
+  const exactProvider = canonical.slice(0, separator);
+  const exactModel = canonical.slice(separator + 1);
+  const definition = BUILTIN_CATALOG
+    .provider(exactProvider)
+    ?.models.find((candidate) => candidate.id === exactModel);
+  return definition?.capabilities ? [...definition.capabilities] : undefined;
+}
+
 export interface PersistedModelSelectionRepair {
   provider: string;
   model: string;
@@ -230,6 +265,10 @@ function projectModelGroups(
           providerLabel,
           model,
           label: sourceLabel,
+          ...(() => {
+            const inputTypes = catalogInputTypes(provider, model);
+            return inputTypes ? { inputTypes } : {};
+          })(),
           ...(typeof rawModel.description === 'string' && rawModel.description
             ? { description: rawModel.description.slice(0, 500) }
             : {}),

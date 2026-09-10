@@ -184,6 +184,95 @@ describe('resolveEffectiveTaskSettings precedence', () => {
   })
 })
 
+describe('resolveEffectiveTaskSettings requiredCapabilities hard minimum', () => {
+  it('keeps a builtin image requirement when user layers set text, [], and []', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'] } },
+      userGlobal: { dispatch: { requiredCapabilities: ['text'] } },
+      userTask: { dispatch: { requiredCapabilities: [] } },
+      invocation: { dispatch: { requiredCapabilities: [] } },
+    })
+    assert.deepEqual(result.dispatch.requiredCapabilities, ['image'])
+    // An explicit empty user array must not remove the task-declared image.
+    assert.equal(result.sources.dispatch?.requiredCapabilities, 'builtin_task')
+  })
+
+  it('does not let a single empty user layer erase a builtin image requirement', () => {
+    const withEmptyTask = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'] } },
+      userTask: { dispatch: { requiredCapabilities: [] } },
+    })
+    assert.deepEqual(withEmptyTask.dispatch.requiredCapabilities, ['image'])
+    assert.equal(withEmptyTask.sources.dispatch?.requiredCapabilities, 'builtin_task')
+
+    const withEmptyGlobal = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'] } },
+      userGlobal: { dispatch: { requiredCapabilities: [] } },
+    })
+    assert.deepEqual(withEmptyGlobal.dispatch.requiredCapabilities, ['image'])
+    assert.equal(withEmptyGlobal.sources.dispatch?.requiredCapabilities, 'builtin_task')
+  })
+
+  it('adds image to a task declaring text input without dropping text', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['text'] } },
+      invocation: { dispatch: { requiredCapabilities: ['image'] } },
+    })
+    assert.deepEqual(result.dispatch.requiredCapabilities, ['text', 'image'])
+    assert.equal(result.sources.dispatch?.requiredCapabilities, 'invocation')
+  })
+
+  it('restores inherited requirements when the user override is removed', () => {
+    const withOverride = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'] } },
+      userTask: { dispatch: { requiredCapabilities: ['text'] } },
+    })
+    assert.deepEqual(withOverride.dispatch.requiredCapabilities, ['text', 'image'])
+    assert.equal(withOverride.sources.dispatch?.requiredCapabilities, 'user_task')
+
+    // Dropping the user-task override re-inherits the builtin image minimum.
+    const withoutOverride = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'] } },
+    })
+    assert.deepEqual(withoutOverride.dispatch.requiredCapabilities, ['image'])
+    assert.equal(withoutOverride.sources.dispatch?.requiredCapabilities, 'builtin_task')
+  })
+
+  it('keeps ordinary override semantics for requirements not declared by the task', () => {
+    const text = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { requiredCapabilities: ['image'] } },
+      userTask: { dispatch: { requiredCapabilities: ['text'] } },
+    })
+    assert.deepEqual(text.dispatch.requiredCapabilities, ['text'])
+    const empty = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { requiredCapabilities: ['image'] } },
+      invocation: { dispatch: { requiredCapabilities: [] } },
+    })
+    assert.deepEqual(empty.dispatch.requiredCapabilities, [])
+    assert.equal(empty.sources.dispatch?.requiredCapabilities, 'invocation')
+  })
+
+  it('leaves requiredCapabilities absent when no layer declares any', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { expectedTps: 10 } },
+    })
+    assert.equal(result.dispatch.requiredCapabilities, undefined)
+    assert.equal(result.sources.dispatch?.requiredCapabilities, undefined)
+  })
+
+  it('preserves ordinary field precedence unaffected by the capability minimum', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiredCapabilities: ['image'], expectedTps: 3 } },
+      userGlobal: { dispatch: { requiredCapabilities: ['text'], expectedTps: 20 } },
+      invocation: { dispatch: { expectedTps: 9 } },
+    })
+    assert.deepEqual(result.dispatch.requiredCapabilities, ['text', 'image'])
+    assert.equal(result.dispatch.expectedTps, 9)
+    assert.equal(result.sources.dispatch?.expectedTps, 'invocation')
+    assert.equal(result.sources.dispatch?.requiredCapabilities, 'user_global')
+  })
+})
+
 describe('resolveEffectiveTaskSettings mode switching', () => {
   it('ignores an inherited explicit reference when a higher layer is automatic', () => {
     const result = resolveEffectiveTaskSettings(
