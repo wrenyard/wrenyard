@@ -21,8 +21,8 @@ func TestMain(m *testing.M) {
       "codex-luna":{"client":"codex","provider":"codex","model":"gpt-5.6-luna","mode":"native"},
       "codex-spark":{"client":"codex","provider":"codex-spark","model":"gpt-5.3-codex-spark","mode":"native"},
       "cb-hy":{"client":"codebuddy","provider":"codebuddy","model":"hy4-preview","mode":"native"},
-      "cb-ds":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4-pro","mode":"native"},
-      "cb-dsf":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4-flash","mode":"native"},
+      "cb-ds":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},
+      "cb-dsf":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},
       "cb-minimax":{"client":"codebuddy","provider":"codebuddy","model":"minimax-m3","mode":"native"},
       "cb-kimi":{"client":"codebuddy","provider":"codebuddy","model":"kimi-k3","mode":"native"},
       "cb-glm":{"client":"codebuddy","provider":"codebuddy","model":"glm-5.3","mode":"native"},
@@ -411,8 +411,7 @@ func TestDispatchPlanCodeBuddyIOAAdmissionMaterializesWireModels(t *testing.T) {
 	}
 
 	cases := []struct{ label, canonical, wire string }{
-		{"deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-flash-ioa"},
-		{"deepseek-v4-pro", "deepseek-v4-pro", "deepseek-v4-pro-ioa"},
+		{"deepseek-v4.1-flash", "deepseek-v4.1-flash", "deepseek-v4.1-flash-ioa"},
 		{"hy4-preview", "hy4-preview", "hy4-preview-ioa"},
 		{"hy3", "hy3", "hy3-ioa"},
 		{"minimax-m3", "minimax-m3", "minimax-m3-ioa"},
@@ -530,7 +529,7 @@ func TestDispatchPlanCodeBuddyExpectedWireMismatchFailsClosed(t *testing.T) {
 	seedCodeBuddyNativePlan(t, profileID, "hy4-preview")
 	// Scope and environment match, but the expected wire model is for a
 	// different canonical plan.
-	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "deepseek-v4-pro-ioa")
+	setCodeBuddyExpectedTuple(t, active.Scope, active.Environment, "deepseek-v4.1-flash-ioa")
 	if _, err := dispatchPlanForProfile(profileID); err == nil {
 		t.Fatal("expected-wire mismatch must fail closed before materialization")
 	}

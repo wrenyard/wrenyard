@@ -146,7 +146,7 @@ test('client model availability follows protocol intersection and Grok compatibi
         protocols: ['openai_chat', 'anthropic_messages'],
       },
       {
-        id: 'deepseek', publicId: 'codebuddy/deepseek-v4-flash', provider: 'codebuddy', displayName: 'DeepSeek V4 Flash',
+        id: 'deepseek', publicId: 'codebuddy/deepseek-v4.1-flash', provider: 'codebuddy', displayName: 'DeepSeek V4.1 Flash',
         protocols: ['openai_chat'],
       },
       {

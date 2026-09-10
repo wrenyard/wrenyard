@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  DEEPSEEK_FLASH_PRICE_CHANGE_NOTICE_URL,
   DEEPSEEK_REFERENCE_PRICE_CHECKED_AT,
   DEEPSEEK_REFERENCE_PRICE_SOURCE_URL,
   resolveDeepSeekReferencePricing,
@@ -17,7 +16,6 @@ import type {
 } from '../src/deepseek-pricing.js';
 
 const CURRENT_DOCS = DEEPSEEK_REFERENCE_PRICE_SOURCE_URL;
-const CHANGE_NOTICE = DEEPSEEK_FLASH_PRICE_CHANGE_NOTICE_URL;
 
 /**
  * Per-1M tuples are asserted in (inputCacheHit, inputCacheMiss, output) order,
@@ -29,7 +27,6 @@ interface ExpectedMeta {
   basis: DeepSeekPricingBasis;
   includesPeak: boolean;
   includesOffPeak: boolean;
-  includesFlashPriceChange: boolean;
   sources: readonly string[];
 }
 
@@ -59,22 +56,14 @@ function flashUsd(
   at: DeepSeekPricingInstant,
   through?: DeepSeekPricingInstant,
 ): DeepSeekReferencePricing {
-  return pricing('deepseek-v4-flash', 'USD', at, through);
+  return pricing('deepseek-flash', 'USD', at, through);
 }
 
 function flashCny(
   at: DeepSeekPricingInstant,
   through?: DeepSeekPricingInstant,
 ): DeepSeekReferencePricing {
-  return pricing('deepseek-v4-flash', 'CNY', at, through);
-}
-
-function proUsd(at: DeepSeekPricingInstant): DeepSeekReferencePricing {
-  return pricing('deepseek-v4-pro', 'USD', at);
-}
-
-function proCny(at: DeepSeekPricingInstant): DeepSeekReferencePricing {
-  return pricing('deepseek-v4-pro', 'CNY', at);
+  return pricing('deepseek-flash', 'CNY', at, through);
 }
 
 function assertMeta(result: DeepSeekReferencePricing, expected: ExpectedMeta): void {
@@ -82,7 +71,6 @@ function assertMeta(result: DeepSeekReferencePricing, expected: ExpectedMeta): v
   assert.equal(result.basis, expected.basis);
   assert.equal(result.includesPeak, expected.includesPeak);
   assert.equal(result.includesOffPeak, expected.includesOffPeak);
-  assert.equal(result.includesFlashPriceChange, expected.includesFlashPriceChange);
   assert.deepEqual([...result.sources], [...expected.sources]);
 }
 
@@ -97,8 +85,8 @@ function assertRate(
   assert.equal(result.outputPerMillion, out);
 }
 
-/** Point lookup on post-cut flash USD, asserting tier, rate, flag, and source. */
-function assertPostCutPoint(rateCase: RateCase): void {
+/** Point lookup asserting tier, rate, flags, and source. */
+function assertPoint(rateCase: RateCase): void {
   const [instant, tier, hit, miss, out] = rateCase;
   const result = flashUsd(instant);
   assertMeta(result, {
@@ -106,14 +94,29 @@ function assertPostCutPoint(rateCase: RateCase): void {
     basis: 'point_in_time',
     includesPeak: tier === 'peak',
     includesOffPeak: tier === 'off_peak',
-    includesFlashPriceChange: true,
-    sources: [CHANGE_NOTICE],
+    sources: [CURRENT_DOCS],
   });
   assertRate(result, hit, miss, out);
 }
 
 describe('resolveDeepSeekReferencePricing', () => {
-  it('rejects non-finite dates and a reversed horizon with RangeError', () => {
+  it('rejects invalid models, currencies, non-finite dates, and a reversed horizon', () => {
+    // Retired DeepSeek model ids are no longer priced.
+    assert.throws(
+      () =>
+        pricing('deepseek-v4-flash' as DeepSeekPricingModel, 'USD', '2026-09-10T04:00:00.000Z'),
+      RangeError,
+    );
+    assert.throws(
+      () =>
+        pricing('deepseek-v4-pro' as DeepSeekPricingModel, 'USD', '2026-09-10T04:00:00.000Z'),
+      RangeError,
+    );
+    assert.throws(
+      () =>
+        pricing('deepseek-flash', 'EUR' as DeepSeekPricingCurrency, '2026-09-10T04:00:00.000Z'),
+      RangeError,
+    );
     assert.throws(() => flashUsd('not-a-date'), RangeError);
     assert.throws(() => flashUsd(''), RangeError);
     assert.throws(() => flashUsd(new Date(NaN)), RangeError);
@@ -124,41 +127,8 @@ describe('resolveDeepSeekReferencePricing', () => {
     );
   });
 
-  it('flash USD just before the cut uses the old weekday-peak table', () => {
-    const instant = '2026-09-10T03:59:59.999Z'; // Thursday, peak window [01:00, 04:00)
-    const result = flashUsd(instant);
-    assert.equal(result.model, 'deepseek-v4-flash');
-    assert.equal(result.currency, 'USD');
-    assertMeta(result, {
-      tier: 'peak',
-      basis: 'point_in_time',
-      includesPeak: true,
-      includesOffPeak: false,
-      includesFlashPriceChange: false,
-      sources: [CURRENT_DOCS],
-    });
-    assertRate(result, 0.014, 0.44, 1.32);
-    assert.equal(result.windowStart, instant);
-    assert.equal(result.windowEnd, instant);
-  });
-
-  it('flash USD switches to the new table exactly at and just after the cut', () => {
-    for (const instant of ['2026-09-10T04:00:00.000Z', '2026-09-10T04:00:00.001Z']) {
-      const result = flashUsd(instant);
-      assertMeta(result, {
-        tier: 'off_peak',
-        basis: 'point_in_time',
-        includesPeak: false,
-        includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CHANGE_NOTICE],
-      });
-      assertRate(result, 0.003, 0.15, 0.6);
-    }
-  });
-
-  it('keeps post-cut weekday windows half-open: starts are peak, ends off-peak', () => {
-    // Monday 2026-09-14 lies entirely after the Thursday cut.
+  it('flash USD peak endpoints are half-open: starts are peak, ends off-peak', () => {
+    // Monday 2026-09-14 is a normal weekday after the retired pre-cut era.
     const cases: readonly RateCase[] = [
       ['2026-09-14T01:00:00.000Z', 'peak', 0.006, 0.3, 1.2], // [01:00, 04:00) start is peak
       ['2026-09-14T04:00:00.000Z', 'off_peak', 0.003, 0.15, 0.6], // window end exclusive
@@ -166,7 +136,7 @@ describe('resolveDeepSeekReferencePricing', () => {
       ['2026-09-14T10:00:00.000Z', 'off_peak', 0.003, 0.15, 0.6], // window end exclusive
     ];
     for (const rateCase of cases) {
-      assertPostCutPoint(rateCase);
+      assertPoint(rateCase);
     }
   });
 
@@ -178,145 +148,68 @@ describe('resolveDeepSeekReferencePricing', () => {
       ['2026-09-14T06:00:00.000Z', 'peak', 0.006, 0.3, 1.2], // next Monday
     ];
     for (const rateCase of cases) {
-      assertPostCutPoint(rateCase);
+      assertPoint(rateCase);
     }
   });
 
-  it('flash CNY: exact pre/post-cut off-peak and post-cut peak rates', () => {
-    const preCut = flashCny('2026-09-10T00:00:00.000Z'); // pre-cut off-peak
-    assertMeta(preCut, {
+  it('flash CNY off-peak and peak rates', () => {
+    const offPeak = flashCny('2026-09-14T00:00:00.000Z');
+    assertMeta(offPeak, {
       tier: 'off_peak',
       basis: 'point_in_time',
       includesPeak: false,
       includesOffPeak: true,
-      includesFlashPriceChange: false,
       sources: [CURRENT_DOCS],
     });
-    assertRate(preCut, 0.05, 1.5, 4.5);
+    assertRate(offPeak, 0.02, 1, 4);
 
-    const postOffPeak = flashCny('2026-09-10T04:00:00.000Z'); // exact cut instant
-    assertMeta(postOffPeak, {
-      tier: 'off_peak',
-      basis: 'point_in_time',
-      includesPeak: false,
-      includesOffPeak: true,
-      includesFlashPriceChange: true,
-      sources: [CHANGE_NOTICE],
-    });
-    assertRate(postOffPeak, 0.02, 1, 4);
-
-    const postPeak = flashCny('2026-09-10T06:00:00.000Z');
-    assertMeta(postPeak, {
+    const peak = flashCny('2026-09-14T06:00:00.000Z');
+    assertMeta(peak, {
       tier: 'peak',
       basis: 'point_in_time',
       includesPeak: true,
       includesOffPeak: false,
-      includesFlashPriceChange: true,
-      sources: [CHANGE_NOTICE],
+      sources: [CURRENT_DOCS],
     });
-    assertRate(postPeak, 0.04, 2, 8);
-  });
-
-  it('pro USD is unchanged across the flash cut while its tier follows the clock', () => {
-    const peakBefore = proUsd('2026-09-10T03:00:00.000Z');
-    const peakAfter = proUsd('2026-09-10T06:00:00.000Z');
-    const offPeakBefore = proUsd('2026-09-10T00:00:00.000Z');
-    const offPeakAtCut = proUsd('2026-09-10T04:00:00.000Z');
-    const offPeakAfter = proUsd('2026-09-10T05:00:00.000Z');
-    for (const result of [peakBefore, peakAfter]) {
-      assertMeta(result, {
-        tier: 'peak',
-        basis: 'point_in_time',
-        includesPeak: true,
-        includesOffPeak: false,
-        includesFlashPriceChange: false,
-        sources: [CURRENT_DOCS],
-      });
-      assertRate(result, 0.044, 1.32, 3.96);
-    }
-    for (const result of [offPeakBefore, offPeakAtCut, offPeakAfter]) {
-      assertMeta(result, {
-        tier: 'off_peak',
-        basis: 'point_in_time',
-        includesPeak: false,
-        includesOffPeak: true,
-        includesFlashPriceChange: false,
-        sources: [CURRENT_DOCS],
-      });
-      assertRate(result, 0.022, 0.66, 1.98);
-    }
-  });
-
-  it('pro CNY is unchanged across the flash cut while its tier follows the clock', () => {
-    const peakBefore = proCny('2026-09-10T03:00:00.000Z');
-    const peakAfter = proCny('2026-09-10T06:00:00.000Z');
-    const offPeakBefore = proCny('2026-09-10T00:00:00.000Z');
-    const offPeakAtCut = proCny('2026-09-10T04:00:00.000Z');
-    const offPeakAfter = proCny('2026-09-10T05:00:00.000Z');
-    for (const result of [peakBefore, peakAfter]) {
-      assertMeta(result, {
-        tier: 'peak',
-        basis: 'point_in_time',
-        includesPeak: true,
-        includesOffPeak: false,
-        includesFlashPriceChange: false,
-        sources: [CURRENT_DOCS],
-      });
-      assertRate(result, 0.3, 9, 27);
-    }
-    for (const result of [offPeakBefore, offPeakAtCut, offPeakAfter]) {
-      assertMeta(result, {
-        tier: 'off_peak',
-        basis: 'point_in_time',
-        includesPeak: false,
-        includesOffPeak: true,
-        includesFlashPriceChange: false,
-        sources: [CURRENT_DOCS],
-      });
-      assertRate(result, 0.15, 4.5, 13.5);
-    }
+    assertRate(peak, 0.04, 2, 8);
   });
 
   describe('closed horizons', () => {
-    it('a horizon through the cut instant returns the conservative old-peak maximum', () => {
-      const at = '2026-09-10T03:59:59.999Z';
-      const through = '2026-09-10T04:00:00.000Z';
+    it('a horizon from Friday 10:00 through Monday 01:00 includes the Monday peak endpoint', () => {
+      const at = '2026-09-11T10:00:00.000Z'; // Friday off-peak (window end exclusive)
+      const through = '2026-09-14T01:00:00.000Z'; // Monday window start inclusive
       const result = flashUsd(at, through);
       assertMeta(result, {
         tier: 'peak',
         basis: 'closed_horizon_max',
         includesPeak: true,
         includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CURRENT_DOCS, CHANGE_NOTICE],
+        sources: [CURRENT_DOCS],
       });
-      assertRate(result, 0.014, 0.44, 1.32);
-      assert.equal(result.windowStart, at);
+      assertRate(result, 0.006, 0.3, 1.2);
       assert.equal(result.windowEnd, through);
     });
 
     it('a closed horizon ending at 06:00 includes the peak endpoint', () => {
-      const result = flashUsd('2026-09-10T04:00:00.000Z', '2026-09-10T06:00:00.000Z');
+      const result = flashUsd('2026-09-14T04:00:00.000Z', '2026-09-14T06:00:00.000Z');
       assertMeta(result, {
         tier: 'peak',
         basis: 'closed_horizon_max',
         includesPeak: true,
         includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CHANGE_NOTICE],
+        sources: [CURRENT_DOCS],
       });
       assertRate(result, 0.006, 0.3, 1.2);
     });
 
     it('the same window ending one millisecond before 06:00 stays off-peak', () => {
-      const result = flashUsd('2026-09-10T04:00:00.000Z', '2026-09-10T05:59:59.999Z');
+      const result = flashUsd('2026-09-14T04:00:00.000Z', '2026-09-14T05:59:59.999Z');
       assertMeta(result, {
         tier: 'off_peak',
         basis: 'closed_horizon_max',
         includesPeak: false,
         includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CHANGE_NOTICE],
+        sources: [CURRENT_DOCS],
       });
       assertRate(result, 0.003, 0.15, 0.6);
     });
@@ -328,70 +221,39 @@ describe('resolveDeepSeekReferencePricing', () => {
         basis: 'closed_horizon_max',
         includesPeak: false,
         includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CHANGE_NOTICE],
+        sources: [CURRENT_DOCS],
       });
       assertRate(result, 0.003, 0.15, 0.6);
     });
 
-    it('a horizon from Friday 10:00 through Monday 01:00 includes the Monday peak endpoint', () => {
-      const at = '2026-09-11T10:00:00.000Z'; // Friday off-peak (window end exclusive)
-      const through = '2026-09-14T01:00:00.000Z'; // Monday window start inclusive
-      const result = flashUsd(at, through);
+    it('a >= 1 week horizon covers both tiers with the peak maximum', () => {
+      const result = flashUsd('2026-09-10T04:00:00.000Z', '2026-09-17T04:00:00.000Z');
       assertMeta(result, {
         tier: 'peak',
         basis: 'closed_horizon_max',
         includesPeak: true,
         includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CHANGE_NOTICE],
+        sources: [CURRENT_DOCS],
       });
       assertRate(result, 0.006, 0.3, 1.2);
-      assert.equal(result.windowEnd, through);
-    });
-
-    it('a horizon spanning pre-cut off-peak and post-cut peak resolves to the real old-peak tuple', () => {
-      // 2026-09-10T00:00Z → 06:00Z covers pre-cut off-peak and post-cut peak,
-      // but it MUST also contain the intervening old peak [01:00, 04:00), which
-      // dominates every component. A mixed .007/.30/1.2 snapshot is temporally
-      // impossible, so the conservative maximum is exactly the old peak tuple.
-      const result = flashUsd('2026-09-10T00:00:00.000Z', '2026-09-10T06:00:00.000Z');
-      assertMeta(result, {
-        tier: 'peak',
-        basis: 'closed_horizon_max',
-        includesPeak: true,
-        includesOffPeak: true,
-        includesFlashPriceChange: true,
-        sources: [CURRENT_DOCS, CHANGE_NOTICE],
-      });
-      assertRate(result, 0.014, 0.44, 1.32);
-      assert.notDeepEqual(
-        [
-          result.inputCacheHitPerMillion,
-          result.inputCacheMissPerMillion,
-          result.outputPerMillion,
-        ],
-        [0.007, 0.3, 1.2],
-      );
     });
   });
 
-  it('reports checkedAt 2026-09-09 and returns frozen, deduplicated sources', () => {
+  it('reports checkedAt 2026-09-10 and returns frozen, deduplicated sources', () => {
     const results = [
-      flashUsd('2026-09-10T03:59:59.999Z'),
-      flashUsd('2026-09-10T04:00:00.000Z'),
-      flashUsd('2026-09-10T00:00:00.000Z', '2026-09-10T06:00:00.000Z'),
-      proCny('2026-09-10T03:00:00.000Z'),
+      flashUsd('2026-09-14T01:00:00.000Z'),
+      flashUsd('2026-09-14T04:00:00.000Z'),
+      flashUsd('2026-09-14T00:00:00.000Z', '2026-09-14T06:00:00.000Z'),
+      flashCny('2026-09-14T06:00:00.000Z'),
     ];
     for (const result of results) {
-      assert.equal(result.checkedAt, '2026-09-09');
+      assert.equal(result.checkedAt, '2026-09-10');
       assert.equal(result.checkedAt, DEEPSEEK_REFERENCE_PRICE_CHECKED_AT);
       assert.ok(Object.isFrozen(result));
       assert.ok(Object.isFrozen(result.sources));
       assert.equal(new Set(result.sources).size, result.sources.length);
     }
-    // A spanning horizon carries both provenance URLs exactly once each.
-    const spanning = flashUsd('2026-09-10T00:00:00.000Z', '2026-09-10T06:00:00.000Z');
-    assert.deepEqual([...spanning.sources], [CURRENT_DOCS, CHANGE_NOTICE]);
+    const single = flashUsd('2026-09-14T01:00:00.000Z');
+    assert.deepEqual([...single.sources], [CURRENT_DOCS]);
   });
 });

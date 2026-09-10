@@ -131,7 +131,7 @@ export type TaskDispatchEligibleResult =
  */
 export interface ResolveExplicitDispatchInput {
   taskName: string
-  /** Exact canonical dynamic target, e.g. `codebuddy/deepseek-v4-flash:cb`.
+  /** Exact canonical dynamic target, e.g. `codebuddy/deepseek-v4.1-flash:cb`.
    *  Never a policy alias. */
   exactRuntime: string
   /** Sole eligibility constraint beyond intrinsic availability. */

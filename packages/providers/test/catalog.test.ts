@@ -1,3 +1,4 @@
+import { resolveModelSpeed } from '@wrenyard/catalog';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -9,10 +10,9 @@ import {
 
 test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
-  assert.equal(catalog.resolveRun('codebuddy', 'codebuddy', 'deepseek-v4-flash').mode, 'native');
+  assert.equal(catalog.resolveRun('codebuddy', 'codebuddy', 'deepseek-v4.1-flash').mode, 'native');
   const modelIds = [
-    'deepseek-v4-flash',
-    'deepseek-v4-pro',
+    'deepseek-v4.1-flash',
     'hy4-preview',
     'hy3',
     'minimax-m3',
@@ -27,6 +27,28 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
   for (const modelId of modelIds) {
     assert.equal(catalog.resolveRun('dsh', 'codebuddy', modelId).protocol, 'openai_chat');
     assert.equal(catalog.resolveGatewayModel('openai_chat', `codebuddy/${modelId}`).upstreamModel, modelId);
+  }
+  // Both new Flash entries keep provider-local canonical identities.
+  assert.equal(catalog.resolveRun('dsh', 'tokenhub', 'deepseek/deepseek-flash').protocol, 'openai_chat');
+  // All builtin deepseek identities are exactly the two new Flash entries.
+  const deepseekIds = [
+    ...new Set(
+      BUILTIN_PROVIDERS.flatMap((p) => p.models.map((m) => m.id)).filter((id) => id.includes('deepseek')),
+    ),
+  ].sort();
+  assert.deepEqual(deepseekIds, ['deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
+  // Retired CodeBuddy/TokenHub deepseek ids are gone from the builtin catalog.
+  for (const oldId of [
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
+    'deepseek-v4-flash-202605',
+    'deepseek-v4-pro-202606',
+    'deepseek/deepseek-v4-flash-vision-exp',
+  ]) {
+    assert.ok(
+      !BUILTIN_PROVIDERS.some((p) => p.models.some((m) => m.id === oldId)),
+      `${oldId} must be retired from the builtin catalog`,
+    );
   }
   const legacy = catalog.resolveGatewayModel('openai_chat', 'codebuddy/hy4-preview-ioa');
   assert.equal(legacy.model.id, 'hy4-preview');
@@ -76,7 +98,7 @@ test('derived task plans key representative native and gateway combinations cano
     client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native',
   });
   assert.equal(plans['codebuddy/hy3:gk'], undefined);
-  assert.equal(plans['codebuddy/deepseek-v4-flash:gk'], undefined);
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:gk'], undefined);
 });
 
 test('derived task plans carry canonical keys only — no legacy profile, policy, or alias ids', () => {
@@ -147,23 +169,24 @@ test('Codex/OpenAI GPT plans carry xhigh reasoning effort and never max/ultra', 
   }
   // Levels are declared product metadata, never inferred: unrelated plans stay unset.
   assert.equal(plans['kimi-coding/k3:cc'].reasoningEffort, undefined);
-  assert.equal(plans['codebuddy/deepseek-v4-flash:cb'].reasoningEffort, undefined);
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].reasoningEffort, undefined);
 });
 
 test('reference metadata has real provenance and unknown fields stay absent', () => {
   const catalog = createBuiltinCatalog();
   const codebuddy = catalog.provider('codebuddy')!;
-  const flash = codebuddy.models.find((entry) => entry.id === 'deepseek-v4-flash')!;
-  assert.equal(flash.pricing?.inputUsdPerMillion, 0.44);
-  assert.equal(flash.pricing?.cachedInputUsdPerMillion, 0.014);
-  assert.equal(flash.pricing?.outputUsdPerMillion, 1.32);
+  const flash = codebuddy.models.find((entry) => entry.id === 'deepseek-v4.1-flash')!;
+  assert.equal(flash.pricing?.inputUsdPerMillion, 0.3);
+  assert.equal(flash.pricing?.cachedInputUsdPerMillion, 0.006);
+  assert.equal(flash.pricing?.outputUsdPerMillion, 1.2);
   assert.equal(flash.pricing?.source, 'https://api-docs.deepseek.com/quick_start/pricing/');
-  assert.deepEqual(flash.capabilities, ['text']);
+  assert.deepEqual(flash.capabilities, ['text', 'image']);
   assert.equal(flash.pricing?.source.includes('catalog-default'), false);
-  // External decode benchmark, distinct from any local agent_turn_v1 measurement.
-  assert.equal(flash.speed?.tps, 125.7);
-  assert.equal(flash.speed?.source, 'https://artificialanalysis.ai/models/deepseek-v4-flash/');
-  assert.notEqual(flash.speed?.source.includes('local'), true);
+  // Local benchmark speed; source is a local-benchmark id, never an external AA page.
+  assert.equal(flash.speed?.tps, 200.5);
+  assert.equal(flash.speed?.source, 'local-benchmark:2026-09-10:codebuddy');
+  assert.ok(flash.speed?.basis?.includes('synthetic_stream_v1'));
+  assert.equal(flash.speed?.checkedAt, '2026-09-10');
 
   // GLM-5.3 carries the Z.ai official list price; no sale/invented default.
   const glm = codebuddy.models.find((entry) => entry.id === 'glm-5.3')!;
@@ -283,12 +306,14 @@ test('built-in models carry auditable intelligence evidence per the verified tab
   assert.equal(tier('codebuddy', 'hy4-preview'), 'mid');
   assert.equal(ev('codebuddy', 'hy4-preview').status, 'product_provisional');
   assert.equal(ev('codebuddy', 'hy4-preview').score, undefined);
-  assert.equal(tier('codebuddy', 'deepseek-v4-flash'), 'mid');
-  assert.equal(ev('codebuddy', 'deepseek-v4-flash').status, 'product_provisional');
-  assert.equal(ev('codebuddy', 'deepseek-v4-flash').score, 35);
-  assert.equal(tier('codebuddy', 'deepseek-v4-pro'), 'mid');
-  assert.equal(ev('codebuddy', 'deepseek-v4-pro').status, 'product_provisional');
-  assert.equal(ev('codebuddy', 'deepseek-v4-pro').score, 36);
+  assert.equal(tier('codebuddy', 'deepseek-v4.1-flash'), 'mid');
+  assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').status, 'product_provisional');
+  assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').score, undefined);
+  assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').checkedAt, '2026-09-10');
+  assert.equal(tier('tokenhub', 'deepseek/deepseek-flash'), 'mid');
+  assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').status, 'product_provisional');
+  assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').score, undefined);
+  assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').checkedAt, '2026-09-10');
   assert.equal(tier('anthropic-api', 'claude-fable-5'), 'premium');
   assert.equal(ev('anthropic-api', 'claude-fable-5').status, 'product_provisional');
   assert.equal(ev('anthropic-api', 'claude-fable-5').score, undefined);
@@ -327,9 +352,6 @@ test('built-in models carry auditable intelligence evidence per the verified tab
   for (const [provider, model] of [
     ['cursor', 'composer-2.5'],
     ['codex', 'gpt-5.3-codex-spark'],
-    ['tokenhub', 'deepseek-v4-flash-202605'],
-    ['tokenhub', 'deepseek-v4-pro-202606'],
-    ['tokenhub', 'deepseek/deepseek-v4-flash-vision-exp'],
     ['qwen-coding', 'qwen3-coder-plus'],
     ['qwen-coding', 'qwen3.5-plus'],
     ['qwen', 'qwen3.7-flash'],
@@ -347,7 +369,7 @@ test('every registered built-in model has a valid authoritative speed default', 
     provider.models.map((model) => ({ provider: provider.id, model })),
   );
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
-  assert.equal(uniqueIds.size, 44, 'the complete exact registered model-id inventory is covered');
+  assert.equal(uniqueIds.size, 41, 'the complete exact registered model-id inventory is covered');
 
   for (const { provider, model } of entries) {
     assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);
@@ -360,7 +382,7 @@ test('every registered built-in model has a valid authoritative speed default', 
       assert.match(model.speed.basis!, /exact standard cursor\/composer-2\.5/u);
       assert.doesNotMatch(model.speed.basis!, /external benchmark/u);
       assert.match(model.speed.basis!, /not composer-2\.5-fast/u);
-    } else {
+    } else if (!model.speed.source.startsWith('local-benchmark')) {
       assert.match(model.speed.source, /^https:\/\//u, `${provider}/${model.id} needs a public evidence URL`);
     }
   }
@@ -375,7 +397,6 @@ test('every registered built-in model has a valid authoritative speed default', 
   const representative = new Map(entries.map(({ model }) => [model.id, model.speed.tps]));
   assert.equal(representative.get('gpt-5.3-codex-spark'), 1000);
   assert.equal(representative.get('gpt-5.6-terra'), 98.4);
-  assert.equal(representative.get('deepseek-v4-pro-202606'), 76.9);
   assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
   assert.equal(representative.get('qwen3.7-flash'), 111.12);
   assert.equal(representative.get('doubao-seed-2-0-lite-260215'), 35.1);
@@ -428,13 +449,11 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   });
   assert.deepEqual(route('tokenhub', 'hy4-preview').canonicalModel, route('codebuddy', 'hy4-preview').canonicalModel);
 
-  // Dated DeepSeek routes are distinct versions. Current provider aliases and
+  // DeepSeek routes remain provider-local. Current provider aliases and
   // matching marketing labels must never fold their historical usage into an
   // unversioned route.
-  assert.equal(route('codebuddy', 'deepseek-v4-flash').canonicalModel, undefined);
-  assert.equal(route('tokenhub', 'deepseek-v4-flash-202605').canonicalModel, undefined);
-  assert.equal(route('codebuddy', 'deepseek-v4-pro').canonicalModel, undefined);
-  assert.equal(route('tokenhub', 'deepseek-v4-pro-202606').canonicalModel, undefined);
+  assert.equal(route('codebuddy', 'deepseek-v4.1-flash').canonicalModel, undefined);
+  assert.equal(route('tokenhub', 'deepseek/deepseek-flash').canonicalModel, undefined);
 
   const groups = new Map<string, Set<string>>();
   for (const provider of BUILTIN_PROVIDERS) {
@@ -448,4 +467,20 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   for (const [id, labels] of groups) {
     assert.equal(labels.size, 1, `${id} must have one canonical display-name source`);
   }
+});
+
+
+test('new Flash ignores retired model speed history and TokenHub baseline is marked unmeasured', () => {
+  const catalog = createBuiltinCatalog();
+  const provider = catalog.provider('codebuddy')!;
+  const flash = provider.models.find(model => model.id === 'deepseek-v4.1-flash')!;
+  const speed = resolveModelSpeed(provider, flash, ['deepseek-v4-flash', 'deepseek-v4-pro'].map(model => ({
+    provider: 'codebuddy', model, tps: 999, sampleCount: 30, checkedAt: new Date().toISOString(),
+  })));
+  assert.equal(speed.source, 'catalog_default');
+  assert.equal(speed.tps, 200.5);
+  const tokenhub = catalog.provider('tokenhub')!.models.find(model => model.id === 'deepseek/deepseek-flash')!;
+  assert.equal(tokenhub.speed?.tps, 207);
+  assert.equal(tokenhub.speed?.conservative, true);
+  assert.match(tokenhub.speed?.basis ?? '', /TokenHub endpoint is unmeasured/);
 });

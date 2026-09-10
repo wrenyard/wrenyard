@@ -327,11 +327,11 @@ function unknownQuotaSnapshotService(now: () => number = () => Date.now()): Auto
 /** CodeBuddy native cb profile plus a same-model grok gateway variant, used by
  *  client-collapse / confirmed-free focused tests in isolation. */
 const CODEBUDDY_NATIVE_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:cb',
+  exactAgentRuntime: 'codebuddy/deepseek-v4.1-flash:cb',
   profile: 'codebuddy-native',
   client: 'cb',
   provider: 'codebuddy',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-v4.1-flash',
   intelligence: 'high',
   tps: 90,
   inputUsd: 0.2,
@@ -339,15 +339,15 @@ const CODEBUDDY_NATIVE_PROFILE: ProfileFixture = {
 }
 
 const DEEPSEEK_FLASH_PRICING_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:cb',
+  exactAgentRuntime: 'codebuddy/deepseek-v4.1-flash:cb',
   profile: 'codebuddy-deepseek-flash',
   client: 'cb',
   provider: 'codebuddy',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-v4.1-flash',
   intelligence: 'high',
   tps: 91,
-  inputUsd: 0.44,
-  outputUsd: 1.32,
+  inputUsd: 0.3,
+  outputUsd: 1.2,
 }
 
 const DEEPSEEK_GLM_PRICE_PEER: ProfileFixture = {
@@ -363,11 +363,11 @@ const DEEPSEEK_GLM_PRICE_PEER: ProfileFixture = {
 }
 
 const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'codebuddy/deepseek-v4-flash:gk',
+  exactAgentRuntime: 'codebuddy/deepseek-v4.1-flash:gk',
   profile: 'codebuddy-grok',
   client: 'gk',
   provider: 'codebuddy',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-v4.1-flash',
   intelligence: 'high',
   tps: 90,
   inputUsd: 0.2,
@@ -376,7 +376,7 @@ const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
 }
 
 /** A different, more expensive canonical model used to prove distinct models
- *  never collapse with the codebuddy/deepseek-v4-flash variants above. */
+ *  never collapse with the codebuddy/deepseek-v4.1-flash variants above. */
 const CODEBUDDY_MINIMAX_PROFILE: ProfileFixture = {
   exactAgentRuntime: 'codebuddy/minimax-m3:cb',
   profile: 'codebuddy-minimax',
@@ -2429,7 +2429,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.notEqual(backward.exact_runtime, CODEBUDDY_GLM_FLASH_PROFILE.exactAgentRuntime)
   })
 
-  it('prices automatic DeepSeek Flash from the request horizon without discount bypass or stale post-cut gating', async () => {
+  it('prices automatic DeepSeek Flash from the request horizon without discount bypass', async () => {
     const previewAt = async (
       at: string,
       timeoutMs: number,
@@ -2459,32 +2459,16 @@ describe('daemon task-settings-service (no-model)', () => {
       return row
     }
 
-    const preOffPeak = await previewAt('2026-09-09T04:30:00.000Z', 120_000, 1.32)
-    assert.equal(preOffPeak.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.32)
-    assert.equal(preOffPeak.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 0.66)
-    assert.equal(preOffPeak.automatic_selection?.resolved.reference_pricing.output_usd_per_million, 0.66)
-
-    const crossing = await previewAt('2026-09-10T03:59:59.999Z', 1, 1.32)
-    assert.equal(crossing.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.32)
-    assert.equal(crossing.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 1.32)
-    assert.match(crossing.automatic_selection?.resolved.reference_pricing.source ?? '', /api-docs.*fe-static/)
-
     const atCut = await previewAt('2026-09-10T04:00:00.000Z', 120_000, 1.25)
     assert.equal(atCut.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.2)
     assert.equal(atCut.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 0.6)
     assert.equal(atCut.automatic_selection?.resolved.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(atCut.automatic_selection?.resolved.reference_pricing.source ?? '', /fe-static/)
+    assert.match(atCut.automatic_selection?.resolved.reference_pricing.source ?? '', /api-docs\.deepseek\.com/)
 
     const postPeak = await previewAt('2026-09-10T06:00:00.000Z', 120_000, 1.2)
     assert.equal(postPeak.automatic_selection?.resolved.auto_routing?.reference_output_usd_per_million, 1.2)
     assert.equal(postPeak.automatic_selection?.resolved.auto_routing?.routing_output_usd_per_million, 1.2)
 
-    const preRejected = await previewAt('2026-09-09T04:30:00.000Z', 120_000, 1.25)
-    assert.equal(preRejected.automatic_selection, undefined)
-    assert.equal(
-      preRejected.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')?.resolutionFailure?.code,
-      'price_limit',
-    )
     const postRejected = await previewAt('2026-09-10T04:00:00.000Z', 120_000, 1.1)
     assert.equal(postRejected.automatic_selection, undefined)
     assert.equal(
@@ -2520,11 +2504,11 @@ describe('daemon task-settings-service (no-model)', () => {
     }
 
     assert.equal(
-      await selectedAt('2026-09-09T06:30:00.000Z'),
+      await selectedAt('2026-09-11T06:30:00.000Z'),
       DEEPSEEK_GLM_PRICE_PEER.exactAgentRuntime,
     )
     assert.equal(
-      await selectedAt('2026-09-09T04:30:00.000Z'),
+      await selectedAt('2026-09-11T04:30:00.000Z'),
       DEEPSEEK_FLASH_PRICING_PROFILE.exactAgentRuntime,
     )
 
@@ -2547,7 +2531,7 @@ describe('daemon task-settings-service (no-model)', () => {
     const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
     const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
     assert.equal(row?.explicit?.resolved?.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(row?.explicit?.resolved?.reference_pricing.source ?? '', /fe-static/)
+    assert.match(row?.explicit?.resolved?.reference_pricing.source ?? '', /api-docs\.deepseek\.com/)
     assert.equal(row?.explicit?.resolved?.auto_routing, undefined)
 
     const run = await service.resolveForRun({
@@ -2558,7 +2542,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(run.mode, 'explicit')
     assert.ok(run.dispatch)
     assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(run.dispatch.reference_pricing.source, /fe-static/)
+    assert.match(run.dispatch.reference_pricing.source, /api-docs\.deepseek\.com/)
     assert.equal(run.dispatch.auto_routing, undefined)
   })
 

@@ -104,8 +104,7 @@ interface CodeBuddyAuthenticationAttributes {
 }
 
 const CODEBUDDY_IOA_UPSTREAM_MODELS: Readonly<Record<string, string>> = {
-  'deepseek-v4-flash': 'deepseek-v4-flash-ioa',
-  'deepseek-v4-pro': 'deepseek-v4-pro-ioa',
+  'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
   'hy4-preview': 'hy4-preview-ioa',
   'hy3': 'hy3-ioa',
   'minimax-m3': 'minimax-m3-ioa',
@@ -291,6 +290,46 @@ function codeBuddyStableScope(
 }
 
 /**
+ * Private per-credential native CodeBuddy Gateway headers keyed by the
+ * credential object identity (a WeakMap value, never an enumerable property),
+ * so the active snapshot and the runtime credential share the same
+ * atomically-read account context without ever exposing an identifier on the
+ * public credential or snapshot shape. Populated only from the single
+ * auth-file read already used to build each credential; never read anywhere
+ * except the openai_chat auth-header path.
+ */
+const codeBuddyNativeHeaders = new WeakMap<ProviderCredential, Readonly<Record<string, string>>>();
+
+/** Native Gateway header names, emitted only on a CodeBuddy openai_chat capability. */
+const CODEBUDDY_NATIVE_HEADER_NAMES = ['X-User-Id', 'X-Enterprise-Id', 'X-Tenant-Id', 'X-Domain'] as const;
+
+/**
+ * Builds the optional native Gateway headers from one already-parsed
+ * CodeBuddy auth read. Values come only from validated, nonempty fields
+ * (account.uid, account.enterpriseId, auth.domain across both nested and
+ * flat forms) and any value containing CR/LF is rejected to prevent header
+ * injection. No fabricated values are produced; absent fields are omitted.
+ */
+function codeBuddyNativeAuthHeaders(authState: ParsedCodeBuddyAuth): Readonly<Record<string, string>> | undefined {
+  const validated = (value: string | undefined): string | undefined => {
+    if (value === undefined || /[\r\n]/u.test(value)) return undefined;
+    return value;
+  };
+  const userId = validated(codeBuddyStableAccountField('uid', authState));
+  const enterpriseId = validated(codeBuddyStableAccountField('enterpriseId', authState));
+  const domain = validated(authState.domain);
+  if (userId === undefined && enterpriseId === undefined && domain === undefined) return undefined;
+  const headers: Record<string, string> = {};
+  if (userId !== undefined) headers['X-User-Id'] = userId;
+  if (enterpriseId !== undefined) {
+    headers['X-Enterprise-Id'] = enterpriseId;
+    headers['X-Tenant-Id'] = enterpriseId;
+  }
+  if (domain !== undefined) headers['X-Domain'] = domain;
+  return headers;
+}
+
+/**
  * Binds one already-read credential, its normalized environment, an optional
  * versioned stable scope, and read-free mapping/free closures into a single
  * immutable snapshot.
@@ -396,20 +435,17 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         path = codeBuddyAuthPath(platform, env, home);
         try {
           const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-          const auth = parsed.auth && typeof parsed.auth === 'object' && !Array.isArray(parsed.auth)
-            ? parsed.auth as Record<string, unknown>
-            : undefined;
-          const nested = nonEmptyString(auth?.accessToken);
-          const value = nested ?? nonEmptyString(parsed['auth.accessToken']);
-          if (!value) return undefined;
-          const domain = nonEmptyString(auth?.domain) ?? nonEmptyString(parsed['auth.domain']);
+          const authState = parseCodeBuddyAuth(parsed);
+          if (!authState.accessToken) return undefined;
           const attributes = await loadCodeBuddyAuthenticationAttributes(
             codeBuddyProductCandidates(env, platform, options.codeBuddyProductPath),
             readFile,
             realpath,
           );
-          const credential = { value };
-          codeBuddyEnvironments.set(credential, classifyCodeBuddyEnvironment(attributes, domain));
+          const credential = { value: authState.accessToken };
+          codeBuddyEnvironments.set(credential, classifyCodeBuddyEnvironment(attributes, authState.domain));
+          const nativeHeaders = codeBuddyNativeAuthHeaders(authState);
+          if (nativeHeaders) codeBuddyNativeHeaders.set(credential, nativeHeaders);
           return credential;
         } catch {
           return undefined;
@@ -467,6 +503,8 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         const environment = classifyCodeBuddyEnvironment(attributes, authState.domain);
         const credential = Object.freeze({ value: authState.accessToken });
         codeBuddyEnvironments.set(credential, environment);
+        const nativeHeaders = codeBuddyNativeAuthHeaders(authState);
+        if (nativeHeaders) codeBuddyNativeHeaders.set(credential, nativeHeaders);
         return freezeCodeBuddyActiveSnapshot(
           credential,
           environment,
@@ -513,5 +551,14 @@ export function upstreamAuthHeaders(provider: ProviderDefinition, credential: Pr
   const headers = new Headers();
   if (capability.authScheme === 'x-api-key') headers.set('x-api-key', credential.value);
   else headers.set('authorization', `Bearer ${credential.value}`);
+  if (provider.id === 'codebuddy' && provider.credentialResolver === 'codebuddy' && protocol === 'openai_chat') {
+    const nativeHeaders = codeBuddyNativeHeaders.get(credential);
+    if (nativeHeaders) {
+      for (const name of CODEBUDDY_NATIVE_HEADER_NAMES) {
+        const value = nativeHeaders[name];
+        if (value !== undefined) headers.set(name, value);
+      }
+    }
+  }
   return headers;
 }

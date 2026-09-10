@@ -438,11 +438,10 @@ const codeBuddyIOAEnvironment = "ioa"
 // in the ioa environment; already-wire models and non-iOA models are never
 // rewritten.
 var codeBuddyCanonicalToWireModel = map[string]string{
-	"deepseek-v4-flash": "deepseek-v4-flash-ioa",
-	"deepseek-v4-pro":   "deepseek-v4-pro-ioa",
-	"hy4-preview":       "hy4-preview-ioa",
-	"hy3":               "hy3-ioa",
-	"minimax-m3":        "minimax-m3-ioa",
+	"deepseek-v4.1-flash": "deepseek-v4.1-flash-ioa",
+	"hy4-preview":         "hy4-preview-ioa",
+	"hy3":                 "hy3-ioa",
+	"minimax-m3":          "minimax-m3-ioa",
 }
 
 // codeBuddyWireModel derives the wire model for a canonical CodeBuddy model
