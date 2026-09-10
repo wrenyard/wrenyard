@@ -10,6 +10,7 @@ import {
 import {
   NoEligiblePlanError,
   type TaskDispatchChoice,
+  type TaskDispatchDiagnosticChoice,
   type TaskDispatchDisplayLabels,
   type TaskDispatchResolver,
 } from '../../core/task/dispatch-resolver.mts'
@@ -18,7 +19,6 @@ import {
   selectTaskResolutionFailure,
   taskResolutionFailure,
   type TaskResolutionElimination,
-  type TaskResolutionFailure,
   type TaskResolutionFailureCode,
 } from '../../core/task/task-resolution-failure.mts'
 import { TaskService } from '../../core/task/service.mts'
@@ -37,6 +37,7 @@ import {
   readPerTaskSettings,
   normalizeTaskSettingsLayer,
   resolveEffectiveTaskSettings,
+  SYSTEM_DEFAULT_TIMEOUT_MS,
   type TaskDispatchField,
   type TaskDispatchRequirements as ConfigTaskDispatchRequirements,
   type TaskSettingsLayer as ConfigTaskSettingsLayer,
@@ -54,9 +55,12 @@ import {
   type CodeBuddyActiveSnapshotView,
 } from './auto-routing-snapshot-service.mts'
 import type {
-  TaskRoutingTestExclusion,
   TaskRoutingTestParams,
   TaskRoutingTestResult,
+  TaskRoutingTestRow,
+  TaskRoutingTestTask,
+  TaskRoutingTestTasksParams,
+  TaskRoutingTestTasksResult,
   TaskSettingsAutomaticDispatch,
   TaskSettingsAutomaticSelection,
   TaskSettingsExplicitReference,
@@ -334,6 +338,179 @@ function rawDefinitionDispatch(value: unknown): ConfigTaskDispatchRequirements {
     return value as ConfigTaskDispatchRequirements
   }
   return {}
+}
+
+/** Synthetic task name used only to key the read-only routing form; it never
+ *  identifies a real definition and never reaches a resolver error message. */
+const ROUTING_FORM_TASK_NAME = 'routing-form'
+
+/**
+ * Normalizes the SUBMITTED routing form into the canonical camel-case dispatch
+ * requirements. Only the submitted form participates: no saved task/global
+ * layer is read or inherited. The recommended intelligence expectation defaults
+ * to `mid` (clamped up to an explicit hard minimum) and no hard minimum is
+ * imposed unless submitted.
+ */
+function routingFormRequirements(automatic: TaskSettingsAutomaticDispatch): ConfigTaskDispatchRequirements {
+  return resolveEffectiveTaskSettings({ invocation: normalizeTaskSettingsLayer({ dispatch: automatic }) }).dispatch
+}
+
+/** One provider+model routing form row being assembled before final ordering. */
+interface RoutingFormPair {
+  provider: string
+  model: string
+  providerName: string
+  modelName: string
+  effectiveTps: number | null
+  /** A ready supporting client's exact identity; any ready client admits the pair. */
+  exactAgentRuntime: string
+  /** Present when the pair is admitted by the submitted form. */
+  admitted: boolean
+  /** Closed code of the first submitted gate that rejected every ready client. */
+  rejectionCode?: TaskResolutionFailureCode
+}
+
+/** Collapses baseline diagnostic choices at provider+model, preferring native,
+ *  then grok, then the stable other client (alphabetical tie-break). Any ready
+ *  supporting client can admit the pair; a client admitted by the submitted
+ *  form wins so qualified pairs are never lost to a rejected sibling client. */
+function collapseRoutingFormPairs(
+  choices: readonly TaskDispatchDiagnosticChoice[],
+): Map<string, RoutingFormPair> {
+  const groups = new Map<string, TaskDispatchDiagnosticChoice[]>()
+  for (const choice of choices) {
+    const parsed = splitRuntimeIdentity(choice.exactAgentRuntime)
+    if (parsed === undefined) continue
+    const key = `${parsed.provider}/${parsed.model}`
+    const group = groups.get(key)
+    if (group) group.push(choice)
+    else groups.set(key, [choice])
+  }
+  const pairs = new Map<string, RoutingFormPair>()
+  for (const [key, group] of groups) {
+    group.sort((a, b) => {
+      // Prefer an admitted client, then the production client preference.
+      const aAdmitted = a.admitted !== undefined ? 0 : 1
+      const bAdmitted = b.admitted !== undefined ? 0 : 1
+      if (aAdmitted !== bAdmitted) return aAdmitted - bAdmitted
+      return a.exactAgentRuntime.localeCompare(b.exactAgentRuntime)
+    })
+    const chosen = group[0]!
+    const parsed = splitRuntimeIdentity(chosen.exactAgentRuntime)!
+    const admittedEntry = group.find((entry) => entry.admitted !== undefined)
+    const admitted = admittedEntry !== undefined
+    const tpsSource = admittedEntry ?? chosen
+    const rejectionEntry = admitted ? undefined : group.find((entry) => entry.rejectionCode !== undefined)
+    pairs.set(key, {
+      provider: parsed.provider,
+      model: parsed.model,
+      providerName: parsed.provider,
+      modelName: parsed.model,
+      effectiveTps: tpsSource.baseline?.speed.effective_tps ?? tpsSource.admitted?.speed.effective_tps ?? null,
+      exactAgentRuntime: chosen.exactAgentRuntime,
+      admitted,
+      ...(rejectionEntry?.rejectionCode !== undefined ? { rejectionCode: rejectionEntry.rejectionCode } : {}),
+    })
+  }
+  return pairs
+}
+
+/** Splits a canonical `provider/model:client` runtime identity. */
+function splitRuntimeIdentity(exactAgentRuntime: string): { provider: string; model: string } | undefined {
+  const colon = exactAgentRuntime.lastIndexOf(':')
+  const head = colon >= 0 ? exactAgentRuntime.slice(0, colon) : exactAgentRuntime
+  const slash = head.indexOf('/')
+  if (slash <= 0 || slash >= head.length - 1) return undefined
+  return { provider: head.slice(0, slash), model: head.slice(slash + 1) }
+}
+
+/**
+ * Builds the final provider+model routing form rows from the baseline-available
+ * pairs and the shared automatic-selection trace. Qualified pairs keep the
+ * production rank and the actual weighted scorer contributions (each a
+ * `SCORE_WEIGHTS` term that sums to `score`); rejected pairs carry null
+ * rank/score and a short Chinese reason from the closed failure message set.
+ */
+function buildRoutingFormRows(
+  baselineChoices: readonly TaskDispatchDiagnosticChoice[],
+  trace: AutomaticSelectionTrace,
+  resolver: TaskDispatchResolver,
+): TaskRoutingTestRow[] {
+  const pairs = collapseRoutingFormPairs(baselineChoices)
+  const rankedByRuntime = new Map(trace.ranked.map((entry) => [entry.canonicalId, entry]))
+  const rankedByPair = new Map<string, (typeof trace.ranked)[number]>()
+  for (const entry of trace.ranked) {
+    const parsed = splitRuntimeIdentity(entry.canonicalId)
+    if (parsed === undefined) continue
+    const key = `${parsed.provider}/${parsed.model}`
+    if (!rankedByPair.has(key)) rankedByPair.set(key, entry)
+  }
+  const collapsedByRuntime = new Map(trace.collapsedChoices.map((choice) => [choice.exactAgentRuntime, choice]))
+  const readinessRejected = new Set(trace.readinessRejectedIds)
+  const quotaBlocked = new Set(trace.quotaBlockedIds)
+  const unscorable = new Map(trace.unscorable.map((entry) => [entry.id, entry.code]))
+  const catalogExcluded = new Map(trace.catalogExcluded.map((entry) => [entry.id, entry.reason]))
+
+  const rows: TaskRoutingTestRow[] = []
+  for (const pair of pairs.values()) {
+    const runtime = pair.exactAgentRuntime
+
+    const pairKey = `${pair.provider}/${pair.model}`
+    const ranked = rankedByRuntime.get(runtime) ?? (pair.admitted ? rankedByPair.get(pairKey) : undefined)
+    const choice = collapsedByRuntime.get(runtime)
+    const labels = resolver.displayLabels({ provider: pair.provider, model: pair.model })
+    const providerName = labels?.providerDisplayName ?? pair.providerName
+    const modelName = labels?.modelDisplayName ?? pair.modelName
+
+    if (ranked !== undefined) {
+      const rankedChoice = collapsedByRuntime.get(ranked.canonicalId) ?? choice
+      const effectiveTps = rankedChoice?.speed.effective_tps ?? pair.effectiveTps
+      rows.push({
+        provider: pair.provider,
+        provider_name: providerName,
+        model: pair.model,
+        model_name: modelName,
+        effective_tps: effectiveTps ?? null,
+        price_score: SCORE_WEIGHTS.P * ranked.priceFactor,
+        speed_score: SCORE_WEIGHTS.S * ranked.speedFactor,
+        quota_score: SCORE_WEIGHTS.Q * ranked.quotaQuality,
+        intelligence_score: SCORE_WEIGHTS.I * ranked.intelligenceFactor,
+        score: ranked.score,
+        rank: ranked.rank,
+        reason: null,
+      })
+      continue
+    }
+
+    // Rejected: closed Chinese reason, never raw resolver/quota detail. The
+    // submitted-gate rejection code (baseline availability already confirmed)
+    // takes priority, then the live quota/unscorable/catalog gates.
+    const code: TaskResolutionFailureCode = quotaBlocked.has(runtime)
+      ? 'quota_unavailable'
+      : pair.rejectionCode
+        ?? unscorable.get(runtime)
+        ?? (catalogExcluded.has(runtime)
+          ? codeFromCatalogExclusion(catalogExcluded.get(runtime)!) ?? 'no_available_provider'
+          : 'no_available_provider')
+    rows.push({
+      provider: pair.provider,
+      provider_name: providerName,
+      model: pair.model,
+      model_name: modelName,
+      effective_tps: pair.effectiveTps,
+      price_score: null,
+      speed_score: null,
+      quota_score: null,
+      intelligence_score: null,
+      score: null,
+      rank: null,
+      reason: ({ intelligence_requirement: '智能级别过低', speed_requirement: '速度过低', price_limit: '单价超出上限', quota_unavailable: '额度不足', no_available_provider: '不满足任务要求' } as Record<TaskResolutionFailureCode, string>)[code],
+    })
+  }
+  rows.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
+  let position = 0
+  for (const row of rows) if (row.rank !== null) row.rank = ++position
+  return rows
 }
 
 /** Canonical config layer -> a raw alias object the normalizer accepts. */
@@ -726,51 +903,55 @@ export class TaskSettingsService {
   }
 
   /**
-   * Read-only routing diagnostic for one builtin task definition (UI presets:
-   * edit, code-review, oracle, librarian). Selects the task's effective
-   * requirements and glob cap exactly like a run, then replays the EXACT
-   * automatic-selection path (`resolveAutomaticSelection`) with an optional
-   * request-scoped trace collector. Automatic preview is forced regardless of
-   * any saved explicit pin: the effective mode/explicit reference is never
-   * consulted. Nothing is saved, created, reserved, or modeled — only fresh
-   * non-billable readonly quota/readiness sampling is permitted. An unknown
-   * task or malformed definition is a validation error; "no candidate" is a
-   * useful result (structured failure), not an exception.
+   * Read-only FORM-BASED routing diagnostic. The caller submits the automatic
+   * dispatch form fields directly (`params.automatic`) plus an optional
+   * timeout; the diagnostic NEVER enumerates task definitions and NEVER reads
+   * global/per-task saved settings. Only the submitted form is normalized
+   * (recommended intelligence expectation defaulting to `mid`, no hard minimum,
+   * timeout defaulting to the system default).
+   *
+   * Baseline provider availability is established FIRST with no submitted
+   * requirements, so a provider-ready pair rejected by a submitted task gate
+   * still surfaces as a rejected row. Qualified pairs reuse the exact
+   * production automatic-selection path (`resolveAutomaticSelection`) and keep
+   * the production ranks/weights; rejected pairs carry a short Chinese reason.
+   * Clients are never projected: rows collapse at provider+model and any ready
+   * supporting client can admit the pair. No inference, save, reserve, or
+   * model call happens here — only fresh non-billable readonly quota/readiness
+   * sampling.
    */
   async routingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
-    const taskId = params.task_id?.trim() ?? ''
-    if (!taskId) throw new TaskSettingsTaskNotFoundError(params.task_id ?? '')
+    const requirements = routingFormRequirements(params.automatic)
+    const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
+      ? params.timeout_ms
+      : SYSTEM_DEFAULT_TIMEOUT_MS
 
-    const summaries = await this.definitions.list(undefined)
-    const summary = summaries.find((entry) => entry.name === taskId && entry.kind !== 'project')
-      ?? summaries.find((entry) => entry.name === taskId && entry.project === undefined)
-    if (!summary) throw new TaskSettingsTaskNotFoundError(taskId)
+    // Baseline availability with NO submitted gates: `diagnose` evaluates each
+    // exact pair's availability against empty requirements (so a pair rejected
+    // by a submitted gate still reports available) and independently replays
+    // the submitted form to attach its first closed rejection code.
+    const baseline = this.resolver.diagnose({ taskName: ROUTING_FORM_TASK_NAME, requirements })
+    const baselineChoices: TaskDispatchDiagnosticChoice[] = baseline.ok ? baseline.choices.filter((choice) => choice.available) : []
 
-    const { record } = this.readConfigRecord()
-    const tasks = tasksSectionOf(record)
-    const identity = taskSettingsIdentity({ kind: 'builtin', name: summary.name })
-
-    const builtinLayer = taskDefaultsToSettingsLayer({
-      ...(summary.timeoutMs !== undefined ? { timeoutMs: summary.timeoutMs } : {}),
-      dispatch: rawDefinitionDispatch(summary.dispatch),
-    })
-    const userTaskLayer = readPerTaskSettings(tasks, identity)
-
-    let effective: ReturnType<typeof resolveEffectiveTaskSettings>
-    try {
-      effective = resolveEffectiveTaskSettings({
-        builtin: builtinLayer,
-        userGlobal: readGlobalTaskSettings(tasks) ?? undefined,
-        userTask: userTaskLayer,
+    // Production automatic selection over the submitted form, instrumented with
+    // the shared trace so ranks/factors are the real scorer output. Preview
+    // memo shares one immutable quota snapshot for the single request.
+    const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
+    // Bind availability for the unconstrained pool before applying the form.
+    // Both passes share quota/readiness snapshots and memoized non-billable probes.
+    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, maxAutoOutputUsdPerMillion: undefined }, previewMemo)
+    const bound = await previewMemo.quota
+    const native = await previewMemo.nativeProviderReadiness
+    const availableChoices: TaskDispatchDiagnosticChoice[] = []
+    for (const choice of baselineChoices) {
+      const dispatch = choice.baseline ?? choice.admitted
+      if (!dispatch) continue
+      const availability = await this.previewRuntimeAvailability(TaskSettingsService.tripleOf(dispatch), previewMemo, {
+        codeBuddySnapshot: bound?.codeBuddySnapshot,
+        nativeProviderReadiness: native ?? null,
       })
-    } catch (error) {
-      throw new TaskSettingsInvalidSettingsError(undefined, messageOf(error))
+      if (availability?.available !== false) availableChoices.push(choice)
     }
-
-    // Force the automatic preview: the effective mode and any stored explicit
-    // reference are intentionally ignored here (a saved explicit pin must not
-    // change the diagnostic), and the effective dispatch/global cap are
-    // forwarded unchanged into the shared automatic-selection helper.
     const trace: AutomaticSelectionTrace = {
       capUsdPerMillion: null,
       eligibleIds: [],
@@ -784,117 +965,43 @@ export class TaskSettingsService {
       snapshotId: null,
       nowMs: this.now(),
     }
-    const selection = await this.resolveAutomaticSelection({
-      taskName: summary.name,
-      requirements: effective.dispatch,
-      timeoutMs: effective.timeoutMs,
-      maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
-    }, undefined, trace)
+    await this.resolveAutomaticSelection({
+      taskName: ROUTING_FORM_TASK_NAME,
+      requirements,
+      timeoutMs,
+      maxAutoOutputUsdPerMillion: undefined,
+    }, previewMemo, trace)
 
-    const choiceByRuntime = new Map(trace.collapsedChoices.map((choice) => [choice.exactAgentRuntime, choice]))
-    const candidates = trace.ranked.map((candidate) => {
-      const choice = choiceByRuntime.get(candidate.canonicalId)
+    return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver) }
+  }
+
+  /** Lists the raw definition configuration of ALL valid builtin and project
+   *  tasks for the routing form import combobox. This is a separate, lazy,
+   *  read-only endpoint: it enumerates definitions through the same
+   *  `collectSnapshotSummaries` path the snapshot uses, exposes ONLY the raw
+   *  definition `dispatch`/`timeout_ms` (never the effective user settings or a
+   *  resolved snapshot), and performs no inference, save, or reserve. */
+  async routingTestTasks(_params: TaskRoutingTestTasksParams = {}): Promise<TaskRoutingTestTasksResult> {
+    const summaries = await this.collectSnapshotSummaries({})
+    const tasks: TaskRoutingTestTask[] = summaries.map((summary) => {
+      const kind: 'builtin' | 'project' = summary.kind
+        ?? (summary.project !== undefined ? 'project' : 'builtin')
+      const identity = taskSettingsIdentity({
+        kind,
+        name: summary.name,
+        ...(kind === 'project' && summary.project !== undefined ? { project: summary.project } : {}),
+      })
+      const dispatch = toSnakeDispatch(rawDefinitionDispatch(summary.dispatch))
       return {
-        exact_runtime: candidate.canonicalId,
-        rank: candidate.rank,
-        intelligence_shortfall: candidate.intelligenceShortfall,
-        reference_output_usd_per_million: candidate.referenceUsdPerM,
-        routing_output_usd_per_million: candidate.routingPriceUsdPerM,
-        effective_tps: choice?.speed.effective_tps ?? 0,
-        quota_tier: candidate.tier,
-        quota_coverage_complete: candidate.coverageComplete,
-        quota_headroom_trusted: candidate.headroomTrusted,
-        supply_class: candidate.supplyClass,
-        price_factor: candidate.priceFactor,
-        speed_factor: candidate.speedFactor,
-        quota_factor: candidate.quotaQuality,
-        intelligence_factor: candidate.intelligenceFactor,
-        score: candidate.score,
-        notes: [...candidate.notes],
+        identity,
+        name: summary.name,
+        display_name: summary.displayName ?? summary.name,
+        ...(summary.project !== undefined ? { project: summary.project } : {}),
+        automatic: dispatch,
+        ...(summary.timeoutMs !== undefined ? { timeout_ms: summary.timeoutMs } : {}),
       }
     })
-
-    const exclusions: TaskRoutingTestExclusion[] = [
-      ...trace.quotaBlockedIds.map((id) => ({
-        exact_runtime: id,
-        stage: 'quota_blocked' as const,
-        code: 'quota_unavailable' as const,
-      })),
-      ...trace.readinessRejectedIds.map((id) => ({
-        exact_runtime: id,
-        stage: 'readiness_rejected' as const,
-        code: 'no_available_provider' as const,
-      })),
-      ...trace.unscorable.map((entry) => ({
-        exact_runtime: entry.id,
-        stage: 'not_scorable' as const,
-        code: entry.code,
-      })),
-      ...trace.catalogExcluded.map((entry) => ({
-        exact_runtime: entry.id,
-        stage: 'catalog_excluded' as const,
-        code: codeFromCatalogExclusion(entry.reason) ?? 'no_available_provider',
-        ...(entry.detail !== null ? { detail: entry.detail } : {}),
-      })),
-    ]
-
-    let failure: TaskResolutionFailure | null = null
-    let staticEligibility: TaskRoutingTestResult['static_eligibility'] = null
-    let selectionPayload: TaskRoutingTestResult['selection'] = null
-    if (selection.ok) {
-      const labels = this.displayLabelsOf(selection.dispatch)
-      selectionPayload = {
-        exact_runtime: selection.exactAgentRuntime,
-        resolved: labels
-          ? {
-              ...selection.dispatch,
-              provider_display_name: labels.providerDisplayName,
-              model_display_name: labels.modelDisplayName,
-            }
-          : selection.dispatch,
-        reason: selection.reason,
-      }
-    } else if (trace.eligibleFailure !== undefined) {
-      failure = taskResolutionFailure(trace.eligibleFailure.code)
-      staticEligibility = {
-        code: trace.eligibleFailure.code,
-        message: failure.message,
-        eligible_candidate_count: trace.eligibleFailure.candidateCount,
-      }
-    } else {
-      failure = taskResolutionFailure(selection.error.resolutionFailureCode)
-    }
-
-    return {
-      task_id: summary.name,
-      effective_requirements: toSnakeDispatch(effective.dispatch),
-      effective_output_cap_usd_per_million: trace.capUsdPerMillion,
-      timeout_ms: effective.timeoutMs,
-      snapshot_id: trace.snapshotId,
-      now_ms: trace.nowMs,
-      checked_at: new Date(trace.nowMs).toISOString(),
-      ranking_weights: {
-        price: SCORE_WEIGHTS.P,
-        speed: SCORE_WEIGHTS.S,
-        quota: SCORE_WEIGHTS.Q,
-        intelligence: SCORE_WEIGHTS.I,
-      },
-      ordering: 'candidates are ordered by intelligence shortfall ascending first, then by weighted total score descending, then by canonical runtime id ascending',
-      stages: {
-        eligible: trace.eligibleIds.length,
-        quota_blocked: trace.quotaBlockedIds.length,
-        readiness_rejected: trace.readinessRejectedIds.length,
-        collapsed: trace.collapsedChoices.length,
-        scored: trace.scored,
-        ranked: trace.ranked.length,
-        excluded: trace.unscorable.length + trace.catalogExcluded.length,
-      },
-      candidates,
-      exclusions,
-      selection: selectionPayload,
-      failure,
-      static_eligibility: staticEligibility,
-    }
+    return { tasks }
   }
 
   async save(params: TaskSettingsSaveParams): Promise<TaskSettingsSnapshotResult> {

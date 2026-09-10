@@ -399,13 +399,31 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       throw error
     }
   })
-  // Read-only routing diagnostics: reuses the exact automatic-selection path
-  // (never a second scorer) and never saves settings, creates tasks, reserves
-  // quota, or calls a model. IPC-only, like task.settings.snapshot/save.
+  // Read-only form-based routing diagnostics: reuses the exact
+  // automatic-selection path (never a second scorer) and never saves settings,
+  // creates tasks, reserves quota, or calls a model. IPC-only, like
+  // task.settings.snapshot/save.
   router.register('task.settings.routingTest', async (params, _message, context) => {
     const service = requireTaskSettings(context, 'task.settings.routingTest')
     try {
       return await service.routingTest(params)
+    } catch (error) {
+      if (
+        error instanceof TaskSettingsTaskNotFoundError
+        || error instanceof TaskSettingsInvalidSettingsError
+      ) {
+        throw protocolErrorFromTaskSettingsError(error)
+      }
+      throw error
+    }
+  })
+  // Separate lazy import endpoint listing the raw definition configuration of
+  // every valid builtin/project task for the routing form. Read-only; never
+  // reads effective user settings. IPC-only.
+  router.register('task.settings.routingTestTasks', async (_params, _message, context) => {
+    const service = requireTaskSettings(context, 'task.settings.routingTestTasks')
+    try {
+      return await service.routingTestTasks()
     } catch (error) {
       if (
         error instanceof TaskSettingsTaskNotFoundError

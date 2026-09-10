@@ -1111,18 +1111,11 @@ export function rankAutoRoutingCandidates(
       compareLex(a.snapshotId, b.snapshotId)
   );
 
-  // Single global stable ranking over every accepted candidate. Candidates are
-  // ordered first by intelligence shortfall ascending (a model meeting or
-  // exceeding its expected rank has shortfall 0 and leads; among those that
-  // fall short, the smaller nonnegative shortfall wins), then by the existing
-  // normalized score descending, then deterministic canonicalId/snapshotId
-  // ascending. Supply class and tier are reported as diagnostic fields only,
-  // never as sort keys. Every readiness/quota/reference-price hard gate has
-  // already excluded ineligible candidates, so the shortfall is bounded by the
-  // effective intelligence minimum.
+  // Rank solely by the weighted total score, then stable identity for ties.
+  // Recommendation affects the intelligence factor; shortfall remains a
+  // diagnostic and is never an independent ranking priority.
   const rankedAssessments = accepted.slice().sort(
     (a, b) =>
-      a.intelligenceShortfall - b.intelligenceShortfall ||
       b.score - a.score ||
       compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId)

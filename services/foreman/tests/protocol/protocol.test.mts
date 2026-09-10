@@ -53,6 +53,7 @@ const expectedMethods = [
   'task.settings.snapshot',
   'task.settings.save',
   'task.settings.routingTest',
+  'task.settings.routingTestTasks',
   'task.run.create',
   'task.run.list',
   'task.run.status',
@@ -1810,6 +1811,114 @@ describe('lib/protocol JSON-RPC contract', () => {
         return true
       },
     )
+  })
+
+  it('validates form-based task.settings.routingTest params and result shapes', () => {
+    // The form is submitted directly: only `automatic` (and optional timeout_ms).
+    assert.deepEqual(parseMethodParams('task.settings.routingTest', {
+      automatic: { minimum_tps: 60, intelligence_min: 'high' },
+      timeout_ms: 120_000,
+    }), {
+      automatic: { minimum_tps: 60, intelligence_min: 'high' },
+      timeout_ms: 120_000,
+    })
+    assert.deepEqual(parseMethodParams('task.settings.routingTest', {
+      automatic: {},
+    }), { automatic: {} })
+
+    // `automatic` is required and the legacy task_id form is rejected.
+    assert.throws(
+      () => parseMethodParams('task.settings.routingTest', { task_id: 'commit' }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodParams('task.settings.routingTest', { automatic: { intelligence_min: 'frontier' } }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // Qualified rows carry rank/score plus the actual weighted contributions.
+    const qualifiedRow = {
+      provider: 'codex',
+      provider_name: 'Codex',
+      model: 'gpt-5.6-luna',
+      model_name: 'GPT 5.6 Luna',
+      effective_tps: 107,
+      price_score: 0.3,
+      speed_score: 0.12,
+      quota_score: 0.16,
+      intelligence_score: 0.08,
+      score: 0.66,
+      rank: 1,
+      reason: null,
+    }
+    const rejectedRow = {
+      provider: 'claude',
+      provider_name: 'Claude',
+      model: 'claude-opus-4',
+      model_name: 'Claude Opus 4',
+      effective_tps: null,
+      price_score: null,
+      speed_score: null,
+      quota_score: null,
+      intelligence_score: null,
+      score: null,
+      rank: null,
+      reason: '没有模型满足智能要求，请调整智能要求',
+    }
+    const result = { rows: [qualifiedRow, rejectedRow] }
+    assert.deepEqual(parseMethodResult('task.settings.routingTest', result), result)
+
+    // No client/runtime/trace fields may leak into a row.
+    for (const bad of [
+      { ...qualifiedRow, exact_runtime: 'codex/gpt-5.6-luna:codex' },
+      { ...qualifiedRow, client: 'codex' },
+      { ...qualifiedRow, notes: ['x'] },
+    ]) {
+      assert.throws(
+        () => parseMethodResult('task.settings.routingTest', { rows: [bad] }),
+        (error) => {
+          assertProtocolError(error, INVALID_PARAMS.code)
+          return true
+        },
+      )
+    }
+  })
+
+  it('validates task.settings.routingTestTasks import params and result shapes', () => {
+    assert.deepEqual(parseMethodParams('task.settings.routingTestTasks', {}), {})
+    assert.throws(
+      () => parseMethodParams('task.settings.routingTestTasks', { project: 'alpha' }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    const result = {
+      tasks: [
+        {
+          identity: 'builtin:commit',
+          name: 'commit',
+          display_name: 'Commit helper',
+          automatic: { expected_tps: 80, minimum_tps: 60 },
+          timeout_ms: 120_000,
+        },
+        {
+          identity: 'project:alpha:review',
+          name: 'review',
+          display_name: 'Review',
+          project: 'alpha',
+          automatic: { max_output_usd_per_million: 15 },
+        },
+      ],
+    }
+    assert.deepEqual(parseMethodResult('task.settings.routingTestTasks', result), result)
   })
 
   it('validates runtime.alias snapshot/put/remove params and result shapes', () => {

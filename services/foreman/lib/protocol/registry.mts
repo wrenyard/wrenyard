@@ -192,12 +192,16 @@ import {
 import {
   taskRoutingTestParamsSchema,
   taskRoutingTestResultSchema,
+  taskRoutingTestTasksParamsSchema,
+  taskRoutingTestTasksResultSchema,
   taskSettingsSaveParamsSchema,
   taskSettingsSaveResultSchema,
   taskSettingsSnapshotParamsSchema,
   taskSettingsSnapshotResultSchema,
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
+  type TaskRoutingTestTasksParams,
+  type TaskRoutingTestTasksResult,
   type TaskSettingsSaveParams,
   type TaskSettingsSaveResult,
   type TaskSettingsSnapshotParams,
@@ -373,6 +377,8 @@ export type {
 export type {
   TaskRoutingTestParams,
   TaskRoutingTestResult,
+  TaskRoutingTestTasksParams,
+  TaskRoutingTestTasksResult,
   TaskSettingsSaveParams,
   TaskSettingsSaveResult,
   TaskSettingsSnapshotParams,
@@ -432,6 +438,7 @@ export interface ForemanMethodParams {
   'task.settings.snapshot': TaskSettingsSnapshotParams
   'task.settings.save': TaskSettingsSaveParams
   'task.settings.routingTest': TaskRoutingTestParams
+  'task.settings.routingTestTasks': TaskRoutingTestTasksParams
   'task.run.create': TaskRunCreateParams
   'task.run.list': TaskRunListParams
   'task.run.status': TaskRunStatusParams
@@ -493,6 +500,7 @@ export interface ForemanMethodResults {
   'task.settings.snapshot': TaskSettingsSnapshotResult
   'task.settings.save': TaskSettingsSaveResult
   'task.settings.routingTest': TaskRoutingTestResult
+  'task.settings.routingTestTasks': TaskRoutingTestTasksResult
   'task.run.create': TaskRunCreateResult
   'task.run.list': TaskRunListResult
   'task.run.status': TaskRunStatusResult
@@ -628,6 +636,10 @@ export const methodRegistry: {
   'task.settings.routingTest': {
     params: taskRoutingTestParamsSchema,
     result: taskRoutingTestResultSchema,
+  },
+  'task.settings.routingTestTasks': {
+    params: taskRoutingTestTasksParamsSchema,
+    result: taskRoutingTestTasksResultSchema,
   },
   'task.run.create': {
     params: taskRunCreateParamsSchema,

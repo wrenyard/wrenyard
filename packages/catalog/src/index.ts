@@ -272,7 +272,7 @@ function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
 /**
  * Resolves the single authoritative speed evidence for an exact model in
  * exact precedence order: the first usable exact-provider/model local 31-day
- * agent_turn_v1 sample, then the canonical provider modelSpeedOverride, then the
+ * model-generation sample, then the canonical provider modelSpeedOverride, then the
  * model's required default speed. Matching is by exact provider.id/modelDef.id
  * only — no alias, client, or profile remap — and any sample missing, malformed,
  * future, or older than 31 days is skipped. Used by resolveConstrainedDispatch
@@ -607,7 +607,7 @@ export function resolveConstrainedDispatch(
     }
 
     // Speed evidence tiers in exact precedence order via the shared resolver:
-    // the first usable exact-provider/model local 31-day agent_turn_v1 sample,
+    // the first usable exact-provider/model local 31-day model-generation sample,
     // then the canonical provider modelSpeedOverride, then the model default
     // speed. Matching is by exact provider.id/modelDef.id — no alias or client remap.
     const speed = resolveModelSpeed(provider, modelDef, localSpeed);

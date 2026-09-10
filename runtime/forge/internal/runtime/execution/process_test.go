@@ -168,6 +168,7 @@ func TestRunProcessCodeBuddyTranscriptFamilyUsesCodeBuddyCodec(t *testing.T) {
 	}
 
 	sink := newEventSink(io.Discard, protocol.OutputFormatJSON, Result{})
+	started := time.Now()
 	result := defaultChildRunner(context.Background(), AttemptRequest{
 		Plan:         driver.CommandPlan{Command: command, TranscriptFamily: "codebuddy"},
 		ClientFamily: "claude",
@@ -192,10 +193,14 @@ func TestRunProcessCodeBuddyTranscriptFamilyUsesCodeBuddyCodec(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("turn_usage count = %d, want 1; events=%#v", count, result.Events)
 	}
+	duration, ok := usage["duration_ms"].(int)
+	if !ok || duration <= 0 || int64(duration) > time.Since(started).Milliseconds()+1 {
+		t.Fatalf("duration_ms = %#v, want measured child wall time", usage["duration_ms"])
+	}
 	want := map[string]any{
 		"input_tokens":   1200,
 		"output_tokens":  1456,
-		"duration_ms":    23456,
+		"duration_ms":    duration,
 		"token_scope":    "agent_turn",
 		"duration_scope": "agent_turn",
 		"tps_contract":   "agent_turn_v1",

@@ -854,12 +854,18 @@ func assertNoTrustFields(t *testing.T, data map[string]any) {
 // transcript with one assistant message.usage record and a terminal result
 // carrying larger cumulative usage emits exactly one turn_usage that uses the
 // current child invocation's input/output tokens, never the cumulative
-// terminal result.usage, and declares the full trusted agent_turn contract.
+// terminal result.usage, and declares the full trusted agent_turn contract with
+// the measured invocation wall interval (not the native terminal duration_ms).
 func TestCodeBuddyInvocationUsageFreshCurrentInvocation(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 	var events []protocol.Event
 	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 		events = append(events, event)
 	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
 	write := func(line string) {
 		t.Helper()
 		if _, err := tee.Write([]byte(line + "\n")); err != nil {
@@ -867,18 +873,39 @@ func TestCodeBuddyInvocationUsageFreshCurrentInvocation(t *testing.T) {
 		}
 	}
 	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"ready"}],"usage":{"input_tokens":1200,"output_tokens":1456}}}`)
+	clock.Advance(23456 * time.Millisecond)
 	write(`{"type":"result","is_error":false,"duration_ms":23456,"usage":{"input_tokens":15000,"output_tokens":59043}}`)
 	assertExactlyOneTrustedUsage(t, events, 1200, 1456, 23456)
+}
+
+// The first assistant record may arrive after generation has completed. Its
+// preceding latency must be included in the same invocation denominator.
+func TestCodeBuddyInvocationIncludesTimeBeforeFirstRecord(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+	var events []protocol.Event
+	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) { events = append(events, event) })
+	tee.now = clock.Now
+	tee.codebuddyTurnStarted = clock.Now()
+	clock.Advance(10 * time.Second)
+	_, _ = tee.Write([]byte(`{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50}}}` + "\n"))
+	clock.Advance(time.Second)
+	_, _ = tee.Write([]byte(`{"type":"result","is_error":false,"duration_ms":1,"usage":{"input_tokens":100,"output_tokens":50}}` + "\n"))
+	assertExactlyOneTrustedUsage(t, events, 100, 50, 11000)
 }
 
 // TestCodeBuddyInvocationUsageMultipleAssistantsSummed verifies that several
 // assistant usage records within the current invocation are summed for the
 // turn_usage while the terminal result's larger cumulative usage is ignored.
 func TestCodeBuddyInvocationUsageMultipleAssistantsSummed(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 	var events []protocol.Event
 	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 		events = append(events, event)
 	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
 	write := func(line string) {
 		t.Helper()
 		if _, err := tee.Write([]byte(line + "\n")); err != nil {
@@ -887,15 +914,49 @@ func TestCodeBuddyInvocationUsageMultipleAssistantsSummed(t *testing.T) {
 	}
 	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"one"}],"usage":{"input_tokens":600,"output_tokens":700}}}`)
 	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"two"}],"usage":{"input_tokens":600,"output_tokens":756}}}`)
+	clock.Advance(23456 * time.Millisecond)
 	write(`{"type":"result","is_error":false,"duration_ms":23456,"usage":{"input_tokens":15000,"output_tokens":59043}}`)
 	assertExactlyOneTrustedUsage(t, events, 1200, 1456, 23456)
 }
 
-// TestCodeBuddyInvocationUsageCompactionResetKeepsCurrentOutput verifies that
-// after a compaction reset the terminal result.usage output (59043) is never
-// routed into the turn_usage: the current assistant output (1456) is the only
-// trusted value.
+// TestCodeBuddyInvocationUsageCompactionResetKeepsCurrentOutput verifies the
+// compaction-reset regression: the summed current-invocation output (1456)
+// spans the whole invocation while the small native terminal duration_ms
+// (30100) only covers the interval since the compaction reset. The trust
+// denominator must be the measured full invocation wall interval, so the
+// cumulative terminal result.usage output (59043) never reaches the turn_usage
+// and TPS is never inflated by the shrunken native duration.
 func TestCodeBuddyInvocationUsageCompactionResetKeepsCurrentOutput(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+	var events []protocol.Event
+	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
+	write := func(line string) {
+		t.Helper()
+		if _, err := tee.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"before compaction"}],"usage":{"input_tokens":1200,"output_tokens":1456}}}`)
+	write(`{"type":"system","subtype":"compact_boundary"}`)
+	// Full invocation wall interval is far larger than the small post-reset
+	// native terminal duration_ms below.
+	clock.Advance(489000 * time.Millisecond)
+	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"after compaction"}],"usage":{"input_tokens":1200,"output_tokens":1456}}}`)
+	clock.Advance(1000 * time.Millisecond)
+	write(`{"type":"result","is_error":false,"duration_ms":30100,"usage":{"input_tokens":42000,"output_tokens":59043}}`)
+	assertExactlyOneTrustedUsage(t, events, 2400, 2912, 490000)
+}
+
+// TestCodeBuddyInvocationUsageMissingStartFailsClosed verifies that without a
+// trustworthy invocation start boundary no measured interval exists, so the
+// turn_usage preserves its tokens but claims no trusted agent_turn contract.
+func TestCodeBuddyInvocationUsageMissingStartFailsClosed(t *testing.T) {
 	var events []protocol.Event
 	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 		events = append(events, event)
@@ -906,9 +967,15 @@ func TestCodeBuddyInvocationUsageCompactionResetKeepsCurrentOutput(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"after compaction"}],"usage":{"input_tokens":1200,"output_tokens":1456}}}`)
-	write(`{"type":"result","is_error":false,"duration_ms":30100,"usage":{"input_tokens":42000,"output_tokens":59043}}`)
-	assertExactlyOneTrustedUsage(t, events, 1200, 1456, 30100)
+	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"a"}],"usage":{"input_tokens":100,"output_tokens":50}}}`)
+	// Directly clear the measured start to model an absent boundary.
+	tee.codebuddyTurnStarted = time.Time{}
+	write(`{"type":"result","is_error":false,"duration_ms":2500,"usage":{"input_tokens":900,"output_tokens":700}}`)
+	usages := collectTurnUsage(events)
+	if len(usages) != 1 {
+		t.Fatalf("turn_usage count = %d, want 1; events=%#v", len(usages), events)
+	}
+	assertNoTrustFields(t, usages[0])
 }
 
 // TestCodeBuddyInvocationUsageResultOnlyFailsClosed verifies that a transcript
@@ -916,10 +983,15 @@ func TestCodeBuddyInvocationUsageCompactionResetKeepsCurrentOutput(t *testing.T)
 // of the trusted agent_turn contract fields: without current-invocation usage
 // the turn_usage stays untrusted.
 func TestCodeBuddyInvocationUsageResultOnlyFailsClosed(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 	var events []protocol.Event
 	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 		events = append(events, event)
 	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
 	if _, err := tee.Write([]byte(`{"type":"result","is_error":false,"duration_ms":23456,"usage":{"input_tokens":15000,"output_tokens":59043}}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -932,11 +1004,51 @@ func TestCodeBuddyInvocationUsageResultOnlyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestCodeBuddyInvocationUsageMalformedAssistantPoisonsContract(t *testing.T) {
+// TestCodeBuddyInvocationUsageDuplicateTerminalNoSecondTrusted verifies the
+// exactly-once guard: a second terminal result never emits a second trusted
+// turn_usage and never re-trusts the cumulative metadata.
+func TestCodeBuddyInvocationUsageDuplicateTerminalNoSecondTrusted(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 	var events []protocol.Event
 	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 		events = append(events, event)
 	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
+	write := func(line string) {
+		t.Helper()
+		if _, err := tee.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"type":"assistant","message":{"content":[{"type":"text","text":"a"}],"usage":{"input_tokens":100,"output_tokens":50}}}`)
+	clock.Advance(2500 * time.Millisecond)
+	write(`{"type":"result","is_error":false,"duration_ms":2500,"usage":{"input_tokens":900,"output_tokens":700}}`)
+	// Duplicate terminal: the canonical usage is not re-emitted with trust.
+	clock.Advance(2500 * time.Millisecond)
+	write(`{"type":"result","is_error":false,"duration_ms":2500,"usage":{"input_tokens":9999,"output_tokens":9999}}`)
+	usages := collectTurnUsage(events)
+	if len(usages) != 2 {
+		t.Fatalf("turn_usage count = %d, want 2; events=%#v", len(usages), events)
+	}
+	assertNoTrustFields(t, usages[1])
+}
+
+// TestCodeBuddyInvocationUsageMalformedAssistantPoisonsContract verifies a
+// malformed/incomplete assistant usage record poisons the whole invocation so
+// the terminal turn_usage stays untrusted.
+func TestCodeBuddyInvocationUsageMalformedAssistantPoisonsContract(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+	var events []protocol.Event
+	tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	tee.now = clock.Now
+	if tee.clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = clock.Now()
+	}
 	write := func(line string) {
 		t.Helper()
 		if _, err := tee.Write([]byte(line + "\n")); err != nil {
@@ -945,6 +1057,7 @@ func TestCodeBuddyInvocationUsageMalformedAssistantPoisonsContract(t *testing.T)
 	}
 	write(`{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50}}}`)
 	write(`{"type":"assistant","message":{"usage":{"input_tokens":10}}}`)
+	clock.Advance(2500 * time.Millisecond)
 	write(`{"type":"result","is_error":false,"duration_ms":2500,"usage":{"input_tokens":900,"output_tokens":700}}`)
 
 	usages := collectTurnUsage(events)
@@ -987,13 +1100,19 @@ func TestTrustedAgentTurnTPSContractParity(t *testing.T) {
 		{
 			name: "codebuddy transcript tee",
 			events: func(t *testing.T) []protocol.Event {
+				clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 				var events []protocol.Event
 				tee := NewTranscriptTeeWithEventHandler("codebuddy", io.Discard, func(event protocol.Event) {
 					events = append(events, event)
 				})
+				tee.now = clock.Now
+				if tee.clientFamily == "codebuddy" {
+					tee.codebuddyTurnStarted = clock.Now()
+				}
 				if _, err := tee.Write([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":100,"output_tokens":50}}}` + "\n")); err != nil {
 					t.Fatal(err)
 				}
+				clock.Advance(wantDuration * time.Millisecond)
 				if _, err := tee.Write([]byte(`{"type":"result","duration_ms":2500,"usage":{"input_tokens":900,"output_tokens":700}}` + "\n")); err != nil {
 					t.Fatal(err)
 				}
@@ -1009,6 +1128,9 @@ func TestTrustedAgentTurnTPSContractParity(t *testing.T) {
 					events = append(events, event)
 				})
 				tee.now = clock.Now
+				if tee.clientFamily == "codebuddy" {
+					tee.codebuddyTurnStarted = clock.Now()
+				}
 				if _, err := tee.Write([]byte(`{"type":"text","data":"hi"}` + "\n")); err != nil {
 					t.Fatal(err)
 				}

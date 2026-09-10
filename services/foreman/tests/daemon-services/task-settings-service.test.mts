@@ -145,6 +145,27 @@ function catalogDisplayLabels(provider: string, model: string): TaskDispatchDisp
   }
 }
 
+const INTELLIGENCE_RANKS: Record<string, number> = { low: 0, mid: 1, high: 2, premium: 3 }
+
+/** Mirrors the production hard gates so the fixture `eligible`/`diagnose`
+ *  agree on which submitted-form constraints admit a candidate. */
+function profilePassesForm(
+  profile: ProfileFixture,
+  requirements: { minimumTps?: number; intelligenceMin?: string; maxOutputUsdPerMillion?: number; excludeModelIds?: readonly string[]; excludeProfileIds?: readonly string[]; excludeClientIds?: readonly string[]; excludeProviderIds?: readonly string[] },
+): boolean {
+  if ((requirements.excludeModelIds ?? []).includes(profile.model)) return false
+  if ((requirements.excludeProfileIds ?? []).includes(profile.profile)) return false
+  if ((requirements.excludeClientIds ?? []).includes(profile.client)) return false
+  if ((requirements.excludeProviderIds ?? []).includes(profile.provider)) return false
+  if (
+    requirements.intelligenceMin !== undefined
+    && INTELLIGENCE_RANKS[profile.intelligence]! < INTELLIGENCE_RANKS[requirements.intelligenceMin]!
+  ) return false
+  if (requirements.maxOutputUsdPerMillion !== undefined && profile.outputUsd > requirements.maxOutputUsdPerMillion) return false
+  if (requirements.minimumTps !== undefined && profile.tps < requirements.minimumTps) return false
+  return true
+}
+
 interface ResolverFixtureOptions {
   /** exact runtimes intentionally unavailable per task name. */
   unavailable?: Record<string, string>
@@ -174,7 +195,53 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
       }
       const choices = pool
         .filter((profile) => !blocked(input.taskName, profile.exactAgentRuntime))
+        .filter((profile) => input.taskName !== 'routing-form' || profilePassesForm(profile, input.requirements))
         .map((profile) => ({ ...resolvedChoice(profile), exactAgentRuntime: profile.exactAgentRuntime }))
+      if (choices.length === 0) {
+        return {
+          ok: false as const,
+          error: new NoEligiblePlanError(input.taskName, [], input.requirements, 'no_available_provider'),
+        }
+      }
+      return { ok: true as const, choices }
+    },
+    diagnose(input) {
+      const autoFail = autoFailTasks.includes(input.taskName)
+      const req = input.requirements
+      const choices = pool.map((profile) => {
+        const baselineAvailable = !autoFail && !blocked(input.taskName, profile.exactAgentRuntime)
+        if (!baselineAvailable) {
+          return {
+            exactAgentRuntime: profile.exactAgentRuntime,
+            available: false,
+            rejectionCode: 'no_available_provider' as const,
+          }
+        }
+        if (!profilePassesForm(profile, req)) {
+          const rejectionCode = (req.excludeProviderIds ?? []).includes(profile.provider)
+            || (req.excludeModelIds ?? []).includes(profile.model)
+            || (req.excludeProfileIds ?? []).includes(profile.profile)
+            || (req.excludeClientIds ?? []).includes(profile.client)
+            ? 'no_available_provider' as const
+            : req.maxOutputUsdPerMillion !== undefined && profile.outputUsd > req.maxOutputUsdPerMillion
+              ? 'price_limit' as const
+              : req.minimumTps !== undefined && profile.tps < req.minimumTps
+                ? 'speed_requirement' as const
+                : 'intelligence_requirement' as const
+          return {
+            exactAgentRuntime: profile.exactAgentRuntime,
+            available: true,
+            baseline: resolvedChoice(profile),
+            rejectionCode,
+          }
+        }
+        return {
+          exactAgentRuntime: profile.exactAgentRuntime,
+          available: true,
+          baseline: resolvedChoice(profile),
+          admitted: resolvedChoice(profile),
+        }
+      })
       return { ok: true as const, choices }
     },
     resolveExplicit(input) {
@@ -1603,7 +1670,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(resolution.sources.automatic?.intelligence_expected, 'system')
   })
 
-  it('min high with expected premium selects the eligible premium and never a mid', async () => {
+  it('min high rejects mid while recommendation only contributes to the total score', async () => {
     writeConfig({
       tasks: {
         settings: {
@@ -1618,7 +1685,7 @@ describe('daemon task-settings-service (no-model)', () => {
       resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }),
     })
     const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
-    assert.equal(resolution.exactAgentRuntime, A_PREMIUM_P.exactAgentRuntime)
+    assert.equal(resolution.exactAgentRuntime, A_HIGH_P.exactAgentRuntime)
     assert.equal(resolution.sources.automatic?.intelligence_expected, 'user_global')
     assert.equal(resolution.sources.automatic?.intelligence_min, 'user_global')
   })
@@ -2945,128 +3012,207 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(snapshot.rows.some((row) => row.name === 'broken'), false)
   })
 
-  it('routingTest preview winner agrees with normal automatic selection and reports the actual scoring trace', async () => {
-    writeConfig({})
-    const service = context!.makeService()
-    const result: TaskRoutingTestResult = await service.routingTest({ task_id: 'commit' })
-
-    // The diagnostic forces automatic mode and reuses the exact selection path,
-    // so its winner must equal what a real automatic run resolves.
-    const run = await service.resolveForRun({
-      taskName: 'commit',
-      kind: 'builtin',
-      defaults: { dispatch: { expectedTps: 80, minimumTps: 60 }, timeoutMs: 120_000 },
-    })
-    assert.equal(run.mode, 'automatic')
-    assert.ok(result.selection)
-    assert.equal(result.selection.exact_runtime, run.exactAgentRuntime)
-    assert.equal(result.failure, null)
-    assert.equal(result.static_eligibility, null)
-
-    // Effective requirements reuse the snake_case automatic dispatch shape.
-    assert.equal(result.effective_requirements.expected_tps, 80)
-    assert.equal(result.effective_requirements.minimum_tps, 60)
-    assert.equal(result.timeout_ms, 120_000)
-
-    // Actual ranking weights and a truthful shortfall-before-score ordering.
-    assert.deepEqual(result.ranking_weights, { price: 0.5, speed: 0.2, quota: 0.2, intelligence: 0.1 })
-    assert.match(result.ordering, /shortfall/i)
-    assert.match(result.ordering, /score/i)
-
-    // Ranked rows expose the exact factors and a reconstructible weighted score.
-    assert.ok(result.candidates.length >= 1)
-    const winner = result.candidates[0]!
-    assert.equal(winner.exact_runtime, result.selection.exact_runtime)
-    assert.equal(winner.rank, 1)
-    const weights = result.ranking_weights
-    const reconstructed =
-      weights.price * winner.price_factor
-      + weights.speed * winner.speed_factor
-      + weights.quota * winner.quota_factor
-      + weights.intelligence * winner.intelligence_factor
-    assert.ok(Math.abs(reconstructed - winner.score) < 1e-12)
-    assert.ok(Array.isArray(winner.notes))
-
-    // Stage counts stay internally consistent and identity is the builtin task.
-    assert.equal(result.task_id, 'commit')
-    assert.ok(result.stages.eligible >= result.stages.collapsed)
-    assert.equal(result.stages.ranked, result.candidates.length)
-    assert.equal(result.stages.quota_blocked, 0)
-    assert.equal(result.stages.readiness_rejected, 0)
-  })
-
-  it('routingTest exposes tightened global cap and exclusions even with a surviving winner', async () => {
-    writeConfig({ tasks: { settings: { global: { maxAutoOutputUsdPerMillion: 3 } } } })
-    const result = await context!.makeService().routingTest({ task_id: 'commit' })
-    assert.ok(result.selection)
-    assert.equal(result.effective_output_cap_usd_per_million, 3)
-    assert.ok(result.exclusions.some((entry) => entry.code === 'price_limit'))
-    assert.ok(result.stages.excluded > 0)
-  })
-
-  it('routingTest reports a no-candidate failure as a useful result and writes no config', async () => {
-    const service = context!.makeService()
-    writeConfig({})
-    const before = readFileSync(context!.configPath, 'utf-8')
-
-    // 'auto-fail' is eliminated by the static eligibility gate; the diagnostic
-    // must return a structured failure rather than throwing, and must never
-    // fabricate a candidate score or a selection.
-    const result = await service.routingTest({ task_id: 'auto-fail' })
-    assert.equal(result.selection, null)
-    assert.ok(result.failure)
-    assert.equal(result.failure.code, 'no_available_provider')
-    assert.ok(result.static_eligibility)
-    assert.equal(result.static_eligibility.code, 'no_available_provider')
-    assert.equal(result.static_eligibility.message, result.failure.message)
-    assert.deepEqual(result.candidates, [])
-    assert.deepEqual(result.exclusions, [])
-    assert.equal(result.stages.eligible, 0)
-    assert.equal(result.stages.ranked, 0)
-
-    // Read-only: no config mutation and no temporary residue.
-    assert.equal(readFileSync(context!.configPath, 'utf-8'), before)
-    assert.deepEqual(readConfig(), {})
-    assert.equal(tempResidue().length, 0)
-  })
-
-  it('routingTest forces automatic preview even when the task is pinned to explicit mode', async () => {
+  it('routingTest form never enumerates definitions and ignores saved task/global requirements', async () => {
+    // Saved global + per-task requirements exist but must NOT be inherited: the
+    // submitted form alone drives the diagnostic, and no definition lookup is
+    // performed (a definition source that throws on list proves it).
     writeConfig({
       tasks: {
         settings: {
-          byTask: {
-            'builtin:commit': {
-              selectionMode: 'explicit',
-              explicitRuntime: { kind: 'target', target: PROFILES[1]!.exactAgentRuntime },
-            },
-          },
+          global: { dispatch: { minimumTps: 99_999 } },
+          byTask: { 'builtin:commit': { dispatch: { minimumTps: 99_999 } } },
         },
       },
     })
-    const service = context!.makeService()
+    const service = context!.makeService({
+      definitions: {
+        ...createDefinitionsFixture(),
+        async list() {
+          throw new Error('routingTest must not enumerate definitions')
+        },
+      },
+    })
     const before = readFileSync(context!.configPath, 'utf-8')
 
-    const result = await service.routingTest({ task_id: 'commit' })
-    // The saved explicit pin is ignored: the diagnostic still previews
-    // automatic and must not return the pinned explicit runtime.
-    assert.ok(result.selection)
-    assert.notEqual(result.selection.exact_runtime, PROFILES[1]!.exactAgentRuntime)
-    assert.equal(result.selection.resolved.mode, 'native')
-    // The pinned config on disk is untouched.
+    // The form submits only a speed floor; the saved 99_999 minimum is ignored.
+    const result: TaskRoutingTestResult = await service.routingTest({
+      automatic: { minimum_tps: 60 },
+    })
+    assert.equal(Boolean(result.rows.length > 0), true)
+    // Saved global cap / requirement must not eliminate everything silently.
+    assert.equal(Boolean(result.rows.some((row) => row.rank !== null)), true, JSON.stringify(result.rows))
     assert.equal(readFileSync(context!.configPath, 'utf-8'), before)
     assert.equal(tempResidue().length, 0)
   })
 
-  it('routingTest rejects unknown and empty task ids as validation errors', async () => {
+  it('routingTest qualifies a pair with the production rank and actual weighted contributions', async () => {
     writeConfig({})
     const service = context!.makeService()
-    await assert.rejects(
-      service.routingTest({ task_id: 'does-not-exist' }),
-      (error) => error instanceof TaskSettingsTaskNotFoundError,
+    const result = await service.routingTest({ automatic: { minimum_tps: 60 } })
+
+    const qualified = result.rows.filter((row) => row.rank !== null)
+    assert.equal(Boolean(qualified.length >= 1), true)
+    const winner = qualified.find((row) => row.rank === 1)
+    assert.ok(winner, 'Expected winner')
+    // Actual weighted contributions sum to the shared scorer score.
+    const sum =
+      winner.price_score! + winner.speed_score! + winner.quota_score! + winner.intelligence_score!
+    assert.equal(Boolean(Math.abs(sum - winner.score!) < 1e-12), true)
+    assert.equal(winner.provider.length > 0, true)
+    assert.equal(winner.provider_name.length > 0, true)
+    assert.equal(winner.model_name.length > 0, true)
+    assert.equal(winner.reason, null)
+    assert.equal(Boolean(winner.effective_tps !== null), true)
+
+    // No client/runtime/internal fields leak into any row.
+    const serialized = JSON.stringify(result)
+    assert.equal(serialized.includes('exact_runtime'), false)
+    assert.equal(serialized.includes('"client"'), false)
+    assert.equal(serialized.includes('snapshot_id'), false)
+  })
+
+  it('routingTest retains an available pair rejected by the submitted intelligence/speed gate', async () => {
+    writeConfig({})
+    const service = context!.makeService({ resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }) })
+    // Require premium intelligence: the lower-intelligence providers are
+    // baseline-available but rejected, so they must still appear as rows.
+    const result = await service.routingTest({ automatic: { intelligence_min: 'premium' } })
+
+    // The claude premium profile qualifies; the mid/high pairs are retained as
+    // rejected rows with a short Chinese reason and null rank/score.
+    assert.equal(Boolean(result.rows.some((row) => row.rank !== null)), true, JSON.stringify(result.rows))
+    const rejected = result.rows.filter((row) => row.rank === null)
+    assert.equal(Boolean(rejected.length >= 1), true)
+    for (const row of rejected) {
+      assert.equal(row.score, null)
+      assert.equal(row.price_score, null)
+      assert.equal(row.speed_score, null)
+      assert.equal(row.quota_score, null)
+      assert.equal(row.intelligence_score, null)
+      assert.equal(Boolean(row.reason && /[\u4e00-\u9fff]/u.test(row.reason)), true)
+    }
+  })
+
+  it('routingTest omits pairs that are not baseline provider-ready', async () => {
+    writeConfig({})
+    // A provider blocked for the synthetic routing-form task is unavailable in
+    // baseline and must be omitted entirely (not surfaced as a rejected row).
+    const service = context!.makeService({
+      resolver: createResolverFixture({
+        unavailable: { 'routing-form': PROFILES[1]!.exactAgentRuntime },
+        autoFailTasks: [],
+      }),
+    })
+    const result = await service.routingTest({ automatic: {} })
+    assert.equal(
+      result.rows.some((row) => row.provider === PROFILES[1]!.provider && row.model === PROFILES[1]!.model),
+      false,
     )
-    await assert.rejects(
-      service.routingTest({ task_id: '   ' }),
-      (error) => error instanceof TaskSettingsTaskNotFoundError,
+  })
+
+  it('routingTest checks live readiness even when every submitted gate rejects and omits only the unavailable pair', async () => {
+    writeConfig({})
+    const profiles = [A_MID_P, A_HIGH_P]
+    const seen: string[] = []
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles }),
+      runtimeAvailability: async (runtime) => {
+        seen.push(runtime.model)
+        return { providerCredential: 'available', providerLive: 'unknown', quota: 'unknown', available: runtime.model !== A_MID_P.model }
+      },
+    })
+    const result = await service.routingTest({ automatic: { minimum_tps: 10000 } })
+    assert.deepEqual(result.rows.map(row => row.model), [A_HIGH_P.model])
+    assert.equal(result.rows[0]!.reason, '速度过低')
+    assert.equal(result.rows[0]!.rank, null)
+    assert.equal(result.rows[0]!.effective_tps, A_HIGH_P.tps)
+    assert.deepEqual(seen.sort(), profiles.map(profile => profile.model).sort())
+  })
+
+  it('routingTest keeps a ready sibling when another client for the same pair is unavailable', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE] }),
+      runtimeAvailability: async (runtime) => ({ providerCredential: 'available', providerLive: 'unknown', quota: 'unknown', available: runtime.client === CODEBUDDY_GROK_PROFILE.client }),
+    })
+    const result = await service.routingTest({ automatic: {} })
+    assert.equal(result.rows.length, 1)
+    assert.equal(result.rows[0]!.rank, 1)
+    assert.equal(result.rows[0]!.reason, null)
+  })
+
+  it('routingTest collapses client duplicates at provider+model into one row', async () => {
+    writeConfig({})
+    const service = context!.makeService({
+      resolver: createResolverFixture({
+        profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE],
+        autoFailTasks: [],
+      }),
+    })
+    const result = await service.routingTest({ automatic: {} })
+    const deepseekRows = result.rows.filter(
+      (row) => row.provider === 'codebuddy' && row.model === 'deepseek-v4.1-flash',
     )
+    assert.equal(deepseekRows.length, 1)
+    assert.equal(deepseekRows[0]!.rank, 1)
+  })
+
+  it('routingTest returns rows (not an error) when every pair is rejected by the form', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = readFileSync(context!.configPath, 'utf-8')
+    // An impossible price ceiling rejects every baseline-available pair, but the
+    // form diagnostic must still return one rejected row per available pair.
+    const result = await service.routingTest({ automatic: { max_output_usd_per_million: 0.0001 } })
+    assert.equal(Boolean(result.rows.length >= 1), true)
+    assert.equal(Boolean(result.rows.every((row) => row.rank === null && row.score === null && row.reason !== null)), true)
+    assert.equal(readFileSync(context!.configPath, 'utf-8'), before)
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('routingTestTasks imports the raw definition configuration of every valid task', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const result = await service.routingTestTasks({})
+    const byIdentity = new Map(result.tasks.map((task) => [task.identity, task]))
+
+    // Builtin rows expose the RAW definition dispatch/timeout, never a layer.
+    const commit = byIdentity.get('builtin:commit')
+    assert.ok(commit, 'Expected commit')
+    assert.equal(commit.name, 'commit')
+    assert.equal(commit.display_name, 'Commit helper')
+    assert.deepEqual(commit.automatic, { expected_tps: 80, minimum_tps: 60 })
+    assert.equal(commit.timeout_ms, 120_000)
+    assert.equal('project' in commit, false)
+
+    // A project-scoped source surfaces project rows with their project id.
+    const projectService = context!.makeService({
+      definitions: {
+        async list(project?: string) {
+          const entries = project === undefined
+            ? [BUILTIN_DEFS[0]!]
+            : [BUILTIN_DEFS[1]!]
+          return entries.map((entry) => defToSummary(entry, project))
+        },
+        async describe(taskId: string, project?: string) {
+          const entry = BUILTIN_DEFS.find((candidate) => candidate.name === taskId)
+          if (!entry) throw new Error(`task '${taskId}' not found`)
+          return { ...defToSummary(entry, project), permission: 'readonly' as const }
+        },
+        async listProjects() {
+          return [{ id: 'alpha', displayName: 'Alpha Project' }]
+        },
+      },
+    })
+    const projectResult = await projectService.routingTestTasks({})
+    const projectReview = projectResult.tasks.find((task) => task.identity === 'project:alpha:review')
+    assert.ok(projectReview, 'Expected projectReview')
+    assert.equal(projectReview.project, 'alpha')
+    assert.deepEqual(projectReview.automatic, { max_output_usd_per_million: 15 })
+
+    // No effective-settings or resolved-snapshot field is exposed.
+    const serialized = JSON.stringify(result)
+    assert.equal(serialized.includes('effective'), false)
+    assert.equal(serialized.includes('user_task'), false)
   })
 })

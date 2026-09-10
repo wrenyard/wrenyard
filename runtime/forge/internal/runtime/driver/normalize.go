@@ -168,11 +168,17 @@ type TranscriptTee struct {
 	// codebuddyCanonical guards the at-most-one canonical turn_usage emission
 	// for a terminal result; a later duplicate terminal never emits a second.
 	codebuddyCanonical bool
-	// codebuddyTerminalOK and codebuddyTerminalMs hold the last observed
-	// terminal result's success and validated positive native duration so the
-	// canonical turn_usage can replace the terminal cumulative token totals.
+	// codebuddyTurnStarted marks the monotonic start of the current child
+	// invocation immediately before process launch. CodeBuddy's native
+	// terminal duration_ms resets across compaction while the summed
+	// current-invocation assistant usage spans the whole invocation, so the
+	// denominator used for TPS must be this measured wall interval, which is
+	// never reset by compaction or a native duration reset.
+	codebuddyTurnStarted time.Time
+	// codebuddyTerminalOK holds the last observed terminal result's success so
+	// the canonical turn_usage can replace the terminal cumulative token
+	// totals.
 	codebuddyTerminalOK   bool
-	codebuddyTerminalMs   int
 	codebuddyTerminalSeen bool
 
 	// opencode usage aggregation: OpenCode emits one step_finish per model
@@ -287,12 +293,16 @@ type grokStreamTracker struct {
 }
 
 func NewTranscriptTeeWithEventHandler(clientFamily string, log io.Writer, eventHandler func(protocol.Event)) *TranscriptTee {
-	return &TranscriptTee{
+	tee := &TranscriptTee{
 		clientFamily: clientFamily,
 		log:          log,
 		eventHandler: eventHandler,
 		now:          time.Now,
 	}
+	if clientFamily == "codebuddy" {
+		tee.codebuddyTurnStarted = tee.now()
+	}
+	return tee
 }
 
 func (t *TranscriptTee) Write(p []byte) (int, error) {
@@ -608,9 +618,11 @@ func copyMap(m map[string]any) map[string]any {
 }
 
 // observeCodeBuddyInvocation tracks the current child invocation's native
-// assistant.message.usage records and the terminal result's success/duration
-// so a successful terminal turn_usage can be replaced by truthful
-// current-invocation sums instead of the cumulative result.usage.
+// assistant.message.usage records and the terminal result's success so a
+// successful terminal turn_usage can be replaced by truthful
+// current-invocation sums instead of the cumulative result.usage. The
+// invocation wall interval is measured once before launch (see
+// NewTranscriptTeeWithEventHandler) and is never reset by compaction or the terminal record.
 func (t *TranscriptTee) observeCodeBuddyInvocation(line []byte) {
 	var event map[string]any
 	if err := json.Unmarshal(line, &event); err != nil || event == nil {
@@ -650,11 +662,6 @@ func (t *TranscriptTee) observeCodeBuddyInvocation(line []byte) {
 		t.codebuddyTerminalSeen = true
 		isError, hasIsError := getBool(event, "is_error")
 		t.codebuddyTerminalOK = !((hasIsError && isError) || hasNormalizedFailureField(event))
-		if ms, ok := positiveIntDuration(event["duration_ms"]); ok {
-			t.codebuddyTerminalMs = ms
-		} else {
-			t.codebuddyTerminalMs = 0
-		}
 	}
 }
 
@@ -680,26 +687,32 @@ func codeBuddyAssistantUsage(event map[string]any) (input, output int, present, 
 
 // codeBuddyTurnUsage decides the single turn_usage for a terminal result line.
 // On a successful terminal result with at least one complete current-invocation
-// usage record and a positive validated native duration, it replaces the
-// delegated terminal cumulative tokens with the current-invocation sums and
-// claims the full agent_turn_v1 contract. Every other path (missing/incomplete
-// usage, error result, invalid or absent duration, overflow, duplicate
-// terminal, malformed data) preserves the terminal cumulative metadata but
-// removes all trust fields so untrusted usage can never feed TPS.
+// usage record and a positive whole-millisecond measured invocation wall
+// interval (before process launch to this terminal), it replaces the delegated
+// terminal cumulative tokens with the current-invocation sums and claims the
+// full agent_turn_v1 contract. The denominator is the measured monotonic
+// interval, never the native terminal duration_ms: CodeBuddy's native duration
+// resets across compaction while the summed current-invocation output spans the
+// whole invocation. Every other path (missing/incomplete usage, error result,
+// no start boundary, sub-millisecond interval, overflow, duplicate terminal,
+// malformed data) preserves the terminal cumulative metadata but removes all
+// trust fields so untrusted usage can never feed TPS.
 func (t *TranscriptTee) codeBuddyTurnUsage(event *protocol.Event) {
 	if event == nil || event.Data == nil {
 		return
 	}
-	if t.codebuddyUsageSeen && !t.codebuddyUsageInvalid && !t.codebuddyUsageOverflow && t.codebuddyTerminalSeen && t.codebuddyTerminalOK && t.codebuddyTerminalMs > 0 && !t.codebuddyCanonical {
-		data := map[string]any{
-			"input_tokens":  t.codebuddyUsageInput,
-			"output_tokens": t.codebuddyUsageOutput,
-			"duration_ms":   t.codebuddyTerminalMs,
+	if t.codebuddyUsageSeen && !t.codebuddyUsageInvalid && !t.codebuddyUsageOverflow && t.codebuddyTerminalSeen && t.codebuddyTerminalOK && !t.codebuddyTurnStarted.IsZero() && !t.codebuddyCanonical {
+		if elapsed := int(t.now().Sub(t.codebuddyTurnStarted).Milliseconds()); elapsed > 0 {
+			data := map[string]any{
+				"input_tokens":  t.codebuddyUsageInput,
+				"output_tokens": t.codebuddyUsageOutput,
+				"duration_ms":   elapsed,
+			}
+			applyTrustedAgentTurnContract(data)
+			event.Data = data
+			t.codebuddyCanonical = true
+			return
 		}
-		applyTrustedAgentTurnContract(data)
-		event.Data = data
-		t.codebuddyCanonical = true
-		return
 	}
 	removeTrustFields(event)
 }
