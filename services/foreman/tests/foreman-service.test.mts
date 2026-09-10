@@ -223,6 +223,15 @@ test('service IPC task run can target a managed worktree', async () => {
 
   const fakeForge = join(workDir, 'fake-forge-cwd.mjs')
   writeFileSync(fakeForge, `
+const argv = process.argv.slice(2)
+if (argv[0] === 'providers' && argv[1] === 'list') {
+  process.stdout.write(JSON.stringify([{ id: 'chatgpt', auth_ok: true }]) + '\\n')
+  process.exit(0)
+}
+if (argv[0] === 'quota' && argv[1] === '--json') {
+  process.stdout.write(JSON.stringify([]) + '\\n')
+  process.exit(0)
+}
 const output = [
   { protocol: 'forge.agent.stream', version: 1, run_id: 'fr_task_worktree', seq: 1, type: 'run_started', timestamp: '2026-06-30T00:00:00.000Z', data: { profile: 'test-profile', client_family: 'claude', cwd: process.cwd() } },
   { protocol: 'forge.agent.stream', version: 1, run_id: 'fr_task_worktree', seq: 2, type: 'run_finished', timestamp: '2026-06-30T00:00:00.000Z', data: { status: 'done', exit_code: 0, native_session_id: 'native_task_worktree', client_family: 'claude', summary: '<foreman-task-output>\\n<summary>cwd captured</summary>\\n<result>\\n' + JSON.stringify({ cwd: process.cwd() }) + '\\n</result>\\n</foreman-task-output>' } },
@@ -717,7 +726,25 @@ async function waitForIpcTaskStatus(
 function installFakeForgeLines(dir: string, events: Array<Record<string, unknown>>): void {
   const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
   const script = join(dir, 'fake-forge.mjs')
-  writeFileSync(script, `process.stdout.write(${JSON.stringify(output)})\n`, 'utf-8')
+  // The real native provider readiness probe invokes `forge providers list --json`
+  // and `quota --json` before dispatch. Those calls must
+  // return valid JSON so a clean host without an existing host login still
+  // dispatches the task. Every other invocation keeps the exact inference stream
+  // fixture unchanged.
+  const scriptBody = [
+    `const argv = process.argv.slice(2)`,
+    `if (argv[0] === 'providers' && argv[1] === 'list') {`,
+    `  process.stdout.write(JSON.stringify([{ id: 'chatgpt', auth_ok: true }]) + '\\n')`,
+    `  process.exit(0)`,
+    `}`,
+    `if (argv[0] === 'quota' && argv[1] === '--json') {`,
+    `  process.stdout.write(JSON.stringify([]) + '\\n')`,
+    `  process.exit(0)`,
+    `}`,
+    `process.stdout.write(${JSON.stringify(output)})`,
+    '',
+  ].join('\n')
+  writeFileSync(script, scriptBody, 'utf-8')
 
   process.env.WRENYARD_RUNTIME_BIN = process.execPath
   process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
