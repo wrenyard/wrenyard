@@ -49,6 +49,9 @@ function baseOptions(root: string, recorder: Recorder): MainOptions {
     stdout: () => {},
     stderr: () => {},
     resolver: () => null,
+    // Root every OS-specific app location at the test root so tests never
+    // discover the host machine's real installed Desktop application.
+    env: { HOME: root, USERPROFILE: root, LOCALAPPDATA: root },
   };
 }
 
@@ -252,23 +255,66 @@ test('desktopBin override wins over environment and layout discovery', (t) => {
   assert.deepEqual(recorder.calls, [{ command: '/custom/desktop', args: ['--dev'] }]);
 });
 
+test('desktop discovers the canonical installed application path', (t) => {
+  const root = makeSuite();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let installed: string;
+  if (process.platform === 'win32') {
+    installed = join(root, 'Programs', 'Wrenyard Desktop', 'wrenyard-desktop.exe');
+  } else {
+    installed = join(root, 'Applications', '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
+  }
+  mkdirSync(join(installed, '..'), { recursive: true });
+  writeFileSync(installed, '#!/bin/sh\nexit 0\n');
+  if (process.platform !== 'win32') {
+    chmodSync(installed, 0o755);
+  }
+  const recorder = makeRunner([0]);
+  const code = main(['desktop'], baseOptions(root, recorder));
+  assert.equal(code, 0);
+  assert.deepEqual(recorder.calls, [{ command: installed, args: [] }]);
+});
+
+test('desktop prefers the dev Electron checkout over the installed application', (t) => {
+  const root = makeSuite('development');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const electronDir = join(root, 'apps', 'desktop', 'node_modules', 'electron');
+  mkdirSync(electronDir, { recursive: true });
+  writeFileSync(join(electronDir, 'cli.js'), '#!/usr/bin/env node\n');
+  const installed =
+    process.platform === 'win32'
+      ? join(root, 'Programs', 'Wrenyard Desktop', 'wrenyard-desktop.exe')
+      : join(root, 'Applications', '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
+  mkdirSync(join(installed, '..'), { recursive: true });
+  writeFileSync(installed, '#!/bin/sh\nexit 0\n');
+  const recorder = makeRunner([0]);
+  const code = main(['desktop'], baseOptions(root, recorder));
+  assert.equal(code, 0);
+  assert.equal(recorder.calls.length, 1);
+  assert.equal(recorder.calls[0].command, process.execPath);
+  assert.equal(
+    recorder.calls[0].args[0],
+    join(root, 'apps', 'desktop', 'node_modules', 'electron', 'cli.js'),
+  );
+});
+
 test('desktop falls back to dev Electron in a development suite', (t) => {
   const root = makeSuite('development');
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const binDir = join(root, 'node_modules', '.bin');
-  mkdirSync(binDir, { recursive: true });
-  const electron = join(binDir, process.platform === 'win32' ? 'electron.cmd' : 'electron');
-  writeFileSync(electron, '#!/bin/sh\necho fake electron\n');
-  if (process.platform !== 'win32') {
-    chmodSync(electron, 0o755);
-  }
+  const electronDir = join(root, 'apps', 'desktop', 'node_modules', 'electron');
+  mkdirSync(electronDir, { recursive: true });
+  writeFileSync(join(electronDir, 'cli.js'), '#!/usr/bin/env node\n');
   mkdirSync(join(root, 'apps', 'desktop'), { recursive: true });
   const recorder = makeRunner([0]);
   const code = main(['desktop'], baseOptions(root, recorder));
   assert.equal(code, 0);
   assert.equal(recorder.calls.length, 1);
-  assert.ok(recorder.calls[0].command.endsWith(join('node_modules', '.bin', 'electron')));
-  assert.ok(recorder.calls[0].args[0].endsWith(join('apps', 'desktop')));
+  assert.equal(recorder.calls[0].command, process.execPath);
+  assert.equal(
+    recorder.calls[0].args[0],
+    join(root, 'apps', 'desktop', 'node_modules', 'electron', 'cli.js'),
+  );
+  assert.equal(recorder.calls[0].args[1], join(root, 'apps', 'desktop'));
 });
 
 test('desktop returns failure when nothing can be launched', (t) => {
@@ -425,12 +471,18 @@ test('help is Wrenyard-only and no longer advertises legacy aliases', (t) => {
   assert.equal(recorder.calls.length, 0);
 });
 
-/** Temporary suite that also ships the bundled install.sh like a release. */
+/** Temporary suite that also ships the bundled installers like a release. */
 function makeReleaseSuite(): string {
   const root = makeSuite('release');
   writeFileSync(join(root, 'install.sh'), '#!/bin/sh\nexit 0\n');
   chmodSync(join(root, 'install.sh'), 0o755);
+  writeFileSync(join(root, 'install.ps1'), '# fake installer\n');
   return root;
+}
+
+/** Root prefix env so the updater never reads the host LOCALAPPDATA/HOME. */
+function updateEnv(root: string): NodeJS.ProcessEnv {
+  return { ...process.env, WRENYARD_PREFIX: root };
 }
 
 test('update routes to the release updater and never invokes git/pnpm/go', (t) => {
@@ -440,18 +492,31 @@ test('update routes to the release updater and never invokes git/pnpm/go', (t) =
   let out = '';
   const code = main(['update'], {
     ...baseOptions(root, recorder),
-    // Isolate the default prefix so no real wrenyard install can turn on
+    // Isolate the prefix so no real wrenyard install can turn on
     // service restart/health calls and change the recorded call set.
-    env: { ...process.env, HOME: root },
+    env: updateEnv(root),
     stdout: (text) => {
       out += `${text}\n`;
     },
   });
   assert.equal(code, 0);
   assert.equal(recorder.calls.length, 1);
-  assert.equal(recorder.calls[0].command, 'bash');
-  assert.ok(recorder.calls[0].args[0].endsWith(join('install.sh')));
-  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--suite-only']);
+  if (process.platform === 'win32') {
+    assert.equal(recorder.calls[0].command, 'powershell.exe');
+    assert.deepEqual(recorder.calls[0].args, [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      join(root, 'install.ps1'),
+      '-Update',
+      '-SuiteOnly',
+    ]);
+  } else {
+    assert.equal(recorder.calls[0].command, 'bash');
+    assert.equal(recorder.calls[0].args[0], join(root, 'install.sh'));
+    assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--suite-only']);
+  }
   assert.ok(recorder.calls.every((call) => !['git', 'pnpm', 'go'].includes(call.command)));
   assert.ok(out.includes('wrenyard updated'));
 });
@@ -462,11 +527,21 @@ test('update forwards --version and the Desktop helper suite-only mode to the bu
   const recorder = makeRunner([0]);
   const code = main(
     ['update', '--version', '1.0.0-dev.0', '--suite-only'],
-    { ...baseOptions(root, recorder), env: { ...process.env, HOME: root } },
+    { ...baseOptions(root, recorder), env: updateEnv(root) },
   );
   assert.equal(code, 0);
   assert.equal(recorder.calls.length, 1);
-  assert.deepEqual(recorder.calls[0].args.slice(1), ['--update', '--version', '1.0.0-dev.0', '--suite-only']);
+  if (process.platform === 'win32') {
+    assert.equal(recorder.calls[0].command, 'powershell.exe');
+    assert.deepEqual(recorder.calls[0].args.slice(-4), ['-Update', '-Version', '1.0.0-dev.0', '-SuiteOnly']);
+  } else {
+    assert.deepEqual(recorder.calls[0].args.slice(1), [
+      '--update',
+      '--version',
+      '1.0.0-dev.0',
+      '--suite-only',
+    ]);
+  }
 });
 
 test('update --json emits machine-readable output', (t) => {
@@ -476,7 +551,7 @@ test('update --json emits machine-readable output', (t) => {
   let out = '';
   const code = main(['update', '--json'], {
     ...baseOptions(root, recorder),
-    env: { ...process.env, HOME: root },
+    env: updateEnv(root),
     stdout: (text) => {
       out += `${text}\n`;
     },

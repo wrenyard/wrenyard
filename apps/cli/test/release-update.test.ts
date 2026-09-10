@@ -58,11 +58,19 @@ function makeEnv(): { root: string; previous: string } {
   writeFileSync(join(root, 'bin', 'wrenyard'), '#!/bin/sh\necho fake wrenyard\n');
   chmodSync(join(root, 'bin', 'wrenyard'), 0o755);
   symlinkSync('versions/1.0.0', join(root, 'current'));
-  return { root, previous: 'versions/1.0.0' };
+  return { root, previous: readlinkSync(join(root, 'current')) };
 }
 
 function baseOptions(fake: FakeRunner, envRoot: string): UpdateOptions {
-  return { suiteRoot: envRoot, prefix: envRoot, runner: fake.runner, env: process.env };
+  // These fixtures model POSIX install.sh runs; pin darwin so the assertions
+  // hold on a native Windows host too.
+  return {
+    suiteRoot: envRoot,
+    prefix: envRoot,
+    runner: fake.runner,
+    env: process.env,
+    platform: 'darwin',
+  };
 }
 
 test('POSIX: selects the bundled install.sh and passes --update plus --version', (t) => {
@@ -125,7 +133,13 @@ test('source scripts are a fallback when no bundled installer exists', (t) => {
   mkdirSync(join(root, 'scripts'), { recursive: true });
   writeFileSync(join(root, 'scripts', 'install.sh'), '#!/bin/sh\nexit 0\n');
   const fake = makeFakeRunner([{ status: 0 }]);
-  const outcome = runUpdate({ suiteRoot: root, prefix: root, runner: fake.runner, env: process.env });
+  const outcome = runUpdate({
+    suiteRoot: root,
+    prefix: root,
+    platform: 'darwin',
+    runner: fake.runner,
+    env: process.env,
+  });
   assert.equal(outcome.ok, true);
   assert.equal(fake.calls[0].args[0], join(root, 'scripts', 'install.sh'));
 });
@@ -223,7 +237,13 @@ test('health-check failure after install restores the previous current and resta
     step += 1;
     return { status, stdout: '', stderr: '' };
   };
-  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: process.env });
+  const outcome = runUpdate({
+    suiteRoot: env.root,
+    prefix: env.root,
+    runner,
+    env: process.env,
+    platform: 'darwin',
+  });
   assert.equal(outcome.ok, false);
   assert.equal(outcome.rolledBack, true);
   assert.ok(outcome.healthError, 'health error message present');
@@ -283,7 +303,7 @@ test('post-install launcher calls drop stale suite-pinned env and a wrong-identi
     return { status: 0, stdout: '', stderr: '' };
   };
 
-  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: updateEnv });
+  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: updateEnv, platform: 'darwin' });
   assert.equal(outcome.ok, false);
   assert.equal(outcome.rolledBack, true);
   assert.ok(outcome.healthError, 'wrong-identity healthy daemon must be rejected as a health failure');
@@ -337,7 +357,7 @@ test('a healthy daemon that omits its suite root is rejected as missing identity
     return { status: 0, stdout: '', stderr: '' };
   };
 
-  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: process.env });
+  const outcome = runUpdate({ suiteRoot: env.root, prefix: env.root, runner, env: process.env, platform: 'darwin' });
   assert.equal(outcome.ok, false);
   assert.equal(outcome.rolledBack, true);
   assert.match(outcome.healthError ?? '', /identity mismatch/);
@@ -385,7 +405,7 @@ test('Windows rollback resolves a relative previous target to an absolute juncti
   assert.equal(outcome.ok, false);
   assert.equal(outcome.rolledBack, true);
   assert.ok(outcome.healthError, 'health error message present');
-  assert.equal(readlinkSync(join(root, 'current')), 'versions/1.0.0');
+  assert.equal(readlinkSync(join(root, 'current')), join('versions', '1.0.0'));
   const restore = calls.find(
     (call) => call.command === 'powershell.exe' && call.args.join(' ').includes('New-Item -ItemType Junction'),
   );

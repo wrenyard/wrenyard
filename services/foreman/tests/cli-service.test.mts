@@ -1491,7 +1491,25 @@ function serverPort(server: Server): number {
 function installFakeForgeLines(dir: string, events: Array<Record<string, unknown>>): void {
   const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
   const script = join(dir, 'fake-forge.mjs')
-  writeFileSync(script, `process.stdout.write(${JSON.stringify(output)})\n`, 'utf-8')
+  // The real native provider readiness probe invokes `forge providers list --json`
+  // and `quota --json` before dispatch. Those calls must
+  // return valid JSON so a clean host without an existing host login still
+  // dispatches the task. Every other invocation keeps the exact inference stream
+  // fixture unchanged.
+  const scriptBody = [
+    `const argv = process.argv.slice(2)`,
+    `if (argv[0] === 'providers' && argv[1] === 'list') {`,
+    `  process.stdout.write(JSON.stringify([{ id: 'chatgpt', auth_ok: true }]) + '\\n')`,
+    `  process.exit(0)`,
+    `}`,
+    `if (argv[0] === 'quota' && argv[1] === '--json') {`,
+    `  process.stdout.write(JSON.stringify([]) + '\\n')`,
+    `  process.exit(0)`,
+    `}`,
+    `process.stdout.write(${JSON.stringify(output)})`,
+    '',
+  ].join('\n')
+  writeFileSync(script, scriptBody, 'utf-8')
 
   process.env.WRENYARD_RUNTIME_BIN = process.execPath
   process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])

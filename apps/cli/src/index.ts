@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RuntimeResolutionError, resolveForgeBinary } from '@wrenyard/runtime-resolver';
 import { formatOutcome, parseUpdateArgs, runUpdate } from './release-update.js';
@@ -270,20 +271,33 @@ function resolveDesktop(ctx: MainContext): { command: string; args: string[] } |
   if (typeof envBinary === 'string' && envBinary.length > 0) {
     return { command: envBinary, args: [] };
   }
-  // Known packaged desktop artifact inside the suite layout.
-  const artifact = resolve(
-    ctx.suiteRoot,
-    'desktop',
-    'dist',
-    process.platform === 'win32' ? 'wrenyard-desktop.exe' : 'wrenyard-desktop',
-  );
+  // Development layout: run Electron's official CLI JS with Node so the same
+  // spawn works on every platform (no .bin shell shim, no shell:true). pnpm
+  // places electron under apps/desktop/node_modules; fall back to the root.
+  if (isDevelopmentSuite(ctx.suiteRoot)) {
+    const electronCli = [
+      resolve(ctx.suiteRoot, 'apps', 'desktop', 'node_modules', 'electron', 'cli.js'),
+      resolve(ctx.suiteRoot, 'node_modules', 'electron', 'cli.js'),
+    ].find((candidate) => existsSync(candidate));
+    if (electronCli !== undefined) {
+      return {
+        command: ctx.nodeExecutable,
+        args: [electronCli, resolve(ctx.suiteRoot, 'apps', 'desktop')],
+      };
+    }
+  }
+  // Canonical installed layout used by the official installers.
+  const artifact =
+    process.platform === 'win32'
+      ? join(
+          ctx.env.LOCALAPPDATA ?? join(ctx.env.USERPROFILE ?? homedir(), 'AppData', 'Local'),
+          'Programs',
+          'Wrenyard Desktop',
+          'wrenyard-desktop.exe',
+        )
+      : join(ctx.env.HOME ?? homedir(), 'Applications', '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
   if (existsSync(artifact)) {
     return { command: artifact, args: [] };
-  }
-  // Development layout: run the desktop sources with the workspace Electron.
-  const electron = resolve(ctx.suiteRoot, 'node_modules', '.bin', 'electron');
-  if (isDevelopmentSuite(ctx.suiteRoot) && existsSync(electron)) {
-    return { command: electron, args: [resolve(ctx.suiteRoot, 'apps', 'desktop')] };
   }
   return null;
 }
