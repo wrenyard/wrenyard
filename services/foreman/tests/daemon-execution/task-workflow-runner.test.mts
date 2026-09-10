@@ -818,7 +818,9 @@ describe('daemon execution permission', { concurrency: false }, () => {
 // ── Timeout propagation tests ────────────────────────────────────────
 
 describe('daemon execution timeout', { concurrency: false }, () => {
-  it('passes timeoutMs from TaskConfig to structured agent opts', async () => {
+  it('passes timeoutMs from TaskConfig to structured agent opts', async (t) => {
+    const now = Date.now()
+    t.mock.method(Date, 'now', () => now)
     const workspace = makeTempDir('foreman-daemon-execution-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
