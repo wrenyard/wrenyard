@@ -1,26 +1,10 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { InquiryStepResultSchema } from '../../core/task/schemas/inquiry.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 
-const InputSchema = z.object({
-  topic: z.string().min(1).describe('Request topic.'),
-  context: z
-    .looseObject({})
-    .describe('Complete structured inquiry or brainstorm context accumulated by the workflow.'),
-  answer: z.string().optional().describe('User answer to the previous question, if any.'),
-})
-
-const definition = {
-  __type: 'task' as const,
-  config: {
-    description: 'Reusable inquiry step: ask one question, request optional targeted exploration, converge, or block',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [shellUsage],
-    input: InputSchema,
-    output: InquiryStepResultSchema,
-    prompt: ({ topic, context, answer = '' }: z.infer<typeof InputSchema>) => `
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 ## Mission
 
 You are **Inquiry Step** — a reusable convergence agent for open software requirements.
@@ -91,14 +75,39 @@ When action is \`ask_question\`:
 ## Input
 
 ### Topic
-${topic}
+`,
+`
 
 ### Structured Context
-${JSON.stringify(context, null, 2)}
+`,
+`
 
 ### New Answer
-${answer}
 `,
+`
+`], labels: ["topic","context","answer"] } as const
+
+
+const InputSchema = z.object({
+  topic: z.string().min(1).describe('Request topic.'),
+  context: z
+    .looseObject({})
+    .describe('Complete structured inquiry or brainstorm context accumulated by the workflow.'),
+  answer: z.string().optional().describe('User answer to the previous question, if any.'),
+})
+
+const definition = {
+  __type: 'task' as const,
+  config: {
+    description: 'Reusable inquiry step: ask one question, request optional targeted exploration, converge, or block',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    permission: 'readonly',
+    instructions: [shellUsage],
+    input: InputSchema,
+    output: InquiryStepResultSchema,
+    prompt: withTaskPromptTemplates(({ topic, context, answer = '' }: z.infer<typeof InputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [topic,
+JSON.stringify(context, null, 2),
+answer]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/inquiry-step.mts',
 }

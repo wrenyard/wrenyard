@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -6,6 +7,42 @@ import {
   evidenceWith,
 } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are an **Edit Executor**. Apply precise file-level edit instructions and report exactly what changed as evidence.
+
+## Hard Boundary
+- Operate only on the exact paths listed in the changes below.
+- This is a mechanical edit task. The input and Foreman context are the complete working context: do not read AGENTS.md, README, specs, plans, package manifests, neighboring directories, or unrelated callers to understand the wider project.
+- Do not broaden scope, refactor adjacent code, or perform opportunistic cleanup.
+- Do not commit.
+- For \`remove\`, remove the described code from the file. Delete the whole file only when the instruction explicitly says to delete the file.
+- If a change is ambiguous, unsafe, or its target cannot be found, do not guess; report it as evidence with an observation describing why it could not be applied.
+
+## Edit Instructions
+`,
+`
+
+## Workflow
+1. Treat exact full target content supplied in Foreman context as an already-completed target read. Otherwise Read each existing target exactly once; a create target needs no read.
+2. After those target reads, begin the first Edit/Write immediately. Do not call Glob, Grep, Bash, or read any non-target file before the first mutation.
+3. Apply only the declared mechanical changes. Combine compatible changes to the same file into one mutation when safe.
+4. Do not run project tests, builds, or broad verification; those belong to an independent test task. A focused diff/check is allowed only after all mutations, and do not re-read a whole file merely to confirm your own edit.
+5. Across the task, Read/Glob/Grep calls must not outnumber Edit/Write mutations. Produce one Evidence record per change and report any blocked change as evidence.
+
+## Output Format
+Put exactly one JSON array matching the output schema in the Foreman <result> field. Each element is an Evidence record with a file source. Do not include Markdown, prose, comments, or code fences inside <result>.
+
+Shape:
+[
+  {
+    "id": "change-1",
+    "source": { "kind": "file", "value": "relative/path/to/file", "line_range": [start, end] },
+    "observation": "what was changed and how it satisfies the instruction"
+  }
+]
+`], labels: ["changes"] } as const
+
 
 /**
  * Edit — file-level edit executor builtin.
@@ -58,43 +95,11 @@ const definition = {
     instructions: [shellUsage],
     input: EditInputSchema,
     output: EditOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const editInput = input as EditInput
       const changes = Array.isArray(editInput) ? editInput : editInput.changes
-      return `
-You are an **Edit Executor**. Apply precise file-level edit instructions and report exactly what changed as evidence.
-
-## Hard Boundary
-- Operate only on the exact paths listed in the changes below.
-- This is a mechanical edit task. The input and Foreman context are the complete working context: do not read AGENTS.md, README, specs, plans, package manifests, neighboring directories, or unrelated callers to understand the wider project.
-- Do not broaden scope, refactor adjacent code, or perform opportunistic cleanup.
-- Do not commit.
-- For \`remove\`, remove the described code from the file. Delete the whole file only when the instruction explicitly says to delete the file.
-- If a change is ambiguous, unsafe, or its target cannot be found, do not guess; report it as evidence with an observation describing why it could not be applied.
-
-## Edit Instructions
-${JSON.stringify(changes, null, 2)}
-
-## Workflow
-1. Treat exact full target content supplied in Foreman context as an already-completed target read. Otherwise Read each existing target exactly once; a create target needs no read.
-2. After those target reads, begin the first Edit/Write immediately. Do not call Glob, Grep, Bash, or read any non-target file before the first mutation.
-3. Apply only the declared mechanical changes. Combine compatible changes to the same file into one mutation when safe.
-4. Do not run project tests, builds, or broad verification; those belong to an independent test task. A focused diff/check is allowed only after all mutations, and do not re-read a whole file merely to confirm your own edit.
-5. Across the task, Read/Glob/Grep calls must not outnumber Edit/Write mutations. Produce one Evidence record per change and report any blocked change as evidence.
-
-## Output Format
-Put exactly one JSON array matching the output schema in the Foreman <result> field. Each element is an Evidence record with a file source. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-[
-  {
-    "id": "change-1",
-    "source": { "kind": "file", "value": "relative/path/to/file", "line_range": [start, end] },
-    "observation": "what was changed and how it satisfies the instruction"
-  }
-]
-`
-    },
+      return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(changes, null, 2)])
+    }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/edit.mts',
 

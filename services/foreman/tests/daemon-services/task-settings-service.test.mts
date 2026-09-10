@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -35,6 +35,7 @@ import {
   evaluateForgeNativeRouteReadiness,
   type ForgeProviderReadinessSnapshot,
 } from '../../lib/daemon/execution/forge-provider-readiness-query.mts'
+import type { TaskSettingsLoadError } from '../../lib/protocol/methods/task.mts'
 
 const CATALOG_CHECKED_AT = '2026-09-05'
 const QUOTA_T0 = 1_726_000_000_000
@@ -2559,5 +2560,107 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
     assert.match(run.dispatch.reference_pricing.source, /fe-static/)
     assert.equal(run.dispatch.auto_routing, undefined)
+  })
+
+  it('surfaces mocked registry task load errors without mixing them into executable rows', async () => {
+    const loadErrors: TaskSettingsLoadError[] = [
+      {
+        source_path: '/ws/projects/alpha/tasks/broken.task.ts',
+        file_name: 'broken.task.ts',
+        message: 'strict schema validation failed',
+        project: 'alpha',
+        project_display_name: 'Alpha',
+      },
+      {
+        source_path: '/ws/projects/beta/tasks/dup.task.ts',
+        file_name: 'dup.task.ts',
+        message: "Duplicate definition 'dup' in scope 'beta'",
+        project: 'beta',
+        project_display_name: 'Beta',
+      },
+    ]
+    const service = context!.makeService({
+      definitions: {
+        ...createDefinitionsFixture(),
+        async listLoadErrors() {
+          return loadErrors
+        },
+      },
+    })
+    const snapshot = await service.snapshot({})
+
+    // Raw filename, message, and project grouping travel verbatim and stable.
+    assert.deepEqual(snapshot.load_errors, loadErrors)
+    // The healthy builtin rows are still present and the load errors never
+    // become executable settings rows.
+    assert.equal(snapshot.rows.length > 0, true)
+    assert.equal(
+      snapshot.rows.some((row) => row.identity === 'broken.task.ts' || row.identity === 'dup.task.ts'),
+      false,
+    )
+  })
+
+  it('filters load errors by the requested project consistently', async () => {
+    const loadErrors: TaskSettingsLoadError[] = [
+      {
+        source_path: '/ws/projects/alpha/tasks/broken.task.ts',
+        file_name: 'broken.task.ts',
+        message: 'm',
+        project: 'alpha',
+        project_display_name: 'Alpha',
+      },
+      {
+        source_path: '/ws/projects/beta/tasks/dup.task.ts',
+        file_name: 'dup.task.ts',
+        message: 'm',
+        project: 'beta',
+        project_display_name: 'Beta',
+      },
+      { source_path: '/ws/loose.task.ts', file_name: 'loose.task.ts', message: 'm' },
+    ]
+    const service = context!.makeService({
+      definitions: {
+        ...createDefinitionsFixture(),
+        async listLoadErrors() {
+          return loadErrors
+        },
+      },
+    })
+
+    const all = await service.snapshot({})
+    assert.deepEqual(all.load_errors, loadErrors)
+
+    const alpha = await service.snapshot({ project: 'alpha' })
+    assert.deepEqual(alpha.load_errors, [loadErrors[0]])
+    // A scoped snapshot keeps no out-of-project or project-less errors.
+    assert.equal(
+      alpha.load_errors?.some((error) => error.project !== 'alpha'),
+      false,
+    )
+  })
+
+  it('omits load_errors from a healthy snapshot with no definition source errors', async () => {
+    const service = context!.makeService()
+    const snapshot = await service.snapshot({})
+    assert.equal(snapshot.load_errors, undefined)
+    assert.equal(snapshot.rows.length > 0, true)
+  })
+
+  it('reads malformed project definitions with their registered project label', async () => {
+    const projectDir = join(context!.dir, 'projects', 'alpha')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, 'alpha.fmproj'), 'name: alpha\ndisplay_name: Alpha Project\ndescription: fixture\n')
+    writeFileSync(join(projectDir, 'broken.task.ts'), 'export default { __type: "task", config: { input: {}, output: {}, permission: "readonly", prompt: () => "", dispatch: { intelligenceMin: "frontier" } } }\n')
+    const service = context!.makeService({ definitions: undefined })
+    const snapshot = await service.snapshot({})
+    assert.equal(snapshot.load_errors?.length, 1)
+    const error = snapshot.load_errors![0]!
+    assert.equal(error.file_name, 'broken.task.ts')
+    assert.match(error.message, /schemas must be a ZodType/)
+    assert.equal(error.source_path, join(projectDir, 'broken.task.ts'))
+    assert.equal(error.project, 'alpha')
+    assert.equal(error.project_display_name, 'Alpha Project')
+    assert.ok(snapshot.rows.length > 0)
+    assert.equal(snapshot.rows.some((row) => row.name === 'broken'), false)
   })
 })

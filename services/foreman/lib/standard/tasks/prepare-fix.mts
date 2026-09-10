@@ -1,8 +1,47 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { ChangeSchema } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 import { EditOutputSchema } from './edit.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are a **Verification Repair Planner**. You do not edit files. Your job is to decide whether failed verification evidence should become precise edit instructions.
+
+## Implementation Context
+`,
+`
+
+## Verification Report
+`,
+`
+
+## Latest Edit Report
+`,
+`
+
+## All Edit Reports
+`,
+`
+
+Attempt: `,
+`
+
+## Decision Rules
+- First assess whether the verification result is credible. Test runners can be wrong.
+- If the failure is due to an invalid test, wrong command, missing dependency, credential, remote service, or unsupported environment, do not produce patches.
+- Produce \`edit_required\` only when you can map the failure to concrete implementation changes in files allowed by the FunctionalUnit/IU edit scope.
+- \`patches\` must be directly consumable by the edit task: each patch is a \`Change\` record with \`target\` (e.g. \`{ "kind": "file", "value": "<relative/path>" }\`), \`action\`, \`instruction\`, and \`expected\`.
+- Use precise instructions: name functions, methods, parameters, return behavior, config keys, or code to remove.
+- Do not use low-confidence edits as a guess. If confidence is low, choose \`failed\`, \`invalid_test\`, or \`environment_blocked\` as appropriate.
+
+## Output Format
+Put one JSON object matching this schema in the Foreman <result> field:
+
+`,
+`
+`], labels: ["implementation_context","test_report","edit_report","edit_reports","attempt","运行时填入任务输入"] } as const
+
 
 /**
  * Prepare Fix — Verification Repair Planner builtin (as-is migration of
@@ -76,7 +115,7 @@ const definition = {
     instructions: [shellUsage],
     input: PrepareFixInputSchema,
     output: PrepareFixOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const {
         implementation_context,
         test_report,
@@ -84,35 +123,12 @@ const definition = {
         edit_reports = [],
         attempt = 1,
       } = input as Record<string, any>
-      return `
-You are a **Verification Repair Planner**. You do not edit files. Your job is to decide whether failed verification evidence should become precise edit instructions.
-
-## Implementation Context
-${JSON.stringify(implementation_context, null, 2)}
-
-## Verification Report
-${JSON.stringify(test_report, null, 2)}
-
-## Latest Edit Report
-${JSON.stringify(edit_report, null, 2)}
-
-## All Edit Reports
-${JSON.stringify(edit_reports, null, 2)}
-
-Attempt: ${attempt}
-
-## Decision Rules
-- First assess whether the verification result is credible. Test runners can be wrong.
-- If the failure is due to an invalid test, wrong command, missing dependency, credential, remote service, or unsupported environment, do not produce patches.
-- Produce \`edit_required\` only when you can map the failure to concrete implementation changes in files allowed by the FunctionalUnit/IU edit scope.
-- \`patches\` must be directly consumable by the edit task: each patch is a \`Change\` record with \`target\` (e.g. \`{ "kind": "file", "value": "<relative/path>" }\`), \`action\`, \`instruction\`, and \`expected\`.
-- Use precise instructions: name functions, methods, parameters, return behavior, config keys, or code to remove.
-- Do not use low-confidence edits as a guess. If confidence is low, choose \`failed\`, \`invalid_test\`, or \`environment_blocked\` as appropriate.
-
-## Output Format
-Put one JSON object matching this schema in the Foreman <result> field:
-
-${jsonBlock(`{
+      return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(implementation_context, null, 2),
+JSON.stringify(test_report, null, 2),
+JSON.stringify(edit_report, null, 2),
+JSON.stringify(edit_reports, null, 2),
+attempt,
+jsonBlock(`{
   "status": "edit_required",
   "analysis": "Why the failed verification is credible and what code must change.",
   "patches": [
@@ -124,9 +140,8 @@ ${jsonBlock(`{
     }
   ],
   "confidence": "high"
-}`)}
-`
-    },
+}`)])
+    }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/prepare-fix.mts',
 }

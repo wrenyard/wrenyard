@@ -32,7 +32,7 @@ import type {
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
-import { ConversationView } from './conversation.js';
+import { ConversationView, renderRichText } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, formatTaskCompletionTimeTooltip, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
@@ -141,6 +141,10 @@ let selectedClientTab: ClientSurfaceId | null = null;
 let currentClientSnapshot: ClientConfigurationSnapshotDto | null = null;
 let taskSettings: TaskSettingsSnapshot | null = null;
 let tasksSelectedTaskId: string | null = null;
+/** Collapsed tree-group identities, persisted across re-render/polling so the
+ *  user's expansion choices survive snapshot refreshes. Keys: 'builtin',
+ *  'projects', or 'project:<project>'. */
+const tasksCollapsedGroups = new Set<string>();
 let tasksSaveBusy = false;
 /** In-memory two-mode selection; only ever 'automatic' or 'explicit'. */
 let tasksModeValue: TaskSettingsMode = 'automatic';
@@ -1455,18 +1459,60 @@ function taskResolutionFailureMessage(row: TaskSettingsTaskRow): string | null {
   return issue?.resolutionFailure?.message ?? null;
 }
 
-function tasksCategoryHeader(label: string, count: number, level: number): HTMLElement {
+function tasksCategoryHeader(label: string, count: number, level: number, groupKey?: string): HTMLElement {
   const header = document.createElement('div');
   header.className = 'tasks-tree-category';
   header.setAttribute('role', 'treeitem');
   header.setAttribute('aria-level', String(level));
-  header.setAttribute('aria-expanded', 'true');
-  const name = document.createElement('span');
-  name.textContent = label;
-  const total = document.createElement('small');
-  total.textContent = String(count);
-  header.append(name, total);
+  if (groupKey !== undefined) {
+    const collapsed = tasksCollapsedGroups.has(groupKey);
+    header.setAttribute('aria-expanded', String(!collapsed));
+    header.tabIndex = 0;
+    header.dataset.tasksGroup = groupKey;
+    const chevron = document.createElement('span');
+    chevron.className = 'tasks-tree-chevron';
+    const name = document.createElement('span');
+    name.textContent = label;
+    const total = document.createElement('small');
+    total.textContent = String(count);
+    header.append(chevron, name, total);
+    header.addEventListener('click', () => toggleTasksGroupCollapse(groupKey));
+    header.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleTasksGroupCollapse(groupKey);
+      } else if (event.key === 'ArrowLeft') {
+        if (!tasksCollapsedGroups.has(groupKey)) {
+          event.preventDefault();
+          toggleTasksGroupCollapse(groupKey);
+        }
+      } else if (event.key === 'ArrowRight') {
+        if (tasksCollapsedGroups.has(groupKey)) {
+          event.preventDefault();
+          toggleTasksGroupCollapse(groupKey);
+        }
+      }
+    });
+  } else {
+    header.setAttribute('aria-expanded', 'true');
+    const name = document.createElement('span');
+    name.textContent = label;
+    const total = document.createElement('small');
+    total.textContent = String(count);
+    header.append(name, total);
+  }
   return header;
+}
+
+/** Toggles a tree group's collapse state. The collapsed identity persists in a
+ *  renderer Set so polling/re-render preserves the user's expansion choices and
+ *  the selected task detail stays visible behind a collapsed ancestor. */
+function toggleTasksGroupCollapse(groupKey: string): void {
+  if (tasksCollapsedGroups.has(groupKey)) tasksCollapsedGroups.delete(groupKey);
+  else tasksCollapsedGroups.add(groupKey);
+  renderTasksList();
+  Array.from(tasksList.querySelectorAll<HTMLElement>('[data-tasks-group]'))
+    .find((header) => header.dataset.tasksGroup === groupKey)?.focus();
 }
 
 function tasksTreeGroup(): HTMLElement {
@@ -1512,26 +1558,60 @@ function tasksTreeLeaf(row: TaskSettingsTaskRow, level: number): HTMLElement {
   return leaf;
 }
 
+/** Non-executable error leaf for a backend load failure. Shows only the source
+ *  file name and a failure marker; the marker surfaces the failure message via
+ *  the safe resolution tooltip (the source path is an optional native title). */
+function tasksErrorLeaf(entry: { file_name: string; message: string; source_path?: string }, level: number): HTMLElement {
+  const leaf = document.createElement('div');
+  leaf.className = 'tasks-tree-leaf tasks-error-leaf';
+  leaf.setAttribute('role', 'treeitem');
+  leaf.setAttribute('aria-level', String(level));
+  leaf.tabIndex = 0;
+  const label = document.createElement('span');
+  label.className = 'tasks-tree-label';
+  label.textContent = entry.file_name;
+  leaf.append(label);
+  const indicator = document.createElement('span');
+  indicator.className = 'tasks-issue-indicator';
+  indicator.textContent = '!';
+  indicator.tabIndex = 0;
+  indicator.setAttribute('aria-describedby', 'tasks-resolution-tooltip');
+  indicator.setAttribute('aria-label', '读取失败，聚焦查看原因');
+  indicator.addEventListener('pointerenter', () => showTasksResolutionTooltip(indicator, entry.message));
+  indicator.addEventListener('pointerleave', hideTasksResolutionTooltip);
+  indicator.addEventListener('focus', () => showTasksResolutionTooltip(indicator, entry.message));
+  indicator.addEventListener('blur', hideTasksResolutionTooltip);
+  indicator.addEventListener('click', (event) => event.stopPropagation());
+  leaf.append(indicator);
+  return leaf;
+}
+
 function renderTasksList(): void {
   hideTasksResolutionTooltip();
-  const rows = taskSettings?.rows ?? [];
+  const snapshot = taskSettings;
   tasksList.replaceChildren();
-  if (!taskSettings) {
+  if (!snapshot) {
     tasksList.append(emptyRow('无法读取任务设置'));
     return;
   }
-  if (rows.length === 0) {
-    tasksList.append(emptyRow('暂无任务设置'));
-    return;
+  const rows = snapshot.rows ?? [];
+  // Backend load failures: grouped by their project when known, otherwise into a
+  // simple unknown-source bucket. These are non-executable leaves shown even when
+  // the snapshot carries no valid task rows.
+  const loadErrors = snapshot.load_errors ?? [];
+  const projectLabels = new Map(loadErrors.filter((entry) => entry.project && entry.project_display_name).map((entry) => [entry.project!, entry.project_display_name!]));
+  const projectErrors = new Map<string, Array<{ file_name: string; message: string; source_path?: string }>>();
+  const unknownErrors: Array<{ file_name: string; message: string; source_path?: string }> = [];
+  for (const entry of loadErrors) {
+    if (entry.project) {
+      const bucket = projectErrors.get(entry.project) ?? [];
+      bucket.push(entry);
+      projectErrors.set(entry.project, bucket);
+    } else {
+      unknownErrors.push(entry);
+    }
   }
-  const fragment = document.createDocumentFragment();
   const builtinRows = rows.filter((row) => !row.project);
-  if (builtinRows.length > 0) {
-    fragment.append(tasksCategoryHeader('内置', builtinRows.length, 1));
-    const builtinGroup = tasksTreeGroup();
-    for (const row of builtinRows) builtinGroup.append(tasksTreeLeaf(row, 2));
-    fragment.append(builtinGroup);
-  }
   const projects = new Map<string, TaskSettingsTaskRow[]>();
   for (const row of rows) {
     if (!row.project) continue;
@@ -1539,18 +1619,52 @@ function renderTasksList(): void {
     bucket.push(row);
     projects.set(row.project, bucket);
   }
-  if (projects.size > 0) {
-    const projectRowCount = rows.filter((row) => row.project).length;
-    fragment.append(tasksCategoryHeader('项目', projectRowCount, 1));
-    const projectCategory = tasksTreeGroup();
-    for (const [project, projectRows] of projects) {
-      const lead = projectRows[0];
-      projectCategory.append(tasksCategoryHeader(lead?.project_display_name ?? project, projectRows.length, 2));
-      const projectGroup = tasksTreeGroup();
-      for (const row of projectRows) projectGroup.append(tasksTreeLeaf(row, 3));
-      projectCategory.append(projectGroup);
+  const hasBuiltin = builtinRows.length > 0;
+  const hasProjects = projects.size > 0 || projectErrors.size > 0 || unknownErrors.length > 0;
+  if (!hasBuiltin && !hasProjects) {
+    tasksList.append(emptyRow('暂无任务设置'));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  if (hasBuiltin) {
+    fragment.append(tasksCategoryHeader('内置', builtinRows.length, 1, 'builtin'));
+    if (!tasksCollapsedGroups.has('builtin')) {
+      const builtinGroup = tasksTreeGroup();
+      for (const row of builtinRows) builtinGroup.append(tasksTreeLeaf(row, 2));
+      fragment.append(builtinGroup);
     }
-    fragment.append(projectCategory);
+  }
+  if (hasProjects) {
+    const projectGroupKeys = new Set<string>([...projects.keys(), ...projectErrors.keys()]);
+    const projectRowCount = projectGroupKeys.size + (unknownErrors.length > 0 ? 1 : 0);
+    fragment.append(tasksCategoryHeader('项目', projectRowCount, 1, 'projects'));
+    if (!tasksCollapsedGroups.has('projects')) {
+      const projectCategory = tasksTreeGroup();
+      for (const project of projectGroupKeys) {
+        const projectRows = projects.get(project) ?? [];
+        const errors = projectErrors.get(project) ?? [];
+        if (projectRows.length === 0 && errors.length === 0) continue;
+        const lead = projectRows[0];
+        const groupKey = `project:${project}`;
+        projectCategory.append(tasksCategoryHeader(lead?.project_display_name ?? projectLabels.get(project) ?? project, projectRows.length + errors.length, 2, groupKey));
+        if (!tasksCollapsedGroups.has(groupKey)) {
+          const projectGroup = tasksTreeGroup();
+          for (const row of projectRows) projectGroup.append(tasksTreeLeaf(row, 3));
+          for (const entry of errors) projectGroup.append(tasksErrorLeaf(entry, 3));
+          projectCategory.append(projectGroup);
+        }
+      }
+      if (unknownErrors.length > 0) {
+        const groupKey = 'load-errors:unknown';
+        projectCategory.append(tasksCategoryHeader('未知来源', unknownErrors.length, 2, groupKey));
+        if (!tasksCollapsedGroups.has(groupKey)) {
+          const unknownGroup = tasksTreeGroup();
+          for (const entry of unknownErrors) unknownGroup.append(tasksErrorLeaf(entry, 3));
+          projectCategory.append(unknownGroup);
+        }
+      }
+      fragment.append(projectCategory);
+    }
   }
   tasksList.append(fragment);
 }
@@ -1701,10 +1815,13 @@ function renderTasksTemplatePreview(row: TaskSettingsTaskRow): void {
     return;
   }
   for (const segment of segments) {
-    const item = document.createElement('span');
+    const item = document.createElement('div');
     if (segment.kind === 'text') {
+      // Static instruction text is rendered through the safe rich-text renderer
+      // (markdown is escaped, never executed); the surrounding block keeps the
+      // preview boundary styling while placeholder tokens below stay distinct.
       item.className = 'tasks-preview-segment tasks-preview-text';
-      item.textContent = segment.text;
+      item.append(renderRichText(segment.text));
     } else if (segment.kind === 'placeholder') {
       item.className = 'tasks-preview-segment tasks-preview-placeholder';
       item.textContent = segment.label;

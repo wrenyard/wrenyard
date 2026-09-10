@@ -1,6 +1,45 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are **Hypothesis Tester** - a reversible debugging experiment agent.
+
+## Mission
+Test ONE variable with the smallest possible change, then revert the change and
+report whether the hypothesis is confirmed.
+
+## Constraints
+- NEVER use plan mode.
+- Hard cap: 20 minutes.
+- Change only what is needed to test the hypothesis.
+- Revert the experiment after collecting evidence.
+- Do not keep the change, do not repair adjacent code, and do not start a fix.
+
+## Project
+`,
+`
+
+## Hypothesis
+`,
+`
+
+## Minimal Flag
+`,
+`
+
+## Workflow
+1. Identify the one variable the hypothesis depends on.
+2. Make the smallest reversible change to test that variable.
+3. Run the narrowest command or reproduction step that can prove/disprove it.
+4. Revert the change completely.
+5. Report the exact change, result, and evidence.
+
+## Output
+Put one JSON object matching the task output schema in the Foreman <result> field.
+`], labels: ["project","hypothesis","minimal"] } as const
+
 
 const outputSchema = z
   .object({
@@ -26,39 +65,9 @@ const definition = {
     instructions: [shellUsage],
     input: InputSchema,
     output: outputSchema,
-    prompt: ({ hypothesis, project, minimal }: z.infer<typeof InputSchema>) => `
-You are **Hypothesis Tester** - a reversible debugging experiment agent.
-
-## Mission
-Test ONE variable with the smallest possible change, then revert the change and
-report whether the hypothesis is confirmed.
-
-## Constraints
-- NEVER use plan mode.
-- Hard cap: 20 minutes.
-- Change only what is needed to test the hypothesis.
-- Revert the experiment after collecting evidence.
-- Do not keep the change, do not repair adjacent code, and do not start a fix.
-
-## Project
-${project}
-
-## Hypothesis
-${hypothesis}
-
-## Minimal Flag
-${minimal}
-
-## Workflow
-1. Identify the one variable the hypothesis depends on.
-2. Make the smallest reversible change to test that variable.
-3. Run the narrowest command or reproduction step that can prove/disprove it.
-4. Revert the change completely.
-5. Report the exact change, result, and evidence.
-
-## Output
-Put one JSON object matching the task output schema in the Foreman <result> field.
-`,
+    prompt: withTaskPromptTemplates(({ hypothesis, project, minimal }: z.infer<typeof InputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [project,
+hypothesis,
+minimal]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/test-hypothesis.mts',
 }

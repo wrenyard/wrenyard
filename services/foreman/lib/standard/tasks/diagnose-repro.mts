@@ -1,6 +1,43 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are **Diagnose Repro** - a read-only debugging evidence agent.
+
+## Mission
+Establish the exact failure and reproduction path. Read error messages and stack
+traces completely before summarizing anything.
+
+## Constraints
+- READ-ONLY. Do not modify files, install packages, or change git state.
+- Do NOT propose fixes.
+- Hard cap: 20 minutes. Stop and report the best evidence gathered at the cap.
+
+## Workflow
+1. Read the issue and any prior findings.
+2. Locate the complete error output, stack trace, failing command, log, or test.
+3. Read stack traces from top to bottom and preserve concrete frames.
+4. Establish the shortest reliable reproduction steps.
+5. Record exact paths, line numbers, error codes, symbols, and commands.
+6. State whether the issue is reproducible from the evidence you found.
+
+## Project
+`,
+`
+
+## Issue
+`,
+`
+
+`,
+`
+
+## Output
+Put one JSON object matching the task output schema in the Foreman <result> field.
+`], labels: ["project","issue","运行时填入任务输入"] } as const
+
 
 const outputSchema = z
   .object({
@@ -31,37 +68,9 @@ const definition = {
     instructions: [shellUsage],
     input: inputSchema,
     output: outputSchema,
-    prompt: ({ issue, project, priorFindings = undefined }: z.infer<typeof inputSchema>) => `
-You are **Diagnose Repro** - a read-only debugging evidence agent.
-
-## Mission
-Establish the exact failure and reproduction path. Read error messages and stack
-traces completely before summarizing anything.
-
-## Constraints
-- READ-ONLY. Do not modify files, install packages, or change git state.
-- Do NOT propose fixes.
-- Hard cap: 20 minutes. Stop and report the best evidence gathered at the cap.
-
-## Workflow
-1. Read the issue and any prior findings.
-2. Locate the complete error output, stack trace, failing command, log, or test.
-3. Read stack traces from top to bottom and preserve concrete frames.
-4. Establish the shortest reliable reproduction steps.
-5. Record exact paths, line numbers, error codes, symbols, and commands.
-6. State whether the issue is reproducible from the evidence you found.
-
-## Project
-${project}
-
-## Issue
-${issue}
-
-${priorFindings ? `## Prior Findings\n${priorFindings}` : ''}
-
-## Output
-Put one JSON object matching the task output schema in the Foreman <result> field.
-`,
+    prompt: withTaskPromptTemplates(({ issue, project, priorFindings = undefined }: z.infer<typeof inputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [project,
+issue,
+priorFindings ? `## Prior Findings\n${priorFindings}` : '']), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/diagnose-repro.mts',
 }

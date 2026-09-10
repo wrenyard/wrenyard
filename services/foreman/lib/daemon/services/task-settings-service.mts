@@ -20,7 +20,9 @@ import {
   type TaskResolutionFailureCode,
 } from '../../core/task/task-resolution-failure.mts'
 import { TaskService } from '../../core/task/service.mts'
-import { resolveTaskTarget } from '../../workspace/definition-registry.mts'
+import { getTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { resolveTaskTarget, getLoadErrors } from '../../workspace/definition-registry.mts'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { discoverProjects } from '../../core/project/loader.mts'
 import type { ForemanConfigStore } from '../../config/manager.mts'
 import { JsonForemanConfigStore } from '../../config/manager.mts'
@@ -56,6 +58,7 @@ import type {
   TaskSettingsExplicitRow,
   TaskSettingsInstructionSegment,
   TaskSettingsLayer as TaskSettingsLayerDto,
+  TaskSettingsLoadError,
   TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsRuntimeReadiness,
@@ -142,6 +145,10 @@ export interface TaskSettingsDefinitionSource {
   /** Optional discovery-only view of registered projects (id + `.fmproj`
    *  displayName). Never touches host paths, clones, sync, or remotes. */
   listProjects?(): TaskSettingsProjectSummary[] | Promise<TaskSettingsProjectSummary[]>
+  /** Optional registry task definition load errors (strict schema failures and
+   *  duplicate definitions) surfaced separately from executable settings rows.
+   *  Absent sources contribute no load errors to a snapshot. */
+  listLoadErrors?(): TaskSettingsLoadError[] | Promise<TaskSettingsLoadError[]>
 }
 
 export interface TaskSettingsProviderAvailability {
@@ -353,14 +360,9 @@ function summaryStableIdentity(summary: TaskSettingsDefinitionSummary): string {
   })
 }
 
-/** Safe, non-executing preview of the resolved TaskConfig prompt template.
- *
- *  Mirrors the exact buildTaskPrompt structure and ordering: each string
- *  instruction becomes a verbatim `text` segment in source order, each
- *  function instruction becomes an explicit placeholder segment (never
- *  invoked, never source-inspected), and the input-dependent `config.prompt`
- *  body is represented as a final placeholder. Nothing is executed and no
- *  prompt text is fabricated. */
+/** Read declared static fragments without invoking instruction/prompt functions.
+ * Template-backed prompts share these fragments with actual execution; arbitrary
+ * dynamic project prompts retain an explicit placeholder. */
 export function taskInstructionTemplate(
   config: { instructions?: unknown; prompt?: unknown } | undefined,
 ): TaskSettingsInstructionSegment[] {
@@ -375,7 +377,20 @@ export function taskInstructionTemplate(
       segments.push({ kind: 'placeholder', source: `task.instructions[${index}]`, label: '运行时填入任务输入' })
     }
   }
-  segments.push({ kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' })
+  const templates = getTaskPromptTemplates(config?.prompt)
+  for (const [templateIndex, template] of templates.entries()) {
+    const source = `task.prompt[${templateIndex}]`
+    if (template.label) segments.push({ kind: 'text', source, text: `## ${template.label}` })
+    for (const [index, text] of template.strings.entries()) {
+      if (text.trim()) segments.push({ kind: 'text', source: `${source}.text[${index}]`, text })
+      if (index < template.strings.length - 1) {
+        segments.push({ kind: 'placeholder', source: `${source}.input[${index}]`, label: template.labels?.[index] ?? '运行时填入任务输入' })
+      }
+    }
+  }
+  if (templates.length === 0) {
+    segments.push({ kind: 'placeholder', source: 'task.prompt', label: '运行时根据任务输入生成任务提示' })
+  }
   return segments
 }
 
@@ -615,6 +630,17 @@ export class TaskSettingsService {
       rows.push(await this.buildRow(summary, params.project, tasks, userGlobal, previewMemo))
     }
 
+    const loadErrors = this.definitions.listLoadErrors !== undefined
+      ? await this.definitions.listLoadErrors()
+      : undefined
+    // Load errors stay separate from executable rows; a project-scoped snapshot
+    // keeps only the errors whose owning project matches the request.
+    const scopedLoadErrors = loadErrors === undefined
+      ? undefined
+      : params.project === undefined
+        ? loadErrors
+        : loadErrors.filter((error) => error.project === params.project)
+
     return {
       config_path: this.configPath,
       revision,
@@ -622,6 +648,9 @@ export class TaskSettingsService {
       user_global: this.toLayerDto(userGlobal),
       aliases: await this.aliasEntries(),
       rows,
+      ...(scopedLoadErrors !== undefined && scopedLoadErrors.length > 0
+        ? { load_errors: scopedLoadErrors }
+        : {}),
     }
   }
 
@@ -1888,6 +1917,39 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
         id: node.id,
         ...(node.config.displayName !== undefined ? { displayName: node.config.displayName } : {}),
       }))
+    },
+    async listLoadErrors() {
+      // Ensure normal task discovery has run so the registry load errors are
+      // current, then project-group each error by registered project ownership
+      // (longest containing registered project directory; never a fabricated
+      // project). Only task definition errors are surfaced.
+      await getService().list(undefined)
+      const projects = discoverProjects(workspaceRoot)
+      const projectNodes = [...projects.entries()].map(([id, node]) => ({
+        id,
+        dirPath: resolve(node.dirPath),
+        displayName: node.config.displayName,
+      }))
+      return getLoadErrors(workspaceRoot).map((error) => {
+        const absolute = resolve(error.sourcePath)
+        let owner: { id: string; displayName?: string } | undefined
+        let longest = -1
+        for (const node of projectNodes) {
+          const rel = relative(node.dirPath, absolute)
+          const contained = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+          if (contained && node.dirPath.length > longest) {
+            longest = node.dirPath.length
+            owner = { id: node.id, displayName: node.displayName }
+          }
+        }
+        return {
+          source_path: error.sourcePath,
+          file_name: basename(error.sourcePath),
+          message: error.load_error,
+          ...(owner !== undefined ? { project: owner.id } : {}),
+          ...(owner?.displayName !== undefined ? { project_display_name: owner.displayName } : {}),
+        } satisfies TaskSettingsLoadError
+      })
     },
     async describe(taskId, project) {
       const detail = await getService().describe(taskId, project)

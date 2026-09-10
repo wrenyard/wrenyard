@@ -1,3 +1,5 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { TASK_PROMPT_TEMPLATE_1 as EXPLORE_TASK_PROMPT_TEMPLATE } from './explore.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -10,6 +12,8 @@ import {
 } from '../../core/task/concepts.mts'
 import { buildExplorePrompt, type ExploreInput } from './explore.mts'
 import type { TaskDefinition } from '../../core/task/types.mts'
+
+
 
 /**
  * Explore Code — code fact-confirmation agent (Batch D3).
@@ -52,7 +56,7 @@ const definition: TaskDefinition = {
     instructions: [],
     input,
     output,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const { goal, questions, targets, constraints } = input as ExploreInput
       return buildExplorePrompt({
         role: '**Code Explorer**',
@@ -70,7 +74,7 @@ const definition: TaskDefinition = {
         targets,
         constraints,
       })
-    },
+    }, [EXPLORE_TASK_PROMPT_TEMPLATE]),
   },
   sourcePath: 'lib/standard/tasks/explore-code.mts',
 }

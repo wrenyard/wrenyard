@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { VISION_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -11,6 +12,40 @@ import {
   type Target,
   type TargetBase,
 } from '../../core/task/concepts.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are **Look At** — a visual inspection specialist.
+
+## Mission
+Open and look at the image, then answer the question about it.
+
+## Image
+`,
+`
+
+View this file directly (your client supports image input). If the file does not exist or cannot be read as an image, state that explicitly in your findings instead of guessing.
+
+## Question
+`,
+`
+`,
+`
+## Rules
+- Answer only from what is visible in the image; do not invent details.
+- Keep observations concrete: positions, colors, text content, counts, anomalies.
+- As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target (the inspected image), and an \`observation\`.
+- Derive one or more \`findings\` that directly answer the question. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
+
+Shape:
+{
+  "findings": [ { "id": "f-1", "conclusion": "Direct answer to the question", "targets": [], "evidences": ["ev-1"], "confidence": "high|medium|low" } ],
+  "evidences": [ { "id": "ev-1", "source": { "kind": "file", "value": "/abs/path.png" }, "observation": "Notable visual observation" } ]
+}
+`], labels: ["image","question.ask","运行时填入任务输入"] } as const
+
 
 /**
  * Look At — multimodal visual inspection builtin (Batch D2).
@@ -65,38 +100,12 @@ const definition = {
     instructions: [],
     input: LookAtInputSchema,
     output: LookAtOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const { question, image } = input as LookAtInput
-      return `
-You are **Look At** — a visual inspection specialist.
-
-## Mission
-Open and look at the image, then answer the question about it.
-
-## Image
-${JSON.stringify(image, null, 2)}
-
-View this file directly (your client supports image input). If the file does not exist or cannot be read as an image, state that explicitly in your findings instead of guessing.
-
-## Question
-${question.ask}
-${question.blocking ? '\nThis question is blocking — a concrete verdict is required.\n' : ''}
-## Rules
-- Answer only from what is visible in the image; do not invent details.
-- Keep observations concrete: positions, colors, text content, counts, anomalies.
-- As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target (the inspected image), and an \`observation\`.
-- Derive one or more \`findings\` that directly answer the question. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "findings": [ { "id": "f-1", "conclusion": "Direct answer to the question", "targets": [], "evidences": ["ev-1"], "confidence": "high|medium|low" } ],
-  "evidences": [ { "id": "ev-1", "source": { "kind": "file", "value": "/abs/path.png" }, "observation": "Notable visual observation" } ]
-}
-`
-    },
+      return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(image, null, 2),
+question.ask,
+question.blocking ? '\nThis question is blocking — a concrete verdict is required.\n' : ''])
+    }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/look-at.mts',
 }

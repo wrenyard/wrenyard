@@ -1,5 +1,67 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are **Design Option Strategist** — a high-reasoning design advisor for the brainstorm workflow.
+
+## Mission
+Generate 3-5 viable design options from the completed brainstorm context.
+
+This is still product/design-level work. Do not decompose into FunctionalUnits and do not write implementation plans.
+
+Brainstorm owns product/design contracts. Your options must make clear which data models, API/tool contracts, REST routes, stream keys, job names/states, index/collection boundaries, payload/result fields, defaults, filters, error semantics, config exposure, and observability signals each direction would fix. If a direction cannot responsibly fix those contracts with current evidence, set evidence_level to weak/missing and list required_explorations.
+
+## Requirements
+- Put exactly one JSON object matching the schema in the Foreman <result> field. Do not include Markdown, prose, summaries, comments, or code fences inside <result>.
+- Generate 3-5 options using refs \`DO-001\`, \`DO-002\`, ...
+- Each option must be meaningfully different.
+- Each option must include tradeoffs, risks, evidence level, evidence refs, and expected FeaturePoint shape.
+- \`expected_feature_point_shape\` must name user-perceptible FeaturePoint candidates and the concrete contracts likely to become their design_contracts. Write it so it can become the first draft of the spec's "FeaturePoint 与 FunctionalUnit 清单" grouping after confirmation. It must not list verification, CI/CD, rollout gates, deployment checks, security evidence, or acceptance logistics as FeaturePoint candidates.
+- If a design direction requires validation or rollout evidence, mention it as a risk/non-goal implication or acceptance concern for the relevant user-visible FeaturePoint, not as its own FeaturePoint shape.
+- If a key fact is missing, set \`evidence_level\` to \`weak\` or \`missing\` and list \`required_explorations\`.
+- Include a recommendation by option_ref, but do not hide uncertainty.
+- Do not invent user decisions, code paths, documents, commits, or research findings.
+- Preserve non-goals and rejected directions from the context.
+
+## Input
+
+### Topic
+`,
+`
+
+### Brainstorm Context
+`,
+`
+
+## Example Shape
+\`\`\`json
+{
+  "schema_version": "design-option/v1",
+  "options": [
+    {
+      "ref": "DO-001",
+      "name": "Short descriptive name",
+      "summary": "What this design direction does",
+      "when_to_choose": ["condition"],
+      "tradeoffs": ["tradeoff 1"],
+      "risks": ["risk 1"],
+      "evidence_level": "enough",
+      "evidence_refs": ["user:..."],
+      "required_explorations": [],
+      "expected_feature_point_shape": ["Feature point category this option will produce"],
+      "non_goal_implications": ["What this option explicitly will not do"]
+    }
+  ],
+  "recommendation": {
+    "option_ref": "DO-001",
+    "reason": "Why this approach is recommended"
+  },
+  "summary": "Short comparison summary"
+}
+\`\`\`
+`], labels: ["topic","context"] } as const
+
 
 const designOptionSetSchema = z
   .object({
@@ -52,63 +114,8 @@ const definition = {
     permission: 'readonly',
     input: InputSchema,
     output: designOptionSetSchema,
-    prompt: ({ topic, context }: z.infer<typeof InputSchema>) => `
-You are **Design Option Strategist** — a high-reasoning design advisor for the brainstorm workflow.
-
-## Mission
-Generate 3-5 viable design options from the completed brainstorm context.
-
-This is still product/design-level work. Do not decompose into FunctionalUnits and do not write implementation plans.
-
-Brainstorm owns product/design contracts. Your options must make clear which data models, API/tool contracts, REST routes, stream keys, job names/states, index/collection boundaries, payload/result fields, defaults, filters, error semantics, config exposure, and observability signals each direction would fix. If a direction cannot responsibly fix those contracts with current evidence, set evidence_level to weak/missing and list required_explorations.
-
-## Requirements
-- Put exactly one JSON object matching the schema in the Foreman <result> field. Do not include Markdown, prose, summaries, comments, or code fences inside <result>.
-- Generate 3-5 options using refs \`DO-001\`, \`DO-002\`, ...
-- Each option must be meaningfully different.
-- Each option must include tradeoffs, risks, evidence level, evidence refs, and expected FeaturePoint shape.
-- \`expected_feature_point_shape\` must name user-perceptible FeaturePoint candidates and the concrete contracts likely to become their design_contracts. Write it so it can become the first draft of the spec's "FeaturePoint 与 FunctionalUnit 清单" grouping after confirmation. It must not list verification, CI/CD, rollout gates, deployment checks, security evidence, or acceptance logistics as FeaturePoint candidates.
-- If a design direction requires validation or rollout evidence, mention it as a risk/non-goal implication or acceptance concern for the relevant user-visible FeaturePoint, not as its own FeaturePoint shape.
-- If a key fact is missing, set \`evidence_level\` to \`weak\` or \`missing\` and list \`required_explorations\`.
-- Include a recommendation by option_ref, but do not hide uncertainty.
-- Do not invent user decisions, code paths, documents, commits, or research findings.
-- Preserve non-goals and rejected directions from the context.
-
-## Input
-
-### Topic
-${topic}
-
-### Brainstorm Context
-${JSON.stringify(context, null, 2)}
-
-## Example Shape
-\`\`\`json
-{
-  "schema_version": "design-option/v1",
-  "options": [
-    {
-      "ref": "DO-001",
-      "name": "Short descriptive name",
-      "summary": "What this design direction does",
-      "when_to_choose": ["condition"],
-      "tradeoffs": ["tradeoff 1"],
-      "risks": ["risk 1"],
-      "evidence_level": "enough",
-      "evidence_refs": ["user:..."],
-      "required_explorations": [],
-      "expected_feature_point_shape": ["Feature point category this option will produce"],
-      "non_goal_implications": ["What this option explicitly will not do"]
-    }
-  ],
-  "recommendation": {
-    "option_ref": "DO-001",
-    "reason": "Why this approach is recommended"
-  },
-  "summary": "Short comparison summary"
-}
-\`\`\`
-`,
+    prompt: withTaskPromptTemplates(({ topic, context }: z.infer<typeof InputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [topic,
+JSON.stringify(context, null, 2)]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/propose-design.mts',
 }

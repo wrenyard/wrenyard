@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import type { TaskCapabilityConfig } from '../../core/task/types.mts'
@@ -10,6 +11,102 @@ import {
   type Evidence,
 } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { label: "通用验证", strings: [`
+You are a **Verification Runner**. Verify the requested behavior and report evidence and assessments. Do not edit files and do not propose code patches.
+
+## Acceptance Criteria
+`,
+`
+
+`,
+`
+
+## Rules
+- Treat each criterion independently. Do not collapse or skip criteria.
+- A criterion is a Given/When/Then fact to establish: evaluate its \`then\` against the observed behavior under its \`when\` (and \`given\` context).
+- When verification commands are supplied, run them first and do not inspect project files unless a command fails or leaves a criterion unresolved.
+- Without supplied commands, use one targeted discovery pass over scripts, manifests, or nearby test files, then execute the smallest relevant check.
+- You may correct commands, run a smaller focused check, or run a broader surrounding check when justified.
+- Keep attempts bounded: no more than three materially different attempts per criterion unless a fast retry is clearly required.
+- Mark \`blocked\` for missing credentials, unavailable remote services, unavailable browser/runtime tooling, or environment problems that prevent a meaningful verdict.
+- Mark \`not_supported\` when the requested verification needs a project-specialized task or external human/visual judgment that this generic task cannot perform.
+- Do not output suggested edits. Implementation repair is handled by a separate task.
+
+## Workflow
+1. For each criterion, gather observations as pooled \`evidences\` (id, source target, observation).
+2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\` of \`passed\` | \`failed\` | \`blocked\` | \`not_supported\`, the supporting \`evidences\` ids, and an optional \`reason\`.
+3. Keep \`evidences\` pooled (shared across assessments) and reference them by id.
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
+
+Shape:
+{
+  "evidences": [ { "id": "ev-1", "source": { "kind": "command", "value": "npm test" }, "observation": "..." } ],
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+}
+`], labels: ["criteria","运行时填入任务输入"] } as const
+
+export const TASK_PROMPT_TEMPLATE_2 = { label: "浏览器验证", strings: [`
+You are a **Verification Runner** with **browser capabilities**. Use the Playwright MCP tool for all page-level interactions, state inspection, navigation, and screenshots.
+
+## Acceptance Criteria
+`,
+`
+
+## Rules
+- Use Playwright MCP for every browser interaction: page navigation, element interaction, DOM state inspection, and screenshots.
+- Rely on observed page state (DOM text, element visibility, screenshot analysis) to determine pass/fail.
+- Mark \`blocked\` for missing credentials, unavailable remote services, unavailable browser tooling, or environment problems that prevent a meaningful verdict.
+- Mark \`not_supported\` when the criterion cannot be verified through automated browser interaction.
+- Do not edit files and do not propose code patches.
+
+## Workflow
+1. For each criterion, navigate to the relevant page(s) and gather observations as pooled \`evidences\`.
+2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
+3. Keep \`evidences\` pooled and reference them by id.
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field.
+
+Shape:
+{
+  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "dashboard-loaded" }, "observation": "..." } ],
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+}
+`], labels: ["criteria"] } as const
+
+export const TASK_PROMPT_TEMPLATE_3 = { label: "桌面验证", strings: [`
+You are a **Verification Runner** with **desktop application capabilities**. Use the Cua Driver MCP tool for app state, semantic element actions, and screenshots.
+
+## Acceptance Criteria
+`,
+`
+
+## Rules
+- Use Cua Driver MCP for application state inspection, semantic element interaction, and screenshots.
+- Screenshots are the primary evidence source for desktop app verification.
+- If an operation requires OS-level permissions and the agent cannot satisfy them, mark the criterion as \`blocked\` with a clear explanation of which permission was missing.
+- Rely on observed app state (window content, element labels, screenshot analysis) to determine pass/fail.
+- Mark \`not_supported\` when the criterion cannot be verified through Cua Driver interaction.
+- Do not edit files and do not propose code patches.
+
+## Workflow
+1. For each criterion, interact with the desktop application and gather observations as pooled \`evidences\`.
+2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
+3. Keep \`evidences\` pooled and reference them by id.
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field.
+
+Shape:
+{
+  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "app-window-loaded" }, "observation": "..." } ],
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+}
+`], labels: ["criteria"] } as const
+
 
 /**
  * Test — generic verification runner builtin.
@@ -66,100 +163,16 @@ export const testCapabilityConfig: TaskCapabilityConfig = {
 // ─── Prompt builders ──────────────────────────────────────────────
 
 function buildGenericPrompt(criteria: AcceptanceCriterion[], commands?: string[]): string {
-  return `
-You are a **Verification Runner**. Verify the requested behavior and report evidence and assessments. Do not edit files and do not propose code patches.
-
-## Acceptance Criteria
-${JSON.stringify(criteria, null, 2)}
-
-${commands?.length ? `## Verification Commands\n${commands.map((command) => `- \`${command}\``).join('\n')}\n` : ''}
-
-## Rules
-- Treat each criterion independently. Do not collapse or skip criteria.
-- A criterion is a Given/When/Then fact to establish: evaluate its \`then\` against the observed behavior under its \`when\` (and \`given\` context).
-- When verification commands are supplied, run them first and do not inspect project files unless a command fails or leaves a criterion unresolved.
-- Without supplied commands, use one targeted discovery pass over scripts, manifests, or nearby test files, then execute the smallest relevant check.
-- You may correct commands, run a smaller focused check, or run a broader surrounding check when justified.
-- Keep attempts bounded: no more than three materially different attempts per criterion unless a fast retry is clearly required.
-- Mark \`blocked\` for missing credentials, unavailable remote services, unavailable browser/runtime tooling, or environment problems that prevent a meaningful verdict.
-- Mark \`not_supported\` when the requested verification needs a project-specialized task or external human/visual judgment that this generic task cannot perform.
-- Do not output suggested edits. Implementation repair is handled by a separate task.
-
-## Workflow
-1. For each criterion, gather observations as pooled \`evidences\` (id, source target, observation).
-2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\` of \`passed\` | \`failed\` | \`blocked\` | \`not_supported\`, the supporting \`evidences\` ids, and an optional \`reason\`.
-3. Keep \`evidences\` pooled (shared across assessments) and reference them by id.
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "command", "value": "npm test" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
-}
-`
+  return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(criteria, null, 2),
+commands?.length ? `## Verification Commands\n${commands.map((command) => `- \`${command}\``).join('\n')}\n` : ''])
 }
 
 function buildBrowserPrompt(criteria: AcceptanceCriterion[]): string {
-  return `
-You are a **Verification Runner** with **browser capabilities**. Use the Playwright MCP tool for all page-level interactions, state inspection, navigation, and screenshots.
-
-## Acceptance Criteria
-${JSON.stringify(criteria, null, 2)}
-
-## Rules
-- Use Playwright MCP for every browser interaction: page navigation, element interaction, DOM state inspection, and screenshots.
-- Rely on observed page state (DOM text, element visibility, screenshot analysis) to determine pass/fail.
-- Mark \`blocked\` for missing credentials, unavailable remote services, unavailable browser tooling, or environment problems that prevent a meaningful verdict.
-- Mark \`not_supported\` when the criterion cannot be verified through automated browser interaction.
-- Do not edit files and do not propose code patches.
-
-## Workflow
-1. For each criterion, navigate to the relevant page(s) and gather observations as pooled \`evidences\`.
-2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
-3. Keep \`evidences\` pooled and reference them by id.
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "dashboard-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
-}
-`
+  return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_2, [JSON.stringify(criteria, null, 2)])
 }
 
 function buildComputerPrompt(criteria: AcceptanceCriterion[]): string {
-  return `
-You are a **Verification Runner** with **desktop application capabilities**. Use the Cua Driver MCP tool for app state, semantic element actions, and screenshots.
-
-## Acceptance Criteria
-${JSON.stringify(criteria, null, 2)}
-
-## Rules
-- Use Cua Driver MCP for application state inspection, semantic element interaction, and screenshots.
-- Screenshots are the primary evidence source for desktop app verification.
-- If an operation requires OS-level permissions and the agent cannot satisfy them, mark the criterion as \`blocked\` with a clear explanation of which permission was missing.
-- Rely on observed app state (window content, element labels, screenshot analysis) to determine pass/fail.
-- Mark \`not_supported\` when the criterion cannot be verified through Cua Driver interaction.
-- Do not edit files and do not propose code patches.
-
-## Workflow
-1. For each criterion, interact with the desktop application and gather observations as pooled \`evidences\`.
-2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
-3. Keep \`evidences\` pooled and reference them by id.
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "app-window-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
-}
-`
+  return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_3, [JSON.stringify(criteria, null, 2)])
 }
 
 // ─── Task definition (TaskDefinition object literal) ──────────────
@@ -175,7 +188,7 @@ const definition = {
     instructions: [shellUsage],
     input: TestInputSchema,
     output: TestOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const data = input as TestInput
       const criteria = data.acceptance_criteria
       switch (data.capability) {
@@ -186,7 +199,7 @@ const definition = {
         default:
           return buildGenericPrompt(criteria, data.verification_commands)
       }
-    },
+    }, [TASK_PROMPT_TEMPLATE_1, TASK_PROMPT_TEMPLATE_2, TASK_PROMPT_TEMPLATE_3]),
   },
   sourcePath: 'lib/standard/tasks/test.mts',
 }

@@ -1,3 +1,5 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { TASK_PROMPT_TEMPLATE_1 as EXPLORE_TASK_PROMPT_TEMPLATE } from './explore.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { GitCommitTargetSchema } from '../../core/task/targets/git-commit.mts'
@@ -11,6 +13,8 @@ import {
 import { buildExplorePrompt } from './explore.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 import type { TaskCapabilityConfig, TaskDefinition } from '../../core/task/types.mts'
+
+
 
 /**
  * Explore Commit — git history analysis agent (Batch D3).
@@ -74,7 +78,7 @@ const definition: TaskDefinition = {
     instructions: [shellUsage],
     input: inputSchema,
     output,
-    prompt: (promptInput: unknown): string => {
+    prompt: withTaskPromptTemplates((promptInput: unknown): string => {
       const {
         goal,
         questions,
@@ -105,7 +109,7 @@ ${focus || '(none)'}`
         targets,
         constraints,
       })
-    },
+    }, [EXPLORE_TASK_PROMPT_TEMPLATE]),
   },
   sourcePath: 'lib/standard/tasks/explore-commit.mts',
 }

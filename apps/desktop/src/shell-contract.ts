@@ -635,6 +635,14 @@ export interface TaskSettingsSnapshot {
   rows: TaskSettingsTaskRow[];
   /** Read-only runtime alias projection used to suggest explicit references. */
   aliases: RuntimeAliasEntry[];
+  /** Optional backend load failures surfaced when some task sources could not be read. */
+  load_errors?: Array<{
+    source_path: string;
+    file_name: string;
+    message: string;
+    project?: string;
+    project_display_name?: string;
+  }>;
 }
 
 /** A validation problem surfaced by the daemon for a runtime alias entry. */

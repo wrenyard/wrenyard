@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { FeaturePointSetSchema } from '../../core/task/schemas/feature-point.mts'
@@ -5,30 +6,7 @@ import { FunctionalUnitSetSchema } from '../../core/task/schemas/functional-unit
 import shellUsage from '../instructions/shell-usage.mts'
 import featurePointDefinition from '../instructions/feature-point-definition.mts'
 
-const InputSchema = z.object({
-  feature_point_set: FeaturePointSetSchema.describe(
-    'Confirmed FeaturePointSet produced by brainstorm.',
-  ),
-  context: z
-    .looseObject({})
-    .optional()
-    .describe('Additional orchestration context, document findings, code findings, or user constraints.'),
-  review_feedback: z
-    .string()
-    .optional()
-    .describe('FunctionalUnit review or user feedback from a previous revision round.'),
-})
-
-const definition = {
-  __type: 'task' as const,
-  config: {
-    description: 'Break down a design-complete FeaturePointSet into implementation-ready FunctionalUnit contracts',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [shellUsage, featurePointDefinition],
-    input: InputSchema,
-    output: FunctionalUnitSetSchema,
-    prompt: ({ feature_point_set, context = {}, review_feedback = '' }: z.infer<typeof InputSchema>) => `
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are **Functional Unit Breakdown Specialist** — a design-contract decomposition agent.
 
 ## Mission
@@ -71,14 +49,45 @@ Architect may decide internal code organization, module/class/function boundarie
 - When review_feedback reports missing FeaturePoint decisions, do not fill the gap yourself. Return \`needs_clarification\` units so the workflow can fail and the orchestrator can return to brainstorm.
 
 ## Review Feedback
-${review_feedback || '(none)'}
+`,
+`
 
 ## FeaturePointSet
-${JSON.stringify(feature_point_set, null, 2)}
+`,
+`
 
 ## Additional Context
-${JSON.stringify(context, null, 2)}
 `,
+`
+`], labels: ["运行时填入任务输入","feature_point_set","context"] } as const
+
+
+const InputSchema = z.object({
+  feature_point_set: FeaturePointSetSchema.describe(
+    'Confirmed FeaturePointSet produced by brainstorm.',
+  ),
+  context: z
+    .looseObject({})
+    .optional()
+    .describe('Additional orchestration context, document findings, code findings, or user constraints.'),
+  review_feedback: z
+    .string()
+    .optional()
+    .describe('FunctionalUnit review or user feedback from a previous revision round.'),
+})
+
+const definition = {
+  __type: 'task' as const,
+  config: {
+    description: 'Break down a design-complete FeaturePointSet into implementation-ready FunctionalUnit contracts',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    permission: 'readonly',
+    instructions: [shellUsage, featurePointDefinition],
+    input: InputSchema,
+    output: FunctionalUnitSetSchema,
+    prompt: withTaskPromptTemplates(({ feature_point_set, context = {}, review_feedback = '' }: z.infer<typeof InputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [review_feedback || '(none)',
+JSON.stringify(feature_point_set, null, 2),
+JSON.stringify(context, null, 2)]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/functional-unit-breakdown.mts',
 }

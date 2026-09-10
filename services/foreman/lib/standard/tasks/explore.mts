@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -16,6 +17,58 @@ import {
   type TargetBase,
 } from '../../core/task/concepts.mts'
 import type { TaskDefinition } from '../../core/task/types.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are `,
+` - a read-only investigation agent.
+
+## Problem
+Answer every question using direct evidence gathered from the declared targets. Do not guess beyond what the evidence supports.
+
+## Goal
+`,
+`
+
+## Questions (answer all, 1:1)
+`,
+`
+
+## Targets to investigate
+`,
+`
+
+`,
+`
+## Tool Constraints
+`,
+`
+
+## Workflow
+1. Read the goal and every question. Treat the questions as the driving problem — each must end as \`answered\`, \`unanswered\`, or \`blocked\`.
+2. Investigate the declared targets only. Prefer targeted reads and searches; avoid broad or generated directories.
+3. As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target, and an \`observation\`.
+4. Derive \`findings\` from the evidence pool. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
+5. For every input question, produce exactly one result with the same \`question_id\`:
+   - \`answered\`: the evidence supports a conclusion.
+   - \`unanswered\`: investigation was inconclusive or evidence was insufficient.
+   - \`blocked\`: a missing input, access, tooling, or environment limit prevented a verdict. Add a short \`reason\`.
+6. Keep \`evidences\` pooled (shared across findings) and reference them by id — do not duplicate observations inline.
+
+`,
+`
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
+
+Shape:
+{
+  "results": [
+    { "question_id": "<id>", "status": "answered|unanswered|blocked", "reason": "<optional>", "findings": [ ... ] }
+  ],
+  "evidences": [ { "id": "...", "source": { "kind": "...", "value": "..." }, "observation": "..." } ]
+}
+`], labels: ["role","goal.outcome","questions","targets","constraints","toolConstraints","workflow"] } as const
+
 
 /**
  * Explore — problem-driven read-only exploration builtin.
@@ -92,49 +145,13 @@ export function buildExplorePrompt(args: {
   constraints?: Constraint[]
 }): string {
   const { role, toolConstraints, workflow, goal, questions, targets, constraints } = args
-  return `
-You are ${role} - a read-only investigation agent.
-
-## Problem
-Answer every question using direct evidence gathered from the declared targets. Do not guess beyond what the evidence supports.
-
-## Goal
-${goal.outcome}
-
-## Questions (answer all, 1:1)
-${JSON.stringify(questions, null, 2)}
-
-## Targets to investigate
-${JSON.stringify(targets, null, 2)}
-
-${constraints && constraints.length > 0 ? `## Constraints\n${JSON.stringify(constraints, null, 2)}\n` : ''}
-## Tool Constraints
-${toolConstraints}
-
-## Workflow
-1. Read the goal and every question. Treat the questions as the driving problem — each must end as \`answered\`, \`unanswered\`, or \`blocked\`.
-2. Investigate the declared targets only. Prefer targeted reads and searches; avoid broad or generated directories.
-3. As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target, and an \`observation\`.
-4. Derive \`findings\` from the evidence pool. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
-5. For every input question, produce exactly one result with the same \`question_id\`:
-   - \`answered\`: the evidence supports a conclusion.
-   - \`unanswered\`: investigation was inconclusive or evidence was insufficient.
-   - \`blocked\`: a missing input, access, tooling, or environment limit prevented a verdict. Add a short \`reason\`.
-6. Keep \`evidences\` pooled (shared across findings) and reference them by id — do not duplicate observations inline.
-
-${workflow}
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "results": [
-    { "question_id": "<id>", "status": "answered|unanswered|blocked", "reason": "<optional>", "findings": [ ... ] }
-  ],
-  "evidences": [ { "id": "...", "source": { "kind": "...", "value": "..." }, "observation": "..." } ]
-}
-`
+  return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [role,
+goal.outcome,
+JSON.stringify(questions, null, 2),
+JSON.stringify(targets, null, 2),
+constraints && constraints.length > 0 ? `## Constraints\n${JSON.stringify(constraints, null, 2)}\n` : '',
+toolConstraints,
+workflow])
 }
 
 // ─── Task definition (direct TaskDefinition object literal) ─────
@@ -153,7 +170,7 @@ const definition: TaskDefinition = {
     instructions: [],
     input: ExploreInputSchema,
     output: ExploreOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const { goal, questions, targets, constraints } = input as ExploreInput
       return buildExplorePrompt({
         role: '**Explorer**',
@@ -165,7 +182,7 @@ const definition: TaskDefinition = {
         targets,
         constraints,
       })
-    },
+    }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/explore.mts',
 }
