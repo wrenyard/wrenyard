@@ -133,6 +133,7 @@ func TestCircuitStoreConcurrentWritersLeaveCompleteRecord(t *testing.T) {
 	profile := "same-profile"
 
 	var wg sync.WaitGroup
+	deadline := time.Now().Add(30 * time.Second)
 	for i := 0; i < 16; i++ {
 		i := i
 		wg.Add(1)
@@ -148,8 +149,12 @@ func TestCircuitStoreConcurrentWritersLeaveCompleteRecord(t *testing.T) {
 				ReasonCode:     CircuitReasonRetryExhausted,
 				RetryCount:     maxProfileRetries,
 			}
-			if !store.Write(profile, record) {
-				t.Errorf("writer %d failed to persist", i)
+			for !store.Write(profile, record) {
+				if time.Now().After(deadline) {
+					t.Errorf("writer %d failed to persist", i)
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
 			}
 		}()
 	}

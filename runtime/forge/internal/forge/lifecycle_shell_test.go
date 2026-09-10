@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -183,7 +184,7 @@ func TestShellPlanSourceBlocksFollowXDGConfigHome(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a zshrc file_write action for %q", zshPlan.Zshrc)
 	}
-	if !strings.Contains(zshProfile, zshPlan.ManagedFile) {
+	if !strings.Contains(zshProfile, strconv.Quote(zshPlan.ManagedFile)) {
 		t.Fatalf("zsh source block must reference the resolved managed file %q:\n%s", zshPlan.ManagedFile, zshProfile)
 	}
 	if strings.Contains(zshProfile, "$HOME/.config") || strings.Contains(zshProfile, filepath.Join(home, ".config")) {
@@ -242,7 +243,7 @@ func TestPlanReplacesPrereleaseForgeDelimitedBlocks(t *testing.T) {
 	if strings.Contains(zshProfile, "forge shell shortcuts") || strings.Contains(zshProfile, "config/forge") {
 		t.Fatalf("prerelease Forge-delimited zsh block must be removed:\n%s", zshProfile)
 	}
-	if strings.Count(zshProfile, sourceBlockStart) != 1 || !strings.Contains(zshProfile, zshPlan.ManagedFile) {
+	if strings.Count(zshProfile, sourceBlockStart) != 1 || !strings.Contains(zshProfile, strconv.Quote(zshPlan.ManagedFile)) {
 		t.Fatalf("zsh profile must contain exactly one canonical Wrenyard source block:\n%s", zshProfile)
 	}
 	if !strings.Contains(zshProfile, "preamble") || !strings.Contains(zshProfile, "postamble") {

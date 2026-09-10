@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -291,10 +292,13 @@ func TestDefaultRootIsXDGAware(t *testing.T) {
 		t.Fatalf("DefaultRoot()=%q want %q", root, want)
 	}
 
-	// Fallback to $HOME/.local/state when XDG_STATE_HOME is unset.
+	// Fallback to $HOME/.local/state when XDG_STATE_HOME is unset. Go's
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolate both HOME and
+	// USERPROFILE together to keep the fallback hermetic on every platform.
 	t.Setenv("XDG_STATE_HOME", "")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	root, err = DefaultRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +321,12 @@ func TestAtomicWriteUsesMode0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("record file mode=%o want 0600", mode)
+	// Permission bits are only meaningful on POSIX; on Windows the mode
+	// comparison is not platform-correct, so guard it while keeping the
+	// write/stat/durable-record checks everywhere.
+	if runtime.GOOS != "windows" {
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("record file mode=%o want 0600", mode)
+		}
 	}
 }

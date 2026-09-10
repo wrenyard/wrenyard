@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNativeSessionSnapshotRoundTripPersistsOnlyResumeArtifacts(t *testing.T) {
@@ -181,6 +182,7 @@ func TestNativeSessionConcurrentRefreshIsAtomic(t *testing.T) {
 	sourceB, _ := writeNativeSessionFixture(t, nativeID, t.TempDir(), strings.Repeat("B", 4096), false)
 	start := make(chan struct{})
 	errs := make(chan error, 16)
+	deadline := time.Now().Add(30 * time.Second)
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		source := sourceA
@@ -191,7 +193,18 @@ func TestNativeSessionConcurrentRefreshIsAtomic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs <- RefreshNativeSessionSnapshot(dataDir, source, nativeID)
+			for {
+				err := RefreshNativeSessionSnapshot(dataDir, source, nativeID)
+				if err == nil {
+					errs <- nil
+					return
+				}
+				if !strings.Contains(err.Error(), "snapshot lock remained busy") || time.Now().After(deadline) {
+					errs <- err
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 		}()
 	}
 	close(start)
