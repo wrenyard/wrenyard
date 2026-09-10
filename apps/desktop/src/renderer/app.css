@@ -171,7 +171,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .tasks-detail[aria-busy="true"] { cursor: progress; }
 
 /* Two-column title band: task name + resolved Provider · Model at left, controls on the right */
-.tasks-detail-head { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(210px, 48%); gap: 14px; align-items: start; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.tasks-detail-head { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(250px, 48%); gap: 14px; align-items: start; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .tasks-detail-title { min-width: 0; display: flex; flex-direction: column; }
 .tasks-detail-title h2 { overflow-wrap: anywhere; margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 21px; line-height: 1.25; }
 .tasks-detail-identity { overflow-wrap: anywhere; margin: 7px 0 0; color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 10px; }
@@ -180,7 +180,7 @@ button, input, select { accent-color: var(--moss-deep); }
 /* Compact right-aligned three-row control group */
 .tasks-control-group { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .tasks-control-group .tasks-rows { display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 6px; background: rgba(212, 201, 168, .55); overflow: hidden; }
-.tasks-control-group .tasks-setting-row { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 5px; min-height: 36px; padding: 5px 6px; background: rgba(255, 250, 240, .55); }
+.tasks-control-group .tasks-setting-row { min-width: 0; display: grid; grid-template-columns: 58px minmax(92px, 1fr) minmax(0, .75fr); align-items: center; gap: 5px; min-height: 36px; padding: 5px 6px; background: rgba(255, 250, 240, .55); }
 .tasks-control-group .tasks-setting-row label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .tasks-setting-control { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
 .tasks-setting-control input { height: 28px; min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 11px; font-weight: 500; }
