@@ -646,6 +646,84 @@ function codexQuotaSnapshotService(
   })
 }
 
+/** Cursor Grok native profile draws on the cursor-models pool. */
+const CURSOR_GROK_QUOTA_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'cursor/cursor-grok-4.6-high:cur',
+  profile: 'cursor-grok-quota',
+  client: 'cursor',
+  provider: 'cursor',
+  model: 'cursor-grok-4.6-high',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 1,
+  outputUsd: 4,
+}
+
+/** Cursor Other native profile (cursor/kimi-k3) shares the raw cursor row but
+ *  binds the distinct cursor-other pool. */
+const CURSOR_OTHER_QUOTA_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'cursor/kimi-k3:cur',
+  profile: 'cursor-other-quota',
+  client: 'cursor',
+  provider: 'cursor',
+  model: 'kimi-k3',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 1,
+  outputUsd: 4,
+}
+
+/** Kimi Coding k3 native profile requires BOTH 5h rolling_partial and 7d full_cycle. */
+const KIMI_K3_QUOTA_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'kimi-coding/k3:cc',
+  profile: 'kimi-k3-quota',
+  client: 'cc',
+  provider: 'kimi-coding',
+  model: 'k3',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 1,
+  outputUsd: 4,
+}
+
+/** Official deepseek/deepseek-flash bound only to a mandatory monetary balance. */
+const DEEPSEEK_BALANCE_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'deepseek/deepseek-flash:cb',
+  profile: 'deepseek-balance',
+  client: 'cb',
+  provider: 'deepseek',
+  model: 'deepseek-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.2,
+  outputUsd: 1,
+}
+
+/** A raw quota report with one pool row; `balances` is optional. */
+function poolQuotaSnapshotService(
+  pool: string,
+  windows: Array<{ name: string; pct: number; resets_at?: string; window_minutes?: number }>,
+  balances?: Array<{ currency: string; amount: string }>,
+  row: { status?: string; stale?: boolean } = {},
+  nowMs: number = QUOTA_T0,
+): AutoRoutingQuotaSnapshotService {
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.resolve(JSON.stringify([{
+      pool,
+      status: row.status ?? 'ok',
+      stale: row.stale ?? false,
+      fetched_at: new Date(nowMs).toISOString(),
+      windows: windows.map((window) => ({
+        resets_at: new Date(nowMs + 86_400_000).toISOString(),
+        window_minutes: 43_800,
+        ...window,
+      })),
+      ...(balances !== undefined ? { balances } : {}),
+    }])),
+    now: () => nowMs,
+  })
+}
+
 /** One automatic-preview failure issue (structural type, no protocol import). */
 type AutomaticUnavailableIssue = {
   code: string
@@ -657,10 +735,10 @@ type AutomaticUnavailableIssue = {
  *  exact resolutionFailure code plus its safe Chinese message, no raw resolver
  *  copy, and no identity/price/TPS/secret leakage. */
 function assertClosedAutoIssue(issue: AutomaticUnavailableIssue | undefined): void {
-  assert.ok(issue)
+  assert.ok(issue, "Expected an automatic dispatch issue")
   assert.equal(issue.code, 'automatic_dispatch_unavailable')
   const failure = issue.resolutionFailure
-  assert.ok(failure)
+  assert.ok(failure, "Expected a structured resolution failure")
   assert.equal(issue.message, failure.message)
   assert.deepEqual(Object.keys(failure).sort(), ['code', 'message'])
   const serialized = JSON.stringify(issue)
@@ -1973,7 +2051,7 @@ describe('daemon task-settings-service (no-model)', () => {
     const expensiveCodex = { ...CODEX_QUOTA_PROFILE, outputUsd: 12 }
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: [expensiveCodex] }),
-      quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
+      quotaSnapshots: poolQuotaSnapshotService('codex', [{ name: '7d', pct: 100 }]),
       nativeProviderReadiness: () => Promise.resolve({
         sampledAtMs: QUOTA_T0,
         authByProvider: Object.freeze({ codex: true }),
@@ -1982,7 +2060,7 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     await assert.rejects(
       service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
-      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'price_limit',
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
     )
   })
 
@@ -2665,7 +2743,7 @@ describe('daemon task-settings-service (no-model)', () => {
         },
       },
     })
-    const service = context!.makeService()
+    const service = context!.makeService({ resolver: createResolverFixture({ profiles: [PROFILES[0]!] }) })
     const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
     assertClosedAutoIssue(issue)
     assert.deepEqual(issue?.resolutionFailure, {
@@ -2705,24 +2783,23 @@ describe('daemon task-settings-service (no-model)', () => {
     })
   })
 
-  it('unknown quota with a reference price at the 10 gate classifies as price_limit, never quota_unavailable', async () => {
+  it('unknown quota with a high reference price is neutral and routes instead of a price_limit elimination', async () => {
     writeConfig({})
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: [PROFILES[2]!] }),
     })
-    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
-    assertClosedAutoIssue(issue)
-    assert.deepEqual(issue?.resolutionFailure, {
-      code: 'price_limit',
-      message: '允许价格内没有可用模型，请调整价格上限',
-    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    // The claude-opus-4 candidate has no applicable quota binding (unknown,
+    // neutral), so a reference price above the old $10 gate no longer rejects.
+    assert.equal(resolution.exactAgentRuntime, PROFILES[2]!.exactAgentRuntime)
+    assert.equal(resolution.dispatch?.auto_routing?.quota_tier, 'unknown')
   })
 
   it('mixed eliminations surface the cheapest routing-relevant gate deterministically regardless of pool order', async () => {
     writeConfig({
       tasks: {
         settings: {
-          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'high' } },
+          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'high', maxOutputUsdPerMillion: 10 } },
         },
       },
     })
@@ -2730,10 +2807,9 @@ describe('daemon task-settings-service (no-model)', () => {
     const forward = context!.makeService({ resolver: createResolverFixture({ profiles: pool }) })
     const forwardIssue = await automaticUnavailableIssueOf(forward, 'builtin:commit')
     assertClosedAutoIssue(forwardIssue)
-    // The cheaper gpt-5.6-luna (mid) is eliminated by the intelligence floor
-    // while the expensive claude-opus-4 clears intelligence but trips the
-    // unknown-quota 10 reference gate. Deterministic selection prefers the
-    // elimination of the cheapest routing-relevant candidate.
+    // The cheaper gpt-5.6-luna (mid) is eliminated by the intelligence floor;
+    // the premium model exceeds the explicit cap. The cheaper intelligence
+    // elimination remains deterministic regardless of input order.
     assert.equal(forwardIssue?.resolutionFailure?.code, 'intelligence_requirement')
     assert.equal(forwardIssue?.message, '没有模型满足智能要求，请调整智能要求')
 
@@ -2908,6 +2984,165 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
     assert.match(run.dispatch.reference_pricing.source, /api-docs\.deepseek\.com/)
     assert.equal(run.dispatch.auto_routing, undefined)
+  })
+
+  it('Cursor Other (kimi-k3) routes independent of Cursor Grok on the same raw row', async () => {
+    writeConfig({})
+    // One raw cursor row feeds both bindings: Grok -> cursor-models (Cursor
+    // window), Other -> cursor-other (Other window).
+    const quotaSnapshots = poolQuotaSnapshotService('cursor', [
+      { name: 'Cursor', pct: 100 },
+      { name: 'Other', pct: 25 },
+    ])
+    const other = await context!.makeService({
+      resolver: createResolverFixture({ profiles: [CURSOR_OTHER_QUOTA_PROFILE] }),
+      quotaSnapshots,
+    }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    // Other stays available independently of Grok's exhausted pool.
+    assert.equal(other.exactAgentRuntime, CURSOR_OTHER_QUOTA_PROFILE.exactAgentRuntime)
+    assert.equal(other.dispatch?.auto_routing?.quota_tier, 'healthy')
+
+    await assert.rejects(
+      context!.makeService({
+        resolver: createResolverFixture({ profiles: [CURSOR_OTHER_QUOTA_PROFILE] }),
+        quotaSnapshots: poolQuotaSnapshotService('cursor', [{ name: 'Cursor', pct: 0 }, { name: 'Other', pct: 100 }]),
+      }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+    )
+
+    // Grok reads the same raw row's exhausted Cursor window and is blocked.
+    await assert.rejects(
+      context!.makeService({
+        resolver: createResolverFixture({ profiles: [CURSOR_GROK_QUOTA_PROFILE] }),
+        quotaSnapshots,
+      }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+    )
+  })
+
+  it('Kimi k3 requires both 5h and 7d: either exhausted blocks, unrelated 1mo does not', async () => {
+    writeConfig({})
+    const runWith = async (windows: Array<{ name: string; pct: number }>) => {
+      const service = context!.makeService({
+        resolver: createResolverFixture({ profiles: [KIMI_K3_QUOTA_PROFILE] }),
+        quotaSnapshots: poolQuotaSnapshotService('kimi-coding', windows),
+      })
+      return service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    }
+
+    // Both windows healthy routes with complete coverage; a raw 1mo stays inert.
+    const healthy = await runWith([
+      { name: '5h', pct: 0 },
+      { name: '7d', pct: 0 },
+      { name: '1mo', pct: 100 },
+    ])
+    assert.equal(healthy.exactAgentRuntime, KIMI_K3_QUOTA_PROFILE.exactAgentRuntime)
+    assert.equal(healthy.dispatch?.auto_routing?.quota_coverage_complete, true)
+
+    // Either required window exhausted blocks the candidate (AND semantics).
+    for (const exhausted of [
+      [{ name: '5h', pct: 100 }, { name: '7d', pct: 0 }],
+      [{ name: '5h', pct: 0 }, { name: '7d', pct: 100 }],
+    ]) {
+      await assert.rejects(
+        runWith(exhausted),
+        (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+      )
+    }
+  })
+
+  it('deepseek/deepseek-flash mandatory balance: positive available, zero blocks, unknown stays unknown', async () => {
+    writeConfig({})
+    const runWithBalance = async (
+      balances: Array<{ currency: string; amount: string }> | undefined,
+    ) => context!.makeService({
+      resolver: createResolverFixture({ profiles: [DEEPSEEK_BALANCE_PROFILE] }),
+      quotaSnapshots: poolQuotaSnapshotService('deepseek', [], balances),
+    }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+
+    // Positive balance: available with neutral quota quality (never a boost).
+    const positive = await runWithBalance([{ currency: 'USD', amount: '12.50' }])
+    assert.equal(positive.exactAgentRuntime, DEEPSEEK_BALANCE_PROFILE.exactAgentRuntime)
+    assert.equal(positive.dispatch?.auto_routing?.quota_tier, 'healthy')
+    assert.equal(positive.dispatch?.auto_routing?.quota_headroom_trusted, true)
+
+    // Exactly zero blocks.
+    await assert.rejects(
+      runWithBalance([{ currency: 'USD', amount: '0' }]),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+    )
+
+    // Missing/absent balance evidence is unknown, never fabricated zero.
+    const unknown = await runWithBalance(undefined)
+    assert.equal(unknown.exactAgentRuntime, DEEPSEEK_BALANCE_PROFILE.exactAgentRuntime)
+    assert.equal(unknown.dispatch?.auto_routing?.quota_tier, 'unknown')
+    assert.notEqual(unknown.dispatch?.auto_routing?.quota_headroom_trusted, true)
+  })
+
+  it('API-account alternative currencies: any valid positive balance keeps it available; all zero blocks', async () => {
+    writeConfig({})
+    const runWithBalances = async (balances: Array<{ currency: string; amount: string }>) =>
+      context!.makeService({
+        resolver: createResolverFixture({ profiles: [DEEPSEEK_BALANCE_PROFILE] }),
+        quotaSnapshots: poolQuotaSnapshotService('deepseek', [], balances),
+      }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+
+    const mixed = await runWithBalances([
+      { currency: 'USD', amount: '0' },
+      { currency: 'CNY', amount: '42.0' },
+    ])
+    assert.equal(mixed.exactAgentRuntime, DEEPSEEK_BALANCE_PROFILE.exactAgentRuntime)
+
+    await assert.rejects(
+      runWithBalances([
+        { currency: 'USD', amount: '0' },
+        { currency: 'CNY', amount: '0' },
+      ]),
+      (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'quota_unavailable',
+    )
+  })
+
+  it('explicit reference cap still rejects an otherwise routable balance-bound candidate', async () => {
+    const runAtCap = async (cap: number) => {
+      const nowMs = Date.parse('2026-09-10T04:00:00.000Z')
+      writeConfig({
+        tasks: {
+          settings: {
+            global: {
+              selectionMode: 'automatic',
+              timeoutMs: 120_000,
+              maxAutoOutputUsdPerMillion: cap,
+              dispatch: { expectedTps: 1, minimumTps: 1 },
+            },
+          },
+        },
+      })
+      return context!.makeService({
+        resolver: createResolverFixture({ profiles: [DEEPSEEK_BALANCE_PROFILE] }),
+        quotaSnapshots: poolQuotaSnapshotService(
+          'deepseek',
+          [],
+          [{ currency: 'USD', amount: '5' }],
+          {},
+          nowMs,
+        ),
+        now: () => nowMs,
+      }).snapshot({ task_id: 'builtin:commit' })
+    }
+
+    // A cap at/above the reference admits the balance-bound candidate.
+    const admitted = await runAtCap(1)
+    const admittedRow = admitted.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(admittedRow?.automatic_selection)
+
+    // A below-reference cap still rejects before any quota/balance benefit.
+    const rejected = await runAtCap(0.5)
+    const rejectedRow = rejected.rows.find((row) => row.identity === 'builtin:commit')
+    assert.equal(rejectedRow?.automatic_selection, undefined)
+    assert.equal(
+      rejectedRow?.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')?.resolutionFailure?.code,
+      'price_limit',
+    )
   })
 
   it('surfaces mocked registry task load errors without mixing them into executable rows', async () => {

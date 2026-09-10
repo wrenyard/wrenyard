@@ -73,7 +73,7 @@ test('Zen and OpenRouter free models have exactly zero reference prices; Go mode
     assert.equal(model.pricing?.inputUsdPerMillion, 0);
     assert.equal(model.pricing?.cachedInputUsdPerMillion, 0);
     assert.equal(model.pricing?.outputUsdPerMillion, 0);
-    assert.equal(model.intelligenceEvidence?.status, 'product_provisional');
+    assert.ok(model.intelligence, `${provider}/${modelId} must still carry a configured tier`);
   };
   assertZero('opencode-zen', 'mimo-v2.5-free');
   assertZero('opencode-zen', 'ling-3.0-flash-fin-free');

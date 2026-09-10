@@ -178,6 +178,13 @@ test('the public quota metadata graph is recursively frozen at runtime', () => {
         }
       }
     }
+    const balances = binding.requiredBalances;
+    if (balances) {
+      assert.equal(Object.isFrozen(balances), true);
+      for (const balance of balances) {
+        assert.equal(Object.isFrozen(balance), true);
+      }
+    }
   }
 });
 
@@ -235,4 +242,50 @@ test('existing single-pool bindings keep exact top-level pool fields', () => {
     assert.deepEqual(windows.map((window) => window.windowId), [...expectedWindows]);
     assert.equal(binding.pools, undefined);
   }
+});
+
+test('Cursor Other (kimi-k3) shares the raw cursor row but normalizes to the distinct cursor-other pool using the Other window', () => {
+  const binding = findProviderQuotaBinding('cursor', 'kimi-k3');
+  assert.ok(binding);
+  assert.equal(binding.providerId, 'cursor');
+  assert.equal(binding.modelId, 'kimi-k3');
+  // Same raw row as Grok, distinct normalized pool: never folded into cursor-models.
+  assert.equal(binding.quotaProviderId, 'cursor');
+  assert.equal(binding.quotaPoolId, 'cursor-other');
+  assert.notEqual(binding.quotaPoolId, 'cursor-models');
+  // Match the actual raw Other window exactly.
+  assert.ok(binding.windows);
+  assert.deepEqual(binding.windows!.map((window) => window.windowId), ['Other']);
+  assert.equal(Object.isFrozen(binding.windows), true);
+  assert.equal(binding.pools, undefined);
+  // Grok mapping stays exactly as before.
+  const grok = findProviderQuotaBinding('cursor', 'cursor-grok-4.6-high');
+  assert.ok(grok);
+  assert.equal(grok.quotaPoolId, 'cursor-models');
+  assert.deepEqual(grok.windows?.map((window) => window.windowId), ['Cursor']);
+});
+
+test('official deepseek/deepseek-flash binds only a mandatory monetary balance with no windows or inherited pools', () => {
+  const binding = findProviderQuotaBinding('deepseek', 'deepseek-flash');
+  assert.ok(binding);
+  assert.equal(binding.providerId, 'deepseek');
+  assert.equal(binding.modelId, 'deepseek-flash');
+  assert.equal(binding.quotaProviderId, 'deepseek');
+  // No raw windows and no inherited pool: balance-only applicability.
+  assert.equal(binding.windows, undefined);
+  assert.equal(binding.pools, undefined);
+  assert.equal(binding.quotaPoolId, 'deepseek-balance');
+  const balances = binding.requiredBalances;
+  assert.ok(balances);
+  assert.equal(balances!.length, 1);
+  const balance = balances![0];
+  assert.equal(balance.balanceId, 'deepseek-balance');
+  assert.equal(balance.required, true);
+  assert.equal(balance.evidence, 'provider_parser');
+  assert.equal(balance.evidenceRef, 'runtime/forge/internal/usage/quota/deepseek.go');
+  assert.equal(Object.isFrozen(balances), true);
+  assert.equal(Object.isFrozen(balance), true);
+  // No CodeBuddy or TokenHub balance inheritance.
+  assert.equal(findProviderQuotaBinding('codebuddy', 'deepseek-flash'), undefined);
+  assert.equal(findProviderQuotaBinding('tokenhub', 'deepseek-flash'), undefined);
 });

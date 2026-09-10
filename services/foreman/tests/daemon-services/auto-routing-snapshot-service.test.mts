@@ -34,6 +34,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
+import { assessRequiredQuota } from '@wrenyard/catalog';
 
 import type { CodeBuddyQueryContext } from '../../lib/daemon/execution/forge-quota-query.mts';
 import {
@@ -118,13 +119,18 @@ function windowConstraint(binding: Binding, windowId: string) {
  * has no proven raw windows.
  */
 function bindingRequiredConstraintIds(binding: Binding): string[] {
+  const balanceIds = (binding.requiredBalances ?? []).map((balance) => balance.balanceId);
   const pools = binding.pools ?? [];
   if (pools.length > 0) {
-    return pools.flatMap((pool) =>
-      pool.windows.length === 0 ? [pool.quotaPoolId] : pool.windows.map((window) => window.windowId),
-    );
+    return [
+      ...pools.flatMap((pool) =>
+        pool.windows.length === 0 ? [pool.quotaPoolId] : pool.windows.map((window) => window.windowId),
+      ),
+      ...balanceIds,
+    ];
   }
-  return (binding.windows ?? []).map((window) => window.windowId);
+  const windows = (binding.windows ?? []).map((window) => window.windowId);
+  return [...windows, ...balanceIds];
 }
 
 /** Raw window ids a provider row would surface for a binding (actual windows only). */
@@ -268,6 +274,7 @@ test('maps every canonical binding from quotaProviderId rows and derives evidenc
       assert.deepEqual([...entry.quotaPoolIds!], binding.pools!.map((pool) => pool.quotaPoolId));
       assert.equal(entry.quotaPoolId, undefined);
       for (const constraint of entry.requiredQuota) {
+        if (constraint.kind === 'balance') continue;
         // Pools without proven raw windows stay null constraints (unknown).
         assert.equal(constraint.evidence, null, `missing null evidence for ${binding.providerId} ${constraint.id}`);
       }
@@ -275,7 +282,14 @@ test('maps every canonical binding from quotaProviderId rows and derives evidenc
     }
     // Normalized quotaPoolId is retained in output for legacy single-pool bindings.
     assert.equal(entry.quotaPoolId, binding.quotaPoolId);
+    const hasProvenWindows = (binding.windows?.length ?? 0) > 0;
     for (const constraint of entry.requiredQuota) {
+      if (constraint.kind === 'balance') continue;
+      // A single-pool binding with no proven windows stays a null constraint.
+      if (!hasProvenWindows) {
+        assert.equal(constraint.evidence, null, `pool ${constraint.id} must stay unknown`);
+        continue;
+      }
       const evidence = constraint.evidence;
       assert.notEqual(evidence, null, `missing evidence for ${binding.providerId} ${constraint.id}`);
       assert.equal(evidence!.remainingPercent, 80);
@@ -584,6 +598,56 @@ test('codex-spark reads its separate row and requires both 5h and 7d', async () 
   assert.equal(entry.quotaPoolId, 'codex-spark-models');
   assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['5h', '7d']);
   assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.evidence?.remainingPercent), [90, 70]);
+});
+
+test('Cursor Other shares the raw cursor row but binds the distinct cursor-other pool using independent Other evidence', async () => {
+  const snapshot = await serviceFor([{
+    pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: ['Cursor', 'Other'].map((name) => ({ name, pct: name === 'Cursor' ? 100 : 25, resets_at: iso(T0 + 86_400_000), window_minutes: 43_800 })),
+  }]).snapshot();
+
+  // Grok keeps its Cursor window on cursor-models.
+  const grok = entryFor(snapshot, 'cursor', 'cursor-grok-4.6-high');
+  assert.equal(grok.quotaPoolId, 'cursor-models');
+  assert.deepEqual(grok.requiredQuota.map((constraint) => constraint.id), ['Cursor']);
+  assert.equal(grok.requiredQuota[0]!.evidence!.remainingPercent, 0);
+
+  // Other uses its own raw window, never the exhausted Cursor window.
+  const other = entryFor(snapshot, 'cursor', 'kimi-k3');
+  assert.equal(other.quotaPoolId, 'cursor-other');
+  assert.deepEqual(other.requiredQuota.map((constraint) => constraint.id), ['Other']);
+  assert.equal(other.requiredQuota[0]!.evidence!.remainingPercent, 75);
+});
+
+test('deepseek/deepseek-flash mandatory balance evidence comes from the raw Forge balances array', async () => {
+  const withBalance = await serviceFor([{
+    pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: [],
+    balances: [{ currency: 'USD', amount: '12.50' }],
+  }]).snapshot();
+  const entry = entryFor(withBalance, 'deepseek', 'deepseek-flash');
+  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['deepseek-balance']);
+  const constraint = entry.requiredQuota[0]!;
+  assert.equal(constraint.kind, 'balance');
+  assert.equal(constraint.balance!.amount, '12.50');
+  assert.equal(constraint.balance!.observedAtMs, T0);
+
+  // No balances array: the mandatory balance stays an unknown null constraint.
+  const noBalance = await serviceFor([{
+    pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [],
+  }]).snapshot();
+  const noEntry = entryFor(noBalance, 'deepseek', 'deepseek-flash');
+  assert.equal(noEntry.requiredQuota[0]!.balance, null);
+
+  // No raw deepseek row at all: unknown snapshot keeps a null balance.
+  const rejecting = new AutoRoutingQuotaSnapshotService({
+    queryJson: () => Promise.reject(new Error('unreachable')),
+    now: () => T0,
+  });
+  const unknown = await rejecting.snapshot();
+  const unknownEntry = entryFor(unknown, 'deepseek', 'deepseek-flash');
+  assert.equal(unknownEntry.requiredQuota[0]!.kind, 'balance');
+  assert.equal(unknownEntry.requiredQuota[0]!.balance, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -1485,4 +1549,26 @@ test('a missing, undefined, throwing, or stableScope-less current snapshot fails
   await runScenario(() => Promise.resolve(
     fakeCodeBuddySnapshot({ stableScope: undefined, environment: 'ioa', credentialValue: 'token' }),
   ));
+});
+
+
+test('monetary balances preserve exact positive amounts and never add currencies or fabricate zero', async () => {
+  const read = async (balances: unknown[]) => {
+    const snapshot = await serviceFor([{ pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [], balances }]).snapshot();
+    return entryFor(snapshot, 'deepseek', 'deepseek-flash').requiredQuota[0]!.balance;
+  };
+  assert.equal((await read([{ currency: 'USD', amount: '3.25' }, { currency: 'CNY', amount: '100.00' }]))?.amount, '3.25');
+  for (const invalid of [null, {}, { currency: 'USD', amount: '' }, { currency: 'USD', amount: '0e0' }, { currency: '?', amount: '0' }]) {
+    assert.equal(await read([{ currency: 'USD', amount: '0' }, invalid]), null);
+    assert.equal((await read([invalid, { currency: 'USD', amount: '0.00000000000000000001' }]))?.amount, '0.00000000000000000001');
+  }
+  assert.equal((await read([{ currency: 'USD', amount: '0.00' }, { currency: 'CNY', amount: '00.0' }]))?.amount, '0');
+});
+
+
+test('fresh exhausted Other blocks without reset metadata while a missing Other stays unknown', async () => {
+  const zero = await serviceFor([{ pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Other', pct: 100 }] }]).snapshot();
+  assert.equal(assessRequiredQuota(T0, entryFor(zero, 'cursor', 'kimi-k3').requiredQuota).state, 'blocked');
+  const missing = await serviceFor([{ pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Cursor', pct: 0 }] }]).snapshot();
+  assert.equal(assessRequiredQuota(T0, entryFor(missing, 'cursor', 'kimi-k3').requiredQuota).state, 'unknown');
 });

@@ -42,6 +42,25 @@ export interface ProviderQuotaPoolConstraint {
   readonly windows: readonly ProviderQuotaWindowConstraint[];
 }
 
+/**
+ * A mandatory monetary balance constraint for a pool binding.
+ *
+ * Balance evidence comes from the existing Forge balances source (raw
+ * `balances: [{ currency, amount }]` with a decimal amount string); no second
+ * balance table is introduced. A fresh, valid amount strictly greater than
+ * zero means the resource is not exhausted and carries neutral quota quality
+ * (it never boosts subscription pace). Exactly zero blocks. Malformed,
+ * negative, stale or missing values are unknown and are never fabricated as
+ * zero — the constraint stays uncovered (null evidence) in that case.
+ */
+export interface ProviderQuotaBalanceConstraint {
+  readonly balanceId: string;
+  readonly required: true;
+  readonly evidence: QuotaEvidenceKind;
+  readonly evidenceRef: string;
+  readonly checkedAt: string;
+}
+
 export interface ProviderQuotaBinding {
   readonly providerId: string;
   readonly modelId: string;
@@ -52,6 +71,8 @@ export interface ProviderQuotaBinding {
   readonly windows?: readonly ProviderQuotaWindowConstraint[];
   /** Jointly applicable required pools for multi-pool bindings. */
   readonly pools?: readonly ProviderQuotaPoolConstraint[];
+  /** Optional mandatory monetary balance resources; all must pass. */
+  readonly requiredBalances?: readonly ProviderQuotaBalanceConstraint[];
 }
 
 /** Builds one window object and freezes it at module load. */
@@ -80,6 +101,21 @@ function poolConstraint(
   return Object.freeze({
     quotaPoolId,
     windows: Object.freeze(windows.slice()),
+  });
+}
+
+/** Builds one frozen mandatory balance constraint at module load. */
+function balanceConstraint(
+  balanceId: string,
+  evidenceRef: string,
+  checkedAt = '2026-09-08',
+): ProviderQuotaBalanceConstraint {
+  return Object.freeze({
+    balanceId,
+    required: true,
+    evidence: 'provider_parser',
+    evidenceRef,
+    checkedAt,
   });
 }
 
@@ -184,6 +220,16 @@ export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.f
       ),
     ]),
   }),
+  // K3 consumes the Other allowance, independently of the Cursor model pool.
+  Object.freeze({
+    providerId: 'cursor',
+    modelId: 'kimi-k3',
+    quotaProviderId: 'cursor',
+    quotaPoolId: 'cursor-other',
+    windows: Object.freeze([
+      windowConstraint('Other', 'full_cycle', 'provider_parser', 'runtime/forge/internal/usage/quota/cursor.go', '2026-09-10'),
+    ]),
+  }),
   Object.freeze({
     providerId: 'kimi-coding',
     modelId: 'k3',
@@ -249,6 +295,20 @@ export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.f
     'codex-spark-models',
     codexSparkWindows(),
   ),
+  // Official deepseek/deepseek-flash: no registered official provider exists in
+  // the public catalog yet, so this explicit model binding carries ONLY a
+  // mandatory monetary balance resource (`deepseek` raw row). It deliberately
+  // inherits NO CodeBuddy or TokenHub balance: a missing/stale/unknown amount
+  // keeps coverage incomplete rather than fabricating a balance.
+  Object.freeze({
+    providerId: 'deepseek',
+    modelId: 'deepseek-flash',
+    quotaProviderId: 'deepseek',
+    quotaPoolId: 'deepseek-balance',
+    requiredBalances: Object.freeze([
+      balanceConstraint('deepseek-balance', 'runtime/forge/internal/usage/quota/deepseek.go'),
+    ]),
+  }),
 ]);
 
 /** Exact providerId + modelId lookup. Returns the matching binding or undefined. */

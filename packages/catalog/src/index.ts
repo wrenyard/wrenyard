@@ -28,14 +28,12 @@ export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   premium: 3,
 };
 
-// Auditable intelligence evidence attached to a model. This is evidence data
-// only: it never changes the runtime reasoningEffort product field.
-export type IntelligenceEvidenceStatus = 'measured' | 'estimated' | 'product_provisional';
-
+// Optional provenance attached to a model's configured intelligence tier. This
+// is descriptive reference data only and never gates routing: the configured
+// intelligence tier is the sole tier admission fact.
 export interface IntelligenceEvidence {
   source: string;
   checkedAt: string;
-  status: IntelligenceEvidenceStatus;
   indexVersion?: string;
   score?: number;
   reasoningConfiguration?: string;
@@ -588,16 +586,12 @@ export function resolveConstrainedDispatch(
       if (!capOk) continue;
     }
 
-    // Hard constraint: intelligence minimum. Fail closed when intelligence is unknown.
+    // Hard constraint: intelligence minimum. The configured intelligence tier
+    // is the sole admission fact; fail closed when intelligence is unknown.
     if (requirements.intelligenceMin) {
       const intel = modelDef.intelligence;
       if (intel === undefined) continue;
       if (INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
-      // High/premium tiers require measured intelligence evidence to be
-      // dispatched at that tier. A model claiming high/premium with absent,
-      // estimated, or product-provisional evidence fails closed, and this
-      // never mutates the runtime reasoningEffort product field.
-      if ((intel === 'high' || intel === 'premium') && !(modelDef.intelligenceEvidence && modelDef.intelligenceEvidence.status === 'measured')) continue;
     }
 
     // Hard constraint: max output price. Fail closed when pricing is unknown.
@@ -796,7 +790,6 @@ export {
   FULL_CYCLE_RESET_WEIGHT,
   HEALTHY_ROLLING_REMAINING,
   NEUTRAL_HEADROOM,
-  REFERENCE_PRICE_GATE_USD_PER_M,
   SCORE_WEIGHTS,
   STRAINED_ROLLING_REMAINING,
   assessRequiredQuota,
@@ -805,6 +798,7 @@ export {
 } from './auto-routing-policy.js';
 export type {
   AutoRoutingResult,
+  BalanceEvidence,
   CandidateAssessment,
   CandidateEvaluation,
   CandidateInput,

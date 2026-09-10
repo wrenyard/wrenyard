@@ -80,9 +80,8 @@ import { randomUUID } from 'node:crypto';
 
 import { queryForgeQuotaJson, type CodeBuddyQueryContext } from '../execution/forge-quota-query.mts';
 
-import type { QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/catalog';
+import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/catalog';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
-
 /** Evidence freshness window for a direct raw observation (ms). */
 const QUOTA_SNAPSHOT_VALID_FOR_MS = 60_000;
 
@@ -194,12 +193,19 @@ interface RawWindow {
   readonly windowMs: number | null;
 }
 
+/** One raw Forge balance entry: a currency plus a decimal amount string. */
+interface RawBalance {
+  readonly currency: string | null;
+  readonly amount: string | null;
+}
+
 interface RawRow {
   readonly pool: string | null;
   readonly status: string | null;
   readonly stale: boolean;
   readonly fetchedAtMs: number | null;
   readonly windows: readonly RawWindow[];
+  readonly balances: readonly RawBalance[];
 }
 
 function finiteNumber(value: unknown): value is number {
@@ -249,12 +255,30 @@ function normalizeRow(item: unknown): RawRow | null {
     }
   }
 
+  // Existing Forge balances source: raw `balances: [{ currency, amount }]` with
+  // a decimal amount string. Never synthesized, never coerced to zero.
+  const balances: RawBalance[] = [];
+  if (Array.isArray(raw.balances)) {
+    for (const entry of raw.balances) {
+      if (entry === null || typeof entry !== 'object') {
+        balances.push({ currency: null, amount: null });
+        continue;
+      }
+      const balance = entry as Record<string, unknown>;
+      balances.push({
+        currency: stringOrNull(balance.currency),
+        amount: stringOrNull(balance.amount),
+      });
+    }
+  }
+
   return {
     pool: stringOrNull(raw.pool),
     status: stringOrNull(raw.status),
     stale: raw.stale === true,
     fetchedAtMs: isoTimeMs(raw.fetched_at),
     windows: Object.freeze(windows),
+    balances: Object.freeze(balances),
   };
 }
 
@@ -301,6 +325,7 @@ type RequiredQuotaTarget =
       readonly id: string;
       readonly windowName?: undefined;
       readonly resetKind?: undefined;
+      readonly balanceId?: undefined;
     }
   | {
       readonly id: string;
@@ -310,6 +335,15 @@ type RequiredQuotaTarget =
       /** Replenishment semantics come exclusively from the binding window
        *  constraint; never invented from raw output. */
       readonly resetKind: unknown;
+      readonly balanceId?: undefined;
+    }
+  | {
+      /** Mandatory monetary balance resource; evidence is located by the raw
+       *  Forge balances array on the same binding row. */
+      readonly id: string;
+      readonly balanceId: string;
+      readonly windowName?: undefined;
+      readonly resetKind?: undefined;
     };
 
 interface BindingQuotaShape {
@@ -327,6 +361,11 @@ interface BindingQuotaShape {
  * exact name; a pool with no proven raw windows contributes exactly one
  * constraint keyed by the normalized pool id whose evidence stays null so the
  * pool coverage remains incomplete/unknown.
+ *
+ * A binding may additionally declare mandatory monetary balance resources
+ * (`requiredBalances`): each contributes one discriminated balance constraint
+ * sourced from the same raw row's Forge `balances` array. No second balance
+ * table is introduced.
  */
 function quotaShapeOf(binding: {
   readonly providerId: string;
@@ -337,7 +376,11 @@ function quotaShapeOf(binding: {
     readonly quotaPoolId: string;
     readonly windows: readonly { readonly windowId: string; readonly resetKind: unknown }[];
   }[];
+  readonly requiredBalances?: readonly { readonly balanceId: string }[];
 }, row?: RawRow | null): BindingQuotaShape {
+  const balanceTargets: RequiredQuotaTarget[] = (binding.requiredBalances ?? []).map(
+    (balance) => ({ id: balance.balanceId, balanceId: balance.balanceId }),
+  );
   const pools = binding.pools ?? [];
   if (pools.length > 0) {
     const quotaPoolIds: string[] = [];
@@ -355,7 +398,7 @@ function quotaShapeOf(binding: {
         targets.push({ id: window.windowId, windowName: window.windowId, resetKind: window.resetKind });
       }
     }
-    return { quotaPoolIds, targets };
+    return { quotaPoolIds, targets: [...targets, ...balanceTargets] };
   }
   const targets: RequiredQuotaTarget[] = (binding.windows ?? []).map((window) => ({
     id: window.windowId,
@@ -376,7 +419,7 @@ function quotaShapeOf(binding: {
   }
   return {
     quotaPoolId: binding.quotaPoolId,
-    targets,
+    targets: [...targets, ...balanceTargets],
   };
 }
 
@@ -401,6 +444,10 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
   // Raw USED pct is authoritative. remainingPercent = 100 - pct is derived and
   // a finite out-of-range pct is preserved (never the Go-clamped remaining_pct).
   const remainingPercent = 100 - rawWindow.pct;
+  // A fresh explicit zero proves exhaustion even when cycle metadata is absent.
+  if (remainingPercent === 0) {
+    return { remainingPercent, observedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS, replenishmentKind };
+  }
   if (replenishmentKind === 'full_cycle') {
     // Full-cycle evidence carries the parsed reset time and cycle duration.
     if (rawWindow.resetsAtMs === null || rawWindow.windowMs === null) return null;
@@ -415,6 +462,33 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
   }
   // rolling_partial/unknown carry no reset pace.
   return { remainingPercent, observedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS, replenishmentKind };
+}
+
+/**
+ * Builds discriminated monetary balance evidence for one mandatory balance
+ * resource from the raw Forge balances array on the same row.
+ *
+ * Only a usable row with a fresh observation yields evidence: any valid positive
+ * balance keeps the account available (all must be valid to claim all-zero).
+ * Nothing here synthesizes a percentage, reset period, free-supply fact, FX rate
+ * or guaranteed affordability from money; malformed/absent amounts surface as
+ * the raw string (or null) so the policy treats them as unknown, never zero.
+ */
+function balanceEvidence(row: RawRow): BalanceEvidence | null {
+  if (row.fetchedAtMs === null || row.balances.length === 0) return null;
+  let positive: string | undefined;
+  let allValid = true;
+  for (const entry of row.balances) {
+    if (entry.currency === null || !/^[A-Z]{3}$/.test(entry.currency) || entry.amount === null || !/^\d+(?:\.\d+)?$/.test(entry.amount)) {
+      allValid = false;
+      continue;
+    }
+    if (/[1-9]/.test(entry.amount)) positive ??= entry.amount;
+  }
+  // Currencies are alternative balances, not amounts to add or convert.
+  // One valid positive suffices; claim zero only when every entry is valid.
+  if (positive === undefined && !allValid) return null;
+  return { amount: positive ?? '0', observedAtMs: row.fetchedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS };
 }
 
 /**
@@ -441,10 +515,11 @@ function buildUnknownSnapshot(nowMs: number, rows: readonly RawRow[] = []): Auto
     // the row itself is stale/non-ok: present-but-unusable stays an explicit
     // null constraint rather than disappearing into a falsely complete 7d row.
     const shape = quotaShapeOf(binding, findRow(rows, binding.quotaProviderId));
-    const requiredQuota = shape.targets.map((target) => ({
-      id: target.id,
-      evidence: null,
-    }));
+    const requiredQuota = shape.targets.map((target) =>
+      target.balanceId !== undefined
+        ? { id: target.id, evidence: null, kind: 'balance' as const, balance: null }
+        : { id: target.id, evidence: null },
+    );
     return entryFields(binding, shape, requiredQuota);
   });
   return deepFreeze({
@@ -487,6 +562,10 @@ function buildSnapshot(
       // unrelated raw rows/windows never fabricate a constraint or evidence.
       // The row and the window/reset facts are narrowed together so an absent
       // value is never handed to evidence construction.
+      if (target.balanceId !== undefined) {
+        const balance = usable && row !== null ? balanceEvidence(row) : null;
+        return { id: target.id, evidence: null, kind: 'balance', balance };
+      }
       const evidence =
         usable && row !== null && target.windowName !== undefined
           ? windowEvidence(row, target.windowName, target.resetKind)

@@ -70,16 +70,16 @@ describe('task resolution failure catalog exclusion mapping', () => {
   it('maps real auto-routing exclusion reasons to the closed code set', () => {
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['reference_above_cap'], 'price_limit')
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['marginal_above_reference'], 'price_limit')
-    assert.equal(CATALOG_EXCLUSION_CODE_MAP['reference_price_gate'], 'price_limit')
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['speed_below_minimum'], 'speed_requirement')
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['intelligence_out_of_range'], 'intelligence_requirement')
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['quota_blocked'], 'quota_unavailable')
   })
 
-  it('maps reference_price_gate to price_limit even under unknown/incomplete quota', () => {
-    // An unknown/incomplete quota is not quota_unavailable; the observable
-    // admission rejection is the reference-price gate, so it stays price_limit.
-    assert.equal(codeFromCatalogExclusion('reference_price_gate'), 'price_limit')
+  it('no longer maps the obsolete reference_price_gate', () => {
+    // Unknown/incomplete quota is neutral regardless of listed price: there is
+    // no reference-price gate exclusion reason left to classify.
+    assert.equal(CATALOG_EXCLUSION_CODE_MAP['reference_price_gate'], undefined)
+    assert.equal(codeFromCatalogExclusion('reference_price_gate'), undefined)
   })
 
   it('maps quota_blocked to quota_unavailable', () => {

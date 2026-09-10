@@ -7,7 +7,6 @@ import {
   INTELLIGENCE_ORDER,
   normalizeIntelligenceTier,
   type DispatchCandidate,
-  type IntelligenceEvidence,
   type IntelligenceTier,
   type ModelCapability,
   type ModelDefinition,
@@ -118,29 +117,29 @@ function buildEvidenceCatalog(): { catalog: Catalog; candidates: DispatchCandida
   const mk = (
     id: string,
     intelligence: 'low' | 'mid' | 'high' | 'premium',
-    evidence?: IntelligenceEvidence,
+    provenance?: { source: string; checkedAt: string; score?: number },
   ) => ({
     id, displayName: id, intelligence,
-    ...(evidence ? { intelligenceEvidence: evidence } : {}),
+    ...(provenance ? { intelligenceEvidence: provenance } : {}),
     speed: { tps: 50, source: 'bench-evidence', checkedAt: '2026-09-09' },
   });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
-      mk('measured-high', 'high', { source: 'https://aa.test/measured-high', checkedAt: '2026-09-09', status: 'measured', indexVersion: 'v4.3', score: 44 }),
-      mk('absent-high', 'high'),
-      mk('estimated-high', 'high', { source: 'https://aa.test/estimated', checkedAt: '2026-09-09', status: 'estimated', score: 47 }),
-      mk('provisional-high', 'high', { source: 'https://aa.test/provisional', checkedAt: '2026-09-09', status: 'product_provisional', score: 45 }),
-      mk('low-ok', 'low', { source: 'https://aa.test/low', checkedAt: '2026-09-09', status: 'measured', score: 20 }),
+      mk('high-with-provenance', 'high', { source: 'https://aa.test/high', checkedAt: '2026-09-09', score: 44 }),
+      mk('high-no-provenance', 'high'),
+      mk('premium-no-provenance', 'premium'),
+      mk('mid-with-provenance', 'mid', { source: 'https://aa.test/mid', checkedAt: '2026-09-09', score: 30 }),
+      mk('low-no-provenance', 'low'),
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const candidates: DispatchCandidate[] = [
-    { profileId: 'measured', client: 'c1', provider: 'p', model: 'measured-high' },
-    { profileId: 'absent', client: 'c1', provider: 'p', model: 'absent-high' },
-    { profileId: 'estimated', client: 'c1', provider: 'p', model: 'estimated-high' },
-    { profileId: 'provisional', client: 'c1', provider: 'p', model: 'provisional-high' },
-    { profileId: 'low', client: 'c1', provider: 'p', model: 'low-ok' },
+    { profileId: 'high-prov', client: 'c1', provider: 'p', model: 'high-with-provenance' },
+    { profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' },
+    { profileId: 'premium-bare', client: 'c1', provider: 'p', model: 'premium-no-provenance' },
+    { profileId: 'mid-prov', client: 'c1', provider: 'p', model: 'mid-with-provenance' },
+    { profileId: 'low-bare', client: 'c1', provider: 'p', model: 'low-no-provenance' },
   ];
   return { catalog, candidates };
 }
@@ -168,7 +167,6 @@ test('intelligence minimum excludes below-min tiers but admits any tier at or ab
   // configurable maximum intelligence band.
   const premiumModel = catalog.provider('p')?.models.find(model => model.id === 'mpremium');
   assert.ok(premiumModel);
-  premiumModel.intelligenceEvidence = { source: 'https://benchmark.test/premium', checkedAt: '2026-09-10', status: 'measured', score: 60 };
   const premium = resolveConstrainedDispatch(catalog, candidates.filter(candidate => candidate.model === 'mpremium'), { intelligenceMin: 'mid', intelligenceExpected: 'mid' });
   assert.equal(premium.ok, true);
   assert.equal(premium.selected.model.intelligence, 'premium');
@@ -231,13 +229,13 @@ test('deterministic ordering: same expected-speed group orders lower price befor
   assert.equal(result.selected.plan.model, 'mfast');
 });
 
-test('no eligible candidate returns a structured failure for a genuinely impossible intelligence floor', () => {
+test('a premium floor is satisfied by the configured premium tier', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  // A premium floor fails closed: the only premium fixture lacks measured
-  // evidence, so no candidate satisfies the floor.
+  // The configured tier is authoritative: the premium fixture is admitted at a
+  // premium floor regardless of whether any evidence metadata is present.
   const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'premium' });
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, 'no-eligible-candidate');
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.model.intelligence, 'premium');
   assert.equal(result.considered, candidates.length);
 });
 
@@ -260,24 +258,54 @@ test('compatibility normalizer accepts only the four current tiers and rejects f
   assert.equal(normalizeIntelligenceTier('legacy-unknown'), undefined);
 });
 
-test('low eligibility does not require measured intelligence evidence', () => {
+test('low eligibility is satisfied by the configured tier regardless of provenance', () => {
   const { catalog, candidates } = buildEvidenceCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'low' });
+  const result = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'low-no-provenance'), { intelligenceMin: 'low' });
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'low-ok');
+  // A low tier without any evidence metadata still qualifies.
+  assert.equal(result.selected.model.intelligence, 'low');
 });
 
-test('high dispatch fails closed on absent, estimated, or product-provisional evidence but admits measured', () => {
+test('high dispatch is admitted by the configured high tier with or without provenance', () => {
   const { catalog, candidates } = buildEvidenceCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'high' });
-  assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'measured-high');
-  assert.equal(result.selected.model.intelligence, 'high');
-  // Absent/estimated/product-provisional high evidence must not pass verified dispatch.
-  const onlyBad: DispatchCandidate[] = candidates.filter((c) => c.model !== 'measured-high' && c.model !== 'low-ok');
-  const bad = resolveConstrainedDispatch(catalog, onlyBad, { intelligenceMin: 'high' });
-  assert.equal(bad.ok, false);
-  assert.equal(bad.reason, 'no-eligible-candidate');
+  // Only the bare high candidate is offered: no evidence status field exists,
+  // yet the configured high tier satisfies a high minimum.
+  const bareHigh: DispatchCandidate[] = [{ profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }];
+  const bare = resolveConstrainedDispatch(catalog, bareHigh, { intelligenceMin: 'high' });
+  assert.equal(bare.ok, true);
+  assert.equal(bare.selected.model.intelligence, 'high');
+
+  // A high candidate that carries optional provenance is equally admitted.
+  const withProv: DispatchCandidate[] = [{ profileId: 'high-prov', client: 'c1', provider: 'p', model: 'high-with-provenance' }];
+  const prov = resolveConstrainedDispatch(catalog, withProv, { intelligenceMin: 'high' });
+  assert.equal(prov.ok, true);
+  assert.equal(prov.selected.model.intelligence, 'high');
+});
+
+test('a high-tier model fails a premium minimum while a premium tier qualifies', () => {
+  const { catalog, candidates } = buildEvidenceCatalog();
+  const highOnly: DispatchCandidate[] = [{ profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }];
+  const high = resolveConstrainedDispatch(catalog, highOnly, { intelligenceMin: 'premium' });
+  assert.equal(high.ok, false);
+  assert.equal(high.reason, 'no-eligible-candidate');
+
+  const premiumOnly: DispatchCandidate[] = [{ profileId: 'premium-bare', client: 'c1', provider: 'p', model: 'premium-no-provenance' }];
+  const premium = resolveConstrainedDispatch(catalog, premiumOnly, { intelligenceMin: 'premium' });
+  assert.equal(premium.ok, true);
+  assert.equal(premium.selected.model.intelligence, 'premium');
+  void candidates;
+});
+
+test('optional provenance never gates routing', () => {
+  const { catalog } = buildEvidenceCatalog();
+  // Same configured tier, one with provenance and one without: both resolve
+  // exactly the same way because the evidence payload is descriptive only.
+  const withProv = resolveConstrainedDispatch(catalog, [{ profileId: 'mid-prov', client: 'c1', provider: 'p', model: 'mid-with-provenance' }], { intelligenceMin: 'mid' });
+  const bare = resolveConstrainedDispatch(catalog, [{ profileId: 'mid-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }], { intelligenceMin: 'high' });
+  assert.equal(withProv.ok, true);
+  assert.equal(bare.ok, true);
+  assert.equal(catalog.provider('p')!.models.find(m => m.id === 'mid-with-provenance')!.intelligenceEvidence?.score, 30);
+  assert.equal(catalog.provider('p')!.models.find(m => m.id === 'high-no-provenance')!.intelligenceEvidence, undefined);
 });
 
 test('missing price metadata fails closed under a max-output-price requirement', () => {

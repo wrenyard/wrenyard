@@ -295,7 +295,7 @@ test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is hea
   );
 });
 
-test("the $10 gate still rejects unknown or incomplete coverage and sub-$10 strained stays accepted", () => {
+test("unknown quota is neutral regardless of listed price and sub-price strained stays accepted", () => {
   // Complete low-remaining weekly evidence is strained but trustworthy: $9.99 accepted.
   const strained = expectAccepted(
     cand({
@@ -305,22 +305,23 @@ test("the $10 gate still rejects unknown or incomplete coverage and sub-$10 stra
   );
   assert.equal(strained!.tier, "strained");
   assert.equal(strained!.coverageComplete, true);
-  // Unknown coverage at $10+ stays rejected by the reference price gate.
-  expectRejected(
+  // Unknown quota is neutral: no listed reference price can turn a genuinely
+  // unknown/incomplete quota into a price rejection.
+  const unknownHigh = expectAccepted(
     cand({
       referenceUsdPerM: 10,
       requiredQuota: [q("5h", rollingEv(50))],
-    }),
-    "reference_price_gate"
+    })
   );
-  // Incomplete coverage at $10+ stays rejected even with one strained constraint.
-  expectRejected(
+  assert.equal(unknownHigh!.tier, "unknown");
+  // Incomplete coverage plus a strained constraint is likewise never gated by price.
+  const incompleteStrained = expectAccepted(
     cand({
       referenceUsdPerM: 10,
       requiredQuota: [q("7d", fullCycleEv(28, 0.84)), q("monthly", null)],
-    }),
-    "reference_price_gate"
+    })
   );
+  assert.equal(incompleteStrained!.tier, "strained");
   // Stale evidence keeps failing closed to incomplete unknown coverage.
   const stale = assessRequiredQuota(NOW, [
     q("5h", {
@@ -605,7 +606,7 @@ test("zero remaining blocks the candidate", () => {
 // Tier, gate, and incomplete-strained behavior on evaluateCandidate
 // ---------------------------------------------------------------------------
 
-test("incomplete-strained reference 9.99 accepted, 10.00 rejected by gate", () => {
+test("incomplete-strained reference is accepted at any listed price", () => {
   const incompleteStrained = {
     requiredQuota: [q("strain", rollingEv(4)), q("monthly", null)],
   };
@@ -615,25 +616,22 @@ test("incomplete-strained reference 9.99 accepted, 10.00 rejected by gate", () =
   assert.equal(accepted!.headroomTrusted, false);
   close(accepted!.headroom, 0.04, 1e-12, "incomplete-strained H");
 
-  const gated = expectRejected(
-    cand({ ...incompleteStrained, referenceUsdPerM: 10 }),
-    "reference_price_gate"
+  // An unknown/incomplete quota is not price-gated: a high listed reference
+  // price no longer rejects it.
+  const highPrice = expectAccepted(
+    cand({ ...incompleteStrained, referenceUsdPerM: 10 })
   );
-  assert.ok(gated!.detail!.includes("tier=strained"));
+  assert.equal(highPrice!.tier, "strained");
 });
 
-test("unknown tier with reference >= 10 is rejected even when covered", () => {
+test("unknown tier with a high reference price is accepted, not price-gated", () => {
   const unknownCovered = { requiredQuota: [q("u", rollingEv(50))] };
   const ok = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 9.99 }));
   assert.equal(ok!.tier, "unknown");
-  expectRejected(
-    cand({ ...unknownCovered, referenceUsdPerM: 10 }),
-    "reference_price_gate"
-  );
-  expectRejected(
-    cand({ ...unknownCovered, referenceUsdPerM: 10.000001 }),
-    "reference_price_gate"
-  );
+  const high = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 10 }));
+  assert.equal(high!.tier, "unknown");
+  const higher = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 10.000001 }));
+  assert.equal(higher!.tier, "unknown");
 });
 
 test("healthy tiers compute quota metrics and normalized score exactly", () => {
@@ -658,6 +656,62 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
   close(a!.intelligenceFactor, 1, 1e-12, "I saturated");
   close(a!.score, expScore(input, a!), 1e-12, "normalized score");
 });
+
+test("balance constraint: positive amount is available and neutral, zero blocks, unknown never fabricates zero", () => {
+  const at = NOW;
+  const balance = (amount: string | null) => ({
+    id: "deepseek-balance",
+    evidence: null,
+    kind: "balance" as const,
+    balance:
+      amount === null
+        ? null
+        : { amount, observedAtMs: at - 1_000, validForMs: HOUR_MS },
+  });
+
+  // Positive valid amount: not exhausted, neutral quality (no subscription boost).
+  const positive = assessRequiredQuota(NOW, [balance("12.50")]);
+  assert.equal(positive.state, "healthy");
+  assert.equal(positive.coverageComplete, true);
+  assert.equal(positive.headroom, NEUTRAL_HEADROOM);
+
+  // Exactly zero blocks.
+  const zero = assessRequiredQuota(NOW, [balance("0")]);
+  assert.equal(zero.state, "blocked");
+  assert.deepEqual(zero.blockedConstraintIds, ["deepseek-balance"]);
+
+  // Missing / malformed / negative / stale / future are unknown, never zero.
+  for (const unknown of [balance(null), balance(""), balance("not-a-number"), balance("-1"), balance("0x00"), balance("0e0")]) {
+    const result = assessRequiredQuota(NOW, [unknown]);
+    assert.notEqual(result.state, "blocked", "unknown balance must never block");
+    assert.equal(result.state, "unknown");
+    assert.notEqual(result.headroom, 0);
+  }
+  const stale: RequiredQuotaConstraint = {
+    id: "deepseek-balance",
+    evidence: null,
+    kind: "balance",
+    balance: { amount: "5", observedAtMs: NOW - 2 * HOUR_MS, validForMs: HOUR_MS },
+  };
+  assert.equal(assessRequiredQuota(NOW, [stale]).state, "unknown");
+
+  // A positive balance keeps the candidate available; a zero balance blocks it.
+  const available = expectAccepted(cand({ requiredQuota: [balance("1.00")] }));
+  assert.equal(available!.tier, "healthy");
+  assert.equal(available!.headroom, NEUTRAL_HEADROOM);
+  expectRejected(cand({ requiredQuota: [balance("0")] }), "quota_blocked");
+});
+
+test(">= 10 unknown quota is no longer blocked by any reference price gate", () => {
+  for (const price of [10, 25, 100, 1000]) {
+    const accepted = expectAccepted(
+      cand({ referenceUsdPerM: price, effectiveCapUsdPerM: 1000, requiredQuota: [q("u", rollingEv(50))] })
+    );
+    assert.equal(accepted!.tier, "unknown");
+  }
+});
+
+
 
 // ---------------------------------------------------------------------------
 // Approved normalized formula: weights, price anchors, speed, quota, intelligence

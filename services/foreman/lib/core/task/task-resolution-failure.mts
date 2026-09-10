@@ -114,20 +114,19 @@ export function selectTaskResolutionFailure(
  * Mapping from real Catalog auto-routing exclusion reasons to the closed code
  * set. Only reasons that represent a real elimination gate are mapped:
  *
- * - reference_above_cap / marginal_above_reference / reference_price_gate -> price_limit
- * - speed_below_minimum                                   -> speed_requirement
- * - intelligence_out_of_range                             -> intelligence_requirement
- * - quota_blocked                                         -> quota_unavailable
+ * - reference_above_cap / marginal_above_reference -> price_limit
+ * - speed_below_minimum                           -> speed_requirement
+ * - intelligence_out_of_range                     -> intelligence_requirement
+ * - quota_blocked                                 -> quota_unavailable
  *
  * Unknown/strained/incomplete quota reasons are not hard eliminations and are
- * NOT mapped (returns undefined). `reference_price_gate` caused by an
- * unknown/incomplete quota still maps to price_limit because the admission
- * rejection observed is the reference-price gate, not a quota state.
+ * NOT mapped (returns undefined). The obsolete reference_price_gate is gone:
+ * a genuinely unknown/incomplete quota is neutral regardless of listed price,
+ * so it is never classified as a price elimination.
  */
 export const CATALOG_EXCLUSION_CODE_MAP: Readonly<Record<string, TaskResolutionFailureCode>> = {
   reference_above_cap: 'price_limit',
   marginal_above_reference: 'price_limit',
-  reference_price_gate: 'price_limit',
   speed_below_minimum: 'speed_requirement',
   intelligence_out_of_range: 'intelligence_requirement',
   quota_blocked: 'quota_unavailable',
