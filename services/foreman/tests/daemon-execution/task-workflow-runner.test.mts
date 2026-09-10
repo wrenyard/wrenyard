@@ -1236,7 +1236,9 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
     timeout_ms: 42_000,
   }
 
-  it('passes invocation settings to the resolver and launches only the resolved runtime with its timeout', async () => {
+  it('passes invocation settings to the resolver and launches only the resolved runtime with its timeout', async (t) => {
+    const now = Date.now()
+    t.mock.method(Date, 'now', () => now)
     const workspace = makeTempDir('foreman-settings-kernel-')
     writeSettingsTask(workspace)
     await discoverTasks(workspace)
