@@ -121,6 +121,75 @@ test('rejects a developer absolute path embedded in first-party bytes', () => {
   }
 });
 
+test('accepts a dependency binary embedding the current generic home under an upstream build path', () => {
+  const stage = makeStage();
+  try {
+    // Mirrors CI 34493121404: upstream fsevents.node was publicly compiled on a
+    // runner whose home equals the current generic home (os.homedir on the
+    // macOS CI host). That is a public upstream build path, not a local leak,
+    // so a dependency file must not trip the developer-path rule.
+    const home = os.homedir();
+    writeFile(stage, 'services/foreman/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${home}/runner/work/fsevents\n`));
+    const result = runGate(stage);
+    assert.equal(result.ok, true, result.message);
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('rejects the current generic home embedded in a first-party file', () => {
+  const stage = makeStage();
+  try {
+    const home = os.homedir();
+    writeFile(stage, 'dist/wrenyard.mjs', `export const builtFrom = ${JSON.stringify(`${home}/leaked`)};\n`);
+    const result = runGate(stage);
+    assert.equal(result.ok, false, 'expected a first-party home path to be rejected');
+    assert.match(result.message, /local developer\/home\/checkout absolute path/);
+    assert.match(result.message, /dist[\\/]wrenyard\.mjs/);
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('rejects an explicit buildTmp path inside a dependency binary including Windows/escaped spellings', () => {
+  const stage = makeStage();
+  const buildRoot = makeStage();
+  try {
+    const buildTmp = path.join(buildRoot, 'wrenyard-release-abc123');
+    const jsonEscaped = buildTmp.replace(/\//gu, '\\').replace(/\\/gu, '\\\\');
+    writeFile(stage, 'services/foreman/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${jsonEscaped}/foreman\n`));
+    try {
+      assertSafeReleasePayload(stage, 'test', buildTmp, path.join(buildRoot, 'worktree'));
+      assert.fail('expected the escaped buildTmp path in a dependency to be rejected');
+    } catch (error) {
+      assert.match(error.message, /local developer\/home\/checkout absolute path/);
+      assert.match(error.message, /fsevents\.node/);
+    }
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.rmSync(buildRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects an explicit worktree path inside a dependency binary', () => {
+  const stage = makeStage();
+  const buildRoot = makeStage();
+  try {
+    const worktree = path.join(buildRoot, 'worktrees', 'dev24nat');
+    writeFile(stage, 'services/foreman/node_modules/tsx/dist/loader.js', `// built at ${worktree}\n`);
+    try {
+      assertSafeReleasePayload(stage, 'test', path.join(buildRoot, 'tmp'), worktree);
+      assert.fail('expected the worktree path in a dependency to be rejected');
+    } catch (error) {
+      assert.match(error.message, /local developer\/home\/checkout absolute path/);
+      assert.match(error.message, /node_modules[\\/]tsx/);
+    }
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.rmSync(buildRoot, { recursive: true, force: true });
+  }
+});
+
 test('rejects a JSON-escaped Windows developer path embedded in first-party bytes', () => {
   const stage = makeStage();
   const stageRoot = makeStage();

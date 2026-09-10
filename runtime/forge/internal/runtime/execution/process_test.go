@@ -144,6 +144,27 @@ func TestRunProcessCancellation(t *testing.T) {
 	}
 }
 
+// Exact selector for the isolated transcript fixture subprocess.
+const helperSubprocessMarker = "TestRunProcessTranscriptFixtureHelper"
+
+// A real child delay keeps the measured interval above 1 ms on fast runners.
+// Only the exact helper invocation emits a transcript and exits without PASS.
+func TestRunProcessTranscriptFixtureHelper(t *testing.T) {
+	if len(os.Args) != 5 || os.Args[1] != "-test.run" || os.Args[2] != "^"+helperSubprocessMarker+"$" || os.Args[3] != "--" {
+		return
+	}
+	fixturePath := os.Args[4]
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := os.Stdout.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(0)
+}
+
 // TestRunProcessCodeBuddyTranscriptFamilyUsesCodeBuddyCodec is the
 // production-boundary proof that a CodeBuddy plan's runner-only
 // TranscriptFamily routes child stdout through the codebuddy codec (summing
@@ -160,11 +181,11 @@ func TestRunProcessCodeBuddyTranscriptFamilyUsesCodeBuddyCodec(t *testing.T) {
 	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var command []string
-	if runtime.GOOS == "windows" {
-		command = []string{"cmd.exe", "/d", "/s", "/c", "type", path}
-	} else {
-		command = []string{"cat", path}
+	command := []string{
+		os.Args[0],
+		"-test.run", "^" + helperSubprocessMarker + "$",
+		"--",
+		path,
 	}
 
 	sink := newEventSink(io.Discard, protocol.OutputFormatJSON, Result{})
