@@ -105,6 +105,7 @@ export interface ModelDefinition {
   intelligenceEvidence?: IntelligenceEvidence;
   reasoningEffort?: ReasoningEffort;
   maxOutputTokens?: number;
+  /** Supported input types, including image content returned by tools; not output generation. */
   capabilities?: readonly ModelCapability[];
   speed: ModelSpeedMeta;
   pricing?: ModelPricing;
@@ -117,6 +118,7 @@ export interface TaskDispatchRequirements {
   intelligenceMax?: IntelligenceTier;
   intelligenceExpected?: IntelligenceTier;
   maxOutputUsdPerMillion?: number;
+  /** Required input support. Missing/unknown model support fails admission. */
   requiredCapabilities?: readonly ModelCapability[];
   excludeModelIds?: readonly string[];
   excludeProfileIds?: readonly string[];

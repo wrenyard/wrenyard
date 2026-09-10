@@ -277,8 +277,9 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-intelligence-min|tasks-intelligence-max|tasks-max-output-price/);
   // The stats ledger page is untouched by this task.
   assert.match(html, /id="stats-task-runs-list"/);
-  // The Task page still has exactly three compact editable rows and never hosts the auto cap.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 3);
+  // The Task page still has exactly four compact editable rows (mode, timeout,
+  // 输入要求, conditional explicit runtime) and never hosts the auto cap.
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
   const tasksStart = html.indexOf('product-page tasks-page');
   const tasksEnd = html.indexOf('provider-dialog-backdrop');
   assert.ok(tasksStart > 0 && tasksEnd > tasksStart);
@@ -309,12 +310,12 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /'mode', 'explicit_runtime', 'timeout_ms', 'automatic'/);
   // No additional-instructions editor or catalog candidate synthesis surfaces exist.
   assert.doesNotMatch(app, /tasksInstructionsInput|tasksModelSelect|renderTasksChoiceOptions|tasksChoiceLabel|resolvedAdditionalInstructionsContent/);
-  assert.doesNotMatch(app, /exactAgentRuntime|runtime_choices|resolved_runtime|additional_instructions|patch\.automatic|includeAutomatic/);
+  assert.doesNotMatch(app, /exactAgentRuntime|runtime_choices|resolved_runtime|additional_instructions|includeAutomatic/);
   // CAS conflict reloads authoritative state and re-applies only remaining visible fields.
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
   assert.match(app, /草稿仍保留/);
-  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string \}/);
+  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; inputTypes: string \}/);
 });
 
 test('renderer edits inherited mode and runtime from the effective baseline without creating incidental pins', async () => {
@@ -372,6 +373,33 @@ test('renderer edits inherited mode and runtime from the effective baseline with
     'reset deletes only per-task overrides so the next snapshot returns to global effective values');
 });
 
+test('renderer 输入要求 row pins required_capabilities only on a real change, respects declared-image, and preserves draft', async () => {
+  const app = await rendererSource();
+  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
+  // The new row is a plain tasks-setting-row, visible in both automatic and
+  // explicit modes (never nested inside the explicit-only row).
+  assert.match(html, /<label for="tasks-input-types">输入要求<\/label>/u);
+  assert.match(html, /<select id="tasks-input-types">/u);
+  assert.match(html, /<option value="inherit">沿用默认<\/option>/u);
+  assert.match(html, /<option value="text">文本<\/option>/u);
+  assert.match(html, /<option value="image">文本和图片<\/option>/u);
+  assert.match(html, /id="tasks-input-types-effective">—</);
+  assert.doesNotMatch(html, /tasks-explicit-row[^]*id="tasks-input-types"/u);
+  // Executable patch/inheritance behavior is covered by task-input-types.test.ts.
+  assert.match(app, /inputTypesPatch\(row\.user_task\.automatic\?\.required_capabilities,/u);
+  // A declared-image task disables the text-only option but keeps inherit/image.
+  assert.match(app, /option\.disabled = option\.value === 'text' && builtinRequiresImage;/u);
+  // Draft now remembers the 输入要求 selection so a CAS conflict keeps it.
+  assert.match(app, /inputTypes: tasksInputTypesSelect\.value/u);
+  assert.match(app, /tasksInputTypesSelect\.value = draft\.inputTypes;/u);
+  // The save path merges the input-types patch under automatic without clobbering
+  // unrelated layer fields.
+  assert.match(app, /const inputPatch = inputTypesPatch\(/u);
+  assert.match(app, /patch\.automatic = \{ \.\.\.\(patch\.automatic \?\? \{\}\), \.\.\.inputPatch\.automatic \};/u);
+  // The reset path still deletes the whole automatic override via the shared loop.
+  assert.match(app, /for \(const field of \['mode', 'explicit_runtime', 'timeout_ms', 'automatic'\] as const\)/);
+});
+
 test('renderer builds 内置/项目 hierarchy with authoritative labels and stable identity leaves', async () => {
   const app = await rendererSource();
   assert.match(app, /tasksList\.replaceChildren\(\)/);
@@ -400,9 +428,9 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   assert.doesNotMatch(app, /'未解析'/u);
   assert.doesNotMatch(app, /exactAgentRuntime/);
   assert.doesNotMatch(app, /tasksPreviewTitle/);
-  // Additive only: the Task page still has exactly three editable setting rows
+  // Additive only: the Task page still has exactly four editable setting rows
   // and no new automatic-selection row or editable control.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 3);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
   assert.doesNotMatch(html, /automatic-selection-row|tasks-auto-selection|id="tasks-automatic"/);
 });
 
@@ -527,7 +555,7 @@ test('task settings renderer uses the themed mode listbox, stripped identity, cl
   // #tasks-mode <select>. The listbox trigger/list live inside the Task markup
   // and expose exactly two options (automatic/explicit).
   assert.doesNotMatch(html, /<select id="tasks-mode">/u);
-  assert.doesNotMatch(tasksMarkup, /<select/u);
+  assert.doesNotMatch(tasksMarkup, /<select[^>]*id="tasks-mode"/u);
   assert.match(tasksMarkup, /id="tasks-mode-trigger"[^>]+aria-haspopup="listbox"[^>]+aria-expanded="false"[^>]+aria-controls="tasks-mode-list"/u);
   assert.match(tasksMarkup, /id="tasks-mode-trigger-label">自动选择</u);
   assert.match(tasksMarkup, /id="tasks-mode-list" role="listbox"/u);

@@ -387,6 +387,13 @@ export interface ConversationModelOptionSnapshot {
   label: string;
   description?: string;
   defaultReasoningEffort?: string;
+  /**
+   * Exact built-in Catalog input capabilities (`text`/`image`) projected for
+   * this option. Derived from the authoritative Catalog model, never from DSH
+   * claims or the model name. `undefined` means the capability is unknown —
+   * the UI must not assume text-only for an unmatched model.
+   */
+  inputTypes?: readonly ('text' | 'image')[];
 }
 
 export interface ConversationModelGroupSnapshot {
