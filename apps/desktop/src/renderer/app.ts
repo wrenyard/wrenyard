@@ -1,5 +1,4 @@
 import { builtinRequiresImage, imageCapabilitiesPatch, imageRequiredFromRow } from '../task-input-types.js';
-import { intelligenceSelectionFromRow, intelligencePatch, type TaskIntelligenceValue, type TaskIntelligenceSelections } from '../task-intelligence.js';
 import type {
   PetCompanionSettings,
   ProviderCatalogSnapshot,
@@ -19,7 +18,6 @@ import type {
   TaskSettingsExplicitReference,
   TaskSettingsLayer,
   TaskSettingsMode,
-  TaskSettingsIntelligence,
   TaskSettingsPatch,
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
@@ -92,10 +90,6 @@ const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
 const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
 const tasksInputTypesCheckbox = requireElement<HTMLInputElement>('tasks-input-types');
-const tasksMinIntelligenceSelect = requireElement<HTMLSelectElement>('tasks-min-intelligence');
-const tasksExpectedIntelligenceSelect = requireElement<HTMLSelectElement>('tasks-expected-intelligence');
-const tasksMinIntelligenceEffective = requireElement<HTMLSpanElement>('tasks-min-intelligence-effective');
-const tasksExpectedIntelligenceEffective = requireElement<HTMLSpanElement>('tasks-expected-intelligence-effective');
 const tasksInputTypesEffective = requireElement<HTMLElement>('tasks-input-types-effective');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
@@ -1798,18 +1792,6 @@ function secondsToMilliseconds(value: string): number | null {
   return Math.round(parsed * 1000);
 }
 
-/** Provenance label for the 输入要求 hint, mirroring the settings source layers. */
-function inputRequirementSourceLabel(source: string): string {
-  switch (source) {
-    case 'builtin': return '内置';
-    case 'user_global': return '全局';
-    case 'user_task': return '本任务';
-    case 'invocation': return '调用方';
-    case 'system': return '系统';
-    default: return '未知';
-  }
-}
-
 function renderTimeoutEffective(row: TaskSettingsTaskRow): void {
   const override = row.user_task.timeout_ms;
   const effective = row.effective.timeout_ms.value;
@@ -1838,7 +1820,6 @@ function populateTaskForm(row: TaskSettingsTaskRow): void {
   tasksRuntimeInput.value = explicitReferenceText(row.effective.explicit_runtime.value);
   populateRuntimeSuggestions();
   populateInputTypesControl(row);
-  populateIntelligenceControl(row);
   renderTimeoutEffective(row);
   renderTasksTemplatePreview(row);
   tasksSaveButton.disabled = tasksSaveBusy;
@@ -1854,47 +1835,6 @@ function populateInputTypesControl(row: TaskSettingsTaskRow): void {
   tasksInputTypesCheckbox.disabled = tasksSaveBusy || builtinRequiresImage(row);
   tasksInputTypesEffective.textContent = builtinRequiresImage(row) ? '任务定义要求图片' : '';
   tasksInputTypesEffective.classList.add('is-dim');
-}
-
-/** Wires the optional 最低智能 / 建议智能 rows: mirrors the editable user_task
- *  selection (never the effective value), and shows each effective tier with its
- *  provenance. Both rows are visible in automatic and explicit modes; the
- *  recommendation only influences automatic dispatch. */
-function populateIntelligenceControl(row: TaskSettingsTaskRow): void {
-  const selections = intelligenceSelectionFromRow(row);
-  tasksMinIntelligenceSelect.value = selections.min;
-  tasksExpectedIntelligenceSelect.value = selections.expected;
-  tasksMinIntelligenceSelect.disabled = tasksSaveBusy;
-  tasksExpectedIntelligenceSelect.disabled = tasksSaveBusy;
-  renderIntelligenceMinEffective(row);
-  renderIntelligenceExpectedEffective(row);
-}
-
-function intelligenceTierLabel(value: TaskSettingsIntelligence): string {
-  switch (value) {
-    case 'low': return '低';
-    case 'mid': return '中';
-    case 'high': return '高';
-    case 'premium': return '旗舰';
-  }
-}
-
-/** Absent minimum reads as 无最低要求; the source layer is shown alongside. */
-function renderIntelligenceMinEffective(row: TaskSettingsTaskRow): void {
-  const sourced = row.effective.automatic.intelligence_min;
-  const label = sourced.value == null ? '无最低要求' : `最低智能 ${intelligenceTierLabel(sourced.value)}`;
-  tasksMinIntelligenceEffective.textContent = `${label}（来源：${inputRequirementSourceLabel(sourced.source)}）`;
-  tasksMinIntelligenceEffective.classList.add('is-dim');
-}
-
-/** Absent expected falls back to mid at the daemon; the hint notes the default. */
-function renderIntelligenceExpectedEffective(row: TaskSettingsTaskRow): void {
-  const sourced = row.effective.automatic.intelligence_expected;
-  const value = sourced?.value ?? null;
-  const source = sourced?.source ?? 'system';
-  const label = value == null ? '未设置，按默认中（mid）' : `建议智能 ${intelligenceTierLabel(value)}`;
-  tasksExpectedIntelligenceEffective.textContent = `${label}（来源：${inputRequirementSourceLabel(source)}）`;
-  tasksExpectedIntelligenceEffective.classList.add('is-dim');
 }
 
 /** Read-only static instruction-template preview. Text is emitted through safe
@@ -2177,8 +2117,6 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   tasksSaveBusy = true;
   tasksSaveButton.disabled = true;
   tasksInputTypesCheckbox.disabled = true;
-  tasksMinIntelligenceSelect.disabled = true;
-  tasksExpectedIntelligenceSelect.disabled = true;
   setTasksError('');
   try {
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
@@ -2200,8 +2138,6 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
     tasksSaveButton.disabled = false;
     const savedRow = tasksSelectedRow();
     tasksInputTypesCheckbox.disabled = savedRow ? builtinRequiresImage(savedRow) : true;
-    tasksMinIntelligenceSelect.disabled = false;
-    tasksExpectedIntelligenceSelect.disabled = false;
     tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
     const current = tasksSelectedRow();
     if (current) renderTimeoutEffective(current);
@@ -2219,16 +2155,7 @@ async function saveTaskLayer(reset = false): Promise<void> {
     if (inputPatch.automatic) {
       patch.automatic = { ...(patch.automatic ?? {}), ...inputPatch.automatic };
     }
-    // Merge optional intelligence tiers under automatic; only changed leaves are
-    // written so unrelated automatic fields (e.g. required_capabilities) survive.
-    const intelligenceSelections: TaskIntelligenceSelections = {
-      min: tasksMinIntelligenceSelect.value as TaskIntelligenceValue,
-      expected: tasksExpectedIntelligenceSelect.value as TaskIntelligenceValue,
-    };
-    const intelPatch = intelligencePatch(row.user_task.automatic, intelligenceSelections);
-    if (intelPatch.automatic) {
-      patch.automatic = { ...(patch.automatic ?? {}), ...intelPatch.automatic };
-    }
+
   }
   await commitTaskSave(patch);
 }
@@ -2240,17 +2167,15 @@ async function saveTaskTimeoutReset(): Promise<void> {
   await commitTaskSave({ timeout_ms: null });
 }
 
-interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean; intelligenceMin: string; intelligenceExpected: string }
+interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean }
 function readTaskDraft(): TaskFormDraft {
-  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value, imageRequired: tasksInputTypesCheckbox.checked, intelligenceMin: tasksMinIntelligenceSelect.value, intelligenceExpected: tasksExpectedIntelligenceSelect.value };
+  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value, imageRequired: tasksInputTypesCheckbox.checked };
 }
 function applyTaskDraft(draft: TaskFormDraft): void {
   applyTasksModeSelection(draft.mode);
   tasksRuntimeInput.value = draft.runtime;
   tasksTimeoutInput.value = draft.timeout;
   tasksInputTypesCheckbox.checked = draft.imageRequired;
-  tasksMinIntelligenceSelect.value = draft.intelligenceMin;
-  tasksExpectedIntelligenceSelect.value = draft.intelligenceExpected;
 }
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
