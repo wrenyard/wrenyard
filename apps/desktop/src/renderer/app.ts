@@ -1,4 +1,3 @@
-import { builtinRequiresImage, imageCapabilitiesPatch, imageRequiredFromRow } from '../task-input-types.js';
 import type {
   PetCompanionSettings,
   ProviderCatalogSnapshot,
@@ -89,8 +88,6 @@ const tasksRuntimeSuggestions = requireElement<HTMLDataListElement>('tasks-runti
 const tasksSaveButton = requireElement<HTMLButtonElement>('tasks-save');
 const tasksResetButton = requireElement<HTMLButtonElement>('tasks-reset');
 const tasksError = requireElement<HTMLElement>('tasks-error');
-const tasksInputTypesCheckbox = requireElement<HTMLInputElement>('tasks-input-types');
-const tasksInputTypesEffective = requireElement<HTMLElement>('tasks-input-types-effective');
 const clientPlanDialog = requireElement<HTMLElement>('client-plan-dialog');
 const clientPlanContent = requireElement<HTMLElement>('client-plan-content');
 const clientPlanError = requireElement<HTMLElement>('client-plan-error');
@@ -1819,22 +1816,10 @@ function populateTaskForm(row: TaskSettingsTaskRow): void {
   tasksTimeoutInput.value = msToSecondsText(row.user_task.timeout_ms);
   tasksRuntimeInput.value = explicitReferenceText(row.effective.explicit_runtime.value);
   populateRuntimeSuggestions();
-  populateInputTypesControl(row);
   renderTimeoutEffective(row);
   renderTasksTemplatePreview(row);
   tasksSaveButton.disabled = tasksSaveBusy;
   tasksResetButton.disabled = tasksSaveBusy || Object.keys(row.user_task).length === 0;
-}
-
-/** Wires the 需要图片 row: a single native checkbox driven by the effective image
- *  requirement, disabled when the task definition mandatorily requires image
- *  input (the backend still enforces the declared requirement) or while a save
- *  is in progress. Visible in both modes. */
-function populateInputTypesControl(row: TaskSettingsTaskRow): void {
-  tasksInputTypesCheckbox.checked = imageRequiredFromRow(row);
-  tasksInputTypesCheckbox.disabled = tasksSaveBusy || builtinRequiresImage(row);
-  tasksInputTypesEffective.textContent = builtinRequiresImage(row) ? '任务定义要求图片' : '';
-  tasksInputTypesEffective.classList.add('is-dim');
 }
 
 /** Read-only static instruction-template preview. Text is emitted through safe
@@ -2116,7 +2101,6 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   if (!taskSettings || !row || tasksSaveBusy) return;
   tasksSaveBusy = true;
   tasksSaveButton.disabled = true;
-  tasksInputTypesCheckbox.disabled = true;
   setTasksError('');
   try {
     if (Object.keys(patch).length === 0) throw new Error('没有需要保存的更改');
@@ -2136,8 +2120,6 @@ async function commitTaskSave(patch: TaskSettingsPatch): Promise<void> {
   } finally {
     tasksSaveBusy = false;
     tasksSaveButton.disabled = false;
-    const savedRow = tasksSelectedRow();
-    tasksInputTypesCheckbox.disabled = savedRow ? builtinRequiresImage(savedRow) : true;
     tasksResetButton.disabled = Object.keys(tasksSelectedRow()?.user_task ?? {}).length === 0;
     const current = tasksSelectedRow();
     if (current) renderTimeoutEffective(current);
@@ -2148,15 +2130,6 @@ async function saveTaskLayer(reset = false): Promise<void> {
   const row = tasksSelectedRow();
   if (!row || tasksSaveBusy) return;
   const patch = reset ? resetPatch(row.user_task) : buildLayerPatch(row, tasksModeValue, tasksRuntimeInput.value, tasksTimeoutInput.value);
-  if (!reset) {
-    // Merge the 需要图片 pin under automatic without clobbering other layer fields
-    // (mode/reference/timeout) that buildLayerPatch may have written.
-    const inputPatch = imageCapabilitiesPatch(row, taskSettings?.user_global ?? {}, tasksInputTypesCheckbox.checked);
-    if (inputPatch.automatic) {
-      patch.automatic = { ...(patch.automatic ?? {}), ...inputPatch.automatic };
-    }
-
-  }
   await commitTaskSave(patch);
 }
 
@@ -2167,15 +2140,14 @@ async function saveTaskTimeoutReset(): Promise<void> {
   await commitTaskSave({ timeout_ms: null });
 }
 
-interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean }
+interface TaskFormDraft { mode: TaskSettingsMode; runtime: string; timeout: string }
 function readTaskDraft(): TaskFormDraft {
-  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value, imageRequired: tasksInputTypesCheckbox.checked };
+  return { mode: tasksModeValue, runtime: tasksRuntimeInput.value, timeout: tasksTimeoutInput.value };
 }
 function applyTaskDraft(draft: TaskFormDraft): void {
   applyTasksModeSelection(draft.mode);
   tasksRuntimeInput.value = draft.runtime;
   tasksTimeoutInput.value = draft.timeout;
-  tasksInputTypesCheckbox.checked = draft.imageRequired;
 }
 
 function selectedClientModels(card: HTMLElement): ClientModelSelectionDto {
