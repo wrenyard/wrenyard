@@ -696,20 +696,21 @@ export function parseRunSyntax(input: string): RunSyntaxRef {
   if (slash === -1) {
     throw new Error(`run syntax must separate provider and model with "/": ${JSON.stringify(input)}`);
   }
-  const colon = input.indexOf(':');
+  const colon = input.lastIndexOf(':');
   if (colon === -1) {
     throw new Error(`run syntax must separate model and client with ":": ${JSON.stringify(input)}`);
-  }
-  if (input.indexOf(':', colon + 1) !== -1) {
-    throw new Error(`run syntax must contain exactly one ":" separator: ${JSON.stringify(input)}`);
   }
   if (colon < slash) {
     throw new Error(`run syntax must be provider/model:client with "/" before ":": ${JSON.stringify(input)}`);
   }
   // Split provider at the first slash so model ids may contain additional slashes,
-  // and take the client from the single (and therefore final) colon.
+  // and take the client from the final colon, preserving the :free model variant.
   const provider = input.slice(0, slash);
+  if (provider.includes(':')) throw new Error('provider must not contain ":"');
   const model = input.slice(slash + 1, colon);
+  if (model.includes(':') && !/^[^:]+:free$/.test(model)) {
+    throw new Error(`model ":" is only supported in a trailing :free variant: ${JSON.stringify(input)}`);
+  }
   const rawClient = input.slice(colon + 1);
   if (provider.length === 0) {
     throw new Error(`run syntax provider must not be empty: ${JSON.stringify(input)}`);
@@ -746,7 +747,7 @@ export function formatRunSyntax(target: RunSyntaxRef): string {
   if (target.provider.includes('/')) {
     throw new Error(`provider must not contain "/": ${JSON.stringify(target.provider)}`);
   }
-  if (target.provider.includes(':') || target.model.includes(':')) {
+  if (target.provider.includes(':') || (target.model.includes(':') && !/^[^:]+:free$/.test(target.model))) {
     throw new Error(
       `provider and model must not contain ":": ${JSON.stringify(target.provider)} / ${JSON.stringify(target.model)}`,
     );

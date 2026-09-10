@@ -10,7 +10,7 @@ import (
 )
 
 func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
-	want := []string{"anthropic", "anthropic-api", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-native", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
+	want := []string{"anthropic", "anthropic-api", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-go", "opencode-native", "opencode-zen", "openrouter", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
 	modules := providers.Modules()
 	got := make([]string, len(modules))
 	reg := catalog.DefaultRegistry()

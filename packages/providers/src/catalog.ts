@@ -34,18 +34,21 @@ const SRC_AA_GPT54 = 'https://artificialanalysis.ai/models/gpt-5-4/';
 const SRC_AA_KIMI25 = 'https://artificialanalysis.ai/models/kimi-k2-5/providers';
 const SRC_AA_KIMI26 = 'https://artificialanalysis.ai/models/kimi-k2-6/';
 const SRC_AA_Q36 = 'https://artificialanalysis.ai/models/qwen3-6-plus/';
+const SRC_OPENCODE_ZEN = 'https://opencode.ai/docs/zen/';
+const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
+const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
 
 const clients: readonly ClientDefinition[] = [
   { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true },
-  { id: 'codebuddy', nativeProvider: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true },
+  { id: 'codebuddy', nativeProvider: 'codebuddy', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
   { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true },
-  { id: 'cursor', nativeProvider: 'cursor', gatewayProtocols: ['openai_chat'], taskCapable: true },
-  { id: 'dsh', gatewayProtocols: ['openai_chat'] },
+  { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
+  { id: 'dsh', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
   {
     id: 'grok',
     nativeProvider: 'spacex-ai',
     gatewayProtocols: ['openai_chat'],
-    unsupportedGatewayProviders: ['codebuddy'],
+    unsupportedGatewayProviders: ['codebuddy', 'opencode-go'],
     taskCapable: true,
   },
   { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
@@ -229,6 +232,26 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     models: [model('glm-5.3', 'GLM-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 'GLM-5.3 Flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash'])],
     protocols: [openAI('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'), anthropic('https://open.bigmodel.cn/api/anthropic/v1/messages')],
   },
+  {
+    id: 'opencode-zen', displayName: 'OpenCode Zen 免费模型', credentialResolver: 'forge-managed', defaultModel: 'ling-3.0-flash-fin-free',
+    models: [model('mimo-v2.5-free', 'OpenCode Zen Mimo v2.5 Free', 1_048_576, 32_768), model('ling-3.0-flash-fin-free', 'Ling 3.0 Flash Fin Free', 262_144, 32_768)],
+    protocols: [openAI('https://opencode.ai/zen/v1/chat/completions')],
+  },
+  {
+    id: 'openrouter', displayName: 'OpenRouter 免费模型', credentialResolver: 'forge-managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
+    models: [model('nex-agi/nex-n2.5-mini:free', 'Nex N2.5 Mini Free', 262_144, 235_929), model('cohere/north-mini-code:free', 'North Mini Code Free', 256_000, 64_000)],
+    protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
+  },
+  {
+    id: 'opencode-go', displayName: 'OpenCode Go', credentialResolver: 'forge-managed', defaultModel: 'glm-5.3-flash',
+    models: [
+      { ...model('glm-5.3-flash', 'GLM-5.3 Flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']), capabilities: ['text'], pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.03, outputUsdPerMillion: 0.50, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
+      { ...model('glm-5.3', 'GLM-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']), capabilities: ['text'], pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
+      { ...model('deepseek-flash', 'DeepSeek V4.1 Flash', 1_000_000, 384_000), capabilities: ['text', 'image'], intelligence: 'mid', pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' }, intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'user-selected mid tier pending independent V4.1 benchmark' } },
+      { ...model('hy3', 'HY3'), capabilities: ['text'], pricing: { inputUsdPerMillion: 0.14, cachedInputUsdPerMillion: 0.035, outputUsdPerMillion: 0.58, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
+    ],
+    protocols: [openAI('https://opencode.ai/zen/go/v1/chat/completions')],
+  },
 ];
 
 const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setupHint: string }>> = {
@@ -308,6 +331,18 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     description: '智谱 GLM-5.3 系列编程模型与订阅额度。',
     setupHint: '输入 GLM Coding API Key；Key 仅写入本机 Wrenyard runtime。',
   },
+  'opencode-zen': {
+    description: 'OpenCode Zen 免费试用模型。',
+    setupHint: '免费试用模型可能将提交数据用于改进，并受额度限制；输入 OpenCode Zen 托管凭据即可使用。',
+  },
+  openrouter: {
+    description: 'OpenRouter 免费模型。',
+    setupHint: '免费池共享 50 次/天、20 次/分钟限制；累计购买至少 $10 额度 后提升至 1000 次/天。输入 OpenRouter API Key；每日剩余免费次数暂不可查询。',
+  },
+  'opencode-go': {
+    description: 'OpenCode Go 付费订阅模型（$10/月）。',
+    setupHint: 'OpenCode Go 与 Zen 免费试用相互独立，为 $10/月付费订阅；额度因模型而异；使用 OpenCode 客户端。超额后是否使用余额由控制台 Use balance 设置决定。',
+  },
 };
 
 function speedDefault(
@@ -370,6 +405,12 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'qwen3.7-flash': speedDefault(111.12, 'https://www.respan.ai/models/openrouter/qwen/qwen3.7-flash', 'Respan public real-traffic output-throughput measurement for exact Qwen3.7 Flash.'),
   'qwen3.7-plus': speedDefault(56.2, 'https://artificialanalysis.ai/models/qwen3-7-plus/', 'Artificial Analysis output-speed measurement for Qwen3.7 Plus.'),
   'qwen3.8-max': speedDefault(39.4, 'https://artificialanalysis.ai/models/qwen3-8-max/', 'Artificial Analysis output-speed measurement for Qwen3.8 Max.'),
+  // Public bootstrap baselines; real local Task samples take precedence.
+  'mimo-v2.5-free': { tps: 29, source: 'https://openrouter.ai/xiaomi/mimo-v2.5', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer route public P50 baseline; Zen endpoint unmeasured.' },
+  'ling-3.0-flash-fin-free': { tps: 119, source: 'https://openrouter.ai/inclusionai/ling-3.0-flash-fin:free', checkedAt: '2026-09-10', conservative: true, basis: 'Same-model Novita public P50 baseline; Zen endpoint unmeasured.' },
+  'nex-agi/nex-n2.5-mini:free': { tps: 119, source: 'https://openrouter.ai/nex-agi/nex-n2.5-mini:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
+  'cohere/north-mini-code:free': { tps: 78, source: 'https://openrouter.ai/cohere/north-mini-code:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
+  'deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). OpenCode Go endpoint is unmeasured; never represented as a local agent_turn_v1 sample.' },
 };
 
 type ModelMeta = {
@@ -557,6 +598,30 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'premium',
     capabilities: ['text'],
     intelligenceEvidence: { source: SRC_AA_OPUS, checkedAt: INTEL_CHECKED_AT, status: 'product_provisional', indexVersion: 'v4.3', score: 51, reasoningConfiguration: 'adaptive max' },
+  },
+  'mimo-v2.5-free': {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'free trial model; no verified intelligence score' },
+  },
+  'ling-3.0-flash-fin-free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'free trial model; no verified intelligence score' },
+  },
+  'nex-agi/nex-n2.5-mini:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'free model; no verified intelligence score' },
+  },
+  'cohere/north-mini-code:free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
+    intelligenceEvidence: { source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10', status: 'product_provisional', basis: 'free model; no verified intelligence score' },
   },
 };
 

@@ -717,7 +717,7 @@ function openProviderDialog(entry: ProviderCatalogSnapshot): void {
   providerDialogTitle.textContent = apiKeyMode
     ? (configured ? '更新 API Key' : '配置 API Key')
     : '提供方配置指引';
-  providerDialogGuidance.textContent = entry.setupHint || providerDialogGuidanceText(mode);
+  providerDialogGuidance.textContent = appendProviderPlanBilling(entry.id, entry.setupHint || providerDialogGuidanceText(mode));
   providerKeyLabel.hidden = !apiKeyMode;
   providerKeyInput.hidden = !apiKeyMode;
   providerDialogSave.hidden = !apiKeyMode;
@@ -738,6 +738,28 @@ function providerDialogGuidanceText(mode: ProviderCatalogSnapshot['authMode']): 
   if (mode === 'native') return '此提供方使用浏览器登录授权，无需 API 密钥。请在提供方登录页完成验证后回到工坊继续使用。';
   if (mode === 'environment') return '此提供方的密钥由启动环境的环境变量提供，本页面不接收密钥输入。请调整启动环境后重新加载会话。';
   return '此提供方无需配置密钥。';
+}
+
+/** Appends a concise, human-readable plan-billing explanation to the existing
+ *  setup hint for the two providers that carry subscription quota economics.
+ *  The text is explanatory only (estimates, not actual per-call charges) and is
+ *  appended verbatim to the existing guidance; no new controls are introduced and
+ *  other providers are left untouched. */
+function appendProviderPlanBilling(id: string, base: string): string {
+  let extra: string | null = null;
+  if (id === 'opencode-go') {
+    extra =
+      '套餐计费说明（仅为估算，非实际单次收费）：' +
+      '$10/月付费订阅；GLM-5.3-Flash/HY3 对应 $60 月用量，GLM-5.3/DeepSeek4.1 对应 $15；' +
+      '按月额度用满时摊销系数分别约 1/6 与 2/3，GLMFlash 输出约 $0.0833/百万 Token；' +
+      '5h/周/月是同一套餐的 20%/50%/100% 限制；如需避免超额扣余额，可在控制台按需关闭 Use balance。';
+  } else if (id === 'zhipu-coding') {
+    extra =
+      '智谱积分说明（北京时间）：工作日 14–18 点为高峰、其余时段为半额积分；' +
+      '2026/9/3–9/20 期间 Flash 在 23–09 对其他受支持 Agent 再减半；' +
+      '分时效率参与自动派发，剩余额度仍以订阅查询结果为准。';
+  }
+  return extra === null ? base : `${base}\n\n${extra}`;
 }
 
 function closeProviderDialog(): void {

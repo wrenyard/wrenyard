@@ -1,3 +1,4 @@
+import { createBuiltinCatalog, createBuiltinProviderRuntime } from '@wrenyard/providers'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -456,6 +457,23 @@ const CODEBUDDY_GLM_FLASH_PROFILE: ProfileFixture = {
   outputUsd: 1.5,
 }
 
+/** Authenticated opencode client variant of the domestic zhipu-coding
+ *  GLM-5.3-Flash candidate. Its client is in the domestic set, so the pure
+ *  subscription-economics resolver returns verified quota-burn efficiency, which
+ *  the automatic selection must surface as real policy notes without touching
+ *  the listed reference or marginal USD price. */
+const ZHIPU_GLM_FLASH_OPENCODE_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'zhipu-coding/glm-5.3-flash:opencode',
+  profile: 'zhipu-coding-glm-flash-opencode',
+  client: 'opencode',
+  provider: 'zhipu-coding',
+  model: 'glm-5.3-flash',
+  intelligence: 'high',
+  tps: 90,
+  inputUsd: 0.5,
+  outputUsd: 1.5,
+}
+
 /** Quota report carrying the privacy-safe CodeBuddy exhaustion block. */
 function codebuddyExhaustionQuotaSnapshotService(): AutoRoutingQuotaSnapshotService {
   const resetsAt = new Date(Date.now() + 86_400_000).toISOString()
@@ -506,6 +524,44 @@ function healthyZhipuQuotaSnapshotService(): AutoRoutingQuotaSnapshotService {
       ),
     now: () => snapshotAtMs,
   })
+}
+
+/** zhipu-coding quota report carrying one usable binding with a controllable
+ *  read instant and windows, so verified quota-burn efficiency can be exercised
+ *  against a real (non-unknown) snapshot while keeping reference/marginal prices
+ *  untouched. `nowMs` drives both the snapshot read time and the routing horizon. */
+function zhipuQuotaSnapshotService(
+  nowMs: number,
+  windows: Array<{ name: string; pct: number; resets_at: string; window_minutes: number }>,
+  row: { status?: string; stale?: boolean } = {},
+): AutoRoutingQuotaSnapshotService {
+  return new AutoRoutingQuotaSnapshotService({
+    queryJson: () =>
+      Promise.resolve(
+        JSON.stringify([
+          {
+            pool: 'zhipu-coding',
+            status: row.status ?? 'ok',
+            stale: row.stale ?? false,
+            fetched_at: new Date(nowMs).toISOString(),
+            windows,
+          },
+        ]),
+      ),
+    now: () => nowMs,
+  })
+}
+
+/** Two-window zhipu-coding binding (5h + 7d) pinned to a fixed instant, used to
+ *  prove the efficiency evidence applies to real policy without rewriting prices. */
+function zhipuWindowsAt(
+  nowMs: number,
+  pct: number,
+): Array<{ name: string; pct: number; resets_at: string; window_minutes: number }> {
+  return [
+    { name: '5h', pct, resets_at: new Date(nowMs + 4 * 60 * 60_000).toISOString(), window_minutes: 300 },
+    { name: '7d', pct, resets_at: new Date(nowMs + 6 * 24 * 60 * 60_000).toISOString(), window_minutes: 10_080 },
+  ]
 }
 
 function codexQuotaSnapshotService(
@@ -1773,6 +1829,143 @@ describe('daemon task-settings-service (no-model)', () => {
     const result = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
     assert.equal(result.exactAgentRuntime, ZHIPU_GLM_FLASH_PROFILE.exactAgentRuntime)
     assert.equal(nativeCalls, 0)
+  })
+
+  it('each authenticated free pool participates in real automatic dispatch with its catalog identity', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const catalog = createBuiltinCatalog()
+    const runtime = createBuiltinProviderRuntime({ env: {}, home: '/unused' })
+    for (const [providerId, modelId] of [
+      ['opencode-zen', 'ling-3.0-flash-fin-free'],
+      ['openrouter', 'nex-agi/nex-n2.5-mini:free'],
+    ]) {
+      const provider = catalog.provider(providerId)!
+      const model = provider.models.find((model) => model.id === modelId)!
+      const exactAgentRuntime = `${providerId}/${modelId}:oc`
+      const profile: ProfileFixture = {
+        exactAgentRuntime, profile: exactAgentRuntime, client: 'opencode',
+        provider: providerId, model: modelId, intelligence: model.intelligence!,
+        tps: model.speed!.tps, inputUsd: model.pricing!.inputUsdPerMillion!,
+        outputUsd: model.pricing!.outputUsdPerMillion!, mode: 'gateway',
+      }
+      const freeSupply = runtime.freeSupply!(provider, modelId, { value: 'mock-authenticated-key' })
+      assert.ok(freeSupply)
+      const selected = await context!.makeService({
+        resolver: createResolverFixture({ profiles: [profile] }),
+        quotaSnapshots: unknownQuotaSnapshotService(),
+        runtimeAvailability: () => ({
+          providerCredential: 'available', providerLive: 'unknown', quota: 'unknown',
+          available: true, freeSupply,
+        }),
+      }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {
+        dispatch: { expectedTps: 80, minimumTps: 60, maxOutputUsdPerMillion: 6, intelligenceMin: 'low', intelligenceMax: 'high', intelligenceExpected: 'low' },
+        timeoutMs: 60_000,
+      } })
+      assert.equal(selected.exactAgentRuntime, exactAgentRuntime)
+      assert.equal(selected.dispatch?.auto_routing?.supply_class, 'confirmed_free')
+      assert.equal(selected.dispatch?.auto_routing?.routing_output_usd_per_million, 0)
+      assert.notEqual(selected.dispatch?.auto_routing?.quota_tier, 'healthy')
+    }
+  })
+
+  it('authenticated domestic zhipu-coding Flash applies verified quota efficiency and never rewrites reference/marginal price', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const resolveAt = (atMs: number) => {
+      const service = context!.makeService({
+        resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_OPENCODE_PROFILE] }),
+        quotaSnapshots: zhipuQuotaSnapshotService(atMs, zhipuWindowsAt(atMs, 95)),
+        runtimeAvailability: () => ({
+          providerCredential: 'available',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: true,
+        }),
+      })
+      return service.resolveForRun({
+        taskName: 'commit',
+        kind: 'builtin',
+        defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 },
+      })
+    }
+
+    // Weekday peak window: production verified efficiency must reach real policy
+    // notes, and the 5%-remaining quota must stay non-healthy (not made healthy
+    // by the efficiency evidence). Reference and marginal USD prices are untouched.
+    const peak = await resolveAt(Date.parse('2026-09-14T14:30:00+08:00'))
+    const peakDecision = peak.dispatch?.auto_routing
+    assert.ok(peakDecision)
+    assert.equal(peak.exactAgentRuntime, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.exactAgentRuntime)
+    assert.ok(peakDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
+    assert.notEqual(peakDecision.quota_tier, 'healthy')
+    assert.equal(peakDecision.reference_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    assert.equal(peakDecision.routing_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    assert.equal(peakDecision.effective_cap_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    const peakScore = peakDecision.score
+
+    // Off-peak/campaign night window: same quota, higher verified efficiency, and
+    // still every price/cap invariant holds; the time dependence shows in the
+    // real policy score (not just the pure resolver).
+    const offpeakAt = Date.parse('2026-09-15T23:30:00+08:00')
+    const offpeak = await resolveAt(offpeakAt)
+    const offpeakDecision = offpeak.dispatch?.auto_routing
+    assert.ok(offpeakDecision)
+    assert.ok(offpeakDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
+    assert.equal(offpeakDecision.reference_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    assert.equal(offpeakDecision.routing_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    assert.equal(offpeakDecision.effective_cap_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
+    assert.ok(offpeakDecision.score > peakScore, 'off-peak campaign efficiency must outrank weekday peak')
+  })
+
+  it('domestic efficiency preserves unknown quota and rejects unsupported or unavailable credentials', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const offpeakAt = Date.parse('2026-09-15T23:30:00+08:00')
+
+    // Declared quota windows retain unknown evidence; known burn efficiency must
+    // never turn that unknown remaining balance into healthy quota.
+    const unknownQuota = await context!.makeService({
+      resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_OPENCODE_PROFILE] }),
+      quotaSnapshots: unknownQuotaSnapshotService(() => offpeakAt),
+      runtimeAvailability: () => ({
+        providerCredential: 'available',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: true,
+      }),
+    }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 } })
+    const unknownDecision = unknownQuota.dispatch?.auto_routing
+    assert.ok(unknownDecision)
+    assert.ok(unknownDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
+    assert.equal(unknownDecision.quota_coverage_complete, false)
+    assert.notEqual(unknownDecision.quota_tier, 'healthy')
+
+    // A domestic provider with a non-domestic client never resolves efficiency.
+    const wrongClient = await context!.makeService({
+      resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_PROFILE] }),
+      quotaSnapshots: zhipuQuotaSnapshotService(offpeakAt, zhipuWindowsAt(offpeakAt, 95)),
+      runtimeAvailability: () => ({
+        providerCredential: 'available',
+        providerLive: 'unknown',
+        quota: 'unknown',
+        available: true,
+      }),
+    }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 } })
+    assert.ok(!wrongClient.dispatch?.auto_routing?.reasons.includes('quota_burn_efficiency_evidence_applied'))
+
+    // Unavailable credential: the candidate is eliminated before any efficiency
+    // resolution, so no efficiency note can ever appear.
+    await assert.rejects(
+      context!.makeService({
+        resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_OPENCODE_PROFILE] }),
+        quotaSnapshots: zhipuQuotaSnapshotService(offpeakAt, zhipuWindowsAt(offpeakAt, 95)),
+        runtimeAvailability: () => ({
+          providerCredential: 'missing',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: false,
+        }),
+      }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 } }),
+      (error) => error instanceof NoEligiblePlanError,
+    )
   })
 
   it('Codex weekly-only evidence is complete and can truthfully be strained', async () => {

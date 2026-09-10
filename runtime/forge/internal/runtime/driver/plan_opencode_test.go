@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -251,6 +252,93 @@ func TestCompleteOpenCodePlansRejectUnsupportedCapabilityToolsAndMCP(t *testing.
 				t.Fatalf("unsupported OpenCode %s contribution reached runtime materialization: %v", tc.name, statErr)
 			}
 		})
+	}
+}
+
+func openCodeGatewaySession(t *testing.T, plan CommandPlan) string {
+	t.Helper()
+	base, err := os.ReadFile(plan.Env["OPENCODE_CONFIG"])
+	if err != nil {
+		t.Fatalf("read OpenCode isolated base config: %v", err)
+	}
+	var config struct {
+		Permission map[string]interface{} `json:"permission"`
+		Provider   struct {
+			Wrenyard struct {
+				Options struct {
+					Headers struct {
+						XOpenCodeSession string `json:"x-opencode-session"`
+					} `json:"headers"`
+				} `json:"options"`
+			} `json:"wrenyard"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(base, &config); err != nil {
+		t.Fatalf("decode OpenCode gateway config: %v", err)
+	}
+	// Gateway routing must not weaken the fail-closed permission expectations.
+	if config.Permission["*"] != "deny" {
+		t.Fatalf("unknown OpenCode tools must fail closed after gateway routing: %#v", config.Permission)
+	}
+	return config.Provider.Wrenyard.Options.Headers.XOpenCodeSession
+}
+
+func gatewayRoutedSpec(t *testing.T) ProfileSpec {
+	return ProfileSpec{
+		Name: "opencode-test", Client: "opencode",
+		Launcher:     map[string]interface{}{"command": "opencode"},
+		Env:          map[string]string{},
+		ForgeDataDir: t.TempDir(),
+		Provider:     catalog.Provider{GatewayRouted: true},
+		Runtime: RuntimePreparation{Env: map[string]string{
+			"WRENYARD_GATEWAY_OPENAI_CHAT_URL": "https://gateway.test/v1",
+			"WRENYARD_GATEWAY_TOKEN":           "tok",
+		}},
+		ClientDesc: catalog.Client{
+			Name: "opencode", Dialect: catalog.DialectOpenCode,
+			PermissionAdapter: catalog.PermissionAdapterOpenCode,
+		},
+	}
+}
+
+func TestOpenCodeGatewayRoutedFreshInvocationHasOpaqueSession(t *testing.T) {
+	plan, err := BuildPlan(PlanRequest{
+		Spec:       gatewayRoutedSpec(t),
+		Prompt:     "inspect",
+		WorkDir:    t.TempDir(),
+		Permission: catalog.PermissionReadonly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := openCodeGatewaySession(t, plan)
+	if session == "" {
+		t.Fatalf("OpenCode gateway config missing x-opencode-session header")
+	}
+	// 16 random bytes hex-encoded => 32 hex chars.
+	if len(session) != 32 {
+		t.Fatalf("OpenCode fresh session id is not an opaque 32-char hex value: %q", session)
+	}
+	if _, err := hex.DecodeString(session); err != nil {
+		t.Fatalf("OpenCode fresh session id is not valid hex: %q", session)
+	}
+}
+
+func TestOpenCodeGatewayRoutedResumeReusesSessionID(t *testing.T) {
+	spec := gatewayRoutedSpec(t)
+	plan, err := BuildPlan(PlanRequest{
+		Spec:            spec,
+		Prompt:          "inspect",
+		WorkDir:         t.TempDir(),
+		Permission:      catalog.PermissionReadonly,
+		ResumeSessionID: "ses_resume_42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := openCodeGatewaySession(t, plan)
+	if session != "ses_resume_42" {
+		t.Fatalf("OpenCode resume session id = %q, want %q", session, "ses_resume_42")
 	}
 }
 

@@ -42,7 +42,7 @@ function localSamples(): LocalSpeedSample[] {
   ]
 }
 
-const CANONICAL_TARGET_RE = /^[^/\s]+\/[^:\s]+:[a-z]+$/u
+const CANONICAL_TARGET_RE = /^[^/\s]+\/[^:\s]+(?::free)?:[a-z]+$/u
 
 async function createSpeedOverrideResolver(
   defaultTps: number,
@@ -97,15 +97,15 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     })
   })
 
-  it('automatic selection over the full task-capable candidate pool picks the cheaper eligible HY3 canonical target', () => {
-    // Auto pool is every canonical task-capable candidate from the Catalog.
+  it('automatic selection over the pre-existing provider pool picks the cheaper eligible HY3 canonical target', () => {
+    // Exclude the newly added providers to retain this native-route regression fixture.
     // With an 80/60 floor the expected group contains the local-measured
     // DeepSeek Flash (82.42) and the catalog-default HY3 (93.8); HY3 wins on
     // reference output price (0.556) even though the local cb candidate is
     // eligible.
     const resolution = resolver.resolve({
       taskName: 'auto-80-60',
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+      requirements: { expectedTps: 80, minimumTps: 60, excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'] } satisfies TaskDispatchRequirements,
     })
 
     assert.equal(resolution.ok, true)
@@ -138,11 +138,11 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     const withPolicy = resolver.resolve({
       taskName: 'policy-auto',
       declaredRuntime: 'forge/fast',
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+      requirements: { expectedTps: 80, minimumTps: 60, excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'] } satisfies TaskDispatchRequirements,
     })
     const withAbsent = resolver.resolve({
       taskName: 'absent-auto',
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
+      requirements: { expectedTps: 80, minimumTps: 60, excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'] } satisfies TaskDispatchRequirements,
     })
 
     assert.equal(withPolicy.ok, true)
@@ -162,6 +162,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       declaredRuntime: 'forge/fast',
       requirements: {
         maxOutputUsdPerMillion: 2,
+        excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'],
         minimumTps: 40,
         intelligenceMin: 'mid',
       } satisfies TaskDispatchRequirements,

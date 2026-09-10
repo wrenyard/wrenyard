@@ -3,6 +3,7 @@ import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates } from '@wrenyard/catalog
 import type { CandidateInput } from '@wrenyard/catalog'
 import {
   resolveDeepSeekReferencePricing,
+  resolveSubscriptionEconomics,
   type DeepSeekPricingModel,
   type DeepSeekReferencePricing,
 } from '@wrenyard/providers'
@@ -160,7 +161,10 @@ export interface TaskSettingsProviderAvailability {
    *  credential (current CodeBuddy internal/ioa environments only). Never
    *  carries a token, domain, or internal upstream suffix. Absent means the
    *  account/environment is not confirmed free (external/cloudhosted/unknown/
-   *  missing credential/other providers). */
+   *  missing credential/other providers). This CodeBuddy-scoped fact is
+   *  independent from the provenance-bearing verifiedEfficiency signal resolved
+   *  separately for domestic providers; neither rewrites the listed reference
+   *  price or any marginal USD price. */
   freeSupply?: { confirmedFree: true; source: string; ruleId: string }
   /** Private execution admission tuple derived from the same current
    * CodeBuddy snapshot as readiness/free supply. Never serialized into task
@@ -1702,12 +1706,41 @@ function toAutomaticCandidateInput(
   )
   const requiredQuota = quotaEntry?.requiredQuota ?? []
   const freeFact = entry.availability?.freeSupply
+  // Verified quota-burn efficiency is a separate, provenance-bearing signal from
+  // the pure subscription-economics resolver. It is consulted ONLY when the live
+  // readiness probe reported an available provider credential for this exact
+  // runtime triple — unknown or missing credentials never produce efficiency.
+  // The resolver owns every provider/client/model rule and horizon check; this
+  // code never rewrites the listed reference price or the DeepSeek marginal USD
+  // price, and never amortizes any estimate into a monetary route price.
+  const availability = entry.availability
+  const economics = availability?.providerCredential === 'available' && availability?.available === true
+    ? resolveSubscriptionEconomics({
+        provider: choice.provider,
+        model: choice.model,
+        client: choice.client,
+        atMs: context.nowMs,
+        throughMs: context.nowMs + context.timeoutMs,
+        authenticated: true,
+      })
+    : undefined
+  const verifiedEfficiency = economics === undefined
+    ? null
+    : {
+        efficiencyScore: economics.efficiencyScore,
+        appliesFromMs: economics.atMs,
+        appliesUntilMs: economics.throughMs,
+        source: economics.source,
+        ruleId: economics.ruleId,
+        domain: 'quota_burn_efficiency' as const,
+        worst_applicable: 'worst_applicable' as const,
+      }
   return {
     snapshotId: context.snapshotId,
     canonicalId: choice.exactAgentRuntime,
     nowMs: context.nowMs,
     referenceUsdPerM,
-    referenceKind: 'listed',
+    referenceKind: referenceUsdPerM === 0 && freeFact ? 'verified_free' : 'listed',
     effectiveCapUsdPerM: context.capUsdPerM,
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,
@@ -1718,6 +1751,7 @@ function toAutomaticCandidateInput(
     intelligenceExpectedRank: context.intelligenceExpectedRank,
     requiredQuota,
     ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
+    verifiedEfficiency,
     confirmedFreeSupply: freeFact
       ? {
           kind: 'confirmed_free',

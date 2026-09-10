@@ -53,6 +53,8 @@ const REQUEST_HEADER_ALLOWLIST = new Set([
 const RESPONSE_HEADER_ALLOWLIST = new Set([
   'cache-control', 'content-type', 'openai-organization', 'openai-processing-ms',
   'openai-version', 'request-id', 'x-request-id',
+  // Preserved for all providers so native clients observe 429 boundaries.
+  'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset',
 ]);
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 
@@ -83,6 +85,18 @@ function upstreamHeaders(headers: IncomingHttpHeaders): Headers {
   }
   out.set('content-type', 'application/json');
   return out;
+}
+
+// Returns a validated incoming OpenCode session id, or undefined. The value
+// must be a single non-empty token of <=256 chars with no CRLF, so it cannot
+// smuggle extra header lines into the upstream request. The OpenCode driver
+// injects this header locally; we forward it only to OpenCode service providers.
+function openCodeSessionHeader(headers: IncomingHttpHeaders): string | undefined {
+  const value = headers['x-opencode-session'];
+  if (value === undefined || Array.isArray(value)) return undefined;
+  if (value.length === 0 || value.length > 256) return undefined;
+  if (value.includes('\r') || value.includes('\n')) return undefined;
+  return value;
 }
 
 interface ResponseModelContext {
@@ -278,6 +292,23 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       upstreamAuthHeaders(resolved.provider, credential, route.protocol).forEach((value, name) => headers.set(name, value));
       const upstreamModel = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
       body.model = upstreamModel;
+
+      // OpenCode service providers require the stable OpenCode User-Agent and
+      // the forwarded session header. Other providers are left untouched and
+      // never receive these identity values.
+      if (resolved.provider.id === 'opencode-zen' || resolved.provider.id === 'opencode-go') {
+        headers.set('user-agent', 'wrenyard/1.0.0-dev.23');
+        const session = openCodeSessionHeader(request.headers);
+        if (session) headers.set('x-opencode-session', session);
+      }
+
+      // OpenRouter free requests must not carry a model fallback list or route
+      // object, which would let the client select a paid model. The exact free
+      // model id is preserved; no fallback, retry, or substitution is added.
+      if (resolved.provider.id === 'openrouter') {
+        delete body.models;
+        delete body.route;
+      }
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();
