@@ -1457,7 +1457,7 @@ function buildTaskDisplayNames(settings: TaskSettingsSnapshot | null): void {
   taskDisplayNames = map;
   const grouped = new Map<string, Set<string>>();
   for (const row of settings?.rows ?? []) {
-    const key = `${row.kind}:${row.name}`;
+    const key = `${row.identity.startsWith('builtin:') ? 'builtin' : 'project'}:${row.name}`;
     const names = grouped.get(key) ?? new Set<string>();
     names.add(row.display_name);
     grouped.set(key, names);
