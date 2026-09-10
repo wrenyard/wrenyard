@@ -129,13 +129,13 @@ button, input, select { accent-color: var(--moss-deep); }
 .tasks-page > * { width: min(100%, 1280px); margin-inline: auto; }
 .tasks-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: clamp(170px, 23vw, 250px) minmax(0, 1fr); gap: 14px; align-items: stretch; margin-top: 22px; }
 .tasks-list-pane { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: 7px; background: rgba(245, 235, 212, .72); overflow-y: auto; }
-.tasks-tree { display: grid; gap: 1px; padding: 8px; }
+.tasks-tree { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; padding: 8px; }
 .tasks-tree-category { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 10px 5px; color: var(--ink-soft); font-size: 10px; font-weight: 800; letter-spacing: .06em; }
 .tasks-tree-category > span:not(.tasks-tree-chevron) { flex: 1; min-width: 0; }
 .tasks-tree-category small { color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 600; }
-.tasks-tree-group { display: grid; gap: 2px; margin-left: 9px; padding-left: 11px; border-left: 1px solid rgba(212, 201, 168, .6); }
+.tasks-tree-group { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin-left: 9px; padding-left: 11px; border-left: 1px solid rgba(212, 201, 168, .6); }
 .tasks-tree-group .tasks-tree-category { padding-top: 7px; font-size: 9px; letter-spacing: .03em; }
-.tasks-tree-leaf { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid transparent; border-radius: 5px; padding: 6px 9px; color: var(--ink-soft); background: transparent; text-align: left; cursor: pointer; }
+.tasks-tree-leaf { width: 100%; min-width: 0; min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid transparent; border-radius: 5px; padding: 6px 9px; color: var(--ink-soft); background: transparent; text-align: left; cursor: pointer; }
 .tasks-tree-leaf:hover { border-color: rgba(212, 201, 168, .78); background: rgba(247, 239, 216, .74); }
 .tasks-tree-leaf:focus-visible { border-color: var(--moss-deep); background: rgba(123, 160, 91, .08); box-shadow: 0 0 0 1px rgba(94, 124, 70, .12); outline: none; }
 .tasks-tree-leaf.is-selected, .tasks-tree-leaf[aria-selected="true"] { background: #f8f0dc; box-shadow: inset 2px 0 var(--moss-deep); }
