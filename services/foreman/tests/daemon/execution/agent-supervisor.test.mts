@@ -2254,15 +2254,16 @@ function installFakeForgeEnvRecorder(
   const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
   writeFileSync(script, `
 import { writeFileSync } from 'node:fs'
+const inherited = Object.fromEntries(Object.entries(process.env))
 writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({
   FOREMAN_TASK_RUN_ID: process.env.FOREMAN_TASK_RUN_ID,
   PATH: process.env.PATH,
   FOREMAN_ENV_TEST_SENTINEL: process.env.FOREMAN_ENV_TEST_SENTINEL,
-  WRENYARD_CODEBUDDY_EXPECTED_SCOPE: process.env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE,
-  WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT: process.env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT,
-  WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL: process.env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL,
-  wrenyard_codebuddy_expected_scope: process.env.wrenyard_codebuddy_expected_scope,
-  Wrenyard_Codebuddy_Expected_Environment: process.env.Wrenyard_Codebuddy_Expected_Environment,
+  WRENYARD_CODEBUDDY_EXPECTED_SCOPE: inherited.WRENYARD_CODEBUDDY_EXPECTED_SCOPE,
+  WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT: inherited.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT,
+  WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL: inherited.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL,
+  wrenyard_codebuddy_expected_scope: inherited.wrenyard_codebuddy_expected_scope,
+  Wrenyard_Codebuddy_Expected_Environment: inherited.Wrenyard_Codebuddy_Expected_Environment,
 }))
 process.stdout.write(${JSON.stringify(output)})
 `, 'utf-8')

@@ -98,38 +98,80 @@ fi
   chmodSync(hook, 0o755)
 }
 
-function writeFailBranchDeleteGitBin(dir: string): string {
-  const path = join(dir, 'git-fail-branch-delete')
+function canonicalPath(path: string): string {
+  const resolved = realpathSync.native(path)
+  if (resolved.startsWith('\\\\?\\UNC\\')) return `\\\\${resolved.slice(8)}`
+  if (resolved.startsWith('\\\\?\\')) return resolved.slice(4)
+  return resolved
+}
+
+function writeGitFailWrapper(dir: string, name: string, matchArg0: string, matchArg1: string, stderr: string): string {
+  writeFileSync(join(dir, 'go.mod'), 'module gitfailwrapper\n\ngo 1.20\n', 'utf-8')
+  const sourcePath = join(dir, 'main.go')
   writeFileSync(
-    path,
-    `#!/bin/sh
-if [ "$1" = "branch" ] && [ "$2" = "-d" ]; then
-  echo "fatal: simulated branch delete failure" >&2
-  exit 1
-fi
-exec /usr/bin/env git "$@"
+    sourcePath,
+    `package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+)
+
+func main() {
+	args := os.Args[1:]
+	if len(args) >= 2 && args[0] == ${JSON.stringify(matchArg0)} && args[1] == ${JSON.stringify(matchArg1)} {
+		fmt.Fprintln(os.Stderr, ${JSON.stringify(stderr)})
+		os.Exit(1)
+	}
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(127)
+	}
+	cmd := exec.Command(gitBin, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 `,
     'utf-8',
   )
-  chmodSync(path, 0o755)
-  return path
+  const bin = join(dir, process.platform === 'win32' ? `${name}.exe` : name)
+  execFileSync('go', ['build', '-o', bin, '.'], {
+    cwd: dir,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+  return bin
+}
+
+function writeFailBranchDeleteGitBin(dir: string): string {
+  return writeGitFailWrapper(
+    dir,
+    'git-fail-branch-delete',
+    'branch',
+    '-d',
+    'fatal: simulated branch delete failure',
+  )
 }
 
 function writeFailRevListCountGitBin(dir: string): string {
-  const path = join(dir, 'git-fail-rev-list-count')
-  writeFileSync(
-    path,
-    `#!/bin/sh
-if [ "$1" = "rev-list" ] && [ "$2" = "--count" ]; then
-  echo "fatal: simulated rev-list --count failure" >&2
-  exit 1
-fi
-exec /usr/bin/env git "$@"
-`,
-    'utf-8',
+  return writeGitFailWrapper(
+    dir,
+    'git-fail-rev-list-count',
+    'rev-list',
+    '--count',
+    'fatal: simulated rev-list --count failure',
   )
-  chmodSync(path, 0o755)
-  return path
 }
 
 beforeEach(() => {
@@ -270,7 +312,7 @@ describe('ProjectManager', () => {
     })
     assert.equal(existsSync(expectedPath), true)
     assert.equal(existsSync(join(workspace, 'worktrees')), false)
-    assert.equal(manager.resolveWorktreePath('deadbeef', 'app'), realpathSync(expectedPath))
+    assert.equal(manager.resolveWorktreePath('deadbeef', 'app'), canonicalPath(expectedPath))
 
     const detail = manager.status('app') as ProjectDetail
     assert.equal(detail.name, 'app')
@@ -339,7 +381,7 @@ describe('ProjectManager', () => {
 
     assert.equal(
       manager.resolveWorktreePath('deadbeef', 'control'),
-      realpathSync(join(expectedPath, 'services', 'control')),
+      canonicalPath(join(expectedPath, 'services', 'control')),
     )
     assert.throws(
       () => manager.resolveWorktreePath('deadbeef', 'engine'),
@@ -366,6 +408,23 @@ describe('ProjectManager', () => {
       () => manager.resolveWorktreePath('deadbeef', 'control'),
       /Managed worktree component path does not exist/u,
     )
+  })
+
+  it('resolves a worktree when the project checkout is reached via a filesystem alias', () => {
+    const workspace = makeTempDir('foreman-workspace-')
+    const repo = makeTempDir('foreman-repo-')
+    initRepo(repo)
+    const aliasParent = makeTempDir('foreman-repo-alias-parent-')
+    const alias = join(aliasParent, 'repo')
+    symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    writeFmproj(join(workspace, 'projects', 'app'), 'app', 'test-host.local', alias)
+    const manager = new ProjectManager({
+      workspaceRoot: workspace,
+      hostname: 'test-host.local',
+      idGenerator: () => 'deadbeef',
+    })
+    manager.createWorktree('app')
+    assert.equal(manager.resolveWorktreePath('deadbeef', 'app'), canonicalPath(worktreePath('deadbeef')))
   })
 
   it('merges a clean managed worktree into main and removes it', () => {

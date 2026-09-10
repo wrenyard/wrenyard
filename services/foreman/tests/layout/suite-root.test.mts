@@ -29,7 +29,7 @@ function makeSuiteRoot(): string {
 }
 
 test('foremanPackageRoot derives to the services/foreman package root', () => {
-  assert.ok(foremanPackageRoot.endsWith('services/foreman'))
+  assert.ok(foremanPackageRoot.endsWith(join('services', 'foreman')))
 })
 
 test('resolves the suite root upward from a nested package directory', () => {

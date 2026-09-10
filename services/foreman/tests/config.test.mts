@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 
 import { createDefaultForemanConfigData } from '../lib/config/data.mts'
@@ -157,7 +157,7 @@ describe('Foreman config', () => {
     )
     const root = workspace()
     const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_WORKSPACE: '/wrenyard-ws' } })
-    assert.equal(config.workspaceRoot, '/wrenyard-ws')
+    assert.equal(config.workspaceRoot, resolve('/wrenyard-ws'))
   })
 
 })

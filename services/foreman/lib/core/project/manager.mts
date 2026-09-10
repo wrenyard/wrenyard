@@ -1318,9 +1318,16 @@ function validateWorktreeId(value: string): string {
   return id
 }
 
+function nativeRealpath(path: string): string {
+  const resolved = realpathSync.native(path)
+  if (resolved.startsWith('\\\\?\\UNC\\')) return `\\\\${resolved.slice(8)}`
+  if (resolved.startsWith('\\\\?\\')) return resolved.slice(4)
+  return resolved
+}
+
 function normalizePath(path: string): string {
   try {
-    return realpathSync(path)
+    return nativeRealpath(path)
   } catch {
     return resolve(path)
   }

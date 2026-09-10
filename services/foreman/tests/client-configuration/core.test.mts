@@ -120,14 +120,15 @@ test('gateway credential helper resolves the live token over local IPC', async (
 })
 
 test('discovery reports Codex App and CLI independently and accepts capability overrides', async () => {
-  const existing = new Set(['/Applications/ChatGPT.app', '/bin/codex', '/bin/claude'])
+  const executable = (name: string) => join('/bin', process.platform === 'win32' ? `${name}.exe` : name)
+  const existing = new Set([join('/Applications', 'ChatGPT.app'), executable('codex'), executable('claude')])
   const discovery = new InstalledClientDiscovery({
     env: { HOME: '/home/test', PATH: '/bin' },
     platform: 'darwin',
     appRoots: ['/Applications'],
     pathExists: async (path) => existing.has(path),
     runCommand: async (executable) => ({
-      stdout: executable.endsWith('codex') ? 'codex-cli 0.153.0' : '2.1.179',
+      stdout: /codex(?:\.exe)?$/.test(executable) ? 'codex-cli 0.153.0' : '2.1.179',
       stderr: '',
       exitCode: 0,
     }),

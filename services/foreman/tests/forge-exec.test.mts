@@ -44,6 +44,8 @@ describe('forge exec windows behavior', () => {
 })
 
 describe('forge runtime resolution precedence', () => {
+  const runtimeBinary = process.platform === 'win32' ? 'forge.exe' : 'forge'
+
   function suiteWith(runtimePaths: string[]): { suiteRoot: string; cleanup: () => void } {
     const suiteRoot = mkdtempSync(join(tmpdir(), 'wrenyard-suite-'))
     mkdirSync(join(suiteRoot, 'runtime', 'forge', 'bin'), { recursive: true })
@@ -56,7 +58,7 @@ describe('forge runtime resolution precedence', () => {
   }
 
   it('prefers an explicit WRENYARD_RUNTIME_BIN over any suite runtime', () => {
-    const suite = suiteWith(['.wrenyard/runtime/forge'])
+    const suite = suiteWith([`.wrenyard/runtime/${runtimeBinary}`])
     try {
       const env = { WRENYARD_RUNTIME_BIN: '/opt/forge', FOREMAN_FORGE_BIN: '/legacy/forge' }
       assert.equal(resolveRuntimeBin(env, { suiteRoot: suite.suiteRoot }), '/opt/forge')
@@ -67,14 +69,14 @@ describe('forge runtime resolution precedence', () => {
 
   it('prefers the packed CLI .wrenyard runtime over suite zip and source runtimes', () => {
     const suite = suiteWith([
-      '.wrenyard/runtime/forge',
-      'bin/forge',
-      'runtime/forge/bin/forge',
+      `.wrenyard/runtime/${runtimeBinary}`,
+      `bin/${runtimeBinary}`,
+      `runtime/forge/bin/${runtimeBinary}`,
     ])
     try {
       assert.equal(
         resolveRuntimeBin({}, { suiteRoot: suite.suiteRoot }),
-        join(suite.suiteRoot, '.wrenyard', 'runtime', 'forge'),
+        join(suite.suiteRoot, '.wrenyard', 'runtime', runtimeBinary),
       )
     } finally {
       suite.cleanup()
@@ -82,11 +84,11 @@ describe('forge runtime resolution precedence', () => {
   })
 
   it('prefers the suite zip bin runtime over the source checkout runtime', () => {
-    const suite = suiteWith(['bin/forge', 'runtime/forge/bin/forge'])
+    const suite = suiteWith([`bin/${runtimeBinary}`, `runtime/forge/bin/${runtimeBinary}`])
     try {
       assert.equal(
         resolveRuntimeBin({}, { suiteRoot: suite.suiteRoot }),
-        join(suite.suiteRoot, 'bin', 'forge'),
+        join(suite.suiteRoot, 'bin', runtimeBinary),
       )
     } finally {
       suite.cleanup()
@@ -94,11 +96,11 @@ describe('forge runtime resolution precedence', () => {
   })
 
   it('falls back to the source checkout runtime when nothing packed exists', () => {
-    const suite = suiteWith(['runtime/forge/bin/forge'])
+    const suite = suiteWith([`runtime/forge/bin/${runtimeBinary}`])
     try {
       assert.equal(
         resolveRuntimeBin({}, { suiteRoot: suite.suiteRoot }),
-        join(suite.suiteRoot, 'runtime', 'forge', 'bin', 'forge'),
+        join(suite.suiteRoot, 'runtime', 'forge', 'bin', runtimeBinary),
       )
     } finally {
       suite.cleanup()
@@ -137,10 +139,11 @@ describe('forge runtime resolution precedence', () => {
   })
 
   it('respects an injected existsSync probe over the real filesystem', () => {
-    const fakeExists = (path: string) => path === join('/virtual', 'bin', 'forge')
+    const probeBin = join('/virtual', 'bin', runtimeBinary)
+    const fakeExists = (path: string) => path === probeBin
     assert.equal(
       resolveRuntimeBin({}, { suiteRoot: '/virtual', existsSync: fakeExists }),
-      join('/virtual', 'bin', 'forge'),
+      probeBin,
     )
   })
 

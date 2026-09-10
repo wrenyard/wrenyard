@@ -64,10 +64,12 @@ test('first put creates a 0700 dir and a 0600 file holding the canonical target'
     assert.equal(result.canonical, target);
     assert.equal(result.revision, 1);
 
-    const fileMode = (await stat(configPath)).mode & 0o777;
-    const dirMode = (await stat(dirname(configPath))).mode & 0o777;
-    assert.equal(fileMode, 0o600);
-    assert.equal(dirMode, 0o700);
+    if (process.platform !== 'win32') {
+      const fileMode = (await stat(configPath)).mode & 0o777;
+      const dirMode = (await stat(dirname(configPath))).mode & 0o777;
+      assert.equal(fileMode, 0o600);
+      assert.equal(dirMode, 0o700);
+    }
 
     const snapshot = await store.load();
     assert.equal(snapshot.exists, true);
