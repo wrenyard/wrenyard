@@ -266,7 +266,7 @@ process.stdout.write(output.map((event) => JSON.stringify(event)).join('\\n') + 
     const taskStatus = await waitForIpcTaskStatus(client, taskRunId ?? '', 'done')
     assert.equal((taskStatus as { worktree?: string }).worktree, 'deadbeef')
     const taskOutput = await client.task.run.output({ task_run_id: taskRunId ?? '' })
-    assert.deepEqual(taskOutput.output, { cwd: realpathSync(join(created.path, 'services', 'app')) })
+    assert.deepEqual(taskOutput.output, { cwd: realpathSync.native(join(created.path, 'services', 'app')) })
   } finally {
     client?.close()
     await running.stop()
