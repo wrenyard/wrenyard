@@ -274,12 +274,12 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
   // Removed surface: multi-row form, additional-instructions editor, and catalog picks.
   assert.doesNotMatch(html, /tasks-instructions|tasks-model-select|tasks-runtime-field|附加指令/);
-  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-intelligence-min|tasks-intelligence-max|tasks-max-output-price/);
+  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-min-intelligence|tasks-expected-intelligence|tasks-intelligence-note|tasks-intelligence-max|tasks-max-output-price/);
   // The stats ledger page is untouched by this task.
   assert.match(html, /id="stats-task-runs-list"/);
   // The Task page still has exactly four compact editable rows (mode, timeout,
   // 输入要求, conditional explicit runtime) and never hosts the auto cap.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 6);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
   const tasksStart = html.indexOf('product-page tasks-page');
   const tasksEnd = html.indexOf('provider-dialog-backdrop');
   assert.ok(tasksStart > 0 && tasksEnd > tasksStart);
@@ -315,7 +315,7 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
   assert.match(app, /草稿仍保留/);
-  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean; intelligenceMin: string; intelligenceExpected: string \}/);
+  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean \}/);
 });
 
 test('renderer edits inherited mode and runtime from the effective baseline without creating incidental pins', async () => {
@@ -403,46 +403,6 @@ test('renderer 需要图片 row is one native checkbox with correct inheritance 
   assert.match(app, /for \(const field of \['mode', 'explicit_runtime', 'timeout_ms', 'automatic'\] as const\)/);
 });
 
-test('renderer intelligence selectors edit min/expected on the user_task layer and merge a narrow automatic patch', async () => {
-  const app = await rendererSource();
-  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
-  // Two compact rows, visible in both modes, with the same inherit/low/mid/high/premium choices.
-  assert.match(html, /<label for="tasks-min-intelligence">最低智能<\/label>/u);
-  assert.match(html, /<select id="tasks-min-intelligence">/u);
-  assert.match(html, /<option value="inherit">沿用默认<\/option>/u);
-  assert.match(html, /<option value="low">低<\/option>/u);
-  assert.match(html, /<option value="mid">中<\/option>/u);
-  assert.match(html, /<option value="high">高<\/option>/u);
-  assert.match(html, /<option value="premium">旗舰<\/option>/u);
-  assert.match(html, /id="tasks-min-intelligence-effective">—</);
-  assert.match(html, /<label for="tasks-expected-intelligence">建议智能<\/label>/u);
-  assert.match(html, /<select id="tasks-expected-intelligence">/u);
-  assert.match(html, /id="tasks-expected-intelligence-effective">—</);
-  // The two rows are always visible, never nested inside the explicit-only row.
-  assert.doesNotMatch(html, /tasks-explicit-row[^]*id="tasks-min-intelligence"/u);
-  // Renderer reads the editable user_task layer (not the effective value) and
-  // patch-generation compares against that same layer.
-  assert.match(app, /intelligenceSelectionFromRow\(row\)/u);
-  assert.match(app, /intelligencePatch\(row\.user_task\.automatic,/u);
-  // Draft keeps both selections so a CAS conflict restores them.
-  assert.match(app, /intelligenceMin: tasksMinIntelligenceSelect\.value/u);
-  assert.match(app, /intelligenceExpected: tasksExpectedIntelligenceSelect\.value/u);
-  assert.match(app, /tasksMinIntelligenceSelect\.value = draft\.intelligenceMin;/u);
-  assert.match(app, /tasksExpectedIntelligenceSelect\.value = draft\.intelligenceExpected;/u);
-  // The save path merges intelligence leaves under automatic without clobbering
-  // unrelated layer fields.
-  assert.match(app, /patch\.automatic = \{ \.\.\.\(patch\.automatic \?\? \{\}\), \.\.\.intelPatch\.automatic \};/u);
-  // Both selects are disabled while saving and re-enabled afterwards.
-  assert.match(app, /tasksMinIntelligenceSelect\.disabled = true;/u);
-  assert.match(app, /tasksExpectedIntelligenceSelect\.disabled = false;/u);
-  // Effective hints: absent minimum shows 无最低要求, absent expected falls back to mid.
-  assert.match(app, /无最低要求/u);
-  assert.match(app, /未设置，按默认中/u);
-  // No search UI is added alongside the new intelligence controls.
-  assert.doesNotMatch(app, /tasksSearch|searchCheckbox|native-search/u);
-  assert.doesNotMatch(html, /tasks-search|id="tasks-search"/u);
-});
-
 test('renderer catalog model label reports image support from exact entry metadata only', async () => {
   const conversation = await readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8');
   assert.match(conversation, /entry\.inputTypes === undefined\n\s*\? '图片：未知'/u);
@@ -480,7 +440,7 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   assert.doesNotMatch(app, /tasksPreviewTitle/);
   // Additive only: the Task page still has exactly four editable setting rows
   // and no new automatic-selection row or editable control.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 6);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
   assert.doesNotMatch(html, /automatic-selection-row|tasks-auto-selection|id="tasks-automatic"/);
 });
 
