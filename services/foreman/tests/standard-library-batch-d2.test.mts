@@ -6,10 +6,6 @@ import librarianTask, {
   LibrarianInputSchema,
   LibrarianOutputSchema,
 } from '../lib/standard/tasks/librarian.mts'
-import lookAtTask, {
-  LookAtInputSchema,
-  LookAtOutputSchema,
-} from '../lib/standard/tasks/look-at.mts'
 import oracleTask, {
   OracleInputSchema,
   OracleOutputSchema,
@@ -45,20 +41,6 @@ const librarianOutputSample = {
   ],
   evidences: [
     { id: 'ev1', source: { kind: 'url', value: 'https://example.com/batch' }, observation: 'docs show exclusive bound' },
-  ],
-}
-
-const lookAtInputSample = {
-  question: { id: 'q1', ask: 'What color is the error banner?', blocking: true },
-  image: { kind: 'file', value: '/tmp/shot.png' },
-}
-
-const lookAtOutputSample = {
-  findings: [
-    { id: 'f1', conclusion: 'The banner is red', targets: [], evidences: ['ev1'], confidence: 'high' },
-  ],
-  evidences: [
-    { id: 'ev1', source: { kind: 'file', value: '/tmp/shot.png' }, observation: 'red banner top-right' },
   ],
 }
 
@@ -182,51 +164,6 @@ describe('standard/tasks librarian — schema behavior', () => {
 })
 
 // ───────────────────────────────────────────────────────────────────
-// look-at
-// ───────────────────────────────────────────────────────────────────
-
-describe('standard/tasks look-at — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly and no runtime pin (vision Task defaults to auto)', () => {
-    assert.equal(lookAtTask.__type, 'task')
-    assert.equal(lookAtTask.config.permission, 'readonly')
-    assert.equal(Object.hasOwn(lookAtTask.config, 'agentRuntime'), false)
-    assert.equal(lookAtTask.sourcePath, 'lib/standard/tasks/look-at.mts')
-    assert.deepEqual(lookAtTask.config.instructions, [])
-  })
-
-  it('input/output are Zod schemas', () => {
-    assert.equal(typeof LookAtInputSchema.parse, 'function')
-    assert.equal(typeof LookAtOutputSchema.parse, 'function')
-  })
-
-  it('prompt preserves multimodal runtime (view the image directly)', async () => {
-    const prompt = await lookAtTask.config.prompt(lookAtInputSample)
-    assert.equal(typeof prompt, 'string')
-    assert.match(prompt, /Look At/)
-    assert.match(prompt, /View this file directly/)
-    assert.match(prompt, /image input/)
-    assert.match(prompt, /Question/)
-  })
-})
-
-describe('standard/tasks look-at — schema behavior', () => {
-  it('parses a valid input and output', () => {
-    assert.deepEqual(LookAtInputSchema.parse(lookAtInputSample), lookAtInputSample)
-    assert.deepEqual(LookAtOutputSchema.parse(lookAtOutputSample), lookAtOutputSample)
-  })
-
-  it('rejects input missing image', () => {
-    assert.throws(() =>
-      LookAtInputSchema.parse({ question: { id: 'q1', ask: '?', blocking: false } }),
-    )
-  })
-
-  it('rejects input missing question', () => {
-    assert.throws(() => LookAtInputSchema.parse({ image: { kind: 'file', value: '/x' } }))
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────
 // oracle
 // ───────────────────────────────────────────────────────────────────
 
@@ -333,7 +270,6 @@ describe('standard/tasks code-review — definition shape & config', () => {
   it('prompt preserves blocking-only review behavior', async () => {
     const prompt = await codeReviewTask.config.prompt(codeReviewInputSample)
     assert.equal(typeof prompt, 'string')
-    assert.match(prompt, /Code Quality Reviewer/)
     assert.match(prompt, /BLOCKING-ONLY/)
     assert.match(prompt, /definite_correctness_bug/)
     assert.match(prompt, /required_changes/)
@@ -481,8 +417,6 @@ describe('standard-library Batch D2 — Zod schemas convert to draft-07 JSON Sch
   const schemas = {
     librarianInput: LibrarianInputSchema,
     librarianOutput: LibrarianOutputSchema,
-    lookAtInput: LookAtInputSchema,
-    lookAtOutput: LookAtOutputSchema,
     oracleInput: OracleInputSchema,
     oracleOutput: OracleOutputSchema,
     codeReviewInput: CodeReviewInputSchema,

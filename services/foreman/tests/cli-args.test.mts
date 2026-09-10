@@ -5,13 +5,13 @@ import { parsePowerShellForemanArgs, resolveCliArgs } from '../lib/client/cli/ar
 describe('Foreman CLI argument normalization', () => {
   it('preserves tail JSON from raw PowerShell invocation lines', () => {
     const args = parsePowerShellForemanArgs(
-      `foreman task run explore-code -p app '{"focus":"check task api","limit":5}'`,
+      `foreman task run explore -p app '{"focus":"check task api","limit":5}'`,
     )
 
     assert.deepEqual(args, [
       'task',
       'run',
-      'explore-code',
+      'explore',
       '-p',
       'app',
       '{"focus":"check task api","limit":5}',

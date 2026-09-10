@@ -11,10 +11,7 @@ import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
 } from '../lib/standard/index.mts'
-import prepareFixTask from '../lib/standard/tasks/prepare-fix.mts'
-import implementTask from '../lib/standard/tasks/implement.mts'
 import codeReviewTask from '../lib/standard/tasks/code-review.mts'
-import shellUsage from '../lib/standard/instructions/shell-usage.mts'
 import {
   describeTask,
   discoverTasks,
@@ -33,7 +30,6 @@ import {
   GENERAL_DISPATCH_REQUIREMENTS,
   REVIEW_DISPATCH_REQUIREMENTS,
   ULTRA_DISPATCH_REQUIREMENTS,
-  VISION_DISPATCH_REQUIREMENTS,
 } from '../lib/standard/task-dispatch.mts'
 
 // ───────────────────────────────────────────────────────────────────
@@ -92,38 +88,26 @@ afterEach(() => {
   tempDirs = []
 })
 
+// The retained seven-role builtin catalog, in fixed order.
 const EXPECTED_BUILTIN_NAMES = [
   'explore',
   'edit',
   'test',
-  'explore-code',
-  'explore-commit',
   'code-review',
   'commit',
   'librarian',
   'oracle',
-  'look-at',
+] as const
+
+// Retired roles that must no longer resolve or describe at the registry surface.
+const RETIRED_BUILTIN_NAMES = [
+  'implement',
   'prepare-fix',
   'architect',
-  'conform-review',
-  'explore-notes',
-  'feature-point-synthesize',
-  'fp-review',
-  'fu-review',
-  'functional-unit-breakdown',
-  'inquiry-step',
-  'investigate',
-  'plan-review',
-  'propose-design',
-  'request-intake',
-  'spec-review',
-  'diagnose-repro',
-  'instrument-evidence',
-  'test-hypothesis',
-  'verify-fix',
-  'implement',
-  'write-failing-test',
-] as const
+  'explore-code',
+  'explore-commit',
+  'look-at',
+]
 
 // Zod schema for the public list/describe shape (the fields the
 // standard-library builtin contract guarantees).
@@ -148,8 +132,8 @@ const ListedDefinitionShapeSchema = z.object({
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library BUILTIN_TASKS index', () => {
-  it('exposes exactly 30 entries in the fixed order', () => {
-    assert.equal(BUILTIN_TASKS.length, 30)
+  it('exposes exactly 7 entries in the fixed order', () => {
+    assert.equal(BUILTIN_TASKS.length, 7)
     assert.deepEqual(
       BUILTIN_TASKS.map((e) => e.name),
       [...EXPECTED_BUILTIN_NAMES],
@@ -164,15 +148,15 @@ describe('standard-library BUILTIN_TASKS index', () => {
     }
   })
 
-  it('BUILTIN_NAMES matches the 30 builtin names', () => {
-    assert.equal(BUILTIN_NAMES.size, 30)
+  it('BUILTIN_NAMES matches the 7 builtin names', () => {
+    assert.equal(BUILTIN_NAMES.size, 7)
     for (const name of EXPECTED_BUILTIN_NAMES) {
       assert.equal(BUILTIN_NAMES.has(name), true, `${name} should be in BUILTIN_NAMES`)
     }
   })
 
   it('every builtin carries its curated Chinese displayName and category from the single metadata map', () => {
-    assert.equal(Object.keys(BUILTIN_METADATA).length, 30)
+    assert.equal(Object.keys(BUILTIN_METADATA).length, 7)
     for (const name of EXPECTED_BUILTIN_NAMES) {
       const metadata = BUILTIN_METADATA[name]
       assert.ok(metadata, `${name} should have builtin metadata`)
@@ -194,16 +178,18 @@ describe('standard-library BUILTIN_TASKS index', () => {
   })
 
   it('keeps curated labels exact while categories and task ids stay unchanged', () => {
-    assert.equal(BUILTIN_METADATA.explore.displayName, '综合探索')
+    assert.equal(BUILTIN_METADATA.explore.displayName, '探索调查')
     assert.equal(BUILTIN_METADATA.edit.displayName, '编辑文件')
-    assert.equal(BUILTIN_METADATA.implement.displayName, '实施（旧版）')
-    assert.deepEqual(BUILTIN_METADATA.explore.category, { id: 'explore', displayLabel: '代码探索' })
+    assert.equal(BUILTIN_METADATA['code-review'].displayName, '变更审查')
+    assert.equal(BUILTIN_METADATA.oracle.displayName, '分析顾问')
+    assert.deepEqual(BUILTIN_METADATA.explore.category, { id: 'explore', displayLabel: '探索' })
     assert.deepEqual(BUILTIN_METADATA.edit.category, { id: 'edit', displayLabel: '编码' })
-    assert.deepEqual(BUILTIN_METADATA.implement.category, { id: 'edit', displayLabel: '编码' })
-    // The registry index (29 active + implement legacy) is untouched.
+    assert.deepEqual(BUILTIN_METADATA['code-review'].category, { id: 'code-review', displayLabel: '审查' })
+    assert.deepEqual(BUILTIN_METADATA.oracle.category, { id: 'architecture', displayLabel: '复杂分析' })
+    // Every retained builtin is active: no legacy scheduling marker remains.
     const active = BUILTIN_TASKS.filter((e) => e.definition.config.scheduling !== 'legacy')
-    assert.equal(active.length, 29)
-    assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'write-failing-test')
+    assert.equal(active.length, 7)
+    assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'oracle')
   })
 })
 
@@ -212,24 +198,25 @@ describe('standard-library BUILTIN_TASKS index', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library builtin injection', () => {
-  it('keeps all 30 builtins resolvable but omits legacy-only tasks from scheduling lists', async () => {
+  it('keeps all 7 builtins resolvable and omits retired roles from resolution and describe', async () => {
     const workspace = makeTempDir('foreman-builtin-empty-')
     await discoverTasks(workspace)
 
     const tasks = listTasks(workspace)
     const builtins = tasks.filter((t) => t.source === 'builtin')
-    assert.equal(builtins.length, 29)
+    assert.equal(builtins.length, 7)
 
-    for (const name of EXPECTED_BUILTIN_NAMES.filter((candidate) => candidate !== 'implement')) {
+    for (const name of EXPECTED_BUILTIN_NAMES) {
       const entry = tasks.find((t) => t.name === name)
       assert.ok(entry, `builtin ${name} should be listed`)
       assert.equal(entry.source, 'builtin')
       assert.equal(entry.path, BUILTIN_SOURCE_PATH)
     }
-    assert.equal(tasks.some((task) => task.name === 'implement'), false)
-    assert.equal(resolveTaskTarget('implement', workspace)?.name, 'implement',
-      'legacy graphs must retain exact definition resolution')
-    assert.equal(describeTask('implement', workspace)?.scheduling, 'legacy')
+    // Retired roles no longer resolve or describe at the registry surface.
+    for (const retired of RETIRED_BUILTIN_NAMES) {
+      assert.equal(resolveTaskTarget(retired, workspace), null, `retired ${retired} must not resolve`)
+      assert.equal(describeTask(retired, workspace), null, `retired ${retired} must not describe`)
+    }
   })
 
   it('resolveTaskTarget selects the builtin for unqualified builtin names', async () => {
@@ -250,7 +237,7 @@ describe('standard-library builtin injection', () => {
     await discoverTasks(workspace)
 
     const builtins = listTasks(workspace).filter((t) => t.source === 'builtin')
-    assert.equal(builtins.length, 29)
+    assert.equal(builtins.length, 7)
     for (const task of builtins) {
       const metadata = BUILTIN_METADATA[task.name]
       assert.ok(metadata, `${task.name} should have builtin metadata`)
@@ -258,18 +245,11 @@ describe('standard-library builtin injection', () => {
       assert.deepEqual(task.category, metadata.category)
     }
 
-    for (const name of ['explore', 'edit', 'oracle', 'look-at', 'code-review']) {
+    for (const name of ['explore', 'edit', 'oracle', 'code-review', 'commit', 'librarian']) {
       const described = describeTask(name, workspace)
       assert.ok(described, `${name} should be describable`)
       assert.equal(described.displayName, BUILTIN_METADATA[name].displayName)
     }
-
-    // The legacy implement entry stays describable with its curated label.
-    const implemented = describeTask('implement', workspace)
-    assert.ok(implemented)
-    assert.equal(implemented.displayName, '实施（旧版）')
-    assert.equal(implemented.scheduling, 'legacy')
-    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
   })
 
   it('rejects qualified task ids instead of parsing them', async () => {
@@ -277,26 +257,6 @@ describe('standard-library builtin injection', () => {
     await discoverTasks(workspace)
 
     assert.throws(() => resolveTaskTarget('foreman/explore', workspace), /containing '\/' are not supported/)
-  })
-
-  it('discovers representative migrated tasks with builtin provenance', async () => {
-    const workspace = makeTempDir('foreman-builtin-migrated-')
-    await discoverTasks(workspace)
-
-    const tasks = listTasks(workspace)
-    for (const name of [
-      'request-intake',
-      'propose-design',
-      'feature-point-synthesize',
-      'functional-unit-breakdown',
-      'diagnose-repro',
-      'write-failing-test',
-    ]) {
-      const entry = tasks.find((t) => t.name === name)
-      assert.ok(entry, `migrated builtin ${name} should be listed`)
-      assert.equal(entry.source, 'builtin')
-      assert.equal(entry.path, BUILTIN_SOURCE_PATH)
-    }
   })
 
   it('a registered project definition overrides a same-id builtin', async () => {
@@ -337,7 +297,7 @@ describe('standard-library builtin list/describe schemas', () => {
     const workspace = makeTempDir('foreman-builtin-describe-')
     await discoverTasks(workspace)
 
-    for (const name of ['explore', 'edit', 'oracle', 'look-at']) {
+    for (const name of ['explore', 'edit', 'oracle', 'commit']) {
       const described = describeTask(name, workspace)
       assert.ok(described, `${name} should be describable`)
       ListedDefinitionShapeSchema.parse(described)
@@ -372,13 +332,15 @@ describe('standard-library builtin list/describe schemas', () => {
 
     const defs = listTaskDefinitions(workspace)
     const builtinDefs = defs.filter((d) => d.source === 'builtin')
-    assert.equal(builtinDefs.length, 29)
-    for (const name of EXPECTED_BUILTIN_NAMES.filter((candidate) => candidate !== 'implement')) {
+    assert.equal(builtinDefs.length, 7)
+    for (const name of EXPECTED_BUILTIN_NAMES) {
       const def = defs.find((d) => d.name === name)
       assert.ok(def, `${name} should be in listTaskDefinitions`)
       assert.equal(def.source, 'builtin')
     }
-    assert.equal(defs.some((definition) => definition.name === 'implement'), false)
+    for (const retired of RETIRED_BUILTIN_NAMES) {
+      assert.equal(defs.some((definition) => definition.name === retired), false)
+    }
   })
 
   it('external project definitions carry project source metadata and are context-scoped', async () => {
@@ -674,343 +636,6 @@ describe('standard-library TaskService builtin execution', () => {
 })
 
 // ───────────────────────────────────────────────────────────────────
-// prepare-fix builtin task — definition / schema / prompt
-// ───────────────────────────────────────────────────────────────────
-
-describe('standard-library prepare-fix builtin task', () => {
-  it('registers prepare-fix as a category-decorated shallow clone and write-failing-test as the final catalog entry', () => {
-    const entry = BUILTIN_TASKS.find((e) => e.name === 'prepare-fix')
-    assert.ok(entry, 'prepare-fix should be a builtin task')
-    // BUILTIN_TASKS carries a category-decorated shallow clone, not the module
-    // singleton. The clone copies the definition and injects the category.
-    assert.equal(entry.definition.__type, 'task')
-    assert.deepEqual(entry.definition.config.category, { id: 'edit', displayLabel: '编码' })
-    assert.equal(entry.definition.sourcePath, prepareFixTask.sourcePath)
-    // Registration must not mutate the imported module singleton.
-    assert.equal(
-      (prepareFixTask.config as { category?: unknown }).category,
-      undefined,
-      'the module singleton config must stay category-free after registration',
-    )
-    assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'write-failing-test')
-  })
-
-  it('exposes a task definition with the migrated static description/permission and no runtime pin', () => {
-    assert.equal(prepareFixTask.__type, 'task')
-    assert.equal(
-      prepareFixTask.config.description,
-      'Analyze failed verification evidence and produce precise edit instructions only when the failure is credible and code repair is required.',
-    )
-    assert.equal(Object.hasOwn(prepareFixTask.config, 'agentRuntime'), false)
-    assert.equal(prepareFixTask.config.permission, 'readonly')
-    assert.deepEqual(prepareFixTask.config.instructions, [shellUsage])
-    assert.equal(prepareFixTask.sourcePath, 'lib/standard/tasks/prepare-fix.mts')
-  })
-
-  it('input schema requires implementation_context and test_report, others optional', () => {
-    const input = prepareFixTask.config.input
-    // Required fields present.
-    const ok = input.safeParse({ implementation_context: {}, test_report: {} })
-    assert.equal(ok.success, true)
-    // Optional fields accepted.
-    const withOptional = input.safeParse({
-      implementation_context: { feature_point: { ref: 'FP-001' } },
-      test_report: { passed: false },
-      edit_report: {},
-      edit_reports: [{}],
-      attempt: 2,
-    })
-    assert.equal(withOptional.success, true)
-    // Missing required fields rejected.
-    const missing = input.safeParse({ test_report: {} })
-    assert.equal(missing.success, false)
-  })
-
-  it('output schema requires status/analysis/patches/confidence with the exact status enum', () => {
-    const output = prepareFixTask.config.output
-    const ok = output.safeParse({
-      status: 'edit_required',
-      analysis: 'credible failure',
-      patches: [
-        {
-          target: { kind: 'file', value: 'src/x.ts' },
-          action: 'update',
-          instruction: 'fix x',
-          expected: 'no longer fails',
-        },
-      ],
-      confidence: 'high',
-    })
-    assert.equal(ok.success, true)
-    // Invalid status enum rejected.
-    const bad = output.safeParse({ status: 'nope', analysis: 'a', patches: [], confidence: 'high' })
-    assert.equal(bad.success, false)
-    // patches must be Change records (action enum).
-    const badPatch = output.safeParse({
-      status: 'edit_required',
-      analysis: 'a',
-      patches: [{ target: { kind: 'file', value: 'src/x.ts' }, action: 'mutate', instruction: 'i', expected: 'e' }],
-      confidence: 'low',
-    })
-    assert.equal(badPatch.success, false)
-  })
-
-  it('prompt renders the Verification Repair Planner contract with default attempt', () => {
-    const prompt = prepareFixTask.config.prompt({
-      implementation_context: { feature_point: { ref: 'FP-001' } },
-      test_report: { passed: false },
-    }) as unknown as string
-    assert.equal(typeof prompt, 'string')
-    assert.match(prompt, /Verification Repair Planner/)
-    assert.match(prompt, /edit_required/)
-    assert.match(prompt, /Attempt: 1/)
-  })
-
-  it('prompt honors an explicit attempt value', () => {
-    const prompt = prepareFixTask.config.prompt({
-      implementation_context: {},
-      test_report: {},
-      attempt: 3,
-    }) as unknown as string
-    assert.match(prompt, /Attempt: 3/)
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────
-// implement builtin task — registration / strict I/O / runtime contract
-// ───────────────────────────────────────────────────────────────────
-
-describe('standard-library implement builtin task', () => {
-  it('registers implement as a category-decorated edit builtin without mutating the module singleton', () => {
-    const entry = BUILTIN_TASKS.find((e) => e.name === 'implement')
-    assert.ok(entry, 'implement should be a builtin task')
-    assert.equal(entry.definition.__type, 'task')
-    assert.deepEqual(entry.definition.config.category, { id: 'edit', displayLabel: '编码' })
-    assert.equal(entry.definition.sourcePath, implementTask.sourcePath)
-    // The registered definition carries the legacy scheduling marker, never a
-    // profile or agentRuntime source pin.
-    assert.equal(entry.definition.config.scheduling, 'legacy')
-    assert.equal(Object.hasOwn(entry.definition.config, 'profile'), false)
-    assert.equal(Object.hasOwn(entry.definition.config, 'agentRuntime'), false)
-    // Registration must not mutate the imported module singleton.
-    assert.equal(
-      (implementTask.config as { category?: unknown }).category,
-      undefined,
-      'the module singleton config must stay category-free after registration',
-    )
-  })
-
-  it('keeps the legacy-only recovery contract (yolo permission, timeout, legacy scheduling) with no profile or agentRuntime source pin', () => {
-    assert.equal(implementTask.__type, 'task')
-    assert.equal(Object.hasOwn(implementTask.config, 'agentRuntime'), false, 'no agentRuntime source pin on the legacy definition')
-    assert.equal(Object.hasOwn(implementTask.config, 'profile'), false, 'no profile source pin on the legacy definition')
-    assert.equal(implementTask.config.permission, 'yolo')
-    assert.equal(implementTask.config.timeoutMs, 1_800_000)
-    assert.equal(implementTask.config.scheduling, 'legacy')
-    assert.equal(implementTask.sourcePath, 'lib/standard/tasks/implement.mts')
-    assert.ok(implementTask.config.instructions?.includes(shellUsage))
-  })
-
-  it('locks implement at the real registry/service surface as scheduling legacy with no profile or agentRuntime pin', async () => {
-    const workspace = makeTempDir('foreman-implement-real-surface-')
-    await discoverTasks(workspace)
-
-    // The registered registry entry is scheduling:'legacy' with no source pin.
-    const registered = BUILTIN_TASKS.find((e) => e.name === 'implement')
-    assert.ok(registered, 'implement should be a builtin task')
-    assert.equal(registered.definition.config.scheduling, 'legacy')
-    assert.equal(Object.hasOwn(registered.definition.config, 'profile'), false)
-    assert.equal(Object.hasOwn(registered.definition.config, 'agentRuntime'), false)
-
-    // The describe surface stays legacy and pin-free too.
-    const described = describeTask('implement', workspace)
-    assert.ok(described)
-    assert.equal(described.scheduling, 'legacy')
-    assert.equal(Object.hasOwn(described, 'agentRuntime'), false)
-    assert.equal(Object.hasOwn(described, 'profile'), false)
-
-    // Implement is absent from every new-work list surface.
-    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
-    assert.equal(listTaskDefinitions(workspace).some((definition) => definition.name === 'implement'), false)
-  })
-
-  it('rejects direct scheduling of the legacy implement task without ever reaching a runner', async () => {
-    const workspace = makeTempDir('foreman-legacy-implement-')
-    const hostname = osHostname()
-    const projectCwd = makeTempDir('foreman-legacy-implement-cwd-')
-    const projectDir = join(workspace, 'projects', 'app')
-    mkdirSync(projectDir, { recursive: true })
-    writeFileSync(
-      join(projectDir, 'app.fmproj'),
-      `name: app\ndescription: Test\nhosts:\n  ${hostname}: ${JSON.stringify(projectCwd)}\n`,
-      'utf-8',
-    )
-    await discoverTasks(workspace)
-
-    let startCalls = 0
-    const { TaskService } = await import('../lib/core/task/service.mts')
-    const service = new TaskService({
-      workspaceRoot: workspace,
-      operations: {
-        runner: {
-          startTaskRun: async () => {
-            startCalls += 1
-            return { id: 'run', task_run_id: 'run', hint: 'ok' }
-          },
-          cancelTaskRun: async () => ({}),
-        } as never,
-      },
-    })
-    await assert.rejects(
-      service.run({
-        taskId: 'implement',
-        project: 'app',
-        input: {
-          objective: 'large change',
-          acceptance_criteria: [{ id: 'ac-1', when: 'done', then: 'done' }],
-        },
-      }),
-      (error) => (error as { code?: string }).code === 'legacy_task_not_schedulable',
-    )
-    // New-work rejection is precise and spend-free: no runner start attempt.
-    assert.equal(startCalls, 0, 'direct legacy scheduling must not reach the runner')
-  })
-
-  it('keeps the internal allowLegacyTask flag only as a persisted-node bridge (no definition runtime pin)', async () => {
-    // The compatibility flag exists solely so GraphRunner recovery can reattach
-    // a persisted implement run that already carries a saved task_run_id. It is
-    // not a new-work scheduling path and it does not give the definition a
-    // profile/agentRuntime pin — the module contract above stays pin-free.
-    const workspace = makeTempDir('foreman-legacy-implement-recovery-')
-    const hostname = osHostname()
-    const projectCwd = makeTempDir('foreman-legacy-implement-recovery-cwd-')
-    const projectDir = join(workspace, 'projects', 'app')
-    mkdirSync(projectDir, { recursive: true })
-    writeFileSync(
-      join(projectDir, 'app.fmproj'),
-      `name: app\ndescription: Test\nhosts:\n  ${hostname}: ${JSON.stringify(projectCwd)}\n`,
-      'utf-8',
-    )
-    await discoverTasks(workspace)
-
-    const mockRunner = {
-      startTaskRun: async () => ({ id: 'legacy-run', task_run_id: 'legacy-run', hint: 'ok' }),
-      cancelTaskRun: async () => ({}),
-    }
-    const { TaskService } = await import('../lib/core/task/service.mts')
-    const service = new TaskService({
-      workspaceRoot: workspace,
-      operations: { runner: mockRunner as never },
-    })
-    const result = await service.run({
-      taskId: 'implement',
-      project: 'app',
-      input: {
-        objective: 'resume old node',
-        acceptance_criteria: [{ id: 'ac-1', when: 'done', then: 'done' }],
-      },
-      allowLegacyTask: true,
-    })
-    assert.ok('task_run_id' in result)
-    assert.equal(result.task_run_id, 'legacy-run')
-  })
-
-  it('input schema requires objective and acceptance_criteria, others optional', () => {
-    const input = implementTask.config.input
-    const ok = input.safeParse({
-      objective: 'Add a retry helper',
-      context: 'Optional context',
-      scope: ['src/retry.ts'],
-      constraints: ['No new dependencies'],
-      acceptance_criteria: [
-        { id: 'ac-1', given: 'a failing operation', when: 'calling retry', then: 'it retries up to 3 times' },
-      ],
-      verification_commands: ['npm test'],
-    })
-    assert.equal(ok.success, true)
-    // Minimal input parses.
-    const minimal = input.safeParse({
-      objective: 'Add a retry helper',
-      acceptance_criteria: [{ id: 'ac-1', when: 'calling retry', then: 'it retries' }],
-    })
-    assert.equal(minimal.success, true)
-    // Missing objective rejected.
-    assert.equal(
-      input.safeParse({ acceptance_criteria: [{ id: 'ac-1', when: 'w', then: 't' }] }).success,
-      false,
-    )
-    // Empty acceptance_criteria rejected (min 1).
-    assert.equal(
-      input.safeParse({ objective: 'x', acceptance_criteria: [] }).success,
-      false,
-    )
-  })
-
-  it('output schema is strict and bounded with the exact status enum', () => {
-    const output = implementTask.config.output
-    const ok = output.safeParse({
-      status: 'completed',
-      summary: 'Implemented the retry helper.',
-      changes: [{ path: 'src/retry.ts', summary: 'Added retry helper' }],
-      verification: [{ command: 'npm test', status: 'passed', summary: 'All tests pass' }],
-      remaining_issues: [],
-    })
-    assert.equal(ok.success, true)
-    // Unknown status enum rejected.
-    assert.equal(
-      output.safeParse({
-        status: 'done',
-        summary: 'x',
-        changes: [],
-        verification: [],
-        remaining_issues: [],
-      }).success,
-      false,
-    )
-    // Missing required fields rejected.
-    assert.equal(
-      output.safeParse({ status: 'completed', summary: 'x', verification: [], remaining_issues: [] }).success,
-      false,
-    )
-    // Strict output rejects unknown keys.
-    assert.equal(
-      output.safeParse({
-        status: 'completed',
-        summary: 'x',
-        changes: [],
-        verification: [],
-        remaining_issues: [],
-        extra: true,
-      }).success,
-      false,
-    )
-    // blocked/needs_attention are valid statuses.
-    assert.equal(
-      output.safeParse({
-        status: 'needs_attention',
-        summary: 'Incomplete',
-        changes: [],
-        verification: [],
-        remaining_issues: ['missing tests'],
-      }).success,
-      true,
-    )
-  })
-
-  it('prompt renders the continuous vertical-slice contract', () => {
-    const prompt = implementTask.config.prompt({
-      objective: 'Add a retry helper',
-      acceptance_criteria: [{ id: 'ac-1', when: 'calling retry', then: 'it retries up to 3 times' }],
-    }) as unknown as string
-    assert.equal(typeof prompt, 'string')
-    assert.match(prompt, /Implementer/)
-    assert.match(prompt, /acceptance criteria/i)
-    assert.match(prompt, /Never commit|NEVER commit/)
-    assert.match(prompt, /completed/)
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────
 // code-review builtin task — normal review-outcome boundary
 // ───────────────────────────────────────────────────────────────────
 
@@ -1085,21 +710,11 @@ describe('standard-library dispatch preset contracts', () => {
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
   })
 
-  it('VISION is high..high preserving capability/TPS/price', () => {
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.expectedTps, 20)
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.minimumTps, 8)
-    assert.equal(VISION_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 15)
-    assert.deepEqual(VISION_DISPATCH_REQUIREMENTS.requiredCapabilities, ['image'])
-  })
 
-  it('the six review builtins target high via REVIEW_DISPATCH_REQUIREMENTS', () => {
-    for (const name of ['code-review', 'conform-review', 'fp-review', 'fu-review', 'plan-review', 'spec-review']) {
-      const entry = BUILTIN_TASKS.find((e) => e.name === name)
-      assert.ok(entry, `${name} should be a builtin`)
-      assert.deepEqual(entry.definition.config.dispatch, REVIEW_DISPATCH_REQUIREMENTS)
-    }
+
+  it('the review builtin targets high via REVIEW_DISPATCH_REQUIREMENTS', () => {
+    const entry = BUILTIN_TASKS.find((e) => e.name === 'code-review')
+    assert.ok(entry, 'code-review should be a builtin')
+    assert.deepEqual(entry.definition.config.dispatch, REVIEW_DISPATCH_REQUIREMENTS)
   })
 })

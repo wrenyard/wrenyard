@@ -1,4 +1,0 @@
-{
-  "check_id": "transport-retry-1",
-  "problem": "Retry count is unbounded."
-}

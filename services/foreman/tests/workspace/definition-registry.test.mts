@@ -92,7 +92,7 @@ describe('workspace definition registry', () => {
     const tasks = listTasks(workspace)
     // Builtins and project definitions coexist as plain ids; list returns
     // one effective definition per id.
-    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 29)
+    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 7)
     // Project definitions require project context to be selected.
     const appTasks = listTasks(workspace, 'app')
     assert.equal(appTasks.some((task) => task.name === 'probe' && task.source === 'project'), true)
@@ -534,30 +534,6 @@ export default defineTask(config)
     const errors = getLoadErrors(workspace)
     assert.ok(errors.some((error) => /agentRuntime|profile/u.test(error.load_error)),
       errors.map((e) => e.load_error).join('; '))
-  })
-
-  it('registers the builtin scheduling:legacy implement pin-free and keeps it out of new-work surfaces', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-legacy-builtin-')
-    await discoverTasks(workspace)
-
-    // Builtin injection must not require any source runtime pin: the legacy
-    // implement registers exactly like the no-pin invariant.
-    assert.equal(getLoadErrors(workspace).length, 0)
-
-    // ...but remains resolvable/describable for persisted-run recovery.
-    assert.equal(resolveTaskTarget('implement', workspace)?.source, 'builtin')
-    const described = describeTask('implement', workspace)
-    assert.ok(described, 'builtin legacy implement must be describable for recovery')
-    assert.equal(described.scheduling, 'legacy')
-    assert.equal('profile' in described, false, 'legacy describe surfaces must not expose a source profile pin')
-    assert.equal('agentRuntime' in described, false)
-    const found = findTaskDefinition('implement', workspace)
-    assert.ok(found, 'builtin legacy implement must remain findable for recovery')
-    assert.equal('profile' in found, false)
-
-    // ...and is omitted from new-work list surfaces.
-    assert.equal(listTasks(workspace).some((task) => task.name === 'implement'), false)
-    assert.equal(listTaskDefinitions(workspace).some((task) => task.name === 'implement'), false)
   })
 
   it('registers a pin-free current source-authored scheduling:legacy definition for recovery only', async () => {

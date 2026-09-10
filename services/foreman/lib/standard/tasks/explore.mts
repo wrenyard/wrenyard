@@ -45,7 +45,7 @@ Answer every question using direct evidence gathered from the declared targets. 
 
 ## Workflow
 1. Read the goal and every question. Treat the questions as the driving problem — each must end as \`answered\`, \`unanswered\`, or \`blocked\`.
-2. Investigate the declared targets only. Prefer targeted reads and searches; avoid broad or generated directories.
+2. Investigate the declared targets only. Prefer rg, targeted reads, and bounded git log/diff for code or history; read note bodies when investigating documents. Avoid broad or generated directories. For failures, trace evidence to a concrete cause and state uncertainty; no mandatory decomposition stages.
 3. As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target, and an \`observation\`.
 4. Derive \`findings\` from the evidence pool. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
 5. For every input question, produce exactly one result with the same \`question_id\`:
@@ -77,9 +77,8 @@ Shape:
  * (open `Target`) + optional `constraints`; output is `results` (one entry
  * per question, status answered|unanswered|blocked) plus a pooled
  * `evidences` set with derived `findings`. Permission is always
- * `readonly`. Domain explore tasks (explore-code / explore-commit) are
- * sibling direct definitions that narrow `targets` and the
- * evidence/finding `source`/`targets` to a domain Target subtype.
+ * `readonly`. Code, history, notes, and diagnostic investigation share this definition.
+ * Domain-specific targets remain accepted by the open Target schema.
  */
 
 // ─── Direct I/O schemas (canonical concept references) ───────────
@@ -164,7 +163,7 @@ const definition: TaskDefinition = {
   __type: 'task',
   config: {
     description:
-      'Problem-driven read-only exploration. Investigates targets against a goal and questions, pooling evidences and findings, and answers each question as answered/unanswered/blocked.',
+      'Read-only investigation of code, Git history, notes, logs, or other declared targets. Answer concrete questions with evidence; diagnose causes without editing or requiring a staged workflow.',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [],

@@ -101,7 +101,29 @@ Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
 - `wrenyard desktop` — launch the 啾啾工坊 Desktop product shell
 - `wrenyard doctor` — check the local install and report problems
 - `wrenyard service` — manage the control-plane service
-- `wrenyard task` — schedule and track task-graph work
+- `wrenyard task` — delegate and track bounded project work
+
+## Builtin tasks
+
+Seven reusable roles share the same task runtime and automatic cost, speed,
+and capability selection:
+
+| Task | Work to delegate |
+| --- | --- |
+| `explore` | Investigate code, Git history, notes, logs, and concrete failures |
+| `edit` | Implement bounded file changes, including fixes and test code |
+| `test` | Run verification and report evidence |
+| `code-review` | Review correctness and conformance to supplied requirements |
+| `commit` | Commit the declared changes locally |
+| `librarian` | Research external documentation and sources |
+| `oracle` | Analyze difficult technical questions and tradeoffs |
+
+Use `wrenyard task list` and `wrenyard task describe <id>` for current contracts.
+Choose roles as needed; no FP/FU/IU pipeline or staged debugging workflow is
+required. Retired roles (including the old `implement` and `look-at` builtins)
+are removed rather than hidden behind aliases. Existing run records remain
+readable; restarting work that names a retired task requires a current role.
+Project-authored tasks remain available.
 
 ## Uninstall and rollback
 
