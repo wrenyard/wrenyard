@@ -166,11 +166,10 @@ export interface CandidateInput {
   effectiveTps: number;
   intelligenceRank: number;
   intelligenceMinRank: number;
-  intelligenceMaxRank: number;
   /**
    * Optional expected intelligence rank. When present it must be an integer
-   * within [intelligenceMinRank, intelligenceMaxRank]; it shifts the
-   * intelligence factor I to reward matching (or exceeding) the expected rank.
+   * in [intelligenceMinRank, 3]; it shifts the intelligence factor I to reward
+   * matching (or exceeding) the expected rank.
    */
   intelligenceExpectedRank?: number;
   /** Required quota constraints; missing/invalid evidence leaves coverage incomplete. */
@@ -660,7 +659,6 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     effectiveTps: input.effectiveTps,
     intelligenceRank: input.intelligenceRank,
     intelligenceMinRank: input.intelligenceMinRank,
-    intelligenceMaxRank: input.intelligenceMaxRank,
     intelligenceExpectedRank: input.intelligenceExpectedRank,
     requiredQuota,
     marginalPrice,
@@ -744,47 +742,42 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     return rejected(snapshotId, canonicalId, "speed_below_minimum", "effective TPS is below the minimum TPS");
   }
 
-  // Intelligence ranks are fixed integers on the closed 0..3 scale. min must not
-  // exceed max; the model rank and any optional expected rank must be integers
-  // in [0, 3] and within [min, max]; otherwise the candidate is rejected.
+  // Intelligence ranks are fixed integers on the closed 0..3 scale. The model
+  // rank and any optional expected rank must be integers in [0, 3]; the model
+  // rank must additionally meet the intelligence minimum, otherwise the
+  // candidate is rejected.
   if (
     !Number.isInteger(candidate.intelligenceRank) ||
     !Number.isInteger(candidate.intelligenceMinRank) ||
-    !Number.isInteger(candidate.intelligenceMaxRank) ||
     candidate.intelligenceMinRank < 0 ||
-    candidate.intelligenceMaxRank > 3 ||
-    candidate.intelligenceMinRank > candidate.intelligenceMaxRank
+    candidate.intelligenceMinRank > 3
   ) {
     return rejected(
       snapshotId,
       canonicalId,
       "invalid_intelligence",
-      "intelligence ranks must be integers in [0, 3] with min <= max"
+      "intelligence ranks must be integers in [0, 3]"
     );
   }
-  if (
-    candidate.intelligenceRank < candidate.intelligenceMinRank ||
-    candidate.intelligenceRank > candidate.intelligenceMaxRank
-  ) {
-    return rejected(snapshotId, canonicalId, "intelligence_out_of_range", "intelligence rank is outside [min, max]");
+  if (candidate.intelligenceRank < candidate.intelligenceMinRank || candidate.intelligenceRank > 3) {
+    return rejected(snapshotId, canonicalId, "intelligence_out_of_range", "intelligence rank is below the minimum or outside [0, 3]");
   }
-  // Hard intelligence range: intelligenceExpectedRank is absent only when
+  // Hard intelligence floor: intelligenceExpectedRank is absent only when
   // undefined; any other value (including null) must be an integer in [0, 3]
-  // and inside [min, max] or the candidate is rejected before any gate.
+  // and at or above the minimum, or the candidate is rejected before any gate.
   const expectedRank = candidate.intelligenceExpectedRank;
   if (expectedRank !== undefined) {
     if (
       !Number.isInteger(expectedRank) ||
       expectedRank < 0 ||
       expectedRank > 3 ||
-      expectedRank < candidate.intelligenceMinRank ||
-      expectedRank > candidate.intelligenceMaxRank
+      expectedRank < candidate.intelligenceMinRank
     ) {
       return rejected(
         snapshotId,
         canonicalId,
         "invalid_intelligence",
-        "intelligence expected rank must be an integer in [0, 3] within [min, max]"
+        "intelligence expected rank must be an integer in [0, 3] at or above the minimum"
       );
     }
   }
@@ -966,11 +959,11 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
   const speedFactor = clamp01(candidate.effectiveTps / 200);
 
   // Normalized intelligence factor I in [0, 1]. When an expected rank is
-  // supplied (already validated as an integer inside [min, max]), I rewards
-  // matching or exceeding it and penalizes deviation: d = model - expected,
-  // smaller penalty (0.10 per step) when the model beats expected, larger
-  // penalty (0.25 per step) when it falls short. Without an expected rank, I is
-  // the model rank normalized over the 0..3 scale.
+  // supplied (already validated as an integer at or above the minimum), I
+  // rewards matching or exceeding it and penalizes deviation: d = model -
+  // expected, smaller penalty (0.10 per step) when the model beats expected,
+  // larger penalty (0.25 per step) when it falls short. Without an expected
+  // rank, I is the model rank normalized over the 0..3 scale.
   let intelligenceFactor: number;
   if (expectedRank !== undefined && expectedRank !== null) {
     const d = candidate.intelligenceRank - expectedRank;

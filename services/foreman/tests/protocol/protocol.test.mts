@@ -214,7 +214,7 @@ describe('lib/protocol JSON-RPC contract', () => {
       automatic: {
         expected_tps: 30,
         intelligence_min: 'mid',
-        intelligence_max: 'premium',
+        intelligence_expected: 'high',
       },
     }
     assert.deepEqual(parseMethodParams('task.run.create', {
@@ -676,7 +676,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         expectedTps: 20,
         minimumTps: 10,
         intelligenceMin: 'high',
-        intelligenceMax: 'premium',
+        intelligenceExpected: 'premium',
         maxOutputUsdPerMillion: 5,
         requiredCapabilities: ['text'],
         excludeModelIds: ['model-old'],
@@ -1414,7 +1414,6 @@ describe('lib/protocol JSON-RPC contract', () => {
             expected_tps: { value: 20, source: 'builtin' },
             minimum_tps: { value: 10, source: 'builtin' },
             intelligence_min: { value: null, source: 'system' },
-            intelligence_max: { value: null, source: 'system' },
             intelligence_expected: { value: null, source: 'system' },
             max_output_usd_per_million: { value: null, source: 'system' },
             required_capabilities: { value: null, source: 'system' },
@@ -1704,7 +1703,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         expectedTps: 20,
         minimumTps: 10,
         intelligenceMin: 'high',
-        intelligenceMax: 'premium',
+        intelligenceExpected: 'premium',
         maxOutputUsdPerMillion: 5,
         requiredCapabilities: ['text'],
         excludeModelIds: ['model-old'],
@@ -1713,7 +1712,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         excludeProviderIds: ['provider-old'],
       },
     }
-    const frontierSummary = { ...dispatchSummary, dispatch: { ...dispatchSummary.dispatch, intelligenceMax: 'frontier' } }
+    const frontierSummary = { ...dispatchSummary, dispatch: { ...dispatchSummary.dispatch, intelligenceExpected: 'frontier' } }
     const frontierDetail = {
       ...dispatchSummary,
       path: '/tmp/dispatch.task.ts',
@@ -1765,8 +1764,7 @@ describe('lib/protocol JSON-RPC contract', () => {
             expected_tps: { value: null, source: 'system' },
             minimum_tps: { value: null, source: 'system' },
             intelligence_min: { value: null, source: 'system' },
-            intelligence_max: { value: 'frontier', source: 'system' },
-            intelligence_expected: { value: null, source: 'system' },
+            intelligence_expected: { value: 'frontier', source: 'system' },
             max_output_usd_per_million: { value: null, source: 'system' },
             required_capabilities: { value: null, source: 'system' },
             exclude_model_ids: { value: null, source: 'system' },
@@ -1792,7 +1790,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         scope: 'task',
         task_id: 'commit',
         expected_revision: 'rev-1',
-        patch: { automatic: { intelligence_max: 'frontier' } },
+        patch: { automatic: { intelligence_expected: 'frontier' } },
       }),
       (error) => {
         assertProtocolError(error, INVALID_PARAMS.code)

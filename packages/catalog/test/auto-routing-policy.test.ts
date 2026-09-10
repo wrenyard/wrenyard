@@ -99,7 +99,6 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
     effectiveTps: 25,
     intelligenceRank: 3,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     requiredQuota: [q("monthly", fullCycleEv(60, 0.5))],
     marginalPrice: null,
     verifiedEfficiency: null,
@@ -549,7 +548,7 @@ test("invalid candidates and fields reject with machine reasons", () => {
     "intelligence_out_of_range"
   );
   expectRejected(
-    cand({ intelligenceMinRank: 9, intelligenceMaxRank: 5 }),
+    cand({ intelligenceMinRank: 9 }),
     "invalid_intelligence"
   );
   expectRejected(
@@ -739,17 +738,17 @@ test("unknown tier uses neutral headroom 0.5 for Q; verified efficiency blends i
 test("intelligence factor I rewards exact expected, tiers above/below, and absent ranks 0..1/3..1", () => {
   // exact: model rank equals expected -> I=1
   const exact = expectAccepted(
-    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceExpectedRank: 2 })
   );
   close(exact!.intelligenceFactor, 1, 1e-12, "exact I=1");
   // one tier above expected (rank 3 vs 2): d=1 -> penalty 0.1 -> I=0.9
   const above = expectAccepted(
-    cand({ intelligenceRank: 3, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+    cand({ intelligenceRank: 3, intelligenceMinRank: 0, intelligenceExpectedRank: 2 })
   );
   close(above!.intelligenceFactor, 0.9, 1e-12, "one above I=0.9");
   // one tier below expected (rank 1 vs 2): d=-1 -> penalty 0.25 -> I=0.75
   const below = expectAccepted(
-    cand({ intelligenceRank: 1, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+    cand({ intelligenceRank: 1, intelligenceMinRank: 0, intelligenceExpectedRank: 2 })
   );
   close(below!.intelligenceFactor, 0.75, 1e-12, "one below I=0.75");
   // absent expected rank: I = rank/3
@@ -760,25 +759,31 @@ test("intelligence factor I rewards exact expected, tiers above/below, and absen
     [3, 1],
   ] as const) {
     const a = expectAccepted(
-      cand({ intelligenceRank: rank, intelligenceMinRank: 0, intelligenceMaxRank: 3 })
+      cand({ intelligenceRank: rank, intelligenceMinRank: 0 })
     );
     close(a!.intelligenceFactor, expectedI, 1e-12, `absent I rank ${rank}`);
   }
 });
 
-test("intelligenceExpectedRank outside [min,max] or non-integer is rejected", () => {
+test("intelligenceExpectedRank below the minimum or non-integer is rejected", () => {
   expectRejected(
-    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 5 }),
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceExpectedRank: 5 }),
     "invalid_intelligence"
   );
   expectRejected(
-    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: -1 }),
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceExpectedRank: -1 }),
     "invalid_intelligence"
   );
   expectRejected(
-    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 1.5 }),
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceExpectedRank: 1.5 }),
     "invalid_intelligence"
   );
+  // An expected rank above the old ceiling stays admissible: there is no
+  // configurable maximum intelligence band.
+  const premium = expectAccepted(
+    cand({ intelligenceRank: 3, intelligenceMinRank: 2, intelligenceExpectedRank: 3 })
+  );
+  close(premium!.intelligenceFactor, 1, 1e-12, "premium above old high ceiling");
 });
 
 test("minimum TPS gate rejects regardless of other strengths", () => {
@@ -1175,7 +1180,6 @@ test("expected premium ranks the eligible premium candidate above a cheaper fast
     effectiveCapUsdPerM: 40,
     intelligenceRank: 3,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const high = cand({
@@ -1185,7 +1189,6 @@ test("expected premium ranks the eligible premium candidate above a cheaper fast
     effectiveTps: 200,
     intelligenceRank: 2,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const result = rankAutoRoutingCandidates([high, premium])
@@ -1199,7 +1202,6 @@ test("expected premium falls back to the eligible high when premium is blocked b
     canonicalId: "premium-blocked",
     intelligenceRank: 3,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
     requiredQuota: [q("z", rollingEv(0))],
   })
@@ -1209,7 +1211,6 @@ test("expected premium falls back to the eligible high when premium is blocked b
     effectiveCapUsdPerM: 10,
     intelligenceRank: 2,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const result = rankAutoRoutingCandidates([high, premiumBlocked])
@@ -1222,14 +1223,12 @@ test("intelligenceMin high excludes a mid candidate and keeps the eligible high"
     canonicalId: "mid-excluded",
     intelligenceRank: 1,
     intelligenceMinRank: 2,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const high = cand({
     canonicalId: "high-ok",
     intelligenceRank: 2,
     intelligenceMinRank: 2,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const result = rankAutoRoutingCandidates([mid, high])
@@ -1247,7 +1246,6 @@ test("same expectation keeps the score tie-break and deterministic canon order",
     effectiveCapUsdPerM: 10,
     intelligenceRank: 1,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 1,
   })
   const pricier = cand({
@@ -1256,7 +1254,6 @@ test("same expectation keeps the score tie-break and deterministic canon order",
     effectiveCapUsdPerM: 10,
     intelligenceRank: 1,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 1,
   })
   const result = rankAutoRoutingCandidates([pricier, cheaper])
@@ -1277,7 +1274,6 @@ test("selected candidate below expected surfaces an intelligence_below_expected 
     canonicalId: "premium-blocked",
     intelligenceRank: 3,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
     requiredQuota: [q("z", rollingEv(0))],
   })
@@ -1287,7 +1283,6 @@ test("selected candidate below expected surfaces an intelligence_below_expected 
     effectiveCapUsdPerM: 10,
     intelligenceRank: 2,
     intelligenceMinRank: 0,
-    intelligenceMaxRank: 3,
     intelligenceExpectedRank: 3,
   })
   const result = rankAutoRoutingCandidates([high, premiumBlocked])
@@ -1307,7 +1302,6 @@ test("all factors and the score stay within [0,1]", () => {
       effectiveTps: 0,
       intelligenceRank: 0,
       intelligenceMinRank: 0,
-      intelligenceMaxRank: 3,
       requiredQuota: [q("u", fullCycleEv(90, 1))],
     })
   )!;

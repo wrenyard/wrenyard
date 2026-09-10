@@ -1481,22 +1481,19 @@ export class TaskSettingsService {
       capUsdPerM,
       minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
       intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
-      intelligenceMaxRank: intelligenceRankOf(params.requirements.intelligenceMax, INTELLIGENCE_ORDER.premium),
       intelligenceExpectedRank: (() => {
         const expectedTier = params.requirements.intelligenceExpected
         if (expectedTier !== undefined) {
           return intelligenceRankOf(expectedTier, INTELLIGENCE_ORDER.premium)
         }
-        // Missing expectation defaults to `mid`, clamped to the effective hard
-        // min/max so it is always an admissible target (consistent with the
-        // settings resolver, which also defaults to `mid`).
+        // Missing expectation defaults to `mid`, clamped upward to the
+        // effective hard minimum so it is always an admissible target
+        // (consistent with the settings resolver, which also defaults to
+        // `mid`). There is no configurable ceiling.
         let resolved: IntelligenceTier = 'mid'
         const minTier = params.requirements.intelligenceMin
-        const maxTier = params.requirements.intelligenceMax
         if (minTier !== undefined && INTELLIGENCE_ORDER.mid < INTELLIGENCE_ORDER[minTier]) {
           resolved = minTier
-        } else if (maxTier !== undefined && INTELLIGENCE_ORDER.mid > INTELLIGENCE_ORDER[maxTier]) {
-          resolved = maxTier
         }
         return INTELLIGENCE_ORDER[resolved]
       })(),
@@ -1799,7 +1796,6 @@ interface AutomaticSelectionContext {
   capUsdPerM: number
   minimumTps: number
   intelligenceMinRank: number
-  intelligenceMaxRank: number
   intelligenceExpectedRank: number | undefined
 }
 
@@ -1996,7 +1992,6 @@ function toAutomaticCandidateInput(
     effectiveTps: choice.speed.effective_tps,
     intelligenceRank,
     intelligenceMinRank: context.intelligenceMinRank,
-    intelligenceMaxRank: context.intelligenceMaxRank,
     intelligenceExpectedRank: context.intelligenceExpectedRank,
     requiredQuota,
     ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
@@ -2048,7 +2043,6 @@ interface TaskSettingsEffectiveAutomaticDto {
   expected_tps: { value: number | null; source: TaskSettingsSourceLayer }
   minimum_tps: { value: number | null; source: TaskSettingsSourceLayer }
   intelligence_min: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
-  intelligence_max: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
   intelligence_expected: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
   max_output_usd_per_million: { value: number | null; source: TaskSettingsSourceLayer }
   required_capabilities: { value: Array<'text' | 'image'> | null; source: TaskSettingsSourceLayer }

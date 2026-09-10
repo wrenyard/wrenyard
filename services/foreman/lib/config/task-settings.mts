@@ -85,7 +85,6 @@ export const TASK_DISPATCH_FIELDS = [
   'expectedTps',
   'minimumTps',
   'intelligenceMin',
-  'intelligenceMax',
   'intelligenceExpected',
   'maxOutputUsdPerMillion',
   'excludeModelIds',
@@ -104,7 +103,6 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   expectedTps: ['expectedTps', 'expected_tps'],
   minimumTps: ['minimumTps', 'minimum_tps'],
   intelligenceMin: ['intelligenceMin', 'intelligence_min'],
-  intelligenceMax: ['intelligenceMax', 'intelligence_max'],
   intelligenceExpected: ['intelligenceExpected', 'intelligence_expected'],
   maxOutputUsdPerMillion: ['maxOutputUsdPerMillion', 'max_output_usd_per_million'],
   excludeModelIds: ['excludeModelIds', 'exclude_model_ids'],
@@ -123,7 +121,6 @@ const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 
 const INTELLIGENCE_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'intelligenceMin',
-  'intelligenceMax',
   'intelligenceExpected',
 ])
 
@@ -300,7 +297,6 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
   const record = raw as Record<string, unknown>
   const out: Partial<TaskDispatchRequirements> = {}
   let intelligenceMin: IntelligenceTier | undefined
-  let intelligenceMax: IntelligenceTier | undefined
   let intelligenceExpected: IntelligenceTier | undefined
 
   for (const field of TASK_DISPATCH_FIELDS) {
@@ -325,7 +321,6 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
       }
       ;(out as Record<string, unknown>)[field] = normalized
       if (field === 'intelligenceMin') intelligenceMin = normalized
-      if (field === 'intelligenceMax') intelligenceMax = normalized
       if (field === 'intelligenceExpected') intelligenceExpected = normalized
       continue
     }
@@ -356,24 +351,14 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
 
   }
 
+  // Validate the optional target against the available intelligence minimum.
+  // The target must be at or above the minimum; absent target stays absent.
   if (
+    intelligenceExpected !== undefined &&
     intelligenceMin !== undefined &&
-    intelligenceMax !== undefined &&
-    INTELLIGENCE_ORDER[intelligenceMin] > INTELLIGENCE_ORDER[intelligenceMax]
+    INTELLIGENCE_ORDER[intelligenceExpected] < INTELLIGENCE_ORDER[intelligenceMin]
   ) {
-    fail(scope, 'dispatch.intelligenceMin cannot exceed dispatch.intelligenceMax')
-  }
-
-  // Validate the optional target against the available effective range. When
-  // both bounds are present the target must sit inside [min, max]; with a single
-  // bound it must respect that bound. Absent target stays absent.
-  if (intelligenceExpected !== undefined) {
-    if (intelligenceMin !== undefined && INTELLIGENCE_ORDER[intelligenceExpected] < INTELLIGENCE_ORDER[intelligenceMin]) {
-      fail(scope, 'dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
-    }
-    if (intelligenceMax !== undefined && INTELLIGENCE_ORDER[intelligenceExpected] > INTELLIGENCE_ORDER[intelligenceMax]) {
-      fail(scope, 'dispatch.intelligenceExpected cannot exceed dispatch.intelligenceMax')
-    }
+    fail(scope, 'dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
   }
   return out
 }
@@ -541,27 +526,14 @@ function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): v
   // dropped by the reader) never participates in the order check.
   const min =
     dispatch.intelligenceMin === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceMin)
-  const max =
-    dispatch.intelligenceMax === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceMax)
   const expected =
     dispatch.intelligenceExpected === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceExpected)
   if (
+    expected !== undefined &&
     min !== undefined &&
-    max !== undefined &&
-    INTELLIGENCE_ORDER[min] > INTELLIGENCE_ORDER[max]
+    INTELLIGENCE_ORDER[expected] < INTELLIGENCE_ORDER[min]
   ) {
-    fail(
-      '',
-      'effective dispatch.intelligenceMin cannot exceed dispatch.intelligenceMax',
-    )
-  }
-  if (expected !== undefined) {
-    if (min !== undefined && INTELLIGENCE_ORDER[expected] < INTELLIGENCE_ORDER[min]) {
-      fail('', 'effective dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
-    }
-    if (max !== undefined && INTELLIGENCE_ORDER[expected] > INTELLIGENCE_ORDER[max]) {
-      fail('', 'effective dispatch.intelligenceExpected cannot exceed dispatch.intelligenceMax')
-    }
+    fail('', 'effective dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
   }
 }
 
@@ -674,18 +646,16 @@ export function resolveEffectiveTaskSettings(
   }
 
   // Implicit default expectation: when no layer defines `intelligenceExpected`,
-  // the system default expectation is `mid`. The implicit default is clamped to
-  // the effective hard min/max (e.g. a `high` minimum lifts the default to
-  // `high`) so it never violates the ordering; an explicitly configured
-  // out-of-range expectation still fails via assertEffectiveIntelligenceOrder.
+  // the system default expectation is `mid`. The implicit default is clamped
+  // upward to the effective hard minimum only (e.g. a `high` minimum lifts the
+  // default to `high`) so it never violates the ordering; there is no
+  // configurable ceiling. An explicitly configured expectation below the
+  // minimum still fails via assertEffectiveIntelligenceOrder.
   if (dispatch.intelligenceExpected === undefined) {
     let expectedTier: IntelligenceTier = 'mid'
     const minTier = dispatch.intelligenceMin
-    const maxTier = dispatch.intelligenceMax
     if (minTier !== undefined && INTELLIGENCE_ORDER.mid < INTELLIGENCE_ORDER[minTier]) {
       expectedTier = minTier
-    } else if (maxTier !== undefined && INTELLIGENCE_ORDER.mid > INTELLIGENCE_ORDER[maxTier]) {
-      expectedTier = maxTier
     }
     dispatch.intelligenceExpected = expectedTier
     dispatchSources.intelligenceExpected = 'system_global'

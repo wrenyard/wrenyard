@@ -672,9 +672,8 @@ describe('standard-library code-review outcome boundary', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library dispatch preset contracts', () => {
-  it('FREQUENT stays low..high with current TPS, price cap, and exclusions', () => {
+  it('FREQUENT stays low-minimum with current TPS, price cap, and exclusions', () => {
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
-    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 80)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.minimumTps, 60)
@@ -683,31 +682,43 @@ describe('standard-library dispatch preset contracts', () => {
     assert.ok(FREQUENT_DISPATCH_REQUIREMENTS.excludeProfileIds.length > 0)
   })
 
-  it('GENERAL stays mid..high with current economics', () => {
+  it('GENERAL stays mid-minimum with current economics', () => {
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceMin, 'mid')
-    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.expectedTps, 40)
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.minimumTps, 20)
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 18)
   })
 
-  it('REVIEW is high..premium with the review TPS/price and no unrelated exclusions', () => {
+  it('REVIEW is high-minimum with the review TPS/price and no unrelated exclusions', () => {
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
-    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceMax, 'premium')
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.expectedTps, 40)
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.minimumTps, 20)
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
   })
 
-  it('ULTRA is high..premium preserving TPS/price', () => {
+  it('ULTRA is high-minimum preserving TPS/price', () => {
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
-    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMax, 'premium')
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceExpected, 'premium')
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.expectedTps, 20)
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.minimumTps, 8)
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
+  })
+
+  it('no builtin preset carries a configurable maximum intelligence ceiling', () => {
+    for (const preset of [
+      FREQUENT_DISPATCH_REQUIREMENTS,
+      GENERAL_DISPATCH_REQUIREMENTS,
+      REVIEW_DISPATCH_REQUIREMENTS,
+      ULTRA_DISPATCH_REQUIREMENTS,
+    ]) {
+      assert.equal(
+        (preset as { intelligenceMax?: unknown }).intelligenceMax,
+        undefined,
+        'a retired maximum intelligence ceiling must not be present',
+      )
+    }
   })
 
 

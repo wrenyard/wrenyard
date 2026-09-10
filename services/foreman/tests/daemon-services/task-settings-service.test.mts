@@ -1962,7 +1962,7 @@ describe('daemon task-settings-service (no-model)', () => {
           available: true, freeSupply,
         }),
       }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {
-        dispatch: { expectedTps: 80, minimumTps: 60, maxOutputUsdPerMillion: 6, intelligenceMin: 'low', intelligenceMax: 'high', intelligenceExpected: 'low' },
+        dispatch: { expectedTps: 80, minimumTps: 60, maxOutputUsdPerMillion: 6, intelligenceMin: 'low', intelligenceExpected: 'low' },
         timeoutMs: 60_000,
       } })
       assert.equal(selected.exactAgentRuntime, exactAgentRuntime)

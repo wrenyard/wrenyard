@@ -204,10 +204,10 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   }
 
   // Reject legacy alias keys explicitly rather than silently accepting them.
-  for (const legacyKey of ['intelligence', 'maximumOutputUsdPerMillion', 'exclusions'] as const) {
+  for (const legacyKey of ['intelligence', 'intelligenceMax', 'intelligence_max', 'maximumOutputUsdPerMillion', 'exclusions'] as const) {
     if (legacyKey in raw) {
       throw new Error(
-        `${sourcePath} task config dispatch.${legacyKey} is no longer supported; use the current TaskDispatchRequirements shape (expectedTps/minimumTps, intelligenceMin/intelligenceMax, maxOutputUsdPerMillion, excludeModelIds/excludeProfileIds/excludeClientIds/excludeProviderIds, requiredCapabilities)`,
+        `${sourcePath} task config dispatch.${legacyKey} is no longer supported; use the current TaskDispatchRequirements shape (expectedTps/minimumTps, intelligenceMin/intelligenceExpected, maxOutputUsdPerMillion, excludeModelIds/excludeProfileIds/excludeClientIds/excludeProviderIds, requiredCapabilities)`,
       )
     }
   }
@@ -236,7 +236,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     expectedTps,
     minimumTps,
     raw.intelligenceMin,
-    raw.intelligenceMax,
     raw.intelligenceExpected,
     maxOutputUsdPerMillion,
     requiredCapabilities,
@@ -248,7 +247,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   ].some((value) => value !== undefined)
   if (!hasRecognizedHardRequirement) {
     throw new Error(
-      `${sourcePath} task config dispatch must declare at least one hard requirement (expectedTps/minimumTps, intelligenceMin/intelligenceMax, maxOutputUsdPerMillion, requiredCapabilities, or an exclude* axis)`,
+      `${sourcePath} task config dispatch must declare at least one requirement (expectedTps/minimumTps, intelligenceMin/intelligenceExpected, maxOutputUsdPerMillion, requiredCapabilities, or an exclude* axis)`,
     )
   }
 
@@ -280,13 +279,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   if (raw.intelligenceMin !== undefined && normalizedIntelligenceMin === undefined) {
     throw new Error(`${sourcePath} task config dispatch.intelligenceMin must be one of: low, mid, high, premium`)
   }
-  const normalizedIntelligenceMax =
-    raw.intelligenceMax !== undefined && typeof raw.intelligenceMax === 'string'
-      ? normalizeIntelligenceTier(raw.intelligenceMax)
-      : undefined
-  if (raw.intelligenceMax !== undefined && normalizedIntelligenceMax === undefined) {
-    throw new Error(`${sourcePath} task config dispatch.intelligenceMax must be one of: low, mid, high, premium`)
-  }
   const normalizedIntelligenceExpected =
     raw.intelligenceExpected !== undefined && typeof raw.intelligenceExpected === 'string'
       ? normalizeIntelligenceTier(raw.intelligenceExpected)
@@ -295,29 +287,11 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     throw new Error(`${sourcePath} task config dispatch.intelligenceExpected must be one of: low, mid, high, premium`)
   }
   if (
-    raw.intelligenceMin !== undefined &&
-    raw.intelligenceMax !== undefined &&
+    normalizedIntelligenceExpected !== undefined &&
     normalizedIntelligenceMin !== undefined &&
-    normalizedIntelligenceMax !== undefined &&
-    INTELLIGENCE_ORDER[normalizedIntelligenceMin as IntelligenceTier] > INTELLIGENCE_ORDER[normalizedIntelligenceMax as IntelligenceTier]
+    INTELLIGENCE_ORDER[normalizedIntelligenceExpected as IntelligenceTier] < INTELLIGENCE_ORDER[normalizedIntelligenceMin as IntelligenceTier]
   ) {
-    throw new Error(
-      `${sourcePath} task config dispatch.intelligenceMin (${String(raw.intelligenceMin)}) must be <= intelligenceMax (${String(raw.intelligenceMax)})`,
-    )
-  }
-  if (normalizedIntelligenceExpected !== undefined) {
-    if (
-      normalizedIntelligenceMin !== undefined &&
-      INTELLIGENCE_ORDER[normalizedIntelligenceExpected as IntelligenceTier] < INTELLIGENCE_ORDER[normalizedIntelligenceMin as IntelligenceTier]
-    ) {
-      throw new Error(`${sourcePath} task config dispatch.intelligenceExpected cannot be below intelligenceMin`)
-    }
-    if (
-      normalizedIntelligenceMax !== undefined &&
-      INTELLIGENCE_ORDER[normalizedIntelligenceExpected as IntelligenceTier] > INTELLIGENCE_ORDER[normalizedIntelligenceMax as IntelligenceTier]
-    ) {
-      throw new Error(`${sourcePath} task config dispatch.intelligenceExpected cannot exceed intelligenceMax`)
-    }
+    throw new Error(`${sourcePath} task config dispatch.intelligenceExpected cannot be below intelligenceMin`)
   }
 
   if (maxOutputUsdPerMillion !== undefined) {

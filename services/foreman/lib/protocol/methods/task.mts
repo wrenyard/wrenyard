@@ -32,7 +32,6 @@ export interface TaskDispatchRequirements {
   expectedTps?: number
   minimumTps?: number
   intelligenceMin?: 'low' | 'mid' | 'high' | 'premium'
-  intelligenceMax?: 'low' | 'mid' | 'high' | 'premium'
   intelligenceExpected?: 'low' | 'mid' | 'high' | 'premium'
   maxOutputUsdPerMillion?: number
   requiredCapabilities?: readonly ('text' | 'image')[]
@@ -238,7 +237,6 @@ const taskDispatchRequirementsSchema = {
     expectedTps: { type: 'number', exclusiveMinimum: 0 },
     minimumTps: { type: 'number', exclusiveMinimum: 0 },
     intelligenceMin: { enum: ['low', 'mid', 'high', 'premium'] },
-    intelligenceMax: { enum: ['low', 'mid', 'high', 'premium'] },
     intelligenceExpected: { enum: ['low', 'mid', 'high', 'premium'] },
     maxOutputUsdPerMillion: { type: 'number', exclusiveMinimum: 0 },
     requiredCapabilities: { type: 'array', items: { enum: ['text', 'image'] } },
@@ -594,7 +592,6 @@ export interface TaskSettingsAutomaticDispatch {
   expected_tps?: number
   minimum_tps?: number
   intelligence_min?: TaskSettingsIntelligence
-  intelligence_max?: TaskSettingsIntelligence
   intelligence_expected?: TaskSettingsIntelligence
   max_output_usd_per_million?: number
   required_capabilities?: readonly TaskSettingsCapability[]
@@ -641,7 +638,6 @@ export interface TaskSettingsEffectiveAutomatic {
   expected_tps: TaskSettingsSourcedValue<number | null>
   minimum_tps: TaskSettingsSourcedValue<number | null>
   intelligence_min: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
-  intelligence_max: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
   intelligence_expected: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
   max_output_usd_per_million: TaskSettingsSourcedValue<number | null>
   required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>
@@ -1000,7 +996,6 @@ export const taskSettingsAutomaticDispatchSchema = {
     expected_tps: { type: 'number', exclusiveMinimum: 0 },
     minimum_tps: { type: 'number', exclusiveMinimum: 0 },
     intelligence_min: taskSettingsIntelligenceSchema,
-    intelligence_max: taskSettingsIntelligenceSchema,
     intelligence_expected: taskSettingsIntelligenceSchema,
     max_output_usd_per_million: { type: 'number', exclusiveMinimum: 0 },
     required_capabilities: { type: 'array', items: taskSettingsCapabilitySchema },
@@ -1024,7 +1019,6 @@ const taskSettingsAutomaticPatchSchema = {
     expected_tps: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     minimum_tps: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     intelligence_min: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
-    intelligence_max: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
     intelligence_expected: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
     max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
@@ -1171,7 +1165,6 @@ const taskSettingsEffectiveAutomaticSchema = {
     'expected_tps',
     'minimum_tps',
     'intelligence_min',
-    'intelligence_max',
     'intelligence_expected',
     'max_output_usd_per_million',
     'required_capabilities',
@@ -1184,7 +1177,6 @@ const taskSettingsEffectiveAutomaticSchema = {
     expected_tps: taskSettingsSourcedNullableNumberSchema,
     minimum_tps: taskSettingsSourcedNullableNumberSchema,
     intelligence_min: taskSettingsSourcedIntelligenceSchema,
-    intelligence_max: taskSettingsSourcedIntelligenceSchema,
     intelligence_expected: taskSettingsSourcedIntelligenceSchema,
     max_output_usd_per_million: taskSettingsSourcedNullableNumberSchema,
     required_capabilities: taskSettingsSourcedCapabilityArraySchema,
