@@ -920,7 +920,9 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
-  if (app.isPackaged) app.setAsDefaultProtocolClient('wrenyard');
+  // Never register the OS URL scheme during smoke: it would point the host's
+  // Launch Services / registry at the disposable packaged app path.
+  if (app.isPackaged && !SMOKE) app.setAsDefaultProtocolClient('wrenyard');
   void bootstrap().catch(async (error) => {
     console.error('[wrenyard-desktop] startup failed:', error instanceof Error ? (error.stack ?? error.message) : String(error));
     try {
