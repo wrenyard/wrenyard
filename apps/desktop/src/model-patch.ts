@@ -43,10 +43,6 @@ export async function writeModelPatch(dshHome: string, connection: WrenyardGatew
   return target;
 }
 
-export function canonicalProviderId(provider: string): string {
-  return provider === 'deepseek-official' ? 'deepseek' : provider;
-}
-
 export function defaultMcpUrl(env: NodeJS.ProcessEnv = process.env): string {
   return env.WRENYARD_MCP_URL ?? env.FOREMAN_MCP_URL ?? DEFAULT_WRENYARD_MCP_URL;
 }

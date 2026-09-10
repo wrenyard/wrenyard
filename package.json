@@ -1,6 +1,6 @@
 {
   "name": "wrenyard",
-  "version": "1.0.0-dev.23",
+  "version": "1.0.0-dev.24",
   "description": "Wrenyard — source-development preview suite for task orchestration, runtime, and desktop visualization",
   "private": true,
   "license": "MIT",
@@ -48,7 +48,7 @@
     "release:local": "node tools/release/build-local-release.mjs",
     "release:e2e": "node --test tests/install/packed-install.test.mjs",
     "release:check": "node tools/release/verify-manifest.mjs && node tools/release/verify-legal.mjs",
-    "desktop:smoke": "pnpm --filter @wrenyard/desktop run smoke",
+    "desktop:smoke": "node tools/release/smoke-desktop.mjs",
     "check": "pnpm run check:identifiers && pnpm run check:secrets && pnpm run release:check && pnpm run check:workspace && pnpm run forge:vet && pnpm run forge:test"
   },
   "devDependencies": {

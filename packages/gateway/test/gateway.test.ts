@@ -191,7 +191,7 @@ function listen(gateway: ReturnType<typeof headerFixture>) {
   return server;
 }
 
-test('opencode service providers receive app UA and forwarded session', async () => {
+test('opencode service providers receive app UA and forwarded session', async (t) => {
   let seenUA: string | null = 'unset';
   let seenSession: string | null = 'unset';
   let seenAuth: string | null = 'unset';
@@ -203,6 +203,7 @@ test('opencode service providers receive app UA and forwarded session', async ()
     return new Response('{}', { headers: { 'content-type': 'application/json' } });
   });
   const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
   await once(server, 'listening');
   const address = server.address();
   assert.ok(address && typeof address === 'object');
@@ -211,7 +212,7 @@ test('opencode service providers receive app UA and forwarded session', async ()
     headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-opencode-session': 'ses_opencode_1' },
     body: JSON.stringify({ model: 'opencode-zen/zen-public', messages: [] }),
   });
-  assert.equal(seenUA, 'wrenyard/1.0.0-dev.23');
+  assert.equal(seenUA, 'wrenyard');
   assert.equal(seenSession, 'ses_opencode_1');
   assert.equal(seenAuth, 'Bearer upstream-secret');
   server.close();

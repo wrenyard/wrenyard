@@ -9,7 +9,7 @@ const workflowPath = resolve(repoRoot, '.github', 'workflows', 'release.yml');
 const workflow = readFileSync(workflowPath, 'utf8');
 const ciWorkflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
 
-test('release.yml publishes only suite and Desktop archives', () => {
+test('release.yml publishes exactly the four suite and Desktop archives', () => {
   assert.ok(workflow.includes('for target in darwin-arm64 win32-x64'));
   assert.ok(workflow.includes('wrenyard-$version-$target-suite.zip'));
   assert.ok(workflow.includes('wrenyard-desktop-$version-$target.zip'));
@@ -20,18 +20,19 @@ test('release.yml publishes only suite and Desktop archives', () => {
   assert.ok(!workflow.includes('path.join(out'));
 });
 
+test('release.yml has no dev21 legacy special case', () => {
+  assert.ok(!workflow.includes('1.0.0-dev.21'));
+  assert.ok(!workflow.includes('expected_count=8'));
+  assert.ok(!workflow.includes('cp "$suite.sha256" "$desktop.sha256" release-assets/'));
+  assert.ok(!workflow.includes('migration sidecars'));
+});
+
 test('release.yml keeps build evidence internal and verifies it before selection', () => {
   assert.ok(workflow.includes("find artifacts -type f -name '*.sha256'"));
   assert.ok(workflow.includes('crypto.createHash("sha256")'));
   assert.ok(workflow.includes('transient CI evidence'));
   assert.ok(!workflow.includes('cp "$source_dir/install.sh"'));
   assert.ok(!workflow.includes('cp "$source_dir/install.ps1"'));
-});
-
-test('dev21 alone publishes migration checksum sidecars for dev20 clients', () => {
-  assert.ok(workflow.includes('if [ "$version" = "1.0.0-dev.21" ]'));
-  assert.ok(workflow.includes('cp "$suite.sha256" "$desktop.sha256" release-assets/'));
-  assert.ok(workflow.includes('expected_count=8'));
 });
 
 test('release.yml never writes signed from certificate secret presence', () => {
@@ -42,6 +43,22 @@ test('release.yml never writes signed from certificate secret presence', () => {
   assert.ok(!workflow.includes('WIN_CERT_BASE64'));
 });
 
+test('workflow_dispatch runs preflight without publishing', () => {
+  // Manual dispatch is the preflight path: it validates the real packages but
+  // must never create a tag or a release.
+  assert.ok(/^  workflow_dispatch:/m.test(workflow));
+  assert.ok(workflow.includes("if: github.event_name == 'push'"));
+  assert.ok(!workflow.includes('gh release delete'));
+});
+
+test('release.yml keeps the tag-version check on tag push only', () => {
+  // The guard compares GITHUB_REF_NAME against v<package version> and is
+  // limited to the push event, since a manual dispatch has no tag.
+  assert.ok(workflow.includes('GITHUB_REF_NAME'));
+  assert.ok(workflow.includes('!='));
+  assert.ok(workflow.includes('if: github.event_name == \'push\''));
+});
+
 test('release.yml uses preview-grade ad-hoc/unsigned labels only', () => {
   // macOS is ad-hoc signed; Windows is unsigned. Both are preview-grade.
   assert.ok(workflow.includes('ad-hoc-preview'));
@@ -50,6 +67,23 @@ test('release.yml uses preview-grade ad-hoc/unsigned labels only', () => {
 
 test('release.yml keeps prerelease creation enabled', () => {
   assert.ok(workflow.includes('--prerelease'));
+});
+
+test('release.yml stages a draft and only publishes after a complete upload', () => {
+  // The draft release is created first, every public archive is uploaded to
+  // it, and only then is the draft flipped to a published prerelease.
+  assert.ok(workflow.includes('--draft'));
+  assert.ok(workflow.includes('gh release create "$TAG"'));
+  assert.ok(workflow.includes('gh release upload "$TAG"'));
+  assert.ok(workflow.includes('gh release edit "$TAG" --draft=false --prerelease'));
+});
+
+test('release.yml never deletes or overwrites an existing published release', () => {
+  // A tag that already has a release must fail safely rather than being
+  // deleted and recreated.
+  assert.ok(!workflow.includes('gh release delete'));
+  assert.ok(workflow.includes('if gh release view "$TAG"'));
+  assert.ok(workflow.includes('refusing to delete or overwrite it'));
 });
 
 test('release.yml builds exactly the two maintained targets', () => {
@@ -74,6 +108,7 @@ test('release.yml verifies the tag equals v<package version>', () => {
   // expected value.
   assert.ok(workflow.includes('GITHUB_REF_NAME'));
   assert.ok(workflow.includes('!='));
+  assert.ok(workflow.includes('Validate tag matches the root package version'));
 });
 
 test('release.yml verifies the build target via ESM platform.mjs', () => {
@@ -85,29 +120,36 @@ test('release.yml verifies the build target via ESM platform.mjs', () => {
   assert.ok(workflow.includes('.triplet'));
 });
 
-test('release.yml packs and checksums artifacts without packed-install E2E', () => {
-  // Publish must assemble one release:local tree and verify its manifests
-  // and checksums. Real installer/update E2E is optional local work
-  // (`pnpm release:e2e`) and must not block a prerelease.
+test('release.yml runs required native checks, Desktop smoke and packed-install E2E', () => {
+  // Publish must assemble one release:local tree, verify its manifests and
+  // checksums, smoke the Desktop build, then run the packed-install release
+  // E2E against the staged release directory before anything is published.
+  assert.ok(workflow.includes('run: pnpm check'));
+  assert.ok(!workflow.includes('run: pnpm build'));
+  assert.ok(workflow.includes('pnpm audit --prod --audit-level high'));
+  assert.ok(workflow.includes('run: pnpm desktop:smoke'));
   assert.ok(workflow.includes('run: pnpm release:local'));
+  assert.ok(workflow.includes('run: pnpm release:e2e'));
+  assert.ok(workflow.includes('WRENYARD_E2E_RELEASE_DIR: ${{ github.workspace }}/.artifacts/release'));
   assert.ok(workflow.includes('node tools/release/verify-manifest.mjs'));
   assert.equal(
     workflow.split('pnpm release:local').length - 1,
     1,
     'release.yml must contain exactly one pnpm release:local build step',
   );
-  assert.ok(!workflow.includes('run: pnpm release:e2e'));
-  assert.ok(!/^\s+WRENYARD_E2E_RELEASE_DIR:/m.test(workflow));
 });
 
 test('release.yml runs packaging gates before release creation', () => {
-  // identifiers, secrets, legal, build, and release:local must all run
-  // before the prerelease is created.
+  // identifiers, secrets, legal, the native check, audit, release:local,
+  // Desktop smoke and release:e2e must all run before the draft is created.
   assert.ok(workflow.includes('check:identifiers'));
   assert.ok(workflow.includes('check:secrets'));
   assert.ok(workflow.includes('release:legal'));
-  assert.ok(workflow.includes('pnpm build'));
+  assert.ok(workflow.includes('run: pnpm check'));
+  assert.ok(workflow.includes('pnpm audit --prod --audit-level high'));
+  assert.ok(workflow.includes('pnpm desktop:smoke'));
   assert.ok(workflow.includes('pnpm release:local'));
+  assert.ok(workflow.includes('pnpm release:e2e'));
 });
 
 test('artifact checksum verification uses the cross-platform Node runtime', () => {
@@ -136,15 +178,17 @@ test('routine CI never builds or uploads release packages', () => {
   assert.ok(!ciWorkflow.includes('.artifacts/release'));
 });
 
-test('release hop artifacts are short-lived and deleted after publish', () => {
+test('release hop artifacts are short-lived and deleted after staging/publication', () => {
   // Actions artifacts are only a job-to-job hop. Durable product is the
   // GitHub Release. Free-org included artifact storage is 500 MB and is
-  // shared with Packages; the two large platform packs must not linger.
+  // shared with Packages; the two large platform packs must not linger, and a
+  // successful manual preflight must clean them up too.
   assert.ok(workflow.includes('retention-days: 1'));
   assert.ok(!workflow.includes('retention-days: 7'));
   assert.ok(workflow.includes('actions: write'));
   assert.ok(workflow.includes(`actions/runs/\${GITHUB_RUN_ID}/artifacts`));
   assert.ok(workflow.includes('actions/artifacts/${id}'));
+  assert.ok(workflow.includes('Drop hop artifacts after staging/publication'));
 });
 
 test('release.yml does not write tag-scoped dependency caches', () => {

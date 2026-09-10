@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { entryFor } from './platform.mjs';
+import { scanText } from '../check-secrets.mjs';
 
 const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(RELEASE_DIR, '..', '..');
@@ -537,6 +538,101 @@ process.exitCode = result.error ? 1 : (result.status ?? 1);
 `;
 }
 
+// Bounded staged-payload security gate. Runs on the actual first-party staged
+// CLI and suite trees immediately before archive creation so a contaminated
+// payload can never be hashed or published on either Windows or macOS. It
+// rejects private-key/token signatures in first-party text, local developer
+// machine/home/checkout absolute paths written into payload bytes, and pays
+// special attention to forbidden user credential/config/database/log files.
+// Third-party dependency assets are not automatically secrets: upstream source
+// maps and public documentation/certificate examples under node_modules are
+// normal runtime assets, so only first-party source maps and the explicit
+// credential/database/log artifacts are rejected. The bounded credential scan
+// covers all first-party text but only the private-key PEM signature in
+// dependencies. It never reads or prints matched secret values: observations
+// name only the path and detector/rule.
+
+const FORBIDDEN_PAYLOAD_NAMES = new Set([
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.netrc', '.pgpass',
+  '.git-credentials', '.htpasswd',
+]);
+
+// Real secret containers are always rejected, whoever shipped them. Third-party
+// public certificates and documentation are runtime assets, not credentials, so
+// they are intentionally absent from this set.
+const FORBIDDEN_PAYLOAD_EXTENSIONS = new Set([
+  '.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk', '.asc',
+  '.db', '.sqlite', '.sqlite3', '.log',
+]);
+
+const FORBIDDEN_PAYLOAD_DIRS = new Set(['.git', '.gnupg', '.ssh', 'agent-workspace']);
+
+// A path is a dependency tree (third-party) when its last node_modules segment
+// is not a @wrenyard scoped package; anything else under node_modules is an
+// upstream asset.
+function isDependencyPath(segments) {
+  const index = segments.lastIndexOf('node_modules');
+  return index >= 0 && segments[index + 1] !== '@wrenyard';
+}
+
+function developerPathNeedles(buildTmp, worktree) {
+  const values = new Set();
+  for (const candidate of [buildTmp, worktree, os.homedir(), process.env.HOME, process.env.USERPROFILE]) {
+    if (!candidate) continue;
+    for (const raw of [candidate, path.resolve(candidate)]) {
+      values.add(raw);
+      values.add(raw.replaceAll('\\', '/'));
+      values.add(raw.replaceAll('/', '\\'));
+      values.add(raw.replaceAll('\\', '\\\\'));
+      values.add(raw.replaceAll('/', '\\\\'));
+    }
+  }
+  return [...values].filter(value => value.length > 3).map(value => Buffer.from(value));
+}
+
+export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
+  const root = path.resolve(stage);
+  const needles = developerPathNeedles(buildTmp, worktree);
+  const violations = [];
+  const report = (file, rule) => violations.push(path.relative(root, file) + ': ' + rule);
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      const segments = path.relative(root, file).split(path.sep);
+      if (entry.isSymbolicLink()) continue;
+      if (segments.some(segment => FORBIDDEN_PAYLOAD_DIRS.has(segment))) {
+        report(file, 'forbidden private/workspace payload directory'); continue;
+      }
+      if (entry.isDirectory()) { walk(file); continue; }
+      if (!entry.isFile()) continue;
+      const lower = entry.name.toLowerCase();
+      const ext = path.extname(lower);
+      const dependency = isDependencyPath(segments);
+      if (FORBIDDEN_PAYLOAD_NAMES.has(lower)) {
+        report(file, 'forbidden user credential/config file'); continue;
+      }
+      const bytes = fs.readFileSync(file);
+      const text = bytes.includes(0) ? null : bytes.toString('utf8');
+      const publicCertificate = dependency && ext === '.pem' && text
+        && /^\s*-----BEGIN CERTIFICATE-----[\s\S]*-----END CERTIFICATE-----\s*$/.test(text)
+        && !text.includes('PRIVATE KEY');
+      if (FORBIDDEN_PAYLOAD_EXTENSIONS.has(ext) && !publicCertificate) {
+        report(file, 'forbidden credential/secret/database/log file'); continue;
+      }
+      if (ext === '.map' && !dependency) report(file, 'source map payload forbidden');
+      if (needles.some(needle => bytes.includes(needle))) report(file, 'embeds a local developer/home/checkout absolute path');
+      if (!text) continue;
+      // First-party code is scanned for every secret signature. Upstream assets
+      // can contain public examples, but must never contain private keys.
+      const findings = scanText(text).filter(finding => !dependency || finding.detector === 'pem-private-key');
+      if (findings.length) report(file, 'secret signature detected (' + [...new Set(findings.map(f => f.detector))].join(', ') + ')');
+    }
+  }
+  walk(root);
+  if (violations.length) throw new Error('unsafe staged ' + label + ' payload:\n' + violations.join('\n'));
+}
+
 // The npm package exposes exactly one public launcher (wrenyard); the Foreman
 // control launcher, the native Forge runtime and the bundled Node runtime are
 // hidden under .wrenyard so they never surface as extra public bin commands.
@@ -761,6 +857,7 @@ async function main() {
     assertNoBuildPathsInStagedForeman(cliStage, 'cli', tmp, ROOT);
     assertStagedForemanRuns(cliStage, 'cli', '.wrenyard/runtime');
     assertNoForemanBinDir(path.join(cliStage, 'services', 'foreman'), 'cli');
+    assertSafeReleasePayload(cliStage, 'cli', tmp, ROOT);
     const cliTgz = await packCliTgz(cliStage, outputDir, version);
 
     const suiteStage = path.join(tmp, 'suite');
@@ -769,6 +866,7 @@ async function main() {
     assertNoBuildPathsInStagedForeman(suiteStage, 'suite', tmp, ROOT);
     assertStagedForemanRuns(suiteStage, 'suite', 'runtime');
     assertNoForemanBinDir(path.join(suiteStage, 'services', 'foreman'), 'suite');
+    assertSafeReleasePayload(suiteStage, 'suite', tmp, ROOT);
     const suiteZip = path.join(outputDir, `wrenyard-${version}-${target.triplet}-suite.zip`);
     await zipDirectory(suiteStage, suiteZip);
 
@@ -832,7 +930,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`[release] FAILED: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+const isMain =
+  typeof process !== 'undefined' &&
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  main().catch((error) => {
+    console.error(`[release] FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

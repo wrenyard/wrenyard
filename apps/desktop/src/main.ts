@@ -59,7 +59,8 @@ const RUNTIME_ALIAS_ERROR_MESSAGES: Record<string, string> = {
 };
 const SERVICE_RETRY_ATTEMPTS = 10;
 const SERVICE_RETRY_DELAY_MS = 500;
-const SMOKE_TIMEOUT_MS = 30_000;
+/** Smoke drives task enumeration and a routing test over IPC, which can cold-load the workspace and model catalog. */
+const SMOKE_TIMEOUT_MS = 90_000;
 
 const require = createRequire(import.meta.url);
 
@@ -243,9 +244,24 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
         "window.wrenyardShell.getConversation().then((value) => value?.status === 'ready' && Array.isArray(value?.sessions) && value?.models?.status === 'ready' && value?.models?.routable === true && value.models.groups.length > 0).catch(() => false)",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers) && value.providers.every((provider) => value.catalog?.some((entry) => entry.id === provider.id && entry.configured === true && entry.quota))).catch(() => false)",
+        "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers) && Array.isArray(value?.catalog) && value.providers.every((provider) => value.catalog.some((entry) => entry.id === provider.id && entry.configured === true && entry.quota))).catch(() => false)",
       ),
     ]);
+    // Task settings/definitions over real IPC: rows, persisted layers, aliases
+    // and daemon-owned effective settings must all be present and well typed.
+    const tasksOk = await shell.window.webContents.executeJavaScript(
+      "window.wrenyardShell.getTaskSettings().then((value) => value && typeof value.revision === 'string' && typeof value.config_path === 'string' && value.user_global && typeof value.user_global === 'object' && !Array.isArray(value.user_global) && Array.isArray(value.rows) && value.rows.length > 0 && value.rows.every((row) => typeof row.identity === 'string' && typeof row.name === 'string' && typeof row.display_name === 'string' && row.user_task && row.effective && Array.isArray(row.issues)) && Array.isArray(value.aliases)).catch(() => false)",
+    );
+    // Read-only routing test surfaces: the import list of task definitions and
+    // the daemon-scored routing test result must both be well typed.
+    const routingOk = await shell.window.webContents.executeJavaScript(
+      "Promise.all([window.wrenyardShell.requestRoutingTestTasks(), window.wrenyardShell.requestTaskRoutingTest({ automatic: {} })]).then(([tasks, test]) => Array.isArray(tasks?.tasks) && tasks.tasks.length > 0 && tasks.tasks.every((task) => typeof task.identity === 'string' && typeof task.name === 'string' && typeof task.display_name === 'string' && task.automatic && typeof task.automatic === 'object') && Array.isArray(test?.rows)).catch(() => false)",
+    );
+    // New conversation is an in-memory draft; only the first send persists a
+    // session. Repeated create calls must leave the durable list unchanged.
+    const newConversationOk = await shell.window.webContents.executeJavaScript(
+      "(async () => { const before = await window.wrenyardShell.getConversation(); await window.wrenyardShell.createConversation(); const value = await window.wrenyardShell.createConversation(); return value.status === 'ready' && value.selectedSessionId === undefined && value.selectedRunning === false && value.items.length === 0 && JSON.stringify(value.sessions.map(session => session.id).sort()) === JSON.stringify(before.sessions.map(session => session.id).sort()); })()",
+    );
     shell.setPage('settings', false);
     const settingsVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'settings' && document.getElementById('update-action-button') instanceof HTMLButtonElement",
@@ -266,9 +282,9 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-trigger') instanceof HTMLButtonElement && document.getElementById('conversation-model-list')?.getAttribute('role') === 'listbox'",
     );
-    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
+    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !tasksOk || !routingOk || !newConversationOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, clients=${clientsVisible}, workbench=${workbenchVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, newConversation=${newConversationOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, clients=${clientsVisible}, workbench=${workbenchVisible})`,
       );
     }
   };
