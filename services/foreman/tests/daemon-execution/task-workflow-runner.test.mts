@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { discoverTasks, resetRegistry } from '../../lib/workspace/task-loader.mts'
+import { discoverTasks, resetRegistry, resolveTaskTarget } from '../../lib/workspace/task-loader.mts'
 import { invalidateProjectCache } from '../../lib/core/project/loader.mts'
 import type { AgentOpts, AgentResult, ExecutionOptions, TaskExecutionResult, TaskRunSettingsResolver } from '../../lib/types.mts'
 import type { TaskSettingsLayer } from '../../lib/protocol/methods/task.mts'
@@ -479,15 +479,16 @@ describe('daemon execution', { concurrency: false }, () => {
     assert.equal(agentCalls, 0)
   })
 
-  it('does not dispatch the builtin scheduling:legacy implement for new work without explicit resolution', async () => {
+  it('does not dispatch the removed builtin implement for new work because it no longer resolves', async () => {
     const workspace = makeTempDir('foreman-daemon-legacy-new-work-')
     await discoverTasks(workspace)
 
+    // The retired implement role is gone from the catalog and must not resolve
+    // at the registry surface, so no execution path can reach an agent.
+    assert.equal(resolveTaskTarget('implement', workspace), null, 'removed implement must not resolve')
     let agentCalls = 0
     // No settings resolver is supplied (same shape as the unconstrained active
-    // case above). The pin-free legacy builtin must never auto-dispatch through
-    // a hidden definition profile, so new-work execution rejects before any
-    // agent launches.
+    // case above). Execution rejects before any agent launches.
     await assert.rejects(
       () => createTaskRunner().execute('implement', undefined, {
         workspaceRoot: workspace,
@@ -500,7 +501,7 @@ describe('daemon execution', { concurrency: false }, () => {
         },
       }),
     )
-    assert.equal(agentCalls, 0, 'legacy implement must never launch an agent for new work')
+    assert.equal(agentCalls, 0, 'removed implement must never launch an agent for new work')
   })
 })
 

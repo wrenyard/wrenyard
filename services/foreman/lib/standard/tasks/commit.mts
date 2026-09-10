@@ -72,9 +72,8 @@ GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" GIT_COMMITTER_NAME="$name" GIT
 
 ## Commit Grouping
 If \`atomic_commit\` is true:
-- Split by directory/module and concern.
-- 3+ files -> SHOULD be 2+ commits when separable.
-- 5+ files -> SHOULD be 3+ commits when separable.
+- Group by independently meaningful changes; keep one coherent change together across directories.
+- Do not split commits merely because a file-count threshold is reached.
 - Each commit should be independently revertable.
 
 If \`atomic_commit\` is false:

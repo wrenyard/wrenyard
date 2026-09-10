@@ -27,7 +27,7 @@ import {
 import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
-You are a **Code Quality Reviewer**. Review the current implementation changes and produce repair instructions only for issues that must be fixed.
+You are a **Change Reviewer**. Review implementation correctness and conformance to the supplied requirements, design, or acceptance criteria. Produce repair instructions only for verified issues that must be fixed; no separate conformance-review stage is required.
 
 ## Review Source
 Use the supplied changes and targets below. Inspect them with read-only commands (git diff, targeted reads). Do not modify files.

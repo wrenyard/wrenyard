@@ -18,9 +18,6 @@ import exploreTask, {
   ExploreInputSchema,
   ExploreOutputSchema,
 } from '../lib/standard/tasks/explore.mts'
-import exploreCodeTask from '../lib/standard/tasks/explore-code.mts'
-import exploreCommitTask from '../lib/standard/tasks/explore-commit.mts'
-import { resolveCapabilities } from '../lib/core/task/capabilities.mts'
 
 // ───────────────────────────────────────────────────────────────────
 // Shared sample fixtures
@@ -28,66 +25,6 @@ import { resolveCapabilities } from '../lib/core/task/capabilities.mts'
 
 const goal = { outcome: 'Determine whether the batch exporter covers the final item' }
 const questions = [{ id: 'q1', ask: 'Does the loop cover the final item?', blocking: true }]
-
-const codeInputSample = {
-  goal,
-  questions,
-  targets: [{ kind: 'file', value: 'src/batch.ts' }],
-}
-
-const codeOutputSample = {
-  results: [
-    {
-      question_id: 'q1',
-      status: 'answered' as const,
-      findings: [
-        {
-          id: 'f1',
-          conclusion: 'covered by inclusive bound',
-          targets: [{ kind: 'file', value: 'src/batch.ts' }],
-          evidences: ['ev1'],
-          confidence: 'high' as const,
-        },
-      ],
-    },
-  ],
-  evidences: [
-    { id: 'ev1', source: { kind: 'file', value: 'src/batch.ts' }, observation: 'inclusive bound at line 40' },
-  ],
-}
-
-const commitInputSample = {
-  goal,
-  questions,
-  targets: [{ kind: 'git_commit', value: 'main', hash: 'HEAD~20..HEAD' }],
-  count: 20,
-  focus: 'exporter',
-}
-
-const commitOutputSample = {
-  results: [
-    {
-      question_id: 'q1',
-      status: 'answered' as const,
-      findings: [
-        {
-          id: 'f1',
-          conclusion: 'active development area: exporter',
-          targets: [{ kind: 'git_commit', value: 'abc1234', hash: 'abc1234', theme: 'exporter' }],
-          evidences: ['ev1'],
-          confidence: 'medium' as const,
-        },
-      ],
-    },
-  ],
-  evidences: [
-    {
-      id: 'ev1',
-      source: { kind: 'git_commit', value: 'abc1234', hash: 'abc1234', date: '2026-07-10', theme: 'exporter' },
-      observation: 'commit touched src/exporter.ts',
-    },
-  ],
-}
 
 // ───────────────────────────────────────────────────────────────────
 // Direct explore definition and exported schemas
@@ -145,17 +82,18 @@ describe('standard/tasks explore — direct definition, prompt & exported schema
     assert.throws(() => ExploreOutputSchema.parse({ results: output.results }))
   })
 
-  it('keeps the direct family configuration differences explicit', () => {
-    assert.deepEqual(
-      [
-        'agentRuntime' in exploreTask.config,
-        'agentRuntime' in exploreCodeTask.config,
-        'agentRuntime' in exploreCommitTask.config,
-      ],
-      [false, false, false],
-    )
-    assert.deepEqual(exploreCodeTask.config.instructions, [])
-    assert.notDeepEqual(exploreCommitTask.config.instructions, [])
+  it('the generic ExploreInputSchema accepts code/git/markdown representative targets without executing a prompt', () => {
+    // The merged explore role supersedes the retired explore-code and
+    // explore-commit roles; its unified open-target input must accept file,
+    // git_commit and markdown targets natively.
+    for (const target of [
+      { kind: 'file', value: 'src/batch.ts' },
+      { kind: 'git_commit', value: 'main', hash: 'HEAD~20..HEAD' },
+      { kind: 'markdown', value: 'docs/specs/x.md', title: 'X', category: 'spec' },
+    ]) {
+      const parsed = ExploreInputSchema.parse({ goal, questions, targets: [target] })
+      assert.equal(parsed.targets[0].kind, target.kind)
+    }
   })
 })
 
@@ -210,133 +148,6 @@ describe('standard-library Batch D3 — domain Targets satisfy open TargetBase',
 })
 
 // ───────────────────────────────────────────────────────────────────
-// explore-code
-// ───────────────────────────────────────────────────────────────────
-
-describe('standard/tasks explore-code — definition, prompt & schema', () => {
-  it('is a direct readonly TaskDefinition with FileTarget schemas and no runtime pin', () => {
-    assert.equal(exploreCodeTask.__type, 'task')
-    assert.equal(exploreCodeTask.config.permission, 'readonly')
-    assert.equal('agentRuntime' in exploreCodeTask.config, false)
-    assert.equal(exploreCodeTask.sourcePath, 'lib/standard/tasks/explore-code.mts')
-    assert.deepEqual(exploreCodeTask.config.instructions, [])
-  })
-
-  it('prompt preserves rg preference and entry/data-flow tracing', async () => {
-    const prompt = await exploreCodeTask.config.prompt(codeInputSample)
-    assert.match(prompt, /Code Explorer/)
-    assert.match(prompt, /rg/)
-    assert.match(prompt, /entry/)
-    assert.match(prompt, /data flow/)
-    assert.match(prompt, /answered\|unanswered\|blocked/)
-  })
-
-  it('schema parses a valid unified input/output (file-targeted evidence)', () => {
-    assert.ok(exploreCodeTask.config.input.parse(codeInputSample))
-    assert.deepEqual(exploreCodeTask.config.output.parse(codeOutputSample), codeOutputSample)
-  })
-
-  it('rejects input missing questions and output missing pooled evidences', () => {
-    assert.throws(() =>
-      exploreCodeTask.config.input.parse({ goal, targets: [{ kind: 'file', value: 'a' }] }),
-    )
-    assert.throws(() => exploreCodeTask.config.output.parse({ results: [] }))
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────
-// explore-commit
-// ───────────────────────────────────────────────────────────────────
-
-describe('standard/tasks explore-commit — definition, prompt & schema', () => {
-  it('is a direct readonly TaskDefinition with GitCommitTarget schemas and no runtime pin', () => {
-    assert.equal(exploreCommitTask.__type, 'task')
-    assert.equal(exploreCommitTask.config.permission, 'readonly')
-    assert.equal('agentRuntime' in exploreCommitTask.config, false)
-    assert.equal(exploreCommitTask.sourcePath, 'lib/standard/tasks/explore-commit.mts')
-    const joined = (exploreCommitTask.config.instructions ?? []).join('\n')
-    assert.match(joined, /# Shell Usage/)
-  })
-
-  it('prompt preserves git log/show workflow and renders count + focus', async () => {
-    const prompt = await exploreCommitTask.config.prompt(commitInputSample)
-    assert.match(prompt, /Commit Explorer/)
-    assert.match(prompt, /git --no-optional-locks log/)
-    assert.match(prompt, /git --no-optional-locks show/)
-    assert.match(prompt, /20/) // default count rendered
-    assert.match(prompt, /exporter/) // focus rendered
-    const noFocus = await exploreCommitTask.config.prompt({
-      goal,
-      questions,
-      targets: [{ kind: 'git_commit', value: 'main', hash: 'HEAD' }],
-    })
-    assert.match(noFocus, /\(none\)/) // focus absent
-  })
-
-  it('prompt requests git commands only in the deployed git-history safe shapes', async () => {
-    const prompt = await exploreCommitTask.config.prompt(commitInputSample)
-    // All three deployed safe shapes carry --no-optional-locks.
-    assert.match(prompt, /git --no-optional-locks log --oneline -20/)
-    assert.match(prompt, /git --no-optional-locks show --name-only <hash>/)
-    assert.match(prompt, /git --no-optional-locks show --stat <hash>/)
-    // No generic log/show or percent-format command remains after the safe shapes are removed.
-    const stripped = prompt
-      .replaceAll('git --no-optional-locks log --oneline', '')
-      .replaceAll('git --no-optional-locks show --name-only', '')
-      .replaceAll('git --no-optional-locks show --stat', '')
-    assert.doesNotMatch(stripped, /git log|git show|pretty=format|%H%x09|%ad%x09|%s/)
-  })
-
-  it('declares exactly git-history and resolves it for every input under readonly permission', () => {
-    assert.equal(exploreCommitTask.config.permission, 'readonly')
-    assert.deepEqual(exploreCommitTask.config.capabilities?.available, ['git-history'])
-    // Deterministic selection: any input mounts exactly git-history.
-    assert.deepEqual(
-      resolveCapabilities(exploreCommitTask.config.capabilities, commitInputSample),
-      ['git-history'],
-    )
-    assert.deepEqual(
-      resolveCapabilities(exploreCommitTask.config.capabilities, {
-        goal,
-        questions,
-        targets: [{ kind: 'git_commit', value: 'main', hash: 'HEAD' }],
-      }),
-      ['git-history'],
-    )
-  })
-
-  it('schema parses a valid unified input/output with optional count extension (GitCommitTarget source)', () => {
-    assert.ok(exploreCommitTask.config.input.parse(commitInputSample))
-    // count/focus optional — parse without them
-    assert.ok(
-      exploreCommitTask.config.input.parse({
-        goal,
-        questions,
-        targets: [{ kind: 'git_commit', value: 'main', hash: 'HEAD' }],
-      }),
-    )
-    assert.deepEqual(exploreCommitTask.config.output.parse(commitOutputSample), commitOutputSample)
-  })
-
-  it('output narrows evidence source to GitCommitTarget (rejects non-git_commit kind)', () => {
-    assert.throws(() =>
-      exploreCommitTask.config.output.parse({
-        results: [{ question_id: 'q1', status: 'answered', findings: [] }],
-        evidences: [{ id: 'ev1', source: { kind: 'file', value: '/x' }, observation: 'wrong' }],
-      }),
-    )
-    assert.ok(
-      exploreCommitTask.config.output.parse({
-        results: [{ question_id: 'q1', status: 'answered', findings: [] }],
-        evidences: [
-          { id: 'ev1', source: { kind: 'git_commit', value: 'h', hash: 'h', theme: 't' }, observation: 'ok' },
-        ],
-      }),
-    )
-  })
-})
-
-// ───────────────────────────────────────────────────────────────────
 // Cross-cutting: schemas convert to draft-07 JSON Schema (loader path)
 // ───────────────────────────────────────────────────────────────────
 
@@ -346,10 +157,6 @@ describe('standard-library Batch D3 — Zod schemas convert to draft-07 JSON Sch
     exploreOutput: ExploreOutputSchema,
     markdownTarget: MarkdownTargetSchema,
     gitCommitTarget: GitCommitTargetSchema,
-    codeInput: exploreCodeTask.config.input,
-    codeOutput: exploreCodeTask.config.output,
-    commitInput: exploreCommitTask.config.input,
-    commitOutput: exploreCommitTask.config.output,
   }
   for (const [name, schema] of Object.entries(schemas)) {
     it(`${name} converts via z.toJSONSchema(target: draft-07)`, () => {

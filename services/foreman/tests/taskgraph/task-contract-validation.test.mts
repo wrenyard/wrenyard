@@ -34,8 +34,6 @@ import {
   NULL_CONTRACT_RESOLVER,
 } from '../../lib/core/taskgraph/index.mts'
 import { makeResolver, emptyGraph, startNode, taskNode, endNode } from './validator-helpers.mts'
-import diagnoseReproTask from '../../lib/standard/tasks/diagnose-repro.mts'
-import { normalizeSchema } from '../../lib/workspace/schema-loader.mts'
 
 // ─── Fake contract resolver ───────────────────────────────────────────────────
 
@@ -833,64 +831,6 @@ describe('B7 definition contract validation (task-contract-resolver)', () => {
       graph, [], undefined, makeResolver(), contractResolver, 'test-project',
     )
     assert.ok(result.graph !== null, 'array with $inputs should defer validation')
-  })
-
-  // ── Production contract regression: diagnose-repro in TaskGraph ───────────
-
-  it('materializes a diagnose-repro node with a string priorFindings contract', () => {
-    const inputSchema = normalizeSchema(diagnoseReproTask.config.input) as JsonObject
-    const outputSchema = normalizeSchema(diagnoseReproTask.config.output) as JsonObject
-    assert.ok(inputSchema, 'diagnose-repro input schema must normalize to draft-07')
-    assert.ok(outputSchema, 'diagnose-repro output schema must normalize to draft-07')
-
-    // The narrowed contract emits fully typed draft-07 for priorFindings — an
-    // anyOf/record/array/null union here fails graph schema materialization.
-    const inputProps = (inputSchema.properties ?? {}) as Record<string, JsonObject>
-    const priorFindingsSchema = (inputProps.priorFindings ?? {}) as JsonObject
-    assert.equal(priorFindingsSchema.type, 'string')
-
-    const contractResolver = new FakeContractResolver()
-    contractResolver.setContract('task', 'diagnose-repro', 'test-project', inputSchema)
-
-    const resolver = makeResolver({
-      resolveActionSchema(actionType) {
-        if (actionType !== 'task') return null
-        return {
-          input: inputSchema as ObjectJsonSchema,
-          output: outputSchema as ObjectJsonSchema,
-        }
-      },
-    })
-
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      t: taskNode('t', {
-        deps: ['start'],
-        action: {
-          type: 'task',
-          params: {
-            name: 'diagnose-repro',
-            project: 'test-project',
-            input: {
-              issue: 'build fails with a module resolution error',
-              project: 'test-project',
-              priorFindings: JSON.stringify({
-                redirect: 'suspect tsconfig moduleResolution for the build step',
-                evidence: ['src/main.ts:120', 'Cannot find module'],
-              }),
-            },
-          },
-        },
-        input_schema: objectSchema({}, []),
-      }),
-    }
-
-    const result = validateTaskGraphPostImage(
-      graph, [], undefined, resolver, contractResolver, 'test-project',
-    )
-    assert.ok(result.graph !== null, 'diagnose-repro node must materialize with string priorFindings')
-    assert.equal(result.issues.length, 0)
   })
 
   it('does not treat reserved task ctx as a graph wiring schema', () => {

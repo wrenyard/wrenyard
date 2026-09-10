@@ -44,17 +44,16 @@ git log -1 --format="%an <%ae>%x09%cn <%ce>"
 
 ## Commit Workflow
 
-When committing is requested, follow the git-master workflow:
+When committing is requested, follow these rules:
 
 ### Style Detection
-1. Run \`git log -30 --pretty=format:"%s"\` to detect existing commit style
+1. Run \`git log -10 --pretty=format:"%s"\` to detect existing commit style
 2. Match the dominant style (semantic/plain/short) — do NOT impose a style
 
 ### Atomic Commits
-- **3+ files → MUST be 2+ commits**
-- **5+ files → MUST be 3+ commits**
-- Split by: directory/module, concern (config/logic/test), independence
-- Combine ONLY when splitting breaks compilation
+- Group by independently meaningful changes; a coherent change may span code, tests and documentation.
+- Do not impose a minimum number of commits from the number of files.
+- Honor the request for one commit or independent groups.
 
 ### Conventional Commits
 When semantic style is detected, use scopes:

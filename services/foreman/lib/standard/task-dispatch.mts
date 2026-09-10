@@ -14,7 +14,6 @@ import type { IntelligenceTier, TaskDispatchRequirements } from '@wrenyard/catal
  *   - GENERAL   — general tasks
  *   - REVIEW    — explicit review / judgment tasks
  *   - ULTRA     — ultra tasks
- *   - VISION    — vision-specialized tasks (exact routing preserved)
  */
 
 /** Models/profiles excluded across aliases for the strict frequent class. */
@@ -93,20 +92,4 @@ export const ULTRA_DISPATCH_REQUIREMENTS = {
   intelligenceMax: 'premium' as IntelligenceTier,
   intelligenceExpected: 'high' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
-} satisfies TaskDispatchRequirements
-
-/**
- * Vision-specialized tasks (e.g. look-at): require vision capability and
- * preserve the exact specialized routing (forge/gk-kimi). high..high intelligence
- * tier with a cost ceiling and no exclusions, so the pinned specialized K3
- * runtime stays eligible.
- */
-export const VISION_DISPATCH_REQUIREMENTS = {
-  expectedTps: 20,
-  minimumTps: 8,
-  intelligenceMin: 'high' as IntelligenceTier,
-  intelligenceMax: 'high' as IntelligenceTier,
-  intelligenceExpected: 'high' as IntelligenceTier,
-  maxOutputUsdPerMillion: 15,
-  requiredCapabilities: ['image'],
 } satisfies TaskDispatchRequirements
