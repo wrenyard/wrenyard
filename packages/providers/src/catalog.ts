@@ -39,10 +39,16 @@ const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
 
 const clients: readonly ClientDefinition[] = [
-  { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true },
+  // Native WebSearch is documented at https://code.claude.com/docs/en/tools-reference
+  // (checked 2026-09-10); native-capable only against its exact nativeProvider.
+  { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true },
   { id: 'codebuddy', nativeProvider: 'codebuddy', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
-  { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true },
-  { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
+  // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
+  // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
+  { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
+  // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
+  // (checked 2026-09-10).
+  { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true, supportsNativeWebSearch: true },
   { id: 'dsh', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
   {
     id: 'grok',
@@ -50,6 +56,9 @@ const clients: readonly ClientDefinition[] = [
     gatewayProtocols: ['openai_chat'],
     unsupportedGatewayProviders: ['codebuddy', 'opencode-go'],
     taskCapable: true,
+    // Client web_search with backend support per https://docs.x.ai/build/settings
+    // (checked 2026-09-10); our Grok gateway projection stays SupportsBackendSearch=false.
+    supportsNativeWebSearch: true,
   },
   { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
 ];

@@ -60,7 +60,9 @@ describe('resolveEffectiveTaskSettings defaults', () => {
     assert.equal(result.timeoutMs, 15 * 60 * 1000)
     assert.equal(result.timeoutMs, SYSTEM_DEFAULT_TIMEOUT_MS)
     assert.equal(result.explicitRuntime, undefined)
-    assert.deepEqual(result.dispatch, {})
+    // The implicit system default expectation is `mid` (no minimum is set).
+    assert.deepEqual(result.dispatch, { intelligenceExpected: 'mid' })
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
     assert.equal(result.sources.timeoutMs, 'system_global')
     assert.equal(result.sources.selectionMode, 'system_global')
   })
@@ -160,11 +162,13 @@ describe('resolveEffectiveTaskSettings precedence', () => {
       intelligenceMin: 'mid',
       intelligenceMax: 'premium',
       excludeModelIds: ['model-a'],
+      intelligenceExpected: 'mid',
     })
     assert.equal(result.sources.dispatch?.expectedTps, 'user_global')
     assert.equal(result.sources.dispatch?.intelligenceMin, 'user_global')
     assert.equal(result.sources.dispatch?.intelligenceMax, 'user_task')
     assert.equal(result.sources.dispatch?.excludeModelIds, 'invocation')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
   })
 
   it('does not mutate any input layer when invocation wins', () => {
@@ -270,6 +274,66 @@ describe('resolveEffectiveTaskSettings requiredCapabilities hard minimum', () =>
     assert.equal(result.dispatch.expectedTps, 9)
     assert.equal(result.sources.dispatch?.expectedTps, 'invocation')
     assert.equal(result.sources.dispatch?.requiredCapabilities, 'user_global')
+  })
+})
+
+describe('resolveEffectiveTaskSettings requiresWebSearch', () => {
+  it('rejects a non-boolean dispatch.requiresWebSearch', () => {
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { requiresWebSearch: 'yes' } }),
+      /dispatch\.requiresWebSearch must be a boolean/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { requires_web_search: 1 } }),
+      /dispatch\.requiresWebSearch must be a boolean/,
+    )
+  })
+
+  it('normal rightmost-wins boolean precedence when builtin does not declare search', () => {
+    const unset = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { expectedTps: 10 } },
+    })
+    assert.equal(unset.dispatch.requiresWebSearch, undefined)
+
+    const userTrue = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { requiresWebSearch: true } },
+    })
+    assert.equal(userTrue.dispatch.requiresWebSearch, true)
+    assert.equal(userTrue.sources.dispatch?.requiresWebSearch, 'user_global')
+
+    // A later layer overrides the normal winner.
+    const overridden = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { requiresWebSearch: true } },
+      userTask: { dispatch: { requiresWebSearch: false } },
+    })
+    assert.equal(overridden.dispatch.requiresWebSearch, false)
+    assert.equal(overridden.sources.dispatch?.requiresWebSearch, 'user_task')
+  })
+
+  it('keeps a builtin requiresWebSearch:true mandatory across user false and resets', () => {
+    const withUserFalse = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiresWebSearch: true } },
+      userGlobal: { dispatch: { requiresWebSearch: false } },
+    })
+    assert.equal(withUserFalse.dispatch.requiresWebSearch, true)
+    assert.equal(withUserFalse.sources.dispatch?.requiresWebSearch, 'builtin_task')
+
+    const withUserReset = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiresWebSearch: true } },
+      userTask: {},
+      invocation: { dispatch: { requiresWebSearch: false } },
+    })
+    assert.equal(withUserReset.dispatch.requiresWebSearch, true)
+    assert.equal(withUserReset.sources.dispatch?.requiresWebSearch, 'builtin_task')
+  })
+
+  it('preserves builtin true even when a higher layer also declares true', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { requiresWebSearch: true } },
+      userGlobal: { dispatch: { requiresWebSearch: true } },
+    })
+    assert.equal(result.dispatch.requiresWebSearch, true)
+    assert.equal(result.sources.dispatch?.requiresWebSearch, 'builtin_task')
   })
 })
 
@@ -522,7 +586,7 @@ describe('normalizeTaskSettingsLayer validation', () => {
     )
     assert.equal(effective.timeoutMs, 60_000)
     assert.equal(effective.explicitRuntime, undefined)
-    assert.deepEqual(effective.dispatch, {})
+    assert.deepEqual(effective.dispatch, { intelligenceExpected: 'mid' })
   })
 
   it('drops historical preferredRuntime dispatch keys instead of treating them as a current setting', () => {
@@ -737,14 +801,90 @@ describe('resolveEffectiveTaskSettings integration', () => {
       mode: 'explicit',
       explicitRuntime: ALIAS_REF,
       timeoutMs: 45_000,
-      dispatch: { minimumTps: 2 },
+      dispatch: { minimumTps: 2, intelligenceExpected: 'mid' },
       maxAutoOutputUsdPerMillion: undefined,
       sources: {
         selectionMode: 'user_task',
         explicitRuntime: 'user_task',
         timeoutMs: 'user_task',
-        dispatch: { minimumTps: 'invocation' },
+        dispatch: { minimumTps: 'invocation', intelligenceExpected: 'system_global' },
       },
     } satisfies EffectiveTaskSettings)
+  })
+})
+
+describe('resolveEffectiveTaskSettings intelligence expectation default', () => {
+  it('clamps the implicit mid default up to a high minimum', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMin: 'high' } },
+    })
+    assert.equal(result.dispatch.intelligenceExpected, 'high')
+    assert.equal(result.dispatch.intelligenceMin, 'high')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
+  })
+
+  it('clamps the implicit mid default down to a low maximum', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMax: 'low' } },
+    })
+    assert.equal(result.dispatch.intelligenceExpected, 'low')
+    assert.equal(result.dispatch.intelligenceMax, 'low')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
+  })
+
+  it('keeps the implicit mid default within an explicit low..high range', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceMax: 'high' } },
+    })
+    assert.equal(result.dispatch.intelligenceExpected, 'mid')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
+  })
+
+  it('honors an explicit minimum high with an explicit expected premium', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMin: 'high', intelligenceExpected: 'premium' } },
+    })
+    assert.equal(result.dispatch.intelligenceMin, 'high')
+    assert.equal(result.dispatch.intelligenceExpected, 'premium')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'user_global')
+  })
+
+  it('rejects an explicit expected below an explicit minimum', () => {
+    assert.throws(
+      () => resolveEffectiveTaskSettings({
+        userGlobal: { dispatch: { intelligenceMin: 'high', intelligenceExpected: 'mid' } },
+      }),
+      /intelligenceExpected cannot be below dispatch.intelligenceMin/,
+    )
+  })
+
+  it('rejects an explicit expected above an explicit maximum', () => {
+    assert.throws(
+      () => resolveEffectiveTaskSettings({
+        userGlobal: { dispatch: { intelligenceMax: 'mid', intelligenceExpected: 'high' } },
+      }),
+      /intelligenceExpected cannot exceed dispatch.intelligenceMax/,
+    )
+  })
+
+  it('re-inherits the system mid default when an explicit expectation is reset', () => {
+    const withExpected = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceExpected: 'premium' } },
+    })
+    assert.equal(withExpected.dispatch.intelligenceExpected, 'premium')
+    assert.equal(withExpected.sources.dispatch?.intelligenceExpected, 'user_global')
+
+    const reset = resolveEffectiveTaskSettings({})
+    assert.equal(reset.dispatch.intelligenceExpected, 'mid')
+    assert.equal(reset.sources.dispatch?.intelligenceExpected, 'system_global')
+  })
+
+  it('lets the user task layer override the system mid default', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceExpected: 'low' } },
+      userTask: { dispatch: { intelligenceExpected: 'high' } },
+    })
+    assert.equal(result.dispatch.intelligenceExpected, 'high')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'user_task')
   })
 })

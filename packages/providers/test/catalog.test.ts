@@ -65,7 +65,7 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
 test('derived task plans key representative native and gateway combinations canonically', () => {
   const plans = deriveTaskDispatchPlans(createBuiltinCatalog());
   assert.deepEqual(plans['codex/gpt-5.6-sol:codex'], {
-    client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh',
+    client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
   });
   assert.deepEqual(plans['codex-spark/gpt-5.3-codex-spark:codex'], {
     client: 'codex', provider: 'codex-spark', model: 'gpt-5.3-codex-spark', mode: 'native', reasoningEffort: 'xhigh',
@@ -95,10 +95,37 @@ test('derived task plans key representative native and gateway combinations cano
     client: 'claude', provider: 'zhipu-coding', model: 'glm-5.3-flash', mode: 'gateway', protocol: 'anthropic_messages',
   });
   assert.deepEqual(plans['spacex-ai/grok-4.5:gk'], {
-    client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native',
+    client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native', supportsWebSearch: true,
   });
   assert.equal(plans['codebuddy/hy3:gk'], undefined);
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:gk'], undefined);
+});
+
+test('native web search is admitted only for explicitly supported native client/provider pairs', () => {
+  const catalog = createBuiltinCatalog();
+  const plans = deriveTaskDispatchPlans(catalog);
+
+  // Built-in native combinations that declare supportsNativeWebSearch are admitted.
+  assert.equal(plans['codex/gpt-5.6-sol:codex'].supportsWebSearch, true);
+  assert.equal(plans['codex/gpt-5.6-terra:codex'].supportsWebSearch, true);
+  assert.equal(plans['cursor/composer-2.5:cur'].supportsWebSearch, true);
+  assert.equal(plans['cursor/cursor-grok-4.6-high:cur'].supportsWebSearch, true);
+  assert.equal(plans['spacex-ai/grok-4.5:gk'].supportsWebSearch, true);
+
+  // CodeBuddy/DeepSeek native routes are NOT marked: the client does not declare
+  // native web search, even though it runs natively.
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].supportsWebSearch, undefined);
+  assert.equal(plans['codebuddy/glm-5.3-flash:cb'].supportsWebSearch, undefined);
+
+  // Third-party gateway routes through Grok/Codex are never marked supported.
+  assert.equal(plans['kimi-coding/k3:gk']?.mode, 'gateway');
+  assert.equal(plans['kimi-coding/k3:gk']?.supportsWebSearch, undefined);
+
+  // Native Claude has an empty model list, so no exact native candidate exists;
+  // the client metadata still declares native web search support.
+  assert.deepEqual(catalog.provider('anthropic')!.models, []);
+  assert.equal(catalog.clients().find((client) => client.id === 'claude')!.supportsNativeWebSearch, true);
+  assert.equal(plans['anthropic/claude-sonnet-5:cc'], undefined);
 });
 
 test('derived task plans carry canonical keys only — no legacy profile, policy, or alias ids', () => {

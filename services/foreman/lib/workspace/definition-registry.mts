@@ -228,6 +228,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeProfileIds,
     excludeClientIds,
     excludeProviderIds,
+    requiresWebSearch,
   } = raw
 
   // The dispatch object must contain at least one recognized hard requirement.
@@ -243,6 +244,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeProfileIds,
     excludeClientIds,
     excludeProviderIds,
+    requiresWebSearch,
   ].some((value) => value !== undefined)
   if (!hasRecognizedHardRequirement) {
     throw new Error(
@@ -328,6 +330,12 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     if (!Array.isArray(requiredCapabilities) || !requiredCapabilities.every((entry) => typeof entry === 'string' && entry.length > 0)) {
       throw new Error(`${sourcePath} task config dispatch.requiredCapabilities must be an array of non-empty strings`)
     }
+  }
+
+  // Native web search is a recognized dispatch requirement; it is a boolean-only
+  // hidden gate (never a search settings UI control). Accept only booleans.
+  if (requiresWebSearch !== undefined && requiresWebSearch !== null && typeof requiresWebSearch !== 'boolean') {
+    throw new Error(`${sourcePath} task config dispatch.requiresWebSearch must be a boolean`)
   }
 
   for (const axis of ['excludeModelIds', 'excludeProfileIds', 'excludeClientIds', 'excludeProviderIds'] as const) {

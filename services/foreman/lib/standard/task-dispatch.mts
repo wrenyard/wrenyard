@@ -48,7 +48,7 @@ export const FREQUENT_DISPATCH_REQUIREMENTS = {
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
   intelligenceMax: 'high' as IntelligenceTier,
-  intelligenceExpected: 'low' as IntelligenceTier,
+  intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 6,
   excludeModelIds: [...FREQUENT_MODEL_EXCLUSIONS],
   excludeProfileIds: [...FREQUENT_PROFILE_EXCLUSIONS],
@@ -90,6 +90,6 @@ export const ULTRA_DISPATCH_REQUIREMENTS = {
   minimumTps: 8,
   intelligenceMin: 'high' as IntelligenceTier,
   intelligenceMax: 'premium' as IntelligenceTier,
-  intelligenceExpected: 'high' as IntelligenceTier,
+  intelligenceExpected: 'premium' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
 } satisfies TaskDispatchRequirements

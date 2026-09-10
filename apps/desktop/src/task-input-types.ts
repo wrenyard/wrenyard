@@ -1,23 +1,28 @@
 import type { TaskSettingsCapability, TaskSettingsLayer, TaskSettingsPatch } from './shell-contract.js';
 
-export type TaskInputTypeValue = 'inherit' | 'text' | 'image';
+type CapabilityRow = {
+  builtin: { dispatch: { required_capabilities?: readonly TaskSettingsCapability[] } };
+  user_task: TaskSettingsLayer;
+  effective: { automatic: { required_capabilities: { value: readonly TaskSettingsCapability[] | null } } };
+};
 
-function selectionForOverride(override: readonly TaskSettingsCapability[] | null | undefined): TaskInputTypeValue {
-  if (override == null) return 'inherit';
-  return override.includes('image') ? 'image' : 'text';
+export function builtinRequiresImage(row: CapabilityRow): boolean {
+  return row.builtin.dispatch.required_capabilities?.includes('image') === true;
 }
 
-/** Display the editable layer, while the form separately shows effective requirements. */
-export function inputTypeFromRow(row: { user_task: TaskSettingsLayer }): TaskInputTypeValue {
-  return selectionForOverride(row.user_task.automatic?.required_capabilities);
+/** The daemon's effective value drives the checkbox; task requirements are mandatory. */
+export function imageRequiredFromRow(row: CapabilityRow): boolean {
+  return builtinRequiresImage(row) || row.effective.automatic.required_capabilities.value?.includes('image') === true;
 }
 
-/** Patch only a changed override; an untouched inherited or legacy array stays untouched. */
-export function inputTypesPatch(
-  override: readonly TaskSettingsCapability[] | null | undefined,
-  selected: TaskInputTypeValue,
+/** Preserve untouched overrides; remove the leaf when a change restores inheritance. */
+export function imageCapabilitiesPatch(
+  row: CapabilityRow,
+  userGlobal: TaskSettingsLayer,
+  checked: boolean,
 ): TaskSettingsPatch {
-  if (selectionForOverride(override) === selected) return {};
-  const required_capabilities = selected === 'inherit' ? null : selected === 'image' ? ['text', 'image'] as const : ['text'] as const;
-  return { automatic: { required_capabilities } };
+  if (builtinRequiresImage(row) || checked === imageRequiredFromRow(row)) return {};
+  const inherited = userGlobal.automatic?.required_capabilities ?? row.builtin.dispatch.required_capabilities;
+  const inheritedImage = inherited?.includes('image') === true;
+  return { automatic: { required_capabilities: checked === inheritedImage ? null : checked ? ['image'] : ['text'] } };
 }

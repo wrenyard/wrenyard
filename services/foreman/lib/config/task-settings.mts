@@ -93,6 +93,7 @@ export const TASK_DISPATCH_FIELDS = [
   'excludeClientIds',
   'excludeProviderIds',
   'requiredCapabilities',
+  'requiresWebSearch',
 ] as const
 
 export type TaskDispatchField = (typeof TASK_DISPATCH_FIELDS)[number]
@@ -111,6 +112,7 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   excludeClientIds: ['excludeClientIds', 'exclude_client_ids'],
   excludeProviderIds: ['excludeProviderIds', 'exclude_provider_ids'],
   requiredCapabilities: ['requiredCapabilities', 'required_capabilities'],
+  requiresWebSearch: ['requiresWebSearch', 'requires_web_search'],
 }
 
 const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
@@ -131,6 +133,10 @@ const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'excludeClientIds',
   'excludeProviderIds',
   'requiredCapabilities',
+])
+
+const BOOLEAN_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
+  'requiresWebSearch',
 ])
 
 /* -------------------------------------------------------------------------- *
@@ -337,6 +343,14 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
         fail(scope, 'dispatch.requiredCapabilities accepts only text or image')
       }
       ;(out as Record<string, unknown>)[field] = list
+      continue
+    }
+
+    if (BOOLEAN_FIELDS.has(field)) {
+      if (typeof value !== 'boolean') {
+        fail(scope, `dispatch.${field} must be a boolean`)
+      }
+      ;(out as Record<string, unknown>)[field] = value
       continue
     }
 
@@ -632,11 +646,51 @@ export function resolveEffectiveTaskSettings(
       continue
     }
 
+    // `requiresWebSearch` hard-minimum exception: a task-definition declaration
+    // (the builtin Task layer) of `requiresWebSearch: true` is mandatory — no
+    // user layer, including an explicit `false` or a reset to undefined, may
+    // erase it. A builtin `false`/absent leaves normal rightmost boolean
+    // precedence intact. Source is `builtin_task` whenever the declaration alone
+    // forces the value.
+    if (field === 'requiresWebSearch') {
+      const taskMinimum = entries.find((entry) => entry.tag === 'builtin_task')?.layer.dispatch?.requiresWebSearch ?? false
+      const normalWinner = (leaf.value ?? false) as boolean
+      if (taskMinimum === true || normalWinner === true) {
+        dispatch.requiresWebSearch = true
+        dispatchSources.requiresWebSearch = taskMinimum === true
+          ? 'builtin_task'
+          : leaf.source ?? 'builtin_task'
+      } else if (leaf.value !== undefined) {
+        dispatch.requiresWebSearch = false
+        dispatchSources.requiresWebSearch = leaf.source ?? 'system_global'
+      }
+      continue
+    }
+
     if (leaf.value !== undefined && leaf.source !== undefined) {
       ;(dispatch as Record<string, unknown>)[field] = leaf.value
       dispatchSources[field] = leaf.source
     }
   }
+
+  // Implicit default expectation: when no layer defines `intelligenceExpected`,
+  // the system default expectation is `mid`. The implicit default is clamped to
+  // the effective hard min/max (e.g. a `high` minimum lifts the default to
+  // `high`) so it never violates the ordering; an explicitly configured
+  // out-of-range expectation still fails via assertEffectiveIntelligenceOrder.
+  if (dispatch.intelligenceExpected === undefined) {
+    let expectedTier: IntelligenceTier = 'mid'
+    const minTier = dispatch.intelligenceMin
+    const maxTier = dispatch.intelligenceMax
+    if (minTier !== undefined && INTELLIGENCE_ORDER.mid < INTELLIGENCE_ORDER[minTier]) {
+      expectedTier = minTier
+    } else if (maxTier !== undefined && INTELLIGENCE_ORDER.mid > INTELLIGENCE_ORDER[maxTier]) {
+      expectedTier = maxTier
+    }
+    dispatch.intelligenceExpected = expectedTier
+    dispatchSources.intelligenceExpected = 'system_global'
+  }
+
   assertEffectiveIntelligenceOrder(dispatch)
 
   const sources: EffectiveTaskSettingsSources = {

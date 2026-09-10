@@ -716,6 +716,41 @@ ${extraConfig}  permission: 'readonly',
     assert.ok(errors.some((error) => error.load_error.includes('at least one hard requirement')), errors.map((e) => e.load_error).join('; '))
   })
 
+  it('accepts a search-only dispatch declaration and lists dispatch with requiresWebSearch', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-search-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'web-search.task.ts'), `export default defineTask({
+  permission: 'readonly',
+  dispatch: { requiresWebSearch: true },
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => 'web-search',
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('web-search', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.requiresWebSearch, true)
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects a non-boolean requiresWebSearch declaration', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-search-bad-')
+    const projectDir = join(workspace, 'projects', 'app')
+    const taskPath = join(projectDir, 'bad-search.task.ts')
+    registerProject(projectDir, 'app')
+    writeFileSync(taskPath, taskSource("'bad-search'", '  dispatch: { requiresWebSearch: \'yes\' },\n'), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('bad-search', workspace), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(errors.some((error) => error.load_error.includes('dispatch.requiresWebSearch must be a boolean')), errors.map((e) => e.load_error).join('; '))
+  })
+
   it('rejects invalid intelligence tier ordering', async () => {
     const workspace = makeTempDir('foreman-v2-loader-dispatch-order-')
     const projectDir = join(workspace, 'projects', 'app')

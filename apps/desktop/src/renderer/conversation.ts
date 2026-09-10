@@ -643,9 +643,9 @@ export class ConversationView {
         option.append(name, provider);
         const inputTypes = document.createElement('small');
         inputTypes.className = 'conversation-model-option-provider';
-        inputTypes.textContent = entry.inputTypes?.length
-          ? `支持输入：${entry.inputTypes.map((cap) => (cap === 'image' ? '图片' : '文本')).join('、')}`
-          : '支持输入：未知';
+        inputTypes.textContent = entry.inputTypes === undefined
+          ? '图片：未知'
+          : entry.inputTypes.includes('image') ? '图片：支持' : '图片：不支持';
         option.append(inputTypes);
         this.providerBindings.push({
           providerId,

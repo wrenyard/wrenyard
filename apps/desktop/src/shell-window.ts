@@ -80,6 +80,7 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'intelligence_expected',
   'max_output_usd_per_million',
   'required_capabilities',
+  'requires_web_search',
   'exclude_model_ids',
   'exclude_profile_ids',
   'exclude_client_ids',
@@ -160,6 +161,10 @@ function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false):
     if (value !== undefined && (typeof value !== 'string' || !TASK_SETTINGS_INTELLIGENCE_VALUES.has(value))) {
       throw new Error('自动约束无效');
     }
+  }
+  const requiresWebSearch = automatic.requires_web_search;
+  if (requiresWebSearch !== undefined && !(allowFieldReset && requiresWebSearch === null) && typeof requiresWebSearch !== 'boolean') {
+    throw new Error('自动约束无效');
   }
   const requiredCapabilities = automatic.required_capabilities;
   if (requiredCapabilities !== undefined) {

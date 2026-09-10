@@ -184,6 +184,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .tasks-control-group .tasks-setting-row label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
 .tasks-setting-control { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
 .tasks-setting-control input, .tasks-setting-control select { height: 28px; min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0 8px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 11px; font-weight: 500; }
+.tasks-setting-control input[type="checkbox"] { width: 17px; height: 17px; padding: 0; margin: 0; }
 .tasks-mode-row .tasks-setting-control { grid-column: 2 / -1; }
 .tasks-mode-trigger {
   min-height: 28px;
