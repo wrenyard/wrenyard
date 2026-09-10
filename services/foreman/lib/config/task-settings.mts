@@ -2,6 +2,7 @@ import {
   INTELLIGENCE_ORDER,
   type IntelligenceTier,
   type TaskDispatchRequirements as CatalogTaskDispatchRequirements,
+  normalizeIntelligenceTier,
 } from '@wrenyard/catalog'
 
 /**
@@ -85,6 +86,7 @@ export const TASK_DISPATCH_FIELDS = [
   'minimumTps',
   'intelligenceMin',
   'intelligenceMax',
+  'intelligenceExpected',
   'maxOutputUsdPerMillion',
   'excludeModelIds',
   'excludeProfileIds',
@@ -102,6 +104,7 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   minimumTps: ['minimumTps', 'minimum_tps'],
   intelligenceMin: ['intelligenceMin', 'intelligence_min'],
   intelligenceMax: ['intelligenceMax', 'intelligence_max'],
+  intelligenceExpected: ['intelligenceExpected', 'intelligence_expected'],
   maxOutputUsdPerMillion: ['maxOutputUsdPerMillion', 'max_output_usd_per_million'],
   excludeModelIds: ['excludeModelIds', 'exclude_model_ids'],
   excludeProfileIds: ['excludeProfileIds', 'exclude_profile_ids'],
@@ -119,6 +122,7 @@ const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 const INTELLIGENCE_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'intelligenceMin',
   'intelligenceMax',
+  'intelligenceExpected',
 ])
 
 const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
@@ -127,14 +131,6 @@ const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'excludeClientIds',
   'excludeProviderIds',
   'requiredCapabilities',
-])
-
-const INTELLIGENCE_TIERS: ReadonlySet<string> = new Set([
-  'low',
-  'mid',
-  'high',
-  'frontier',
-  'premium',
 ])
 
 /* -------------------------------------------------------------------------- *
@@ -299,6 +295,7 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
   const out: Partial<TaskDispatchRequirements> = {}
   let intelligenceMin: IntelligenceTier | undefined
   let intelligenceMax: IntelligenceTier | undefined
+  let intelligenceExpected: IntelligenceTier | undefined
 
   for (const field of TASK_DISPATCH_FIELDS) {
     const { value } = resolveAliased(record, DISPATCH_FIELD_ALIASES[field])
@@ -313,12 +310,17 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
     }
 
     if (INTELLIGENCE_FIELDS.has(field)) {
-      if (typeof value !== 'string' || !INTELLIGENCE_TIERS.has(value)) {
-        fail(scope, `dispatch.${field} must be low, mid, high, frontier, or premium`)
+      if (typeof value !== 'string') {
+        fail(scope, `dispatch.${field} must be one of: low, mid, high, premium`)
       }
-      ;(out as Record<string, unknown>)[field] = value as IntelligenceTier
-      if (field === 'intelligenceMin') intelligenceMin = value as IntelligenceTier
-      if (field === 'intelligenceMax') intelligenceMax = value as IntelligenceTier
+      const normalized = normalizeIntelligenceTier(value)
+      if (normalized === undefined) {
+        fail(scope, `dispatch.${field} must be one of: low, mid, high, premium`)
+      }
+      ;(out as Record<string, unknown>)[field] = normalized
+      if (field === 'intelligenceMin') intelligenceMin = normalized
+      if (field === 'intelligenceMax') intelligenceMax = normalized
+      if (field === 'intelligenceExpected') intelligenceExpected = normalized
       continue
     }
 
@@ -346,6 +348,18 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
     INTELLIGENCE_ORDER[intelligenceMin] > INTELLIGENCE_ORDER[intelligenceMax]
   ) {
     fail(scope, 'dispatch.intelligenceMin cannot exceed dispatch.intelligenceMax')
+  }
+
+  // Validate the optional target against the available effective range. When
+  // both bounds are present the target must sit inside [min, max]; with a single
+  // bound it must respect that bound. Absent target stays absent.
+  if (intelligenceExpected !== undefined) {
+    if (intelligenceMin !== undefined && INTELLIGENCE_ORDER[intelligenceExpected] < INTELLIGENCE_ORDER[intelligenceMin]) {
+      fail(scope, 'dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
+    }
+    if (intelligenceMax !== undefined && INTELLIGENCE_ORDER[intelligenceExpected] > INTELLIGENCE_ORDER[intelligenceMax]) {
+      fail(scope, 'dispatch.intelligenceExpected cannot exceed dispatch.intelligenceMax')
+    }
   }
   return out
 }
@@ -509,19 +523,31 @@ function assertExplicitReference(
 }
 
 function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): void {
-  const min = dispatch.intelligenceMin
-  const max = dispatch.intelligenceMax
+  // Compare the normalized tiers so a rejected `frontier` alias (already
+  // dropped by the reader) never participates in the order check.
+  const min =
+    dispatch.intelligenceMin === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceMin)
+  const max =
+    dispatch.intelligenceMax === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceMax)
+  const expected =
+    dispatch.intelligenceExpected === undefined ? undefined : normalizeIntelligenceTier(dispatch.intelligenceExpected)
   if (
-    typeof min === 'string' &&
-    typeof max === 'string' &&
-    INTELLIGENCE_TIERS.has(min) &&
-    INTELLIGENCE_TIERS.has(max) &&
-    INTELLIGENCE_ORDER[min as IntelligenceTier] > INTELLIGENCE_ORDER[max as IntelligenceTier]
+    min !== undefined &&
+    max !== undefined &&
+    INTELLIGENCE_ORDER[min] > INTELLIGENCE_ORDER[max]
   ) {
     fail(
       '',
       'effective dispatch.intelligenceMin cannot exceed dispatch.intelligenceMax',
     )
+  }
+  if (expected !== undefined) {
+    if (min !== undefined && INTELLIGENCE_ORDER[expected] < INTELLIGENCE_ORDER[min]) {
+      fail('', 'effective dispatch.intelligenceExpected cannot be below dispatch.intelligenceMin')
+    }
+    if (max !== undefined && INTELLIGENCE_ORDER[expected] > INTELLIGENCE_ORDER[max]) {
+      fail('', 'effective dispatch.intelligenceExpected cannot exceed dispatch.intelligenceMax')
+    }
   }
 }
 

@@ -514,6 +514,7 @@ test('valid auto_routing payload reprojects onto the resolved automatic dispatch
       routing_output_usd_per_million: 2,
       effective_cap_usd_per_million: 4,
       score: 0.95,
+      scoring: { version: 'normalized-v1', price: 1, speed: 0.75, quota: 1, intelligence: 1 },
       reasons: ['lowest reference price', 'healthy quota'],
     }
     setDispatchAutoRouting(db, 'e1', JSON.stringify(decision))

@@ -1,4 +1,4 @@
-import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
+import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { ImplementationPlanSchema } from '../../core/task/schemas/implementation-plan.mts'
 import { FunctionalUnitSetSchema } from '../../core/task/schemas/functional-unit.mts'
@@ -80,7 +80,7 @@ const definition = {
   config: {
     description:
       'Implementation plan review — verify one-FP/FU-node plan coverage, edit/test traceability, and implement workflow readiness',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: InputSchema,

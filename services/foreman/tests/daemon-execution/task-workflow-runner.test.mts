@@ -19,7 +19,6 @@ import {
   DispatchControlError,
 } from '../../lib/daemon/dispatch-control.mts'
 import { DaemonTaskRunner } from '../../lib/daemon/execution/task-runner.mts'
-import { bindTaskRuntimeOverrideConfigPath } from '../../lib/config/task-runtime-override.mts'
 import { foremanSchemas } from '../../lib/core/task/schemas/index.mts'
 import type {
   AgentExecutionHost,
@@ -1287,40 +1286,6 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
     const row = dbGet<{ input: string | null }>('SELECT input FROM tasks ORDER BY created_at LIMIT 1')
     assert.ok(row, 'a persisted task row must exist')
     assert.ok(!JSON.stringify(result).includes(codeBuddyExecution.expectedScope), 'task results must not serialize the binding')
-  })
-
-  it('does not reintroduce an automatic stale machine pin when a settings resolver is present', async () => {
-    const workspace = makeTempDir('foreman-settings-stale-')
-    writeSettingsTask(workspace)
-    // A machine-configured soft pin that the legacy path would apply for this task.
-    const configPath = join(workspace, 'foreman.config.json')
-    writeFileSync(
-      configPath,
-      JSON.stringify({ tasks: { agentRuntime: { 'settings-task': 'forge/fast' } } }),
-      'utf-8',
-    )
-    const unbind = bindTaskRuntimeOverrideConfigPath(configPath)
-    try {
-      await discoverTasks(workspace)
-      const resolver: TaskRunSettingsResolver = async () => automaticResolution('forge/general')
-
-      let launchedProfile: string | undefined
-      const agent = async (profile: string, _prompt: string): Promise<AgentResult> => {
-        launchedProfile = profile
-        return { output: textOutput('done'), status: 'done' }
-      }
-
-      const result = await executeTask('settings-task', undefined, {
-        workspaceRoot: workspace,
-        taskSettingsResolver: resolver,
-        primitives: { agent },
-      })
-
-      assert.equal(result.status, 'done')
-      assert.equal(launchedProfile, 'forge/general', 'automatic settings result must win over a stale machine pin')
-    } finally {
-      unbind()
-    }
   })
 
   it('terminates with no fallback and zero agent calls when the resolver fails explicitly', async () => {

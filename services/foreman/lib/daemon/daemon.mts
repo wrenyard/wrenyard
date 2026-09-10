@@ -36,7 +36,6 @@ import {
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
-import { bindTaskRuntimeOverrideConfigPath } from '../config/task-runtime-override.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
@@ -188,23 +187,10 @@ export async function startForemanDaemon(
   plannedRestartStore.snapshot()
   const dispatchControl = new DispatchControl(plannedRestartStore)
 
-  // The daemon's real config path is authoritative for task list/describe/
-  // execution preference reads for the whole daemon lifecycle. One daemon-wide
-  // binding is active at a time; it is released on shutdown or startup failure.
-  const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
-  const releaseTaskOverrideBinding = bindTaskRuntimeOverrideConfigPath(authoritativeConfigPath)
-
   let runtime: ForemanDaemonRuntime | undefined
   try {
     runtime = await bootstrapForemanDaemonRuntime(dispatchControl)
     const running = await startForemanDaemonWithRuntime(config, runtime, deps, options)
-    // Wrap stop so the daemon-wide override binding outlives the RPC surface
-    // but is always released when the daemon shuts down.
-    const originalStop = running.stop
-    running.stop = async () => {
-      await originalStop()
-      releaseTaskOverrideBinding()
-    }
     return running
   } catch (error) {
     if (runtime) {
@@ -213,7 +199,6 @@ export async function startForemanDaemon(
       // rollback, drain waiting, plan completion, or admission restoration.
       await cleanupFailedDaemonStart(runtime)
     }
-    releaseTaskOverrideBinding()
     // If a durable plan is active, record the startup failure as a recoverable
     // planned_restart failure; admission stays closed (mode unchanged).
     failActivePlannedRestartOnStartup(plannedRestartStore, error, options.configPath)
@@ -999,10 +984,11 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
     catalog,
     runtime: providerRuntime,
     // Lazy per-candidate trusted local agent_turn_v1 speed evidence. The stats
-    // query reports samples keyed by the canonical provider/model:client target,
-    // the same identity the Catalog candidates and runtime task plans use.
+    // query reports samples keyed by the exact persisted provider/model, the
+    // same exact identity resolveModelSpeed matches against the Catalog model.
     localSpeed: () => readTrustedSpeedSamples31d().map((sample) => ({
-      profileId: sample.resolvedProfile,
+      provider: sample.provider,
+      model: sample.model,
       tps: sample.tps,
       sampleCount: sample.sampleCount,
       checkedAt: sample.checkedAt,

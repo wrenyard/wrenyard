@@ -1,4 +1,4 @@
-import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
+import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   FunctionalUnitSetSchema,
@@ -18,7 +18,7 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Review FunctionalUnitSet contract completeness and implementation-batch readiness before user confirmation',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: inputSchema,

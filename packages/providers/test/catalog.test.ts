@@ -178,8 +178,12 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(glmf.pricing?.cachedInputUsdPerMillion, 0.03);
   assert.equal(glmf.pricing?.outputUsdPerMillion, 0.50);
   assert.equal(glmf.pricing?.source, 'https://docs.z.ai/guides/overview/pricing');
-  assert.equal(glmf.intelligence, 'high');
+  assert.equal(glmf.intelligence, 'mid');
   assert.deepEqual(glmf.capabilities, ['text']);
+  assert.equal(glmf.intelligenceEvidence?.status, 'measured');
+  assert.equal(glmf.intelligenceEvidence?.score, 42);
+  assert.equal(glmf.intelligenceEvidence?.checkedAt, '2026-09-09');
+  assert.equal(glmf.intelligenceEvidence?.source, 'https://artificialanalysis.ai/models/glm-5-3-flash/');
   assert.equal(glmf.speed?.tps, 73.1);
   assert.equal(glmf.speed?.source, 'https://artificialanalysis.ai/models/glm-5-3-flash/');
 
@@ -205,8 +209,12 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   // HY3 is canonical (no preview/suffix aliases), high/text, and carries
   // independent speed plus official Tencent TokenHub-derived price evidence.
   const hy3 = codebuddy.models.find((entry) => entry.id === 'hy3')!;
-  assert.equal(hy3.intelligence, 'high');
+  assert.equal(hy3.intelligence, 'low');
   assert.deepEqual(hy3.capabilities, ['text']);
+  assert.equal(hy3.intelligenceEvidence?.status, 'measured');
+  assert.equal(hy3.intelligenceEvidence?.score, 26);
+  assert.equal(hy3.intelligenceEvidence?.checkedAt, '2026-09-09');
+  assert.equal(hy3.intelligenceEvidence?.source, 'https://artificialanalysis.ai/models/hy3/');
   assert.equal(hy3.speed.tps, 93.8);
   assert.match(hy3.speed.source, /^https:\/\//u);
   assert.equal(hy3.pricing?.inputUsdPerMillion, 0.139);
@@ -214,6 +222,124 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(hy3.pricing?.outputUsdPerMillion, 0.556);
   assert.equal(hy3.pricing?.source, 'https://cloud.tencent.com/document/product/1823/130055');
   assert.equal(hy3.pricing?.checkedAt, '2026-09-08');
+});
+
+test('built-in models carry auditable intelligence evidence per the verified table', () => {
+  const catalog = createBuiltinCatalog();
+  const find = (provider: string, model: string) =>
+    catalog.provider(provider)!.models.find((entry) => entry.id === model)!;
+  const ev = (provider: string, model: string) => find(provider, model).intelligenceEvidence!;
+  const tier = (provider: string, model: string) => find(provider, model).intelligence;
+
+  // Direct measured mappings.
+  assert.equal(tier('codebuddy', 'hy3'), 'low');
+  assert.equal(ev('codebuddy', 'hy3').status, 'measured');
+  assert.equal(ev('codebuddy', 'hy3').score, 26);
+  assert.equal(ev('codebuddy', 'hy3').checkedAt, '2026-09-09');
+
+  assert.equal(tier('codebuddy', 'glm-5.3-flash'), 'mid');
+  assert.equal(ev('codebuddy', 'glm-5.3-flash').status, 'measured');
+  assert.equal(ev('codebuddy', 'glm-5.3-flash').score, 42);
+
+  assert.equal(tier('codex', 'gpt-5.6-sol'), 'high');
+  assert.equal(ev('codex', 'gpt-5.6-sol').status, 'measured');
+  assert.equal(ev('codex', 'gpt-5.6-sol').score, 44);
+  assert.equal(ev('codex', 'gpt-5.6-sol').reasoningConfiguration, 'xhigh');
+
+  assert.equal(tier('codex', 'gpt-5.6-terra'), 'mid');
+  assert.equal(ev('codex', 'gpt-5.6-terra').status, 'measured');
+  assert.equal(ev('codex', 'gpt-5.6-terra').score, 38);
+
+  assert.equal(tier('codex', 'gpt-5.6-luna'), 'mid');
+  assert.equal(ev('codex', 'gpt-5.6-luna').status, 'measured');
+  assert.equal(ev('codex', 'gpt-5.6-luna').score, 35);
+
+  assert.equal(tier('cursor', 'cursor-grok-4.6-high'), 'high');
+  assert.equal(ev('cursor', 'cursor-grok-4.6-high').status, 'measured');
+  assert.equal(ev('cursor', 'cursor-grok-4.6-high').score, 44);
+  assert.equal(ev('cursor', 'cursor-grok-4.6-high').reasoningConfiguration, 'high');
+  assert.deepEqual(find('cursor', 'cursor-grok-4.6-high').pricing, {
+    inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6,
+    source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10',
+  });
+
+  assert.equal(tier('codex', 'gpt-6-astra'), 'premium');
+  assert.equal(ev('codex', 'gpt-6-astra').status, 'measured');
+  assert.equal(ev('codex', 'gpt-6-astra').score, 53);
+
+  // Kimi K3 and k3 are exact canonical equivalents and share measured high evidence.
+  assert.equal(tier('codebuddy', 'kimi-k3'), 'high');
+  assert.equal(tier('kimi-coding', 'k3'), 'high');
+  assert.equal(ev('codebuddy', 'kimi-k3').status, 'measured');
+  assert.equal(ev('kimi-coding', 'k3').status, 'measured');
+  assert.equal(ev('codebuddy', 'kimi-k3').score, 44);
+  assert.equal(ev('kimi-coding', 'k3').score, 44);
+  assert.equal(ev('codebuddy', 'kimi-k3').reasoningConfiguration, 'max');
+
+  // Product provisional: page evidence retained but status is not measured.
+  assert.equal(tier('codebuddy', 'glm-5.3'), 'high');
+  assert.equal(ev('codebuddy', 'glm-5.3').status, 'product_provisional');
+  assert.equal(ev('codebuddy', 'glm-5.3').score, 45);
+  assert.equal(tier('codebuddy', 'hy4-preview'), 'mid');
+  assert.equal(ev('codebuddy', 'hy4-preview').status, 'product_provisional');
+  assert.equal(ev('codebuddy', 'hy4-preview').score, undefined);
+  assert.equal(tier('codebuddy', 'deepseek-v4-flash'), 'mid');
+  assert.equal(ev('codebuddy', 'deepseek-v4-flash').status, 'product_provisional');
+  assert.equal(ev('codebuddy', 'deepseek-v4-flash').score, 35);
+  assert.equal(tier('codebuddy', 'deepseek-v4-pro'), 'mid');
+  assert.equal(ev('codebuddy', 'deepseek-v4-pro').status, 'product_provisional');
+  assert.equal(ev('codebuddy', 'deepseek-v4-pro').score, 36);
+  assert.equal(tier('anthropic-api', 'claude-fable-5'), 'premium');
+  assert.equal(ev('anthropic-api', 'claude-fable-5').status, 'product_provisional');
+  assert.equal(ev('anthropic-api', 'claude-fable-5').score, undefined);
+  assert.equal(tier('anthropic-api', 'claude-opus-5'), 'premium');
+  assert.equal(ev('anthropic-api', 'claude-opus-5').status, 'product_provisional');
+  assert.equal(ev('anthropic-api', 'claude-opus-5').score, 51);
+
+  // Estimated: not verified high, status is estimated.
+  assert.equal(tier('anthropic-api', 'claude-haiku-4-5-20251001'), 'low');
+  assert.equal(ev('anthropic-api', 'claude-haiku-4-5-20251001').status, 'estimated');
+  assert.equal(ev('anthropic-api', 'claude-haiku-4-5-20251001').score, 15);
+  assert.equal(tier('zhipu', 'glm-4.7-flash'), 'low');
+  assert.equal(ev('zhipu', 'glm-4.7-flash').status, 'estimated');
+  assert.equal(ev('zhipu', 'glm-4.7-flash').score, 15);
+  assert.equal(tier('zhipu', 'glm-5-turbo'), 'low');
+  assert.equal(ev('zhipu', 'glm-5-turbo').status, 'estimated');
+  assert.equal(ev('zhipu', 'glm-5-turbo').score, 27);
+  assert.equal(tier('zhipu', 'glm-5.2'), 'mid');
+  assert.equal(ev('zhipu', 'glm-5.2').status, 'estimated');
+  assert.equal(ev('zhipu', 'glm-5.2').score, 39);
+  assert.equal(tier('codex', 'gpt-5.4'), 'mid');
+  assert.equal(ev('codex', 'gpt-5.4').status, 'estimated');
+  assert.equal(ev('codex', 'gpt-5.4').score, 39);
+  assert.equal(tier('moonshot', 'kimi-k2.5'), 'low');
+  assert.equal(ev('moonshot', 'kimi-k2.5').status, 'estimated');
+  assert.equal(ev('moonshot', 'kimi-k2.5').score, 23);
+  assert.equal(tier('moonshot', 'kimi-k2.6'), 'mid');
+  assert.equal(ev('moonshot', 'kimi-k2.6').status, 'estimated');
+  assert.equal(ev('moonshot', 'kimi-k2.6').score, 31);
+  assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
+  assert.equal(ev('qwen-coding', 'qwen3.6-plus').status, 'estimated');
+  assert.equal(ev('qwen-coding', 'qwen3.6-plus').score, 27);
+
+  // Unknown exact routes: no tier and no evidence (never inherited from a
+  // generic sibling id).
+  for (const [provider, model] of [
+    ['cursor', 'composer-2.5'],
+    ['codex', 'gpt-5.3-codex-spark'],
+    ['tokenhub', 'deepseek-v4-flash-202605'],
+    ['tokenhub', 'deepseek-v4-pro-202606'],
+    ['tokenhub', 'deepseek/deepseek-v4-flash-vision-exp'],
+    ['qwen-coding', 'qwen3-coder-plus'],
+    ['qwen-coding', 'qwen3.5-plus'],
+    ['qwen', 'qwen3.7-flash'],
+  ] as const) {
+    assert.equal(tier(provider, model), undefined, `${provider}/${model} has no intelligence tier`);
+    assert.equal(find(provider, model).intelligenceEvidence, undefined, `${provider}/${model} must not inherit intelligence evidence`);
+  }
+  // A dated id never inherits an unrelated model's score.
+  assert.equal(find('tokenhub', 'qwen3.5-plus').intelligence, undefined);
+  assert.equal(find('tokenhub', 'qwen3.5-plus').intelligenceEvidence, undefined);
 });
 
 test('every registered built-in model has a valid authoritative speed default', () => {

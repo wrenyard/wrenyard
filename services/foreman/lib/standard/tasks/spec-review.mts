@@ -1,4 +1,4 @@
-import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
+import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import specDocument from '../instructions/spec-document.mts'
 import { FeaturePointSetSchema } from '../../core/task/schemas/feature-point.mts'
@@ -71,7 +71,7 @@ const definition = {
   __type: 'task' as const,
   config: {
     description: 'Spec review — check document format, canonical FP/FU structure, and coverage of confirmed FeaturePoints/FunctionalUnits',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     input: InputSchema,
     output: specReviewResultSchema,

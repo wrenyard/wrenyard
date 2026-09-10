@@ -21,7 +21,7 @@ test('stats snapshot projects bounded summary data for Desktop', async () => {
       source: 'sqlite',
       today: { ...today, outcomes: { done: 9, failed: 1, cancelled: 1, running: 1 } },
       daily: [{ ...today, outcomes: { done: 9, failed: 1, cancelled: 1 } }],
-      byProfile: [{ profile: 'kimi', dispatchCount: 8, inputTokens: 1, outputTokens: 2, totalTokens: 3 }],
+      byProfile: [{ model: 'kimi', dispatchCount: 8, inputTokens: 1, outputTokens: 2, totalTokens: 3 }],
       byTask: [{ taskName: 'edit', dispatchCount: 6, inputTokens: 1, outputTokens: 2, totalTokens: 3 }],
       windows: [{
         period: '24h',
@@ -29,7 +29,7 @@ test('stats snapshot projects bounded summary data for Desktop', async () => {
         endAt: today.endAt,
         dispatchCount: 12,
         totalTokens: 3_900,
-        byProfile: [{ profile: 'kimi', runCount: 8, totalTokens: 3_000, averageTps: 12.5 }],
+        byProfile: [{ model: 'kimi', runCount: 8, totalTokens: 3_000, averageTps: 12.5 }],
         taskStats: {
           totalDurationMs: 120_000,
           byTask: [{ taskId: 'edit', source: 'builtin', runCount: 6, durationMs: 80_000, averageDurationMs: 13_333 }],
@@ -42,7 +42,7 @@ test('stats snapshot projects bounded summary data for Desktop', async () => {
 
   assert.equal(snapshot.status, 'available');
   assert.equal(snapshot.source, 'summary');
-  assert.deepEqual(snapshot.byProfile, [{ name: 'kimi', dispatchCount: 8, totalTokens: 3 }]);
+  assert.deepEqual(snapshot.byProfile, [{ name: 'kimi', model: 'kimi', dispatchCount: 8, totalTokens: 3 }]);
   assert.deepEqual(snapshot.byTask, [{ name: 'edit', dispatchCount: 6, totalTokens: 3 }]);
   assert.equal(snapshot.windows[0].totalDurationMs, 120_000);
   assert.equal(snapshot.windows[0].builtinTotalDurationMs, 80_000);
@@ -80,7 +80,7 @@ test('stats snapshot rejects malformed projections and caps renderer arrays', as
       source: 'sqlite',
       today: { ...today, outcomes: { done: 1, failed: 0, cancelled: 0 } },
       daily: Array.from({ length: 400 }, (_, index) => ({ ...today, dayKey: `day-${index}` })),
-      byProfile: Array.from({ length: 100 }, (_, index) => ({ profile: `p-${index}`, dispatchCount: 1, totalTokens: 1 })),
+      byProfile: Array.from({ length: 100 }, (_, index) => ({ model: `p-${index}`, dispatchCount: 1, totalTokens: 1 })),
       byTask: [],
       windows: [],
     };
@@ -290,7 +290,7 @@ test('stats snapshot retains runs with unknown cost and never fabricates a speed
   assert.equal(zeroAndBad.speed, undefined);
 });
 
-test('stats snapshot parses additive model/display/provider fields and prefers model over legacy profile', async () => {
+test('stats snapshot requires model identity for rankings and preserves display fields', async () => {
   const snapshot = await buildStatsSnapshot(async (method) => {
     if (method === 'stats.today') throw new Error('method unavailable');
     return {
@@ -340,19 +340,13 @@ test('stats snapshot parses additive model/display/provider fields and prefers m
     };
   });
 
-  assert.equal(snapshot.byProfile.length, 2);
+  assert.equal(snapshot.byProfile.length, 1);
   // model is preferred over the legacy profile for the internal identity
   assert.equal(snapshot.byProfile[0].name, 'kimi/kimi-k2');
   assert.equal(snapshot.byProfile[0].model, 'kimi/kimi-k2');
   assert.equal(snapshot.byProfile[0].modelDisplayName, 'Kimi K2');
   // provider names are de-duplicated deterministically, preserving order
   assert.deepEqual(snapshot.byProfile[0].providerDisplayNames, ['Kimi', 'Moonshot']);
-  // old profile-only payload stays parseable but never acquires a guessed display name
-  assert.equal(snapshot.byProfile[1].name, 'old-only');
-  assert.equal(snapshot.byProfile[1].model, undefined);
-  assert.equal(snapshot.byProfile[1].modelDisplayName, undefined);
-  assert.equal(snapshot.byProfile[1].providerDisplayNames, undefined);
-
   const windowProfile = snapshot.windows[0].byProfile[0];
   assert.equal(windowProfile.name, 'kimi/kimi-k3');
   assert.equal(windowProfile.modelDisplayName, 'Kimi K3');

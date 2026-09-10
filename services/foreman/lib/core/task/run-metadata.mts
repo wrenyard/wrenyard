@@ -375,9 +375,19 @@ const AUTO_ROUTING_DECISION_KEYS: ReadonlySet<string> = new Set([
  */
 function isAutoRoutingDecision(record: Record<string, unknown>): record is TaskAutoRoutingDecision & Record<string, unknown> {
   const keys = Object.keys(record)
-  if (keys.length !== AUTO_ROUTING_DECISION_KEYS.size) return false
+  if (keys.length !== AUTO_ROUTING_DECISION_KEYS.size + (record.scoring === undefined ? 0 : 1)) return false
   for (const key of keys) {
-    if (!AUTO_ROUTING_DECISION_KEYS.has(key)) return false
+    if (key !== 'scoring' && !AUTO_ROUTING_DECISION_KEYS.has(key)) return false
+  }
+  if (record.scoring !== undefined) {
+    const factors = record.scoring
+    if (typeof factors !== 'object' || factors === null || Array.isArray(factors)) return false
+    const values = factors as Record<string, unknown>
+    if (Object.keys(values).length !== 5 || values.version !== 'normalized-v1') return false
+    for (const key of ['price', 'speed', 'quota', 'intelligence']) {
+      const value = values[key]
+      if (!isFiniteNumber(value) || value < 0 || value > 1) return false
+    }
   }
   return (
     typeof record.snapshot_id === 'string'
@@ -423,6 +433,7 @@ function parseAutoRoutingDecision(raw: string | null): TaskAutoRoutingDecision |
     routing_output_usd_per_million: record.routing_output_usd_per_million,
     effective_cap_usd_per_million: record.effective_cap_usd_per_million,
     score: record.score,
+    ...(record.scoring === undefined ? {} : { scoring: { ...record.scoring } }),
     reasons: [...record.reasons],
   }
 }

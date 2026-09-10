@@ -4,7 +4,11 @@ import {
   Catalog,
   resolveConstrainedDispatch,
   isDynamicFast,
+  INTELLIGENCE_ORDER,
+  normalizeIntelligenceTier,
   type DispatchCandidate,
+  type IntelligenceEvidence,
+  type IntelligenceTier,
   type ModelCapability,
   type ModelDefinition,
   type ModelSpeedMeta,
@@ -17,6 +21,13 @@ import {
 
 function speedFixture(tps = 40, source = 'benchmark-fixture', checkedAt = '2026-09-05'): ModelSpeedMeta {
   return { tps, source, checkedAt };
+}
+
+// A freshly-minted ISO timestamp a few days before the current clock, used so
+// local speed samples stay within the 31-day freshness window regardless of when
+// the suite runs.
+function recentIso(daysAgo = 5): string {
+  return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
 }
 
 test('native routing wins over a shared gateway protocol', () => {
@@ -56,7 +67,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   const mk = (
     id: string,
-    intelligence: undefined | 'low' | 'mid' | 'high' | 'frontier' | 'premium',
+    intelligence: undefined | 'low' | 'mid' | 'high' | 'premium',
     tps: number,
     outUsd: number | undefined,
     capabilities: readonly ModelCapability[] = ['text'] as readonly ModelCapability[],
@@ -101,6 +112,39 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
   return { catalog, candidates };
 }
 
+function buildEvidenceCatalog(): { catalog: Catalog; candidates: DispatchCandidate[] } {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  const mk = (
+    id: string,
+    intelligence: 'low' | 'mid' | 'high' | 'premium',
+    evidence?: IntelligenceEvidence,
+  ) => ({
+    id, displayName: id, intelligence,
+    ...(evidence ? { intelligenceEvidence: evidence } : {}),
+    speed: { tps: 50, source: 'bench-evidence', checkedAt: '2026-09-09' },
+  });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [
+      mk('measured-high', 'high', { source: 'https://aa.test/measured-high', checkedAt: '2026-09-09', status: 'measured', indexVersion: 'v4.3', score: 44 }),
+      mk('absent-high', 'high'),
+      mk('estimated-high', 'high', { source: 'https://aa.test/estimated', checkedAt: '2026-09-09', status: 'estimated', score: 47 }),
+      mk('provisional-high', 'high', { source: 'https://aa.test/provisional', checkedAt: '2026-09-09', status: 'product_provisional', score: 45 }),
+      mk('low-ok', 'low', { source: 'https://aa.test/low', checkedAt: '2026-09-09', status: 'measured', score: 20 }),
+    ],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  const candidates: DispatchCandidate[] = [
+    { profileId: 'measured', client: 'c1', provider: 'p', model: 'measured-high' },
+    { profileId: 'absent', client: 'c1', provider: 'p', model: 'absent-high' },
+    { profileId: 'estimated', client: 'c1', provider: 'p', model: 'estimated-high' },
+    { profileId: 'provisional', client: 'c1', provider: 'p', model: 'provisional-high' },
+    { profileId: 'low', client: 'c1', provider: 'p', model: 'low-ok' },
+  ];
+  return { catalog, candidates };
+}
+
 test('hard max output price excludes over-budget candidates', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, { maxOutputUsdPerMillion: 4 });
@@ -138,12 +182,13 @@ test('explicit exclusions across all candidates yield no eligible result', () =>
 
 test('local 31-day agent_turn_v1 speed overrides catalog default truthfully', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 60 }, [{ profileId: 'fast', tps: 99, sampleCount: 31, checkedAt: '2026-09-05' }]);
+  const result = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 60 }, [{ provider: 'p', model: 'mfast', tps: 99, sampleCount: 31, checkedAt: recentIso(5) }]);
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mfast');
   assert.equal(result.selected.speed.source, 'local_31d');
   assert.equal(result.selected.speed.tps, 99);
-  assert.equal(result.selected.speed.profileId, 'fast');
+  assert.equal(result.selected.speed.provider, 'p');
+  assert.equal(result.selected.speed.model, 'mfast');
   assert.equal(result.selected.speed.sampleCount, 31);
 });
 
@@ -174,17 +219,58 @@ test('deterministic ordering: same expected-speed group orders lower price befor
     { profileId: 'alt', client: 'c1', provider: 'p2', model: 'z' },
   ];
   // Both mfast (p, out 2) and z (p2, out 2) have tps 50; identity tie-break favours p/mfast.
-  const result = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, [{ profileId: 'alt', tps: 50, sampleCount: 10, checkedAt: '2026-09-05' }]);
+  const result = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, [{ provider: 'p2', model: 'z', tps: 50, sampleCount: 10, checkedAt: recentIso(5) }]);
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mfast');
 });
 
 test('no eligible candidate returns a structured failure for a genuinely impossible intelligence band', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'frontier', intelligenceMax: 'frontier' });
+  // A premium band fails closed: the only premium fixture lacks measured
+  // evidence, so no candidate satisfies the band.
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'premium', intelligenceMax: 'premium' });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'no-eligible-candidate');
   assert.equal(result.considered, candidates.length);
+});
+
+test('intelligence order exposes exactly four current tiers and no frontier', () => {
+  assert.deepEqual(Object.keys(INTELLIGENCE_ORDER), ['low', 'mid', 'high', 'premium']);
+  assert.equal(INTELLIGENCE_ORDER.low, 0);
+  assert.equal(INTELLIGENCE_ORDER.mid, 1);
+  assert.equal(INTELLIGENCE_ORDER.high, 2);
+  assert.equal(INTELLIGENCE_ORDER.premium, 3);
+});
+
+test('compatibility normalizer accepts only the four current tiers and rejects frontier/legacy', () => {
+  assert.equal(normalizeIntelligenceTier('low'), 'low');
+  assert.equal(normalizeIntelligenceTier('mid'), 'mid');
+  assert.equal(normalizeIntelligenceTier('high'), 'high');
+  assert.equal(normalizeIntelligenceTier('premium'), 'premium');
+  // The legacy 'frontier' alias is no longer collapsed to 'high'; it is rejected.
+  assert.equal(normalizeIntelligenceTier('frontier'), undefined);
+  assert.equal(normalizeIntelligenceTier(undefined), undefined);
+  assert.equal(normalizeIntelligenceTier('legacy-unknown'), undefined);
+});
+
+test('low eligibility does not require measured intelligence evidence', () => {
+  const { catalog, candidates } = buildEvidenceCatalog();
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'low', intelligenceMax: 'low' });
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.plan.model, 'low-ok');
+});
+
+test('high dispatch fails closed on absent, estimated, or product-provisional evidence but admits measured', () => {
+  const { catalog, candidates } = buildEvidenceCatalog();
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'high' });
+  assert.equal(result.ok, true);
+  assert.equal(result.selected.plan.model, 'measured-high');
+  assert.equal(result.selected.model.intelligence, 'high');
+  // Absent/estimated/product-provisional high evidence must not pass verified dispatch.
+  const onlyBad: DispatchCandidate[] = candidates.filter((c) => c.model !== 'measured-high' && c.model !== 'low-ok');
+  const bad = resolveConstrainedDispatch(catalog, onlyBad, { intelligenceMin: 'high' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, 'no-eligible-candidate');
 });
 
 test('missing price metadata fails closed under a max-output-price requirement', () => {
@@ -337,23 +423,27 @@ test('registerProvider validates modelSpeedOverrides evidence and exact canonica
 
 test('per-profile local 31-day samples are accepted individually with sample count', () => {
   const { catalog, candidates } = buildDispatchCatalog();
+  const fastCheckedAt = recentIso(5);
+  const midCheckedAt = recentIso(6);
   const fastOnly: DispatchCandidate[] = [{ profileId: 'fast', client: 'c1', provider: 'p', model: 'mfast' }];
-  const fastResult = resolveConstrainedDispatch(catalog, fastOnly, {}, [{ profileId: 'fast', tps: 99, sampleCount: 31, checkedAt: '2026-09-05' }]);
+  const fastResult = resolveConstrainedDispatch(catalog, fastOnly, {}, [{ provider: 'p', model: 'mfast', tps: 99, sampleCount: 31, checkedAt: fastCheckedAt }]);
   assert.equal(fastResult.ok, true);
   assert.equal(fastResult.selected.speed.source, 'local_31d');
   assert.equal(fastResult.selected.speed.tps, 99);
-  assert.equal(fastResult.selected.speed.profileId, 'fast');
+  assert.equal(fastResult.selected.speed.provider, 'p');
+  assert.equal(fastResult.selected.speed.model, 'mfast');
   assert.equal(fastResult.selected.speed.sampleCount, 31);
-  assert.equal(fastResult.selected.speed.checkedAt, '2026-09-05');
+  assert.equal(fastResult.selected.speed.checkedAt, fastCheckedAt);
 
   const midOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' }];
-  const midResult = resolveConstrainedDispatch(catalog, midOnly, {}, [{ profileId: 'mid', tps: 120, sampleCount: 20, checkedAt: '2026-09-04' }]);
+  const midResult = resolveConstrainedDispatch(catalog, midOnly, {}, [{ provider: 'p', model: 'mmid', tps: 120, sampleCount: 20, checkedAt: midCheckedAt }]);
   assert.equal(midResult.ok, true);
   assert.equal(midResult.selected.speed.source, 'local_31d');
   assert.equal(midResult.selected.speed.tps, 120);
-  assert.equal(midResult.selected.speed.profileId, 'mid');
+  assert.equal(midResult.selected.speed.provider, 'p');
+  assert.equal(midResult.selected.speed.model, 'mmid');
   assert.equal(midResult.selected.speed.sampleCount, 20);
-  assert.equal(midResult.selected.speed.checkedAt, '2026-09-04');
+  assert.equal(midResult.selected.speed.checkedAt, midCheckedAt);
 });
 
 function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCandidate; defaultModel: DispatchCandidate } {
@@ -393,12 +483,13 @@ test('exact speed precedence is local_31d over provider_override over catalog_de
 
   // A usable exact-profile local sample outranks the provider override.
   const localSample = resolveConstrainedDispatch(catalog, [overrideModel], {}, [
-    { profileId: 'p/m:c1', tps: 90, sampleCount: 31, checkedAt: '2026-09-07' },
+    { provider: 'p', model: 'm', tps: 90, sampleCount: 31, checkedAt: recentIso(3) },
   ]);
   assert.equal(localSample.ok, true);
   assert.equal(localSample.selected.speed.source, 'local_31d');
   assert.equal(localSample.selected.speed.tps, 90);
-  assert.equal(localSample.selected.speed.profileId, 'p/m:c1');
+  assert.equal(localSample.selected.speed.provider, 'p');
+  assert.equal(localSample.selected.speed.model, 'm');
 });
 
 test('invalid local samples fall through to the canonical speed tiers', () => {
@@ -415,47 +506,54 @@ test('invalid local samples fall through to the canonical speed tiers', () => {
   ];
   for (const sample of invalid) {
     // An unusable exact-profile sample is skipped; the provider override applies.
-    const viaOverride = resolveConstrainedDispatch(catalog, [overrideModel], {}, [{ profileId: 'p/m:c1', ...sample }]);
+    const viaOverride = resolveConstrainedDispatch(catalog, [overrideModel], {}, [{ provider: 'p', model: 'm', ...sample }]);
     assert.equal(viaOverride.ok, true);
     assert.equal(viaOverride.selected.speed.source, 'provider_override');
     assert.equal(viaOverride.selected.speed.tps, 60);
 
     // A model without an override falls through to its required default speed.
-    const viaDefault = resolveConstrainedDispatch(catalog, [defaultModel], {}, [{ profileId: 'p/n:c1', ...sample }]);
+    const viaDefault = resolveConstrainedDispatch(catalog, [defaultModel], {}, [{ provider: 'p', model: 'n', ...sample }]);
     assert.equal(viaDefault.ok, true);
     assert.equal(viaDefault.selected.speed.source, 'catalog_default');
     assert.equal(viaDefault.selected.speed.tps, 20);
   }
 });
 
-test('unusable alias-profile local samples are not reinterpreted onto canonical profiles', () => {
+test('exact provider/model local samples are isolated across models and stale samples fall through', () => {
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    modelAliases: { 'legacy-glm': 'glm-5.3' },
-    models: [{ id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) }],
-    modelSpeedOverrides: { 'glm-5.3': { tps: 70, source: 'override-bench', checkedAt: '2026-09-06' } },
+    models: [
+      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) },
+      { id: 'other', displayName: 'Other', intelligence: 'mid', speed: speedFixture(20) },
+    ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  const aliasCandidate: DispatchCandidate = { profileId: 'legacy-glm:cc', client: 'c1', provider: 'p', model: 'legacy-glm' };
   const canonicalCandidate: DispatchCandidate = { profileId: 'glm-5.3:cc', client: 'c1', provider: 'p', model: 'glm-5.3' };
+  const otherCandidate: DispatchCandidate = { profileId: 'other:cc', client: 'c1', provider: 'p', model: 'other' };
   const local = [
-    { profileId: 'legacy-glm:cc', tps: 0, sampleCount: 10, checkedAt: '2026-09-05' },
-    { profileId: 'glm-5.3:cc', tps: 95, sampleCount: 10, checkedAt: '2026-09-05' },
+    { provider: 'p', model: 'glm-5.3', tps: 95, sampleCount: 10, checkedAt: recentIso(2) },
+    { provider: 'p', model: 'other', tps: 0, sampleCount: 10, checkedAt: recentIso(2) },
   ];
-  // The unusable alias-profile sample is ignored and the alias candidate is not
-  // remapped onto the canonical profile's usable sample: it falls through to the
-  // canonical provider override instead.
-  const viaAlias = resolveConstrainedDispatch(catalog, [aliasCandidate], {}, local);
-  assert.equal(viaAlias.ok, true);
-  assert.equal(viaAlias.selected.speed.source, 'provider_override');
-  assert.equal(viaAlias.selected.speed.tps, 70);
-  // The canonical candidate matches its own valid exact-profile sample.
+  // The canonical candidate matches its own exact-provider/model sample.
   const viaCanonical = resolveConstrainedDispatch(catalog, [canonicalCandidate], {}, local);
   assert.equal(viaCanonical.ok, true);
   assert.equal(viaCanonical.selected.speed.source, 'local_31d');
   assert.equal(viaCanonical.selected.speed.tps, 95);
+  // An invalid zero-TPS sample is skipped; another model's sample cannot replace it.
+  const viaOther = resolveConstrainedDispatch(catalog, [otherCandidate], {}, local);
+  assert.equal(viaOther.ok, true);
+  assert.equal(viaOther.selected.speed.source, 'catalog_default');
+  assert.equal(viaOther.selected.speed.tps, 20);
+  // A stale (>31-day) local sample falls through to the model default speed.
+  const stale = [
+    { provider: 'p', model: 'glm-5.3', tps: 200, sampleCount: 10, checkedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString() },
+  ];
+  const viaDefault = resolveConstrainedDispatch(catalog, [canonicalCandidate], {}, stale);
+  assert.equal(viaDefault.ok, true);
+  assert.equal(viaDefault.selected.speed.source, 'catalog_default');
+  assert.equal(viaDefault.selected.speed.tps, 40);
 });
 
 test('strict dynamic-fast boundary is tps greater than 80, not 80', () => {
@@ -468,8 +566,8 @@ test('strict dynamic-fast boundary is tps greater than 80, not 80', () => {
   const fast81: DispatchCandidate[] = [{ profileId: 'f81', client: 'c1', provider: 'p', model: 'mmid' }];
   // Override speeds to exactly 80 and 81 for the boundary check.
   const local = [
-    { profileId: 'f80', tps: 80, sampleCount: 5, checkedAt: '2026-09-05' },
-    { profileId: 'f81', tps: 81, sampleCount: 5, checkedAt: '2026-09-05' },
+    { provider: 'p', model: 'mfast', tps: 80, sampleCount: 5, checkedAt: recentIso(5) },
+    { provider: 'p', model: 'mmid', tps: 81, sampleCount: 5, checkedAt: recentIso(5) },
   ];
   const result = resolveConstrainedDispatch(catalog, [...fast80, ...fast81], { minimumTps: 81 }, local);
   assert.equal(result.ok, true);
@@ -580,16 +678,25 @@ test('automatic dispatch collapses the same provider/model to the Catalog-native
 
 test('hard gates run before client collapse: an unusable native path falls back to the grok gateway', () => {
   const { catalog, native, codebuddyGateway, grokGateway } = buildDualRouteCatalog();
-  // The native claude plan's local sample is under minimumTps, so the hard gate
-  // filters it before collapse; among the surviving gateway clients grok wins.
+  // The exact provider/model local sample is shared identically by every client
+  // of vendor/m. With the shared sample above the floor, all clients pass the
+  // speed gate and collapse picks the eligible native claude plan.
   const result = resolveConstrainedDispatch(catalog, [codebuddyGateway, grokGateway, native], { minimumTps: 60 }, [
-    { profileId: native.profileId, tps: 20, sampleCount: 5, checkedAt: '2026-09-05' },
-    { profileId: codebuddyGateway.profileId, tps: 90, sampleCount: 5, checkedAt: '2026-09-05' },
-    { profileId: grokGateway.profileId, tps: 90, sampleCount: 5, checkedAt: '2026-09-05' },
+    { provider: 'vendor', model: 'm', tps: 90, sampleCount: 5, checkedAt: recentIso(5) },
   ]);
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.client, 'grok');
-  assert.equal(result.selected.plan.mode, 'gateway');
+  assert.equal(result.selected.plan.client, 'claude');
+  assert.equal(result.selected.plan.mode, 'native');
+  assert.equal(result.selected.speed.source, 'local_31d');
+  assert.equal(result.selected.speed.tps, 90);
+
+  // When the shared sample is below the floor, the same speed gate filters every
+  // client of the model; client collapse cannot rescue any route.
+  const tooSlow = resolveConstrainedDispatch(catalog, [codebuddyGateway, grokGateway, native], { minimumTps: 60 }, [
+    { provider: 'vendor', model: 'm', tps: 20, sampleCount: 5, checkedAt: recentIso(5) },
+  ]);
+  assert.equal(tooSlow.ok, false);
+  assert.equal(tooSlow.reason, 'no-eligible-candidate');
 });
 
 test('with no native route the grok client beats claude for the same provider/model', () => {

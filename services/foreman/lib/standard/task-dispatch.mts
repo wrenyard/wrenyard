@@ -9,11 +9,12 @@ import type { IntelligenceTier, TaskDispatchRequirements } from '@wrenyard/catal
  * its historical `agentRuntime` cost/intelligence class, so no task duplicates
  * the requirement logic.
  *
- * Class mapping (driven by historical `agentRuntime` selectors):
- *   - FREQUENT  ← forge/fast        (frequent mechanical / fast tasks)
- *   - GENERAL   ← forge/general
- *   - ULTRA     ← forge/ultra
- *   - VISION    ← forge/gk-kimi     (vision-specialized, exact routing preserved)
+ * Class mapping:
+ *   - FREQUENT  — frequent mechanical / fast / explore tasks
+ *   - GENERAL   — general tasks
+ *   - REVIEW    — explicit review / judgment tasks
+ *   - ULTRA     — ultra tasks
+ *   - VISION    — vision-specialized tasks (exact routing preserved)
  */
 
 /** Models/profiles excluded across aliases for the strict frequent class. */
@@ -38,15 +39,17 @@ const FREQUENT_PROFILE_EXCLUSIONS = [
 ] as const
 
 /**
- * Frequent / mechanical / fast tasks: strict throughput and a hard cost
- * ceiling, mid..high intelligence, with explicit model + profile exclusions
- * for GLM-5.3, Kimi K3 (k3), GPT-5.6 Sol, and GPT-6 Astra across aliases.
+ * Frequent / mechanical / fast / explore tasks: strict throughput and a hard
+ * cost ceiling, low..high intelligence (so the free HY3 runtime stays eligible),
+ * with explicit model + profile exclusions for GLM-5.3, Kimi K3 (k3),
+ * GPT-5.6 Sol, and GPT-6 Astra across aliases.
  */
 export const FREQUENT_DISPATCH_REQUIREMENTS = {
   expectedTps: 80,
   minimumTps: 60,
-  intelligenceMin: 'mid' as IntelligenceTier,
+  intelligenceMin: 'low' as IntelligenceTier,
   intelligenceMax: 'high' as IntelligenceTier,
+  intelligenceExpected: 'low' as IntelligenceTier,
   maxOutputUsdPerMillion: 6,
   excludeModelIds: [...FREQUENT_MODEL_EXCLUSIONS],
   excludeProfileIds: [...FREQUENT_PROFILE_EXCLUSIONS],
@@ -61,32 +64,49 @@ export const GENERAL_DISPATCH_REQUIREMENTS = {
   minimumTps: 20,
   intelligenceMin: 'mid' as IntelligenceTier,
   intelligenceMax: 'high' as IntelligenceTier,
+  intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 18,
 } satisfies TaskDispatchRequirements
 
 /**
+ * Review / judgment tasks: explicit review workloads that demand high-grade
+ * reasoning. high..premium intelligence with a permissive output cost ceiling
+ * (maxOutputUsdPerMillion 60) and no unrelated model/profile exclusions.
+ */
+export const REVIEW_DISPATCH_REQUIREMENTS = {
+  expectedTps: 40,
+  minimumTps: 20,
+  intelligenceMin: 'high' as IntelligenceTier,
+  intelligenceMax: 'premium' as IntelligenceTier,
+  intelligenceExpected: 'high' as IntelligenceTier,
+  maxOutputUsdPerMillion: 60,
+} satisfies TaskDispatchRequirements
+
+/**
  * Ultra tasks: historical ultra cost / intelligence class with explicit
- * bounded values (frontier..premium intelligence, permissive output cost ceiling).
+ * bounded values (high..premium intelligence, permissive output cost ceiling).
  */
 export const ULTRA_DISPATCH_REQUIREMENTS = {
   expectedTps: 20,
   minimumTps: 8,
-  intelligenceMin: 'frontier' as IntelligenceTier,
+  intelligenceMin: 'high' as IntelligenceTier,
   intelligenceMax: 'premium' as IntelligenceTier,
+  intelligenceExpected: 'high' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
 } satisfies TaskDispatchRequirements
 
 /**
  * Vision-specialized tasks (e.g. look-at): require vision capability and
- * preserve the exact specialized routing (forge/gk-kimi). Frontier intelligence
- * tier (frontier..frontier) with a cost ceiling and no exclusions, so the pinned
- * specialized K3 runtime stays eligible.
+ * preserve the exact specialized routing (forge/gk-kimi). high..high intelligence
+ * tier with a cost ceiling and no exclusions, so the pinned specialized K3
+ * runtime stays eligible.
  */
 export const VISION_DISPATCH_REQUIREMENTS = {
   expectedTps: 20,
   minimumTps: 8,
-  intelligenceMin: 'frontier' as IntelligenceTier,
-  intelligenceMax: 'frontier' as IntelligenceTier,
+  intelligenceMin: 'high' as IntelligenceTier,
+  intelligenceMax: 'high' as IntelligenceTier,
+  intelligenceExpected: 'high' as IntelligenceTier,
   maxOutputUsdPerMillion: 15,
   requiredCapabilities: ['image'],
 } satisfies TaskDispatchRequirements

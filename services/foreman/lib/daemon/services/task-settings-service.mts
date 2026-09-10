@@ -1245,9 +1245,12 @@ export class TaskSettingsService {
       snapshot,
       capUsdPerM,
       minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
-      expectedTps: finiteOrDefault(params.requirements.expectedTps, 0),
       intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
       intelligenceMaxRank: intelligenceRankOf(params.requirements.intelligenceMax, INTELLIGENCE_ORDER.premium),
+      intelligenceExpectedRank:
+        params.requirements.intelligenceExpected === undefined
+          ? undefined
+          : intelligenceRankOf(params.requirements.intelligenceExpected, INTELLIGENCE_ORDER.premium),
     }
 
     const inputs: CandidateInput[] = []
@@ -1303,6 +1306,13 @@ export class TaskSettingsService {
       routing_output_usd_per_million: best.routingPriceUsdPerM,
       effective_cap_usd_per_million: context.capUsdPerM,
       score: best.score,
+      scoring: {
+        version: 'normalized-v1',
+        price: best.priceFactor,
+        speed: best.speedFactor,
+        quota: best.quotaQuality,
+        intelligence: best.intelligenceFactor,
+      },
       reasons: [...best.notes],
     }
     const { exactAgentRuntime: _exact, ...resolvedFields } = chosen.choice
@@ -1506,9 +1516,9 @@ interface AutomaticSelectionContext {
   snapshot: AutoRoutingQuotaSnapshot | null
   capUsdPerM: number
   minimumTps: number
-  expectedTps: number
   intelligenceMinRank: number
   intelligenceMaxRank: number
+  intelligenceExpectedRank: number | undefined
 }
 
 function finiteOrDefault(value: number | undefined, fallback: number): number {
@@ -1671,11 +1681,11 @@ function toAutomaticCandidateInput(
     effectiveCapUsdPerM: context.capUsdPerM,
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,
-    expectedTps: context.expectedTps,
     effectiveTps: choice.speed.effective_tps,
     intelligenceRank,
     intelligenceMinRank: context.intelligenceMinRank,
     intelligenceMaxRank: context.intelligenceMaxRank,
+    intelligenceExpectedRank: context.intelligenceExpectedRank,
     requiredQuota,
     ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
     confirmedFreeSupply: freeFact
@@ -1723,8 +1733,9 @@ function automaticSelectionFailure(
 interface TaskSettingsEffectiveAutomaticDto {
   expected_tps: { value: number | null; source: TaskSettingsSourceLayer }
   minimum_tps: { value: number | null; source: TaskSettingsSourceLayer }
-  intelligence_min: { value: 'low' | 'mid' | 'high' | 'frontier' | 'premium' | null; source: TaskSettingsSourceLayer }
-  intelligence_max: { value: 'low' | 'mid' | 'high' | 'frontier' | 'premium' | null; source: TaskSettingsSourceLayer }
+  intelligence_min: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
+  intelligence_max: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
+  intelligence_expected: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }
   max_output_usd_per_million: { value: number | null; source: TaskSettingsSourceLayer }
   required_capabilities: { value: Array<'text' | 'image'> | null; source: TaskSettingsSourceLayer }
   exclude_model_ids: { value: string[] | null; source: TaskSettingsSourceLayer }

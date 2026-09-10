@@ -28,6 +28,13 @@ import {
   resolveTaskTarget,
 } from '../lib/workspace/task-loader.mts'
 import { invalidateProjectCache } from '../lib/core/project/loader.mts'
+import {
+  FREQUENT_DISPATCH_REQUIREMENTS,
+  GENERAL_DISPATCH_REQUIREMENTS,
+  REVIEW_DISPATCH_REQUIREMENTS,
+  ULTRA_DISPATCH_REQUIREMENTS,
+  VISION_DISPATCH_REQUIREMENTS,
+} from '../lib/standard/task-dispatch.mts'
 
 // ───────────────────────────────────────────────────────────────────
 // Helpers
@@ -1031,5 +1038,68 @@ describe('standard-library code-review outcome boundary', () => {
     const data = parsed.data as { findings: unknown[]; required_changes: unknown[] }
     assert.equal(data.findings.length, 1)
     assert.equal(data.required_changes.length, 1)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────
+// Immutable four-tier dispatch presets — approved values (task wiring is a
+// separate step; these assertions only lock the preset contracts).
+// ───────────────────────────────────────────────────────────────────
+
+describe('standard-library dispatch preset contracts', () => {
+  it('FREQUENT stays low..high with current TPS, price cap, and exclusions', () => {
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'low')
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 80)
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.minimumTps, 60)
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 6)
+    assert.ok(FREQUENT_DISPATCH_REQUIREMENTS.excludeModelIds.length > 0)
+    assert.ok(FREQUENT_DISPATCH_REQUIREMENTS.excludeProfileIds.length > 0)
+  })
+
+  it('GENERAL stays mid..high with current economics', () => {
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceMin, 'mid')
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.expectedTps, 40)
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.minimumTps, 20)
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 18)
+  })
+
+  it('REVIEW is high..premium with the review TPS/price and no unrelated exclusions', () => {
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceMax, 'premium')
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.expectedTps, 40)
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.minimumTps, 20)
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
+  })
+
+  it('ULTRA is high..premium preserving TPS/price', () => {
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMax, 'premium')
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.expectedTps, 20)
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.minimumTps, 8)
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
+  })
+
+  it('VISION is high..high preserving capability/TPS/price', () => {
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.expectedTps, 20)
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.minimumTps, 8)
+    assert.equal(VISION_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 15)
+    assert.deepEqual(VISION_DISPATCH_REQUIREMENTS.requiredCapabilities, ['image'])
+  })
+
+  it('the six review builtins target high via REVIEW_DISPATCH_REQUIREMENTS', () => {
+    for (const name of ['code-review', 'conform-review', 'fp-review', 'fu-review', 'plan-review', 'spec-review']) {
+      const entry = BUILTIN_TASKS.find((e) => e.name === name)
+      assert.ok(entry, `${name} should be a builtin`)
+      assert.deepEqual(entry.definition.config.dispatch, REVIEW_DISPATCH_REQUIREMENTS)
+    }
   })
 })

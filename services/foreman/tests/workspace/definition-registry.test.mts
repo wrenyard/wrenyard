@@ -684,7 +684,7 @@ ${extraConfig}  permission: 'readonly',
     minimumTps: 5,
     expectedTps: 10,
     intelligenceMin: 'mid',
-    intelligenceMax: 'frontier',
+    intelligenceMax: 'premium',
     maxOutputUsdPerMillion: 4.5,
     requiredCapabilities: ['text'],
     excludeModelIds: ['m1'],
@@ -700,10 +700,30 @@ ${extraConfig}  permission: 'readonly',
     assertTaskTarget(target)
     assert.equal(target.definition.config.dispatch?.expectedTps, 10)
     assert.equal(target.definition.config.dispatch?.intelligenceMin, 'mid')
-    assert.equal(target.definition.config.dispatch?.intelligenceMax, 'frontier')
+    assert.equal(target.definition.config.dispatch?.intelligenceMax, 'premium')
     assert.equal(target.definition.config.dispatch?.maxOutputUsdPerMillion, 4.5)
     assert.deepEqual([...target.definition.config.dispatch?.excludeModelIds ?? []], ['m1'])
     assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects the legacy frontier intelligence alias in dispatch', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-frontier-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'legacy-frontier.task.ts'), taskSource("'legacy-frontier'", `  dispatch: {
+    intelligenceMin: 'frontier',
+    intelligenceMax: 'frontier',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    // The retired `frontier` alias is rejected by the strict four-tier
+    // contract, so the definition must not load and a load error is recorded.
+    const listed = listTasks(workspace, 'app').find((task) => task.name === 'legacy-frontier')
+    assert.equal(listed, undefined, 'legacy-frontier task must not be listed')
+    assert.equal(describeTask('legacy-frontier', workspace, 'app'), null)
+    assert.equal(getLoadErrors(workspace).length, 1)
   })
 
   it('rejects an empty dispatch object with no recognized hard requirement', async () => {

@@ -15,26 +15,32 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Final score weights. P + S together form one unified economic allocation:
- * (P + S) weights the marginal speed/price exchange term of the score, while Q
- * weights quota headroom quality and I weights intelligence. Individual values
- * are kept unchanged for compatibility with prior releases.
+ * Final normalized score weights. The unified ranking score is a convex blend
+ * of four bounded [0, 1] factors:
+ *   P = price factor (cheaper per-M output price scores higher),
+ *   S = speed factor (effective TPS, saturated at 200),
+ *   Q = quota headroom quality,
+ *   I = intelligence factor.
+ *   score = .50*P + .20*S + .20*Q + .10*I, always within [0, 1].
  */
-export const SCORE_WEIGHTS = { P: 0.55, Q: 0.3, S: 0.1, I: 0.05 } as const;
+export const SCORE_WEIGHTS = { P: 0.5, S: 0.2, Q: 0.2, I: 0.1 } as const;
 
 /**
- * Marginal exchange rate embedded in the score: +1 TPS of effective speed is
- * worth USD 0.01 per M output tokens (and +100 TPS is worth USD 1 per M).
+ * Fixed continuous price anchors mapping a per-M output token price (USD) to a
+ * normalized price factor P in [0, 1] (see interpolatePriceFactor). Lower price
+ * yields higher P; prices are interpolated linearly between anchors and any
+ * price >= 50 yields P = 0. This is the single source of truth for the price
+ * factor and is not a configurable DSL or runtime knob.
  */
-export const SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS = 0.01;
-
-/**
- * @deprecated Kept exported only as a compatibility constant from the
- * superseded cheapest-set admission gate. Same-tier ranking no longer uses a
- * cheapest-set prefilter or any HEADROOM_CHALLENGE_MIN_GAP challenge rule;
- * every candidate is ranked by one deterministic descending score instead.
- */
-export const HEADROOM_CHALLENGE_MIN_GAP = 0.5;
+export const PRICE_FACTOR_ANCHORS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [0.5, 0.85],
+  [1, 0.75],
+  [2, 0.6],
+  [6, 0.35],
+  [30, 0.05],
+  [50, 0],
+];
 
 /** Neutral headroom used whenever evidence is genuinely unknown. */
 export const NEUTRAL_HEADROOM = 0.5;
@@ -157,11 +163,16 @@ export interface CandidateInput {
   /** Routing horizon that the marginal interval must fully cover. */
   timeoutMs: number;
   minimumTps: number;
-  expectedTps: number;
   effectiveTps: number;
   intelligenceRank: number;
   intelligenceMinRank: number;
   intelligenceMaxRank: number;
+  /**
+   * Optional expected intelligence rank. When present it must be an integer
+   * within [intelligenceMinRank, intelligenceMaxRank]; it shifts the
+   * intelligence factor I to reward matching (or exceeding) the expected rank.
+   */
+  intelligenceExpectedRank?: number;
   /** Required quota constraints; missing/invalid evidence leaves coverage incomplete. */
   requiredQuota: readonly RequiredQuotaConstraint[];
   marginalPrice?: MarginalPriceEvidence | null;
@@ -256,13 +267,14 @@ export interface CandidateAssessment {
   quotaQuality: number;
   /** Diagnostic price factor; kept as a public field but no longer ranked. */
   priceFactor: number;
-  /** Diagnostic expected-saturated speed factor; kept as a public field but no longer ranked. */
+  /** Diagnostic speed factor (effective TPS saturated at 200); kept as a public field but no longer ranked. */
   speedFactor: number;
-  /** Intelligence factor I used in the score. */
+  /** Intelligence factor I used in the score (bounded [0, 1]). */
   intelligenceFactor: number;
   /**
-   * Unified ranking score (see SCORE_WEIGHTS/SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS).
-   * A ranking utility, not a price or a bill, so it may be negative.
+   * Unified normalized ranking score (see SCORE_WEIGHTS): score = .50*P + .20*S
+   * + .20*Q + .10*I, where every factor is bounded in [0, 1], so the score is
+   * itself always within [0, 1].
    */
   score: number;
   verifiedEfficiency: number | null;
@@ -325,6 +337,26 @@ function clamp01(value: number): number {
   if (value <= 0) return 0;
   if (value >= 1) return 1;
   return value;
+}
+
+/**
+ * Interpolate the normalized price factor P in [0, 1] from PRICE_FACTOR_ANCHORS.
+ * Non-positive or non-finite prices score P = 1 (free); prices at or above the
+ * final anchor (>= 50) score P = 0; intermediate prices are linearly blended.
+ */
+function interpolatePriceFactor(priceUsdPerM: number): number {
+  if (!isFiniteNumber(priceUsdPerM) || priceUsdPerM <= 0) return 1;
+  const lastAnchor = PRICE_FACTOR_ANCHORS[PRICE_FACTOR_ANCHORS.length - 1];
+  if (priceUsdPerM >= lastAnchor[0]) return 0;
+  for (let i = 0; i < PRICE_FACTOR_ANCHORS.length - 1; i++) {
+    const [p0, v0] = PRICE_FACTOR_ANCHORS[i];
+    const [p1, v1] = PRICE_FACTOR_ANCHORS[i + 1];
+    if (priceUsdPerM >= p0 && priceUsdPerM <= p1) {
+      const t = (priceUsdPerM - p0) / (p1 - p0);
+      return v0 + t * (v1 - v0);
+    }
+  }
+  return 0;
 }
 
 function minOf(values: number[]): number {
@@ -619,11 +651,11 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     effectiveCapUsdPerM: input.effectiveCapUsdPerM,
     timeoutMs: input.timeoutMs,
     minimumTps: input.minimumTps,
-    expectedTps: input.expectedTps,
     effectiveTps: input.effectiveTps,
     intelligenceRank: input.intelligenceRank,
     intelligenceMinRank: input.intelligenceMinRank,
     intelligenceMaxRank: input.intelligenceMaxRank,
+    intelligenceExpectedRank: input.intelligenceExpectedRank,
     requiredQuota,
     marginalPrice,
     verifiedEfficiency,
@@ -694,33 +726,61 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
 
   if (
     !isFiniteNumber(candidate.minimumTps) ||
-    !isFiniteNumber(candidate.expectedTps) ||
     !isFiniteNumber(candidate.effectiveTps) ||
     candidate.minimumTps < 0 ||
-    candidate.expectedTps < 0 ||
     candidate.effectiveTps < 0
   ) {
     return rejected(snapshotId, canonicalId, "invalid_speed", "speed numbers must be finite and non-negative");
   }
-  // expectedTps below minimumTps is not a rejection: S = 1 when
-  // expectedTps <= minimumTps. Only a deficient effectiveTps is rejected.
+  // Only a deficient effectiveTps against the minimumTps hard gate is rejected;
+  // the score's speed factor S uses effectiveTps directly (saturated at 200).
   if (candidate.effectiveTps < candidate.minimumTps) {
     return rejected(snapshotId, canonicalId, "speed_below_minimum", "effective TPS is below the minimum TPS");
   }
 
+  // Intelligence ranks are fixed integers on the closed 0..3 scale. min must not
+  // exceed max; the model rank and any optional expected rank must be integers
+  // in [0, 3] and within [min, max]; otherwise the candidate is rejected.
   if (
-    !isFiniteNumber(candidate.intelligenceRank) ||
-    !isFiniteNumber(candidate.intelligenceMinRank) ||
-    !isFiniteNumber(candidate.intelligenceMaxRank) ||
+    !Number.isInteger(candidate.intelligenceRank) ||
+    !Number.isInteger(candidate.intelligenceMinRank) ||
+    !Number.isInteger(candidate.intelligenceMaxRank) ||
+    candidate.intelligenceMinRank < 0 ||
+    candidate.intelligenceMaxRank > 3 ||
     candidate.intelligenceMinRank > candidate.intelligenceMaxRank
   ) {
-    return rejected(snapshotId, canonicalId, "invalid_intelligence", "intelligence bounds must be finite with min <= max");
+    return rejected(
+      snapshotId,
+      canonicalId,
+      "invalid_intelligence",
+      "intelligence ranks must be integers in [0, 3] with min <= max"
+    );
   }
   if (
     candidate.intelligenceRank < candidate.intelligenceMinRank ||
     candidate.intelligenceRank > candidate.intelligenceMaxRank
   ) {
     return rejected(snapshotId, canonicalId, "intelligence_out_of_range", "intelligence rank is outside [min, max]");
+  }
+  // Hard intelligence range: intelligenceExpectedRank is absent only when
+  // undefined; any other value (including null) must be an integer in [0, 3]
+  // and inside [min, max] or the candidate is rejected before any gate.
+  const expectedRank = candidate.intelligenceExpectedRank;
+  if (expectedRank !== undefined) {
+    if (
+      !Number.isInteger(expectedRank) ||
+      expectedRank < 0 ||
+      expectedRank > 3 ||
+      expectedRank < candidate.intelligenceMinRank ||
+      expectedRank > candidate.intelligenceMaxRank
+    ) {
+      return rejected(
+        snapshotId,
+        canonicalId,
+        "invalid_intelligence",
+        "intelligence expected rank must be an integer in [0, 3] within [min, max]"
+      );
+    }
   }
 
   const quota = assessRequiredQuota(candidate.nowMs, candidate.requiredQuota);
@@ -753,6 +813,11 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
   let supplyClass: SupplyClass = "standard";
   let confirmedFreeSupplyApplied = false;
   let confirmedFreeSupplyEvidence: { source: string; ruleId: string } | null = null;
+  // Effective routing price (USD per M output tokens) drives the price factor P.
+  // A confirmed-free candidate zeroes it (P = 1); otherwise it starts at the
+  // reference and may be lowered by a valid worst-applicable marginal price.
+  let routingPriceUsdPerM = candidate.referenceUsdPerM;
+  let marginalApplied = false;
   const freeSupply = candidate.confirmedFreeSupply;
   if (freeSupply !== null && freeSupply !== undefined) {
     const freeEvidenceWellFormed =
@@ -778,6 +843,9 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
         source: freeSupply.source,
         ruleId: freeSupply.ruleId,
       };
+      // Valid confirmed-free evidence passes every hard gate above; it routes
+      // for free, so the effective price becomes 0 and the price factor P = 1.
+      routingPriceUsdPerM = 0;
       notes.push("confirmed_free_supply_applied");
     }
   }
@@ -786,11 +854,10 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
   // (nonempty source/ruleId), the conservative worst_applicable marker, and a
   // UTC interval covering [now, now + timeout]. Invalid/stale/insufficient
   // evidence falls back to reference; an otherwise-valid applicable marginal
-  // above the listed reference rejects the candidate.
-  let routingPriceUsdPerM = candidate.referenceUsdPerM;
-  let marginalApplied = false;
+  // above the listed reference rejects the candidate. Confirmed-free routing
+  // already zeroed the price, so marginal application is skipped in that case.
   const marginal = candidate.marginalPrice;
-  if (marginal !== null && marginal !== undefined) {
+  if (marginal !== null && marginal !== undefined && !confirmedFreeSupplyApplied) {
     const usdPerM = marginal.usdPerM;
     const appliesFromMs = marginal.appliesFromMs;
     const appliesUntilMs = marginal.appliesUntilMs;
@@ -874,67 +941,45 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
   }
 
   const headroom = quota.headroom === null ? NEUTRAL_HEADROOM : quota.headroom;
+  // Quota headroom factor Q in [0, 1]: raw trust headroom, or a blend with
+  // verified quota-burn efficiency when present. Q never depends on price/speed.
   const quotaQuality =
     verifiedEfficiency === null
-      ? headroom
+      ? clamp01(headroom)
       : clamp01(
           EFFICIENCY_HEADROOM_WEIGHT * headroom +
             EFFICIENCY_EVIDENCE_WEIGHT * verifiedEfficiency
         );
 
-  // Diagnostic-only price factor (public field, no longer ranked): P = 1 when
-  // the routed price is zero, otherwise 1 - ln(1 + routingPrice) / ln(1 + cap),
-  // safe when cap is zero. The unified economic term below (P + S) replaces P
-  // for ranking; P stays only for observability.
-  let priceFactor: number;
-  if (routingPriceUsdPerM <= 0) {
-    priceFactor = 1;
-  } else if (candidate.effectiveCapUsdPerM <= 0) {
-    priceFactor = 0;
-  } else {
-    priceFactor = clamp01(
-      1 - Math.log(1 + routingPriceUsdPerM) / Math.log(1 + candidate.effectiveCapUsdPerM)
-    );
-  }
+  // Normalized price factor P in [0, 1] from the fixed continuous price anchors
+  // (interpolatePriceFactor): cheaper per-M output price scores higher; price
+  // >= 50 scores 0. Confirmed-free routing already zeroed routingPriceUsdPerM.
+  const priceFactor = interpolatePriceFactor(routingPriceUsdPerM);
 
-  // Diagnostic-only speed factor (public field, no longer ranked): S = 1 when
-  // expected does not beat the minimum, else the effective headroom over
-  // minimum relative to expected. Ranking instead uses raw effectiveTps via the
-  // unified economic term below, so speeds above expectedTps still matter even
-  // when this diagnostic saturates at 1.
-  let speedFactor: number;
-  if (candidate.expectedTps <= candidate.minimumTps) {
-    speedFactor = 1;
-  } else {
-    speedFactor = clamp01(
-      (candidate.effectiveTps - candidate.minimumTps) /
-        (candidate.expectedTps - candidate.minimumTps)
-    );
-  }
+  // Normalized speed factor S in [0, 1]: effective TPS saturated at 200.
+  const speedFactor = clamp01(candidate.effectiveTps / 200);
 
-  // Intelligence factor: I = 1 when the rank range is degenerate, else
-  // normalized descending rank within [min, max].
+  // Normalized intelligence factor I in [0, 1]. When an expected rank is
+  // supplied (already validated as an integer inside [min, max]), I rewards
+  // matching or exceeding it and penalizes deviation: d = model - expected,
+  // smaller penalty (0.10 per step) when the model beats expected, larger
+  // penalty (0.25 per step) when it falls short. Without an expected rank, I is
+  // the model rank normalized over the 0..3 scale.
   let intelligenceFactor: number;
-  if (candidate.intelligenceMaxRank === candidate.intelligenceMinRank) {
-    intelligenceFactor = 1;
+  if (expectedRank !== undefined && expectedRank !== null) {
+    const d = candidate.intelligenceRank - expectedRank;
+    const penalty = d >= 0 ? 0.1 * d : 0.25 * -d;
+    intelligenceFactor = Math.max(0, 1 - penalty);
   } else {
-    intelligenceFactor = clamp01(
-      1 -
-        (candidate.intelligenceRank - candidate.intelligenceMinRank) /
-          (candidate.intelligenceMaxRank - candidate.intelligenceMinRank)
-    );
+    intelligenceFactor = clamp01(candidate.intelligenceRank / 3);
   }
 
-  // Unified economic ranking score. It is a ranking utility, never a price or
-  // a bill, so it may legitimately be negative. P + S are one economic
-  // allocation weighting the marginal exchange of +1 TPS for USD 0.01/M
-  // (0.01 * raw effectiveTps - routingPriceUsdPerM); Q adds quota headroom
-  // quality and I adds intelligence. priceFactor/speedFactor above are
-  // diagnostic-only and no longer appear in the score.
+  // Unified normalized ranking score in [0, 1]:
+  //   score = .50*P + .20*S + .20*Q + .10*I
+  // Every factor is bounded in [0, 1], so the score is itself within [0, 1].
   const score =
-    (SCORE_WEIGHTS.P + SCORE_WEIGHTS.S) *
-      (SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS * candidate.effectiveTps -
-        routingPriceUsdPerM) +
+    SCORE_WEIGHTS.P * priceFactor +
+    SCORE_WEIGHTS.S * speedFactor +
     SCORE_WEIGHTS.Q * quotaQuality +
     SCORE_WEIGHTS.I * intelligenceFactor;
 
@@ -968,23 +1013,6 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
 // Deterministic conservative ranking
 // ---------------------------------------------------------------------------
 
-/**
- * Rank a single tier deterministically by one descending-score pass over every
- * candidate. There is no cheapest-set prefilter and no
- * HEADROOM_CHALLENGE_MIN_GAP admission gate: the unified score already prices
- * the marginal speed/price exchange plus quota headroom quality and
- * intelligence, so a single ordering ranks the whole tier. Stable ties resolve
- * by canonicalId then snapshotId ascending.
- */
-function rankTier(candidates: readonly CandidateAssessment[]): CandidateAssessment[] {
-  return candidates.slice().sort(
-    (a, b) =>
-      b.score - a.score ||
-      compareLex(a.canonicalId, b.canonicalId) ||
-      compareLex(a.snapshotId, b.snapshotId)
-  );
-}
-
 function toRankedCandidate(
   assessment: CandidateAssessment,
   rank: number
@@ -1017,10 +1045,10 @@ function toRankedCandidate(
 /**
  * Deterministic conservative auto-routing over a set of candidate snapshots.
  *
- * Confirmed-free accepted candidates are ranked before standard supply. Within
- * each supply class, candidates keep strict tier order (healthy, unknown,
- * strained); each tier is ranked by the single descending-score pass above.
- * Rejected candidates are returned with machine-readable reasons.
+ * Every accepted candidate is ranked together by a single descending-score
+ * pass; supply class and quota tier are retained only as diagnostic fields on
+ * each ranked position and are never used as sort keys. Rejected candidates are
+ * returned with machine-readable reasons.
  */
 export function rankAutoRoutingCandidates(
   inputs: readonly CandidateInput[]
@@ -1029,10 +1057,7 @@ export function rankAutoRoutingCandidates(
     return { ranked: [], excluded: [] };
   }
 
-  const buckets: Record<SupplyClass, Record<QuotaTier, CandidateAssessment[]>> = {
-    confirmed_free: { healthy: [], unknown: [], strained: [] },
-    standard: { healthy: [], unknown: [], strained: [] },
-  };
+  const accepted: CandidateAssessment[] = [];
   const excluded: ExcludedCandidate[] = [];
 
   // One immutable selection context: ranking mixes only candidates sharing the
@@ -1060,7 +1085,7 @@ export function rankAutoRoutingCandidates(
         });
         continue;
       }
-      buckets[assessment.supplyClass][assessment.tier].push(assessment);
+      accepted.push(assessment);
     } else {
       excluded.push({
         snapshotId: evaluation.snapshotId,
@@ -1077,17 +1102,15 @@ export function rankAutoRoutingCandidates(
       compareLex(a.snapshotId, b.snapshotId)
   );
 
-  const tierOrder: readonly QuotaTier[] = ["healthy", "unknown", "strained"];
-  const supplyOrder: readonly SupplyClass[] = ["confirmed_free", "standard"];
-  const rankedAssessments: CandidateAssessment[] = [];
-  for (const supplyClass of supplyOrder) {
-    for (const tier of tierOrder) {
-      const tierRanking = rankTier(buckets[supplyClass][tier]);
-      for (const assessment of tierRanking) {
-        rankedAssessments.push(assessment);
-      }
-    }
-  }
+  // Single global stable ranking over every accepted candidate: by score
+  // descending, then canonicalId, then snapshotId ascending. Supply class and
+  // tier are reported as diagnostic fields only, never as sort keys.
+  const rankedAssessments = accepted.slice().sort(
+    (a, b) =>
+      b.score - a.score ||
+      compareLex(a.canonicalId, b.canonicalId) ||
+      compareLex(a.snapshotId, b.snapshotId)
+  );
 
   const ranked: RankedCandidate[] = rankedAssessments.map((assessment, index) =>
     toRankedCandidate(assessment, index + 1)

@@ -54,6 +54,18 @@ export const taskAutoRoutingDecisionSchema = {
     routing_output_usd_per_million: { type: 'number' },
     effective_cap_usd_per_million: { type: 'number' },
     score: { type: 'number' },
+    scoring: {
+      type: 'object',
+      required: ['version', 'price', 'speed', 'quota', 'intelligence'],
+      properties: {
+        version: { const: 'normalized-v1' },
+        price: { type: 'number', minimum: 0, maximum: 1 },
+        speed: { type: 'number', minimum: 0, maximum: 1 },
+        quota: { type: 'number', minimum: 0, maximum: 1 },
+        intelligence: { type: 'number', minimum: 0, maximum: 1 },
+      },
+      additionalProperties: false,
+    },
     reasons: {
       type: 'array',
       items: { type: 'string' },
