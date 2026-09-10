@@ -213,6 +213,12 @@
           </button>
         </header>
 
+        <div class="quota-tabs" id="quota-tabs" role="tablist" aria-label="模型供应视图">
+          <button class="quota-tab is-selected" id="quota-tab-supply" type="button" role="tab" aria-selected="true" aria-controls="quota-panel-supply" data-quota-tab="supply">供应配置</button>
+          <button class="quota-tab" id="quota-tab-routing" type="button" role="tab" aria-selected="false" aria-controls="quota-panel-routing" data-quota-tab="routing" tabindex="-1">路由测试</button>
+        </div>
+
+        <div class="quota-tabpanel" id="quota-panel-supply" role="tabpanel" aria-labelledby="quota-tab-supply">
         <div class="quota-meta">
           <span class="status-pill is-pending" id="quota-status">读取中</span>
           <span id="quota-updated-at">正在读取 Runtime 模型提供方…</span>
@@ -260,6 +266,31 @@
           <div class="alias-list" id="alias-list" aria-live="polite"></div>
         </section>
         <p class="quota-footnote">Provider 次序同时用于模型供应与额度显示；额度区域只展示已激活且支持额度的 Provider。</p>
+        </div>
+
+        <div class="quota-tabpanel" id="quota-panel-routing" role="tabpanel" aria-labelledby="quota-tab-routing" hidden>
+          <section class="routing-test-panel" aria-labelledby="routing-test-title">
+            <div class="routing-test-head">
+              <div>
+                <h2 id="routing-test-title">路由测试</h2>
+                <p>只读运行一次自动路由评估，展示有效需求、候选排序与计分依据；不会调用模型，也不会保存配置。</p>
+              </div>
+            </div>
+            <div class="routing-test-form">
+              <label for="routing-test-preset">预设</label>
+              <select id="routing-test-preset">
+                <option value="edit">编辑文件</option>
+                <option value="code-review">变更审查</option>
+                <option value="oracle">分析顾问</option>
+                <option value="librarian">资料研究</option>
+              </select>
+              <button class="primary-button" id="routing-test-run" type="button">测试路由</button>
+            </div>
+            <p class="routing-test-note">排序依据由后台返回：先按推荐智能缺口从小到大排序，再比较加权总分；排序规则以后台为准。</p>
+            <span class="routing-test-status status-pill is-pending" id="routing-test-status" role="status" aria-live="polite">未运行</span>
+            <div class="routing-test-result" id="routing-test-result" aria-live="polite"></div>
+          </section>
+        </div>
       </section>
 
       <section class="product-page clients-page" id="clients-page" aria-labelledby="clients-title" hidden>

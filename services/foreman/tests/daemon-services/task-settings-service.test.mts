@@ -36,8 +36,7 @@ import {
   evaluateForgeNativeRouteReadiness,
   type ForgeProviderReadinessSnapshot,
 } from '../../lib/daemon/execution/forge-provider-readiness-query.mts'
-import type { TaskSettingsLoadError } from '../../lib/protocol/methods/task.mts'
-
+import type { TaskRoutingTestResult, TaskSettingsLoadError } from '../../lib/protocol/methods/task.mts'
 const CATALOG_CHECKED_AT = '2026-09-05'
 const QUOTA_T0 = 1_726_000_000_000
 
@@ -2944,5 +2943,130 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(error.project_display_name, 'Alpha Project')
     assert.ok(snapshot.rows.length > 0)
     assert.equal(snapshot.rows.some((row) => row.name === 'broken'), false)
+  })
+
+  it('routingTest preview winner agrees with normal automatic selection and reports the actual scoring trace', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const result: TaskRoutingTestResult = await service.routingTest({ task_id: 'commit' })
+
+    // The diagnostic forces automatic mode and reuses the exact selection path,
+    // so its winner must equal what a real automatic run resolves.
+    const run = await service.resolveForRun({
+      taskName: 'commit',
+      kind: 'builtin',
+      defaults: { dispatch: { expectedTps: 80, minimumTps: 60 }, timeoutMs: 120_000 },
+    })
+    assert.equal(run.mode, 'automatic')
+    assert.ok(result.selection)
+    assert.equal(result.selection.exact_runtime, run.exactAgentRuntime)
+    assert.equal(result.failure, null)
+    assert.equal(result.static_eligibility, null)
+
+    // Effective requirements reuse the snake_case automatic dispatch shape.
+    assert.equal(result.effective_requirements.expected_tps, 80)
+    assert.equal(result.effective_requirements.minimum_tps, 60)
+    assert.equal(result.timeout_ms, 120_000)
+
+    // Actual ranking weights and a truthful shortfall-before-score ordering.
+    assert.deepEqual(result.ranking_weights, { price: 0.5, speed: 0.2, quota: 0.2, intelligence: 0.1 })
+    assert.match(result.ordering, /shortfall/i)
+    assert.match(result.ordering, /score/i)
+
+    // Ranked rows expose the exact factors and a reconstructible weighted score.
+    assert.ok(result.candidates.length >= 1)
+    const winner = result.candidates[0]!
+    assert.equal(winner.exact_runtime, result.selection.exact_runtime)
+    assert.equal(winner.rank, 1)
+    const weights = result.ranking_weights
+    const reconstructed =
+      weights.price * winner.price_factor
+      + weights.speed * winner.speed_factor
+      + weights.quota * winner.quota_factor
+      + weights.intelligence * winner.intelligence_factor
+    assert.ok(Math.abs(reconstructed - winner.score) < 1e-12)
+    assert.ok(Array.isArray(winner.notes))
+
+    // Stage counts stay internally consistent and identity is the builtin task.
+    assert.equal(result.task_id, 'commit')
+    assert.ok(result.stages.eligible >= result.stages.collapsed)
+    assert.equal(result.stages.ranked, result.candidates.length)
+    assert.equal(result.stages.quota_blocked, 0)
+    assert.equal(result.stages.readiness_rejected, 0)
+  })
+
+  it('routingTest exposes tightened global cap and exclusions even with a surviving winner', async () => {
+    writeConfig({ tasks: { settings: { global: { maxAutoOutputUsdPerMillion: 3 } } } })
+    const result = await context!.makeService().routingTest({ task_id: 'commit' })
+    assert.ok(result.selection)
+    assert.equal(result.effective_output_cap_usd_per_million, 3)
+    assert.ok(result.exclusions.some((entry) => entry.code === 'price_limit'))
+    assert.ok(result.stages.excluded > 0)
+  })
+
+  it('routingTest reports a no-candidate failure as a useful result and writes no config', async () => {
+    const service = context!.makeService()
+    writeConfig({})
+    const before = readFileSync(context!.configPath, 'utf-8')
+
+    // 'auto-fail' is eliminated by the static eligibility gate; the diagnostic
+    // must return a structured failure rather than throwing, and must never
+    // fabricate a candidate score or a selection.
+    const result = await service.routingTest({ task_id: 'auto-fail' })
+    assert.equal(result.selection, null)
+    assert.ok(result.failure)
+    assert.equal(result.failure.code, 'no_available_provider')
+    assert.ok(result.static_eligibility)
+    assert.equal(result.static_eligibility.code, 'no_available_provider')
+    assert.equal(result.static_eligibility.message, result.failure.message)
+    assert.deepEqual(result.candidates, [])
+    assert.deepEqual(result.exclusions, [])
+    assert.equal(result.stages.eligible, 0)
+    assert.equal(result.stages.ranked, 0)
+
+    // Read-only: no config mutation and no temporary residue.
+    assert.equal(readFileSync(context!.configPath, 'utf-8'), before)
+    assert.deepEqual(readConfig(), {})
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('routingTest forces automatic preview even when the task is pinned to explicit mode', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          byTask: {
+            'builtin:commit': {
+              selectionMode: 'explicit',
+              explicitRuntime: { kind: 'target', target: PROFILES[1]!.exactAgentRuntime },
+            },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const before = readFileSync(context!.configPath, 'utf-8')
+
+    const result = await service.routingTest({ task_id: 'commit' })
+    // The saved explicit pin is ignored: the diagnostic still previews
+    // automatic and must not return the pinned explicit runtime.
+    assert.ok(result.selection)
+    assert.notEqual(result.selection.exact_runtime, PROFILES[1]!.exactAgentRuntime)
+    assert.equal(result.selection.resolved.mode, 'native')
+    // The pinned config on disk is untouched.
+    assert.equal(readFileSync(context!.configPath, 'utf-8'), before)
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('routingTest rejects unknown and empty task ids as validation errors', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    await assert.rejects(
+      service.routingTest({ task_id: 'does-not-exist' }),
+      (error) => error instanceof TaskSettingsTaskNotFoundError,
+    )
+    await assert.rejects(
+      service.routingTest({ task_id: '   ' }),
+      (error) => error instanceof TaskSettingsTaskNotFoundError,
+    )
   })
 })

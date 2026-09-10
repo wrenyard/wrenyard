@@ -25,7 +25,7 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
@@ -620,6 +620,11 @@ async function bootstrap(): Promise<void> {
     if (taskId !== undefined) params.task_id = taskId;
     return (await requestForeman('task.settings.snapshot', params)) as TaskSettingsSnapshot;
   };
+  // Read-only routing test: the daemon owns evaluation, ranking, and scoring.
+  // Desktop only forwards the exact task id and transports the result back.
+  const requestTaskRoutingTest = async (taskId: string): Promise<TaskRoutingTestResult> => {
+    return (await requestForeman('task.settings.routingTest', { task_id: taskId })) as TaskRoutingTestResult;
+  };
   const saveTaskSettings = async (request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> => {
     const params: Record<string, unknown> = {
       scope: request.scope,
@@ -784,6 +789,7 @@ async function bootstrap(): Promise<void> {
     runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
     runtimeAliasPut: (request: RuntimeAliasPutRequest) => putRuntimeAlias(request),
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
+    requestTaskRoutingTest: (taskId: string) => requestTaskRoutingTest(taskId),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

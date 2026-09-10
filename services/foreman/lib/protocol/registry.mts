@@ -190,10 +190,14 @@ import {
   type TaskRunWaitResult,
 } from './methods/task.mts'
 import {
+  taskRoutingTestParamsSchema,
+  taskRoutingTestResultSchema,
   taskSettingsSaveParamsSchema,
   taskSettingsSaveResultSchema,
   taskSettingsSnapshotParamsSchema,
   taskSettingsSnapshotResultSchema,
+  type TaskRoutingTestParams,
+  type TaskRoutingTestResult,
   type TaskSettingsSaveParams,
   type TaskSettingsSaveResult,
   type TaskSettingsSnapshotParams,
@@ -367,6 +371,8 @@ export type {
   TaskRunWaitResult,
 } from './methods/task.mts'
 export type {
+  TaskRoutingTestParams,
+  TaskRoutingTestResult,
   TaskSettingsSaveParams,
   TaskSettingsSaveResult,
   TaskSettingsSnapshotParams,
@@ -425,6 +431,7 @@ export interface ForemanMethodParams {
   'task.definition.describe': TaskDefinitionDescribeParams
   'task.settings.snapshot': TaskSettingsSnapshotParams
   'task.settings.save': TaskSettingsSaveParams
+  'task.settings.routingTest': TaskRoutingTestParams
   'task.run.create': TaskRunCreateParams
   'task.run.list': TaskRunListParams
   'task.run.status': TaskRunStatusParams
@@ -485,6 +492,7 @@ export interface ForemanMethodResults {
   'task.definition.describe': TaskDefinitionDescribeResult
   'task.settings.snapshot': TaskSettingsSnapshotResult
   'task.settings.save': TaskSettingsSaveResult
+  'task.settings.routingTest': TaskRoutingTestResult
   'task.run.create': TaskRunCreateResult
   'task.run.list': TaskRunListResult
   'task.run.status': TaskRunStatusResult
@@ -616,6 +624,10 @@ export const methodRegistry: {
   'task.settings.save': {
     params: taskSettingsSaveParamsSchema,
     result: taskSettingsSaveResultSchema,
+  },
+  'task.settings.routingTest': {
+    params: taskRoutingTestParamsSchema,
+    result: taskRoutingTestResultSchema,
   },
   'task.run.create': {
     params: taskRunCreateParamsSchema,

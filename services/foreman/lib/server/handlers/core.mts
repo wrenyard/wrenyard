@@ -399,6 +399,23 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       throw error
     }
   })
+  // Read-only routing diagnostics: reuses the exact automatic-selection path
+  // (never a second scorer) and never saves settings, creates tasks, reserves
+  // quota, or calls a model. IPC-only, like task.settings.snapshot/save.
+  router.register('task.settings.routingTest', async (params, _message, context) => {
+    const service = requireTaskSettings(context, 'task.settings.routingTest')
+    try {
+      return await service.routingTest(params)
+    } catch (error) {
+      if (
+        error instanceof TaskSettingsTaskNotFoundError
+        || error instanceof TaskSettingsInvalidSettingsError
+      ) {
+        throw protocolErrorFromTaskSettingsError(error)
+      }
+      throw error
+    }
+  })
   // runtime.alias.snapshot/put/remove delegate to the injected daemon-owned
   // RuntimeAliasService; the RPC surface never recreates store or resolution
   // logic. IPC-only. When the dependency is absent the methods fail loud with a
