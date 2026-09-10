@@ -274,12 +274,12 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
   // Removed surface: multi-row form, additional-instructions editor, and catalog picks.
   assert.doesNotMatch(html, /tasks-instructions|tasks-model-select|tasks-runtime-field|附加指令/);
-  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-min-intelligence|tasks-expected-intelligence|tasks-intelligence-note|tasks-intelligence-max|tasks-max-output-price/);
+  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-input-types|tasks-min-intelligence|tasks-expected-intelligence|tasks-intelligence-note|tasks-intelligence-max|tasks-max-output-price/);
   // The stats ledger page is untouched by this task.
   assert.match(html, /id="stats-task-runs-list"/);
-  // The Task page still has exactly four compact editable rows (mode, timeout,
-  // 输入要求, conditional explicit runtime) and never hosts the auto cap.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
+  // The Task page still has exactly three compact editable rows (mode, timeout,
+  // conditional explicit runtime) and never hosts the auto cap.
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 3);
   const tasksStart = html.indexOf('product-page tasks-page');
   const tasksEnd = html.indexOf('provider-dialog-backdrop');
   assert.ok(tasksStart > 0 && tasksEnd > tasksStart);
@@ -315,7 +315,7 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
   assert.match(app, /草稿仍保留/);
-  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean \}/);
+  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string \}/);
 });
 
 test('renderer edits inherited mode and runtime from the effective baseline without creating incidental pins', async () => {
@@ -373,36 +373,6 @@ test('renderer edits inherited mode and runtime from the effective baseline with
     'reset deletes only per-task overrides so the next snapshot returns to global effective values');
 });
 
-test('renderer 需要图片 row is one native checkbox with correct inheritance and mandatory handling, and preserves draft', async () => {
-  const app = await rendererSource();
-  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
-  // The row is a plain tasks-setting-row, visible in both automatic and
-  // explicit modes (never nested inside the explicit-only row).
-  assert.match(html, /<label for="tasks-input-types">需要图片<\/label>/u);
-  assert.match(html, /<input id="tasks-input-types" type="checkbox" \/>/u);
-  assert.doesNotMatch(html, /<select id="tasks-input-types">/u);
-  assert.match(html, /id="tasks-input-types-effective">—</);
-  assert.doesNotMatch(html, /tasks-explicit-row[^]*id="tasks-input-types"/u);
-  // No search checkbox/UI is added by this task.
-  assert.doesNotMatch(html, /tasks-search|id="tasks-search"/u);
-  // Executable patch/inheritance behavior is covered by task-input-types.test.ts.
-  assert.match(app, /imageCapabilitiesPatch\(row, taskSettings\?\.user_global \?\? \{\}, tasksInputTypesCheckbox\.checked\)/u);
-  assert.match(app, /imageRequiredFromRow\(row\)/u);
-  // A mandatory builtin image requirement disables the checkbox.
-  assert.match(app, /tasksInputTypesCheckbox\.disabled = tasksSaveBusy \|\| builtinRequiresImage\(row\);/u);
-  // After save finalization the mandatory disabled state is re-derived, never blanket re-enabled.
-  assert.match(app, /tasksInputTypesCheckbox\.disabled = savedRow \? builtinRequiresImage\(savedRow\) : true;/u);
-  // Draft remembers the boolean so a CAS conflict keeps it.
-  assert.match(app, /imageRequired: tasksInputTypesCheckbox\.checked/u);
-  assert.match(app, /tasksInputTypesCheckbox\.checked = draft\.imageRequired;/u);
-  // The save path merges the image patch under automatic without clobbering
-  // unrelated layer fields.
-  assert.match(app, /const inputPatch = imageCapabilitiesPatch\(/u);
-  assert.match(app, /patch\.automatic = \{ \.\.\.\(patch\.automatic \?\? \{\}\), \.\.\.inputPatch\.automatic \};/u);
-  // The reset path still deletes the whole automatic override via the shared loop.
-  assert.match(app, /for \(const field of \['mode', 'explicit_runtime', 'timeout_ms', 'automatic'\] as const\)/);
-});
-
 test('renderer catalog model label reports image support from exact entry metadata only', async () => {
   const conversation = await readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8');
   assert.match(conversation, /entry\.inputTypes === undefined\n\s*\? '图片：未知'/u);
@@ -440,7 +410,7 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   assert.doesNotMatch(app, /tasksPreviewTitle/);
   // Additive only: the Task page still has exactly four editable setting rows
   // and no new automatic-selection row or editable control.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 3);
   assert.doesNotMatch(html, /automatic-selection-row|tasks-auto-selection|id="tasks-automatic"/);
 });
 
