@@ -5,7 +5,7 @@ const mode = process.env.WRENYARD_TEST_PROVIDER_READINESS_MODE
 
 if (mode === 'ok') {
   process.stdout.write(JSON.stringify([
-    { id: 'codex', auth_ok: true, api_kind: 'openai-chat-completions', extra: 'ignored' },
+    { id: 'chatgpt', auth_ok: true, api_kind: 'openai-chat-completions', extra: 'ignored' },
     { id: 'cursor', auth_ok: false, api_kind: '' },
   ]))
 } else if (mode === 'error') {

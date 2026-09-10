@@ -9,9 +9,8 @@ import (
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/anthropic"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/anthropicapi"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/chatgpt"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codebuddy"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codex"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codexspark"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/freepool"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/kimi"
@@ -39,9 +38,8 @@ type Override struct {
 var modules = append([]ProviderModule{
 	anthropic.Module(),
 	anthropicapi.Module(),
+	chatgpt.Module(),
 	codebuddy.Module(),
-	codex.Module(),
-	codexspark.Module(),
 	cursor.Module(),
 	kimi.Module(),
 	minimaxapi.Module(),

@@ -32,15 +32,15 @@ function fixtureEnv(mode: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Process
 test('projects required id/auth_ok fields and ignores legitimate provider-list extras', async () => {
   const snapshot = await queryForgeProviderReadiness({ env: fixtureEnv('ok'), now: () => 1234 })
   assert.equal(snapshot.sampledAtMs, 1234)
-  assert.deepEqual({ ...snapshot.authByProvider }, { codex: true, cursor: false })
+  assert.deepEqual({ ...snapshot.authByProvider }, { chatgpt: true, cursor: false })
   assert.equal(JSON.stringify(snapshot).includes('api_kind'), false)
   assert.equal(JSON.stringify(snapshot).includes('ignored'), false)
 })
 
 test('rejects nonboolean auth and conflicting duplicate ids without echoing raw status', () => {
   for (const text of [
-    JSON.stringify([{ id: 'codex', auth_ok: 'yes', secret: 'do-not-echo' }]),
-    JSON.stringify([{ id: 'codex', auth_ok: true }, { id: 'codex', auth_ok: false }]),
+    JSON.stringify([{ id: 'chatgpt', auth_ok: 'yes', secret: 'do-not-echo' }]),
+    JSON.stringify([{ id: 'chatgpt', auth_ok: true }, { id: 'chatgpt', auth_ok: false }]),
   ]) {
     assert.throws(
       () => parseForgeProviderReadinessJson(text),
@@ -54,28 +54,28 @@ test('rejects nonboolean auth and conflicting duplicate ids without echoing raw 
 test('native readiness is exact-provider and never promotes native auth into gateway support', () => {
   const snapshot = {
     sampledAtMs: 1,
-    authByProvider: Object.freeze({ codex: true, cursor: false }),
+    authByProvider: Object.freeze({ chatgpt: true, cursor: false }),
   }
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    credentialResolverId: 'codex', client: 'codex', mode: 'native', nativeClients: ['codex'],
+    providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: ['codex'],
   }), 'available')
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    credentialResolverId: 'cursor', client: 'cursor', mode: 'native', nativeClients: ['cursor'],
+    providerId: 'cursor', client: 'cursor', mode: 'native', nativeClients: ['cursor'],
   }), 'missing')
   assert.equal(evaluateForgeNativeRouteReadiness({
     sampledAtMs: 1,
     authByProvider: Object.freeze({}),
   }, {
-    credentialResolverId: 'codex', client: 'codex', mode: 'native', nativeClients: ['codex'],
+    providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: ['codex'],
   }), 'unknown')
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    credentialResolverId: 'codex', client: 'grok', mode: 'gateway', nativeClients: ['codex'],
+    providerId: 'chatgpt', client: 'grok', mode: 'gateway', nativeClients: ['codex'],
   }), 'unsupported')
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    credentialResolverId: 'forge-managed', client: 'codex', mode: 'native', nativeClients: ['codex'],
+    providerId: 'forge-managed', client: 'codex', mode: 'native', nativeClients: ['codex'],
   }), 'unsupported', 'a shared native client cannot promote an unsupported credential resolver')
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    credentialResolverId: 'codex', client: 'codex', mode: 'native', nativeClients: [],
+    providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: [],
   }), 'unsupported', 'a credential resolver cannot bypass the provider native-client allowlist')
 })
 

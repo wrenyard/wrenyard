@@ -16,10 +16,10 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv("WRENYARD_DISPATCH_PLANS_JSON") == "" {
 		_ = os.Setenv("WRENYARD_DISPATCH_PLANS_JSON", `{
-      "codex-sol":{"client":"codex","provider":"codex","model":"gpt-5.6-sol","mode":"native"},
-      "codex-terra":{"client":"codex","provider":"codex","model":"gpt-5.6-terra","mode":"native"},
-      "codex-luna":{"client":"codex","provider":"codex","model":"gpt-5.6-luna","mode":"native"},
-      "codex-spark":{"client":"codex","provider":"codex-spark","model":"gpt-5.3-codex-spark","mode":"native"},
+      "codex-sol":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-sol","mode":"native"},
+      "codex-terra":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-terra","mode":"native"},
+      "codex-luna":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-luna","mode":"native"},
+      "codex-spark":{"client":"codex","provider":"chatgpt","model":"gpt-5.3-codex-spark","mode":"native"},
       "cb-hy":{"client":"codebuddy","provider":"codebuddy","model":"hy4-preview","mode":"native"},
       "cb-ds":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},
       "cb-dsf":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},
@@ -123,7 +123,7 @@ func TestLoadProfileAcceptsDaemonPlanForCanonicalTargetWithoutRecipe(t *testing.
 }
 
 func TestLoadProfileFailsClosedWhenCanonicalTargetHasNoPlan(t *testing.T) {
-	canonical := "codex/no-such-model:codex"
+	canonical := "chatgpt/no-such-model:codex"
 	def, ok, err := executionDependencies().LoadProfile(canonical)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestLoadProfileFailsClosedWhenCanonicalPlanHasUnknownClientOrProvider(t *te
 	t.Run("unknown client adapter", func(t *testing.T) {
 		key := "ghost-client/gpt-6-astra:codex"
 		setTestDispatchPlan(t, key, profilepkg.DispatchPlan{
-			Client: "ghost-client", Provider: "codex", Model: "gpt-6-astra", Mode: "native",
+			Client: "ghost-client", Provider: "chatgpt", Model: "gpt-6-astra", Mode: "native",
 		})
 		_, ok, err := executionDependencies().LoadProfile(key)
 		if err != nil {
@@ -148,7 +148,7 @@ func TestLoadProfileFailsClosedWhenCanonicalPlanHasUnknownClientOrProvider(t *te
 		}
 	})
 	t.Run("unknown provider adapter", func(t *testing.T) {
-		key := "codex/ghost-provider:codex"
+		key := "chatgpt/ghost-provider:codex"
 		setTestDispatchPlan(t, key, profilepkg.DispatchPlan{
 			Client: "codex", Provider: "ghost-provider", Model: "gpt-6-astra", Mode: "native",
 		})
@@ -624,7 +624,7 @@ func TestDispatchPlanNonCodeBuddyPlansUnaffectedByMissingContext(t *testing.T) {
 
 	profileID := "cb-unaffected-codex"
 	setTestDispatchPlan(t, profileID, profilepkg.DispatchPlan{
-		Client: "codex", Provider: "codex", Model: "gpt-5.6-terra", Mode: "native",
+		Client: "codex", Provider: "chatgpt", Model: "gpt-5.6-terra", Mode: "native",
 	})
 	plan, err := dispatchPlanForProfile(profileID)
 	if err != nil {

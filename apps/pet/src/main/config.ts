@@ -74,14 +74,16 @@ const GROK_PROVIDER_ID = 'super-grok';
 const LEGACY_GROK_ID = 'grok';
 const CURSOR_PROVIDER_ID = 'cursor';
 const DEEPSEEK_PROVIDER_ID = 'deepseek';
+/** Single unified ChatGPT provider; legacy codex/codex-spark ids normalize here. */
+const CHATGPT_PROVIDER_ID = 'chatgpt';
+const LEGACY_CHATGPT_PROVIDER_IDS = ['codex', 'codex-spark'];
 
 const DEFAULT_PROVIDER_IDS = [
-  'codex',
+  CHATGPT_PROVIDER_ID,
   CURSOR_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   'zhipu-coding',
   'kimi-coding',
-  'codex-spark',
   GROK_PROVIDER_ID,
 ];
 
@@ -226,7 +228,7 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
  * Insert the cursor provider enabled:true exactly once when absent, preserving
  * explicit cursor disabled state and the relative order of existing entries.
  * Also inserts deepseek exactly once immediately after cursor when cursor
- * exists, otherwise after codex, when absent — preserving enabled values and
+ * exists, otherwise after chatgpt, when absent — preserving enabled values and
  * unknown providers and never duplicating entries.
  */
 function migrateDefaultGapProviders(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
@@ -234,27 +236,28 @@ function migrateDefaultGapProviders(providers: QuotaProviderEntry[]): QuotaProvi
   const hasDeepseek = result.some((p) => p.id === DEEPSEEK_PROVIDER_ID);
   if (hasDeepseek) return result;
   // Insert deepseek immediately after cursor when present to reflect its
-  // popularity slot; otherwise immediately after codex, else at the end.
+  // popularity slot; otherwise immediately after chatgpt, else at the end.
   const cursorIdx = result.findIndex((p) => p.id === CURSOR_PROVIDER_ID);
   let insertAt: number;
   if (cursorIdx !== -1) {
     insertAt = cursorIdx + 1;
   } else {
-    const codexIdx = result.findIndex((p) => p.id === 'codex');
-    insertAt = codexIdx !== -1 ? codexIdx + 1 : result.length;
+    const chatgptIdx = result.findIndex((p) => p.id === CHATGPT_PROVIDER_ID);
+    insertAt = chatgptIdx !== -1 ? chatgptIdx + 1 : result.length;
   }
   return [...result.slice(0, insertAt), { id: DEEPSEEK_PROVIDER_ID, enabled: true }, ...result.slice(insertAt)];
 }
 
 /**
- * Insert cursor immediately after Codex when absent (or at the end when Codex
- * is absent), preserving explicit cursor state and existing relative order.
+ * Insert cursor immediately after ChatGPT when absent (or at the end when
+ * ChatGPT is absent), preserving explicit cursor state and existing relative
+ * order.
  */
 function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
   const hasCursor = providers.some((p) => p.id === CURSOR_PROVIDER_ID);
   if (hasCursor) return providers;
-  const codexIdx = providers.findIndex((p) => p.id === 'codex');
-  const insertAt = codexIdx === -1 ? providers.length : codexIdx + 1;
+  const chatgptIdx = providers.findIndex((p) => p.id === CHATGPT_PROVIDER_ID);
+  const insertAt = chatgptIdx === -1 ? providers.length : chatgptIdx + 1;
   return [
     ...providers.slice(0, insertAt),
     { id: CURSOR_PROVIDER_ID, enabled: true },
@@ -264,14 +267,19 @@ function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderE
 
 /**
  * Migrate legacy `quota.pools` string ids to canonical provider ids.
- * Maps the exact legacy `grok` id to `super-grok`, preserves ordering,
- * and deduplicates when both the legacy and canonical ids coexist.
+ * Maps the exact legacy `grok` id to `super-grok` and the legacy ChatGPT ids
+ * (`codex`, `codex-spark`) to the single `chatgpt` id, preserves ordering, and
+ * deduplicates when both the legacy and canonical ids coexist.
  */
 function migrateQuotaPoolIds(ids: string[]): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
-    const mapped = id === LEGACY_GROK_ID ? GROK_PROVIDER_ID : id;
+    const mapped = id === LEGACY_GROK_ID
+      ? GROK_PROVIDER_ID
+      : LEGACY_CHATGPT_PROVIDER_IDS.includes(id)
+        ? CHATGPT_PROVIDER_ID
+        : id;
     if (seen.has(mapped)) continue;
     seen.add(mapped);
     result.push(mapped);
@@ -281,24 +289,30 @@ function migrateQuotaPoolIds(ids: string[]): string[] {
 
 /**
  * Migrate legacy `quota.providers` entries to canonical ids.
- * Maps the exact legacy `grok` id to `super-grok`, preserves entry ordering
- * and enabled state, and deduplicates when both ids coexist: the explicit
- * canonical `super-grok` entry's enabled value wins, while the merged entry
+ * Maps the exact legacy `grok` id to `super-grok` and the legacy ChatGPT
+ * provider ids (`codex`, `codex-spark`) to the single `chatgpt` id, preserves
+ * entry ordering and enabled state, and deduplicates when both ids coexist:
+ * the explicit canonical entry's enabled value wins, while the merged entry
  * retains the stable position of its first occurrence.
  */
 function migrateQuotaProviderIds(entries: QuotaProviderEntry[]): QuotaProviderEntry[] {
   const result: QuotaProviderEntry[] = [];
-  let mergedIndex = -1;
+  const mergedIndexById = new Map<string, number>();
   for (const entry of entries) {
-    const mappedId = entry.id === LEGACY_GROK_ID ? GROK_PROVIDER_ID : entry.id;
-    if (mappedId !== GROK_PROVIDER_ID) {
+    const mappedId = entry.id === LEGACY_GROK_ID
+      ? GROK_PROVIDER_ID
+      : LEGACY_CHATGPT_PROVIDER_IDS.includes(entry.id)
+        ? CHATGPT_PROVIDER_ID
+        : entry.id;
+    if (mappedId !== GROK_PROVIDER_ID && mappedId !== CHATGPT_PROVIDER_ID) {
       result.push(entry);
       continue;
     }
-    if (mergedIndex === -1) {
-      mergedIndex = result.length;
-      result.push({ id: GROK_PROVIDER_ID, enabled: entry.enabled });
-    } else if (entry.id === GROK_PROVIDER_ID) {
+    const mergedIndex = mergedIndexById.get(mappedId);
+    if (mergedIndex === undefined) {
+      mergedIndexById.set(mappedId, result.length);
+      result.push({ id: mappedId, enabled: entry.enabled });
+    } else if (entry.id === mappedId) {
       // Explicit canonical entry's enabled value wins over a mapped legacy entry.
       result[mergedIndex].enabled = entry.enabled;
     }

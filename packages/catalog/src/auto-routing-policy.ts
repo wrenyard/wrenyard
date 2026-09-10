@@ -384,14 +384,6 @@ function interpolatePriceFactor(priceUsdPerM: number): number {
   return 0;
 }
 
-function minOf(values: number[]): number {
-  let best = Number.POSITIVE_INFINITY;
-  for (const v of values) {
-    if (v < best) best = v;
-  }
-  return best;
-}
-
 function compareLex(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
@@ -560,9 +552,11 @@ function assessConstraint(
 }
 
 /**
- * Aggregate the required quota constraints monotonically:
- * blocked first, then any strained (coverage may still be incomplete),
- * then unknown, and only complete, trustworthy, healthy evidence is healthy.
+ * Aggregate the required quota constraints by equal arithmetic mean:
+ * any blocked constraint blocks eligibility; otherwise every applicable
+ * constraint contributes its determinate headroom, and each missing/rejected/
+ * unknown/positive-balance (headroom null) constraint contributes
+ * NEUTRAL_HEADROOM (0.5). An empty list stays neutral unknown.
  */
 export function assessRequiredQuota(
   nowMs: number,
@@ -575,10 +569,10 @@ export function assessRequiredQuota(
   let hasStrained = false;
   let hasUnknown = false;
   let hasMissingOrRejected = false;
-  /** True when a healthy mandatory balance is the only healthy constraint:
-   *  balances are neutral quality and must never be read as full quota. */
-  let hasNeutralBalance = false;
   const blockedConstraintIds: string[] = [];
+  // Every applicable constraint contributes exactly one headroom term to the
+  // arithmetic mean: its determinate headroom, or NEUTRAL_HEADROOM when it
+  // carries none (unknown/missing/rejected/positive balance).
   const headroomPool: number[] = [];
 
   for (const constraint of list) {
@@ -591,18 +585,23 @@ export function assessRequiredQuota(
         break;
       case "strained":
         hasStrained = true;
-        if (assessment.headroom !== null) headroomPool.push(assessment.headroom);
+        headroomPool.push(
+          assessment.headroom === null ? NEUTRAL_HEADROOM : assessment.headroom
+        );
         break;
       case "healthy":
-        if (assessment.headroom !== null) headroomPool.push(assessment.headroom);
-        else hasNeutralBalance = true;
+        headroomPool.push(
+          assessment.headroom === null ? NEUTRAL_HEADROOM : assessment.headroom
+        );
         break;
       case "unknown":
         hasUnknown = true;
+        headroomPool.push(NEUTRAL_HEADROOM);
         break;
       case "missing":
       case "rejected":
         hasMissingOrRejected = true;
+        headroomPool.push(NEUTRAL_HEADROOM);
         break;
     }
   }
@@ -629,13 +628,14 @@ export function assessRequiredQuota(
   let headroom: number | null;
   if (state === "blocked") {
     headroom = null;
-  } else if (state === "unknown") {
+  } else if (empty) {
+    // No applicable constraint is neutral unknown, not full quota.
     headroom = NEUTRAL_HEADROOM;
-  } else if (headroomPool.length === 0) {
-    // A healthy mandatory balance is neutral quality: no full-quota boost.
-    headroom = state === "healthy" && !hasNeutralBalance ? 1 : NEUTRAL_HEADROOM;
   } else {
-    headroom = minOf(headroomPool);
+    // Equal arithmetic mean over every applicable constraint.
+    let sum = 0;
+    for (const term of headroomPool) sum += term;
+    headroom = sum / headroomPool.length;
   }
 
   return {

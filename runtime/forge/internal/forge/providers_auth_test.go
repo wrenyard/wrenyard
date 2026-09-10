@@ -734,7 +734,7 @@ func TestProviderAuthStatusCodex(t *testing.T) {
 		forgeDataDir,
 		userHome,
 	)
-	status := resolver.ProviderAuthStatus("codex")
+	status := resolver.ProviderAuthStatus("chatgpt")
 	if !status.OK {
 		t.Fatalf("codex should be authenticated, got status: %+v", status)
 	}
@@ -742,7 +742,7 @@ func TestProviderAuthStatusCodex(t *testing.T) {
 		t.Fatalf("expected codex resolver, got %s", status.Kind)
 	}
 
-	cred, ok := resolver.Credential("codex")
+	cred, ok := resolver.Credential("chatgpt")
 	if !ok {
 		t.Fatal("codex credential should be available")
 	}
@@ -761,7 +761,7 @@ func TestProviderAuthStatusCodexMissing(t *testing.T) {
 		forgeDataDir,
 		userHome,
 	)
-	status := resolver.ProviderAuthStatus("codex")
+	status := resolver.ProviderAuthStatus("chatgpt")
 	if status.OK {
 		t.Fatal("codex should NOT be authenticated without auth.json")
 	}

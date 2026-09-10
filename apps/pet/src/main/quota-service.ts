@@ -138,7 +138,7 @@ function runForgeQuotaJson(runtimeCommand?: string): Promise<string> {
 }
 
 interface RawQuotaEntry {
-  pool?: string;
+  provider?: string;
   label?: string;
   status?: string;
   error?: string;
@@ -275,7 +275,10 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
     if (!entry || typeof entry !== 'object') continue;
 
     const e = entry as RawQuotaEntry;
-    const id = e.pool ?? `pool-${i}`;
+    // Wire rows are provider-keyed; a missing provider id is malformed and
+    // must be skipped rather than fabricated (no `pool-i` placeholder).
+    if (typeof e.provider !== 'string' || e.provider.length === 0) continue;
+    const id = e.provider;
     const label = typeof e.label === 'string' ? e.label : id;
     const displayLine = typeof e.display_line === 'string' && e.display_line.length > 0 ? e.display_line : null;
     // Forge-provided message takes precedence over the error field; both are

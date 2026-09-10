@@ -127,7 +127,7 @@ func TestAPIKeyProvidersUseForgeManagedCredentials(t *testing.T) {
 			t.Fatalf("provider %s credential resolver = %#v, want forge-managed", id, provider.Inference)
 		}
 	}
-	for _, id := range []string{"codex", "codex-spark"} {
+	for _, id := range []string{"chatgpt"} {
 		provider, err := r.LookupBinding(id)
 		if err != nil {
 			t.Fatal(err)
@@ -922,8 +922,8 @@ func TestClientDescriptorsCodexOpenCode(t *testing.T) {
 	if codex.Binary.Name != "codex" {
 		t.Fatalf("codex binary name = %q", codex.Binary.Name)
 	}
-	if codex.DefaultProvider != "codex" {
-		t.Fatalf("codex default provider = %q, want codex", codex.DefaultProvider)
+	if codex.DefaultProvider != "chatgpt" {
+		t.Fatalf("codex default provider = %q, want chatgpt", codex.DefaultProvider)
 	}
 
 	oc, err := r.LookupDescriptor("opencode")
@@ -968,28 +968,20 @@ func TestDialectCompatibilityNewProviders(t *testing.T) {
 		t.Fatalf("zhipu-coding binding should not use client binary")
 	}
 
-	// codex (codex dialect) compatible with codex client.
-	codexClient, codexProvider, err := r.ResolveBinding("codex", "codex")
+	// chatgpt (codex dialect) compatible with codex client.
+	codexClient, codexProvider, err := r.ResolveBinding("codex", "chatgpt")
 	if err != nil {
-		t.Fatalf("codex + codex should be compatible: %v", err)
+		t.Fatalf("codex + chatgpt should be compatible: %v", err)
 	}
-	if codexClient.DefaultProvider != "codex" {
-		t.Fatalf("codex client default provider = %q, want codex", codexClient.DefaultProvider)
+	if codexClient.DefaultProvider != "chatgpt" {
+		t.Fatalf("codex client default provider = %q, want chatgpt", codexClient.DefaultProvider)
 	}
-	if codexProvider.QuotaProvider != "codex" {
-		t.Fatalf("codex provider quota provider = %q, want codex", codexProvider.QuotaProvider)
+	if codexProvider.QuotaProvider != "chatgpt" {
+		t.Fatalf("chatgpt provider quota provider = %q, want chatgpt", codexProvider.QuotaProvider)
 	}
-
-	// codex-spark (codex dialect) distinct pool.
-	_, spark, err := r.ResolveBinding("codex", "codex-spark")
-	if err != nil {
-		t.Fatalf("codex + codex-spark should be compatible: %v", err)
-	}
-	if spark.QuotaProvider != "codex-spark" {
-		t.Fatalf("codex-spark quota provider = %q, want codex-spark", spark.QuotaProvider)
-	}
-	if len(spark.AllowedModels) != 1 || spark.AllowedModels[0] != "gpt-5.3-codex-spark" {
-		t.Fatalf("codex-spark allowed models = %v, want [gpt-5.3-codex-spark]", spark.AllowedModels)
+	// Single chatgpt provider owns the Spark model; no separate pool.
+	if _, ok := r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark"); !ok {
+		t.Fatal("chatgpt provider must own the Spark model in the same provider")
 	}
 
 	// opencode-native (opencode dialect) compatible with opencode client.
@@ -1015,7 +1007,7 @@ func TestProviderUsesClientBinaryPolicy(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"zhipu-coding", "codex", "codex-spark", "opencode-native"} {
+	for _, name := range []string{"zhipu-coding", "chatgpt", "opencode-native"} {
 		b, err := r.LookupBinding(name)
 		if err != nil {
 			t.Fatal(err)
@@ -1035,8 +1027,7 @@ func TestCredentialResolverMapping(t *testing.T) {
 		{"kimi-coding", CredentialResolverForgeManaged},
 		{"zhipu-coding", CredentialResolverForgeManaged},
 		{"anthropic", CredentialResolverClaude},
-		{"codex", CredentialResolverCodex},
-		{"codex-spark", CredentialResolverCodex},
+		{"chatgpt", CredentialResolverCodex},
 	}
 	for _, tc := range tests {
 		provider, err := r.LookupBinding(tc.id)
@@ -1084,26 +1075,23 @@ func TestExistingProviderBindingsUnchanged(t *testing.T) {
 	}
 }
 
-func TestCodexSparkDistinctPool(t *testing.T) {
+func TestChatGPTOwnsSpark(t *testing.T) {
 	r := defaultReg()
 
-	codex, err := r.LookupBinding("codex")
+	chatgpt, err := r.LookupBinding("chatgpt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if codex.QuotaProvider != "codex" {
-		t.Fatalf("codex quota = %q, want codex", codex.QuotaProvider)
+	if chatgpt.QuotaProvider != "chatgpt" {
+		t.Fatalf("chatgpt quota = %q, want chatgpt", chatgpt.QuotaProvider)
 	}
-
-	spark, err := r.LookupBinding("codex-spark")
-	if err != nil {
-		t.Fatal(err)
+	if _, ok := r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark"); !ok {
+		t.Fatal("chatgpt must own the Spark model in the same provider")
 	}
-	if spark.QuotaProvider != "codex-spark" {
-		t.Fatalf("codex-spark quota = %q, want codex-spark", spark.QuotaProvider)
-	}
-	if codex.QuotaProvider == spark.QuotaProvider {
-		t.Fatal("codex and codex-spark must use distinct canonical quota pools")
+	for _, obsolete := range []string{"codex", "codex-spark"} {
+		if _, err := r.LookupBinding(obsolete); err == nil {
+			t.Fatalf("obsolete provider %q must not exist", obsolete)
+		}
 	}
 }
 
@@ -1171,18 +1159,18 @@ func TestProviderModelMap(t *testing.T) {
 		t.Fatal("zhipu-coding should no longer own retired glm-5.2")
 	}
 
-	// codex provider owns GPT-5.6 models.
+	// chatgpt provider owns GPT-5.6 models.
 	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
-		_, ok := r.LookupProviderModel("codex", model)
+		_, ok := r.LookupProviderModel("chatgpt", model)
 		if !ok {
-			t.Fatalf("codex should own model %q", model)
+			t.Fatalf("chatgpt should own model %q", model)
 		}
 	}
 
-	// codex-spark owns gpt-5.3-codex-spark.
-	_, ok = r.LookupProviderModel("codex-spark", "gpt-5.3-codex-spark")
+	// chatgpt also owns gpt-5.3-codex-spark.
+	_, ok = r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark")
 	if !ok {
-		t.Fatal("codex-spark should own gpt-5.3-codex-spark")
+		t.Fatal("chatgpt should own gpt-5.3-codex-spark")
 	}
 }
 

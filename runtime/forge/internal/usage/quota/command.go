@@ -112,13 +112,13 @@ func quotaWindowsJSON(windows []Window) []quotaWindowJSON {
 	return out
 }
 
-// canonicalPools lists the canonical pool names in deterministic order.
-var canonicalPools = []string{"codex", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "codex-spark", "anthropic", "super-grok"}
+// canonicalProviders lists the canonical provider names in deterministic order.
+var canonicalProviders = []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "anthropic", "super-grok"}
 
 // Command dispatches the quota command. Usage: forge quota [name] [--json] [--refresh]
 func Command(deps CommandDeps, args []string) int {
 	// Handle refresh-provider subcommand (spawned by DefaultSpawner).
-	// This bypasses normal flag/pool parsing entirely.
+	// This bypasses normal flag/provider parsing entirely.
 	if len(args) > 0 && args[0] == "refresh-provider" {
 		return handleRefreshProvider(deps, args[1:])
 	}
@@ -170,7 +170,7 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 	}
 
 	providerName := args[0]
-	canonical, ok := canonicalPoolMap[providerName]
+	canonical, ok := canonicalProviderMap[providerName]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "forge quota refresh-provider: unknown provider %q\n", providerName)
 		return 2
@@ -181,8 +181,8 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 		return 2
 	}
 
-	// Derive expected cache path using the existing pool/cache-path mapping.
-	expectedCachePath := poolCachePath(deps.DataDir, canonical)
+	// Derive expected cache path using the existing provider/cache-path mapping.
+	expectedCachePath := providerCachePath(deps.DataDir, canonical)
 
 	cachePath := os.Getenv("FORGE_REFRESH_CACHE_PATH")
 	lockPath := os.Getenv("FORGE_REFRESH_LOCK_PATH")
@@ -233,15 +233,15 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 
 	q, err := provider.Fetch(ctx)
 	if err != nil {
-		// Codex, codex-spark, and cursor use fail-closed cache: replace
-		// expired quota with a failure marker instead of preserving stale
-		// data. The failure-marker write is atomic with ownership: the token
+	// Codex/ChatGPT, cursor, and deepseek use fail-closed cache: replace
+	// expired quota with a failure marker instead of preserving stale
+	// data. The failure-marker write is atomic with ownership: the token
 		// is re-verified under the guard immediately before the write, so a
 		// stale worker resumed after reclaim can never overwrite a newer
 		// owner's cache or marker. On ownership loss we exit without
 		// writing or releasing the newer token.
 		guardErr := rl.WithOwnedGuard(func() error {
-			if failClosedPool(canonical) {
+			if failClosedProvider(canonical) {
 				return writeRefreshFailureForce(cachePath, time.Now(), err.Error())
 			}
 			return writeRefreshFailure(cachePath, time.Now(), err.Error())
@@ -282,38 +282,41 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 	return 0
 }
 
-// poolEntry is the canonical quota list row shared by the regular pools and
-// the observed CodeBuddy projection.
-type poolEntry struct {
-	Pool        string            `json:"pool"`
-	Label       string            `json:"label,omitempty"`
-	Used        *float64          `json:"used,omitempty"`
-	Total       *float64          `json:"total,omitempty"`
-	Balances    []MoneyBalance    `json:"balances,omitempty"`
-	Status      string            `json:"status"`
-	Code        string            `json:"code,omitempty"`
-	Error       string            `json:"error,omitempty"`
-	Message     string            `json:"message,omitempty"`
-	Windows     []quotaWindowJSON `json:"windows,omitempty"`
-	Pace        *PaceJSON         `json:"pace,omitempty"`
-	Reset       *ResetJSON        `json:"reset,omitempty"`
-	DisplayLine string            `json:"display_line,omitempty"`
-	FetchedAt   *time.Time        `json:"fetched_at,omitempty"`
-	Stale       bool              `json:"stale,omitempty"`
+// providerEntry is the canonical quota list row shared by the regular
+// providers and the observed CodeBuddy projection.
+type providerEntry struct {
+	Provider string            `json:"provider"`
+	Label    string            `json:"label,omitempty"`
+	Used     *float64          `json:"used,omitempty"`
+	Total    *float64          `json:"total,omitempty"`
+	Balances []MoneyBalance    `json:"balances,omitempty"`
+	Status   string            `json:"status"`
+	Code     string            `json:"code,omitempty"`
+	Error    string            `json:"error,omitempty"`
+	Message  string            `json:"message,omitempty"`
+	Windows  []quotaWindowJSON `json:"windows,omitempty"`
+	// NotApplicableWindows propagates the provider-confirmed absent windows
+	// (e.g. Pro plan without a 5h primary) into the command JSON projection.
+	NotApplicableWindows []string   `json:"not_applicable_windows,omitempty"`
+	Pace                 *PaceJSON  `json:"pace,omitempty"`
+	Reset                *ResetJSON `json:"reset,omitempty"`
+	DisplayLine          string     `json:"display_line,omitempty"`
+	FetchedAt            *time.Time `json:"fetched_at,omitempty"`
+	Stale                bool       `json:"stale,omitempty"`
 }
 
 func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) int {
-	entries := make([]poolEntry, 0, len(canonicalPools))
+	entries := make([]providerEntry, 0, len(canonicalProviders))
 
-	for _, pool := range canonicalPools {
-		entry := poolEntry{Pool: pool, Label: CanonicalLabel(pool), Status: "ok"}
+	for _, providerName := range canonicalProviders {
+		entry := providerEntry{Provider: providerName, Label: CanonicalLabel(providerName), Status: "ok"}
 
-		cachePath := poolCachePath(deps.DataDir, pool)
+		cachePath := providerCachePath(deps.DataDir, providerName)
 
 		// Resolve provider availability before accepting cache.
-		provider := innerProviderFor(deps, pool, billing)
+		provider := innerProviderFor(deps, providerName, billing)
 		if deps.ProviderForOverride != nil {
-			provider = deps.ProviderForOverride(pool, billing)
+			provider = deps.ProviderForOverride(providerName, billing)
 		}
 
 		if provider == nil {
@@ -322,7 +325,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 			if asJSON {
 				entries = append(entries, entry)
 			} else {
-				fmt.Printf("%s: unavailable\n", pool)
+				fmt.Printf("%s: unavailable\n", providerName)
 			}
 			continue
 		}
@@ -330,7 +333,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 		// Check cache first (unless --refresh)
 		if !refresh {
 			if cached, ok := ReadCache(cachePath); ok {
-				if cacheEligibleForPool(cached, pool) {
+				if cacheEligibleForProvider(cached, providerName) {
 					if cached.Used != nil {
 						entry.Used = cached.Used
 					}
@@ -344,6 +347,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 						entry.Windows = quotaWindowsJSON(cached.Windows)
 						entry.Pace, entry.Reset = PaceAndResetJSON(cached.Windows)
 					}
+					entry.NotApplicableWindows = cached.NotApplicableWindows
 					if !cached.FetchedAt.IsZero() {
 						entry.FetchedAt = &cached.FetchedAt
 					}
@@ -355,7 +359,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 					} else {
 						dl := entry.DisplayLine
 						if dl == "" {
-							fmt.Printf("%s: %.0f/%.0f\n", pool, ptrFloatVal(entry.Used), ptrFloatVal(entry.Total))
+							fmt.Printf("%s: %.0f/%.0f\n", providerName, ptrFloatVal(entry.Used), ptrFloatVal(entry.Total))
 						} else {
 							fmt.Println(dl)
 						}
@@ -370,16 +374,16 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 
 		q, err := provider.Fetch(ctx)
 		if err != nil {
-			// Fail-closed pools replace any existing valid quota with a failure
-			// marker so stale data is never rendered.
-			if failClosedPool(pool) {
+			// Fail-closed providers replace any existing valid quota with a
+			// failure marker so stale data is never rendered.
+			if failClosedProvider(providerName) {
 				_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 			}
 			projectQuotaFetchError(&entry, err)
 			if asJSON {
 				entries = append(entries, entry)
 			} else {
-				fmt.Printf("%s: error: %v\n", pool, err)
+				fmt.Printf("%s: error: %v\n", providerName, err)
 			}
 			continue
 		}
@@ -407,6 +411,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 			entry.Windows = quotaWindowsJSON(q.Windows)
 			entry.Pace, entry.Reset = PaceAndResetJSON(q.Windows)
 		}
+		entry.NotApplicableWindows = q.NotApplicableWindows
 		if !q.FetchedAt.IsZero() {
 			entry.FetchedAt = &q.FetchedAt
 		}
@@ -419,7 +424,7 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 		} else {
 			dl := entry.DisplayLine
 			if dl == "" {
-				fmt.Printf("%s: %.0f/%.0f\n", pool, ptrFloatVal(entry.Used), ptrFloatVal(entry.Total))
+				fmt.Printf("%s: %.0f/%.0f\n", providerName, ptrFloatVal(entry.Used), ptrFloatVal(entry.Total))
 			} else {
 				fmt.Println(dl)
 			}
@@ -454,23 +459,23 @@ func quotaListAll(deps CommandDeps, billing BillingInfo, asJSON, refresh bool) i
 // record. The window is a neutral truthful 0%-remaining window named observed
 // carrying the authoritative resets_at and a concise Chinese message. Legacy
 // v1 and mismatched records stay inert; nil context always yields no entry.
-func observedCodeBuddyEntry(deps CommandDeps) (poolEntry, bool) {
+func observedCodeBuddyEntry(deps CommandDeps) (providerEntry, bool) {
 	expectedScope := strings.TrimSpace(deps.CodeBuddyExpectedScope)
 	expectedEnvironment := strings.TrimSpace(deps.CodeBuddyExpectedEnvironment)
 	if expectedScope == "" || expectedEnvironment == "" || deps.CodeBuddyActiveScope == nil {
-		return poolEntry{}, false
+		return providerEntry{}, false
 	}
 	currentScope, currentEnvironment, ok := deps.CodeBuddyActiveScope()
 	if !ok || strings.TrimSpace(currentScope) == "" || strings.TrimSpace(currentEnvironment) == "" {
-		return poolEntry{}, false
+		return providerEntry{}, false
 	}
 	if currentScope != expectedScope || currentEnvironment != expectedEnvironment {
-		return poolEntry{}, false
+		return providerEntry{}, false
 	}
 	store := observedquota.NewStore(deps.ObservedQuotaRoot)
 	record, ok := store.ActiveScoped(observedquota.ProviderCodeBuddy, currentScope, timeNow())
 	if !ok {
-		return poolEntry{}, false
+		return providerEntry{}, false
 	}
 	label := CanonicalLabel(observedquota.ProviderCodeBuddy)
 	resetsAt := record.ResetsAt
@@ -478,8 +483,8 @@ func observedCodeBuddyEntry(deps CommandDeps) (poolEntry, bool) {
 		Name: "observed", Pct: 100, ResetsAt: &resetsAt,
 	}
 	q := Quota{Provider: observedquota.ProviderCodeBuddy, Label: label, Windows: []Window{window}}
-	return poolEntry{
-		Pool:        observedquota.ProviderCodeBuddy,
+	return providerEntry{
+		Provider:    observedquota.ProviderCodeBuddy,
 		Label:       label,
 		Status:      "ok",
 		Windows:     quotaWindowsJSON([]Window{window}),
@@ -495,12 +500,12 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 	// Validate canonical name
 	canonical := canonicalName(name)
 	if canonical == "" {
-		fmt.Fprintf(os.Stderr, "forge quota: unknown pool %q; available: %s\n",
-			name, strings.Join(canonicalPools, ", "))
+		fmt.Fprintf(os.Stderr, "forge quota: unknown provider %q; available: %s\n",
+			name, strings.Join(canonicalProviders, ", "))
 		return 2
 	}
 
-	cachePath := poolCachePath(deps.DataDir, canonical)
+	cachePath := providerCachePath(deps.DataDir, canonical)
 
 	// Resolve provider availability before accepting cache.
 	provider := innerProviderFor(deps, canonical, billing)
@@ -510,16 +515,16 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 	if provider == nil {
 		if asJSON {
 			type singleEntry struct {
-				Pool   string `json:"pool"`
-				Label  string `json:"label,omitempty"`
-				Status string `json:"status"`
-				Error  string `json:"error"`
+				Provider string `json:"provider"`
+				Label    string `json:"label,omitempty"`
+				Status   string `json:"status"`
+				Error    string `json:"error"`
 			}
 			return printJSONQuota(singleEntry{
-				Pool:   canonical,
-				Label:  CanonicalLabel(canonical),
-				Status: "unavailable",
-				Error:  "unknown provider",
+				Provider: canonical,
+				Label:    CanonicalLabel(canonical),
+				Status:   "unavailable",
+				Error:    "unknown provider",
 			})
 		}
 		fmt.Fprintf(os.Stderr, "forge quota: unavailable %q\n", canonical)
@@ -529,43 +534,45 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 	// Check cache (unless --refresh)
 	if !refresh {
 		if cached, ok := ReadCache(cachePath); ok {
-			if cacheEligibleForPool(cached, canonical) {
+			if cacheEligibleForProvider(cached, canonical) {
 				label := CanonicalLabel(canonical)
 				cached.Label = label
 				dl := DisplayLine(cached)
 				if asJSON {
 					type singleEntry struct {
-						Pool        string            `json:"pool"`
-						Label       string            `json:"label,omitempty"`
-						Used        float64           `json:"used"`
-						Total       float64           `json:"total"`
-						Balances    []MoneyBalance    `json:"balances,omitempty"`
-						Windows     []quotaWindowJSON `json:"windows,omitempty"`
-						Pace        *PaceJSON         `json:"pace,omitempty"`
-						Reset       *ResetJSON        `json:"reset,omitempty"`
-						DisplayLine string            `json:"display_line,omitempty"`
-						FetchedAt   *time.Time        `json:"fetched_at,omitempty"`
-						Stale       bool              `json:"stale,omitempty"`
-						Status      string            `json:"status"`
-						Source      string            `json:"source,omitempty"`
-						From        string            `json:"from,omitempty"`
+						Provider             string            `json:"provider"`
+						Label                string            `json:"label,omitempty"`
+						Used                 float64           `json:"used"`
+						Total                float64           `json:"total"`
+						Balances             []MoneyBalance    `json:"balances,omitempty"`
+						Windows              []quotaWindowJSON `json:"windows,omitempty"`
+						NotApplicableWindows []string          `json:"not_applicable_windows,omitempty"`
+						Pace                 *PaceJSON         `json:"pace,omitempty"`
+						Reset                *ResetJSON        `json:"reset,omitempty"`
+						DisplayLine          string            `json:"display_line,omitempty"`
+						FetchedAt            *time.Time        `json:"fetched_at,omitempty"`
+						Stale                bool              `json:"stale,omitempty"`
+						Status               string            `json:"status"`
+						Source               string            `json:"source,omitempty"`
+						From                 string            `json:"from,omitempty"`
 					}
 					pace, reset := PaceAndResetJSON(cached.Windows)
 					entry := singleEntry{
-						Pool:        canonical,
-						Label:       label,
-						Used:        ptrFloatVal(cached.Used),
-						Total:       ptrFloatVal(cached.Total),
-						Balances:    cached.Balances,
-						Windows:     quotaWindowsJSON(cached.Windows),
-						Pace:        pace,
-						Reset:       reset,
-						DisplayLine: dl,
-						FetchedAt:   timePtr(cached.FetchedAt),
-						Stale:       cached.Stale,
-						Status:      "ok",
-						Source:      "cache",
-						From:        "cache",
+						Provider:             canonical,
+						Label:                label,
+						Used:                 ptrFloatVal(cached.Used),
+						Total:                ptrFloatVal(cached.Total),
+						Balances:             cached.Balances,
+						Windows:              quotaWindowsJSON(cached.Windows),
+						NotApplicableWindows: cached.NotApplicableWindows,
+						Pace:                 pace,
+						Reset:                reset,
+						DisplayLine:          dl,
+						FetchedAt:            timePtr(cached.FetchedAt),
+						Stale:                cached.Stale,
+						Status:               "ok",
+						Source:               "cache",
+						From:                 "cache",
 					}
 					return printJSONQuota(entry)
 				}
@@ -584,13 +591,13 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 
 	q, err := provider.Fetch(ctx)
 	if err != nil {
-		// Fail-closed pools replace any existing valid quota with a failure
+		// Fail-closed providers replace any existing valid quota with a failure
 		// marker so stale data is never rendered.
-		if failClosedPool(canonical) {
+		if failClosedProvider(canonical) {
 			_ = writeRefreshFailureForce(cachePath, timeNow(), err.Error())
 		}
 		if asJSON {
-			entry := poolEntry{Pool: canonical, Label: CanonicalLabel(canonical)}
+			entry := providerEntry{Provider: canonical, Label: CanonicalLabel(canonical)}
 			projectQuotaFetchError(&entry, err)
 			return printJSONQuota(entry)
 		}
@@ -614,36 +621,38 @@ func quotaShowOne(deps CommandDeps, name string, billing BillingInfo, asJSON, re
 
 	if asJSON {
 		type singleEntry struct {
-			Pool        string            `json:"pool"`
-			Label       string            `json:"label,omitempty"`
-			Used        float64           `json:"used"`
-			Total       float64           `json:"total"`
-			Balances    []MoneyBalance    `json:"balances,omitempty"`
-			Windows     []quotaWindowJSON `json:"windows,omitempty"`
-			DisplayLine string            `json:"display_line,omitempty"`
-			Pace        *PaceJSON         `json:"pace,omitempty"`
-			Reset       *ResetJSON        `json:"reset,omitempty"`
-			FetchedAt   *time.Time        `json:"fetched_at,omitempty"`
-			Stale       bool              `json:"stale,omitempty"`
-			Status      string            `json:"status"`
-			Error       string            `json:"error,omitempty"`
-			Message     string            `json:"message,omitempty"`
+			Provider             string            `json:"provider"`
+			Label                string            `json:"label,omitempty"`
+			Used                 float64           `json:"used"`
+			Total                float64           `json:"total"`
+			Balances             []MoneyBalance    `json:"balances,omitempty"`
+			Windows              []quotaWindowJSON `json:"windows,omitempty"`
+			NotApplicableWindows []string          `json:"not_applicable_windows,omitempty"`
+			DisplayLine          string            `json:"display_line,omitempty"`
+			Pace                 *PaceJSON         `json:"pace,omitempty"`
+			Reset                *ResetJSON        `json:"reset,omitempty"`
+			FetchedAt            *time.Time        `json:"fetched_at,omitempty"`
+			Stale                bool              `json:"stale,omitempty"`
+			Status               string            `json:"status"`
+			Error                string            `json:"error,omitempty"`
+			Message              string            `json:"message,omitempty"`
 		}
 		pace, reset := PaceAndResetJSON(q.Windows)
 		entry := singleEntry{
-			Pool:        canonical,
-			Label:       label,
-			Used:        ptrFloatVal(q.Used),
-			Total:       ptrFloatVal(q.Total),
-			Balances:    q.Balances,
-			Windows:     quotaWindowsJSON(q.Windows),
-			DisplayLine: dl,
-			Pace:        pace,
-			Reset:       reset,
-			FetchedAt:   timePtr(q.FetchedAt),
-			Stale:       q.Stale,
-			Status:      "ok",
-			Message:     q.Message,
+			Provider:             canonical,
+			Label:                label,
+			Used:                 ptrFloatVal(q.Used),
+			Total:                ptrFloatVal(q.Total),
+			Balances:             q.Balances,
+			Windows:              quotaWindowsJSON(q.Windows),
+			NotApplicableWindows: q.NotApplicableWindows,
+			DisplayLine:          dl,
+			Pace:                 pace,
+			Reset:                reset,
+			FetchedAt:            timePtr(q.FetchedAt),
+			Stale:                q.Stale,
+			Status:               "ok",
+			Message:              q.Message,
 		}
 		return printJSONQuota(entry)
 	}
@@ -663,35 +672,35 @@ func timePtr(t time.Time) *time.Time {
 }
 
 func canonicalName(name string) string {
-	canon, ok := canonicalPoolMap[strings.ToLower(strings.TrimSpace(name))]
+	canon, ok := canonicalProviderMap[strings.ToLower(strings.TrimSpace(name))]
 	if !ok {
 		return ""
 	}
 	return canon
 }
 
-// poolCachePath returns the canonical cache file path for a given pool name
-// under the specified data directory.
-func poolCachePath(dataDir, pool string) string {
-	return filepath.Join(dataDir, "quota", pool+".json")
+// providerCachePath returns the canonical cache file path for a given provider
+// name under the specified data directory.
+func providerCachePath(dataDir, providerID string) string {
+	return filepath.Join(dataDir, "quota", providerID+".json")
 }
 
-// failClosedPool reports whether the given canonical pool uses a fail-closed
-// cache: on fetch failure, stale success data is force-replaced with a failure
-// marker so it is never rendered.
-func failClosedPool(pool string) bool {
-	switch pool {
-	case "codex", "codex-spark", "cursor", "deepseek", "super-grok":
+// failClosedProvider reports whether the given canonical provider uses a
+// fail-closed cache: on fetch failure, stale success data is force-replaced
+// with a failure marker so it is never rendered.
+func failClosedProvider(providerID string) bool {
+	switch providerID {
+	case "chatgpt", "cursor", "deepseek", "super-grok":
 		return true
 	}
 	return false
 }
 
-// requiredSource returns the exact cache source a fail-closed pool must carry
-// to be eligible for direct display. Empty means no source validation.
-func requiredSource(pool string) string {
-	switch pool {
-	case "codex", "codex-spark":
+// requiredSource returns the exact cache source a fail-closed provider must
+// carry to be eligible for direct display. Empty means no source validation.
+func requiredSource(providerID string) string {
+	switch providerID {
+	case "chatgpt":
 		return "codex-app-server"
 	case "cursor":
 		return "cursor-dashboard"
@@ -703,12 +712,12 @@ func requiredSource(pool string) string {
 	return ""
 }
 
-// cacheEligibleForPool checks whether the given cached Quota is eligible
+// cacheEligibleForProvider checks whether the given cached Quota is eligible
 // for direct command display. The cache is usable when:
 //   - FetchedAt is non-zero and age is non-negative and below defaultCacheTTL
-//   - For codex/codex-spark/cursor, the source must be exactly the provider's
+//   - For chatgpt/cursor, the source must be exactly the provider's
 //     authoritative source (requiredSource).
-func cacheEligibleForPool(cached Quota, pool string) bool {
+func cacheEligibleForProvider(cached Quota, providerID string) bool {
 	if cached.FetchedAt.IsZero() {
 		return false
 	}
@@ -716,16 +725,15 @@ func cacheEligibleForPool(cached Quota, pool string) bool {
 	if age < 0 || age >= defaultCacheTTL {
 		return false
 	}
-	if source := requiredSource(pool); source != "" && cached.Source != source {
+	if source := requiredSource(providerID); source != "" && cached.Source != source {
 		return false
 	}
 	return true
 }
 
-var canonicalPoolMap = map[string]string{
-	"codex":        "codex",
-	"codex-spark":  "codex-spark",
-	"spark":        "codex-spark",
+var canonicalProviderMap = map[string]string{
+	"chatgpt":      "chatgpt",
+	"codex":        "chatgpt",
 	"cursor":       "cursor",
 	"deepseek":     "deepseek",
 	"ds":           "deepseek",
@@ -772,10 +780,8 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 			AllowSnapshot:         deps.CodexBarEnabled(),
 			SnapshotStaleDuration: staleDur,
 		}
-	case "codex", "codex-spark":
-		return CodexProvider{
-			ProviderName: name,
-		}
+	case "chatgpt":
+		return ChatGPTProvider{}
 	case "cursor":
 		return CursorProvider{}
 	case "deepseek":
@@ -791,7 +797,7 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 	}
 }
 
-func projectQuotaFetchError(entry *poolEntry, err error) {
+func projectQuotaFetchError(entry *providerEntry, err error) {
 	entry.Status = "error"
 	entry.Error = err.Error()
 	var statusErr *QuotaStatusError

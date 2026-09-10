@@ -23,10 +23,10 @@ describe('parseQuotaJson', () => {
   it('parses provider-level remaining_pct and expected_remaining_pct with no windows', () => {
     const raw = JSON.stringify([
       {
-        pool: 'codex',
-        label: 'Codex',
+        provider: 'chatgpt',
+        label: 'ChatGPT',
         status: 'ok',
-        display_line: 'Codex month 55%',
+        display_line: 'ChatGPT month 55%',
         stale: false,
         remaining_pct: 55,
         expected_remaining_pct: 30,
@@ -37,22 +37,22 @@ describe('parseQuotaJson', () => {
     const providers = parseQuotaJson(raw);
     expect(providers).toHaveLength(1);
 
-    const codex = providers[0];
-    expect(codex.id).toBe('codex');
-    expect(codex.bars).toBeDefined();
-    expect(codex.bars!.remainingPct).toBe(55);
-    expect(codex.bars!.expectedRemainingPct).toBe(30);
+    const chatgpt = providers[0];
+    expect(chatgpt.id).toBe('chatgpt');
+    expect(chatgpt.bars).toBeDefined();
+    expect(chatgpt.bars!.remainingPct).toBe(55);
+    expect(chatgpt.bars!.expectedRemainingPct).toBe(30);
     // Zero real windows preserved
-    expect(codex.bars!.windows).toHaveLength(0);
+    expect(chatgpt.bars!.windows).toHaveLength(0);
   });
 
   it('retains normal window rows with expected_remaining_pct:null', () => {
     const raw = JSON.stringify([
       {
-        pool: 'codex',
-        label: 'Codex',
+        provider: 'chatgpt',
+        label: 'ChatGPT',
         status: 'ok',
-        display_line: 'Codex 7d 25%',
+        display_line: 'ChatGPT 7d 25%',
         stale: false,
         remaining_pct: 25,
         expected_remaining_pct: null,
@@ -65,20 +65,20 @@ describe('parseQuotaJson', () => {
     const providers = parseQuotaJson(raw);
     expect(providers).toHaveLength(1);
 
-    const codex = providers[0];
-    expect(codex.bars).toBeDefined();
-    expect(codex.bars!.windows).toHaveLength(1);
-    expect(codex.bars!.windows[0].name).toBe('7d');
-    expect(codex.bars!.windows[0].remainingPct).toBe(25);
+    const chatgpt = providers[0];
+    expect(chatgpt.bars).toBeDefined();
+    expect(chatgpt.bars!.windows).toHaveLength(1);
+    expect(chatgpt.bars!.windows[0].name).toBe('7d');
+    expect(chatgpt.bars!.windows[0].remainingPct).toBe(25);
     // Null marker preserved
-    expect(codex.bars!.windows[0].expectedRemainingPct).toBeNull();
+    expect(chatgpt.bars!.windows[0].expectedRemainingPct).toBeNull();
     // Provider-level null propagated
-    expect(codex.bars!.expectedRemainingPct).toBeNull();
+    expect(chatgpt.bars!.expectedRemainingPct).toBeNull();
   });
 
   it('retains all three Kimi Coding quota pools in Forge order', () => {
     const raw = JSON.stringify([{
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       label: 'kimi',
       status: 'ok',
       display_line: 'kimi 5h 20% · 7d 40% · 1mo 73%',
@@ -97,7 +97,7 @@ describe('parseQuotaJson', () => {
   it('preserves Cursor Cursor/Other windows generically through parseQuotaJson', () => {
     const raw = JSON.stringify([
       {
-        pool: 'cursor',
+        provider: 'cursor',
         label: 'Cursor',
         status: 'ok',
         display_line: 'Cursor Cursor 62% · Other 40%',
@@ -128,7 +128,7 @@ describe('parseQuotaJson', () => {
   it('parses a window that has used_pct but no pct or remaining_pct', () => {
     const raw = JSON.stringify([
       {
-        pool: 'used-only',
+        provider: 'used-only',
         label: 'Used Only',
         status: 'ok',
         display_line: 'Used Only 30%',
@@ -157,7 +157,7 @@ describe('parseQuotaJson', () => {
   it('rejects malformed/non-finite/out-of-range graphical fields', () => {
     const raw = JSON.stringify([
       {
-        pool: 'bad-pool',
+        provider: 'bad-pool',
         label: 'Bad Pool',
         status: 'ok',
         display_line: 'Bad Pool 0%',
@@ -193,8 +193,8 @@ describe('parseQuotaJson', () => {
     const message = 'Sign-in is in progress. Approve the request if prompted; Forge will refresh quota automatically.';
     const raw = JSON.stringify([
       {
-        pool: 'codex',
-        label: 'Codex',
+        provider: 'chatgpt',
+        label: 'ChatGPT',
         status: 'pending',
         code: 'authentication_pending',
         message,
@@ -217,8 +217,8 @@ describe('parseQuotaJson', () => {
   it('keeps Forge code separate from message/error for error status', () => {
     const raw = JSON.stringify([
       {
-        pool: 'codex',
-        label: 'Codex',
+        provider: 'chatgpt',
+        label: 'ChatGPT',
         status: 'error',
         code: 'authentication_expired',
         error: 'legacy raw error',
@@ -229,19 +229,19 @@ describe('parseQuotaJson', () => {
 
     const providers = parseQuotaJson(raw);
     expect(providers).toHaveLength(1);
-    const codex = providers[0];
+    const chatgpt = providers[0];
     // Code is passive metadata preserved independently of message/error
-    expect(codex.status).toBe('error');
-    expect(codex.code).toBe('authentication_expired');
+    expect(chatgpt.status).toBe('error');
+    expect(chatgpt.code).toBe('authentication_expired');
     // Forge message takes precedence over the raw error field for display
-    expect(codex.error).toBe('Forge-provided message');
-    expect(codex.displayLine).toBeNull();
-    expect(codex.stale).toBe(true);
+    expect(chatgpt.error).toBe('Forge-provided message');
+    expect(chatgpt.displayLine).toBeNull();
+    expect(chatgpt.stale).toBe(true);
   });
 
   it('preserves unavailable auth states instead of promoting them to errors', () => {
     const [provider] = parseQuotaJson(JSON.stringify([{
-      pool: 'super-grok',
+      provider: 'super-grok',
       label: 'super-grok',
       status: 'unavailable',
       code: 'authentication_required',
@@ -262,7 +262,7 @@ describe('parseQuotaJson — monetary balances', () => {
   it('parses a single valid CNY balance distinct from bars', () => {
     const raw = JSON.stringify([
       {
-        pool: 'deepseek',
+        provider: 'deepseek',
         label: 'DeepSeek',
         status: 'ok',
         display_line: 'DeepSeek ¥12.50',
@@ -284,7 +284,7 @@ describe('parseQuotaJson — monetary balances', () => {
   it('parses multiple balance currencies in order with generic formatting', () => {
     const raw = JSON.stringify([
       {
-        pool: 'deepseek',
+        provider: 'deepseek',
         label: 'DeepSeek',
         status: 'ok',
         display_line: 'DeepSeek ¥12.50 · $1.00',
@@ -307,7 +307,7 @@ describe('parseQuotaJson — monetary balances', () => {
   it('drops malformed balance entries without becoming ok zero balances', () => {
     const raw = JSON.stringify([
       {
-        pool: 'deepseek',
+        provider: 'deepseek',
         label: 'DeepSeek',
         status: 'ok',
         display_line: 'DeepSeek ¥12.50',
@@ -331,7 +331,7 @@ describe('parseQuotaJson — monetary balances', () => {
   it('retains balances alongside window bars without producing extra bars', () => {
     const raw = JSON.stringify([
       {
-        pool: 'deepseek',
+        provider: 'deepseek',
         label: 'DeepSeek',
         status: 'ok',
         display_line: 'DeepSeek ¥12.50 · 7d 40%',
@@ -350,13 +350,52 @@ describe('parseQuotaJson — monetary balances', () => {
 
   it('yields no balances for missing or non-array balances field', () => {
     const raw = JSON.stringify([
-      { pool: 'codex', label: 'Codex', status: 'ok', display_line: 'Codex 40%', remaining_pct: 40 },
-      { pool: 'deepseek', label: 'DeepSeek', status: 'ok', display_line: 'x', balances: 'nope' },
+      { provider: 'chatgpt', label: 'ChatGPT', status: 'ok', display_line: 'ChatGPT 40%', remaining_pct: 40 },
+      { provider: 'deepseek', label: 'DeepSeek', status: 'ok', display_line: 'x', balances: 'nope' },
     ]);
 
     const providers = parseQuotaJson(raw);
     expect(providers[0].balances).toBeUndefined();
     expect(providers[1].balances).toBeUndefined();
+  });
+});
+
+describe('parseQuotaJson — unified ChatGPT provider', () => {
+  it('parses one ChatGPT row carrying both standard and Spark windows under a single provider id', () => {
+    const raw = JSON.stringify([
+      {
+        provider: 'chatgpt',
+        label: 'ChatGPT',
+        status: 'ok',
+        display_line: 'ChatGPT 5h 20% · 7d 40% · Spark 5h 30% · Spark 7d 60%',
+        remaining_pct: 40,
+        windows: [
+          { name: '5h', pct: 20, remaining_pct: 80 },
+          { name: '7d', pct: 40, remaining_pct: 60 },
+          { name: 'spark-5h', pct: 30, remaining_pct: 70 },
+          { name: 'spark-7d', pct: 60, remaining_pct: 40 },
+        ],
+      },
+    ]);
+
+    const providers = parseQuotaJson(raw);
+    expect(providers).toHaveLength(1);
+    const chatgpt = providers[0];
+    expect(chatgpt.id).toBe('chatgpt');
+    expect(chatgpt.bars?.windows.map((window) => window.name)).toEqual(['5h', '7d', 'spark-5h', 'spark-7d']);
+    expect(chatgpt.bars?.windows.map((window) => window.remainingPct)).toEqual([80, 60, 70, 40]);
+  });
+
+  it('skips a malformed row with no provider id instead of fabricating one', () => {
+    const raw = JSON.stringify([
+      { label: 'No Provider', status: 'ok', display_line: 'missing provider' },
+      { provider: 'chatgpt', label: 'ChatGPT', status: 'ok', display_line: 'ChatGPT 40%', remaining_pct: 40 },
+    ]);
+
+    const providers = parseQuotaJson(raw);
+    expect(providers).toHaveLength(1);
+    expect(providers[0].id).toBe('chatgpt');
+    expect(providers.some((entry) => entry.id.startsWith('pool-'))).toBe(false);
   });
 });
 

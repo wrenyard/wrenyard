@@ -26,36 +26,13 @@ type codexAppServerProcess struct {
 	stderrBuf *bytes.Buffer
 }
 
-// CodexProvider fetches Codex quota via the codex app-server stdio protocol.
-// It has exactly one authoritative source: account/rateLimits/read.
-type CodexProvider struct {
-	ProviderName string
+// ChatGPTProvider fetches ChatGPT/Codex quota via the codex app-server stdio
+// protocol. It has exactly one authoritative source: account/rateLimits/read,
+// which returns both the regular codex bucket and, when present, the
+// codex_bengalfox (Spark) bucket in a single RPC response.
+type ChatGPTProvider struct{}
 
-	// RunRPC is a test seam. When non-nil it is called instead of exec.Command
-	// to start the codex app-server subprocess. It must return a
-	// codexAppServerProcess and any startup error.
-	RunRPC func(ctx context.Context, args []string) (codexAppServerProcess, error)
-}
-
-func (p CodexProvider) Name() string {
-	if strings.TrimSpace(p.ProviderName) != "" {
-		return strings.TrimSpace(p.ProviderName)
-	}
-	return "codex"
-}
-
-// bucketForProvider maps a Codex provider name to the rate limits bucket ID
-// used in the account/rateLimits/read RPC.
-func bucketForProvider(provider string) string {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	provider = strings.ReplaceAll(provider, "_", "-")
-	switch provider {
-	case "codex-spark":
-		return "codex_bengalfox"
-	default:
-		return "codex"
-	}
-}
+func (p ChatGPTProvider) Name() string { return "chatgpt" }
 
 // GetAccountRateLimitsResponse mirrors the generated account/rateLimits/read result.
 type GetAccountRateLimitsResponse struct {
@@ -265,8 +242,8 @@ func (c *rpcConn) wrapErr(err error) error {
 	return fmt.Errorf("%s (stderr: %s)", err.Error(), stderr)
 }
 
-func (p CodexProvider) Fetch(ctx context.Context) (Quota, error) {
-	runRPC := p.RunRPC
+func (p ChatGPTProvider) Fetch(ctx context.Context) (Quota, error) {
+	runRPC := chatGPTRunRPC
 	if runRPC == nil {
 		runRPC = defaultCodexRunRPC
 	}
@@ -325,29 +302,40 @@ func (p CodexProvider) Fetch(ctx context.Context) (Quota, error) {
 		return Quota{}, conn.wrapErr(fmt.Errorf("%s: rateLimitsByLimitId is empty", p.Name()))
 	}
 
-	bucket := bucketForProvider(p.Name())
-	entry, ok := resp.RateLimitsByLimitID[bucket]
+	// The regular codex bucket is required: its absence is a query failure.
+	entry, ok := resp.RateLimitsByLimitID["codex"]
 	if !ok {
-		return Quota{}, conn.wrapErr(fmt.Errorf("%s: bucket %q not found in rateLimitsByLimitId", p.Name(), bucket))
-	}
-
-	windows := make([]Window, 0, 2)
-	if w := convertRateLimitWindow(entry.Primary); w != nil {
-		windows = append(windows, *w)
-	}
-	if w := convertRateLimitWindow(entry.Secondary); w != nil {
-		windows = append(windows, *w)
-	}
-	if len(windows) == 0 {
-		return Quota{}, conn.wrapErr(fmt.Errorf("%s: no rate limit windows available", p.Name()))
+		return Quota{}, conn.wrapErr(fmt.Errorf("%s: bucket %q not found in rateLimitsByLimitId", p.Name(), "codex"))
 	}
 
 	now := time.Now()
+	windows := make([]Window, 0, 4)
+	regular := addChatGPTBucketWindows(&windows, entry, "")
+
+	notApplicable := make([]string, 0, 2)
+	if len(windows) == 0 {
+		return Quota{}, conn.wrapErr(fmt.Errorf("%s: no rate limit windows available", p.Name()))
+	}
+	if strings.EqualFold(entry.PlanType, "pro") && regular.weekly && !regular.has5h && !regular.hasUnknown {
+		notApplicable = append(notApplicable, "5h")
+	}
+
+	// The Spark bucket is optional: when present, its windows join the same
+	// chatgpt row with spark-* names. When absent, the regular limits stand.
+	// Non-applicability is decided per-bucket from Spark's own windows only.
+	if spark, ok := resp.RateLimitsByLimitID["codex_bengalfox"]; ok {
+		sparkInfo := addChatGPTBucketWindows(&windows, spark, "spark-")
+		if strings.EqualFold(spark.PlanType, "pro") && sparkInfo.weekly && !sparkInfo.has5h && !sparkInfo.hasUnknown {
+			notApplicable = append(notApplicable, "spark-5h")
+		}
+	}
+
 	q := Quota{
-		Provider:  p.Name(),
-		Windows:   windows,
-		Source:    "codex-app-server",
-		FetchedAt: now,
+		Provider:             p.Name(),
+		Windows:              windows,
+		NotApplicableWindows: notApplicable,
+		Source:               "codex-app-server",
+		FetchedAt:            now,
 	}
 	if entry.PlanType != "" {
 		q.Message = "plan: " + entry.PlanType
@@ -355,28 +343,79 @@ func (p CodexProvider) Fetch(ctx context.Context) (Quota, error) {
 	return q, nil
 }
 
+// chatGPTRunRPC is a test seam for ChatGPTProvider. When non-nil it is called
+// instead of exec.Command to start the codex app-server subprocess.
+var chatGPTRunRPC func(ctx context.Context, args []string) (codexAppServerProcess, error)
+
 // convertRateLimitWindow converts a RateLimitWindow from the
-// account/rateLimits/read response into a Forge Window.
-func convertRateLimitWindow(rlw *RateLimitWindow) *Window {
+// account/rateLimits/read response into a Forge Window with the given name.
+// It returns nil when the window is absent or malformed (missing usedPercent
+// or a present-but-non-positive windowDurationMins). A nil result never
+// fabricates a window.
+func convertRateLimitWindow(rlw *RateLimitWindow, name string) *Window {
 	if rlw == nil {
 		return nil
 	}
 	if rlw.UsedPercent == nil {
 		return nil
 	}
-	pct := *rlw.UsedPercent
-	wm := 300
-	if rlw.WindowDuration != nil && *rlw.WindowDuration > 0 {
-		wm = int(*rlw.WindowDuration)
+	if rlw.WindowDuration == nil || *rlw.WindowDuration <= 0 {
+		return nil
 	}
 	w := Window{
-		Name:          windowName(wm),
-		Pct:           pct,
-		WindowMinutes: wm,
+		Name:          name,
+		Pct:           *rlw.UsedPercent,
+		WindowMinutes: int(*rlw.WindowDuration),
 	}
 	if rlw.ResetsAt != nil && *rlw.ResetsAt > 0 {
 		t := time.Unix(int64(*rlw.ResetsAt), 0)
 		w.ResetsAt = &t
 	}
 	return &w
+}
+
+// chatGPTBucketWindows summarizes the windows successfully parsed from one
+// bucket, so callers can decide non-applicability without conflating buckets.
+type chatGPTBucketWindows struct {
+	weekly     bool // a valid 7d window was present
+	has5h      bool // a valid 5h window was present
+	hasUnknown bool // a present window had a valid usedPercent but an unknown/malformed duration
+}
+
+// addChatGPTBucketWindows classifies each window by its actual
+// windowDurationMins (300 => 5h, 10080 => 7d, anything else => unknown) and
+// appends the recognized windows to dst using the given name prefix. A window
+// with an unknown duration is not turned into a known pool, but is recorded
+// via hasUnknown so it is never treated as evidence of absence.
+func addChatGPTBucketWindows(dst *[]Window, entry RateLimitsEntry, prefix string) chatGPTBucketWindows {
+	var info chatGPTBucketWindows
+	for _, rlw := range []*RateLimitWindow{entry.Primary, entry.Secondary} {
+		if rlw == nil {
+			continue
+		}
+		if rlw.UsedPercent == nil {
+			// Malformed present window: not a known pool, but not absence.
+			info.hasUnknown = true
+			continue
+		}
+		if rlw.WindowDuration == nil || *rlw.WindowDuration <= 0 {
+			info.hasUnknown = true
+			continue
+		}
+		switch *rlw.WindowDuration {
+		case 300:
+			info.has5h = true
+			if w := convertRateLimitWindow(rlw, prefix+"5h"); w != nil {
+				*dst = append(*dst, *w)
+			}
+		case 10080:
+			info.weekly = true
+			if w := convertRateLimitWindow(rlw, prefix+"7d"); w != nil {
+				*dst = append(*dst, *w)
+			}
+		default:
+			info.hasUnknown = true
+		}
+	}
+	return info
 }

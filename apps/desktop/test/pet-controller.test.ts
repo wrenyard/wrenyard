@@ -15,7 +15,7 @@ function fixtureConfig(): AppConfig {
     house: { displayId: 1, entityX: 20, entityY: 30 },
     entities: { house: true, workers: true, taskgraphs: true },
     appearance: { houseSkin: 'classic' },
-    quota: { providers: [{ id: 'codex', enabled: true }] },
+    quota: { providers: [{ id: 'chatgpt', enabled: true }] },
     windows: { graphSlip: { x: 1, y: 2 } },
   };
 }
@@ -58,7 +58,7 @@ test('Desktop Pet controller owns runtime startup and exposes display state', as
       bottomOffset: 0,
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
-      quota: { providers: [{ id: 'codex', enabled: true }] },
+      quota: { providers: [{ id: 'chatgpt', enabled: true }] },
     },
     displays: [{ id: 1, label: 'Built-in Display', isPrimary: true }],
   });
@@ -104,7 +104,7 @@ test('Desktop persists changed Pet settings and restarts its in-process runtime'
     bottomOffset: 12,
     entities: { house: true, workers: false, taskgraphs: true },
     appearance: { houseSkin: 'mushroom' },
-    quota: { providers: [{ id: 'codex', enabled: false }] },
+    quota: { providers: [{ id: 'chatgpt', enabled: false }] },
   });
 
   assert.equal(current.scale, 4);
@@ -142,12 +142,12 @@ test('Desktop provider ordering retires legacy enablement and activates newly di
   });
   await controller.start();
 
-  await controller.saveProviderOrder(['cursor', 'anthropic', 'codex']);
+  await controller.saveProviderOrder(['cursor', 'anthropic', 'chatgpt']);
 
   assert.deepEqual(current.quota.providers, [
     { id: 'cursor', enabled: true },
     { id: 'anthropic', enabled: true },
-    { id: 'codex', enabled: true },
+    { id: 'chatgpt', enabled: true },
   ]);
   assert.deepEqual(events, ['start', 'quota:']);
 });
@@ -175,8 +175,8 @@ test('Desktop projects one quota refresh into the active Pet runtime', async () 
     saveConfig: () => undefined,
     createRuntime: () => runtime(events),
   });
-  controller.setQuotaProviders([{ id: 'codex' } as never, { id: 'cursor' } as never]);
+  controller.setQuotaProviders([{ id: 'chatgpt' } as never, { id: 'cursor' } as never]);
   await controller.start();
 
-  assert.deepEqual(events, ['start', 'quota:codex,cursor']);
+  assert.deepEqual(events, ['start', 'quota:chatgpt,cursor']);
 });

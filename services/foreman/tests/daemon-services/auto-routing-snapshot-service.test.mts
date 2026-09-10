@@ -2,32 +2,23 @@
  * Focused node:test coverage for AutoRoutingQuotaSnapshotService.
  *
  * Fixtures mirror the REAL `forge quota --json` list DTO proven in
- * runtime/forge/internal/usage/quota: pool entries use `pool`/`status`/`stale`/
- * `fetched_at` (RFC3339 ISO string) plus `windows`; windows use `name`/`pct`/
- * `resets_at` (ISO string)/`window_minutes` (and the Go-emitted, never-read
- * `remaining_pct`). There is no `reset_kind`, `window_ms`, numeric id or epoch
- * timestamp anywhere.
+ * runtime/forge/internal/usage/quota: provider entries use `provider`/
+ * `status`/`stale`/`fetched_at` (RFC3339 ISO string) plus `windows`; windows
+ * use `name`/`pct`/`resets_at` (ISO string)/`window_minutes` (and the
+ * Go-emitted, never-read `remaining_pct`). Provider-declared not-applicable
+ * windows are serialized as `not_applicable_windows`. There is no
+ * `reset_kind`, `window_ms`, numeric id or epoch timestamp anywhere.
  *
- * The suite proves: row location by binding.quotaProviderId while normalized
- * quotaPoolId is kept in output, used->remaining derivation with no clamping,
- * fail-closed missing/invalid/stale/future/over-60s observations, strict
- * rejection of an invented-field source, exact replenishment semantics from
- * binding window constraints (full-cycle carries reset pace; rolling/unknown
- * never invent one), the neutral Go v2 CodeBuddy retained block (exact
- * `observed` window, pct 100, future reset; legacy `1mo` inert) validated
- * without fetched_at (cache bounded by min(now+60s, reset); invalid/expired
- * never block), short-lived unknown snapshots for successful-but-empty
- * reports, deep immutability, single-flight deduplication, cache boundaries,
- * expiry refresh and the failed-refresh contract (expired evidence is never
- * served).
- *
- * Current-login binding is covered by injecting an immutable fake CodeBuddy
- * active snapshot loader: the query callback receives only the expected
- * scope/environment, same-scope token refresh reuses cached evidence, scope or
- * environment switches bypass cached and in-flight CodeBuddy state, missing/
- * throwing/stableScope-less snapshots fail closed, and no credential/token/
- * scope/environment/domain/wire mapping ever reaches a query or a serialized
- * DTO.
+ * The suite proves: row location by row.provider === binding.providerId while
+ * normalized quotaPoolIds are kept in output, used->remaining derivation with
+ * no clamping, fail-closed missing/invalid/stale/future/over-60s observations,
+ * strict rejection of an invented-field source, exact replenishment semantics
+ * from binding window constraints (full-cycle carries reset pace; rolling/
+ * unknown never invent one), the neutral Go v2 CodeBuddy retained block, the
+ * Pro fresh `not_applicable_windows` 5h exclusion, short-lived unknown
+ * snapshots for successful-but-empty reports, deep immutability, single-flight
+ * deduplication, cache boundaries, expiry refresh and the failed-refresh
+ * contract (expired evidence is never served).
  */
 
 import assert from 'node:assert/strict';
@@ -58,18 +49,18 @@ interface FixtureWindow {
 }
 
 interface FixtureRow {
-  pool: string;
+  provider: string;
   status?: string;
   stale?: boolean;
   fetched_at?: string;
+  not_applicable_windows?: string[];
   windows: FixtureWindow[];
+  balances?: unknown[];
 }
 
 type Binding = (typeof PROVIDER_QUOTA_BINDINGS)[number];
-
-/** A declared required window element, narrowed past the optional `windows`
- *  property so indexed access stays strict-safe. */
-type RequiredWindow = NonNullable<Binding['windows']>[number];
+type QuotaPool = Binding['pools'][number];
+type RequiredWindow = QuotaPool['windows'][number];
 
 function reportJson(rows: unknown[]): string {
   return JSON.stringify(rows);
@@ -98,48 +89,31 @@ function entryFor(snapshot: AutoRoutingQuotaSnapshot, providerId: string, modelI
   return entry!;
 }
 
-function evidenceFor(snapshot: AutoRoutingQuotaSnapshot, providerId: string, modelId: string, windowId: string) {
-  const entry = entryFor(snapshot, providerId, modelId);
-  const constraint = entry.requiredQuota.find((candidate) => candidate.id === windowId);
-  assert.ok(constraint, `expected constraint ${windowId} for ${providerId}/${modelId}`);
-  return { entry, constraint: constraint! };
-}
-
-function windowConstraint(binding: Binding, windowId: string) {
-  const constraint = binding.windows?.find((candidate) => candidate.windowId === windowId)
-    ?? binding.pools?.flatMap((pool) => pool.windows).find((candidate) => candidate.windowId === windowId);
-  assert.ok(constraint, `expected required window ${windowId} for ${binding.providerId}/${binding.modelId}`);
-  return constraint!;
-}
-
-/**
- * Required constraint ids emitted for a binding. Legacy single-pool bindings
- * surface one id per declared window; a multi-pool binding surfaces every
- * jointly required pool, keyed by the normalized pool id whenever that pool
- * has no proven raw windows.
- */
+/** Constraint ids emitted for a binding; balances and windowless quota pools
+ *  are keyed by pool id, proven windows by `${quotaPoolId}:${windowId}`. */
 function bindingRequiredConstraintIds(binding: Binding): string[] {
-  const balanceIds = (binding.requiredBalances ?? []).map((balance) => balance.balanceId);
-  const pools = binding.pools ?? [];
-  if (pools.length > 0) {
-    return [
-      ...pools.flatMap((pool) =>
-        pool.windows.length === 0 ? [pool.quotaPoolId] : pool.windows.map((window) => window.windowId),
-      ),
-      ...balanceIds,
-    ];
-  }
-  const windows = (binding.windows ?? []).map((window) => window.windowId);
-  return [...windows, ...balanceIds];
+  return binding.pools.flatMap((pool) =>
+    pool.kind === 'balance' || pool.windows.length === 0
+      ? [pool.quotaPoolId]
+      : pool.windows.map((window) => pool.quotaPoolId),
+  );
+}
+
+function constraintFor(
+  snapshot: AutoRoutingQuotaSnapshot,
+  providerId: string,
+  modelId: string,
+  constraintId: string,
+) {
+  const entry = entryFor(snapshot, providerId, modelId);
+  const constraint = entry.requiredQuota.find((candidate) => candidate.id === constraintId);
+  assert.ok(constraint, `expected constraint ${constraintId} for ${providerId}/${modelId}`);
+  return { entry, constraint: constraint! };
 }
 
 /** Raw window ids a provider row would surface for a binding (actual windows only). */
 function bindingRawWindowIds(binding: Binding): string[] {
-  const pools = binding.pools ?? [];
-  if (pools.length > 0) {
-    return pools.flatMap((pool) => pool.windows.map((window) => window.windowId));
-  }
-  return (binding.windows ?? []).map((window) => window.windowId);
+  return binding.pools.flatMap((pool) => pool.windows.map((window) => window.windowId));
 }
 
 /** Mirrors the service mapping: unproven (and anything else) -> unknown. */
@@ -149,11 +123,14 @@ function expectedReplenishment(resetKind: unknown): string {
   return 'unknown';
 }
 
-function firstConstraintWithKind(kind: string): { binding: Binding; window: RequiredWindow } {
+function firstConstraintWithKind(kind: string): { binding: Binding; constraintId: string; window: RequiredWindow } {
   for (const binding of PROVIDER_QUOTA_BINDINGS) {
-    const windows = binding.windows ?? binding.pools?.flatMap((pool) => pool.windows) ?? [];
-    for (const window of windows) {
-      if (String(window.resetKind) === kind) return { binding, window };
+    for (const pool of binding.pools) {
+      for (const window of pool.windows) {
+        if (String(window.resetKind) === kind) {
+          return { binding, constraintId: pool.quotaPoolId, window };
+        }
+      }
     }
   }
   throw new Error(`no binding window with resetKind ${kind}`);
@@ -163,8 +140,6 @@ function rowsForBinding(
   binding: Binding,
   options: { pct: number; fetchedAtMs: number; extraWindows?: FixtureWindow[] },
 ): FixtureRow[] {
-  // Only actual raw windows are ever surfaced on the provider row; pools with
-  // no proven raw windows contribute no window object here.
   const windows: FixtureWindow[] = bindingRawWindowIds(binding).map((windowId) => ({
     name: windowId,
     pct: options.pct,
@@ -174,7 +149,7 @@ function rowsForBinding(
   if (options.extraWindows) windows.push(...options.extraWindows);
   return [
     {
-      pool: binding.quotaProviderId,
+      provider: binding.providerId,
       status: 'ok',
       stale: false,
       fetched_at: iso(options.fetchedAtMs),
@@ -184,11 +159,11 @@ function rowsForBinding(
 }
 
 function rowsForAllBindings(fetchedAtMs: number, pct = 20): FixtureRow[] {
-  const byPool = new Map<string, FixtureRow>();
+  const byProvider = new Map<string, FixtureRow>();
   for (const binding of PROVIDER_QUOTA_BINDINGS) {
-    const existing = byPool.get(binding.quotaProviderId);
+    const existing = byProvider.get(binding.providerId);
     const row: FixtureRow = existing ?? {
-      pool: binding.quotaProviderId,
+      provider: binding.providerId,
       status: 'ok',
       stale: false,
       fetched_at: iso(fetchedAtMs),
@@ -204,9 +179,9 @@ function rowsForAllBindings(fetchedAtMs: number, pct = 20): FixtureRow[] {
         });
       }
     }
-    byPool.set(binding.quotaProviderId, row);
+    byProvider.set(binding.providerId, row);
   }
-  return [...byPool.values()];
+  return [...byProvider.values()];
 }
 
 function codebuddyRow(
@@ -214,7 +189,7 @@ function codebuddyRow(
   windowOverrides: Partial<FixtureWindow> = {},
 ): FixtureRow {
   return {
-    pool: 'codebuddy',
+    provider: 'codebuddy',
     status: 'ok',
     stale: false,
     // Intentionally NO fetched_at: the neutral Go v2 projection emits this
@@ -256,37 +231,25 @@ function fakeCodeBuddySnapshot(overrides: {
 // Real Go list DTO: mapping, derivation, replenishment semantics
 // ---------------------------------------------------------------------------
 
-test('maps every canonical binding from quotaProviderId rows and derives evidence', async () => {
+test('maps every canonical binding from row.provider and derives evidence', async () => {
   const rows = rowsForAllBindings(T0, 20);
   const snapshot = await serviceFor(rows).snapshot();
 
   assert.equal(snapshot.entries.length, PROVIDER_QUOTA_BINDINGS.length);
   for (const binding of PROVIDER_QUOTA_BINDINGS) {
     const entry = entryFor(snapshot, binding.providerId, binding.modelId);
-    const isMultiPool = (binding.pools?.length ?? 0) > 0;
-    // Required constraint ids cover every jointly required pool / declared window.
+    assert.deepEqual([...entry.quotaPoolIds], binding.pools.map((pool) => pool.quotaPoolId));
     assert.deepEqual(
       entry.requiredQuota.map((constraint) => constraint.id),
       bindingRequiredConstraintIds(binding),
     );
-    if (isMultiPool) {
-      // Normalized multi-pool ids are retained in output; no single quotaPoolId.
-      assert.deepEqual([...entry.quotaPoolIds!], binding.pools!.map((pool) => pool.quotaPoolId));
-      assert.equal(entry.quotaPoolId, undefined);
-      for (const constraint of entry.requiredQuota) {
-        if (constraint.kind === 'balance') continue;
-        // Pools without proven raw windows stay null constraints (unknown).
-        assert.equal(constraint.evidence, null, `missing null evidence for ${binding.providerId} ${constraint.id}`);
-      }
-      continue;
-    }
-    // Normalized quotaPoolId is retained in output for legacy single-pool bindings.
-    assert.equal(entry.quotaPoolId, binding.quotaPoolId);
-    const hasProvenWindows = (binding.windows?.length ?? 0) > 0;
     for (const constraint of entry.requiredQuota) {
       if (constraint.kind === 'balance') continue;
-      // A single-pool binding with no proven windows stays a null constraint.
-      if (!hasProvenWindows) {
+      const pool = binding.pools.find((candidate) => candidate.quotaPoolId === constraint.id)!;
+      const window = pool.windows[0];
+      const windowId = window?.windowId;
+      if (windowId === undefined) {
+        // A windowless quota pool (or a not-applicable window) stays a null constraint.
         assert.equal(constraint.evidence, null, `pool ${constraint.id} must stay unknown`);
         continue;
       }
@@ -295,9 +258,8 @@ test('maps every canonical binding from quotaProviderId rows and derives evidenc
       assert.equal(evidence!.remainingPercent, 80);
       assert.equal(evidence!.observedAtMs, T0);
       assert.equal(evidence!.validForMs, 60_000);
-      const resetKind = windowConstraint(binding, constraint.id).resetKind;
-      assert.equal(evidence!.replenishmentKind, expectedReplenishment(resetKind));
-      if (expectedReplenishment(resetKind) === 'full_cycle') {
+      assert.equal(evidence!.replenishmentKind, expectedReplenishment(window!.resetKind));
+      if (expectedReplenishment(window!.resetKind) === 'full_cycle') {
         assert.equal(evidence!.resetAtMs, T0 + 86_400_000);
         assert.equal(evidence!.windowMs, MONTH_MINUTES * 60_000);
       } else {
@@ -308,37 +270,36 @@ test('maps every canonical binding from quotaProviderId rows and derives evidenc
   }
 
   // Unrelated raw windows never become constraints even when present.
-  const extra = rowsForBinding(PROVIDER_QUOTA_BINDINGS[0]!, {
+  const extra = rowsForBinding(PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!, {
     pct: 20,
     fetchedAtMs: T0,
     extraWindows: [{ name: 'zz-extra', pct: 5, resets_at: iso(T0 + 3_600_000), window_minutes: 60 }],
   });
   const withExtra = await serviceFor(extra).snapshot();
-  const probe = PROVIDER_QUOTA_BINDINGS[0]!;
+  const probe = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
   const probed = entryFor(withExtra, probe.providerId, probe.modelId);
   assert.deepEqual(
     probed.requiredQuota.map((constraint) => constraint.id),
-    probe.windows!.map((window) => window.windowId),
+    bindingRequiredConstraintIds(probe),
   );
 
   assert.deepEqual(snapshot.hardBlockedProviderIds, []);
 });
 
 // ---------------------------------------------------------------------------
-// Binding-driven Kimi shape: 5h + 7d only, no monthly requirement
+// Binding-driven Kimi shape: two pools, 5h rolling + 7d full-cycle
 // ---------------------------------------------------------------------------
 
-test('a fresh kimi-coding row with only 5h/7d gives k3 complete coverage and a raw 1mo stays inert', async () => {
+test('a fresh kimi-coding row gives k3 both pools with truthful semantics and a raw 1mo stays inert', async () => {
   const binding = PROVIDER_QUOTA_BINDINGS.find(
     (candidate) => candidate.providerId === 'kimi-coding' && candidate.modelId === 'k3',
   );
   assert.ok(binding, 'expected a kimi-coding/k3 binding');
-  assert.deepEqual(binding!.windows!.map((window) => window.windowId), ['5h', '7d']);
+  assert.deepEqual(binding!.pools.map((pool) => pool.quotaPoolId), ['kimi-coding/5h', 'kimi-coding/7d']);
 
-  // No monthly window is emitted or required; a stray raw 1mo is unrelated.
   const rows: FixtureRow[] = [
     {
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -353,10 +314,10 @@ test('a fresh kimi-coding row with only 5h/7d gives k3 complete coverage and a r
   const entry = entryFor(snapshot, 'kimi-coding', 'k3');
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
-    ['5h', '7d'],
+    ['kimi-coding/5h', 'kimi-coding/7d'],
   );
-  const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
-  const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
+  const five = entry.requiredQuota.find((constraint) => constraint.id === 'kimi-coding/5h')!.evidence;
+  const seven = entry.requiredQuota.find((constraint) => constraint.id === 'kimi-coding/7d')!.evidence;
   assert.ok(five, '5h must carry fresh evidence');
   assert.ok(seven, '7d must carry fresh evidence');
   assert.equal(five!.remainingPercent, 100);
@@ -366,15 +327,13 @@ test('a fresh kimi-coding row with only 5h/7d gives k3 complete coverage and a r
   assert.equal(seven!.replenishmentKind, 'full_cycle');
   assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
   assert.equal(seven!.windowMs, 10_080 * 60_000);
-  // A usable row still yields the 60s freshness cache.
   assert.equal(snapshot.validUntilMs, T0 + 60_000);
 });
 
-test('missing, stale, or invalid retained kimi windows stay null/incomplete while an exhausted 7d stays preserved', async () => {
-  // Missing the retained 7d window: that constraint is an explicit null.
+test('missing, stale, or invalid kimi windows stay null/incomplete while an exhausted 7d stays preserved', async () => {
   const missing7d: FixtureRow[] = [
     {
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -382,13 +341,15 @@ test('missing, stale, or invalid retained kimi windows stay null/incomplete whil
     },
   ];
   const no7d = await serviceFor(missing7d).snapshot();
-  assert.equal(evidenceFor(no7d, 'kimi-coding', 'k3', '7d').constraint.evidence, null);
-  assert.equal(evidenceFor(no7d, 'kimi-coding', 'k3', '5h').constraint.evidence!.remainingPercent, 100);
+  assert.equal(constraintFor(no7d, 'kimi-coding', 'k3', 'kimi-coding/7d').constraint.evidence, null);
+  assert.equal(
+    constraintFor(no7d, 'kimi-coding', 'k3', 'kimi-coding/5h').constraint.evidence!.remainingPercent,
+    100,
+  );
 
-  // A stale row leaves every retained kimi window null (fail closed).
   const stale: FixtureRow[] = [
     {
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       status: 'ok',
       stale: true,
       fetched_at: iso(T0),
@@ -399,19 +360,18 @@ test('missing, stale, or invalid retained kimi windows stay null/incomplete whil
     },
   ];
   const staleSnapshot = await serviceFor(stale).snapshot();
-  for (const windowId of ['5h', '7d']) {
+  for (const id of ['kimi-coding/5h', 'kimi-coding/7d']) {
     assert.equal(
-      evidenceFor(staleSnapshot, 'kimi-coding', 'k3', windowId).constraint.evidence,
+      constraintFor(staleSnapshot, 'kimi-coding', 'k3', id).constraint.evidence,
       null,
-      `${windowId} must be null on a stale row`,
+      `${id} must be null on a stale row`,
     );
   }
   assert.equal(staleSnapshot.validUntilMs, T0 + 15_000);
 
-  // Invalid retained 7d reset keeps only 5h: 7d is null, coverage incomplete.
   const garbage: FixtureRow[] = [
     {
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -422,12 +382,11 @@ test('missing, stale, or invalid retained kimi windows stay null/incomplete whil
     },
   ];
   const invalid = await serviceFor(garbage).snapshot();
-  assert.equal(evidenceFor(invalid, 'kimi-coding', 'k3', '7d').constraint.evidence, null);
+  assert.equal(constraintFor(invalid, 'kimi-coding', 'k3', 'kimi-coding/7d').constraint.evidence, null);
 
-  // Exhausted (pct 100) retained 7d evidence is preserved for catalog policy.
   const exhausted: FixtureRow[] = [
     {
-      pool: 'kimi-coding',
+      provider: 'kimi-coding',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -438,33 +397,28 @@ test('missing, stale, or invalid retained kimi windows stay null/incomplete whil
     },
   ];
   const preserved = await serviceFor(exhausted).snapshot();
-  const sevenEx = evidenceFor(preserved, 'kimi-coding', 'k3', '7d').constraint.evidence;
-  assert.ok(sevenEx, 'exhausted retained 7d evidence must be preserved');
+  const sevenEx = constraintFor(preserved, 'kimi-coding', 'k3', 'kimi-coding/7d').constraint.evidence;
+  assert.ok(sevenEx, 'exhausted 7d evidence must be preserved');
   assert.equal(sevenEx!.remainingPercent, 0);
   assert.equal(sevenEx!.replenishmentKind, 'full_cycle');
 });
 
 // ---------------------------------------------------------------------------
-// Binding-driven Zhipu shape: shared zhipu-coding row, rolling 5h + weekly 7d
+// Binding-driven Zhipu shape: shared row, rolling 5h + weekly 7d
 // ---------------------------------------------------------------------------
 
-test('a fresh zhipu-coding row gives both glm-5.3 and glm-5.3-flash measured remaining percents with truthful replenishment semantics', async () => {
+test('a fresh zhipu-coding row gives both glm models measured remaining percents with truthful semantics', async () => {
   const zhipuBindings = PROVIDER_QUOTA_BINDINGS.filter(
-    (candidate) => candidate.providerId === 'zhipu-coding',
+    (candidate) => candidate.providerId === 'zhipu-coding' && candidate.modelId !== '*',
   );
   assert.deepEqual(
     zhipuBindings.map((binding) => binding.modelId).sort(),
     ['glm-5.3', 'glm-5.3-flash'],
   );
-  for (const binding of zhipuBindings) {
-    assert.equal(binding.quotaProviderId, 'zhipu-coding');
-    assert.deepEqual(binding.windows!.map((window) => window.windowId), ['5h', '7d']);
-  }
 
-  // One shared zhipu-coding pool row; reset/window values are the raw row's own.
   const rows: FixtureRow[] = [
     {
-      pool: 'zhipu-coding',
+      provider: 'zhipu-coding',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -477,20 +431,14 @@ test('a fresh zhipu-coding row gives both glm-5.3 and glm-5.3-flash measured rem
   const snapshot = await serviceFor(rows).snapshot();
   for (const binding of zhipuBindings) {
     const entry = entryFor(snapshot, binding.providerId, binding.modelId);
-    assert.equal(entry.quotaPoolId, binding.quotaPoolId);
-    assert.deepEqual(
-      entry.requiredQuota.map((constraint) => constraint.id),
-      ['5h', '7d'],
-    );
-    const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
-    const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
+    assert.deepEqual([...entry.quotaPoolIds], ['zhipu-coding/5h', 'zhipu-coding/7d']);
+    const five = entry.requiredQuota.find((constraint) => constraint.id === 'zhipu-coding/5h')!.evidence;
+    const seven = entry.requiredQuota.find((constraint) => constraint.id === 'zhipu-coding/7d')!.evidence;
     assert.ok(five, `${binding.modelId} must carry 5h evidence`);
     assert.ok(seven, `${binding.modelId} must carry 7d evidence`);
-    // Measured remaining percentages are preserved exactly.
     assert.equal(five!.remainingPercent, 98);
     assert.equal(five!.replenishmentKind, 'rolling_partial');
     assert.ok(!('resetAtMs' in five!), '5h rolling_partial must not invent a reset time');
-    assert.ok(!('windowMs' in five!), '5h rolling_partial must not invent a window length');
     assert.equal(seven!.remainingPercent, 65);
     assert.equal(seven!.replenishmentKind, 'full_cycle');
     assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
@@ -500,29 +448,13 @@ test('a fresh zhipu-coding row gives both glm-5.3 and glm-5.3-flash measured rem
 });
 
 // ---------------------------------------------------------------------------
-// Codex: required weekly baseline plus conditional primary 5h; Spark separate
+// ChatGPT: standard pools + a fresh not_applicable 5h exclusion, Spark separate
 // ---------------------------------------------------------------------------
 
-test('a codex 7d-only row is complete, while a present primary 5h participates', async () => {
-  const codexBindings = PROVIDER_QUOTA_BINDINGS.filter((candidate) => candidate.providerId === 'codex');
-  assert.ok(codexBindings.length > 0);
-  const weeklyOnly: FixtureRow[] = [{
-    pool: 'codex',
-    status: 'ok',
-    stale: false,
-    fetched_at: iso(T0),
-    windows: [{ name: '7d', pct: 72, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
-  }];
-  const baseline = await serviceFor(weeklyOnly).snapshot();
-  for (const binding of codexBindings) {
-    const entry = entryFor(baseline, binding.providerId, binding.modelId);
-    assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['7d']);
-    assert.equal(entry.requiredQuota[0]!.evidence!.remainingPercent, 28);
-  }
-
+test('a standard ChatGPT row binds 5h and 7d, while a fresh row excluding 5h marks it not applicable', async () => {
   const rows: FixtureRow[] = [
     {
-      pool: 'codex',
+      provider: 'chatgpt',
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -533,113 +465,190 @@ test('a codex 7d-only row is complete, while a present primary 5h participates',
     },
   ];
   const snapshot = await serviceFor(rows).snapshot();
-  for (const binding of codexBindings) {
-    const entry = entryFor(snapshot, binding.providerId, binding.modelId);
-    assert.equal(entry.quotaPoolId, binding.quotaPoolId);
+  const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
+  assert.deepEqual([...entry.quotaPoolIds], ['chatgpt/5h', 'chatgpt/7d']);
+  assert.deepEqual(
+    entry.requiredQuota.map((constraint) => constraint.id),
+    ['chatgpt/5h', 'chatgpt/7d'],
+  );
+  assert.equal(entry.requiredQuota[0]!.evidence!.remainingPercent, 80);
+  assert.equal(entry.requiredQuota[1]!.evidence!.remainingPercent, 28);
+});
+
+test('a Pro fresh row explicitly listing 5h in not_applicable_windows excludes it from the denominator', async () => {
+  const rows: FixtureRow[] = [
+    {
+      provider: 'chatgpt',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      not_applicable_windows: ['5h'],
+      windows: [{ name: '7d', pct: 72, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
+    },
+  ];
+  const snapshot = await serviceFor(rows).snapshot();
+  const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
+  // The not-applicable 5h is excluded entirely: only the real 7d window remains.
+  assert.deepEqual(
+    entry.requiredQuota.map((constraint) => constraint.id),
+    ['chatgpt/7d'],
+  );
+  assert.equal(entry.requiredQuota[0]!.evidence!.remainingPercent, 28);
+  assert.equal(
+    assessRequiredQuota(T0, entry.requiredQuota).state,
+    'healthy',
+  );
+  // Only applicable pools participate in this snapshot.
+  assert.deepEqual([...entry.quotaPoolIds], ['chatgpt/7d']);
+});
+
+test('a malformed, missing, or stale row keeps the declared 5h as an unknown constraint, never absent', async () => {
+  const cases: Array<{ name: string; rows: FixtureRow[] }> = [
+    {
+      name: 'missing raw row',
+      rows: [],
+    },
+    {
+      name: 'stale row declaring 5h not applicable',
+      rows: [
+        {
+          provider: 'chatgpt',
+          status: 'ok',
+          stale: true,
+          fetched_at: iso(T0),
+          not_applicable_windows: ['5h'],
+          windows: [{ name: '7d', pct: 72, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
+        },
+      ],
+    },
+    {
+      name: 'unknown provider row absent',
+      rows: [{ provider: 'some-other', status: 'ok', stale: false, fetched_at: iso(T0), windows: [] }],
+    },
+  ];
+  for (const scenario of cases) {
+    const snapshot = await serviceFor(scenario.rows).snapshot();
+    const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
     assert.deepEqual(
       entry.requiredQuota.map((constraint) => constraint.id),
-      ['5h', '7d'],
+      ['chatgpt/5h', 'chatgpt/7d'],
+      scenario.name,
     );
-    const five = entry.requiredQuota.find((constraint) => constraint.id === '5h')!.evidence;
-    const seven = entry.requiredQuota.find((constraint) => constraint.id === '7d')!.evidence;
-    assert.ok(five, `${binding.modelId} must carry present 5h evidence`);
-    assert.ok(seven, `${binding.modelId} must carry required 7d evidence`);
-    assert.equal(five!.remainingPercent, 80);
-    assert.equal(five!.replenishmentKind, 'full_cycle');
-    assert.equal(five!.resetAtMs, Date.parse(iso(T0 + 3_600_000)));
-    assert.equal(five!.windowMs, 300 * 60_000);
-    assert.equal(seven!.remainingPercent, 28);
-    assert.equal(seven!.replenishmentKind, 'full_cycle');
-    assert.equal(seven!.resetAtMs, Date.parse(iso(T0 + 86_400_000)));
-    assert.equal(seven!.windowMs, 10_080 * 60_000);
+    for (const constraint of entry.requiredQuota) {
+      assert.equal(constraint.evidence, null, scenario.name);
+    }
   }
-  assert.equal(snapshot.validUntilMs, T0 + 60_000);
-  assert.deepEqual(snapshot.hardBlockedProviderIds, []);
 });
 
-test('a present invalid or stale codex 5h stays an explicit conservative unknown; an absent 5h is ignored', async () => {
-  const modelId = 'gpt-5.6-sol';
-  const absent = await serviceFor([{
-    pool: 'codex', status: 'ok', stale: false, fetched_at: iso(T0),
-    windows: [{ name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 }],
-  }]).snapshot();
-  assert.deepEqual(entryFor(absent, 'codex', modelId).requiredQuota.map((entry) => entry.id), ['7d']);
-
-  const invalid = await serviceFor([{
-    pool: 'codex', status: 'ok', stale: false, fetched_at: iso(T0),
-    windows: [
-      { name: '5h', pct: 20, resets_at: 'not-a-time', window_minutes: 300 },
-      { name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
-    ],
-  }]).snapshot();
-  assert.equal(evidenceFor(invalid, 'codex', modelId, '5h').constraint.evidence, null);
-  assert.notEqual(evidenceFor(invalid, 'codex', modelId, '7d').constraint.evidence, null);
-
-  const stale = await serviceFor([{
-    pool: 'codex', status: 'ok', stale: true, fetched_at: iso(T0),
-    windows: [
-      { name: '5h', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
-      { name: '7d', pct: 20, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
-    ],
-  }]).snapshot();
-  assert.equal(evidenceFor(stale, 'codex', modelId, '5h').constraint.evidence, null);
-  assert.equal(evidenceFor(stale, 'codex', modelId, '7d').constraint.evidence, null);
-});
-
-test('codex-spark reads its separate row and requires both 5h and 7d', async () => {
-  const snapshot = await serviceFor([{
-    pool: 'codex-spark', status: 'ok', stale: false, fetched_at: iso(T0),
-    windows: [
-      { name: '5h', pct: 10, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
-      { name: '7d', pct: 30, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
-    ],
-  }]).snapshot();
-  const entry = entryFor(snapshot, 'codex-spark', 'gpt-5.3-codex-spark');
-  assert.equal(entry.quotaPoolId, 'codex-spark-models');
-  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['5h', '7d']);
+test('Spark reads the spark-5h/spark-7d windows on the same ChatGPT row', async () => {
+  const rows: FixtureRow[] = [
+    {
+      provider: 'chatgpt',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: 'spark-5h', pct: 10, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: 'spark-7d', pct: 30, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const snapshot = await serviceFor(rows).snapshot();
+  const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.3-codex-spark');
+  assert.deepEqual([...entry.quotaPoolIds], ['chatgpt/spark-5h', 'chatgpt/spark-7d']);
+  assert.deepEqual(
+    entry.requiredQuota.map((constraint) => constraint.id),
+    ['chatgpt/spark-5h', 'chatgpt/spark-7d'],
+  );
   assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.evidence?.remainingPercent), [90, 70]);
 });
 
-test('Cursor Other shares the raw cursor row but binds the distinct cursor-other pool using independent Other evidence', async () => {
+test('exhausted standard pools do not block Spark, and exhausted Spark pools do not block standard models', async () => {
+  const standardExhausted: FixtureRow[] = [
+    {
+      provider: 'chatgpt',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 100, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 100, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+        { name: 'spark-5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: 'spark-7d', pct: 0, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const stdSnapshot = await serviceFor(standardExhausted).snapshot();
+  assert.equal(
+    assessRequiredQuota(T0, entryFor(stdSnapshot, 'chatgpt', 'gpt-5.6-sol').requiredQuota).state,
+    'blocked',
+  );
+  assert.equal(
+    assessRequiredQuota(T0, entryFor(stdSnapshot, 'chatgpt', 'gpt-5.3-codex-spark').requiredQuota).state,
+    'healthy',
+  );
+
+  const sparkExhausted: FixtureRow[] = [
+    {
+      provider: 'chatgpt',
+      status: 'ok',
+      stale: false,
+      fetched_at: iso(T0),
+      windows: [
+        { name: '5h', pct: 0, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: '7d', pct: 0, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+        { name: 'spark-5h', pct: 100, resets_at: iso(T0 + 3_600_000), window_minutes: 300 },
+        { name: 'spark-7d', pct: 100, resets_at: iso(T0 + 86_400_000), window_minutes: 10_080 },
+      ],
+    },
+  ];
+  const sparkSnapshot = await serviceFor(sparkExhausted).snapshot();
+  assert.equal(
+    assessRequiredQuota(T0, entryFor(sparkSnapshot, 'chatgpt', 'gpt-5.3-codex-spark').requiredQuota).state,
+    'blocked',
+  );
+  assert.equal(
+    assessRequiredQuota(T0, entryFor(sparkSnapshot, 'chatgpt', 'gpt-5.6-sol').requiredQuota).state,
+    'healthy',
+  );
+});
+
+test('Cursor Other shares the raw cursor row but binds cursor/other using independent Other evidence', async () => {
   const snapshot = await serviceFor([{
-    pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0),
-    windows: ['Cursor', 'Other'].map((name) => ({ name, pct: name === 'Cursor' ? 100 : 25, resets_at: iso(T0 + 86_400_000), window_minutes: 43_800 })),
+    provider: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0),
+    windows: ['Cursor', 'Other', 'Claude'].map((name) => ({ name, pct: name === 'Cursor' ? 100 : 25, resets_at: iso(T0 + 86_400_000), window_minutes: 43_800 })),
   }]).snapshot();
 
-  // Grok keeps its Cursor window on cursor-models.
   const grok = entryFor(snapshot, 'cursor', 'cursor-grok-4.6-high');
-  assert.equal(grok.quotaPoolId, 'cursor-models');
-  assert.deepEqual(grok.requiredQuota.map((constraint) => constraint.id), ['Cursor']);
+  assert.deepEqual([...grok.quotaPoolIds], ['cursor/cursor']);
+  assert.deepEqual(grok.requiredQuota.map((constraint) => constraint.id), ['cursor/cursor']);
   assert.equal(grok.requiredQuota[0]!.evidence!.remainingPercent, 0);
 
-  // Other uses its own raw window, never the exhausted Cursor window.
   const other = entryFor(snapshot, 'cursor', 'kimi-k3');
-  assert.equal(other.quotaPoolId, 'cursor-other');
-  assert.deepEqual(other.requiredQuota.map((constraint) => constraint.id), ['Other']);
+  assert.deepEqual([...other.quotaPoolIds], ['cursor/other']);
+  assert.deepEqual(other.requiredQuota.map((constraint) => constraint.id), ['cursor/other']);
   assert.equal(other.requiredQuota[0]!.evidence!.remainingPercent, 75);
 });
 
 test('deepseek/deepseek-flash mandatory balance evidence comes from the raw Forge balances array', async () => {
   const withBalance = await serviceFor([{
-    pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0),
+    provider: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0),
     windows: [],
     balances: [{ currency: 'USD', amount: '12.50' }],
   }]).snapshot();
   const entry = entryFor(withBalance, 'deepseek', 'deepseek-flash');
-  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['deepseek-balance']);
+  assert.deepEqual(entry.requiredQuota.map((constraint) => constraint.id), ['deepseek/balance']);
   const constraint = entry.requiredQuota[0]!;
   assert.equal(constraint.kind, 'balance');
   assert.equal(constraint.balance!.amount, '12.50');
   assert.equal(constraint.balance!.observedAtMs, T0);
 
-  // No balances array: the mandatory balance stays an unknown null constraint.
   const noBalance = await serviceFor([{
-    pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [],
+    provider: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [],
   }]).snapshot();
   const noEntry = entryFor(noBalance, 'deepseek', 'deepseek-flash');
   assert.equal(noEntry.requiredQuota[0]!.balance, null);
 
-  // No raw deepseek row at all: unknown snapshot keeps a null balance.
   const rejecting = new AutoRoutingQuotaSnapshotService({
     queryJson: () => Promise.reject(new Error('unreachable')),
     now: () => T0,
@@ -659,12 +668,10 @@ test('codebuddy/hy3 direct snapshot requires both empty pools as null constraint
     (candidate) => candidate.providerId === 'codebuddy' && candidate.modelId === 'hy3',
   );
   assert.ok(binding, 'expected a codebuddy/hy3 multi-pool binding');
-  assert.equal(binding!.pools?.length, 2);
+  assert.equal(binding!.pools.length, 2);
 
-  // A fresh codebuddy row carrying only UNRELATED raw windows must not fabricate
-  // either required pool constraint or any evidence for them.
   const unrelatedRawRow: FixtureRow = {
-    pool: 'codebuddy',
+    provider: 'codebuddy',
     status: 'ok',
     stale: false,
     fetched_at: iso(T0),
@@ -676,18 +683,14 @@ test('codebuddy/hy3 direct snapshot requires both empty pools as null constraint
   const snapshot = await serviceFor([unrelatedRawRow]).snapshot();
 
   const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
-  // Both jointly required pools are present; the legacy single quotaPoolId is not.
-  assert.deepEqual([...entry.quotaPoolIds!], ['codebuddy-hy-family', 'codebuddy-monthly']);
-  assert.equal(entry.quotaPoolId, undefined);
+  assert.deepEqual([...entry.quotaPoolIds], ['codebuddy/hy-family', 'codebuddy/monthly']);
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy-hy-family', 'codebuddy-monthly'],
+    ['codebuddy/hy-family', 'codebuddy/monthly'],
   );
   for (const constraint of entry.requiredQuota) {
     assert.equal(constraint.evidence, null, `pool ${constraint.id} must stay unknown without proven raw windows`);
   }
-  // The fresh codebuddy row still yields a 60s direct snapshot (usable row),
-  // while joint HY3 coverage stays incomplete (both constraints null).
   assert.equal(snapshot.validUntilMs, T0 + 60_000);
   assert.deepEqual(snapshot.hardBlockedProviderIds, []);
 });
@@ -704,10 +707,10 @@ test('codebuddy/hy3 unknown snapshot keeps both empty pools required with null e
   assert.ok(binding);
 
   const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
-  assert.deepEqual([...entry.quotaPoolIds!], ['codebuddy-hy-family', 'codebuddy-monthly']);
+  assert.deepEqual([...entry.quotaPoolIds], ['codebuddy/hy-family', 'codebuddy/monthly']);
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy-hy-family', 'codebuddy-monthly'],
+    ['codebuddy/hy-family', 'codebuddy/monthly'],
   );
   for (const constraint of entry.requiredQuota) {
     assert.equal(constraint.evidence, null);
@@ -718,10 +721,7 @@ test('codebuddy/hy3 unknown snapshot keeps both empty pools required with null e
 test('a raw codebuddy pct100 retained block never turns the empty HY3 pools into healthy evidence', async () => {
   const rows = [codebuddyRow()];
   const snapshot = await scopedServiceFor(rows).snapshot();
-  // The observed CodeBuddy exhaustion still hard-blocks the pool...
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
-  // ...but HY3 family+monthly pools remain required unknown constraints with
-  // no fabricated raw rows, windows, or reset facts.
   const binding = PROVIDER_QUOTA_BINDINGS.find(
     (candidate) => candidate.providerId === 'codebuddy' && candidate.modelId === 'hy3',
   );
@@ -729,58 +729,52 @@ test('a raw codebuddy pct100 retained block never turns the empty HY3 pools into
   const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy-hy-family', 'codebuddy-monthly'],
+    ['codebuddy/hy-family', 'codebuddy/monthly'],
   );
   for (const constraint of entry.requiredQuota) {
     assert.equal(constraint.evidence, null);
   }
 });
 
-test('rows are located by quotaProviderId, never by quotaPoolId, and output keeps quotaPoolId', async () => {
-  const binding = PROVIDER_QUOTA_BINDINGS.find((candidate) => candidate.quotaPoolId !== candidate.quotaProviderId);
-  assert.ok(binding, 'metadata must distinguish quotaPoolId from quotaProviderId');
-  // This test intentionally selects a legacy single-pool binding, so its
-  // normalized quotaPoolId is guaranteed present: pin it down before use.
-  assert.ok(binding.quotaPoolId);
-  const window = binding.windows![0]!;
-  // The old invented shape keyed the raw row by quotaPoolId; the real DTO keys
-  // it by quotaProviderId, so this row must NOT match any binding.
+test('a row keyed by a normalized pool id never matches a provider row', async () => {
+  const binding = PROVIDER_QUOTA_BINDINGS.find(
+    (candidate) => candidate.providerId === 'kimi-coding' && candidate.modelId === 'k3',
+  )!;
+  const window = binding.pools[0]!.windows[0]!;
+  // The old invented shape keyed the raw row by a pool id; the real DTO keys it
+  // by provider, so this row must NOT match any binding.
   const staleKeyedRow: FixtureRow = {
-    pool: binding.quotaPoolId,
+    provider: binding.pools[0]!.quotaPoolId,
     status: 'ok',
     stale: false,
     fetched_at: iso(T0),
     windows: [{ name: window.windowId, pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES }],
   };
   const snapshot = await serviceFor([staleKeyedRow]).snapshot();
-  const { constraint } = evidenceFor(snapshot, binding.providerId, binding.modelId, window.windowId);
-  assert.equal(constraint.evidence, null, 'a quotaPoolId-keyed row must never match');
-  // No fresh usable binding evidence and no block -> short unknown, never 60s cache.
+  const { constraint } = constraintFor(snapshot, binding.providerId, binding.modelId, binding.pools[0]!.quotaPoolId);
+  assert.equal(constraint.evidence, null, 'a pool-id-keyed row must never match');
   assert.equal(snapshot.validUntilMs, T0 + 15_000);
 });
 
 test('derives remainingPercent from raw used pct and never reads clamped remaining_pct', async () => {
-  const { binding, window } = firstConstraintWithKind('full_cycle');
-  // pct 120 is out-of-range; Go clamps remaining_pct to 0 in the window JSON.
-  // The service must derive -20 and never consult the clamped 0.
+  const { binding, constraintId, window } = firstConstraintWithKind('full_cycle');
   const extreme = await serviceFor(
     rowsForBinding(binding, { pct: 120, fetchedAtMs: T0 }).map((row) => ({
       ...row,
       windows: row.windows.map((w) => (w.name === window.windowId ? { ...w, remaining_pct: 0 } : w)),
     })),
   ).snapshot();
-  const burned = evidenceFor(extreme, binding.providerId, binding.modelId, window.windowId);
+  const burned = constraintFor(extreme, binding.providerId, binding.modelId, constraintId);
   assert.equal(burned.constraint.evidence!.remainingPercent, -20);
   assert.equal(burned.constraint.evidence!.replenishmentKind, 'full_cycle');
 
-  // pct 20 -> 80, still ignoring any emitted remaining_pct.
   const healthy = await serviceFor(
     rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 }).map((row) => ({
       ...row,
       windows: row.windows.map((w) => (w.name === window.windowId ? { ...w, remaining_pct: 80 } : w)),
     })),
   ).snapshot();
-  const fresh = evidenceFor(healthy, binding.providerId, binding.modelId, window.windowId);
+  const fresh = constraintFor(healthy, binding.providerId, binding.modelId, constraintId);
   assert.equal(fresh.constraint.evidence!.remainingPercent, 80);
   assert.equal(fresh.constraint.evidence!.replenishmentKind, 'full_cycle');
 });
@@ -790,10 +784,10 @@ test('derives remainingPercent from raw used pct and never reads clamped remaini
 // ---------------------------------------------------------------------------
 
 test('an invented-field raw source (id/reset_kind/window_ms/numeric timestamps) yields no usable evidence', async () => {
-  const { binding, window } = firstConstraintWithKind('full_cycle');
+  const { binding, constraintId, window } = firstConstraintWithKind('full_cycle');
   const inventedSource: unknown[] = [
     {
-      pool: binding.quotaProviderId,
+      provider: binding.providerId,
       status: 'ok',
       stale: false,
       fetched_at: T0, // numeric epoch: not a valid ISO fetched_at
@@ -809,15 +803,13 @@ test('an invented-field raw source (id/reset_kind/window_ms/numeric timestamps) 
     },
   ];
   const snapshot = await serviceFor(inventedSource).snapshot();
-  const { constraint } = evidenceFor(snapshot, binding.providerId, binding.modelId, window.windowId);
+  const { constraint } = constraintFor(snapshot, binding.providerId, binding.modelId, constraintId);
   assert.equal(constraint.evidence, null, 'invented fields must not parse into evidence');
   assert.equal(snapshot.validUntilMs, T0 + 15_000, 'no usable rows -> short unknown');
 
-  // A row with a valid ISO fetched_at but broken full-cycle pace fields is
-  // fresh yet still yields null for the full-cycle window.
   const brokenPace: unknown[] = [
     {
-      pool: binding.quotaProviderId,
+      provider: binding.providerId,
       status: 'ok',
       stale: false,
       fetched_at: iso(T0),
@@ -832,7 +824,7 @@ test('an invented-field raw source (id/reset_kind/window_ms/numeric timestamps) 
     },
   ];
   const second = await serviceFor(brokenPace).snapshot();
-  const paced = evidenceFor(second, binding.providerId, binding.modelId, window.windowId);
+  const paced = constraintFor(second, binding.providerId, binding.modelId, constraintId);
   assert.equal(paced.constraint.evidence, null, 'numeric resets_at / missing window_minutes must fail closed');
 });
 
@@ -841,8 +833,8 @@ test('an invented-field raw source (id/reset_kind/window_ms/numeric timestamps) 
 // ---------------------------------------------------------------------------
 
 test('stale, non-ok, future and missing fetched_at rows all yield short unknown evidence', async () => {
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const base = (overrides: Partial<FixtureRow>): FixtureRow[] => [
     { ...rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 })[0]!, ...overrides },
   ];
@@ -856,7 +848,7 @@ test('stale, non-ok, future and missing fetched_at rows all yield short unknown 
 
   for (const scenario of cases) {
     const snapshot = await scopedServiceFor(scenario.rows).snapshot();
-    const { constraint } = evidenceFor(snapshot, binding.providerId, binding.modelId, windowId);
+    const { constraint } = constraintFor(snapshot, binding.providerId, binding.modelId, constraintId);
     assert.equal(constraint.evidence, null, scenario.name);
     assert.equal(snapshot.validUntilMs, T0 + 15_000, scenario.name);
     assert.deepEqual(snapshot.hardBlockedProviderIds, [], scenario.name);
@@ -875,8 +867,8 @@ test('a context-less query can never activate even a well-formed observed CodeBu
 
 test('normal rows older than 60 seconds are unknown, never a 60s successful cache', async () => {
   let calls = 0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const rows = rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 - 70_000 });
   const service = new AutoRoutingQuotaSnapshotService({
     queryJson: () => {
@@ -889,25 +881,23 @@ test('normal rows older than 60 seconds are unknown, never a 60s successful cach
   const first = await service.snapshot();
   assert.equal(first.validUntilMs, T0 + 15_000);
   assert.equal(
-    evidenceFor(first, binding.providerId, binding.modelId, windowId).constraint.evidence,
+    constraintFor(first, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
     'a 70s-old fetched_at is outside the 60s freshness window',
   );
 
-  // The unknown snapshot is not cached: an immediate call must re-query rather
-  // than serve a fabricated 60s success.
   const second = await service.snapshot();
   assert.equal(calls, 2);
   assert.equal(second.validUntilMs, T0 + 15_000);
 });
 
 test('a 30s-old row still yields evidence but bounds the cache to its remaining freshness', async () => {
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const snapshot = await serviceFor(rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 - 30_000 })).snapshot();
   assert.equal(snapshot.validUntilMs, T0 + 30_000, 'valid until fetched_at + 60s');
   assert.notEqual(
-    evidenceFor(snapshot, binding.providerId, binding.modelId, windowId).constraint.evidence,
+    constraintFor(snapshot, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
   );
 });
@@ -915,8 +905,8 @@ test('a 30s-old row still yields evidence but bounds the cache to its remaining 
 test('evaluates a slow asynchronous refresh at completion and caches one consistent snapshot', async () => {
   let calls = 0;
   let current = T0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const service = new AutoRoutingQuotaSnapshotService({
     queryJson: async () => {
       calls += 1;
@@ -927,7 +917,7 @@ test('evaluates a slow asynchronous refresh at completion and caches one consist
   });
 
   const first = await service.snapshot();
-  const evidence = evidenceFor(first, binding.providerId, binding.modelId, windowId).constraint.evidence;
+  const evidence = constraintFor(first, binding.providerId, binding.modelId, constraintId).constraint.evidence;
   assert.notEqual(evidence, null, 'a row stamped while the async query runs is fresh at completion');
   assert.equal(first.nowMs, T0 + 5_000);
   assert.equal(evidence!.observedAtMs, first.nowMs);
@@ -937,14 +927,12 @@ test('evaluates a slow asynchronous refresh at completion and caches one consist
   const second = await service.snapshot();
   assert.equal(calls, 1, 'a still-fresh completion-time snapshot is served from cache');
   assert.equal(second, first);
-  assert.equal(second.nowMs, T0 + 5_000);
-  assert.equal(second.validUntilMs, T0 + 65_000);
 });
 
 test('still rejects a timestamp genuinely in the future after an asynchronous refresh completes', async () => {
   let current = T0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const service = new AutoRoutingQuotaSnapshotService({
     queryJson: async () => {
       current += 5_000;
@@ -957,15 +945,15 @@ test('still rejects a timestamp genuinely in the future after an asynchronous re
   assert.equal(snapshot.nowMs, T0 + 5_000);
   assert.equal(snapshot.validUntilMs, snapshot.nowMs + 15_000);
   assert.equal(
-    evidenceFor(snapshot, binding.providerId, binding.modelId, windowId).constraint.evidence,
+    constraintFor(snapshot, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
     'post-completion future clock skew must remain fail-closed',
   );
 });
 
-test('a report with only an unrelated fresh pool is a short unknown, not a 60s cache', async () => {
+test('a report with only an unrelated fresh provider row is a short unknown, not a 60s cache', async () => {
   const unrelated: FixtureRow[] = [
-    { pool: 'some-other-pool', status: 'ok', stale: false, fetched_at: iso(T0), windows: [] },
+    { provider: 'some-other-provider', status: 'ok', stale: false, fetched_at: iso(T0), windows: [] },
   ];
   const snapshot = await serviceFor(unrelated).snapshot();
   assert.equal(snapshot.validUntilMs, T0 + 15_000);
@@ -981,7 +969,7 @@ test('a report with only an unrelated fresh pool is a short unknown, not a 60s c
 // ---------------------------------------------------------------------------
 
 test('full-cycle windows require a valid parsed reset time and window_minutes', async () => {
-  const { binding, window } = firstConstraintWithKind('full_cycle');
+  const { binding, constraintId, window } = firstConstraintWithKind('full_cycle');
 
   const noReset = await serviceFor(
     rowsForBinding(binding, { pct: 30, fetchedAtMs: T0 }).map((row) => ({
@@ -990,7 +978,7 @@ test('full-cycle windows require a valid parsed reset time and window_minutes', 
     })),
   ).snapshot();
   assert.equal(
-    evidenceFor(noReset, binding.providerId, binding.modelId, window.windowId).constraint.evidence,
+    constraintFor(noReset, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
     'missing resets_at must null a full-cycle window',
   );
@@ -1002,7 +990,7 @@ test('full-cycle windows require a valid parsed reset time and window_minutes', 
     })),
   ).snapshot();
   assert.equal(
-    evidenceFor(noMinutes, binding.providerId, binding.modelId, window.windowId).constraint.evidence,
+    constraintFor(noMinutes, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
     'missing window_minutes must null a full-cycle window',
   );
@@ -1014,7 +1002,7 @@ test('full-cycle windows require a valid parsed reset time and window_minutes', 
     })),
   ).snapshot();
   assert.equal(
-    evidenceFor(garbageReset, binding.providerId, binding.modelId, window.windowId).constraint.evidence,
+    constraintFor(garbageReset, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
     'an unparseable ISO resets_at must null a full-cycle window',
   );
@@ -1022,19 +1010,18 @@ test('full-cycle windows require a valid parsed reset time and window_minutes', 
 
 test('rolling_partial and unproven binding windows never carry a reset pace', async () => {
   for (const kind of ['rolling_partial', 'unproven']) {
-    let matched: { binding: Binding; window: RequiredWindow } | undefined;
+    let matched: { binding: Binding; constraintId: string; window: RequiredWindow } | undefined;
     try {
       matched = firstConstraintWithKind(kind);
     } catch {
-      // The dataset does not contain this kind; nothing to assert.
       continue;
     }
     const snapshot = await serviceFor(rowsForBinding(matched.binding, { pct: 20, fetchedAtMs: T0 })).snapshot();
-    const { constraint } = evidenceFor(
+    const { constraint } = constraintFor(
       snapshot,
       matched.binding.providerId,
       matched.binding.modelId,
-      matched.window.windowId,
+      matched.constraintId,
     );
     assert.equal(constraint.evidence!.remainingPercent, 80);
     assert.equal(constraint.evidence!.replenishmentKind, expectedReplenishment(kind));
@@ -1044,24 +1031,22 @@ test('rolling_partial and unproven binding windows never carry a reset pace', as
 });
 
 test('a missing required window stays an explicit null constraint', async () => {
-  // PROVIDER_QUOTA_BINDINGS[0] (Cursor) declares a single window, so use the
-  // two-window kimi-coding/k3 binding and remove only its first window.
   const binding = PROVIDER_QUOTA_BINDINGS.find(
     (candidate) => candidate.providerId === 'kimi-coding' && candidate.modelId === 'k3',
   );
   assert.ok(binding, 'expected a kimi-coding/k3 binding');
-  assert.ok(binding!.windows!.length >= 2, 'the kimi-coding/k3 binding must declare two required windows');
-  const missingId = binding!.windows![0]!.windowId;
-  const presentId = binding!.windows![1]!.windowId;
+  const missingPool = binding!.pools[0]!;
+  const presentPool = binding!.pools[1]!;
+  const missingId = missingPool.quotaPoolId;
+  const presentId = presentPool.quotaPoolId;
   const rows = rowsForBinding(binding!, { pct: 20, fetchedAtMs: T0 }).map((row) => ({
     ...row,
-    windows: row.windows.filter((window) => window.name !== missingId),
+    windows: row.windows.filter((window) => window.name !== missingPool.windows[0]!.windowId),
   }));
   const snapshot = await serviceFor(rows).snapshot();
-  const missing = evidenceFor(snapshot, binding!.providerId, binding!.modelId, missingId);
-  const present = evidenceFor(snapshot, binding!.providerId, binding!.modelId, presentId);
+  const missing = constraintFor(snapshot, binding!.providerId, binding!.modelId, missingId);
+  const present = constraintFor(snapshot, binding!.providerId, binding!.modelId, presentId);
   assert.equal(missing.constraint.evidence, null);
-  assert.equal(missing.constraint.id, missingId);
   assert.notEqual(present.constraint.evidence, null);
 });
 
@@ -1072,7 +1057,6 @@ test('a missing required window stays an explicit null constraint', async () => 
 test('CodeBuddy pct100 with future ISO reset hard-blocks without any fetched_at', async () => {
   const snapshot = await scopedServiceFor([codebuddyRow()]).snapshot();
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
-  // Far-future reset: the retained block is bounded by the now + 60s cap.
   assert.equal(snapshot.validUntilMs, T0 + 60_000);
 });
 
@@ -1092,7 +1076,7 @@ test('a stale fetched_at on the CodeBuddy retained row is ignored for the block'
 
 test('CodeBuddy absence, invalid or expired observations never hard-block', async () => {
   const cases: Array<{ name: string; rows: FixtureRow[] }> = [
-    { name: 'absent pool', rows: [] },
+    { name: 'absent provider', rows: [] },
     { name: 'pct 99', rows: [codebuddyRow({}, { pct: 99 })] },
     { name: 'pct string', rows: [codebuddyRow({}, { pct: '100' })] },
     { name: 'wrong window name', rows: [codebuddyRow({}, { name: '1h' })] },
@@ -1108,8 +1092,6 @@ test('CodeBuddy absence, invalid or expired observations never hard-block', asyn
   for (const scenario of cases) {
     const snapshot = await serviceFor(scenario.rows).snapshot();
     assert.deepEqual(snapshot.hardBlockedProviderIds, [], scenario.name);
-    // Without a valid block and with no binding rows this is a short unknown,
-    // proving invalid/expired observations produce no retained signal.
     assert.equal(snapshot.validUntilMs, T0 + 15_000, scenario.name);
   }
 });
@@ -1123,7 +1105,7 @@ test('snapshots are deeply frozen at every level', async () => {
   rows.push(codebuddyRow());
   const snapshot = await serviceFor(rows).snapshot();
 
-  const entry = snapshot.entries[0]!;
+  const entry = entryFor(snapshot, 'cursor', 'kimi-k3');
   const constraint = entry.requiredQuota[0]!;
   const evidence = constraint.evidence;
 
@@ -1131,6 +1113,7 @@ test('snapshots are deeply frozen at every level', async () => {
   assert.ok(Object.isFrozen(snapshot.entries));
   assert.ok(Object.isFrozen(snapshot.hardBlockedProviderIds));
   assert.ok(Object.isFrozen(entry));
+  assert.ok(Object.isFrozen(entry.quotaPoolIds));
   assert.ok(Object.isFrozen(entry.requiredQuota));
   assert.ok(Object.isFrozen(constraint));
   assert.ok(evidence !== null && Object.isFrozen(evidence));
@@ -1175,7 +1158,7 @@ test('concurrent snapshot requests share one in-flight query', async () => {
 test('serves the cached snapshot until the earliest 60s freshness boundary', async () => {
   let calls = 0;
   let current = T0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
   const rows = rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 });
   const queryJson = () => {
     calls += 1;
@@ -1187,7 +1170,7 @@ test('serves the cached snapshot until the earliest 60s freshness boundary', asy
   assert.equal(calls, 1);
   assert.equal(first.validUntilMs, T0 + 60_000);
 
-  current = T0 + 30_000; // well before the boundary
+  current = T0 + 30_000;
   const second = await service.snapshot();
   assert.equal(second, first);
   assert.equal(calls, 1);
@@ -1196,8 +1179,8 @@ test('serves the cached snapshot until the earliest 60s freshness boundary', asy
 test('refresh happens after expiry and produces a fresh snapshot', async () => {
   let calls = 0;
   let current = T0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const queryJson = () => {
     calls += 1;
     const pct = current === T0 ? 20 : 60;
@@ -1208,18 +1191,18 @@ test('refresh happens after expiry and produces a fresh snapshot', async () => {
   const first = await service.snapshot();
   assert.equal(first.validUntilMs, T0 + 60_000);
   assert.equal(
-    evidenceFor(first, binding.providerId, binding.modelId, windowId).constraint.evidence!.remainingPercent,
+    constraintFor(first, binding.providerId, binding.modelId, constraintId).constraint.evidence!.remainingPercent,
     80,
   );
 
-  current = T0 + 61_000; // past the cached boundary
+  current = T0 + 61_000;
   const second = await service.snapshot();
   assert.equal(calls, 2);
   assert.notEqual(second, first);
   assert.equal(second.nowMs, current);
   assert.equal(second.validUntilMs, current + 60_000);
   assert.equal(
-    evidenceFor(second, binding.providerId, binding.modelId, windowId).constraint.evidence!.remainingPercent,
+    constraintFor(second, binding.providerId, binding.modelId, constraintId).constraint.evidence!.remainingPercent,
     40,
   );
 });
@@ -1227,8 +1210,8 @@ test('refresh happens after expiry and produces a fresh snapshot', async () => {
 test('a failed refresh never serves expired old evidence and returns a short-lived unknown snapshot', async () => {
   let calls = 0;
   let current = T0;
-  const binding = PROVIDER_QUOTA_BINDINGS[0]!;
-  const windowId = binding.windows![0]!.windowId;
+  const binding = PROVIDER_QUOTA_BINDINGS.find((binding) => binding.providerId === 'cursor' && binding.modelId === 'kimi-k3')!;
+  const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const queryJson = () => {
     calls += 1;
     if (current > T0 + 60_000) return Promise.reject(new Error('forge quota unreachable'));
@@ -1238,16 +1221,16 @@ test('a failed refresh never serves expired old evidence and returns a short-liv
 
   const healthy = await service.snapshot();
   assert.notEqual(
-    evidenceFor(healthy, binding.providerId, binding.modelId, windowId).constraint.evidence,
+    constraintFor(healthy, binding.providerId, binding.modelId, constraintId).constraint.evidence,
     null,
   );
 
-  current = T0 + 120_000; // healthy is long expired
+  current = T0 + 120_000;
   const unknown = await service.snapshot();
   assert.equal(calls, 2);
   assert.notEqual(unknown, healthy);
   assert.equal(unknown.nowMs, current);
-  assert.equal(unknown.validUntilMs, current + 15_000); // short-lived
+  assert.equal(unknown.validUntilMs, current + 15_000);
   assert.deepEqual(unknown.hardBlockedProviderIds, []);
   for (const entry of unknown.entries) {
     for (const constraint of entry.requiredQuota) {
@@ -1255,8 +1238,6 @@ test('a failed refresh never serves expired old evidence and returns a short-liv
     }
   }
 
-  // Even after the unknown snapshot lapses, a still-failing query keeps
-  // returning unknown snapshots and never the expired old one.
   current = current + 20_000;
   const again = await service.snapshot();
   assert.equal(calls, 3);
@@ -1274,9 +1255,6 @@ test('the snapshot DTO carries no credentials, scope, environment, domain, or wi
   rows.push(codebuddyRow());
   const direct = await serviceFor(rows).snapshot();
 
-  // A scoped snapshot derived through an injected current-login loader: the
-  // private credential token, stable scope, and environment must never reach
-  // the serialized DTO even though the query was scoped to them.
   const token = 'codebuddy-bearer-placeholder';
   const scope = 'cbv1:opaque-scope-digest';
   const environment = 'ioa';
@@ -1293,9 +1271,6 @@ test('the snapshot DTO carries no credentials, scope, environment, domain, or wi
   });
   const unknown = await rejecting.snapshot();
 
-  // Structural key-name traversal (case/separator-insensitive) rather than
-  // substring matching over the serialized blob: legitimate pool ids such as
-  // 'zhipu-coding-tokens' must never be flagged as a credential value.
   const forbiddenKeys = new Set(
     [
       'access_token',
@@ -1349,12 +1324,9 @@ test('the neutral observed pct100 window with a finite future reset blocks while
   assert.deepEqual(blocked.hardBlockedProviderIds, ['codebuddy']);
   assert.equal(blocked.validUntilMs, T0 + 60_000);
 
-  // Legacy unsupported monthly semantics are inert: a codebuddy row that only
-  // carries a 1mo pct100 window is not an observed v2 projection and never
-  // blocks.
   const legacy: FixtureRow[] = [
     {
-      pool: 'codebuddy',
+      provider: 'codebuddy',
       status: 'ok',
       stale: false,
       windows: [{ name: '1mo', pct: 100, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES }],
@@ -1380,7 +1352,6 @@ test('the query callback receives only the expected scope/environment, never the
     now: () => T0,
   });
   const snapshot = await service.snapshot();
-  // Only the two private expected values reach the query source.
   assert.deepEqual(received, [{ expectedScope: scope, expectedEnvironment: 'ioa' }]);
   assert.ok(!JSON.stringify(received).includes(token), 'query context must not carry the credential token');
   assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
@@ -1392,7 +1363,6 @@ test('a token refresh on the same stable scope/environment reuses cached evidenc
   let queryCalls = 0;
   const loader = () => {
     loaderCalls += 1;
-    // Token refresh changes the credential value but never the opaque scope.
     const credentialValue = loaderCalls === 1 ? 'token-v1' : 'token-v2';
     return Promise.resolve(fakeCodeBuddySnapshot({ stableScope: scope, environment: 'ioa', credentialValue }));
   };
@@ -1439,14 +1409,11 @@ test('a scope or environment switch bypasses the cached snapshot and re-queries 
   assert.equal(queryCalls, 1);
   assert.deepEqual(scopeA.hardBlockedProviderIds, ['codebuddy']);
 
-  // Scope switch: the old scoped snapshot is still within its freshness window
-  // but must not be served for a different login.
   const scopeB = await service.snapshot();
   assert.equal(queryCalls, 2, 'a scope switch must re-query instead of reusing the cached CodeBuddy block');
   assert.notEqual(scopeB, scopeA);
   assert.deepEqual(scopeB.hardBlockedProviderIds, []);
 
-  // Environment switch on the same scope must also bypass the cached evidence.
   const envB = await service.snapshot();
   assert.equal(queryCalls, 3, 'an environment switch must re-query instead of reusing the cached CodeBuddy block');
   assert.notEqual(envB, scopeB);
@@ -1485,21 +1452,17 @@ test('a scope or environment switch bypasses an in-flight CodeBuddy query', asyn
     now: () => T0,
   });
 
-  // The ioa-scoped refresh starts and stays in flight.
   const first = service.snapshot();
   resolveLoader(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-a', environment: 'ioa' }));
   await flushMicrotasks();
   assert.equal(queryCalls, 1, 'the ioa-scoped query must be in flight');
 
-  // The login environment changes to cloudhosted while the ioa query is still
-  // pending: the new request must not join the in-flight ioa refresh.
   const second = service.snapshot();
   resolveLoader(fakeCodeBuddySnapshot({ stableScope: 'cbv1:scope-b', environment: 'cloudhosted' }));
   const secondSnapshot = await second;
   assert.equal(queryCalls, 2, 'an environment switch must bypass the in-flight CodeBuddy query');
   assert.deepEqual(secondSnapshot.hardBlockedProviderIds, []);
 
-  // Releasing the stale ioa query only settles the first request.
   heldQueries[0]!(reportJson([codebuddyRow()]));
   const firstSnapshot = await first;
   assert.deepEqual(firstSnapshot.hardBlockedProviderIds, ['codebuddy']);
@@ -1525,7 +1488,6 @@ test('a missing, undefined, throwing, or stableScope-less current snapshot fails
     const queryJson = (context?: CodeBuddyQueryContext) => {
       queryCalls += 1;
       contexts.push(context);
-      // A context-less (standalone) query cannot observe any CodeBuddy row.
       if (context === undefined) return Promise.resolve(reportJson([]));
       return Promise.resolve(reportJson([codebuddyRow()]));
     };
@@ -1534,9 +1496,6 @@ test('a missing, undefined, throwing, or stableScope-less current snapshot fails
     const blocked = await service.snapshot();
     assert.deepEqual(blocked.hardBlockedProviderIds, ['codebuddy'], 'the first scoped snapshot must block');
 
-    // The previous scoped block is still cached, but the current snapshot is
-    // gone: the request must fail closed and re-query without any CodeBuddy
-    // context rather than reuse the previous block.
     const failed = await service.snapshot();
     assert.equal(queryCalls, 2, 'a lost current snapshot must re-query without a CodeBuddy context');
     assert.equal(contexts[1], undefined, 'a lost current snapshot must not form a CodeBuddy context');
@@ -1551,10 +1510,9 @@ test('a missing, undefined, throwing, or stableScope-less current snapshot fails
   ));
 });
 
-
 test('monetary balances preserve exact positive amounts and never add currencies or fabricate zero', async () => {
   const read = async (balances: unknown[]) => {
-    const snapshot = await serviceFor([{ pool: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [], balances }]).snapshot();
+    const snapshot = await serviceFor([{ provider: 'deepseek', status: 'ok', stale: false, fetched_at: iso(T0), windows: [], balances }]).snapshot();
     return entryFor(snapshot, 'deepseek', 'deepseek-flash').requiredQuota[0]!.balance;
   };
   assert.equal((await read([{ currency: 'USD', amount: '3.25' }, { currency: 'CNY', amount: '100.00' }]))?.amount, '3.25');
@@ -1565,10 +1523,22 @@ test('monetary balances preserve exact positive amounts and never add currencies
   assert.equal((await read([{ currency: 'USD', amount: '0.00' }, { currency: 'CNY', amount: '00.0' }]))?.amount, '0');
 });
 
-
 test('fresh exhausted Other blocks without reset metadata while a missing Other stays unknown', async () => {
-  const zero = await serviceFor([{ pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Other', pct: 100 }] }]).snapshot();
+  const zero = await serviceFor([{ provider: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Other', pct: 100 }] }]).snapshot();
   assert.equal(assessRequiredQuota(T0, entryFor(zero, 'cursor', 'kimi-k3').requiredQuota).state, 'blocked');
-  const missing = await serviceFor([{ pool: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Cursor', pct: 0 }] }]).snapshot();
+  const missing = await serviceFor([{ provider: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Cursor', pct: 0 }] }]).snapshot();
   assert.equal(assessRequiredQuota(T0, entryFor(missing, 'cursor', 'kimi-k3').requiredQuota).state, 'unknown');
+});
+
+test('every bound resource that is unknown stays neutral across the whole graph', async () => {
+  const snapshot = await serviceFor([
+    { provider: 'cursor', status: 'ok', stale: false, fetched_at: iso(T0), windows: [{ name: 'Cursor', pct: 40 }] },
+  ]).snapshot();
+  // Every entry contributed by bindings with no matching row stays null/neutral.
+  for (const entry of snapshot.entries) {
+    if (entry.providerId === 'cursor') continue;
+    for (const constraint of entry.requiredQuota) {
+      assert.equal(constraint.evidence, null, `${entry.providerId}/${entry.modelId}:${constraint.id}`);
+    }
+  }
 });

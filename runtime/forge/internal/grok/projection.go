@@ -134,7 +134,6 @@ var friendlyProviderNames = map[string]string{
 	"kimi-coding":     "Kimi Coding",
 	"zhipu-coding":    "Zhipu Coding",
 	"anthropic":       "Anthropic",
-	"codex":           "Codex",
-	"codex-spark":     "Codex Spark",
+	"chatgpt":         "ChatGPT",
 	"opencode-native": "OpenCode",
 }

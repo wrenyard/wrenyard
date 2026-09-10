@@ -356,6 +356,7 @@ describe('core task structured-output', () => {
   })
 
   it('uses the short structured-output retry timeout while the shared total budget has room', async () => {
+    stubDateNow()
     const totalBudgetMs = STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS * 3
     let calls = 0
     const seenTimeouts: Array<number | undefined> = []

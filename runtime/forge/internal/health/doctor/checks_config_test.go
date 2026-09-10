@@ -24,7 +24,7 @@ func TestCodexConfigCheckSSOTFalseForMalformedJSON(t *testing.T) {
 	deps := Dependencies{
 		UserHome: func() string { return home },
 		ProviderAuthStatus: func(providerID string) ProviderAuthState {
-			if providerID == "codex" {
+			if providerID == "chatgpt" {
 				return ProviderAuthState{OK: false, SourcePath: filepath.Join(home, ".codex", "auth.json")}
 			}
 			return ProviderAuthState{OK: false}
@@ -64,7 +64,7 @@ func TestCodexConfigCheckSSOTTrueReportsOK(t *testing.T) {
 	deps := Dependencies{
 		UserHome: func() string { return home },
 		ProviderAuthStatus: func(providerID string) ProviderAuthState {
-			if providerID == "codex" {
+			if providerID == "chatgpt" {
 				return ProviderAuthState{OK: true, SourcePath: filepath.Join(home, ".codex", "auth.json")}
 			}
 			return ProviderAuthState{OK: false}
@@ -108,7 +108,7 @@ func TestCodexConfigCheckSSOTFalseForExistingEmptyFile(t *testing.T) {
 	deps := Dependencies{
 		UserHome: func() string { return home },
 		ProviderAuthStatus: func(providerID string) ProviderAuthState {
-			if providerID == "codex" {
+			if providerID == "chatgpt" {
 				return ProviderAuthState{OK: false, SourcePath: filepath.Join(home, ".codex", "auth.json")}
 			}
 			return ProviderAuthState{OK: false}

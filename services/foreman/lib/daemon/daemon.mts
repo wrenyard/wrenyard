@@ -373,7 +373,7 @@ async function startForemanDaemonWithRuntime(
           }
         }
         const state = evaluateForgeNativeRouteReadiness(readiness, {
-          credentialResolverId: providerDef.credentialResolver,
+          providerId: providerDef.id,
           client,
           mode,
           nativeClients: providerDef.nativeClients ?? [],

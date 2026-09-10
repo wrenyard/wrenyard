@@ -147,7 +147,7 @@ func codexClient() Client {
 		},
 		Hygiene:         nil,
 		ResumeFlag:      ResumeFlagLong,
-		DefaultProvider: "codex",
+		DefaultProvider: "chatgpt",
 	}
 }
 

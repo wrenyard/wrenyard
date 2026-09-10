@@ -13,7 +13,9 @@
  * `pool`, `status`, `stale`, a per-entry RFC3339 `fetched_at` and `windows`;
  * each window carries `name`, the raw USED `pct`, an ISO-string `resets_at`
  * and `window_minutes`. The raw output has NO `reset_kind`, `window_ms`,
- * numeric id or epoch timestamp fields, and nothing here invents them.
+ * numeric id or epoch timestamp fields, and nothing here invents them. The Go
+ * quota DTO addresses a row by `provider` (not `pool`) and serializes
+ * not-applicable windows as `not_applicable_windows`.
  *
  * Rules:
  *  - the raw window USED percent (`pct`) is authoritative and
@@ -26,10 +28,9 @@
  *  - missing/non-number pct, missing windows, non-ok rows, stale rows and
  *    rows whose fetched_at is missing, invalid, future or older than 60
  *    seconds all surface as { id, evidence: null } (genuinely unknown);
- *  - a binding row is located by `binding.quotaProviderId` (the raw pool,
- *    e.g. cursor/kimi-coding/zhipu-coding) while the normalized
- *    `binding.quotaPoolId` is retained in output only; a window is located by
- *    exact `name`;
+ *  - a raw row carries `provider` (the owner provider, e.g. cursor/chatgpt)
+ *    and is located by `row.provider === binding.providerId`; a window is
+ *    located by exact `name`;
  *  - replenishment semantics come exclusively from binding window
  *    constraints: `full_cycle`/`rolling_partial`/`unproven` map to
  *    `full_cycle`/`rolling_partial`/`unknown`. Full-cycle evidence carries the
@@ -127,10 +128,8 @@ function codeBuddyContextKey(context: CodeBuddyQueryContext | undefined): string
 export interface AutoRoutingQuotaSnapshotEntry {
   readonly providerId: string;
   readonly modelId: string;
-  /** Normalized single-pool id; retained only for legacy single-pool bindings. */
-  readonly quotaPoolId?: string;
-  /** Every jointly required normalized pool id (multi-pool bindings only). */
-  readonly quotaPoolIds?: readonly string[];
+  /** Every jointly required normalized pool id for this binding. */
+  readonly quotaPoolIds: readonly string[];
   readonly requiredQuota: readonly RequiredQuotaConstraint[];
 }
 
@@ -200,11 +199,13 @@ interface RawBalance {
 }
 
 interface RawRow {
-  readonly pool: string | null;
+  readonly provider: string | null;
   readonly status: string | null;
   readonly stale: boolean;
   readonly fetchedAtMs: number | null;
   readonly windows: readonly RawWindow[];
+  /** Raw window names the provider explicitly declares not applicable. */
+  readonly notApplicableWindows: readonly string[];
   readonly balances: readonly RawBalance[];
 }
 
@@ -255,6 +256,15 @@ function normalizeRow(item: unknown): RawRow | null {
     }
   }
 
+  // Go serializes provider-declared not-applicable window names as
+  // `not_applicable_windows`. Only a fresh ok row may use them to skip a pool.
+  const notApplicableWindows: string[] = [];
+  if (Array.isArray(raw.not_applicable_windows)) {
+    for (const entry of raw.not_applicable_windows) {
+      if (typeof entry === 'string') notApplicableWindows.push(entry);
+    }
+  }
+
   // Existing Forge balances source: raw `balances: [{ currency, amount }]` with
   // a decimal amount string. Never synthesized, never coerced to zero.
   const balances: RawBalance[] = [];
@@ -273,11 +283,12 @@ function normalizeRow(item: unknown): RawRow | null {
   }
 
   return {
-    pool: stringOrNull(raw.pool),
+    provider: stringOrNull(raw.provider),
     status: stringOrNull(raw.status),
     stale: raw.stale === true,
     fetchedAtMs: isoTimeMs(raw.fetched_at),
     windows: Object.freeze(windows),
+    notApplicableWindows: Object.freeze(notApplicableWindows),
     balances: Object.freeze(balances),
   };
 }
@@ -299,7 +310,7 @@ function parseQuotaReport(text: string): readonly RawRow[] {
 
 function rowUsable(row: RawRow, nowMs: number): boolean {
   return (
-    row.pool !== null &&
+    row.provider !== null &&
     row.status === 'ok' &&
     row.stale === false &&
     row.fetchedAtMs !== null &&
@@ -308,17 +319,17 @@ function rowUsable(row: RawRow, nowMs: number): boolean {
   );
 }
 
-function findRow(rows: readonly RawRow[], poolId: string): RawRow | null {
-  return rows.find((row) => row.pool === poolId) ?? null;
+function findRow(rows: readonly RawRow[], providerId: string): RawRow | null {
+  return rows.find((row) => row.provider === providerId) ?? null;
 }
 
 /**
  * One required-quota target derived from a binding's applicability metadata.
  *
- * Window-less markers (jointly required pools with no proven raw windows)
- * carry only the normalized pool id: no windowName and no reset facts, so
- * their evidence stays null (unknown coverage) and an absent window/reset
- * value can never reach evidence construction.
+ * Window-less markers (a quota pool with no proven raw windows) carry only
+ * the normalized pool id: no windowName and no reset facts, so their evidence
+ * stays null (unknown coverage) and an absent window/reset value can never
+ * reach evidence construction.
  */
 type RequiredQuotaTarget =
   | {
@@ -339,7 +350,7 @@ type RequiredQuotaTarget =
     }
   | {
       /** Mandatory monetary balance resource; evidence is located by the raw
-       *  Forge balances array on the same binding row. */
+       *  Forge balances array on the same provider row. */
       readonly id: string;
       readonly balanceId: string;
       readonly windowName?: undefined;
@@ -347,80 +358,56 @@ type RequiredQuotaTarget =
     };
 
 interface BindingQuotaShape {
-  readonly quotaPoolId?: string;
-  readonly quotaPoolIds?: string[];
+  readonly quotaPoolIds: string[];
   readonly targets: readonly RequiredQuotaTarget[];
 }
 
 /**
  * Expands a ProviderQuotaBinding into its required constraint targets.
  *
- * A legacy single-pool binding contributes one target per declared raw window.
- * A multi-pool binding contributes every jointly required pool: each pool that
- * carries proven raw windows contributes one target per window located by
- * exact name; a pool with no proven raw windows contributes exactly one
- * constraint keyed by the normalized pool id whose evidence stays null so the
- * pool coverage remains incomplete/unknown.
+ * Every binding has exactly one shape: an ordered non-empty `pools` array.
+ * Each pool contributes at least one required constraint keyed by its unique
+ * `quotaPoolId`:
  *
- * A binding may additionally declare mandatory monetary balance resources
- * (`requiredBalances`): each contributes one discriminated balance constraint
- * sourced from the same raw row's Forge `balances` array. No second balance
- * table is introduced.
+ *  - a `balance` pool contributes one discriminated balance constraint, with
+ *    evidence sourced from the same raw row's Forge `balances` array;
+ *  - a `quota` pool contributes one target, unless its window is explicitly
+ *    not applicable in a fresh authoritative provider response;
+ *  - a `quota` pool with no proven raw windows always contributes exactly one
+ *    constraint keyed by `quotaPoolId`, so coverage stays incomplete/unknown.
+ *
+ * A pool is skipped ONLY when the binding's provider row is fresh/ok and
+ * explicitly lists the pool's actual window in `not_applicable_windows`. Any
+ * malformed, stale, missing or unknown row always contributes a null
+ * constraint (never an absent one).
  */
 function quotaShapeOf(binding: {
   readonly providerId: string;
-  readonly quotaProviderId: string;
-  readonly quotaPoolId?: string;
-  readonly windows?: readonly { readonly windowId: string; readonly resetKind: unknown }[];
-  readonly pools?: readonly {
+  readonly pools: readonly {
     readonly quotaPoolId: string;
+    readonly kind: string;
     readonly windows: readonly { readonly windowId: string; readonly resetKind: unknown }[];
+    readonly balanceId?: string;
   }[];
-  readonly requiredBalances?: readonly { readonly balanceId: string }[];
-}, row?: RawRow | null): BindingQuotaShape {
-  const balanceTargets: RequiredQuotaTarget[] = (binding.requiredBalances ?? []).map(
-    (balance) => ({ id: balance.balanceId, balanceId: balance.balanceId }),
-  );
-  const pools = binding.pools ?? [];
-  if (pools.length > 0) {
-    const quotaPoolIds: string[] = [];
-    const targets: RequiredQuotaTarget[] = [];
-    for (const pool of pools) {
-      quotaPoolIds.push(pool.quotaPoolId);
-      if (pool.windows.length === 0) {
-        // No raw provider window evidence has been reviewed for this pool yet:
-        // one required null constraint keyed by the normalized pool id keeps
-        // coverage incomplete/unknown. Nothing here invents raw rows or windows.
-        targets.push({ id: pool.quotaPoolId });
-        continue;
-      }
-      for (const window of pool.windows) {
-        targets.push({ id: window.windowId, windowName: window.windowId, resetKind: window.resetKind });
-      }
+}, row: RawRow | null, nowMs: number): BindingQuotaShape {
+  const quotaPoolIds: string[] = [];
+  const targets: RequiredQuotaTarget[] = [];
+  for (const pool of binding.pools) {
+    const window = pool.windows[0];
+    // Every pool represents one resource, so every applicable pool contributes once.
+    if (window && row && rowUsable(row, nowMs)
+      && row.notApplicableWindows.includes(window.windowId)
+      && !row.windows.some((item) => item.name === window.windowId)) continue;
+    quotaPoolIds.push(pool.quotaPoolId);
+    if (pool.kind === 'balance') {
+      targets.push({ id: pool.quotaPoolId, balanceId: pool.quotaPoolId });
+    } else if (window) {
+      targets.push({ id: pool.quotaPoolId, windowName: window.windowId, resetKind: window.resetKind });
+    } else {
+      targets.push({ id: pool.quotaPoolId });
     }
-    return { quotaPoolIds, targets: [...targets, ...balanceTargets] };
   }
-  const targets: RequiredQuotaTarget[] = (binding.windows ?? []).map((window) => ({
-    id: window.windowId,
-    windowName: window.windowId,
-    resetKind: window.resetKind,
-  }));
-  // Current Codex accounts may legitimately expose only the required weekly
-  // window. A primary 5h window is conditional: absent means not applicable,
-  // while a present row must participate (including as null/unknown when its
-  // evidence is invalid or stale). Codex Spark has its own explicit 5h+7d
-  // binding and never enters this special case.
-  if (
-    binding.providerId === 'codex'
-    && binding.quotaProviderId === 'codex'
-    && row?.windows.some((window) => window.name === '5h')
-  ) {
-    targets.unshift({ id: '5h', windowName: '5h', resetKind: 'full_cycle' });
-  }
-  return {
-    quotaPoolId: binding.quotaPoolId,
-    targets: [...targets, ...balanceTargets],
-  };
+  return { quotaPoolIds, targets };
 }
 
 /** Builds the immutable entry fields for a binding from its required quota. */
@@ -429,10 +416,12 @@ function entryFields(
   shape: BindingQuotaShape,
   requiredQuota: RequiredQuotaConstraint[],
 ): AutoRoutingQuotaSnapshotEntry {
-  const base = { providerId: binding.providerId, modelId: binding.modelId, requiredQuota };
-  return shape.quotaPoolIds !== undefined
-    ? { ...base, quotaPoolIds: shape.quotaPoolIds }
-    : { ...base, quotaPoolId: shape.quotaPoolId as string };
+  return {
+    providerId: binding.providerId,
+    modelId: binding.modelId,
+    quotaPoolIds: shape.quotaPoolIds,
+    requiredQuota,
+  };
 }
 
 function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): QuotaEvidence | null {
@@ -500,7 +489,7 @@ function balanceEvidence(row: RawRow): BalanceEvidence | null {
  * `1mo` window is inert and never blocks.
  */
 function codebuddyExhaustionReset(row: RawRow): number | null {
-  if (row.pool !== 'codebuddy') return null;
+  if (row.provider !== 'codebuddy') return null;
   if (row.status !== 'ok') return null;
   if (row.stale !== false) return null;
   const observed = row.windows.find((window) => window.name === 'observed');
@@ -511,10 +500,11 @@ function codebuddyExhaustionReset(row: RawRow): number | null {
 
 function buildUnknownSnapshot(nowMs: number, rows: readonly RawRow[] = []): AutoRoutingQuotaSnapshot {
   const entries: AutoRoutingQuotaSnapshotEntry[] = PROVIDER_QUOTA_BINDINGS.map((binding) => {
-    // Preserve the conditional presence of a raw Codex 5h window even when
-    // the row itself is stale/non-ok: present-but-unusable stays an explicit
-    // null constraint rather than disappearing into a falsely complete 7d row.
-    const shape = quotaShapeOf(binding, findRow(rows, binding.quotaProviderId));
+    // Preserve the explicit presence of a provider-declared not-applicable
+    // window even when the row itself is stale/non-ok: present-but-unusable
+    // stays an explicit null constraint rather than disappearing into a
+    // falsely complete row.
+    const shape = quotaShapeOf(binding, findRow(rows, binding.providerId), nowMs);
     const requiredQuota = shape.targets.map((target) =>
       target.balanceId !== undefined
         ? { id: target.id, evidence: null, kind: 'balance' as const, balance: null }
@@ -548,10 +538,10 @@ function buildSnapshot(
   let hasFreshBindingEvidence = false;
 
   for (const binding of PROVIDER_QUOTA_BINDINGS) {
-    // Row lookup is by binding.quotaProviderId (the raw pool name). The
-    // normalized pool ids are retained in output only.
-    const row = findRow(rows, binding.quotaProviderId);
-    const shape = quotaShapeOf(binding, row);
+    // Row lookup is by row.provider === binding.providerId (the owner
+    // provider). Normalized pool ids are retained in output only.
+    const row = findRow(rows, binding.providerId);
+    const shape = quotaShapeOf(binding, row, nowMs);
     const usable = row !== null && rowUsable(row, nowMs);
     if (usable) {
       hasFreshBindingEvidence = true;

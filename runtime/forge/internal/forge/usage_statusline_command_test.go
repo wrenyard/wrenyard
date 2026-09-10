@@ -22,8 +22,7 @@ func TestQuotaProviderForCanonicalNames(t *testing.T) {
 		provider string
 		wantName string
 	}{
-		{name: "codex", provider: "codex", wantName: "codex"},
-		{name: "codex-spark", provider: "codex-spark", wantName: "codex-spark"},
+		{name: "chatgpt", provider: "chatgpt", wantName: "chatgpt"},
 		{name: "kimi-coding", provider: "kimi-coding", wantName: "kimi-coding"},
 		{name: "cursor", provider: "cursor", wantName: "cursor"},
 	}
@@ -50,8 +49,8 @@ func TestProfileQuotaProviderCanonicalNames(t *testing.T) {
 		{name: "anthropic", profile: profile{Client: "claude", Provider: "anthropic"}, want: ""},
 		{name: "explicit anthropic", profile: profile{Statusline: &statuslineConfig{QuotaProvider: "anthropic"}}, want: ""},
 		{name: "kimi-coding", profile: profile{Client: "claude", Provider: "kimi-coding"}, want: "kimi-coding"},
-		{name: "codex profile", profile: profile{Name: "codex-spark", Client: "codex", Provider: "codex"}, want: "codex"},
-		{name: "codex-spark provider", profile: profile{Client: "codex", Provider: "codex-spark"}, want: "codex-spark"},
+		{name: "codex profile", profile: profile{Name: "codex-spark", Client: "codex", Provider: "chatgpt"}, want: "chatgpt"},
+		{name: "chatgpt provider", profile: profile{Client: "codex", Provider: "chatgpt"}, want: "chatgpt"},
 		{name: "zhipu canonical", profile: profile{Client: "claude", Provider: "zhipu-coding"}, want: "zhipu-coding"},
 		{name: "deepseek", profile: profile{Client: "claude", Provider: "deepseek"}, want: ""},
 		{name: "cursor explicit", profile: profile{Statusline: &statuslineConfig{QuotaProvider: "cursor"}}, want: "cursor"},
@@ -113,14 +112,14 @@ func TestOpenCodeQuotaProviderName(t *testing.T) {
 			want:  "",
 		},
 		{
-			name:  "codex spark provider",
-			input: sl.Input{Model: sl.Model{Provider: "codex-spark", ID: "codex-spark/gpt-5.3-codex-spark"}},
-			want:  "codex-spark",
+			name:  "chatgpt spark model provider",
+			input: sl.Input{Model: sl.Model{Provider: "chatgpt", ID: "chatgpt/gpt-5.3-codex-spark"}},
+			want:  "chatgpt",
 		},
 		{
 			name:  "top-level provider id",
-			input: sl.Input{ProviderID: "codex", Model: sl.Model{ID: "openai/gpt-5"}},
-			want:  "codex",
+			input: sl.Input{ProviderID: "chatgpt", Model: sl.Model{ID: "openai/gpt-5"}},
+			want:  "chatgpt",
 		},
 		{
 			name:  "adapted kimi provider id",

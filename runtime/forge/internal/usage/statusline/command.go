@@ -309,23 +309,21 @@ func QuotaProviderFor(deps CommandDeps, name string, allowCLI bool, interactive 
 			AllowSnapshot:         deps.CodexBarEnabled(),
 			SnapshotStaleDuration: staleDur,
 		}
-	case "codex":
-		inner = quota.CodexProvider{
-			ProviderName: name,
-		}
+	case "chatgpt":
+		inner = quota.ChatGPTProvider{}
 	case "cursor":
 		inner = quota.CursorProvider{}
 	default:
 		return nil
 	}
 
-	// Codex, codex-spark, and cursor use fail-closed cache: never return
+	// chatgpt and cursor use fail-closed cache: never return
 	// expired stale data.
-	failClosed := name == "codex" || name == "codex-spark" || name == "cursor"
+	failClosed := name == "chatgpt" || name == "cursor"
 	// Fail-closed caches are only usable when produced by the authoritative source.
 	var requiredSource string
 	switch name {
-	case "codex", "codex-spark":
+	case "chatgpt":
 		requiredSource = "codex-app-server"
 	case "cursor":
 		requiredSource = "cursor-dashboard"
