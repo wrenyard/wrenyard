@@ -39,15 +39,14 @@ const FREQUENT_PROFILE_EXCLUSIONS = [
 
 /**
  * Frequent / mechanical / fast / explore tasks: strict throughput and a hard
- * cost ceiling, low..high intelligence (so the free HY3 runtime stays eligible),
- * with explicit model + profile exclusions for GLM-5.3, Kimi K3 (k3),
- * GPT-5.6 Sol, and GPT-6 Astra across aliases.
+ * cost ceiling, a low intelligence minimum (so the free HY3 runtime stays
+ * eligible), with explicit model + profile exclusions for GLM-5.3, Kimi K3
+ * (k3), GPT-5.6 Sol, and GPT-6 Astra across aliases.
  */
 export const FREQUENT_DISPATCH_REQUIREMENTS = {
   expectedTps: 80,
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
-  intelligenceMax: 'high' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 6,
   excludeModelIds: [...FREQUENT_MODEL_EXCLUSIONS],
@@ -56,40 +55,37 @@ export const FREQUENT_DISPATCH_REQUIREMENTS = {
 
 /**
  * General tasks: historical general cost / intelligence class with explicit
- * bounded values (mid..high intelligence, moderate output cost ceiling).
+ * bounded values (mid intelligence minimum, moderate output cost ceiling).
  */
 export const GENERAL_DISPATCH_REQUIREMENTS = {
   expectedTps: 40,
   minimumTps: 20,
   intelligenceMin: 'mid' as IntelligenceTier,
-  intelligenceMax: 'high' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 18,
 } satisfies TaskDispatchRequirements
 
 /**
  * Review / judgment tasks: explicit review workloads that demand high-grade
- * reasoning. high..premium intelligence with a permissive output cost ceiling
+ * reasoning. A high intelligence minimum with a permissive output cost ceiling
  * (maxOutputUsdPerMillion 60) and no unrelated model/profile exclusions.
  */
 export const REVIEW_DISPATCH_REQUIREMENTS = {
   expectedTps: 40,
   minimumTps: 20,
   intelligenceMin: 'high' as IntelligenceTier,
-  intelligenceMax: 'premium' as IntelligenceTier,
   intelligenceExpected: 'high' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
 } satisfies TaskDispatchRequirements
 
 /**
  * Ultra tasks: historical ultra cost / intelligence class with explicit
- * bounded values (high..premium intelligence, permissive output cost ceiling).
+ * bounded values (high intelligence minimum, permissive output cost ceiling).
  */
 export const ULTRA_DISPATCH_REQUIREMENTS = {
   expectedTps: 20,
   minimumTps: 8,
   intelligenceMin: 'high' as IntelligenceTier,
-  intelligenceMax: 'premium' as IntelligenceTier,
   intelligenceExpected: 'premium' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
 } satisfies TaskDispatchRequirements

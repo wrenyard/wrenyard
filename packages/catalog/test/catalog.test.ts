@@ -157,14 +157,21 @@ test('hard max output price excludes over-budget candidates', () => {
   assert.equal(none.reason, 'no-eligible-candidate');
 });
 
-test('intelligence range excludes below-min and above-max tiers', () => {
+test('intelligence minimum excludes below-min tiers but admits any tier at or above it', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'mid', intelligenceMax: 'high' });
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'mid' });
   assert.equal(result.ok, true);
-  assert.notEqual(result.selected.plan.model, 'mpremium');
   assert.notEqual(result.selected.plan.model, 'mlow');
   const intel = result.selected.model.intelligence;
-  assert.ok(intel === 'mid' || intel === 'high');
+  assert.ok(intel === 'mid' || intel === 'high' || intel === 'premium');
+  // A premium candidate above the old high ceiling stays eligible: there is no
+  // configurable maximum intelligence band.
+  const premiumModel = catalog.provider('p')?.models.find(model => model.id === 'mpremium');
+  assert.ok(premiumModel);
+  premiumModel.intelligenceEvidence = { source: 'https://benchmark.test/premium', checkedAt: '2026-09-10', status: 'measured', score: 60 };
+  const premium = resolveConstrainedDispatch(catalog, candidates.filter(candidate => candidate.model === 'mpremium'), { intelligenceMin: 'mid', intelligenceExpected: 'mid' });
+  assert.equal(premium.ok, true);
+  assert.equal(premium.selected.model.intelligence, 'premium');
 });
 
 test('explicit exclusions across all candidates yield no eligible result', () => {
@@ -224,11 +231,11 @@ test('deterministic ordering: same expected-speed group orders lower price befor
   assert.equal(result.selected.plan.model, 'mfast');
 });
 
-test('no eligible candidate returns a structured failure for a genuinely impossible intelligence band', () => {
+test('no eligible candidate returns a structured failure for a genuinely impossible intelligence floor', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  // A premium band fails closed: the only premium fixture lacks measured
-  // evidence, so no candidate satisfies the band.
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'premium', intelligenceMax: 'premium' });
+  // A premium floor fails closed: the only premium fixture lacks measured
+  // evidence, so no candidate satisfies the floor.
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'premium' });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'no-eligible-candidate');
   assert.equal(result.considered, candidates.length);
@@ -255,7 +262,7 @@ test('compatibility normalizer accepts only the four current tiers and rejects f
 
 test('low eligibility does not require measured intelligence evidence', () => {
   const { catalog, candidates } = buildEvidenceCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'low', intelligenceMax: 'low' });
+  const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'low' });
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'low-ok');
 });

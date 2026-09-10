@@ -175,6 +175,7 @@ test('effective requirements render compactly and stay absent when unset', () =>
   assert.match(formatEffectiveRequirements(effectiveRequirements()), /期望 ≥ 20 TPS/);
   assert.match(formatEffectiveRequirements(effectiveRequirements()), /排除 提供方 1 个/);
   assert.equal(formatEffectiveRequirements({}), '无额外自动派发约束');
+  assert.equal(formatEffectiveRequirements({ intelligence_min: 'low', intelligence_expected: 'mid' }), '智能最低 low · 推荐智能 mid');
 });
 
 test('candidate detail reports the backend weighted total verbatim, never a re-derived one', () => {

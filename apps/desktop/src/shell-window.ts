@@ -78,7 +78,6 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
   'intelligence_min',
-  'intelligence_max',
   'intelligence_expected',
   'max_output_usd_per_million',
   'required_capabilities',
@@ -157,7 +156,7 @@ function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false):
     if (allowFieldReset && value === null) continue;
     if (value !== undefined && !isFinitePositiveNumber(value)) throw new Error('自动约束无效');
   }
-  for (const field of ['intelligence_min', 'intelligence_max', 'intelligence_expected'] as const) {
+  for (const field of ['intelligence_min', 'intelligence_expected'] as const) {
     const value = automatic[field];
     if (allowFieldReset && value === null) continue;
     if (value !== undefined && (typeof value !== 'string' || !TASK_SETTINGS_INTELLIGENCE_VALUES.has(value))) {

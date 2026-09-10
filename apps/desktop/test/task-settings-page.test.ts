@@ -34,7 +34,6 @@ function automaticEffective(mode: TaskSettingsMode = 'automatic', reference: Tas
       expected_tps: { value: null, source: 'builtin' as const },
       minimum_tps: { value: null, source: 'builtin' as const },
       intelligence_min: { value: null, source: 'builtin' as const },
-      intelligence_max: { value: null, source: 'builtin' as const },
       max_output_usd_per_million: { value: null, source: 'builtin' as const },
       required_capabilities: { value: null, source: 'builtin' as const },
       exclude_model_ids: { value: null, source: 'builtin' as const },

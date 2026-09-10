@@ -115,7 +115,6 @@ export interface TaskDispatchRequirements {
   expectedTps?: number;
   minimumTps?: number;
   intelligenceMin?: IntelligenceTier;
-  intelligenceMax?: IntelligenceTier;
   intelligenceExpected?: IntelligenceTier;
   maxOutputUsdPerMillion?: number;
   /** Required input support. Missing/unknown model support fails admission. */
@@ -589,12 +588,11 @@ export function resolveConstrainedDispatch(
       if (!capOk) continue;
     }
 
-    // Hard constraint: intelligence band. Fail closed when intelligence is unknown.
-    if (requirements.intelligenceMin || requirements.intelligenceMax) {
+    // Hard constraint: intelligence minimum. Fail closed when intelligence is unknown.
+    if (requirements.intelligenceMin) {
       const intel = modelDef.intelligence;
       if (intel === undefined) continue;
-      if (requirements.intelligenceMin && INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
-      if (requirements.intelligenceMax && INTELLIGENCE_ORDER[intel] > INTELLIGENCE_ORDER[requirements.intelligenceMax]) continue;
+      if (INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
       // High/premium tiers require measured intelligence evidence to be
       // dispatched at that tier. A model claiming high/premium with absent,
       // estimated, or product-provisional evidence fails closed, and this

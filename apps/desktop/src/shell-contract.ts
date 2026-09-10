@@ -457,7 +457,6 @@ export interface TaskSettingsAutomaticDispatch {
   expected_tps?: number;
   minimum_tps?: number;
   intelligence_min?: TaskSettingsIntelligence;
-  intelligence_max?: TaskSettingsIntelligence;
   intelligence_expected?: TaskSettingsIntelligence;
   max_output_usd_per_million?: number;
   required_capabilities?: readonly TaskSettingsCapability[];
@@ -514,7 +513,6 @@ export interface TaskSettingsEffectiveAutomatic {
   expected_tps: TaskSettingsSourcedValue<number | null>;
   minimum_tps: TaskSettingsSourcedValue<number | null>;
   intelligence_min: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
-  intelligence_max: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
   intelligence_expected?: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
   max_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
   required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>;

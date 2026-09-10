@@ -660,7 +660,7 @@ ${extraConfig}  permission: 'readonly',
     minimumTps: 5,
     expectedTps: 10,
     intelligenceMin: 'mid',
-    intelligenceMax: 'premium',
+    intelligenceExpected: 'premium',
     maxOutputUsdPerMillion: 4.5,
     requiredCapabilities: ['text'],
     excludeModelIds: ['m1'],
@@ -676,7 +676,7 @@ ${extraConfig}  permission: 'readonly',
     assertTaskTarget(target)
     assert.equal(target.definition.config.dispatch?.expectedTps, 10)
     assert.equal(target.definition.config.dispatch?.intelligenceMin, 'mid')
-    assert.equal(target.definition.config.dispatch?.intelligenceMax, 'premium')
+    assert.equal(target.definition.config.dispatch?.intelligenceExpected, 'premium')
     assert.equal(target.definition.config.dispatch?.maxOutputUsdPerMillion, 4.5)
     assert.deepEqual([...target.definition.config.dispatch?.excludeModelIds ?? []], ['m1'])
     assert.equal(getLoadErrors(workspace).length, 0)
@@ -688,7 +688,6 @@ ${extraConfig}  permission: 'readonly',
     registerProject(projectDir, 'app')
     writeFileSync(join(projectDir, 'legacy-frontier.task.ts'), taskSource("'legacy-frontier'", `  dispatch: {
     intelligenceMin: 'frontier',
-    intelligenceMax: 'frontier',
   },
 `), 'utf-8')
 
@@ -702,7 +701,23 @@ ${extraConfig}  permission: 'readonly',
     assert.equal(getLoadErrors(workspace).length, 1)
   })
 
-  it('rejects an empty dispatch object with no recognized hard requirement', async () => {
+  it('reports the retired maximum in task scripts as an unsupported setting', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-legacy-max-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'legacy-max.task.ts'), taskSource("'legacy-max'", `  dispatch: {
+    intelligenceMin: 'low',
+    intelligenceMax: 'low',
+  },
+`), 'utf-8')
+    await discoverTasks(workspace)
+    assert.equal(describeTask('legacy-max', workspace, 'app'), null)
+    const errors = getLoadErrors(workspace)
+    assert.equal(errors.length, 1)
+    assert.match(JSON.stringify(errors), /intelligenceMax is no longer supported/)
+  })
+
+  it('rejects an empty dispatch object with no recognized requirement', async () => {
     const workspace = makeTempDir('foreman-v2-loader-dispatch-empty-')
     const projectDir = join(workspace, 'projects', 'app')
     const taskPath = join(projectDir, 'empty-dispatch.task.ts')
@@ -713,7 +728,7 @@ ${extraConfig}  permission: 'readonly',
 
     assert.equal(resolveTaskTarget('empty-dispatch', workspace), null)
     const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('at least one hard requirement')), errors.map((e) => e.load_error).join('; '))
+    assert.ok(errors.some((error) => error.load_error.includes('at least one requirement')), errors.map((e) => e.load_error).join('; '))
   })
 
   it('accepts a search-only dispatch declaration and lists dispatch with requiresWebSearch', async () => {
@@ -756,13 +771,13 @@ ${extraConfig}  permission: 'readonly',
     const projectDir = join(workspace, 'projects', 'app')
     const taskPath = join(projectDir, 'bad-order.task.ts')
     registerProject(projectDir, 'app')
-    writeFileSync(taskPath, taskSource("'bad-order'", '  dispatch: { intelligenceMin: \'high\', intelligenceMax: \'low\' },\n'), 'utf-8')
+    writeFileSync(taskPath, taskSource("'bad-order'", '  dispatch: { intelligenceMin: \'high\', intelligenceExpected: \'low\' },\n'), 'utf-8')
 
     await discoverTasks(workspace)
 
     assert.equal(resolveTaskTarget('bad-order', workspace), null)
     const errors = getLoadErrors(workspace)
-    assert.ok(errors.some((error) => error.load_error.includes('intelligenceMin')), errors.map((e) => e.load_error).join('; '))
+    assert.ok(errors.some((error) => error.load_error.includes('intelligenceExpected')), errors.map((e) => e.load_error).join('; '))
   })
 
   it('rejects invalid exclusion entries', async () => {

@@ -113,8 +113,7 @@ export function formatEffectiveRequirements(requirements: TaskSettingsAutomaticD
   if (requirements.expected_tps !== undefined) parts.push(`期望 ≥ ${formatTps(requirements.expected_tps)}`);
   if (requirements.minimum_tps !== undefined) parts.push(`最低 ≥ ${formatTps(requirements.minimum_tps)}`);
   if (requirements.intelligence_min !== undefined) parts.push(`智能最低 ${requirements.intelligence_min}`);
-  if (requirements.intelligence_max !== undefined) parts.push(`智能最高 ${requirements.intelligence_max}`);
-  if (requirements.intelligence_expected !== undefined) parts.push(`智能期望 ${requirements.intelligence_expected}`);
+  if (requirements.intelligence_expected !== undefined) parts.push(`推荐智能 ${requirements.intelligence_expected}`);
   if (requirements.max_output_usd_per_million !== undefined) {
     parts.push(`参考单价上限 ${formatUsd(requirements.max_output_usd_per_million)}/M`);
   }

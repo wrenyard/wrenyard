@@ -373,15 +373,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (missing) return atGate('no_available_provider')
     }
 
-    if (requirements.intelligenceMin || requirements.intelligenceMax) {
+    if (requirements.intelligenceMin) {
       const intelligence = modelDef.intelligence
       if (intelligence === undefined) return atGate('intelligence_requirement')
       const intelligenceMin = requirements.intelligenceMin
-      const intelligenceMax = requirements.intelligenceMax
-      if (intelligenceMin !== undefined && INTELLIGENCE_ORDER[intelligence] < INTELLIGENCE_ORDER[intelligenceMin]) {
-        return atGate('intelligence_requirement')
-      }
-      if (intelligenceMax !== undefined && INTELLIGENCE_ORDER[intelligence] > INTELLIGENCE_ORDER[intelligenceMax]) {
+      if (INTELLIGENCE_ORDER[intelligence] < INTELLIGENCE_ORDER[intelligenceMin]) {
         return atGate('intelligence_requirement')
       }
     }

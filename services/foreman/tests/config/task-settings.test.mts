@@ -154,21 +154,19 @@ describe('resolveEffectiveTaskSettings precedence', () => {
     const result = resolveEffectiveTaskSettings({
       system: { dispatch: { expectedTps: 5 } },
       userGlobal: { dispatch: { expectedTps: 20, intelligenceMin: 'mid' } },
-      userTask: { dispatch: { intelligenceMax: 'premium' } },
+      userTask: { dispatch: { intelligenceExpected: 'premium' } },
       invocation: { dispatch: { excludeModelIds: ['model-a'] } },
     })
     assert.deepEqual(result.dispatch, {
       expectedTps: 20,
       intelligenceMin: 'mid',
-      intelligenceMax: 'premium',
+      intelligenceExpected: 'premium',
       excludeModelIds: ['model-a'],
-      intelligenceExpected: 'mid',
     })
     assert.equal(result.sources.dispatch?.expectedTps, 'user_global')
     assert.equal(result.sources.dispatch?.intelligenceMin, 'user_global')
-    assert.equal(result.sources.dispatch?.intelligenceMax, 'user_task')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'user_task')
     assert.equal(result.sources.dispatch?.excludeModelIds, 'invocation')
-    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
   })
 
   it('does not mutate any input layer when invocation wins', () => {
@@ -430,21 +428,14 @@ describe('normalizeTaskSettingsLayer validation', () => {
     assert.throws(() => normalizeTaskSettingsLayer({ timeoutMs: 1.5 }), TaskSettingsValidationError)
   })
 
-  it('throws on inverted intelligence ordering within a layer', () => {
-    assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'premium', intelligenceMax: 'mid' } }),
-      /intelligenceMin/,
-    )
-  })
-
   it('throws on inverted effective intelligence ordering across layers', () => {
     assert.throws(
       () =>
         resolveEffectiveTaskSettings({
           userGlobal: { dispatch: { intelligenceMin: 'premium' } },
-          userTask: { dispatch: { intelligenceMax: 'mid' } },
+          userTask: { dispatch: { intelligenceExpected: 'mid' } },
         }),
-      /intelligenceMin/,
+      /intelligenceExpected cannot be below/,
     )
   })
 
@@ -458,37 +449,46 @@ describe('normalizeTaskSettingsLayer validation', () => {
       /intelligenceMin must be one of/,
     )
     assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMax: 'frontier' } }),
-      /intelligenceMax must be one of/,
-    )
-    assert.throws(
       () => normalizeTaskSettingsLayer({ dispatch: { intelligenceExpected: 'frontier' } }),
       /intelligenceExpected must be one of/,
     )
   })
 
-  it('carries optional intelligenceExpected with per-field inheritance and rejects out-of-range', () => {
+  it('carries optional intelligenceExpected with per-field inheritance and rejects below-minimum', () => {
     // absent stays absent (never defaults to a minimum)
-    const base = normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'low', intelligenceMax: 'high' } })
+    const base = normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'low' } })
     assert.equal((base.dispatch as { intelligenceExpected?: string }).intelligenceExpected, undefined)
 
     // per-field inheritance: invocation wins over user global
     const layered = resolveEffectiveTaskSettings({
-      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceMax: 'high', intelligenceExpected: 'low' } },
+      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceExpected: 'low' } },
       invocation: { dispatch: { intelligenceExpected: 'mid' } },
     })
     assert.equal(layered.dispatch.intelligenceExpected, 'mid')
     assert.equal(layered.sources.dispatch?.intelligenceExpected, 'invocation')
 
-    // out-of-range below min is rejected
+    // below the minimum is rejected
     assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'mid', intelligenceMax: 'high', intelligenceExpected: 'low' } }),
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'low' } }),
       /intelligenceExpected cannot be below dispatch.intelligenceMin/,
     )
-    // out-of-range above max is rejected
-    assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'low', intelligenceMax: 'mid', intelligenceExpected: 'high' } }),
-      /intelligenceExpected cannot exceed dispatch.intelligenceMax/,
+  })
+
+  it('treats a persisted legacy intelligenceMax field as an ignored unknown field', () => {
+    // The retired configurable ceiling must never impose a ceiling: it is
+    // dropped by normalization, and the implicit default stays `mid`.
+    const layer = normalizeTaskSettingsLayer({
+      dispatch: { intelligenceMin: 'low', intelligenceMax: 'low' },
+    })
+    assert.deepEqual(layer.dispatch, { intelligenceMin: 'low' })
+    const effective = resolveEffectiveTaskSettings({
+      userGlobal: layer,
+    })
+    assert.equal(effective.dispatch.intelligenceExpected, 'mid')
+    assert.equal(effective.dispatch.intelligenceMin, 'low')
+    assert.equal(
+      (effective.dispatch as { intelligenceMax?: string }).intelligenceMax,
+      undefined,
     )
   })
 
@@ -823,21 +823,20 @@ describe('resolveEffectiveTaskSettings intelligence expectation default', () => 
     assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
   })
 
-  it('clamps the implicit mid default down to a low maximum', () => {
+  it('ignores a persisted legacy maximum and keeps the implicit mid default', () => {
+    // A legacy persisted `intelligenceMax: 'low'` must not clamp the implicit
+    // default down: it is an unknown field, so the default stays `mid`.
     const result = resolveEffectiveTaskSettings({
-      userGlobal: { dispatch: { intelligenceMax: 'low' } },
-    })
-    assert.equal(result.dispatch.intelligenceExpected, 'low')
-    assert.equal(result.dispatch.intelligenceMax, 'low')
-    assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
-  })
-
-  it('keeps the implicit mid default within an explicit low..high range', () => {
-    const result = resolveEffectiveTaskSettings({
-      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceMax: 'high' } },
+      userGlobal: { dispatch: { intelligenceMax: 'low' } } as unknown as NonNullable<
+        Parameters<typeof resolveEffectiveTaskSettings>[0]['userGlobal']
+      >,
     })
     assert.equal(result.dispatch.intelligenceExpected, 'mid')
     assert.equal(result.sources.dispatch?.intelligenceExpected, 'system_global')
+    assert.equal(
+      (result.dispatch as { intelligenceMax?: string }).intelligenceMax,
+      undefined,
+    )
   })
 
   it('honors an explicit minimum high with an explicit expected premium', () => {
@@ -858,13 +857,12 @@ describe('resolveEffectiveTaskSettings intelligence expectation default', () => 
     )
   })
 
-  it('rejects an explicit expected above an explicit maximum', () => {
-    assert.throws(
-      () => resolveEffectiveTaskSettings({
-        userGlobal: { dispatch: { intelligenceMax: 'mid', intelligenceExpected: 'high' } },
-      }),
-      /intelligenceExpected cannot exceed dispatch.intelligenceMax/,
-    )
+  it('admits an expected premium above the old ceiling with no maximum gate', () => {
+    const result = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceExpected: 'premium' } },
+    })
+    assert.equal(result.dispatch.intelligenceExpected, 'premium')
+    assert.equal(result.sources.dispatch?.intelligenceExpected, 'user_global')
   })
 
   it('re-inherits the system mid default when an explicit expectation is reset', () => {
