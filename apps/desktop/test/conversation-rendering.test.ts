@@ -141,7 +141,7 @@ test('run_task terminal summary exposes truthful model, token, TPS, cost and sel
   assert.equal(map['消耗 TOKEN'], '900（输入 0 / 输出 900）');
   // numeric zero input token is preserved, not hidden as missing
   assert.ok(map['消耗 TOKEN'].includes('输入 0'));
-  assert.equal(map['任务吞吐（Token/s）'], '18.75');
+  assert.equal(map['TPS'], '18.75');
   assert.equal(map['参考费用（估算）'], '$0.0123');
   assert.equal(map['尝试次数'], '1');
   // selection speed is labeled distinctly from the measured TPS, with its source
@@ -165,7 +165,7 @@ test('run_task summary shows 未知 for missing values and exposes partial/unava
   const map = toLineMap(partial);
   assert.equal(map['模型 / 配置'], '模型未知');
   assert.equal(map['消耗 TOKEN'], '220（输入 未知 / 输出 120）');
-  assert.equal(map['任务吞吐（Token/s）'], '未知');
+  assert.equal(map['TPS'], '未知');
   assert.equal(map['参考费用（估算）'], '未知');
   assert.equal(map['成本完整性'], '部分');
 

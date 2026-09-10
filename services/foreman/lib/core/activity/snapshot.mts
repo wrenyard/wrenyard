@@ -5,13 +5,15 @@
 // task-run telemetry. Everything is read inside one better-sqlite3 read-only
 // transaction across tasks / taskgraph_run / taskgraph_node_state /
 // taskgraph_journal (plus task_run_telemetry and executions for display
-// metadata). The events table is never scanned, no per-task or per-graph
-// N+1 status request is issued, and the response is explicitly bounded:
+// metadata, and bounded indexed per-task shared TPS reads through the
+// events/tps helper). No per-task or per-graph N+1 status request is issued,
+// and the response is explicitly bounded:
 // exceeding any limit fails the whole call (fail-closed) instead of
 // returning a truncated partial snapshot.
 
 import { getDb } from '../../db/connection.mts'
 import type { ForemanDatabase } from '../../db/types.mts'
+import { readTaskTps } from '../../events/tps.mts'
 import type {
   GraphStateType,
   NodeRunStateType,
@@ -41,7 +43,6 @@ export const ACTIVITY_LIMITS = {
 const MAX_PROFILE_LENGTH = 128
 const MAX_RUNTIME_LENGTH = 128
 const MAX_SUMMARY_LENGTH = 280
-const MAX_TPS = 1_000_000
 
 export class ActivitySnapshotError extends Error {
   readonly code: string
@@ -157,10 +158,6 @@ interface NodeRow {
   task_created_at: string | null
   task_ended_at: string | null
   tool_call_count: number | null
-  usage_event_count: number | null
-  output_tokens: number | null
-  agent_turn_ms: number | null
-  tps_complete: number | null
   task_summary: string | null
   requested_agent_runtime: string | null
   resolved_profile: string | null
@@ -219,6 +216,7 @@ export function buildActivitySnapshot(params: ActivitySnapshotParams = {}): Acti
 
     const taskgraphs: ActivitySnapshotGraph[] = []
     const taskAssociation = new Map<string, { taskgraph_id: string; node_id: string }>()
+    const tpsCache = new Map<string, number | undefined>()
     if (graphRows.length > 0) {
       const graphIds = graphRows.map((row) => row.id)
       const nodeRows = readNodeRows(db, graphIds)
@@ -244,7 +242,7 @@ export function buildActivitySnapshot(params: ActivitySnapshotParams = {}): Acti
 
       for (const row of graphRows) {
         taskgraphs.push(
-          graphFromRow(row, nodesByGraph.get(row.id) ?? [], latestSeqByGraph.get(row.id) ?? 0, sampledAt),
+          graphFromRow(row, nodesByGraph.get(row.id) ?? [], latestSeqByGraph.get(row.id) ?? 0, sampledAt, db, tpsCache),
         )
       }
     }
@@ -301,8 +299,7 @@ function readNodeRows(db: ForemanDatabase, graphIds: readonly string[]): NodeRow
        n.taskgraph_id, n.node_id, n.state, n.task_run_id, n.slip_json,
        t.status AS task_status,
        t.created_at AS task_created_at, t.ended_at AS task_ended_at,
-       tel.tool_call_count, tel.usage_event_count, tel.output_tokens,
-       tel.agent_turn_ms, tel.tps_complete,
+       tel.tool_call_count,
        t.summary AS task_summary,
        e.requested_agent_runtime, e.resolved_profile
      FROM taskgraph_node_state n
@@ -355,6 +352,8 @@ function graphFromRow(
   nodeRows: NodeRow[],
   latestSeq: number,
   sampledAt: string,
+  db: ForemanDatabase,
+  tpsCache: Map<string, number | undefined>,
 ): ActivitySnapshotGraph {
   if (nodeRows.length > ACTIVITY_LIMITS.maxNodesPerGraph) {
     throw limitError(
@@ -377,7 +376,7 @@ function graphFromRow(
     nodeCounts[nodeRow.state] += 1
     if (nodeRow.state === 'running') running.push(nodeRow.node_id)
     if (nodeRow.state === 'waiting') waiting.push(nodeRow.node_id)
-    nodes.push(nodeFromRow(nodeRow, sampledAt))
+    nodes.push(nodeFromRow(nodeRow, sampledAt, db, tpsCache))
   }
   const graph: ActivitySnapshotGraph = {
     taskgraph_id: row.id,
@@ -405,7 +404,12 @@ function terminalReasonFor(row: GraphRow): ActivityTerminalReason | undefined {
   return undefined
 }
 
-function nodeFromRow(row: NodeRow, sampledAt: string): ActivitySnapshotNode {
+function nodeFromRow(
+  row: NodeRow,
+  sampledAt: string,
+  db: ForemanDatabase,
+  tpsCache: Map<string, number | undefined>,
+): ActivitySnapshotNode {
   const node: ActivitySnapshotNode = {
     node_id: row.node_id,
     state: row.state,
@@ -440,7 +444,7 @@ function nodeFromRow(row: NodeRow, sampledAt: string): ActivitySnapshotNode {
     const profile = boundString(row.resolved_profile, MAX_PROFILE_LENGTH)
     if (profile) node.resolved_profile = profile
     if (row.tool_call_count !== null) node.tool_call_count = row.tool_call_count
-    const tps = effectiveTps(row)
+    const tps = cachedTaskTps(row.task_run_id, db, tpsCache)
     if (tps !== undefined) node.tps = tps
     if (row.state === 'done' && row.task_summary && row.task_summary.trim()) {
       node.summary = foldSummary(row.task_summary)
@@ -499,18 +503,22 @@ function boundString(value: string | null | undefined, max: number): string | un
 }
 
 /**
- * End-to-end effective output TPS = 1000 * output_tokens / agent_turn_ms.
- * Omitted unless the run's telemetry is complete, at least one usage event
- * was recorded, agent-turn wall time is positive, and the rate is finite
- * within 0..1_000_000. Mirrors the taskgraph.slip projection semantics.
+ * Task TPS resolved through the shared calculation used by task metadata
+ * (`../../events/tps.mts`): complete successful execution intervals
+ * (executions.started_at/ended_at) over additive usage. Read inside the
+ * existing transaction and memoized once per distinct task id so a node
+ * repeated across graphs never re-queries. Nodes without a task run id are
+ * never queried.
  */
-function effectiveTps(row: NodeRow): number | undefined {
-  if (row.tps_complete !== 1) return undefined
-  if (row.usage_event_count === null || row.usage_event_count <= 0) return undefined
-  if (row.agent_turn_ms === null || row.agent_turn_ms <= 0) return undefined
-  if (row.output_tokens === null) return undefined
-  const tps = (1000 * row.output_tokens) / row.agent_turn_ms
-  if (!Number.isFinite(tps) || tps < 0 || tps > MAX_TPS) return undefined
+function cachedTaskTps(
+  taskRunId: string,
+  db: ForemanDatabase,
+  cache: Map<string, number | undefined>,
+): number | undefined {
+  const cached = cache.get(taskRunId)
+  if (cached !== undefined || cache.has(taskRunId)) return cached
+  const tps = readTaskTps(taskRunId, db)?.tps
+  cache.set(taskRunId, tps)
   return tps
 }
 

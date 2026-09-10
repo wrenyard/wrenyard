@@ -114,27 +114,31 @@ export class ExecutionEventStore {
 
   /**
    * Atomically create the bounded per-task-run telemetry row at its zero
-   * counters / tps_complete=true defaults. `INSERT OR IGNORE` makes
-   * initialization idempotent across lifecycle events and event streaming.
+   * counters. `INSERT OR IGNORE` makes initialization idempotent across
+   * lifecycle events and event streaming.
    */
   private ensureTelemetryRow(taskRunId: string, timestamp: string): void {
     this.db.prepare(
       `INSERT OR IGNORE INTO task_run_telemetry (
         task_run_id, tool_call_count, usage_event_count, output_tokens,
-        agent_turn_ms, tps_complete, created_at, updated_at
-      ) VALUES (?, 0, 0, 0, 0, 1, ?, ?)`,
+        created_at, updated_at
+      ) VALUES (?, 0, 0, 0, ?, ?)`,
     ).run(taskRunId, timestamp, timestamp)
   }
 
   /**
-   * Increment durable counters only for events that were genuinely inserted.
-   * tool_call events count once each; tool_result events never count. A valid
-   * agent-turn usage event (exact token_scope=agent_turn,
-   * duration_scope=agent_turn, tps_contract=agent_turn_v1) sums output_tokens
-   * and duration_ms into output_tokens/agent_turn_ms and bumps
+   * Increment durable token/event/tool counters only for events that were
+   * genuinely inserted. tool_call events count once each; tool_result events
+   * never count. A turn_usage event that carries the exact versioned
+   * provenance contract (token_scope=agent_turn, duration_scope=agent_turn,
+   * tps_contract=agent_turn_v1) sums its token partitions and bumps
    * usage_event_count; any persisted usage that is missing, invalid, or not
-   * the exact versioned contract permanently clears tps_complete so the run
-   * can never report a fabricated TPS.
+   * the exact versioned contract marks the run's completeness 'partial' so the
+   * additive token accounting is never presented as complete.
+   *
+   * Native duration fields never gate token accounting: TPS is derived from
+   * executions.started_at/ended_at via the shared events/tps.mts helper, so
+   * this store does not calculate or materialize speed.
    */
   private applyTelemetry(write: ExecutionEventWrite): void {
     const taskRunId = write.taskId
@@ -149,7 +153,7 @@ export class ExecutionEventStore {
       return
     }
     if (write.type !== 'turn_usage') return
-    const usage = parseAgentTurnUsage(write.data)
+    const usage = parseAdditiveUsage(write.data)
     if (usage) {
       // total_tokens is the additive input (uncached) + cached (full cached
       // partition, counted exactly once) + output sum, so cached_read/
@@ -164,7 +168,6 @@ export class ExecutionEventStore {
              cache_creation_input_tokens = cache_creation_input_tokens + ?,
              output_tokens = output_tokens + ?,
              total_tokens = total_tokens + ?,
-             agent_turn_ms = agent_turn_ms + ?,
              updated_at = ?
          WHERE task_run_id = ?`,
       ).run(
@@ -174,7 +177,6 @@ export class ExecutionEventStore {
         usage.cacheCreationInputTokens,
         usage.outputTokens,
         totalIncrement,
-        usage.durationMs,
         write.timestamp,
         taskRunId,
       )
@@ -182,30 +184,29 @@ export class ExecutionEventStore {
     }
     this.db.prepare(
       `UPDATE task_run_telemetry
-       SET tps_complete = 0, completeness = 'partial', updated_at = ?
+       SET completeness = 'partial', updated_at = ?
        WHERE task_run_id = ?`,
     ).run(write.timestamp, taskRunId)
   }
 }
 
-interface AgentTurnUsage {
+interface AdditiveUsage {
   inputTokens: number
   cachedInputTokens: number
   cacheReadInputTokens: number
   cacheCreationInputTokens: number
   outputTokens: number
-  durationMs: number
 }
 
 /**
- * A persisted turn_usage event qualifies as complete agent-turn usage only
- * when it carries the exact three-field versioned contract — token_scope
- * exactly 'agent_turn', duration_scope exactly 'agent_turn', and
- * tps_contract exactly 'agent_turn_v1' — with output_tokens an integer >= 0
- * and a finite, positive duration_ms. Absent/invalid output or duration as
- * well as any unversioned or wrong-scope/contract value (for example
- * 'model_output' or a missing tps_contract) disqualify the event, which
- * permanently disables TPS for the task run.
+ * A persisted turn_usage event qualifies as complete additive usage only when
+ * it carries the exact three-field versioned provenance contract — token_scope
+ * exactly 'agent_turn', duration_scope exactly 'agent_turn', and tps_contract
+ * exactly 'agent_turn_v1' — with output_tokens an integer >= 0. Absent/invalid
+ * output as well as any unversioned or wrong-scope/contract value (for example
+ * 'model_output' or a missing tps_contract) disqualify the event, which marks
+ * the task run's completeness 'partial'. Native duration is irrelevant to
+ * token accounting.
  *
  * Token partitions are carried on the same trusted event: input_tokens is the
  * uncached input partition, cached_input_tokens is the full cached partition
@@ -216,17 +217,15 @@ interface AgentTurnUsage {
  * split rather than coerced to semantic zero, so a missing partition is never
  * silently collapsed into a fabricated count.
  */
-function parseAgentTurnUsage(data: unknown): AgentTurnUsage | undefined {
+function parseAdditiveUsage(data: unknown): AdditiveUsage | undefined {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined
   const record = data as Record<string, unknown>
   const outputTokens = record.output_tokens
-  const durationMs = record.duration_ms
   const validOutputTokens = typeof outputTokens === 'number' && Number.isInteger(outputTokens) && outputTokens >= 0
-  const validDurationMs = typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
   const validContract = record.token_scope === 'agent_turn'
     && record.duration_scope === 'agent_turn'
     && record.tps_contract === 'agent_turn_v1'
-  if (!validOutputTokens || !validDurationMs || !validContract) return undefined
+  if (!validOutputTokens || !validContract) return undefined
   const fullCached = nonNegativeInt(record.cached_input_tokens)
   const cacheRead = nonNegativeInt(record.cache_read_input_tokens)
   const cacheCreation = nonNegativeInt(record.cache_creation_input_tokens)
@@ -239,7 +238,6 @@ function parseAgentTurnUsage(data: unknown): AgentTurnUsage | undefined {
     cacheReadInputTokens: cacheRead,
     cacheCreationInputTokens: cacheCreation,
     outputTokens,
-    durationMs,
   }
 }
 

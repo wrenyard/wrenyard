@@ -602,13 +602,15 @@ const AGENT_MEMORY_TABLE_SQL = `CREATE TABLE agent_memory (
 )`
 
 /**
- * Durable bounded per-task-run runtime telemetry, keyed by the task run id
+ * Durable bounded per-task-run token telemetry, keyed by the task run id
  * (a row in `tasks`). Every new task run is initialized atomically to zero
- * counters and tps_complete=1; the counters are only ever incremented by the
- * execution event store for genuinely inserted tool_call / turn_usage events.
- * Legacy task runs that predate this table simply have no row and degrade by
- * omitting telemetry. `tps_complete` is one-way: any persisted usage that is
- * missing, invalid, or wrong-scope permanently disables the run's TPS.
+ * counters; the counters are only ever incremented by the execution event
+ * store for genuinely inserted tool_call / turn_usage events. Legacy task runs
+ * that predate this table simply have no row and degrade by omitting
+ * telemetry. `completeness` is one-way: any persisted usage that is missing,
+ * invalid, or wrong-scope marks the run partial. TPS is not materialized here:
+ * it derives from executions.started_at/ended_at via the shared events/tps.mts
+ * helper.
  */
 const TASK_RUN_TELEMETRY_TABLE_SQL = `CREATE TABLE task_run_telemetry (
   task_run_id       TEXT PRIMARY KEY REFERENCES tasks(id),
@@ -620,8 +622,6 @@ const TASK_RUN_TELEMETRY_TABLE_SQL = `CREATE TABLE task_run_telemetry (
   cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_creation_input_tokens >= 0),
   output_tokens     INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0),
   total_tokens      INTEGER NOT NULL DEFAULT 0 CHECK(total_tokens >= 0),
-  agent_turn_ms     INTEGER NOT NULL DEFAULT 0 CHECK(agent_turn_ms >= 0),
-  tps_complete      INTEGER NOT NULL DEFAULT 1 CHECK(tps_complete IN (0,1)),
   completeness      TEXT NOT NULL DEFAULT 'complete' CHECK(completeness IN ('complete','partial','unavailable')),
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
@@ -1063,6 +1063,33 @@ function reconcileTaskRunTelemetryTokenColumns(database: ForemanDatabase): void 
   addColumn('cache_creation_input_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(cache_creation_input_tokens >= 0)')
   addColumn('total_tokens', 'INTEGER NOT NULL DEFAULT 0 CHECK(total_tokens >= 0)')
   addColumn('completeness', "TEXT NOT NULL DEFAULT 'complete' CHECK(completeness IN ('complete','partial','unavailable'))")
+}
+
+/**
+ * Atomic idempotent bootstrap migration retiring the obsolete TPS
+ * materialization columns from task_run_telemetry. Only the two retired
+ * columns (agent_turn_ms, tps_complete) are dropped, and only when present;
+ * all token counts, tasks, events, and other data are preserved. TPS now
+ * derives from execution intervals, so no other table or field is renamed.
+ *
+ * Exported for daemon startup only: bootstrapSchema (ordinary initDb) never
+ * calls it, so a running old daemon's columns are left intact. The daemon
+ * calls it once its own process owns the database, after the previous process
+ * has stopped.
+ */
+export function dropTaskRunTelemetryRetiredColumns(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
+    .all()
+    .map((column) => column.name))
+  database.transaction(() => {
+    if (columns.has('agent_turn_ms')) {
+      database.prepare('ALTER TABLE task_run_telemetry DROP COLUMN agent_turn_ms').run()
+    }
+    if (columns.has('tps_complete')) {
+      database.prepare('ALTER TABLE task_run_telemetry DROP COLUMN tps_complete').run()
+    }
+  })()
 }
 
 /**

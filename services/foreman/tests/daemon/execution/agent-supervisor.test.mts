@@ -607,15 +607,14 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     assert.equal(usageData.output_tokens, 2000)
     assert.equal(usageData.duration_ms, 4000)
 
-    const telemetry = db.prepare<[string], { output_tokens: number; agent_turn_ms: number; usage_event_count: number; tps_complete: number }>(
-      `SELECT output_tokens, agent_turn_ms, usage_event_count, tps_complete
+    const telemetry = db.prepare<[string], { output_tokens: number; usage_event_count: number; completeness: string }>(
+      `SELECT output_tokens, usage_event_count, completeness
       FROM task_run_telemetry WHERE task_run_id = ?`,
     ).get(taskId)
     assert.ok(telemetry, 'expected a durable telemetry row')
     assert.equal(telemetry.output_tokens, 2000)
-    assert.equal(telemetry.agent_turn_ms, 4000)
     assert.equal(telemetry.usage_event_count, 1)
-    assert.equal(telemetry.tps_complete, 1, 'a genuine agent_turn_v1 event must keep TPS enabled')
+    assert.equal(telemetry.completeness, 'complete', 'a genuine agent_turn_v1 event must keep accounting complete')
   })
 
   it('preserves Cursor cache partitions and total_tokens while never upgrading trust', async () => {
@@ -768,14 +767,14 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     assert.equal(otherScope.duration_scope, 'model_output', 'a wrong duration_scope must be preserved, never upgraded')
     assert.equal(otherScope.tps_contract, 'agent_turn_v0', 'a wrong tps_contract must be preserved, never upgraded')
 
-    const telemetry = db.prepare<[string], { output_tokens: number; agent_turn_ms: number; usage_event_count: number; tps_complete: number }>(
-      `SELECT output_tokens, agent_turn_ms, usage_event_count, tps_complete
+    const telemetry = db.prepare<[string], { output_tokens: number; usage_event_count: number; completeness: string }>(
+      `SELECT output_tokens, usage_event_count, completeness
       FROM task_run_telemetry WHERE task_run_id = ?`,
     ).get(taskId)
     assert.ok(telemetry, 'expected a durable telemetry row')
     assert.equal(telemetry.usage_event_count, 0, 'no persisted event may count as agent-turn usage')
     assert.equal(telemetry.output_tokens, 0)
-    assert.equal(telemetry.tps_complete, 0, 'missing/other-scope usage must disable TPS for the run')
+    assert.equal(telemetry.completeness, 'partial', 'missing/other-scope usage must mark the run partial')
   })
 
   it('maps normalized Forge stream-json tool_call and tool_result envelope events', async () => {

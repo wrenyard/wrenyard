@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 
 import type { ForemanDatabase } from '../../db/types.mts'
+import { readTaskTps } from '../../events/tps.mts'
 import type {
   EventRefs,
   EventSource,
@@ -63,10 +64,7 @@ export interface TaskGraphProjection {
 export interface TaskGraphSlipTelemetry {
   taskRunId: string | null
   toolCallCount: number | null
-  usageEventCount: number | null
-  outputTokens: number | null
-  agentTurnMs: number | null
-  tpsComplete: number | null
+  tps?: number
   taskSummary: string | null
   resolvedProfile: string | null
 }
@@ -158,10 +156,6 @@ interface SlipTelemetryRow {
   node_id: string
   task_run_id: string | null
   tool_call_count: number | null
-  usage_event_count: number | null
-  output_tokens: number | null
-  agent_turn_ms: number | null
-  tps_complete: number | null
   task_summary: string | null
   resolved_profile: string | null
 }
@@ -382,7 +376,8 @@ export class TaskGraphStore {
    * action types are extracted from the graph JSON with JSON1
    * `json_each`/`json_extract` so only `action.type` is read, not
    * `action.params`. Telemetry is one batched join (never N+1) bounded to the
-   * requested nodes.
+   * requested nodes, plus one bounded indexed shared-TPS read per distinct
+   * task id (never per node).
    */
   readSlipProjection(
     taskgraphId: string,
@@ -423,14 +418,21 @@ export class TaskGraphStore {
       ).get(taskgraphId)?.latest_seq ?? 0
 
       const telemetry = new Map<NodeId, TaskGraphSlipTelemetry>()
+      const tpsByTaskRunId = new Map<string, number | undefined>()
       for (const row of this.readSlipTelemetry(taskgraphId, nodeIds)) {
+        let tps: number | undefined
+        if (row.task_run_id !== null) {
+          if (tpsByTaskRunId.has(row.task_run_id)) {
+            tps = tpsByTaskRunId.get(row.task_run_id)
+          } else {
+            tps = readTaskTps(row.task_run_id, this.db)?.tps
+            tpsByTaskRunId.set(row.task_run_id, tps)
+          }
+        }
         telemetry.set(row.node_id, {
           taskRunId: row.task_run_id,
           toolCallCount: row.tool_call_count,
-          usageEventCount: row.usage_event_count,
-          outputTokens: row.output_tokens,
-          agentTurnMs: row.agent_turn_ms,
-          tpsComplete: row.tps_complete,
+          ...(tps !== undefined ? { tps } : {}),
           taskSummary: row.task_summary,
           resolvedProfile: row.resolved_profile,
         })
@@ -452,8 +454,9 @@ export class TaskGraphStore {
    * One bounded batch query for slip dynamic fields, executed inside the
    * atomic slip snapshot. Joins each requested node's current execution
    * (through its task run and that run's execution_id) and its durable
-   * telemetry row. Never N+1 and never scans the events table: only per-run
-   * counters, the task summary, and the resolved profile are read.
+   * telemetry row. Never N+1: only per-node counters, the task summary, and
+   * the resolved profile are read here; shared TPS is a separate bounded
+   * indexed read per distinct task id performed by the caller.
    */
   private readSlipTelemetry(
     taskgraphId: string,
@@ -465,10 +468,6 @@ export class TaskGraphStore {
          n.node_id,
          n.task_run_id,
          tel.tool_call_count,
-         tel.usage_event_count,
-         tel.output_tokens,
-         tel.agent_turn_ms,
-         tel.tps_complete,
          t.summary AS task_summary,
          e.resolved_profile AS resolved_profile
        FROM taskgraph_node_state n

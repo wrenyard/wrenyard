@@ -1184,7 +1184,7 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
     return;
   }
   list.replaceChildren(
-    tableHeader(['模型', '运行', 'Token', '任务吞吐（Token/s）']),
+    tableHeader(['模型', '运行', 'Token', 'TPS']),
     ...rows.slice(0, 12).map((row) => {
       // The main cell shows only the unified short model display name from the
       // server; when it is absent we render a safe dash, never a raw id.

@@ -176,6 +176,46 @@ describe('activity.snapshot', () => {
     assert.equal(node('no_task').runtime_ms, undefined)
   })
 
+  it('derives node TPS from the shared complete-execution calculation and ignores the misleading native duration', async () => {
+    const db = getDb()
+    // Wall interval 1000ms, output 500 -> 500 TPS. The native duration_ms of
+    // 99999 would give ~5 TPS under the legacy formula; it must not be used.
+    insertTask(db, { id: 'task_tps_ok', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'running' })
+    insertCompletedExecution(db, {
+      id: 'exec_tps_ok',
+      taskRunId: 'task_tps_ok',
+      startedMs: Date.parse('2026-08-05T00:00:00.000Z'),
+      endedMs: Date.parse('2026-08-05T00:00:01.000Z'),
+      outputTokens: 500,
+      nativeDurationMs: 99_999,
+    })
+
+    // A done task whose only attempt is missing started/ended cannot produce a
+    // sample, so the shared TPS is omitted.
+    insertTask(db, { id: 'task_tps_incomplete', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'done' })
+    db.prepare(
+      `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
+       VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', 'done', ?, ?)`,
+    ).run('exec_tps_incomplete', 'task_tps_incomplete', NOW, NOW)
+    db.prepare('UPDATE tasks SET execution_id = ? WHERE id = ?').run('exec_tps_incomplete', 'task_tps_incomplete')
+
+    // A task with no execution at all also omits TPS.
+    insertTask(db, { id: 'task_tps_none', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'running' })
+
+    insertGraph(db, { id: 'tg_tps', state: 'running', structureRevision: 1 })
+    insertNode(db, { taskgraphId: 'tg_tps', nodeId: 'ok', state: 'running', taskRunId: 'task_tps_ok' })
+    insertNode(db, { taskgraphId: 'tg_tps', nodeId: 'incomplete', state: 'done', taskRunId: 'task_tps_incomplete' })
+    insertNode(db, { taskgraphId: 'tg_tps', nodeId: 'none', state: 'running', taskRunId: 'task_tps_none' })
+
+    const result = await call('activity.snapshot', {}) as ActivitySnapshotV1
+    const graph = result.taskgraphs.find((candidate) => candidate.taskgraph_id === 'tg_tps')!
+    const node = (nodeId: string) => graph.nodes.find((candidate) => candidate.node_id === nodeId)!
+
+    assert.equal(node('ok').tps, 500)
+    assert.equal(node('incomplete').tps, undefined)
+    assert.equal(node('none').tps, undefined)
+  })
+
   it('returns a tracked terminal graph once with a safe terminal_reason and omits untracked terminal graphs', async () => {
     seedTerminalState(getDb())
 
@@ -327,6 +367,65 @@ function insertTask(db: ForemanDatabase, task: {
   }
 }
 
+/**
+ * Seeds one complete successful execution for a task run with an exact
+ * started/ended wall interval plus additive agent-turn usage, so the shared
+ * task-metadata TPS (`readTaskTps`) resolves a rate. The historical native
+ * `duration_ms` carried by the usage event is deliberately misleading and must
+ * never influence the produced TPS.
+ */
+function insertCompletedExecution(db: ForemanDatabase, execution: {
+  id: string
+  taskRunId: string
+  startedMs: number
+  endedMs: number
+  outputTokens: number
+  nativeDurationMs?: number
+  requestedAgentRuntime?: string | null
+  resolvedProfile?: string | null
+}): void {
+  const startedAt = new Date(execution.startedMs).toISOString()
+  const endedAt = new Date(execution.endedMs).toISOString()
+  // The task row must exist before the execution can reference it (FK), so the
+  // caller seeds the task with a null execution_id and this helper links it.
+  db.prepare(
+    `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, started_at, ended_at, requested_agent_runtime, resolved_profile, created_at, updated_at)
+     VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', 'done', ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    execution.id,
+    execution.taskRunId,
+    startedAt,
+    endedAt,
+    execution.requestedAgentRuntime ?? null,
+    execution.resolvedProfile ?? null,
+    startedAt,
+    endedAt,
+  )
+  db.prepare('UPDATE tasks SET execution_id = ? WHERE id = ?').run(execution.id, execution.taskRunId)
+  db.prepare(
+    `INSERT INTO task_run_attempt_dispatch
+       (execution_id, task_run_id, requested_agent_runtime, profile, client, provider, model, model_id, mode, created_at, updated_at)
+     VALUES (?, ?, 'agent', 'p', 'claude', 'anthropic', 'sonnet', 'anthropic/sonnet', 'native', ?, ?)`,
+  ).run(execution.id, execution.taskRunId, startedAt, endedAt)
+  db.prepare(
+    `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
+     VALUES (?, ?, 1, 'turn_usage', ?, ?, ?)`,
+  ).run(
+    execution.id,
+    execution.taskRunId,
+    endedAt,
+    JSON.stringify({
+      token_scope: 'agent_turn',
+      duration_scope: 'agent_turn',
+      tps_contract: 'agent_turn_v1',
+      input_tokens: 10,
+      output_tokens: execution.outputTokens,
+      duration_ms: execution.nativeDurationMs ?? 1,
+    }),
+    endedAt,
+  )
+}
+
 function insertExecution(db: ForemanDatabase, execution: {
   id: string
   prompt: string
@@ -401,21 +500,13 @@ function insertJournal(db: ForemanDatabase, taskgraphId: string, seq: number, ty
 function insertTelemetry(db: ForemanDatabase, telemetry: {
   taskRunId: string
   toolCallCount: number
-  usageEventCount: number
-  outputTokens: number
-  agentTurnMs: number
-  tpsComplete: number
 }): void {
   db.prepare(
-    `INSERT INTO task_run_telemetry (task_run_id, tool_call_count, usage_event_count, output_tokens, agent_turn_ms, tps_complete, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO task_run_telemetry (task_run_id, tool_call_count, usage_event_count, output_tokens, created_at, updated_at)
+     VALUES (?, ?, 0, 0, ?, ?)`,
   ).run(
     telemetry.taskRunId,
     telemetry.toolCallCount,
-    telemetry.usageEventCount,
-    telemetry.outputTokens,
-    telemetry.agentTurnMs,
-    telemetry.tpsComplete,
     NOW,
     NOW,
   )
@@ -427,18 +518,24 @@ function seedActiveState(db: ForemanDatabase): void {
   insertExecution(db, { id: 'exec_direct', prompt: 'direct prompt', requestedAgentRuntime: 'claude', resolvedProfile: 'fast' })
   insertTask(db, { id: 'task_dr', template: 'review', project: 'p2', worktree: 'wt-1', input: '{}', status: 'running', executionId: 'exec_direct' })
 
-  // Taskgraph-owned tasks: one queued, one running with telemetry.
+  // Taskgraph-owned tasks: one queued, one running with a complete successful
+  // execution interval whose misleading native duration differs from the wall
+  // interval: 1000 * 500 / 1000 = 500 TPS from the shared calculation.
   insertTask(db, { id: 'task_tq', template: 'checkout', project: 'p1', worktree: null, input: '{}', status: 'queued' })
-  insertExecution(db, { id: 'exec_tg', prompt: 'tg prompt', requestedAgentRuntime: 'claude', resolvedProfile: 'fast' })
-  insertTask(db, { id: 'task_tr', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'running', executionId: 'exec_tg' })
-  insertTelemetry(db, {
+  insertTask(db, { id: 'task_tr', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'running' })
+  insertCompletedExecution(db, {
+    id: 'exec_tg',
     taskRunId: 'task_tr',
-    toolCallCount: 7,
-    usageEventCount: 5,
+    startedMs: Date.parse('2026-08-05T00:00:00.000Z'),
+    endedMs: Date.parse('2026-08-05T00:00:01.000Z'),
     outputTokens: 500,
-    agentTurnMs: 1000,
-    tpsComplete: 1,
+    nativeDurationMs: 99_999,
+    requestedAgentRuntime: 'claude',
+    resolvedProfile: 'fast',
   })
+  // Tool count still comes from the durable telemetry row; its legacy timing
+  // columns are irrelevant to the shared TPS reading.
+  insertTelemetry(db, { taskRunId: 'task_tr', toolCallCount: 7 })
 
   // created graph with two planned nodes.
   insertGraph(db, { id: 'tg_created', state: 'created', structureRevision: 1, project: 'p1', title: 'Blueprint A' })

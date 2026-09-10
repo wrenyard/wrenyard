@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
 import type { ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -9,6 +9,8 @@ import {
   handleDaemonRestart,
   type DaemonRestartCommandDeps,
 } from '../../lib/client/cli/commands/daemon.mts'
+import { closeDb } from '../../lib/db/connection.mts'
+import { installIsolatedForemanEnv, type IsolatedForemanEnv } from '../helpers/isolated-env.mts'
 import type {
   LaunchPlannedRestartOptions,
 } from '../../lib/client/cli/planned-restart-launcher.mts'
@@ -163,6 +165,19 @@ function assertNoDirectRestart(deps: DaemonRestartCommandDeps): void {
 
 const TASK_ENV = { FOREMAN_TASK_RUN_ID: 'run_unit_1' } as NodeJS.ProcessEnv
 const HUMAN_ENV = {} as NodeJS.ProcessEnv
+
+// Every test isolates FOREMAN_DB_PATH so the mocked stores' initDb() calls hit a
+// throwaway database instead of the developer's real Foreman DB.
+let isolatedEnv: IsolatedForemanEnv
+
+beforeEach(() => {
+  isolatedEnv = installIsolatedForemanEnv('foreman-restart-cmd-db')
+})
+
+afterEach(() => {
+  closeDb()
+  isolatedEnv.restore()
+})
 
 describe('handleDaemonRestart (task context auto no-wait)', () => {
   it('schedules a fresh planned restart and returns scheduled JSON without waiting', async () => {

@@ -22,11 +22,9 @@ const (
 	outputTailMaxBytes   = 2 * 1024
 )
 
-// Trusted agent-turn TPS contract. Every comparable client family emits
-// exactly one turn_usage for one agent turn carrying these three additive
-// fields: token_scope and duration_scope declare the statistical universe
-// (one agent turn), and tps_contract pins the formula that Foreman applies to
-// the current-invocation token counts and the current agent-turn wall duration.
+// Versioned provenance for additive current-invocation usage. These wire tags
+// remain stable across clients. Foreman validates them for output token counts
+// and calculates TPS from its stored execution interval, ignoring duration_ms.
 const (
 	tokenScopeAgentTurn    = "agent_turn"
 	durationScopeAgentTurn = "agent_turn"
