@@ -767,6 +767,14 @@ test('run syntax rejects malformed strings with precise errors', () => {
   }
 });
 
+test('OpenRouter free model variants round-trip without losing the suffix', () => {
+  const input = 'openrouter/poolside/laguna-xs-2.1:free:oc';
+  const parsed = parseRunSyntax(input);
+  assert.deepEqual(parsed, { provider: 'openrouter', model: 'poolside/laguna-xs-2.1:free', client: 'opencode' });
+  assert.equal(formatRunSyntax(parsed), input);
+  assert.throws(() => parseRunSyntax('openrouter/model:free:paid:oc'));
+});
+
 test('unknown and alias-like client names are rejected as syntax', () => {
   assert.throws(() => parseRunSyntax('acme/model:fast'), /unknown client key/);
   assert.throws(() => parseRunSyntax('acme/model:claude'), /unknown client key/);

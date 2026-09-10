@@ -9,19 +9,15 @@ export interface ProviderCredential {
   value: string;
 }
 
-/**
- * Privacy-safe confirmed-free routing supply fact scoped to an already-loaded
- * CodeBuddy credential plus one exact supported model. Carries no domain,
- * token, upstream suffix or model/provider/subscription label: it only records
- * that the credential's current environment classification for that exact
- * model is confirmed free.
- */
+/** Privacy-safe free-supply evidence for an exact model and loaded credential.
+ * CodeBuddy environment rules and verified managed free-model rules are separate.
+ * No credential or account identity is exposed in this fact. */
 export interface RoutingFreeSupplyFact {
   readonly confirmedFree: true
   /** Stable source label for the classification evidence. */
-  readonly source: 'codebuddy.credential_environment'
+  readonly source: string
   /** Stable policy rule id granting the confirmed-free classification. */
-  readonly ruleId: 'codebuddy.verified_hy_model_confirmed_free'
+  readonly ruleId: string
 }
 
 /**
@@ -60,16 +56,8 @@ export interface ProviderRuntime {
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
-  /**
-   * Privacy-safe routing supply fact for an already-loaded provider credential
-   * combined with the exact model being routed. Only a CodeBuddy credential
-   * classified into the recognized free environment together with one of the
-   * exact verified model ids ever returns a confirmed-free fact; other
-   * environments, unknown or missing credentials, unrecognized models and every
-   * other provider return undefined. Never exposes the domain, token, upstream
-   * suffix, or treats model/provider/subscription names as free. Optional so
-   * non-CodeBuddy runtime callers remain backward compatible.
-   */
+  /** Exact-model free-supply classification for an already-loaded credential.
+   * Unknown credentials/models and paid subscriptions never qualify. */
   freeSupply?(provider: ProviderDefinition, model: string, credential: ProviderCredential): RoutingFreeSupplyFact | undefined;
   /**
    * One-shot immutable active-credential snapshot for the CodeBuddy provider.
@@ -146,6 +134,52 @@ function evaluateCodeBuddyFreeSupply(environment: CodeBuddyEnvironment | undefin
     source: 'codebuddy.credential_environment',
     ruleId: 'codebuddy.verified_hy_model_confirmed_free',
   };
+}
+
+/**
+ * Confirmed-free evaluation for forge-managed free-pool providers. Only an
+ * already-loaded, non-empty authenticated managed credential together with one
+ * of the exact declared zero-price model ids ever qualifies; the model must
+ * belong to the provider's registered models and reference all three token
+ * prices exactly zero. opencode-go, anonymous/empty credentials, undeclared
+ * paid models, arbitrary ``:free`` names, and any model missing a zero price
+ * resolve to undefined.
+ */
+function evaluateManagedFreeSupply(
+  provider: ProviderDefinition,
+  model: string,
+  credential: ProviderCredential | undefined,
+): RoutingFreeSupplyFact | undefined {
+  if (!credential || !credential.value.trim()) return undefined;
+  if (provider.credentialResolver !== 'forge-managed') return undefined;
+  const definition = provider.models.find((entry) => entry.id === model);
+  if (!definition) return undefined;
+  const pricing = definition.pricing;
+  if (
+    !pricing ||
+    pricing.inputUsdPerMillion !== 0 ||
+    pricing.cachedInputUsdPerMillion !== 0 ||
+    pricing.outputUsdPerMillion !== 0
+  ) {
+    return undefined;
+  }
+  if (provider.id === 'opencode-zen') {
+    if (model !== 'mimo-v2.5-free' && model !== 'ling-3.0-flash-fin-free') return undefined;
+    return {
+      confirmedFree: true,
+      source: 'opencode.zen.official',
+      ruleId: 'opencode-zen.free_model_confirmed_free',
+    };
+  }
+  if (provider.id === 'openrouter') {
+    if (model !== 'nex-agi/nex-n2.5-mini:free' && model !== 'cohere/north-mini-code:free') return undefined;
+    return {
+      confirmedFree: true,
+      source: 'openrouter.official',
+      ruleId: 'openrouter.free_model_confirmed_free',
+    };
+  }
+  return undefined;
 }
 
 function runtimeAuthPath(env: NodeJS.ProcessEnv, home: string): string {
@@ -464,8 +498,8 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       return model === upstreamModel || model === logicalModel ? publicModel : model;
     },
     freeSupply(provider, model, credential) {
-      if (provider.id !== 'codebuddy') return undefined;
-      return evaluateCodeBuddyFreeSupply(codeBuddyEnvironments.get(credential), model);
+      if (provider.id === 'codebuddy') return evaluateCodeBuddyFreeSupply(codeBuddyEnvironments.get(credential), model);
+      return evaluateManagedFreeSupply(provider, model, credential);
     },
     async configureApiKey(provider, key) {
       if (provider.credentialResolver !== 'forge-managed') {

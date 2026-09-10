@@ -36,7 +36,7 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
       BUILTIN_PROVIDERS.flatMap((p) => p.models.map((m) => m.id)).filter((id) => id.includes('deepseek')),
     ),
   ].sort();
-  assert.deepEqual(deepseekIds, ['deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
+  assert.deepEqual(deepseekIds, ['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
   // Retired CodeBuddy/TokenHub deepseek ids are gone from the builtin catalog.
   for (const oldId of [
     'deepseek-v4-flash',
@@ -369,7 +369,7 @@ test('every registered built-in model has a valid authoritative speed default', 
     provider.models.map((model) => ({ provider: provider.id, model })),
   );
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
-  assert.equal(uniqueIds.size, 41, 'the complete exact registered model-id inventory is covered');
+  assert.equal(uniqueIds.size, 46, 'the complete exact registered model-id inventory is covered');
 
   for (const { provider, model } of entries) {
     assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);

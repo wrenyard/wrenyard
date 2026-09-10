@@ -148,3 +148,173 @@ test('an upstream failure is returned once without retrying another model id', a
   server.close();
   await once(server, 'close');
 });
+
+// Registers vendor plus the OpenCode service and OpenRouter providers so we can
+// assert per-provider header and body treatment. Uses the existing mocked
+// upstream pattern; no external calls.
+function headerFixture(fetchImpl: typeof fetch) {
+  const catalog = new Catalog();
+  const register = (id: string, endpoint: string, model: string, upstream: string) => {
+    catalog.registerProvider({
+      id, displayName: id, credentialResolver: 'forge-managed',
+      models: [{
+        id: model,
+        displayName: model,
+        speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
+      }],
+      protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
+    });
+  };
+  register('vendor', 'https://upstream.test/v1/chat/completions', 'public', 'private');
+  register('opencode-zen', 'https://opencode-zen.test/v1/chat/completions', 'zen-public', 'zen-private');
+  register('opencode-go', 'https://opencode-go.test/v1/chat/completions', 'go-public', 'go-private');
+  register('openrouter', 'https://openrouter.test/v1/chat/completions', 'free', 'free');
+  const upstreamByPublic = { public: 'private', 'zen-public': 'zen-private', 'go-public': 'go-private', free: 'free' };
+  return createModelGateway({
+    catalog,
+    fetch: fetchImpl,
+    providers: {
+      credential: async () => ({ value: 'upstream-secret' }),
+      resolveUpstreamModel: (_provider, model) => upstreamByPublic[model as keyof typeof upstreamByPublic] ?? model,
+      publicResponseModel: (provider, model, upstreamModel, publicModel) => {
+        const logicalModel = publicModel.slice(provider.id.length + 1);
+        return model === upstreamModel || model === logicalModel ? publicModel : model;
+      },
+      configureApiKey: async () => undefined,
+    },
+  });
+}
+
+function listen(gateway: ReturnType<typeof headerFixture>) {
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  server.listen(0, '127.0.0.1');
+  return server;
+}
+
+test('opencode service providers receive app UA and forwarded session', async () => {
+  let seenUA: string | null = 'unset';
+  let seenSession: string | null = 'unset';
+  let seenAuth: string | null = 'unset';
+  const gateway = headerFixture(async (_url, init) => {
+    const h = new Headers(init?.headers);
+    seenUA = h.get('user-agent');
+    seenSession = h.get('x-opencode-session');
+    seenAuth = h.get('authorization');
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const server = listen(gateway);
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-opencode-session': 'ses_opencode_1' },
+    body: JSON.stringify({ model: 'opencode-zen/zen-public', messages: [] }),
+  });
+  assert.equal(seenUA, 'wrenyard/1.0.0-dev.23');
+  assert.equal(seenSession, 'ses_opencode_1');
+  assert.equal(seenAuth, 'Bearer upstream-secret');
+  server.close();
+  await once(server, 'close');
+});
+
+test('non-opencode providers do not receive the session header', async () => {
+  let seenSession: string | null = 'unset';
+  const gateway = headerFixture(async (_url, init) => {
+    seenSession = new Headers(init?.headers).get('x-opencode-session');
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const server = listen(gateway);
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-opencode-session': 'ses_opencode_1' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal(seenSession, null);
+  server.close();
+  await once(server, 'close');
+});
+
+test('invalid x-opencode-session is omitted', async () => {
+  for (const bad of ['a'.repeat(300), 'safe\rleak', 'safe\nleak', ['one', 'two']]) {
+    let seenSession: string | null = 'unset';
+    const gateway = headerFixture(async (_url, init) => {
+      seenSession = new Headers(init?.headers).get('x-opencode-session');
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const server = createServer((request, response) => {
+      request.headers['x-opencode-session'] = bad;
+      void gateway.handle(request, response);
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const init: RequestInit = {
+      method: 'POST',
+      headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'opencode-zen/zen-public', messages: [] }),
+    };
+    await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, init);
+    assert.equal(seenSession, null, `session not omitted for ${JSON.stringify(bad)}`);
+    server.close();
+    await once(server, 'close');
+  }
+});
+
+test('429 response forwards retry-after and x-ratelimit headers for all providers', async () => {
+  const gateway = headerFixture(async () => new Response('{"error":"rate limited"}', {
+    status: 429,
+    headers: {
+      'content-type': 'application/json',
+      'retry-after': '60',
+      'x-ratelimit-limit': '100',
+      'x-ratelimit-remaining': '0',
+      'x-ratelimit-reset': '1700000000',
+    },
+  }));
+  const server = listen(gateway);
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('retry-after'), '60');
+  assert.equal(response.headers.get('x-ratelimit-limit'), '100');
+  assert.equal(response.headers.get('x-ratelimit-remaining'), '0');
+  assert.equal(response.headers.get('x-ratelimit-reset'), '1700000000');
+  server.close();
+  await once(server, 'close');
+});
+
+test('openrouter free request strips models and route without changing free id', async () => {
+  let seenBody: Record<string, unknown> = {};
+  const gateway = headerFixture(async (_url, init) => {
+    seenBody = JSON.parse(String(init?.body));
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const server = listen(gateway);
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'openrouter/free',
+      messages: [],
+      models: ['openrouter/paid-backup', 'openrouter/free'],
+      route: { fallback: true },
+    }),
+  });
+  assert.equal(seenBody.model, 'free');
+  assert.equal('models' in seenBody, false);
+  assert.equal('route' in seenBody, false);
+  server.close();
+  await once(server, 'close');
+});

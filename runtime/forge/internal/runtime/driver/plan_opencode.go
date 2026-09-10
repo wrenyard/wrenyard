@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -111,12 +113,24 @@ func buildOpenCodePlan(req PlanRequest) (CommandPlan, error) {
 		})
 	}
 	if spec.Provider.GatewayRouted {
+		// Stable per-invocation session id, reused for every LLM turn of this
+		// invocation. A resume reuses the supplied id; otherwise an opaque
+		// random id is generated once. This never derives from credentials,
+		// prompts, hashes, or provider account ids.
+		session := strings.TrimSpace(req.ResumeSessionID)
+		if session == "" {
+			buf := make([]byte, 16)
+			if _, err := rand.Read(buf); err != nil {
+				return plan, fmt.Errorf("generate OpenCode session id: %w", err)
+			}
+			session = hex.EncodeToString(buf)
+		}
 		gatewayConfig, marshalErr := json.Marshal(map[string]any{
 			"provider": map[string]any{
 				"wrenyard": map[string]any{
 					"npm":     "@ai-sdk/openai-compatible",
 					"name":    "Wrenyard",
-					"options": map[string]any{"baseURL": spec.Runtime.Env["WRENYARD_GATEWAY_OPENAI_CHAT_URL"], "apiKey": "{env:WRENYARD_GATEWAY_TOKEN}"},
+					"options": map[string]any{"baseURL": spec.Runtime.Env["WRENYARD_GATEWAY_OPENAI_CHAT_URL"], "apiKey": "{env:WRENYARD_GATEWAY_TOKEN}", "headers": map[string]any{"x-opencode-session": session}},
 				},
 			},
 		})

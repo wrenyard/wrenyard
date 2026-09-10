@@ -13,6 +13,7 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codex"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codexspark"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/freepool"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/kimi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxapi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxcoding"
@@ -35,7 +36,7 @@ type Override struct {
 	APIKey string
 }
 
-var modules = []ProviderModule{
+var modules = append([]ProviderModule{
 	anthropic.Module(),
 	anthropicapi.Module(),
 	codebuddy.Module(),
@@ -55,7 +56,7 @@ var modules = []ProviderModule{
 	xai.Module(),
 	zhipu.Module(),
 	zhipuapi.Module(),
-}
+}, freepool.Modules()...)
 
 const SpaceXAIProviderID = "spacex-ai"
 
