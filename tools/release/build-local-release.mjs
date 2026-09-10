@@ -544,6 +544,10 @@ process.exitCode = result.error ? 1 : (result.status ?? 1);
 // rejects private-key/token signatures in first-party text, local developer
 // machine/home/checkout absolute paths written into payload bytes, and pays
 // special attention to forbidden user credential/config/database/log files.
+// The exact release temp dir and source worktree are rejected everywhere; the
+// generic developer-home values are rejected only in first-party files, because
+// an upstream dependency can publicly ship bytes compiled under the same CI
+// home (e.g. fsevents.node under /Users/runner) without being a local leak.
 // Third-party dependency assets are not automatically secrets: upstream source
 // maps and public documentation/certificate examples under node_modules are
 // normal runtime assets, so only first-party source maps and the explicit
@@ -576,24 +580,49 @@ function isDependencyPath(segments) {
   return index >= 0 && segments[index + 1] !== '@wrenyard';
 }
 
-function developerPathNeedles(buildTmp, worktree) {
+// Byte variants of one path candidate: raw, slash-normalized, backslash and
+// JSON-escaped backslash spellings, so the same logical path is caught however
+// it was serialized by the build host.
+function pathByteVariants(candidate) {
   const values = new Set();
-  for (const candidate of [buildTmp, worktree, os.homedir(), process.env.HOME, process.env.USERPROFILE]) {
-    if (!candidate) continue;
-    for (const raw of [candidate, path.resolve(candidate)]) {
-      values.add(raw);
-      values.add(raw.replaceAll('\\', '/'));
-      values.add(raw.replaceAll('/', '\\'));
-      values.add(raw.replaceAll('\\', '\\\\'));
-      values.add(raw.replaceAll('/', '\\\\'));
-    }
+  for (const raw of [candidate, path.resolve(candidate)]) {
+    values.add(raw);
+    values.add(raw.replaceAll('\\', '/'));
+    values.add(raw.replaceAll('/', '\\'));
+    values.add(raw.replaceAll('\\', '\\\\'));
+    values.add(raw.replaceAll('/', '\\\\'));
   }
   return [...values].filter(value => value.length > 3).map(value => Buffer.from(value));
 }
 
+// Exact build paths (the release temp dir and the source worktree) are never
+// legitimate payload content, so they are rejected in ALL files. The generic
+// developer-home values (os.homedir/HOME/USERPROFILE) are only distinct because
+// a third-party dependency's publicly compiled bytes can legitimately embed the
+// public CI build home (e.g. upstream fsevents.node containing /Users/runner),
+// so those are enforced against first-party files only.
+function buildPathNeedles(buildTmp, worktree) {
+  const values = new Set();
+  for (const candidate of [buildTmp, worktree]) {
+    if (!candidate) continue;
+    for (const bytes of pathByteVariants(candidate)) values.add(bytes);
+  }
+  return [...values];
+}
+
+function homePathNeedles() {
+  const values = new Set();
+  for (const candidate of [os.homedir(), process.env.HOME, process.env.USERPROFILE]) {
+    if (!candidate) continue;
+    for (const bytes of pathByteVariants(candidate)) values.add(bytes);
+  }
+  return [...values];
+}
+
 export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
   const root = path.resolve(stage);
-  const needles = developerPathNeedles(buildTmp, worktree);
+  const buildNeedles = buildPathNeedles(buildTmp, worktree);
+  const homeNeedles = homePathNeedles();
   const violations = [];
   const report = (file, rule) => violations.push(path.relative(root, file) + ': ' + rule);
   function walk(dir) {
@@ -621,7 +650,9 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
         report(file, 'forbidden credential/secret/database/log file'); continue;
       }
       if (ext === '.map' && !dependency) report(file, 'source map payload forbidden');
-      if (needles.some(needle => bytes.includes(needle))) report(file, 'embeds a local developer/home/checkout absolute path');
+      const embedsBuildPath = buildNeedles.some(needle => bytes.includes(needle));
+      const embedsHomePath = !dependency && homeNeedles.some(needle => bytes.includes(needle));
+      if (embedsBuildPath || embedsHomePath) report(file, 'embeds a local developer/home/checkout absolute path');
       if (!text) continue;
       // First-party code is scanned for every secret signature. Upstream assets
       // can contain public examples, but must never contain private keys.
