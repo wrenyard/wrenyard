@@ -147,6 +147,11 @@ let currentPage: ShellPage = 'workbench';
 let currentStats: StatsSnapshot | null = null;
 /** Read-only authoritative TaskSettings display names keyed by stable identity. */
 let taskDisplayNames: ReadonlyMap<string, string> = new Map();
+let taskInvestmentNames: ReadonlyMap<string, string> = new Map();
+const historicalTaskNames: Readonly<Record<string, string>> = {
+  'builtin:explore-code': '代码探索',
+  'project:retire-builtin-files': '清理旧内置任务',
+};
 let currentQuota: QuotaSnapshot | null = null;
 let selectedPeriod: StatsPeriod = '24h';
 let providerOrderSaving = false;
@@ -1182,11 +1187,11 @@ function renderTasks(statsWindow: StatsWindowSnapshot | undefined): void {
     return;
   }
   list.replaceChildren(
-    tableHeader(['Task', '来源', '运行', '平均耗时', '占比']),
+    tableHeader(['任务', '来源', '运行', '平均耗时', '占比']),
     ...rows.slice(0, 12).map((row) => {
       const share = denominator > 0 ? row.durationMs / denominator * 100 : 0;
       return tableRow([
-        row.name,
+        taskInvestmentNames.get(`${row.source}:${row.name}`) ?? historicalTaskNames[`${row.source}:${row.name}`] ?? row.name,
         sourceLabel(row.source),
         formatCount(row.runCount),
         formatTaskDuration(row.averageDurationMs),
@@ -1436,7 +1441,8 @@ async function refreshStats(): Promise<void> {
     renderStats(snapshot);
     const settings = await window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null);
     buildTaskDisplayNames(settings);
-    // Rerender only the recent task-run ledger with the rebuilt names.
+    // Refresh both task tables after authoritative display names arrive.
+    renderTasks(selectedWindow(snapshot));
     renderTaskRuns(snapshot);
   } finally {
     statsRefreshButton.disabled = false;
@@ -1449,6 +1455,17 @@ function buildTaskDisplayNames(settings: TaskSettingsSnapshot | null): void {
   const map = new Map<string, string>();
   for (const row of settings?.rows ?? []) map.set(row.identity, row.display_name);
   taskDisplayNames = map;
+  const grouped = new Map<string, Set<string>>();
+  for (const row of settings?.rows ?? []) {
+    const key = `${row.kind}:${row.name}`;
+    const names = grouped.get(key) ?? new Set<string>();
+    names.add(row.display_name);
+    grouped.set(key, names);
+  }
+  // Investment rows aggregate projects by task name; do not pick an arbitrary
+  // project's label when identically named definitions disagree.
+  taskInvestmentNames = new Map([...grouped].flatMap(([key, names]) =>
+    names.size === 1 ? [[key, [...names][0]!] as const] : []));
 }
 
 async function refreshQuota(forceRefresh: boolean): Promise<void> {
