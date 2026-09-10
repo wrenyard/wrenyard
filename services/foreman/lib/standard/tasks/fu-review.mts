@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -6,24 +7,7 @@ import {
 } from '../../core/task/schemas/functional-unit.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 
-const inputSchema = z.object({
-  functional_unit_set: FunctionalUnitSetSchema.describe('FunctionalUnitSet to review.'),
-  context: z
-    .looseObject({})
-    .optional()
-    .describe('Complete structured brainstorm context used to produce the unit set.'),
-})
-
-const definition = {
-  __type: 'task' as const,
-  config: {
-    description: 'Review FunctionalUnitSet contract completeness and implementation-batch readiness before user confirmation',
-    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [shellUsage],
-    input: inputSchema,
-    output: FunctionalUnitReviewResultSchema,
-    prompt: ({ functional_unit_set, context = {} }: z.infer<typeof inputSchema>) => `
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are **Functional Unit Reviewer** — a requirements decomposition gate for the FunctionalUnitSet.
 
 ## Mission
@@ -54,10 +38,12 @@ Every must-fix issue must include \`target_ref\` (a \`FP-\` or \`FU-\` ref), \`c
 - \`blocked\`: the FunctionalUnitSet is missing, conflicting, or unreviewable because required upstream input (FeaturePointSet, decisions, or context) is absent. \`issues\` must be empty.
 
 ## FunctionalUnitSet
-${JSON.stringify(functional_unit_set, null, 2)}
+`,
+`
 
 ## Brainstorm Context
-${JSON.stringify(context, null, 2)}
+`,
+`
 
 ## Output Example
 \`\`\`json
@@ -75,7 +61,28 @@ ${JSON.stringify(context, null, 2)}
   "summary": "The FunctionalUnitSet has contract-shape gaps that must be fixed before confirmation."
 }
 \`\`\`
-`,
+`], labels: ["functional_unit_set","context"] } as const
+
+
+const inputSchema = z.object({
+  functional_unit_set: FunctionalUnitSetSchema.describe('FunctionalUnitSet to review.'),
+  context: z
+    .looseObject({})
+    .optional()
+    .describe('Complete structured brainstorm context used to produce the unit set.'),
+})
+
+const definition = {
+  __type: 'task' as const,
+  config: {
+    description: 'Review FunctionalUnitSet contract completeness and implementation-batch readiness before user confirmation',
+    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
+    permission: 'readonly',
+    instructions: [shellUsage],
+    input: inputSchema,
+    output: FunctionalUnitReviewResultSchema,
+    prompt: withTaskPromptTemplates(({ functional_unit_set, context = {} }: z.infer<typeof inputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(functional_unit_set, null, 2),
+JSON.stringify(context, null, 2)]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/fu-review.mts',
 }

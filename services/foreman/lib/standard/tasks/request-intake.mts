@@ -1,49 +1,10 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { RequestIntakeResultSchema } from '../../core/task/schemas/inquiry.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 
-const InputSchema = z.object({
-  phase: z
-    .enum(['plan_exploration', 'assess_scope_after_exploration'])
-    .describe(
-      'plan_exploration = decide whether any targeted exploration is needed and describe it; assess_scope_after_exploration = make scope assessment after optional evidence returns.',
-    ),
-  topic: z.string().min(1).describe('User request topic.'),
-  project: z
-    .string()
-    .regex(/^[a-z][a-z0-9._-]*(\/[a-z][a-z0-9._-]*)*$/)
-    .describe('Target project qualified name.'),
-  requirements: z.array(z.string()).min(1).describe('Initial user requirements.'),
-  code_refs: z.array(z.string()).min(1).describe('Initial code, module, doc, or surface references.'),
-  context: z
-    .looseObject({})
-    .optional()
-    .describe('Structured workflow context accumulated so far.'),
-  exploration_results: z
-    .array(z.looseObject({}))
-    .optional()
-    .describe('Exploration records returned by the fan-out planned in a previous intake pass.'),
-})
-
-const definition = {
-  __type: 'task' as const,
-  config: {
-    description: 'Reusable request intake: classify scope, decide whether targeted exploration is needed, then assess scope',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [shellUsage],
-    input: InputSchema,
-    output: RequestIntakeResultSchema,
-    prompt: ({
-      phase,
-      topic,
-      project,
-      requirements,
-      code_refs,
-      context = {},
-      exploration_results = [],
-    }: z.infer<typeof InputSchema>) => `
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 ## Mission
 
 You are **Request Intake** — a reusable request triage and exploration planning agent.
@@ -108,26 +69,82 @@ Do not recommend splitting merely because a single feature has several internal 
 ## Input
 
 ### Phase
-${phase}
+`,
+`
 
 ### Topic
-${topic}
+`,
+`
 
 ### Project
-${project}
+`,
+`
 
 ### Requirements
-${JSON.stringify(requirements, null, 2)}
+`,
+`
 
 ### Code / Surface References
-${JSON.stringify(code_refs, null, 2)}
+`,
+`
 
 ### Existing Context
-${JSON.stringify(context, null, 2)}
+`,
+`
 
 ### Exploration Results
-${JSON.stringify(exploration_results, null, 2)}
 `,
+`
+`], labels: ["phase","topic","project","requirements","code_refs","context","exploration_results"] } as const
+
+
+const InputSchema = z.object({
+  phase: z
+    .enum(['plan_exploration', 'assess_scope_after_exploration'])
+    .describe(
+      'plan_exploration = decide whether any targeted exploration is needed and describe it; assess_scope_after_exploration = make scope assessment after optional evidence returns.',
+    ),
+  topic: z.string().min(1).describe('User request topic.'),
+  project: z
+    .string()
+    .regex(/^[a-z][a-z0-9._-]*(\/[a-z][a-z0-9._-]*)*$/)
+    .describe('Target project qualified name.'),
+  requirements: z.array(z.string()).min(1).describe('Initial user requirements.'),
+  code_refs: z.array(z.string()).min(1).describe('Initial code, module, doc, or surface references.'),
+  context: z
+    .looseObject({})
+    .optional()
+    .describe('Structured workflow context accumulated so far.'),
+  exploration_results: z
+    .array(z.looseObject({}))
+    .optional()
+    .describe('Exploration records returned by the fan-out planned in a previous intake pass.'),
+})
+
+const definition = {
+  __type: 'task' as const,
+  config: {
+    description: 'Reusable request intake: classify scope, decide whether targeted exploration is needed, then assess scope',
+    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    permission: 'readonly',
+    instructions: [shellUsage],
+    input: InputSchema,
+    output: RequestIntakeResultSchema,
+    prompt: withTaskPromptTemplates(({
+      phase,
+      topic,
+      project,
+      requirements,
+      code_refs,
+      context = {},
+      exploration_results = [],
+    }: z.infer<typeof InputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [phase,
+topic,
+project,
+JSON.stringify(requirements, null, 2),
+JSON.stringify(code_refs, null, 2),
+JSON.stringify(context, null, 2),
+JSON.stringify(exploration_results, null, 2)]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/request-intake.mts',
 }

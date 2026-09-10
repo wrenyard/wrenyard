@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { ULTRA_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import { FunctionalUnitSchema } from '../../core/task/schemas/functional-unit.mts'
@@ -5,41 +6,7 @@ import { FeaturePointSchema } from '../../core/task/schemas/feature-point.mts'
 import { FunctionalUnitExecutionNodeSchema } from '../../core/task/schemas/implementation-plan.mts'
 import editOperationUnits from '../instructions/edit-operation-units.mts'
 
-const inputSchema = z.object({
-  functional_unit: FunctionalUnitSchema.describe(
-    'One confirmed FunctionalUnit to architect and prepare for implementation.',
-  ),
-  feature_point: FeaturePointSchema.optional().describe(
-    'Optional but recommended FeaturePoint context. Use it to correct interpretation of user value, boundaries, non-goals, and acceptance intent.',
-  ),
-  architecture_context: z
-    .looseObject({})
-    .optional()
-    .describe(
-      'Recommended extra code/doc/history/research/runtime context. It is evidence for accurate scoping, not free-form requirements.',
-    ),
-  constraints: z
-    .array(z.string().min(1))
-    .optional()
-    .describe('Optional repository, product, compatibility, security, performance, or operational constraints.'),
-})
-
-const definition = {
-  __type: 'task' as const,
-  config: {
-    description:
-      'Architect - map one confirmed FunctionalUnit to executable ImplementationUnits with edit instructions and local verification',
-    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [editOperationUnits],
-    input: inputSchema,
-    output: FunctionalUnitExecutionNodeSchema,
-    prompt: ({
-      functional_unit,
-      feature_point = undefined,
-      architecture_context = {},
-      constraints = [],
-    }: z.infer<typeof inputSchema>) => `
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are **Architect**, a read-only architecture and edit-planning specialist for Foreman workflows.
 
 ## Mission
@@ -95,16 +62,20 @@ There is no downstream decompose step. Your output must be directly consumable b
 - If the FunctionalUnit itself is not confirmed or has unresolved blockers, still return a schema-valid node but mark affected ImplementationUnits accordingly and make the blocker explicit.
 
 ## FunctionalUnit
-${JSON.stringify(functional_unit, null, 2)}
+`,
+`
 
 ## FeaturePoint Context
-${feature_point ? JSON.stringify(feature_point, null, 2) : '(not provided)'}
+`,
+`
 
 ## Architecture Context
-${JSON.stringify(architecture_context, null, 2)}
+`,
+`
 
 ## Constraints
-${JSON.stringify(constraints, null, 2)}
+`,
+`
 
 ## Output Example
 \`\`\`json
@@ -136,7 +107,47 @@ ${JSON.stringify(constraints, null, 2)}
   ]
 }
 \`\`\`
-`,
+`], labels: ["functional_unit","feature_point","architecture_context","constraints"] } as const
+
+
+const inputSchema = z.object({
+  functional_unit: FunctionalUnitSchema.describe(
+    'One confirmed FunctionalUnit to architect and prepare for implementation.',
+  ),
+  feature_point: FeaturePointSchema.optional().describe(
+    'Optional but recommended FeaturePoint context. Use it to correct interpretation of user value, boundaries, non-goals, and acceptance intent.',
+  ),
+  architecture_context: z
+    .looseObject({})
+    .optional()
+    .describe(
+      'Recommended extra code/doc/history/research/runtime context. It is evidence for accurate scoping, not free-form requirements.',
+    ),
+  constraints: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Optional repository, product, compatibility, security, performance, or operational constraints.'),
+})
+
+const definition = {
+  __type: 'task' as const,
+  config: {
+    description:
+      'Architect - map one confirmed FunctionalUnit to executable ImplementationUnits with edit instructions and local verification',
+    dispatch: ULTRA_DISPATCH_REQUIREMENTS,
+    permission: 'readonly',
+    instructions: [editOperationUnits],
+    input: inputSchema,
+    output: FunctionalUnitExecutionNodeSchema,
+    prompt: withTaskPromptTemplates(({
+      functional_unit,
+      feature_point = undefined,
+      architecture_context = {},
+      constraints = [],
+    }: z.infer<typeof inputSchema>) => renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [JSON.stringify(functional_unit, null, 2),
+feature_point ? JSON.stringify(feature_point, null, 2) : '(not provided)',
+JSON.stringify(architecture_context, null, 2),
+JSON.stringify(constraints, null, 2)]), [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/architect.mts',
 }

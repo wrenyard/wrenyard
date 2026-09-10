@@ -782,6 +782,23 @@ export interface TaskSettingsSnapshotParams {
   task_id?: string
 }
 
+/** One registry task definition load error surfaced out-of-band from executable
+ *  settings rows (strict schema failures and duplicate definitions). Errors never
+ *  double as executable settings rows. */
+export interface TaskSettingsLoadError {
+  /** Authoritative path to the definition file that failed to load. */
+  source_path: string
+  /** Stable raw filename (basename) of the offending definition file. */
+  file_name: string
+  /** Human-readable load error message. */
+  message: string
+  /** Registered project id owning the file's directory, when resolvable;
+   *  absent when the file is outside any registered project. */
+  project?: string
+  /** Authoritative `.fmproj` display label for `project`, when known. */
+  project_display_name?: string
+}
+
 export interface TaskSettingsSnapshotResult {
   config_path: string
   revision: string
@@ -792,6 +809,10 @@ export interface TaskSettingsSnapshotResult {
    *  combobox suggestions (mirrors the runtime-alias protocol snapshot). */
   aliases: Array<{ name: string; target: string }>
   rows: TaskSettingsTaskRow[]
+  /** Optional registry task definition load errors (strict schema failures and
+   *  duplicate definitions), surfaced separately from executable settings rows.
+   *  Absent when the snapshot has no load errors. */
+  load_errors?: TaskSettingsLoadError[]
 }
 
 export interface TaskSettingsSaveParams {
@@ -1275,6 +1296,21 @@ export const taskSettingsSnapshotResultSchema = {
     user_global: taskSettingsLayerSchema,
     aliases: { type: 'array', items: taskSettingsAliasEntrySchema },
     rows: { type: 'array', items: taskSettingsTaskRowSchema },
+    load_errors: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source_path', 'file_name', 'message'],
+        properties: {
+          source_path: { type: 'string', minLength: 1 },
+          file_name: { type: 'string', minLength: 1 },
+          message: { type: 'string', minLength: 1 },
+          project: { type: 'string', minLength: 1 },
+          project_display_name: { type: 'string', minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+    },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

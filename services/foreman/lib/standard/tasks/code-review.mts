@@ -1,3 +1,4 @@
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
@@ -24,6 +25,62 @@ import {
   type TargetBase,
 } from '../../core/task/concepts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
+
+export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
+You are a **Code Quality Reviewer**. Review the current implementation changes and produce repair instructions only for issues that must be fixed.
+
+## Review Source
+Use the supplied changes and targets below. Inspect them with read-only commands (git diff, targeted reads). Do not modify files.
+
+## Goal
+`,
+`
+
+## Targets to review
+`,
+`
+
+## Proposed changes under review
+`,
+`
+
+`,
+`
+`,
+`
+`,
+`
+## Review Checklist (report only verified must-fix, blocking hits)
+- \`definite_correctness_bug\`: a logic error, null/undefined misuse, or wrong state transition that will cause incorrect behavior.
+- \`required_contract_not_implemented\`: a required contract from the change set or acceptance criteria is not implemented.
+- \`build_or_type_failure\`: the change breaks the build or type-check.
+- \`unsafe_error_handling\`: a required error path swallows failures, loses context, or is otherwise unsafe.
+- \`security_boundary_violation\`: input validation, path traversal, injection, or secret-handling violation at a security boundary.
+
+Do not report style, pattern, performance, testing, or optional polish items. Review issues are BLOCKING-ONLY.
+## Required Changes Contract
+- If the review is approved, both \`findings\` and \`required_changes\` MUST be empty, and every \`assessment\` MUST be \`passed\`.
+- If any blocking issue exists, both \`findings\` and \`required_changes\` MUST be non-empty. A failed review without edits is not allowed.
+- Each \`required_change\` is a \`Change\` bound to an exact file \`target\` (with optional \`line_range\`), an \`action\` of create|update|remove, an \`instruction\`, and an \`expected\` post-action state. Never nest edits inside \`findings\`.
+
+## Workflow
+1. Assess each acceptance criterion; emit one \`assessment\` per criterion with \`status\` of \`passed\` | \`failed\` | \`blocked\` | \`not_supported\`, supporting \`evidences\` ids, and an optional \`reason\`.
+2. For every verified blocking issue, emit a \`finding\` (id, conclusion, targets pointing at the file with line_range, evidences, confidence) and a matching \`required_change\` (Change) bound to the same file.
+3. As you observe facts, record them as pooled \`evidences\` (id, source target, observation) and reference them by id.
+4. Missing, conflicting, or unreviewable inputs are a task execution failure, not a review result.
+
+## Output Format
+Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
+
+Shape:
+{
+  "assessments": [ { "criterion_id": "ac-1", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
+  "findings": [ { "id": "f-1", "conclusion": "definite_correctness_bug: ...", "targets": [ { "kind": "file", "value": "src/batch.ts", "line_range": [40, 58] } ], "evidences": ["ev-1"], "confidence": "high" } ],
+  "required_changes": [ { "target": { "kind": "file", "value": "src/batch.ts" }, "action": "update", "instruction": "Change the loop end bound to be inclusive.", "expected": "Final item is processed." } ],
+  "evidences": [ { "id": "ev-1", "source": { "kind": "file", "value": "src/batch.ts" }, "observation": "Loop end bound is exclusive." } ]
+}
+`], labels: ["goal.outcome","targets","changes","constraints","acceptance_criteria","evidences"] } as const
+
 
 /**
  * Code Review — blocking-only quality reviewer builtin (Batch D2).
@@ -116,7 +173,7 @@ const definition = {
     instructions: [shellUsage],
     input: CodeReviewInputSchema,
     output: CodeReviewOutputSchema,
-    prompt: (input: unknown): string => {
+    prompt: withTaskPromptTemplates((input: unknown): string => {
       const {
         goal,
         targets,
@@ -125,55 +182,13 @@ const definition = {
         changes,
         evidences,
       } = input as CodeReviewInput
-      return `
-You are a **Code Quality Reviewer**. Review the current implementation changes and produce repair instructions only for issues that must be fixed.
-
-## Review Source
-Use the supplied changes and targets below. Inspect them with read-only commands (git diff, targeted reads). Do not modify files.
-
-## Goal
-${goal.outcome}
-
-## Targets to review
-${JSON.stringify(targets, null, 2)}
-
-## Proposed changes under review
-${JSON.stringify(changes, null, 2)}
-
-${constraints && constraints.length > 0 ? `## Constraints\n${JSON.stringify(constraints, null, 2)}\n` : ''}
-${acceptance_criteria && acceptance_criteria.length > 0 ? `## Acceptance Criteria\n${JSON.stringify(acceptance_criteria, null, 2)}\n` : ''}
-${evidences && evidences.length > 0 ? `## Pre-collected evidences\n${JSON.stringify(evidences, null, 2)}\n` : ''}
-## Review Checklist (report only verified must-fix, blocking hits)
-- \`definite_correctness_bug\`: a logic error, null/undefined misuse, or wrong state transition that will cause incorrect behavior.
-- \`required_contract_not_implemented\`: a required contract from the change set or acceptance criteria is not implemented.
-- \`build_or_type_failure\`: the change breaks the build or type-check.
-- \`unsafe_error_handling\`: a required error path swallows failures, loses context, or is otherwise unsafe.
-- \`security_boundary_violation\`: input validation, path traversal, injection, or secret-handling violation at a security boundary.
-
-Do not report style, pattern, performance, testing, or optional polish items. Review issues are BLOCKING-ONLY.
-## Required Changes Contract
-- If the review is approved, both \`findings\` and \`required_changes\` MUST be empty, and every \`assessment\` MUST be \`passed\`.
-- If any blocking issue exists, both \`findings\` and \`required_changes\` MUST be non-empty. A failed review without edits is not allowed.
-- Each \`required_change\` is a \`Change\` bound to an exact file \`target\` (with optional \`line_range\`), an \`action\` of create|update|remove, an \`instruction\`, and an \`expected\` post-action state. Never nest edits inside \`findings\`.
-
-## Workflow
-1. Assess each acceptance criterion; emit one \`assessment\` per criterion with \`status\` of \`passed\` | \`failed\` | \`blocked\` | \`not_supported\`, supporting \`evidences\` ids, and an optional \`reason\`.
-2. For every verified blocking issue, emit a \`finding\` (id, conclusion, targets pointing at the file with line_range, evidences, confidence) and a matching \`required_change\` (Change) bound to the same file.
-3. As you observe facts, record them as pooled \`evidences\` (id, source target, observation) and reference them by id.
-4. Missing, conflicting, or unreviewable inputs are a task execution failure, not a review result.
-
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "assessments": [ { "criterion_id": "ac-1", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
-  "findings": [ { "id": "f-1", "conclusion": "definite_correctness_bug: ...", "targets": [ { "kind": "file", "value": "src/batch.ts", "line_range": [40, 58] } ], "evidences": ["ev-1"], "confidence": "high" } ],
-  "required_changes": [ { "target": { "kind": "file", "value": "src/batch.ts" }, "action": "update", "instruction": "Change the loop end bound to be inclusive.", "expected": "Final item is processed." } ],
-  "evidences": [ { "id": "ev-1", "source": { "kind": "file", "value": "src/batch.ts" }, "observation": "Loop end bound is exclusive." } ]
-}
-`
-    },
+      return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [goal.outcome,
+JSON.stringify(targets, null, 2),
+JSON.stringify(changes, null, 2),
+constraints && constraints.length > 0 ? `## Constraints\n${JSON.stringify(constraints, null, 2)}\n` : '',
+acceptance_criteria && acceptance_criteria.length > 0 ? `## Acceptance Criteria\n${JSON.stringify(acceptance_criteria, null, 2)}\n` : '',
+evidences && evidences.length > 0 ? `## Pre-collected evidences\n${JSON.stringify(evidences, null, 2)}\n` : ''])
+    }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/code-review.mts',
 }
