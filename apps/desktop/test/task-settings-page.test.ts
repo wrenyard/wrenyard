@@ -374,7 +374,7 @@ test('renderer edits inherited mode and runtime from the effective baseline with
 
 test('renderer catalog model label reports image support from exact entry metadata only', async () => {
   const conversation = await readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8');
-  assert.match(conversation, /entry\.inputTypes === undefined\n\s*\? '图片：未知'/u);
+  assert.match(conversation, /entry\.inputTypes === undefined\r?\n\s*\? '图片：未知'/u);
   assert.match(conversation, /inputTypes\.includes\('image'\) \? '图片：支持' : '图片：不支持'/u);
   assert.doesNotMatch(conversation, /支持输入：/u);
 });
