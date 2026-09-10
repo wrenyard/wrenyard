@@ -16,6 +16,7 @@ import {
   type RuntimeAliasPutRequest,
   type RuntimeAliasRemoveRequest,
   type RuntimeAliasSnapshot,
+  type TaskRoutingTestResult,
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
@@ -129,6 +130,9 @@ const api: WrenyardShellApi = {
   },
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasRemove, request) as Promise<RuntimeAliasSnapshot>;
+  },
+  requestTaskRoutingTest(taskId: string): Promise<TaskRoutingTestResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTest, taskId) as Promise<TaskRoutingTestResult>;
   },
 };
 

@@ -22,6 +22,7 @@ import type {
   TaskSettingsTaskRow,
   WrenyardShellApi,
 } from '../shell-contract.js';
+import { ROUTING_TEST_PRESETS, RoutingTestController } from './routing-test.js';
 import type {
   ClientConfigurationId,
   ClientConfigurationPlanDto,
@@ -123,6 +124,21 @@ const autoCapInput = requireElement<HTMLInputElement>('auto-cap-input');
 const autoCapSaveButton = requireElement<HTMLButtonElement>('auto-cap-save');
 const autoCapEffective = requireElement<HTMLElement>('auto-cap-effective');
 const autoCapStatus = requireElement<HTMLElement>('auto-cap-status');
+const quotaTabs = requireElement<HTMLElement>('quota-tabs');
+const quotaPanelSupply = requireElement<HTMLElement>('quota-panel-supply');
+const quotaPanelRouting = requireElement<HTMLElement>('quota-panel-routing');
+const routingTestPreset = requireElement<HTMLSelectElement>('routing-test-preset');
+const routingTestRun = requireElement<HTMLButtonElement>('routing-test-run');
+const routingTestStatus = requireElement<HTMLElement>('routing-test-status');
+const routingTestResult = requireElement<HTMLElement>('routing-test-result');
+
+const routingTest = new RoutingTestController({
+  request: (taskId) => window.wrenyardShell.requestTaskRoutingTest(taskId),
+  presetSelect: routingTestPreset,
+  runButton: routingTestRun,
+  status: routingTestStatus,
+  result: routingTestResult,
+});
 
 let petDraft: PetCompanionSettings | null = null;
 let petDirty = false;
@@ -1334,6 +1350,29 @@ function emptyRow(label: string): HTMLElement {
   return row;
 }
 
+/** Currently selected Model Supply view tab; the supply configuration stays the default. */
+function currentQuotaTab(): 'supply' | 'routing' {
+  return quotaPanelRouting.hidden ? 'supply' : 'routing';
+}
+
+/**
+ * Switches the Model Supply view between the supply configuration and routing
+ * test panels. Selecting the routing tab only shows the panel — it never runs a
+ * test, so an existing result can never appear to have been re-run.
+ */
+function selectQuotaTab(tab: 'supply' | 'routing', focus = false): void {
+  const routing = tab === 'routing';
+  quotaPanelSupply.hidden = routing;
+  quotaPanelRouting.hidden = !routing;
+  for (const button of Array.from(quotaTabs.querySelectorAll<HTMLButtonElement>('button[data-quota-tab]'))) {
+    const selected = button.dataset.quotaTab === tab;
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus({ preventScroll: true });
+  }
+}
+
 function syncPeriodButtons(): void {
   const buttons = Array.from(requireElement('stats-period-switcher').querySelectorAll<HTMLButtonElement>('button[data-period]'));
   for (const button of buttons) {
@@ -1350,6 +1389,9 @@ function renderPage(page: ShellPage): void {
   }
   currentPage = page;
   document.documentElement.dataset.page = page;
+  // Leaving Model Supply returns it to its default supply tab; a stale routing
+  // result is never presented as freshly re-run after re-entry.
+  if (page !== 'quota') selectQuotaTab('supply');
   const pages: Array<[ShellPage, HTMLButtonElement, HTMLElement]> = [
     ['workbench', workbenchNav, workbenchPage],
     ['stats', statsNav, statsPage],
@@ -2208,10 +2250,29 @@ refreshButton.addEventListener('click', () => {
 });
 statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => {
+  routingTest.onPresetChanged(ROUTING_TEST_PRESETS);
   void refreshQuota(true);
   void loadRuntimeAliases();
   void loadAutoCapState(true);
 });
+quotaTabs.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  const tab = target.dataset.quotaTab;
+  if (tab !== 'supply' && tab !== 'routing') return;
+  selectQuotaTab(tab);
+});
+quotaTabs.addEventListener('keydown', (event) => {
+  if (!(event instanceof KeyboardEvent) || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
+  const tabs: Array<'supply' | 'routing'> = ['supply', 'routing'];
+  const current = currentQuotaTab();
+  const delta = event.key === 'ArrowRight' ? 1 : -1;
+  const next = tabs[(tabs.indexOf(current) + delta + tabs.length) % tabs.length];
+  selectQuotaTab(next, true);
+  event.preventDefault();
+});
+routingTestRun.addEventListener('click', () => void routingTest.run());
+routingTestPreset.addEventListener('change', () => routingTest.onPresetChanged(ROUTING_TEST_PRESETS));
 clientsRefreshButton.addEventListener('click', () => void refreshClients());
 clientsContent.addEventListener('click', (event) => {
   const tabButton = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-tab-target]');

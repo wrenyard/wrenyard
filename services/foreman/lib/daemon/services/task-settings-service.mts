@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, type IntelligenceTier } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, SCORE_WEIGHTS, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
 import type { CandidateInput } from '@wrenyard/catalog'
 import {
   resolveDeepSeekReferencePricing,
@@ -18,6 +18,7 @@ import {
   selectTaskResolutionFailure,
   taskResolutionFailure,
   type TaskResolutionElimination,
+  type TaskResolutionFailure,
   type TaskResolutionFailureCode,
 } from '../../core/task/task-resolution-failure.mts'
 import { TaskService } from '../../core/task/service.mts'
@@ -53,6 +54,9 @@ import {
   type CodeBuddyActiveSnapshotView,
 } from './auto-routing-snapshot-service.mts'
 import type {
+  TaskRoutingTestExclusion,
+  TaskRoutingTestParams,
+  TaskRoutingTestResult,
   TaskSettingsAutomaticDispatch,
   TaskSettingsAutomaticSelection,
   TaskSettingsExplicitReference,
@@ -721,6 +725,178 @@ export class TaskSettingsService {
     return summaries
   }
 
+  /**
+   * Read-only routing diagnostic for one builtin task definition (UI presets:
+   * edit, code-review, oracle, librarian). Selects the task's effective
+   * requirements and glob cap exactly like a run, then replays the EXACT
+   * automatic-selection path (`resolveAutomaticSelection`) with an optional
+   * request-scoped trace collector. Automatic preview is forced regardless of
+   * any saved explicit pin: the effective mode/explicit reference is never
+   * consulted. Nothing is saved, created, reserved, or modeled — only fresh
+   * non-billable readonly quota/readiness sampling is permitted. An unknown
+   * task or malformed definition is a validation error; "no candidate" is a
+   * useful result (structured failure), not an exception.
+   */
+  async routingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
+    const taskId = params.task_id?.trim() ?? ''
+    if (!taskId) throw new TaskSettingsTaskNotFoundError(params.task_id ?? '')
+
+    const summaries = await this.definitions.list(undefined)
+    const summary = summaries.find((entry) => entry.name === taskId && entry.kind !== 'project')
+      ?? summaries.find((entry) => entry.name === taskId && entry.project === undefined)
+    if (!summary) throw new TaskSettingsTaskNotFoundError(taskId)
+
+    const { record } = this.readConfigRecord()
+    const tasks = tasksSectionOf(record)
+    const identity = taskSettingsIdentity({ kind: 'builtin', name: summary.name })
+
+    const builtinLayer = taskDefaultsToSettingsLayer({
+      ...(summary.timeoutMs !== undefined ? { timeoutMs: summary.timeoutMs } : {}),
+      dispatch: rawDefinitionDispatch(summary.dispatch),
+    })
+    const userTaskLayer = readPerTaskSettings(tasks, identity)
+
+    let effective: ReturnType<typeof resolveEffectiveTaskSettings>
+    try {
+      effective = resolveEffectiveTaskSettings({
+        builtin: builtinLayer,
+        userGlobal: readGlobalTaskSettings(tasks) ?? undefined,
+        userTask: userTaskLayer,
+      })
+    } catch (error) {
+      throw new TaskSettingsInvalidSettingsError(undefined, messageOf(error))
+    }
+
+    // Force the automatic preview: the effective mode and any stored explicit
+    // reference are intentionally ignored here (a saved explicit pin must not
+    // change the diagnostic), and the effective dispatch/global cap are
+    // forwarded unchanged into the shared automatic-selection helper.
+    const trace: AutomaticSelectionTrace = {
+      capUsdPerMillion: null,
+      eligibleIds: [],
+      quotaBlockedIds: [],
+      readinessRejectedIds: [],
+      collapsedChoices: [],
+      unscorable: [],
+      catalogExcluded: [],
+      ranked: [],
+      scored: 0,
+      snapshotId: null,
+      nowMs: this.now(),
+    }
+    const selection = await this.resolveAutomaticSelection({
+      taskName: summary.name,
+      requirements: effective.dispatch,
+      timeoutMs: effective.timeoutMs,
+      maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
+    }, undefined, trace)
+
+    const choiceByRuntime = new Map(trace.collapsedChoices.map((choice) => [choice.exactAgentRuntime, choice]))
+    const candidates = trace.ranked.map((candidate) => {
+      const choice = choiceByRuntime.get(candidate.canonicalId)
+      return {
+        exact_runtime: candidate.canonicalId,
+        rank: candidate.rank,
+        intelligence_shortfall: candidate.intelligenceShortfall,
+        reference_output_usd_per_million: candidate.referenceUsdPerM,
+        routing_output_usd_per_million: candidate.routingPriceUsdPerM,
+        effective_tps: choice?.speed.effective_tps ?? 0,
+        quota_tier: candidate.tier,
+        quota_coverage_complete: candidate.coverageComplete,
+        quota_headroom_trusted: candidate.headroomTrusted,
+        supply_class: candidate.supplyClass,
+        price_factor: candidate.priceFactor,
+        speed_factor: candidate.speedFactor,
+        quota_factor: candidate.quotaQuality,
+        intelligence_factor: candidate.intelligenceFactor,
+        score: candidate.score,
+        notes: [...candidate.notes],
+      }
+    })
+
+    const exclusions: TaskRoutingTestExclusion[] = [
+      ...trace.quotaBlockedIds.map((id) => ({
+        exact_runtime: id,
+        stage: 'quota_blocked' as const,
+        code: 'quota_unavailable' as const,
+      })),
+      ...trace.readinessRejectedIds.map((id) => ({
+        exact_runtime: id,
+        stage: 'readiness_rejected' as const,
+        code: 'no_available_provider' as const,
+      })),
+      ...trace.unscorable.map((entry) => ({
+        exact_runtime: entry.id,
+        stage: 'not_scorable' as const,
+        code: entry.code,
+      })),
+      ...trace.catalogExcluded.map((entry) => ({
+        exact_runtime: entry.id,
+        stage: 'catalog_excluded' as const,
+        code: codeFromCatalogExclusion(entry.reason) ?? 'no_available_provider',
+        ...(entry.detail !== null ? { detail: entry.detail } : {}),
+      })),
+    ]
+
+    let failure: TaskResolutionFailure | null = null
+    let staticEligibility: TaskRoutingTestResult['static_eligibility'] = null
+    let selectionPayload: TaskRoutingTestResult['selection'] = null
+    if (selection.ok) {
+      const labels = this.displayLabelsOf(selection.dispatch)
+      selectionPayload = {
+        exact_runtime: selection.exactAgentRuntime,
+        resolved: labels
+          ? {
+              ...selection.dispatch,
+              provider_display_name: labels.providerDisplayName,
+              model_display_name: labels.modelDisplayName,
+            }
+          : selection.dispatch,
+        reason: selection.reason,
+      }
+    } else if (trace.eligibleFailure !== undefined) {
+      failure = taskResolutionFailure(trace.eligibleFailure.code)
+      staticEligibility = {
+        code: trace.eligibleFailure.code,
+        message: failure.message,
+        eligible_candidate_count: trace.eligibleFailure.candidateCount,
+      }
+    } else {
+      failure = taskResolutionFailure(selection.error.resolutionFailureCode)
+    }
+
+    return {
+      task_id: summary.name,
+      effective_requirements: toSnakeDispatch(effective.dispatch),
+      effective_output_cap_usd_per_million: trace.capUsdPerMillion,
+      timeout_ms: effective.timeoutMs,
+      snapshot_id: trace.snapshotId,
+      now_ms: trace.nowMs,
+      checked_at: new Date(trace.nowMs).toISOString(),
+      ranking_weights: {
+        price: SCORE_WEIGHTS.P,
+        speed: SCORE_WEIGHTS.S,
+        quota: SCORE_WEIGHTS.Q,
+        intelligence: SCORE_WEIGHTS.I,
+      },
+      ordering: 'candidates are ordered by intelligence shortfall ascending first, then by weighted total score descending, then by canonical runtime id ascending',
+      stages: {
+        eligible: trace.eligibleIds.length,
+        quota_blocked: trace.quotaBlockedIds.length,
+        readiness_rejected: trace.readinessRejectedIds.length,
+        collapsed: trace.collapsedChoices.length,
+        scored: trace.scored,
+        ranked: trace.ranked.length,
+        excluded: trace.unscorable.length + trace.catalogExcluded.length,
+      },
+      candidates,
+      exclusions,
+      selection: selectionPayload,
+      failure,
+      static_eligibility: staticEligibility,
+    }
+  }
+
   async save(params: TaskSettingsSaveParams): Promise<TaskSettingsSnapshotResult> {
     if (params.scope === 'task') {
       const taskId = params.task_id?.trim() ?? ''
@@ -1187,6 +1363,7 @@ export class TaskSettingsService {
   private async resolveAutomaticSelection(
     params: AutomaticSelectionParams,
     previewMemo?: AutomaticPreviewMemo,
+    trace?: AutomaticSelectionTrace,
   ): Promise<AutomaticSelectionResult> {
     // Automatic price admission is finalized below from the request-time
     // horizon snapshot. Omitting only the price ceiling here lets a scheduled
@@ -1194,7 +1371,17 @@ export class TaskSettingsService {
     // candidate is still checked against the same static reference by policy.
     const { maxOutputUsdPerMillion: _catalogPriceCeiling, ...intrinsicRequirements } = params.requirements
     const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: intrinsicRequirements })
-    if (!eligible.ok) return { ok: false, error: eligible.error }
+    if (!eligible.ok) {
+      if (trace !== undefined) {
+        trace.eligibleFailure = {
+          code: eligible.error.resolutionFailureCode,
+          message: eligible.error.message,
+          candidateCount: eligible.error.candidates.length,
+        }
+      }
+      return { ok: false, error: eligible.error }
+    }
+    if (trace !== undefined) trace.eligibleIds = eligible.choices.map((choice) => choice.exactAgentRuntime)
 
     const quotaPromise = previewMemo?.quota
       ?? (this.quotaSnapshots
@@ -1227,6 +1414,10 @@ export class TaskSettingsService {
     }
     const nowMs = snapshot ? snapshot.nowMs : this.now()
     const blocked = new Set(snapshot ? snapshot.hardBlockedProviderIds : [])
+    if (trace !== undefined) {
+      trace.snapshotId = snapshot ? snapshot.snapshotId : null
+      trace.nowMs = nowMs
+    }
 
     // Structured actual eliminations, recorded at the exact stage that empties
     // the surviving pool; deterministic selection never parses error text.
@@ -1236,6 +1427,7 @@ export class TaskSettingsService {
       if (blocked.has(choice.provider)) {
         // A determinate hard-blocked provider is a real quota gate.
         eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(choice)))
+        if (trace !== undefined) trace.quotaBlockedIds.push(choice.exactAgentRuntime)
         continue
       }
       const availability = await this.previewRuntimeAvailability(
@@ -1246,11 +1438,13 @@ export class TaskSettingsService {
       if (availability !== undefined && !availability.available) {
         // The live readiness probe rejected the exact choice: no available provider.
         eliminations.push({ code: 'no_available_provider' })
+        if (trace !== undefined) trace.readinessRejectedIds.push(choice.exactAgentRuntime)
         continue
       }
       probed.push({ choice, availability })
     }
     const collapsed = collapseAutomaticChoices(probed)
+    if (trace !== undefined) trace.collapsedChoices = collapsed.map((entry) => entry.choice)
     if (collapsed.length === 0) {
       return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
@@ -1276,6 +1470,8 @@ export class TaskSettingsService {
       : finiteReferences.length > 0
         ? Math.max(...finiteReferences)
         : 0
+
+    if (trace !== undefined) trace.capUsdPerMillion = capUsdPerM
 
     const context: AutomaticSelectionContext = {
       snapshotId: snapshot ? snapshot.snapshotId : 'settings-no-quota-snapshot',
@@ -1315,8 +1511,12 @@ export class TaskSettingsService {
           ?? entry.choice.reference_pricing.output_usd_per_million
         if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
           eliminations.push(eliminationOf('price_limit'))
+          if (trace !== undefined) trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'price_limit' })
         } else {
           eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
+          if (trace !== undefined) {
+            trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })
+          }
         }
         continue
       }
@@ -1325,8 +1525,15 @@ export class TaskSettingsService {
     if (inputs.length === 0) {
       return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
+    if (trace !== undefined) trace.scored = inputs.length
 
     const ranked = rankAutoRoutingCandidates(inputs)
+    if (trace !== undefined) {
+      trace.ranked = ranked.ranked
+      trace.catalogExcluded = ranked.excluded.map((entry) => ({
+        id: entry.canonicalId, reason: entry.reason, detail: entry.detail,
+      }))
+    }
     const best = ranked.ranked[0]
     if (!best) {
       // Every routed candidate was excluded by a real Catalog gate; each
@@ -1519,6 +1726,28 @@ interface AutomaticSelectionParams {
   requirements: ConfigTaskDispatchRequirements
   timeoutMs: number
   maxAutoOutputUsdPerMillion: number | undefined
+}
+
+/** Request-scoped optional trace collector instrumenting the exact automatic
+ *  selection path. Ordinary callers pass no trace and are entirely unaffected:
+ *  the resolver records nothing extra and its return value is identical. Used
+ *  only by the read-only routingTest diagnostic surface. */
+interface AutomaticSelectionTrace {
+  capUsdPerMillion: number | null
+  /** Populated when the initial static eligibility gate rejects everything. */
+  eligibleFailure?: { code: TaskResolutionFailureCode; message: string; candidateCount: number }
+  eligibleIds: string[]
+  quotaBlockedIds: string[]
+  readinessRejectedIds: string[]
+  collapsedChoices: TaskDispatchChoice[]
+  /** Collapsed candidates that could not build a truthful scored input. */
+  unscorable: Array<{ id: string; code: TaskResolutionFailureCode }>
+  /** Real Catalog gate exclusions with their raw reason. */
+  catalogExcluded: Array<{ id: string; reason: string; detail: string | null }>
+  ranked: RankedCandidate[]
+  scored: number
+  snapshotId: string | null
+  nowMs: number
 }
 
 interface AutomaticProbeEntry {

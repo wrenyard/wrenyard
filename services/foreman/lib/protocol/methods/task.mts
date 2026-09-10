@@ -833,6 +833,111 @@ export interface TaskSettingsSaveParams {
 
 export type TaskSettingsSaveResult = TaskSettingsSnapshotResult
 
+// ─── task.settings.routingTest ───────────────────────────────────────────────
+
+export interface TaskRoutingTestParams {
+  task_id: string
+}
+
+/** Actual normalized ranking weights used by the automatic scorer, in the
+ *  order price/speed/quota/intelligence. */
+export interface TaskRoutingTestRankingWeights {
+  price: number
+  speed: number
+  quota: number
+  intelligence: number
+}
+
+/** Pipeline stage counts recorded for one routing test, in evaluation order. */
+export interface TaskRoutingTestStageCounts {
+  /** Exact choices the static resolver admitted. */
+  eligible: number
+  /** Choices dropped by a determinate hard-blocked provider (quota gate). */
+  quota_blocked: number
+  /** Choices dropped by the live readiness probe. */
+  readiness_rejected: number
+  /** Distinct candidates surviving client-variant collapse. */
+  collapsed: number
+  /** Collapsed candidates that produced a truthful scored input. */
+  scored: number
+  /** Scored candidates with a final ranking position. */
+  ranked: number
+  /** Candidates rejected by a real Catalog gate or unscorable evidence. */
+  excluded: number
+}
+
+/** One ranked candidate row, exposing the exact factors that produced the
+ *  weighted total score. */
+export interface TaskRoutingTestCandidateRow {
+  exact_runtime: string
+  rank: number
+  intelligence_shortfall: number
+  reference_output_usd_per_million: number
+  routing_output_usd_per_million: number
+  effective_tps: number
+  quota_tier: 'healthy' | 'unknown' | 'strained'
+  quota_coverage_complete: boolean
+  quota_headroom_trusted: boolean
+  supply_class: 'confirmed_free' | 'standard'
+  price_factor: number
+  speed_factor: number
+  quota_factor: number
+  intelligence_factor: number
+  score: number
+  notes: string[]
+}
+
+/** Gate at which a candidate was excluded from the final ranking. */
+export type TaskRoutingTestExclusionStage =
+  | 'quota_blocked'
+  | 'readiness_rejected'
+  | 'not_scorable'
+  | 'catalog_excluded'
+
+/** One excluded candidate plus the closed failure code its recording gate
+ *  maps to. Skipped candidates never contribute a score. */
+export interface TaskRoutingTestExclusion {
+  exact_runtime: string
+  stage: TaskRoutingTestExclusionStage
+  code: TaskResolutionFailureCode
+  detail?: string
+}
+
+export interface TaskRoutingTestSelection {
+  exact_runtime: string
+  resolved: TaskSettingsResolvedDispatch
+  reason: string
+}
+
+/** Explicit summary of the initial static eligibility gate when
+ *  `resolver.eligible` exposes no per-candidate detail. */
+export interface TaskRoutingTestStaticEligibility {
+  code: TaskResolutionFailureCode
+  message: string
+  eligible_candidate_count: number
+}
+
+export interface TaskRoutingTestResult {
+  task_id: string
+  /** Effective automatic dispatch requirements after all layer merges. */
+  effective_requirements: TaskSettingsAutomaticDispatch
+  effective_output_cap_usd_per_million: number | null
+  timeout_ms: number
+  /** Immutable quota snapshot bound to this evaluation; null when no snapshot. */
+  snapshot_id: string | null
+  now_ms: number
+  checked_at: string
+  ranking_weights: TaskRoutingTestRankingWeights
+  /** Truthful statement of the actual ordering rule (shortfall before score). */
+  ordering: string
+  stages: TaskRoutingTestStageCounts
+  candidates: TaskRoutingTestCandidateRow[]
+  exclusions: TaskRoutingTestExclusion[]
+  selection: TaskRoutingTestSelection | null
+  failure: TaskResolutionFailure | null
+  static_eligibility: TaskRoutingTestStaticEligibility | null
+}
+
 // ─── task.settings schemas ───────────────────────────────────────────────────
 
 const taskSettingsModeSchema = {
@@ -1350,6 +1455,184 @@ export const taskSettingsSaveParamsSchema = {
 } as const satisfies JsonSchema
 
 export const taskSettingsSaveResultSchema = taskSettingsSnapshotResultSchema
+
+const taskRoutingTestFailureCodeSchema = {
+  enum: [
+    'no_available_provider',
+    'price_limit',
+    'intelligence_requirement',
+    'speed_requirement',
+    'quota_unavailable',
+    'quota_insufficient',
+  ],
+} as const satisfies JsonSchema
+
+const taskRoutingTestRankingWeightsSchema = {
+  type: 'object',
+  required: ['price', 'speed', 'quota', 'intelligence'],
+  properties: {
+    price: { type: 'number' },
+    speed: { type: 'number' },
+    quota: { type: 'number' },
+    intelligence: { type: 'number' },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskRoutingTestStageCountsSchema = {
+  type: 'object',
+  required: ['eligible', 'quota_blocked', 'readiness_rejected', 'collapsed', 'scored', 'ranked', 'excluded'],
+  properties: {
+    eligible: { type: 'integer', minimum: 0 },
+    quota_blocked: { type: 'integer', minimum: 0 },
+    readiness_rejected: { type: 'integer', minimum: 0 },
+    collapsed: { type: 'integer', minimum: 0 },
+    scored: { type: 'integer', minimum: 0 },
+    ranked: { type: 'integer', minimum: 0 },
+    excluded: { type: 'integer', minimum: 0 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskRoutingTestCandidateRowSchema = {
+  type: 'object',
+  required: [
+    'exact_runtime',
+    'rank',
+    'intelligence_shortfall',
+    'reference_output_usd_per_million',
+    'routing_output_usd_per_million',
+    'effective_tps',
+    'quota_tier',
+    'quota_coverage_complete',
+    'quota_headroom_trusted',
+    'supply_class',
+    'price_factor',
+    'speed_factor',
+    'quota_factor',
+    'intelligence_factor',
+    'score',
+    'notes',
+  ],
+  properties: {
+    exact_runtime: { type: 'string', minLength: 1 },
+    rank: { type: 'integer', minimum: 1 },
+    intelligence_shortfall: { type: 'number' },
+    reference_output_usd_per_million: { type: 'number' },
+    routing_output_usd_per_million: { type: 'number' },
+    effective_tps: { type: 'number' },
+    quota_tier: { enum: ['healthy', 'unknown', 'strained'] },
+    quota_coverage_complete: { type: 'boolean' },
+    quota_headroom_trusted: { type: 'boolean' },
+    supply_class: { enum: ['confirmed_free', 'standard'] },
+    price_factor: { type: 'number' },
+    speed_factor: { type: 'number' },
+    quota_factor: { type: 'number' },
+    intelligence_factor: { type: 'number' },
+    score: { type: 'number' },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskRoutingTestExclusionSchema = {
+  type: 'object',
+  required: ['exact_runtime', 'stage', 'code'],
+  properties: {
+    exact_runtime: { type: 'string', minLength: 1 },
+    stage: {
+      enum: ['quota_blocked', 'readiness_rejected', 'not_scorable', 'catalog_excluded'],
+    },
+    code: taskRoutingTestFailureCodeSchema,
+    detail: { type: 'string' },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskRoutingTestSelectionSchema = {
+  type: 'object',
+  required: ['exact_runtime', 'resolved', 'reason'],
+  properties: {
+    exact_runtime: { type: 'string', minLength: 1 },
+    resolved: taskSettingsResolvedDispatchSchema,
+    reason: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskRoutingTestStaticEligibilitySchema = {
+  type: 'object',
+  required: ['code', 'message', 'eligible_candidate_count'],
+  properties: {
+    code: taskRoutingTestFailureCodeSchema,
+    message: { type: 'string', minLength: 1 },
+    eligible_candidate_count: { type: 'integer', minimum: 0 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskRoutingTestParamsSchema = {
+  type: 'object',
+  required: ['task_id'],
+  properties: {
+    task_id: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskRoutingTestResultSchema = {
+  type: 'object',
+  required: [
+    'task_id',
+    'effective_requirements',
+    'effective_output_cap_usd_per_million',
+    'timeout_ms',
+    'snapshot_id',
+    'now_ms',
+    'checked_at',
+    'ranking_weights',
+    'ordering',
+    'stages',
+    'candidates',
+    'exclusions',
+    'selection',
+    'failure',
+    'static_eligibility',
+  ],
+  properties: {
+    task_id: { type: 'string', minLength: 1 },
+    effective_requirements: taskSettingsAutomaticDispatchSchema,
+    effective_output_cap_usd_per_million: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
+    timeout_ms: { type: 'number' },
+    snapshot_id: nullableStringSchema,
+    now_ms: { type: 'number' },
+    checked_at: { type: 'string', minLength: 1 },
+    ranking_weights: taskRoutingTestRankingWeightsSchema,
+    ordering: { type: 'string', minLength: 1 },
+    stages: taskRoutingTestStageCountsSchema,
+    candidates: { type: 'array', items: taskRoutingTestCandidateRowSchema },
+    exclusions: { type: 'array', items: taskRoutingTestExclusionSchema },
+    selection: { anyOf: [taskRoutingTestSelectionSchema, { type: 'null' }] },
+    failure: {
+      anyOf: [
+        {
+          type: 'object',
+          required: ['code', 'message'],
+          properties: {
+            code: taskRoutingTestFailureCodeSchema,
+            message: { type: 'string', minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        { type: 'null' },
+      ],
+    },
+    static_eligibility: {
+      anyOf: [taskRoutingTestStaticEligibilitySchema, { type: 'null' }],
+    },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
 
 export const taskRunCreateParamsSchema = {
   type: 'object',

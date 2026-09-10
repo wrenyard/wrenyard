@@ -43,6 +43,7 @@ export const SHELL_CHANNELS = {
   runtimeAliasSnapshot: 'wrenyard-shell:runtime-alias-snapshot',
   runtimeAliasPut: 'wrenyard-shell:runtime-alias-put',
   runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
+  taskRoutingTest: 'wrenyard-shell:task-routing-test',
 } as const;
 
 export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
@@ -703,6 +704,114 @@ export interface TaskSettingsSaveRequest {
   patch: TaskSettingsPatch;
 }
 
+/**
+ * Read-only routing-test projection. Desktop only transports this snapshot from
+ * the daemon `task.settings.routingTest` method and renders it; it never
+ * re-implements routing, scoring, or catalog resolution. The snake_case wire
+ * DTO mirrors the daemon TaskRoutingTestResult exactly.
+ */
+
+/** Actual normalized ranking weights used by the automatic scorer (price/speed/quota/intelligence). */
+export interface TaskRoutingTestRankingWeights {
+  price: number;
+  speed: number;
+  quota: number;
+  intelligence: number;
+}
+
+/** Pipeline stage counts recorded for one routing test, in evaluation order. */
+export interface TaskRoutingTestStageCounts {
+  eligible: number;
+  quota_blocked: number;
+  readiness_rejected: number;
+  collapsed: number;
+  scored: number;
+  ranked: number;
+  excluded: number;
+}
+
+/** One ranked candidate row exposing the exact factors behind the weighted total score. */
+export interface TaskRoutingTestCandidateRow {
+  exact_runtime: string;
+  rank: number;
+  intelligence_shortfall: number;
+  reference_output_usd_per_million: number;
+  routing_output_usd_per_million: number;
+  effective_tps: number;
+  quota_tier: 'healthy' | 'unknown' | 'strained';
+  quota_coverage_complete: boolean;
+  quota_headroom_trusted: boolean;
+  supply_class: 'confirmed_free' | 'standard';
+  price_factor: number;
+  speed_factor: number;
+  quota_factor: number;
+  intelligence_factor: number;
+  score: number;
+  notes: string[];
+}
+
+/** Gate at which a candidate was excluded from the final ranking. */
+export type TaskRoutingTestExclusionStage =
+  | 'quota_blocked'
+  | 'readiness_rejected'
+  | 'not_scorable'
+  | 'catalog_excluded';
+
+/**
+ * Closed resolution-failure code recorded alongside an excluded candidate. It
+ * is an open bounded string in the Desktop safe DTO because the backend may
+ * emit codes this static client does not yet enumerate.
+ */
+export type TaskRoutingTestFailureCode = string;
+
+/** One excluded candidate plus the closed failure code its recording gate maps to. */
+export interface TaskRoutingTestExclusion {
+  exact_runtime: string;
+  stage: TaskRoutingTestExclusionStage;
+  code: TaskRoutingTestFailureCode;
+  detail?: string;
+}
+
+/** Daemon-resolved selection for the routing test; `resolved` is null unless resolution succeeded. */
+export interface TaskRoutingTestSelection {
+  exact_runtime: string;
+  resolved: TaskResolvedDispatch | null;
+  reason: string;
+}
+
+/** Explicit summary of the initial static eligibility gate. */
+export interface TaskRoutingTestStaticEligibility {
+  code: TaskRoutingTestFailureCode;
+  message: string;
+  eligible_candidate_count: number;
+}
+
+/**
+ * Safe, read-only routing-test result. `candidates` carries only truthfully
+ * scored rows; skipped or unknown evidence appears under `exclusions` /
+ * `static_eligibility` and never receives a fabricated score.
+ */
+export interface TaskRoutingTestResult {
+  task_id: string;
+  /** Effective automatic dispatch requirements after all layer merges. */
+  effective_requirements: TaskSettingsAutomaticDispatch;
+  effective_output_cap_usd_per_million: number | null;
+  timeout_ms: number;
+  /** Immutable quota snapshot bound to this evaluation; null when no snapshot. */
+  snapshot_id: string | null;
+  now_ms: number;
+  checked_at: string;
+  ranking_weights: TaskRoutingTestRankingWeights;
+  /** Truthful statement of the actual ordering rule (shortfall before score). */
+  ordering: string;
+  stages: TaskRoutingTestStageCounts;
+  candidates: TaskRoutingTestCandidateRow[];
+  exclusions: TaskRoutingTestExclusion[];
+  selection: TaskRoutingTestSelection | null;
+  failure: { code: TaskRoutingTestFailureCode; message: string } | null;
+  static_eligibility: TaskRoutingTestStaticEligibility | null;
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   navigate(page: ShellPage): Promise<void>;
@@ -738,6 +847,7 @@ export interface WrenyardShellApi {
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
+  requestTaskRoutingTest(taskId: string): Promise<TaskRoutingTestResult>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

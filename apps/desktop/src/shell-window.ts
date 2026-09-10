@@ -24,6 +24,7 @@ import {
   type RuntimeAliasSnapshot,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
+  type TaskRoutingTestResult,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -69,6 +70,7 @@ export interface ShellWindowOptions {
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
+  requestTaskRoutingTest(taskId: string): Promise<TaskRoutingTestResult>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -483,6 +485,11 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.runtimeAliasRemove(validateRuntimeAliasRemoveRequest(request));
     });
+    ipcMain.handle(SHELL_CHANNELS.taskRoutingTest, async (event, taskId: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务 id 无效');
+      return options.requestTaskRoutingTest(taskId);
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -516,6 +523,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.runtimeAliasSnapshot,
       SHELL_CHANNELS.runtimeAliasPut,
       SHELL_CHANNELS.runtimeAliasRemove,
+      SHELL_CHANNELS.taskRoutingTest,
     ]) ipcMain.removeHandler(channel);
   }
 
