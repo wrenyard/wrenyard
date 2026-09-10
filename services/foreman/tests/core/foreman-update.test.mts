@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -39,6 +39,13 @@ function git(cwd: string, args: string[]): string {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
+}
+
+function canonicalPath(path: string): string {
+  const resolved = realpathSync.native(path)
+  if (resolved.startsWith('\\\\?\\UNC\\')) return `\\\\${resolved.slice(8)}`
+  if (resolved.startsWith('\\\\?\\')) return resolved.slice(4)
+  return resolved
 }
 
 function gitOk(cwd: string, args: string[]): void {
@@ -111,7 +118,7 @@ describe('ForemanUpdateGit preflight', () => {
   it('returns the real checkout root and full HEAD for a clean attached main and never pulls', async () => {
     const root = freshRoot()
     const { clone } = buildOriginAndClone(root)
-    const expectedRoot = realpathSync(clone)
+    const expectedRoot = canonicalPath(clone)
     const expectedHead = headOf(clone)
 
     const { executor, calls } = recordingExecutor()
@@ -146,6 +153,24 @@ describe('ForemanUpdateGit preflight', () => {
     mkdirSync(subdir, { recursive: true })
     const updater = new ForemanUpdateGit(subdir)
     await assert.rejects(() => updater.preflight(), (error: unknown) => {
+      const err = error as ForemanUpdateGitError
+      return err instanceof ForemanUpdateGitError && err.code === 'nested_checkout'
+    })
+  })
+
+  it('accepts a filesystem alias of the checkout root and still rejects a nested path', async () => {
+    const root = freshRoot()
+    const { clone } = buildOriginAndClone(root)
+    const alias = join(root, 'checkout-alias')
+    symlinkSync(clone, alias, process.platform === 'win32' ? 'junction' : 'dir')
+
+    const snapshot = await new ForemanUpdateGit(alias).preflight()
+    assert.equal(snapshot.checkout_path, canonicalPath(clone))
+    assert.equal(snapshot.old_head, headOf(clone))
+
+    const nested = join(alias, 'nested')
+    mkdirSync(nested, { recursive: true })
+    await assert.rejects(() => new ForemanUpdateGit(nested).preflight(), (error: unknown) => {
       const err = error as ForemanUpdateGitError
       return err instanceof ForemanUpdateGitError && err.code === 'nested_checkout'
     })

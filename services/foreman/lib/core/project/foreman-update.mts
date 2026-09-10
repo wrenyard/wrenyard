@@ -154,6 +154,19 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Canonicalize an existing path with the native realpath, including Windows
+ * 8.3 short-name expansion. Node's JS realpathSync keeps names like RUNNER~1
+ * while git --show-toplevel returns runneradmin; native realpath matches git.
+ * Invalid paths must still throw — callers do not get a permissive fallback.
+ */
+function nativeRealpath(path: string): string {
+  const resolved = realpathSync.native(path)
+  if (resolved.startsWith('\\\\?\\UNC\\')) return `\\\\${resolved.slice(8)}`
+  if (resolved.startsWith('\\\\?\\')) return resolved.slice(4)
+  return resolved
+}
+
+/**
  * Strict, read-mostly gatekeeper around the Foreman `main` checkout. It proves
  * the checkout is a clean, attached `main` before an update is scheduled,
  * repeats that proof after drain, and runs exactly one fast-forward pull. It
@@ -270,7 +283,7 @@ export class ForemanUpdateGit {
 
   private resolveCheckoutRoot(): string {
     try {
-      return realpathSync(this.checkoutPath)
+      return nativeRealpath(this.checkoutPath)
     } catch {
       throw new ForemanUpdateGitError('checkout_missing', `Checkout path does not exist: ${this.checkoutPath}`)
     }
@@ -286,7 +299,7 @@ export class ForemanUpdateGit {
 
     let topLevel: string
     try {
-      topLevel = realpathSync(topLevelRaw)
+      topLevel = nativeRealpath(topLevelRaw)
     } catch {
       throw new ForemanUpdateGitError('not_a_repository', `git top-level is not resolvable: ${topLevelRaw}`)
     }

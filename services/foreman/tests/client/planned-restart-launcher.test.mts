@@ -117,10 +117,10 @@ describe('buildPlannedRestartCoordinatorInvocation', () => {
     const inv = buildPlannedRestartCoordinatorInvocation(baseOptions())
     assert.equal(inv.command, process.execPath)
     assert.equal(inv.args[0], '--require')
-    assert.ok(inv.args[1].endsWith('tsx/dist/preflight.cjs'))
+    assert.ok(inv.args[1].endsWith(join('tsx', 'dist', 'preflight.cjs')))
     assert.equal(inv.args[2], '--import')
     assert.ok(inv.args[3].endsWith('tsx/dist/loader.mjs'))
-    assert.ok(inv.args[4].endsWith('lib/client/cli/planned-restart-coordinator-process.mts'))
+    assert.ok(inv.args[4].endsWith(join('lib', 'client', 'cli', 'planned-restart-coordinator-process.mts')))
   })
 
   it('emits separate non-shell arguments for operation id, kind, and config only', () => {

@@ -3,7 +3,7 @@ import { test, beforeEach, afterEach } from 'node:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 
 import {
   handleUpdate,
@@ -256,8 +256,8 @@ let CONFIG: string
 
 test('default update checkout targets the Wrenyard suite root, not the foreman package', () => {
   assert.notEqual(suiteDir, foremanDir, 'suite root and package root must be distinct')
-  assert.ok(foremanDir.endsWith('services/foreman'), 'foremanDir is the package root')
-  assert.ok(foremanDir.startsWith(`${suiteDir}/`), 'the package lives inside the suite root')
+  assert.ok(foremanDir.endsWith(join('services', 'foreman')), 'foremanDir is the package root')
+  assert.ok(foremanDir.startsWith(`${suiteDir}${sep}`), 'the package lives inside the suite root')
   assert.ok(existsSync(join(suiteDir, 'pnpm-workspace.yaml')), 'suite root has pnpm-workspace.yaml')
   assert.ok(existsSync(join(suiteDir, 'release-manifest.json')), 'suite root has release-manifest.json')
 })
@@ -310,7 +310,11 @@ test('update preflights a clean main checkout and supplies the snapshot to begin
   assert.equal(plan.kind, 'update')
   assert.equal(plan.phase, 'draining')
   assert.equal(plan.coordinator_pid, null)
-  assert.equal(plan.checkout_path, realpathSync(repo))
+  const nativeRoot = realpathSync.native(repo)
+  const expectedRoot = nativeRoot.startsWith('\\\\?\\UNC\\')
+    ? `\\\\${nativeRoot.slice(8)}`
+    : nativeRoot.startsWith('\\\\?\\') ? nativeRoot.slice(4) : nativeRoot
+  assert.equal(plan.checkout_path, expectedRoot)
   assert.ok(plan.old_head)
   // The pid is stamped via updatePlan after spawn.
   assert.equal(control.updatePlannedRestartCalls.length, 1)
