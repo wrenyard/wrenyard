@@ -323,9 +323,13 @@ async function assertSafeDesktopPackage(context) {
   let secretFindingCount = 0;
   for (const entry of entries) {
     const normalized = normalizeArchivePath(entry);
-    const stat = statFile(archivePath, normalized);
+    // @electron/asar's native member lookup resolves paths with path.sep, so
+    // forward-slash members fail for scoped packages on Windows. Native calls
+    // use the platform spelling; all policy checks keep the slash spelling.
+    const nativePath = path.normalize(normalized);
+    const stat = statFile(archivePath, nativePath);
     if (stat.files) continue;
-    const content = extractFile(archivePath, normalized);
+    const content = extractFile(archivePath, nativePath);
     if (containsUnsafePackagedPath(normalized, content, exactNeedles, genericNeedles)) {
       localPathFindingCount += 1;
     }
@@ -371,6 +375,7 @@ exports.default = async function afterPack(context) {
 
 exports.assertNoForbiddenPackagedEntries = assertNoForbiddenPackagedEntries;
 exports.assertPackagedDshStarts = assertPackagedDshStarts;
+exports.assertSafeDesktopPackage = assertSafeDesktopPackage;
 exports.buildRootNeedles = buildRootNeedles;
 exports.containsLocalPath = containsLocalPath;
 exports.containsUnsafePackagedPath = containsUnsafePackagedPath;

@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(require.resolve('electron-builder'));
+const asar = electronBuilderRequire('@electron/asar') as {
+  createPackage(source: string, destination: string): Promise<void>;
+};
 const packagePolicy = require('../tools/after-pack.cjs') as {
   assertNoForbiddenPackagedEntries(entries: string[]): void;
+  assertSafeDesktopPackage(context: unknown): Promise<void>;
   buildRootNeedles(roots?: string[]): string[];
   containsLocalPath(content: Buffer, needles: string[]): boolean;
   containsUnsafePackagedPath(
@@ -200,4 +206,84 @@ test('POSIX needles match backslash and JSON-double-backslash spellings', () => 
       `raw/backslash/JSON-doubled variant must be detected: ${variant}`,
     );
   }
+});
+
+/** Real-archive harness: build an isolated app output, pack it with the same
+ * createPackage production uses, and run the exported scanner against it.
+ * electronPlatformName win32 keeps the flat resources path on every host, so
+ * native member lookups are still exercised on macOS and Linux CI. */
+async function withRealPackage(
+  files: Record<string, string>,
+  run: (context: Record<string, unknown>) => Promise<void>,
+): Promise<void> {
+  const roots: string[] = [];
+  try {
+    const sourceRoot = mkdtempSync(join(tmpdir(), 'wrenyard-policy-src-'));
+    const appOutDir = mkdtempSync(join(tmpdir(), 'wrenyard-policy-out-'));
+    roots.push(sourceRoot, appOutDir);
+    for (const [relativePath, content] of Object.entries(files)) {
+      const target = join(sourceRoot, relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, content);
+    }
+    const resources = join(appOutDir, 'resources');
+    mkdirSync(resources, { recursive: true });
+    await asar.createPackage(sourceRoot, join(resources, 'app.asar'));
+    await run({
+      appOutDir,
+      electronPlatformName: 'win32',
+      packager: { appInfo: { productFilename: 'Wrenyard' } },
+    });
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('real archive scanner accepts safe scoped-package content', async () => {
+  await withRealPackage({
+    'dist/main.js': 'portable first-party runtime content\n',
+    'node_modules/@example/sdk/lib/index.js': 'module.exports = 42;\n',
+  }, async (context) => {
+    await assert.doesNotReject(() => packagePolicy.assertSafeDesktopPackage(context));
+  });
+});
+
+test('real archive scanner rejects forbidden source maps', async () => {
+  await withRealPackage({
+    'dist/main.js': 'portable first-party runtime content\n',
+    'dist/main.js.map': '{"version":3,"sources":[]}\n',
+  }, async (context) => {
+    await assert.rejects(
+      () => packagePolicy.assertSafeDesktopPackage(context),
+      (error: unknown) => error instanceof Error && error.message.includes('source_maps=1'),
+    );
+  });
+});
+
+test('real archive scanner rejects exact output root leaked from first-party output', async () => {
+  let leakedRoot = '';
+  await withRealPackage({
+    'node_modules/@example/sdk/lib/index.js': 'module.exports = 42;\n',
+    'dist/main.js': 'placeholder\n',
+  }, async (context) => {
+    leakedRoot = context.appOutDir as string;
+    const target = join(leakedRoot, 'resources', 'app.asar');
+    rmSync(target, { force: true });
+    const sourceRoot = mkdtempSync(join(tmpdir(), 'wrenyard-policy-src-'));
+    try {
+      mkdirSync(join(sourceRoot, 'dist'), { recursive: true });
+      mkdirSync(join(sourceRoot, 'node_modules', '@example', 'sdk', 'lib'), { recursive: true });
+      writeFileSync(join(sourceRoot, 'node_modules', '@example', 'sdk', 'lib', 'index.js'), 'module.exports = 42;\n');
+      writeFileSync(join(sourceRoot, 'dist', 'main.js'), `const root = ${JSON.stringify(leakedRoot)};\n`);
+      await asar.createPackage(sourceRoot, target);
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+    await assert.rejects(
+      () => packagePolicy.assertSafeDesktopPackage(context),
+      (error: unknown) => error instanceof Error
+        && error.message.includes('local_paths=1')
+        && !error.message.includes(leakedRoot),
+    );
+  });
 });
