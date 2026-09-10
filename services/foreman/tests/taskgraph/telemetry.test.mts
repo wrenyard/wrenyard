@@ -17,7 +17,7 @@ import {
 } from '../../lib/core/taskgraph/index.mts'
 import { ExecutionEventStore } from '../../lib/db/stores/execution-event-store.mts'
 import { mapStreamEventToBClass } from '../../lib/daemon/execution/agent-supervisor.mts'
-import { bootstrapSchema } from '../../lib/db/schema.mts'
+import { bootstrapSchema, dropTaskRunTelemetryRetiredColumns } from '../../lib/db/schema.mts'
 import type { ForemanDatabase } from '../../lib/db/types.mts'
 import { closeTestDb, initTestDb } from '../helpers/test-db.mts'
 
@@ -195,15 +195,14 @@ interface TelemetryRow {
   tool_call_count: number
   usage_event_count: number
   output_tokens: number
-  agent_turn_ms: number
-  tps_complete: number
+  completeness: string
 }
 
+const TELEMETRY_SELECT = `SELECT tool_call_count, usage_event_count, output_tokens, completeness
+   FROM task_run_telemetry WHERE task_run_id = ?`
+
 function readTelemetry(taskRunId: string): TelemetryRow | undefined {
-  return db.prepare<[string], TelemetryRow>(
-    `SELECT tool_call_count, usage_event_count, output_tokens, agent_turn_ms, tps_complete
-     FROM task_run_telemetry WHERE task_run_id = ?`,
-  ).get(taskRunId)
+  return db.prepare<[string], TelemetryRow>(TELEMETRY_SELECT).get(taskRunId)
 }
 
 function countEvents(executionId: string): number {
@@ -260,7 +259,7 @@ interface SlipNodeWithTelemetry {
 // ─── Execution event store: telemetry semantics ──────────────────────────────
 
 describe('task_run_telemetry via ExecutionEventStore', () => {
-  it('initializes a durable zero/true row for every new task run', () => {
+  it('initializes a durable zero/complete row for every new task run', () => {
     setupTaskAndExecution('tr_init', 'exec_init')
     const store = new ExecutionEventStore(db)
     store.insertTaskLifecycle({
@@ -277,8 +276,97 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.equal(row.tool_call_count, 0)
     assert.equal(row.usage_event_count, 0)
     assert.equal(row.output_tokens, 0)
-    assert.equal(row.agent_turn_ms, 0)
-    assert.equal(row.tps_complete, 1)
+    assert.equal(row.completeness, 'complete')
+  })
+
+  it('fresh schema excludes the retired TPS materialization columns', () => {
+    const columns = new Set(db
+      .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
+      .all()
+      .map((column) => column.name))
+    assert.equal(columns.has('agent_turn_ms'), false, 'retired agent_turn_ms column must not exist')
+    assert.equal(columns.has('tps_complete'), false, 'retired tps_complete column must not exist')
+    assert.equal(columns.has('output_tokens'), true, 'token counters must remain')
+    assert.equal(columns.has('total_tokens'), true, 'token counters must remain')
+    assert.equal(columns.has('completeness'), true, 'completeness must remain')
+  })
+
+  it('bootstrap retains legacy columns and the exported cleanup drops only them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-telemetry-migrate-'))
+    const path = join(dir, 'legacy.db')
+    try {
+      const legacy = new Database(path)
+      // Initialize the full current schema, then re-add ONLY the retired
+      // columns so the table looks like a legacy database. Seeding uses the
+      // real schema (not a hand-rolled subset) so bootstrap has every column
+      // it expects.
+      bootstrapSchema(legacy)
+      legacy.pragma('foreign_keys = ON')
+      legacy.exec(`
+        ALTER TABLE task_run_telemetry ADD COLUMN agent_turn_ms INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE task_run_telemetry ADD COLUMN tps_complete INTEGER NOT NULL DEFAULT 1;
+      `)
+      // Seed a valid task, execution, telemetry row, and event.
+      legacy.prepare(
+        `INSERT INTO tasks (id, template, project, status, created_at, updated_at)
+         VALUES ('tr_legacy', 't', 'foreman', 'done', ?, ?)`,
+      ).run(T0, T0)
+      legacy.prepare(
+        `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
+         VALUES ('exec_legacy', 'tr_legacy', 'default', 'edit', '/tmp', 'p', 'done', ?, ?)`,
+      ).run(T0, T0)
+      legacy.prepare('UPDATE tasks SET execution_id = ? WHERE id = ?').run('exec_legacy', 'tr_legacy')
+      legacy.prepare(
+        `INSERT INTO task_run_telemetry (
+           task_run_id, tool_call_count, usage_event_count, output_tokens, agent_turn_ms, tps_complete, created_at, updated_at
+         ) VALUES ('tr_legacy', 3, 2, 1200, 4000, 1, ?, ?)`,
+      ).run(T0, T0)
+      legacy.prepare(
+        `INSERT INTO events (execution_id, task_id, seq, type, timestamp, created_at)
+         VALUES ('exec_legacy', 'tr_legacy', 1, 'tool_call', ?, ?)`,
+      ).run(T0, T0)
+
+      // Ordinary bootstrap (initDb) is non-destructive: it must retain the
+      // re-added legacy columns rather than dropping them out from under a
+      // still-running old daemon.
+      bootstrapSchema(legacy)
+      bootstrapSchema(legacy)
+      const retained = new Set(legacy
+        .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
+        .all()
+        .map((column) => column.name))
+      assert.equal(retained.has('agent_turn_ms'), true, 'bootstrap must retain the legacy agent_turn_ms column')
+      assert.equal(retained.has('tps_complete'), true, 'bootstrap must retain the legacy tps_complete column')
+
+      // The exported daemon-startup cleanup is idempotent and drops only the
+      // retired columns.
+      dropTaskRunTelemetryRetiredColumns(legacy)
+      dropTaskRunTelemetryRetiredColumns(legacy)
+
+      const columns = new Set(legacy
+        .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
+        .all()
+        .map((column) => column.name))
+      assert.equal(columns.has('agent_turn_ms'), false, 'legacy agent_turn_ms must be dropped')
+      assert.equal(columns.has('tps_complete'), false, 'legacy tps_complete must be dropped')
+      assert.equal(columns.has('output_tokens'), true, 'token counters must remain')
+
+      const row = legacy.prepare<[string], { tool_call_count: number; usage_event_count: number; output_tokens: number }>(
+        `SELECT tool_call_count, usage_event_count, output_tokens FROM task_run_telemetry WHERE task_run_id = ?`,
+      ).get('tr_legacy')
+      assert.ok(row, 'the legacy telemetry row must survive the migration')
+      assert.equal(row.tool_call_count, 3, 'tool counts must be preserved')
+      assert.equal(row.usage_event_count, 2, 'usage counts must be preserved')
+      assert.equal(row.output_tokens, 1200, 'token counts must be preserved')
+
+      const eventCount = legacy.prepare<[], { c: number }>(
+        `SELECT COUNT(*) AS c FROM events`,
+      ).get()?.c ?? 0
+      assert.equal(eventCount, 1, 'events must be preserved')
+      legacy.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('counts each tool_call event once and never tool_result', () => {
@@ -313,7 +401,7 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.equal(countEvents('exec_retry'), 2)
   })
 
-  it('sums valid agent_turn usage into output_tokens, agent_turn_ms and usage count', () => {
+  it('sums valid agent_turn usage into output_tokens and usage count without a duration gate', () => {
     setupTaskAndExecution('tr_usage', 'exec_usage')
     writeEvent('exec_usage', 'tr_usage', 1, 'turn_usage', {
       input_tokens: 100,
@@ -327,11 +415,29 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.ok(row)
     assert.equal(row.usage_event_count, 1)
     assert.equal(row.output_tokens, 1000)
-    assert.equal(row.agent_turn_ms, 2000)
-    assert.equal(row.tps_complete, 1)
+    assert.equal(row.completeness, 'complete')
   })
 
-  it('ingests trusted Cursor usage with cache partitions, counting output/duration/TPS once and treating cache as irrelevant', async () => {
+  it('counts complete additive tokens regardless of native duration 0, missing, or wrong', () => {
+    const cases: Array<{ name: string; data: Record<string, unknown> }> = [
+      { name: 'zero duration_ms', data: { output_tokens: 1000, duration_ms: 0 } },
+      { name: 'missing duration_ms', data: { output_tokens: 1000 } },
+      { name: 'wrong duration_ms', data: { output_tokens: 1000, duration_ms: 'fast' } },
+    ]
+    for (const [index, testCase] of cases.entries()) {
+      const taskRunId = `tr_dur_${index}`
+      const executionId = `exec_dur_${index}`
+      setupTaskAndExecution(taskRunId, executionId)
+      writeEvent(executionId, taskRunId, 1, 'turn_usage', { token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1', ...testCase.data })
+      const row = readTelemetry(taskRunId)
+      assert.ok(row, `expected telemetry row for ${testCase.name}`)
+      assert.equal(row.usage_event_count, 1, `${testCase.name} must still count as usage`)
+      assert.equal(row.output_tokens, 1000, `${testCase.name} must not corrupt token counting`)
+      assert.equal(row.completeness, 'complete', `${testCase.name} must keep token accounting complete`)
+    }
+  })
+
+  it('ingests trusted Cursor usage with cache partitions, counting output once and treating cache as irrelevant', async () => {
     // A trusted Cursor agent_turn event carries cache partitions and total_tokens;
     // the mapping must preserve them but they never affect the TPS numerator or
     // denominator (only output_tokens and duration_ms drive the rate).
@@ -362,8 +468,7 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.ok(row, 'expected telemetry row for the trusted Cursor usage')
     assert.equal(row.usage_event_count, 1, 'duplicate delivery must not double count usage')
     assert.equal(row.output_tokens, 2000, 'output must be counted exactly once')
-    assert.equal(row.agent_turn_ms, 4000, 'duration must be counted exactly once')
-    assert.equal(row.tps_complete, 1, 'a trusted Cursor agent_turn event must keep TPS enabled')
+    assert.equal(row.completeness, 'complete', 'a trusted Cursor agent_turn event must keep accounting complete')
     assert.equal(countEvents('exec_cursor'), 1, 'duplicate delivery must not insert duplicate events')
   })
 
@@ -387,11 +492,10 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.ok(row)
     assert.equal(row.usage_event_count, 2)
     assert.equal(row.output_tokens, 400)
-    assert.equal(row.agent_turn_ms, 400)
-    assert.equal(row.tps_complete, 1)
+    assert.equal(row.completeness, 'complete')
   })
 
-  it('ingests a production-mapped Forge agent_turn event into durable telemetry and omits TPS for missing or other contracts', () => {
+  it('ingests a production-mapped Forge agent_turn event into durable telemetry and marks incomplete for missing or other contracts', () => {
     // The normalized shape is exactly what the supervisor's stream consumer feeds to
     // the production mapStreamEventToBClass mapper before persisting execution events.
     const mappedAgentTurn = mapStreamEventToBClass(normalizedForgeUsage({
@@ -413,10 +517,9 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.ok(okRow, 'expected telemetry row for the production-mapped agent_turn event')
     assert.equal(okRow.usage_event_count, 1)
     assert.equal(okRow.output_tokens, 2000)
-    assert.equal(okRow.agent_turn_ms, 4000)
-    assert.equal(okRow.tps_complete, 1, 'a genuine agent_turn_v1 event must keep TPS enabled')
+    assert.equal(okRow.completeness, 'complete', 'a genuine agent_turn_v1 event must keep accounting complete')
 
-    // Missing provenance is omitted by the mapper and must disable TPS.
+    // Missing provenance is omitted by the mapper and must mark the run partial.
     const mappedMissing = mapStreamEventToBClass(normalizedForgeUsage({
       output_tokens: 100,
       duration_ms: 200,
@@ -432,9 +535,9 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     const missingRow = readTelemetry('tr_mapped_missing')
     assert.ok(missingRow, 'expected telemetry row for the mapped scope-less event')
     assert.equal(missingRow.usage_event_count, 0)
-    assert.equal(missingRow.tps_complete, 0, 'a mapped scope-less event must disable TPS')
+    assert.equal(missingRow.completeness, 'partial', 'a mapped scope-less event must mark the run partial')
 
-    // Wrong provenance is preserved by the mapper and must disable TPS.
+    // Wrong provenance is preserved by the mapper and must mark the run partial.
     const mappedModelOutput = mapStreamEventToBClass(normalizedForgeUsage({
       output_tokens: 100,
       duration_ms: 200,
@@ -453,17 +556,14 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     const modelRow = readTelemetry('tr_mapped_model')
     assert.ok(modelRow, 'expected telemetry row for the mapped model_output event')
     assert.equal(modelRow.usage_event_count, 0)
-    assert.equal(modelRow.tps_complete, 0, 'a mapped non-agent_turn contract must disable TPS')
+    assert.equal(modelRow.completeness, 'partial', 'a mapped non-agent_turn contract must mark the run partial')
   })
 
-  it('permanently disables TPS for missing, zero, negative, invalid, or wrong-contract usage', () => {
+  it('marks the run partial for missing, negative, invalid, or wrong-contract usage', () => {
     const cases: Array<{ name: string; data: Record<string, unknown> }> = [
       { name: 'missing output_tokens', data: { duration_ms: 100, token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
-      { name: 'zero duration_ms', data: { output_tokens: 10, duration_ms: 0, token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
       { name: 'negative output_tokens', data: { output_tokens: -1, duration_ms: 100, token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
-      { name: 'negative duration_ms', data: { output_tokens: 10, duration_ms: -5, token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
       { name: 'non-integer output_tokens', data: { output_tokens: 2.5, duration_ms: 100, token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
-      { name: 'non-numeric duration_ms', data: { output_tokens: 10, duration_ms: 'fast', token_scope: 'agent_turn', duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
       { name: 'missing duration_scope', data: { output_tokens: 10, duration_ms: 100, token_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
       { name: 'model_output duration scope', data: { output_tokens: 10, duration_ms: 100, token_scope: 'agent_turn', duration_scope: 'model_output', tps_contract: 'agent_turn_v1' } },
       { name: 'missing token_scope', data: { output_tokens: 10, duration_ms: 100, duration_scope: 'agent_turn', tps_contract: 'agent_turn_v1' } },
@@ -478,12 +578,12 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
       writeEvent(executionId, taskRunId, 1, 'turn_usage', testCase.data)
       const row = readTelemetry(taskRunId)
       assert.ok(row, `expected telemetry row for ${testCase.name}`)
-      assert.equal(row.tps_complete, 0, `${testCase.name} must permanently disable TPS`)
+      assert.equal(row.completeness, 'partial', `${testCase.name} must mark the run partial`)
       assert.equal(row.usage_event_count, 0, `${testCase.name} must not count as usage`)
     }
   })
 
-  it('a persisted invalid usage disables TPS even after later valid usage', () => {
+  it('a persisted invalid usage stays partial even after later valid usage', () => {
     setupTaskAndExecution('tr_sticky', 'exec_sticky')
     writeEvent('exec_sticky', 'tr_sticky', 1, 'turn_usage', { output_tokens: 10, duration_ms: 100 })
     writeEvent('exec_sticky', 'tr_sticky', 2, 'turn_usage', {
@@ -495,7 +595,7 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     })
     const row = readTelemetry('tr_sticky')
     assert.ok(row)
-    assert.equal(row.tps_complete, 0)
+    assert.equal(row.completeness, 'partial')
     assert.equal(row.usage_event_count, 1)
     assert.equal(row.output_tokens, 500)
   })
@@ -550,13 +650,10 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
       const db2 = new Database(path)
       bootstrapSchema(db2)
       db2.pragma('foreign_keys = ON')
-      const row = db2.prepare<[string], TelemetryRow>(
-        `SELECT tool_call_count, usage_event_count, output_tokens, agent_turn_ms, tps_complete
-         FROM task_run_telemetry WHERE task_run_id = ?`,
-      ).get('tr_restart')
+      const row = db2.prepare<[string], TelemetryRow>(TELEMETRY_SELECT).get('tr_restart')
       assert.ok(row, 'expected telemetry to survive the restart')
       assert.equal(row.tool_call_count, 1)
-      assert.equal(row.tps_complete, 1)
+      assert.equal(row.completeness, 'complete')
       db2.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -581,7 +678,7 @@ describe('taskgraph.slip dynamic telemetry fields', () => {
     assert.equal('profile' in node, false)
   })
 
-  it('surfaces tool_call_count, bounded tps, profile and done-only summary', async () => {
+  it('surfaces tool_call_count, profile and done-only summary without materialized TPS', async () => {
     const { service, id, bridge } = await createGraph()
     setupTaskAndExecution('task_1', 'exec_slip_1', {
       summary: 'All criteria passed.',
@@ -601,104 +698,8 @@ describe('taskgraph.slip dynamic telemetry fields', () => {
     const result = service.slip({ taskgraph_id: id, node_ids: ['work'] })
     const node = result.nodes[0] as SlipNodeWithTelemetry
     assert.equal(node.tool_call_count, 2)
-    assert.equal(node.tps, 500) // 1000 * 2000 / 4000
     assert.equal(node.profile, 'forge/fast')
     assert.equal(node.summary, 'All criteria passed.')
-  })
-
-  it('surfaces bounded agent-turn TPS from a production-mapped Forge usage event', async () => {
-    const { service, id, bridge } = await createGraph()
-    setupTaskAndExecution('task_1', 'exec_slip_mapped_ok', { profile: 'forge/fast' })
-    const mapped = mapStreamEventToBClass(normalizedForgeUsage({
-      output_tokens: 2000,
-      duration_ms: 4000,
-      token_scope: 'agent_turn',
-      duration_scope: 'agent_turn',
-      tps_contract: 'agent_turn_v1',
-    }))
-    const usage = mapped.find((event) => event.type === 'turn_usage')
-    assert.ok(usage, 'production mapping must produce a turn_usage event')
-    writeEvent('exec_slip_mapped_ok', 'task_1', 1, usage.type, usage.data)
-    await driveWorkToDone(service, id, bridge)
-
-    const node = service.slip({ taskgraph_id: id, node_ids: ['work'] }).nodes[0] as SlipNodeWithTelemetry
-    // End-to-end agent-turn effective output speed (1000 * output_tokens / duration_ms),
-    // never provider generation speed.
-    assert.equal(node.tps, 500)
-  })
-
-  it('omits TPS when the persisted usage is a production-mapped missing-provenance event', async () => {
-    const { service, id, bridge } = await createGraph()
-    setupTaskAndExecution('task_1', 'exec_slip_mapped_bad')
-    const mapped = mapStreamEventToBClass(normalizedForgeUsage({
-      output_tokens: 2000,
-      duration_ms: 4000,
-    }))
-    const usage = mapped.find((event) => event.type === 'turn_usage')
-    assert.ok(usage, 'production mapping must produce a turn_usage event')
-    assert.equal('token_scope' in usage.data, false, 'a missing token_scope must be omitted, not upgraded')
-    assert.equal('tps_contract' in usage.data, false, 'a missing tps_contract must be omitted, not upgraded')
-    writeEvent('exec_slip_mapped_bad', 'task_1', 1, usage.type, usage.data)
-    await driveWorkToDone(service, id, bridge)
-
-    const node = service.slip({ taskgraph_id: id, node_ids: ['work'] }).nodes[0] as SlipNodeWithTelemetry
-    assert.equal('tps' in node, false, 'TPS must be omitted when the persisted usage has no agent_turn contract')
-  })
-
-  it('omits tps when persisted usage permanently disabled the run', async () => {
-    const { service, id, bridge } = await createGraph()
-    setupTaskAndExecution('task_1', 'exec_slip_bad')
-    writeEvent('exec_slip_bad', 'task_1', 1, 'turn_usage', { output_tokens: 10, duration_ms: 100 })
-    writeEvent('exec_slip_bad', 'task_1', 2, 'turn_usage', {
-      output_tokens: 2000,
-      duration_ms: 4000,
-      token_scope: 'agent_turn',
-      duration_scope: 'agent_turn',
-      tps_contract: 'agent_turn_v1',
-    })
-    await driveWorkToDone(service, id, bridge)
-
-    const result = service.slip({ taskgraph_id: id, node_ids: ['work'] })
-    const node = result.nodes[0] as SlipNodeWithTelemetry
-    assert.equal(node.tool_call_count, 0)
-    assert.equal('tps' in node, false)
-  })
-
-  it('omits tps when the computed rate is outside the bounded range', async () => {
-    const { service, id, bridge } = await createGraph()
-    setupTaskAndExecution('task_1', 'exec_slip_oob')
-    // 1000 * 2_000_000 / 1000 = 2_000_000 > 1_000_000 bound
-    writeEvent('exec_slip_oob', 'task_1', 1, 'turn_usage', {
-      output_tokens: 2_000_000,
-      duration_ms: 1000,
-      token_scope: 'agent_turn',
-      duration_scope: 'agent_turn',
-      tps_contract: 'agent_turn_v1',
-    })
-    await driveWorkToDone(service, id, bridge)
-
-    const result = service.slip({ taskgraph_id: id, node_ids: ['work'] })
-    const node = result.nodes[0] as SlipNodeWithTelemetry
-    assert.equal('tps' in node, false)
-    assert.equal(node.tool_call_count, 0)
-  })
-
-  it('keeps large but safe counters finite and within the tps bound', async () => {
-    const { service, id, bridge } = await createGraph()
-    setupTaskAndExecution('task_1', 'exec_slip_large')
-    // 1000 * 1_000_000_000 / 1_000_000_000 = 1000
-    writeEvent('exec_slip_large', 'task_1', 1, 'turn_usage', {
-      output_tokens: 1_000_000_000,
-      duration_ms: 1_000_000_000,
-      token_scope: 'agent_turn',
-      duration_scope: 'agent_turn',
-      tps_contract: 'agent_turn_v1',
-    })
-    await driveWorkToDone(service, id, bridge)
-
-    const result = service.slip({ taskgraph_id: id, node_ids: ['work'] })
-    const node = result.nodes[0] as SlipNodeWithTelemetry
-    assert.equal(node.tps, 1000)
   })
 
   it('surfaces the resolved execution profile only when bounded to 128 units', async () => {

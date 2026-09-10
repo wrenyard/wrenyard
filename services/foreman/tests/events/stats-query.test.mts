@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import { query as dbQuery, run as dbRun } from '../../lib/db/connection.mts'
 import { readStatsSummary, readTodayStats } from '../../lib/events/stats-query.mts'
+import { readLocalSpeedSamples } from '../../lib/events/tps.mts'
 import type { StatsSummaryResult } from '../../lib/protocol/methods/stats.mts'
 import { parseMethodResult } from '../../lib/protocol/validate.mts'
 import { closeTestDb, initTestDb } from '../helpers/test-db.mts'
@@ -142,14 +143,22 @@ function seedTaskWithProject(id: string, template: string, status: string, creat
   )
 }
 
-function seedExecutionResolved(id: string, profile: string, resolvedProfile: string | null, taskId: string): void {
+function seedExecutionResolved(
+  id: string,
+  profile: string,
+  resolvedProfile: string | null,
+  taskId: string,
+  times?: { startedAt: string; endedAt: string },
+): void {
   dbRun(
-    `INSERT INTO executions (id, task_id, profile, resolved_profile, permission, cwd, prompt, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'edit', '/tmp', 'prompt', 'done', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z')`,
+    `INSERT INTO executions (id, task_id, profile, resolved_profile, permission, cwd, prompt, status, started_at, ended_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'edit', '/tmp', 'prompt', 'done', ?, ?, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z')`,
     id,
     taskId,
     profile,
     resolvedProfile,
+    times?.startedAt ?? null,
+    times?.endedAt ?? null,
   )
 }
 
@@ -1164,34 +1173,74 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('computes weighted average TPS only from the exact agent_turn_v1 contract', () => {
+  it('computes the median execution-based TPS over eligible completed executions', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
-    seedTask('task-tps', 'commit', today, 'done')
-    seedExecutionResolved('exec-tps', 'policy-a', 'coding', 'task-tps')
-    seedAttemptDispatch('exec-tps', 'task-tps', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
-    // Valid agent_turn_v1 usage: contributes to the TPS numerator and denominator
-    seedUsageWithDuration(today, 30, 2000, 4000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    seedUsageWithDuration(today, 30, 1000, 1000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    // Unversioned, wrong-token-scope, wrong-contract, other-scope, and
-    // zero-duration usage still counts toward totalTokens but never averageTps.
-    seedUsageWithDuration(today, 30, 500, 500, null, 'exec-tps', 'task-tps')
-    seedUsageWithDuration(today, 30, 500, 500, 'model_output', 'exec-tps', 'task-tps')
-    seedUsageWithDuration(today, 30, 500, 500, 'agent_turn', 'exec-tps', 'task-tps', 'model_output', 'agent_turn_v1')
-    seedUsageWithDuration(today, 30, 500, 500, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v0')
-    seedUsageWithDuration(today, 30, 500, 0, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
+    // Three completed executions for the same provider/model, each with a
+    // complete interval and additive agent-turn output. Native event durations
+    // are deliberately inconsistent with the execution elapsed: the rate must
+    // come from execution timing, not from duration_ms.
+    const specs = [
+      { exec: 'exec-tps-1', startedAt: '2026-07-19T00:00:00.000Z', endedAt: '2026-07-19T00:00:10.000Z', output: 1000 }, // 100 TPS
+      { exec: 'exec-tps-2', startedAt: '2026-07-19T01:00:00.000Z', endedAt: '2026-07-19T01:00:20.000Z', output: 2000 }, // 100 TPS
+      { exec: 'exec-tps-3', startedAt: '2026-07-19T02:00:00.000Z', endedAt: '2026-07-19T02:00:10.000Z', output: 1500 }, // 150 TPS
+    ]
+    for (const spec of specs) {
+      seedTask(`task-${spec.exec}`, 'commit', today, 'done')
+      seedExecutionResolved(spec.exec, 'policy-a', 'coding', `task-${spec.exec}`, {
+        startedAt: spec.startedAt,
+        endedAt: spec.endedAt,
+      })
+      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
+      // Native duration is intentionally wrong (1ms): the rate must come from
+      // the execution interval, not from the event's duration_ms.
+      seedUsageWithDuration(today, 30, spec.output, 1, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+    }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
-    const row = result.windows?.[0].byProfile[0]
+    const window = result.windows?.find((candidate) => candidate.period === '1mo')
+    const row = window?.byProfile.find((candidate) => candidate.model === 'codebuddy/deepseek-v4-flash')
     assert.ok(row)
-    assert.equal(row.totalTokens, 30 * 7 + 2000 + 1000 + 500 * 5)
-    // 1000 * (2000 + 1000) / (4000 + 1000) = 600
-    assert.equal(row.averageTps, 600)
+    // Median of [100, 100, 150] = 100, not the native-duration weighted rate.
+    assert.equal(row.averageTps, 100)
     closeTestDb()
   })
 
-  it('omits averageTps when no valid agent_turn usage exists', () => {
+  it('matches the local speed estimate the runtime resolver consumes for the same provider/model/window', () => {
+    initTestDb()
+    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
+    const today = '2026-07-19'
+    const specs = [
+      { exec: 'exec-par-1', startedAt: '2026-07-19T00:00:00.000Z', endedAt: '2026-07-19T00:00:10.000Z', output: 1000 },
+      { exec: 'exec-par-2', startedAt: '2026-07-19T01:00:00.000Z', endedAt: '2026-07-19T01:00:10.000Z', output: 1500 },
+      { exec: 'exec-par-3', startedAt: '2026-07-19T02:00:00.000Z', endedAt: '2026-07-19T02:00:10.000Z', output: 2000 },
+    ]
+    for (const spec of specs) {
+      seedTask(`task-${spec.exec}`, 'commit', today, 'done')
+      seedExecutionResolved(spec.exec, 'policy-a', 'coding', `task-${spec.exec}`, {
+        startedAt: spec.startedAt,
+        endedAt: spec.endedAt,
+      })
+      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
+      seedUsageWithDuration(today, 30, spec.output, 1, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+    }
+
+    const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
+    const row = result.windows?.find((window) => window.period === '1mo')?.byProfile.find(
+      (candidate) => candidate.model === 'codebuddy/deepseek-v4-flash',
+    )
+    assert.ok(row)
+    const local = readLocalSpeedSamples(fixedNow).find(
+      (sample) => sample.provider === 'codebuddy' && sample.model === 'deepseek-v4-flash',
+    )
+    assert.ok(local)
+    assert.equal(row.averageTps, local.tps)
+    assert.equal(row.averageTps, 150)
+    closeTestDb()
+  })
+
+  it('omits averageTps when fewer than 3 eligible execution samples exist', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
@@ -1966,32 +2015,41 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('weighted TPS ignores failure, no-usage, zero-output, zero-duration, and invalid-contract samples', () => {
+  it('excludes failed, no-usage, and non-additive executions from the TPS aggregate while keeping token totals', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
-    seedTask('task-tps', 'tps', today, 'done')
-    seedExecutionResolved('exec-tps', 'policy', 'coding', 'task-tps')
-    seedAttemptDispatch('exec-tps', 'task-tps', 'codebuddy', 'm', 'codebuddy/m')
-    // Valid contract: drives TPS (output 1000, duration 2000).
-    seedUsageWithDuration(today, 10, 1000, 2000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    // Zero-output valid contract: excluded from the TPS numerator/denominator.
-    seedUsageWithDuration(today, 10, 0, 1000, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    // Zero-duration valid contract: excluded.
-    seedUsageWithDuration(today, 10, 500, 0, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    // Invalid contract (v0): excluded.
-    seedUsageWithDuration(today, 10, 500, 500, 'agent_turn', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v0')
-    // Wrong token scope: excluded.
-    seedUsageWithDuration(today, 10, 500, 500, 'model_output', 'exec-tps', 'task-tps', 'agent_turn', 'agent_turn_v1')
-    // Plain turn_usage with no TPS contract: excluded from TPS, still in totalTokens.
-    seedTurnUsage(today, 10, 500, 'exec-tps', 'task-tps')
+    // Three eligible completed executions drive the median.
+    const eligible = [
+      { exec: 'exec-ok-1', endedAt: '2026-07-19T00:00:10.000Z', output: 1000, tps: 100 },
+      { exec: 'exec-ok-2', endedAt: '2026-07-19T01:00:10.000Z', output: 1500, tps: 150 },
+      { exec: 'exec-ok-3', endedAt: '2026-07-19T02:00:10.000Z', output: 2000, tps: 200 },
+    ]
+    for (const spec of eligible) {
+      seedTask(`task-${spec.exec}`, 'tps', today, 'done')
+      seedExecutionResolved(spec.exec, 'policy', 'coding', `task-${spec.exec}`, {
+        startedAt: new Date(Date.parse(spec.endedAt) - 10000).toISOString(),
+        endedAt: spec.endedAt,
+      })
+      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'm', 'codebuddy/m')
+      seedUsageWithDuration(today, 10, spec.output, 999, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+    }
+    // A failed execution with usage must never contribute a sample.
+    seedTask('task-failed', 'tps', today, 'done')
+    seedExecutionResolved('exec-failed', 'policy', 'coding', 'task-failed', {
+      startedAt: new Date(localNoon(today)).toISOString(),
+      endedAt: '2026-07-19T03:00:10.000Z',
+    })
+    seedAttemptDispatch('exec-failed', 'task-failed', 'codebuddy', 'm', 'codebuddy/m')
+    seedUsageWithDuration(today, 10, 999999, 1, 'agent_turn', 'exec-failed', 'task-failed', 'agent_turn', 'agent_turn_v1')
+    dbRun(`UPDATE executions SET status = 'failed' WHERE id = 'exec-failed'`)
+
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
     const row = result.windows?.[0].byProfile[0]
     assert.ok(row)
-    // totalTokens counts every turn_usage (including the zero-output sample); TPS excludes zero-output.
-    assert.equal(row.totalTokens, 10 * 6 + 1000 + 0 + 500 * 4)
-    // Only the single valid sample drives the weighted TPS: 1000 * 1000 / 2000 = 500.
-    assert.equal(row.averageTps, 500)
+    // Median of [100, 150, 200] = 150, driven by execution timing and not by
+    // native durations (all seeded as a misleading 999ms).
+    assert.equal(row.averageTps, 150)
     closeTestDb()
   })
 

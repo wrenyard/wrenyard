@@ -307,12 +307,7 @@ export interface TaskGraphSlipNode {
   agent_runtime?: string;
   /** Durable per-task-run tool_call event count; omitted for legacy runs without a telemetry row. */
   tool_call_count?: number;
-  /**
-   * End-to-end effective agent-turn output speed (1000 * output_tokens /
-   * agent_turn_ms over client-reported agent-turn/session wall time, which may
-   * include tool execution and waiting). This is deliberately not provider
-   * generation speed.
-   */
+  /** TPS: output tokens divided by recorded execution time, including tools and waits. */
   tps?: number;
   /** Resolved execution profile (<=128 UTF-16 units); omitted when absent or out of bound. */
   profile?: string;

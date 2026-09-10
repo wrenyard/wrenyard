@@ -217,16 +217,27 @@ function setupTaskAndExecution(
   targetDb: ForemanDatabase,
   taskRunId: string,
   executionId: string,
-  opts?: { summary?: string; profile?: string },
+  opts?: { summary?: string; profile?: string; startedAtMs?: number; endedAtMs?: number },
 ): void {
+  const startedAt = new Date(opts?.startedAtMs ?? Date.parse(T0)).toISOString()
+  const endedAt = new Date(opts?.endedAtMs ?? Date.parse(T0)).toISOString()
+  // The task row must exist before the execution can reference it (FK): seed the
+  // task with a null execution_id, create the execution, then link it back.
   targetDb.prepare(
-    `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at)
-     VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(executionId, 'default', 'edit', '/tmp', 'p', 'done', T0, T0)
+    `INSERT INTO tasks (id, template, project, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(taskRunId, `template-${taskRunId}`, 'foreman', 'done', T0, T0)
   targetDb.prepare(
-    `INSERT INTO tasks (id, template, project, status, execution_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(taskRunId, `template-${taskRunId}`, 'foreman', 'done', executionId, T0, T0)
+    `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, started_at, ended_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(executionId, taskRunId, 'default', 'edit', '/tmp', 'p', 'done', startedAt, endedAt, T0, T0)
+  targetDb.prepare('UPDATE tasks SET execution_id = ? WHERE id = ?').run(executionId, taskRunId)
+  // A resolvable dispatch identity is required by the shared task-TPS read.
+  targetDb.prepare(
+    `INSERT INTO task_run_attempt_dispatch
+       (execution_id, task_run_id, requested_agent_runtime, profile, client, provider, model, model_id, mode, created_at, updated_at)
+     VALUES (?, ?, 'agent', 'p', 'claude', 'anthropic', 'sonnet', 'anthropic/sonnet', 'native', ?, ?)`,
+  ).run(executionId, taskRunId, T0, T0)
   if (opts?.summary !== undefined) {
     targetDb.prepare('UPDATE tasks SET summary = ? WHERE id = ?').run(opts.summary, taskRunId)
   }
@@ -889,14 +900,18 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
     const id = (await service.create({ graph: { nodes: linearGraph() } })).taskgraph.id
 
     const longSummary = `line one\n\n   ${'x'.repeat(300)}`
+    // Wall interval is exactly 1000ms; the native duration_ms of 5 would give
+    // 400_000 TPS under the legacy formula. The shared calculation must use the
+    // execution interval: 1000 * 2000 / 1000 = 2000 TPS.
     setupTaskAndExecution(db, 'task_1', 'exec_slip_bounds', {
       summary: longSummary,
       profile: 'forge/'.concat('r'.repeat(140)),
+      startedAtMs: Date.parse(T0),
+      endedAtMs: Date.parse(T0) + 1000,
     })
-    // 1000 * 2_000_000 / 1000 = 2_000_000 > 1_000_000 bound → tps omitted.
     writeEvent(db, 'exec_slip_bounds', 'task_1', 1, 'turn_usage', {
-      output_tokens: 2_000_000,
-      duration_ms: 1000,
+      output_tokens: 2000,
+      duration_ms: 5,
       token_scope: 'agent_turn',
       duration_scope: 'agent_turn',
       tps_contract: 'agent_turn_v1',
@@ -910,7 +925,7 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
 
     const node = service.slip({ taskgraph_id: id, node_ids: ['work'] }).nodes[0] as SlipNodeWithTelemetry
     assert.equal(node.tool_call_count, 1)
-    assert.equal('tps' in node, false, 'out-of-bound tps must be omitted')
+    assert.equal(node.tps, 2000, 'tps must come from the execution wall interval, not native duration')
     assert.equal('profile' in node, false, 'over-long profile must be omitted')
     assert.equal(typeof node.summary, 'string')
     assert.equal(node.summary!.length, 280)

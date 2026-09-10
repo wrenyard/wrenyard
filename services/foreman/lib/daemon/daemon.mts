@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, getDb, initDb } from '../db/connection.mts'
+import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { MessageStore } from '../db/stores/message-store.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
@@ -37,6 +38,7 @@ import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
+import { readLocalSpeedSamples } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
@@ -966,6 +968,11 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   const db = initDb(process.env.FOREMAN_DB_PATH)
   retainDaemonDb()
 
+  // Destructive telemetry cleanup belongs to daemon startup, once this process
+  // owns the database and the previous daemon has stopped. Ordinary initDb
+  // (bootstrapSchema) deliberately leaves legacy columns intact.
+  dropTaskRunTelemetryRetiredColumns(db)
+
   // Catalog + provider runtime are the single source of truth for the daemon.
   // Canonical task dispatch plans and the deterministic resolver are derived
   // here (not in the runtime bootstrap) so the runner is wired with a fully
@@ -982,13 +989,8 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
-    // No automatic-routing local speed evidence is injected: the stats
-    // turn_usage tps_contract is WALL agent-turn throughput (including tool
-    // time and waits), not model-generation TPS, and no current adapter emits
-    // trustworthy generation-only timing. Automatic routing therefore uses
-    // provider_override/catalog_default until real matched generation evidence
-    // exists. The catalog local speed helper remains available on the resolver
-    // for a genuinely supplied measurement.
+    // Share execution-based TPS across statistics and automatic routing.
+    localSpeed: () => readLocalSpeedSamples(),
   })
 
   try {

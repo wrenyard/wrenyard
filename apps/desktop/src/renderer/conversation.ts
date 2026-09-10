@@ -386,7 +386,7 @@ export function buildTaskRunSummaryLines(taskRun: TaskRunSnapshot): TaskRunSumma
     lines.push({ label: '消耗 TOKEN', value: '未知' });
   }
 
-  lines.push({ label: '任务吞吐（Token/s）', value: usage.outputTps !== undefined ? String(usage.outputTps) : '未知' });
+  lines.push({ label: 'TPS', value: usage.outputTps !== undefined ? String(usage.outputTps) : '未知' });
   lines.push({
     label: '参考费用（估算）',
     value: usage.referenceCostUsd !== undefined ? `$${usage.referenceCostUsd.toFixed(4)}` : '未知',

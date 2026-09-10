@@ -23,7 +23,7 @@ import {
  *
  * The resolver is a thin adapter over `@wrenyard/catalog`: it derives the
  * trusted dispatch plans and resolves the runtime task plans through the
- * catalog/provider runtime, supplies per-candidate local `agent_turn_v1` speed
+ * catalog/provider runtime, supplies per-provider/model measured TPS
  * evidence through a lazy injected source, and returns exactly one eligible
  * plan with a full, truthful canonical provider/model:client snapshot. It never
  * probes the network or invokes a model; speed, pricing, and intelligence are
@@ -83,7 +83,7 @@ export class ExplicitRuntimeUnavailableError extends Error {
 export interface TaskDispatchResolverDeps {
   catalog: Catalog
   runtime: ProviderRuntime
-  /** Lazy source of per-candidate trusted local `agent_turn_v1` speed samples. */
+  /** Lazy source of per-provider/model measured TPS samples. */
   localSpeed?: () => LocalSpeedSample[]
 }
 

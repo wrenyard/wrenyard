@@ -1,4 +1,5 @@
 import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
+import { readTaskTps } from '../../events/tps.mts'
 import type {
   TaskAutoRoutingDecision,
   TaskReferencePricing,
@@ -53,16 +54,9 @@ interface AttemptDispatchRow {
   auto_routing: string | null
 }
 
-interface TelemetryRow {
-  usage_event_count: number
-  agent_turn_ms: number
-  tps_complete: number
-}
-
 export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
-  const telemetry = dbGet<TelemetryRow | undefined>(
-    `SELECT usage_event_count, agent_turn_ms, tps_complete
-     FROM task_run_telemetry WHERE task_run_id = ?`,
+  const telemetry = dbGet<{ usage_event_count: number } | undefined>(
+    `SELECT usage_event_count FROM task_run_telemetry WHERE task_run_id = ?`,
     taskRunId,
   )
 
@@ -187,34 +181,16 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   }
 
   // --- TPS projection ---------------------------------------------------
-  // Evaluated independently of token/cost completeness. Trusted only when every
-  // persisted row carries trusted TPS evidence and telemetry agrees exactly.
-  let tpsTrusted = attemptRows.length > 0
-  let tpsEventCount = 0
-  let sumDurationMs = 0
-  let sumTpsOutput = 0
-  for (const a of attemptRows) {
-    const events = eventsByExecution.get(a.execution_id) ?? []
-    if (events.length === 0) {
-      tpsTrusted = false
-      continue
-    }
-    for (const e of events) {
-      if (!e.tpsTrusted) {
-        tpsTrusted = false
-        continue
-      }
-      tpsEventCount++
-      sumDurationMs += e.tpsDurationMs!
-      sumTpsOutput += e.tpsOutput!
-    }
-  }
-  const telemetryReady = telemetry != null
-    && telemetry.tps_complete === 1
-    && telemetry.usage_event_count === tpsEventCount
-  if (tpsTrusted && telemetryReady) {
-    usage.agent_turn_ms = sumDurationMs
-    usage.output_tps = sumDurationMs > 0 ? (1000 * sumTpsOutput) / sumDurationMs : 0
+  // Unified execution-based rate: current-invocation output tokens over actual
+  // execution elapsed (executions.started_at -> ended_at), never the sums of
+  // native event duration_ms. `readTaskTps` returns a value only when EVERY
+  // attempt is done and carries a complete sample, so a partial/failed attempt
+  // omits both fields. `tps_contract` is retained unchanged for wire
+  // compatibility; there is no second metric.
+  const taskTps = readTaskTps(taskRunId)
+  if (taskTps) {
+    usage.agent_turn_ms = taskTps.durationMs
+    usage.output_tps = taskTps.tps
     usage.tps_contract = 'agent_turn_v1'
   }
 
@@ -450,7 +426,7 @@ function isStringArray(value: unknown): value is string[] {
  * A single turn_usage record with presence semantics. `additive` is true only
  * when token_scope === 'agent_turn'. `cached` is the normalized cached total
  * (full cached when present, otherwise read+creation when both splits are
- * valid). `tpsTrusted` holds independently of input/cache validity.
+ * valid).
  */
 interface TurnUsageEvent {
   additive: boolean
@@ -459,12 +435,9 @@ interface TurnUsageEvent {
   read?: number
   write?: number
   output?: number
-  tpsTrusted: boolean
-  tpsOutput?: number
-  tpsDurationMs?: number
 }
 
-const EMPTY_TURN_EVENT: TurnUsageEvent = { additive: false, tpsTrusted: false }
+const EMPTY_TURN_EVENT: TurnUsageEvent = { additive: false }
 
 /**
  * Read every persisted turn_usage row for one execution, ordered by seq. A row
@@ -504,31 +477,14 @@ function parseTurnUsage(value: string | null): TurnUsageEvent {
   if (fullCached !== undefined) cached = fullCached
   else if (readSplit !== undefined && writeSplit !== undefined) cached = readSplit + writeSplit
 
-  // TPS evidence is trusted independently of input/cache validity.
-  const durationMs = rec.duration_ms
-  const tpsTrusted =
-    additive
-    && rec.duration_scope === 'agent_turn'
-    && rec.tps_contract === 'agent_turn_v1'
-    && output !== undefined
-    && typeof durationMs === 'number'
-    && Number.isFinite(durationMs)
-    && durationMs > 0
-
-  const ev: TurnUsageEvent = {
+  return {
     additive,
     input,
     cached,
     read: readSplit,
     write: writeSplit,
     output,
-    tpsTrusted,
   }
-  if (tpsTrusted) {
-    ev.tpsOutput = output
-    ev.tpsDurationMs = durationMs as number
-  }
-  return ev
 }
 
 /**

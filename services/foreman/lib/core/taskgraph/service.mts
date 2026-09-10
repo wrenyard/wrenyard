@@ -31,7 +31,7 @@ import {
   GraphRunner,
   TaskGraphValidationError,
 } from './runner.mts'
-import { TaskGraphStore, type TaskGraphRunProjection, type TaskGraphSlipTelemetry } from './store.mts'
+import { TaskGraphStore, type TaskGraphRunProjection } from './store.mts'
 import {
   TaskServiceTaskBridge,
   type TaskGraphTaskBridge,
@@ -269,11 +269,10 @@ export class TaskGraphService {
       if (row && row.taskRunId !== null && row.toolCallCount !== null) {
         node.tool_call_count = row.toolCallCount
       }
-      // tps is the end-to-end effective output rate over client-reported
-      // agent-turn wall time (may include tool execution and waiting); it is
+      // tps is the shared task-metadata rate resolved by the store snapshot
+      // (complete successful execution intervals over additive usage); it is
       // never named or documented as provider generation speed.
-      const tps = row ? effectiveTps(row) : undefined
-      if (tps !== undefined) node.tps = tps
+      if (row?.tps !== undefined) node.tps = row.tps
       if (row && typeof row.resolvedProfile === 'string'
         && row.resolvedProfile.length > 0 && row.resolvedProfile.length <= MAX_PROFILE_LENGTH) {
         node.profile = row.resolvedProfile
@@ -394,26 +393,6 @@ type SlipNodeOutput = TaskSlipNodeOutput & {
 
 const MAX_PROFILE_LENGTH = 128
 const MAX_SUMMARY_LENGTH = 280
-const MAX_TPS = 1_000_000
-
-/**
- * End-to-end effective output TPS = 1000 * output_tokens / agent_turn_ms
- * over client-reported agent-turn/session wall time (may include tool
- * execution and waiting). Returned only when the run's telemetry is complete
- * (tps_complete), at least one usage event was recorded, the summed
- * agent-turn wall time is positive, and the rate is finite within
- * 0..1_000_000. Anything else is omitted. This is deliberately not named or
- * documented as provider generation speed.
- */
-function effectiveTps(row: TaskGraphSlipTelemetry): number | undefined {
-  if (row.tpsComplete !== 1) return undefined
-  if (row.usageEventCount === null || row.usageEventCount <= 0) return undefined
-  if (row.agentTurnMs === null || row.agentTurnMs <= 0) return undefined
-  if (row.outputTokens === null) return undefined
-  const tps = (1000 * row.outputTokens) / row.agentTurnMs
-  if (!Number.isFinite(tps) || tps < 0 || tps > MAX_TPS) return undefined
-  return tps
-}
 
 /** Collapse whitespace to single spaces and truncate to 280 UTF-16 units. */
 function foldSlipSummary(value: string): string {

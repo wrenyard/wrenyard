@@ -1,6 +1,8 @@
 import { get as dbGet, query as dbQuery } from '../db/connection.mts'
+import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
 import { readTaskRunMetadata } from '../core/task/run-metadata.mts'
+import { estimateTps, readExecutionTpsSamples, type ExecutionTpsSample } from './tps.mts'
 import type {
   StatsTodayItem,
   ProfileRankingItem,
@@ -131,8 +133,7 @@ interface WindowModelAccumulator {
   runCount: number
   inputTokens: number
   outputTokens: number
-  tpsOutputTokens: number
-  tpsDurationMs: number
+  tpsSamples: ExecutionTpsSample[]
   modelDisplayNames: Set<string>
   providerDisplayNames: Set<string>
 }
@@ -171,7 +172,7 @@ function eligibleModelIdentity(row: {
   const mid = row.model_id.trim()
   if (p === '' || m === '' || mid === '') return undefined
   if (mid !== `${p}/${m}`) return undefined
-  return { provider: p, model: m }
+  return { provider: migrateProviderId(p), model: m }
 }
 
 /**
@@ -507,13 +508,18 @@ export function readStatsSummary(
 
   const byTaskDuration = rankTaskDuration(durationByTask, limit)
 
-  // --- FIXED PERIOD WINDOWS: project 24h/7d/1mo in memory from the same scans
+  // --- FIXED PERIOD WINDOWS: project 24h/7d/1mo in memory from the same scans.
+  // Execution-based TPS samples are read once for the largest requested window
+  // and reused (filtered by endedAt) for every narrower window, so stats and
+  // local routing share the same measured rate and median calculation.
+  const tpsSamples = readExecutionTpsSamples({ startAt: fullStartIso, endAt: now.toISOString() })
   const windows = buildWindows({
     todayWindow,
     windowsStartIso,
     windowsEndAt: fullEndIso,
     allEventsRows,
     taskIntervalRows,
+    tpsSamples,
     now,
     limit,
     resolveDisplayNames: options.resolveDisplayNames,
@@ -696,32 +702,6 @@ function normalizeResolvedProfile(profile: string | null): string | undefined {
 }
 
 /**
- * A turn_usage event contributes to the profile average TPS only when it
- * carries the exact three-field versioned contract: token_scope exactly
- * 'agent_turn', duration_scope exactly 'agent_turn', and tps_contract exactly
- * 'agent_turn_v1', with output_tokens a strictly positive integer and a
- * finite, positive duration_ms. The single weighted formula
- *   1000 * sum(output_tokens) / sum(duration_ms)
- * stays client-agnostic and applies only to the common contract; legacy and
- * unversioned events never contribute to the TPS numerator/denominator. A
- * zero-output sample is excluded from the TPS numerator and denominator even
- * when its contract and duration are otherwise valid, so failures, no-usage,
- * zero-output, zero-duration, and invalid-contract samples never skew the
- * weighted average.
- */
-function parseAgentTurnUsage(data: JsonRecord): { outputTokens: number; durationMs: number } | undefined {
-  const outputTokens = data.output_tokens
-  const durationMs = data.duration_ms
-  const validOutputTokens = typeof outputTokens === 'number' && Number.isInteger(outputTokens) && outputTokens > 0
-  const validDurationMs = typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
-  const validContract = data.token_scope === 'agent_turn'
-    && data.duration_scope === 'agent_turn'
-    && data.tps_contract === 'agent_turn_v1'
-  if (!validOutputTokens || !validDurationMs || !validContract) return undefined
-  return { outputTokens, durationMs }
-}
-
-/**
  * Returns the overlap of a task interval with [startMs, endMs), or undefined
  * when the interval is invalid, inverted, or has no positive overlap.
  */
@@ -741,6 +721,7 @@ function buildWindows(options: {
   windowsEndAt: string
   allEventsRows: StatsEventRow[]
   taskIntervalRows: StatsTaskIntervalRow[]
+  tpsSamples: ExecutionTpsSample[]
   now: Date
   limit: number
   resolveDisplayNames?: TaskRunDisplayNameResolver
@@ -760,6 +741,7 @@ function buildWindow(
   options: {
     allEventsRows: StatsEventRow[]
     taskIntervalRows: StatsTaskIntervalRow[]
+    tpsSamples: ExecutionTpsSample[]
     limit: number
     resolveDisplayNames?: TaskRunDisplayNameResolver
   },
@@ -798,12 +780,22 @@ function buildWindow(
       recordModelDisplay(g, identity)
       g.inputTokens += inputTokens
       g.outputTokens += outputTokens
-      const usage = parseAgentTurnUsage(record)
-      if (usage) {
-        g.tpsOutputTokens += usage.outputTokens
-        g.tpsDurationMs += usage.durationMs
-      }
     }
+  }
+
+  // Attach execution-based TPS samples for this window to the same model
+  // display grouping used for tokens/runs, resolved through the existing
+  // identity resolver. Ended-but-outside-window samples are filtered by endedAt.
+  for (const sample of options.tpsSamples) {
+    const endedMs = new Date(sample.endedAt).getTime()
+    if (!Number.isFinite(endedMs) || endedMs < startMs || endedMs >= endMs) continue
+    const identity = resolveStatsModelIdentity(
+      { provider: sample.provider, model: sample.model },
+      options.resolveDisplayNames,
+    )
+    const g = ensureWindowModel(modelMap, identity)
+    recordModelDisplay(g, identity)
+    g.tpsSamples.push(sample)
   }
 
   const byProfile: StatsWindowProfileRow[] = [...modelMap.entries()]
@@ -814,10 +806,10 @@ function buildWindow(
         runCount: g.runCount,
         totalTokens: g.inputTokens + g.outputTokens,
       }
-      if (g.tpsDurationMs > 0) {
-        const averageTps = (1000 * g.tpsOutputTokens) / g.tpsDurationMs
-        if (Number.isFinite(averageTps)) item.averageTps = averageTps
-      }
+      // Same median calculation and sample filter as local routing; fewer than
+      // 3 usable samples omit the aggregate TPS entirely.
+      const estimate = estimateTps(g.tpsSamples)
+      if (estimate) item.averageTps = estimate.tps
       applyModelDisplay(g, item)
       return item
     })
@@ -844,8 +836,7 @@ function ensureWindowModel(
       runCount: 0,
       inputTokens: 0,
       outputTokens: 0,
-      tpsOutputTokens: 0,
-      tpsDurationMs: 0,
+      tpsSamples: [],
       modelDisplayNames: new Set<string>(),
       providerDisplayNames: new Set<string>(),
     }

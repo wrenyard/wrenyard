@@ -27,15 +27,21 @@ function seedTask(db: ReturnType<typeof initDb>, taskRunId: string): void {
   ).run(taskRunId, TS, TS)
 }
 
+// Completed executions carry a real started_at/ended_at interval so the unified
+// execution-based TPS can be derived; `elapsedMs` fixes the whole-execution
+// duration used by the corrected rate.
 function seedExecution(
   db: ReturnType<typeof initDb>,
   executionId: string,
   taskRunId: string,
+  elapsedMs = 1000,
 ): void {
+  const startedAt = TS
+  const endedAt = new Date(Date.parse(TS) + elapsedMs).toISOString()
   db.prepare(
-    `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, created_at, updated_at, requested_agent_runtime)
-     VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', 'done', ?, ?, 'agent')`,
-  ).run(executionId, taskRunId, TS, TS)
+    `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, started_at, ended_at, created_at, updated_at, requested_agent_runtime)
+     VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', 'done', ?, ?, ?, ?, 'agent')`,
+  ).run(executionId, taskRunId, startedAt, endedAt, TS, TS)
 }
 
 function seedTurnUsage(
@@ -63,16 +69,14 @@ function seedTurnUsage(
 function seedTelemetry(
   db: ReturnType<typeof initDb>,
   taskRunId: string,
-  opts: { usage_event_count?: number; agent_turn_ms?: number; tps_complete?: number; completeness?: string } = {},
+  opts: { usage_event_count?: number; completeness?: string } = {},
 ): void {
   db.prepare(
-    `INSERT INTO task_run_telemetry (task_run_id, usage_event_count, agent_turn_ms, tps_complete, completeness, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO task_run_telemetry (task_run_id, usage_event_count, completeness, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
   ).run(
     taskRunId,
     opts.usage_event_count ?? 1,
-    opts.agent_turn_ms ?? 1000,
-    opts.tps_complete ?? 1,
     opts.completeness ?? 'complete',
     TS,
     TS,
@@ -127,7 +131,7 @@ function seedDispatch(
     client: o.client ?? 'claude',
     provider: o.provider ?? 'anthropic',
     model: o.model ?? 'sonnet',
-    model_id: o.model_id ?? 'claude-sonnet-4',
+    model_id: o.model_id ?? `${o.provider ?? 'anthropic'}/${o.model ?? 'sonnet'}`,
     mode: o.mode ?? 'native',
     protocol: o.protocol ?? null,
     speed_effective_tps: o.speed_effective_tps ?? 30,
@@ -159,7 +163,7 @@ function fullPricedDispatch(
     client: 'claude',
     provider: 'anthropic',
     model: 'sonnet',
-    model_id: 'claude-sonnet-4',
+    model_id: 'anthropic/sonnet',
     mode: 'native',
     speed_effective_tps: 30,
     speed_source: 'local_31d',
@@ -190,7 +194,7 @@ test('two unequal attempts with different prices sum to exact USD', () => {
     seedExecution(db, 'e2', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 1000, cached_input_tokens: 500, output_tokens: 2000 })
     seedTurnUsage(db, 'e2', task, { input_tokens: 3000, cached_input_tokens: 1500, output_tokens: 1000 })
-    seedTelemetry(db, task, { usage_event_count: 2, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 2 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
     seedDispatch(db, 'e2', task, fullPricedDispatch('e2', task, { input: 2.0, output: 4.0, cache: 1.0, cache_write: 0.5 }))
 
@@ -266,7 +270,7 @@ test('all known-zero usage emits $0 and complete', () => {
       cache_creation_input_tokens: 0,
       output_tokens: 0,
     })
-    seedTelemetry(db, task, { usage_event_count: 1, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
     // dispatch carries only source/checked_at; no numeric rates are required
     // because every token component is an explicit zero.
     seedDispatch(db, 'e1', task, {
@@ -275,7 +279,7 @@ test('all known-zero usage emits $0 and complete', () => {
       client: 'claude',
       provider: 'anthropic',
       model: 'sonnet',
-      model_id: 'claude-sonnet-4',
+      model_id: 'anthropic/sonnet',
       mode: 'native',
       speed_effective_tps: 30,
       speed_source: 'local_31d',
@@ -297,9 +301,10 @@ test('all known-zero usage emits $0 and complete', () => {
     assert.equal(usage.reference_cost_usd, 0)
     assert.equal(usage.reference_cost_complete, true)
     assert.equal(usage.reference_cost_basis, 'catalog_reference')
-    assert.equal(usage.output_tps, 0)
-    assert.equal(usage.tps_contract, 'agent_turn_v1')
-    assert.equal(usage.agent_turn_ms, 1000)
+    // A zero-output execution produces no TPS sample, so no rate is published.
+    assert.equal(usage.output_tps, undefined)
+    assert.equal(usage.tps_contract, undefined)
+    assert.equal(usage.agent_turn_ms, undefined)
   })
 })
 
@@ -310,7 +315,7 @@ test('explicit input/output but missing cached stays partial and cost incomplete
     seedExecution(db, 'e1', task)
     // No cached/read/write partitions present at all.
     seedTurnUsage(db, 'e1', task, { input_tokens: 100, output_tokens: 50 })
-    seedTelemetry(db, task, { usage_event_count: 1, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { usage } = readTaskRunMetadata(task)
@@ -335,7 +340,7 @@ test('empty turn_usage event with exact scopes but no tokens is unavailable', ()
     seedExecution(db, 'e1', task)
     // Exact agent_turn scopes/duration but no token fields.
     seedTurnUsage(db, 'e1', task, {})
-    seedTelemetry(db, task, { usage_event_count: 0, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 0 })
 
     const { usage } = readTaskRunMetadata(task)
 
@@ -359,7 +364,7 @@ test('output-only trusted event emits output and TPS but not input/cached/cost',
     seedExecution(db, 'e1', task)
     // output valid, input/cache absent.
     seedTurnUsage(db, 'e1', task, { output_tokens: 50 })
-    seedTelemetry(db, task, { usage_event_count: 1, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { usage } = readTaskRunMetadata(task)
@@ -378,6 +383,28 @@ test('output-only trusted event emits output and TPS but not input/cached/cost',
   })
 })
 
+test('repairs the old misleading native duration with the real execution interval', () => {
+  withDb((db) => {
+    const task = 'task-repair'
+    seedTask(db, task)
+    // Execution actually ran 4000ms even though the events report tiny native
+    // durations (1ms each). The corrected rate must use the execution interval.
+    seedExecution(db, 'e1', task, 4000)
+    seedTurnUsage(db, 'e1', task, { output_tokens: 100, duration_ms: 1 }, 0)
+    seedTurnUsage(db, 'e1', task, { output_tokens: 300, duration_ms: 1 }, 1)
+    seedTelemetry(db, task, { usage_event_count: 2 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    // (100 + 300) output tokens over 4000ms => 100 TPS, NOT the 2ms native sum
+    // (which would be 200000 TPS) nor any retired telemetry timing.
+    assert.equal(usage.agent_turn_ms, 4000)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 100) < 1e-12)
+    assert.equal(usage.tps_contract, 'agent_turn_v1')
+  })
+})
+
 test('mixed two-event attempt sums output/cached but omits input/cost, keeps TPS', () => {
   withDb((db) => {
     const task = 'task-mixed'
@@ -385,7 +412,7 @@ test('mixed two-event attempt sums output/cached but omits input/cost, keeps TPS
     seedExecution(db, 'e1', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 }, 0)
     seedTurnUsage(db, 'e1', task, { cached_input_tokens: 30, output_tokens: 40 }, 1)
-    seedTelemetry(db, task, { usage_event_count: 2, agent_turn_ms: 2000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 2 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { usage } = readTaskRunMetadata(task)
@@ -396,9 +423,10 @@ test('mixed two-event attempt sums output/cached but omits input/cost, keeps TPS
     assert.equal(usage.total_tokens, undefined)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    // Weighted TPS still present across both events.
-    assert.equal(usage.agent_turn_ms, 2000)
-    assert.ok(Math.abs((usage.output_tps ?? -1) - 30) < 1e-12)
+    // Execution-based TPS still present: 60 output tokens over the whole
+    // 1000ms execution interval (each event's own duration is never summed).
+    assert.equal(usage.agent_turn_ms, 1000)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 60) < 1e-12)
     assert.equal(usage.tps_contract, 'agent_turn_v1')
   })
 })
@@ -410,7 +438,7 @@ test('cumulative/wrong-scope event is not summed and does not upgrade completene
     seedExecution(db, 'e1', task)
     seedTurnUsage(db, 'e1', task, { token_scope: 'agent_turn_cumulative', input_tokens: 999999, cached_input_tokens: 999999, output_tokens: 999999 }, 0)
     seedTurnUsage(db, 'e1', task, { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 }, 1)
-    seedTelemetry(db, task, { usage_event_count: 1, agent_turn_ms: 1000, tps_complete: 0 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
 
     const { usage } = readTaskRunMetadata(task)
 
@@ -433,7 +461,7 @@ test('invalid numeric token stays undefined, cost incomplete, output/TPS visible
     seedTask(db, task)
     seedExecution(db, 'e1', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 'bad', cached_input_tokens: 100, output_tokens: 50 })
-    seedTelemetry(db, task, { usage_event_count: 1, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 1 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { usage } = readTaskRunMetadata(task)
@@ -459,7 +487,7 @@ test('executions primary key is aliased to execution_id and joined', () => {
     seedExecution(db, 'e2', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 20 })
     seedTurnUsage(db, 'e2', task, { input_tokens: 30, cached_input_tokens: 0, output_tokens: 40 })
-    seedTelemetry(db, task, { usage_event_count: 2, agent_turn_ms: 1000, tps_complete: 1 })
+    seedTelemetry(db, task, { usage_event_count: 2 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
     seedDispatch(db, 'e2', task, fullPricedDispatch('e2', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
@@ -581,7 +609,7 @@ test('incomplete auto_routing payload is omitted while resolved identity stays a
 
     assert.ok(resolved, 'incomplete payload must not invalidate the resolved dispatch')
     assert.equal(resolved!.auto_routing, undefined, 'incomplete JSON must be omitted')
-    assert.equal(resolved!.model_id, 'claude-sonnet-4')
+    assert.equal(resolved!.model_id, 'anthropic/sonnet')
     assert.equal(usage.reference_cost_complete, true)
   })
 })
