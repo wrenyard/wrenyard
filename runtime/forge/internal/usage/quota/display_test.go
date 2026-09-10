@@ -23,7 +23,7 @@ func TestCanonicalLabel(t *testing.T) {
 		want string
 	}{
 		{"codex", "Codex"},
-		{"codex-spark", "spark"},
+		{"chatgpt", "ChatGPT"},
 		{"cursor", "Cursor"},
 		{"deepseek", "DeepSeek"},
 		{"kimi-coding", "KIMI"},

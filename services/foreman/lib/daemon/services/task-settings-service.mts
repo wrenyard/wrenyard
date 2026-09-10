@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, SCORE_WEIGHTS, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
-import type { CandidateInput } from '@wrenyard/catalog'
+import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/catalog'
 import {
+  findProviderQuotaBinding,
   resolveDeepSeekReferencePricing,
   resolveSubscriptionEconomics,
   type DeepSeekPricingModel,
@@ -1954,9 +1955,9 @@ function automaticClientPreference(choice: TaskDispatchChoice): number {
 
 /** Only exact native Codex/Cursor-client candidates require the authoritative
  * Forge provider-status sample. This intentionally keys on the native client,
- * not the Catalog provider id: codex-spark shares the `codex` credential
- * resolver and native client while retaining its distinct quota provider id.
- * Gateway variants never consume native login state. */
+ * not the Catalog provider id: the single ChatGPT provider uses the codex
+ * native client and credential resolver, while its quota pools stay scoped to
+ * the ChatGPT provider row. Gateway variants never consume native login state. */
 function needsNativeProviderReadiness(choices: readonly TaskDispatchChoice[]): boolean {
   return choices.some((choice) =>
     choice.mode === 'native' && (choice.client === 'codex' || choice.client === 'cursor'),
@@ -2036,6 +2037,24 @@ function withDeepSeekAttemptPricing(
     : { ...dispatch, reference_pricing: pricing.attemptReferencePricing }
 }
 
+/** Builds explicit null quota constraints for every pool bound to a provider
+ *  model that has no snapshot entry. Uses the unified exported provider
+ *  metadata (`findProviderQuotaBinding`) so each bound `quota`/`balance` pool
+ *  contributes one null constraint keyed by its normalized pool id — an unbound
+ *  candidate is never silently admitted. An unknown provider yields no pools. */
+function missingEntryRequiredQuota(
+  providerId: string,
+  modelId: string,
+): RequiredQuotaConstraint[] {
+  const binding = findProviderQuotaBinding(providerId, modelId)
+  if (binding === undefined) return [{ id: `${providerId}/usage`, evidence: null }]
+  return binding.pools.map((pool) =>
+    pool.kind === 'balance'
+      ? { id: pool.quotaPoolId, evidence: null, kind: 'balance' as const, balance: null }
+      : { id: pool.quotaPoolId, evidence: null },
+  )
+}
+
 /** Builds one policy CandidateInput from truthful resolved dispatch evidence,
  *  the snapshot quota entry (or an empty unknown list), and the confirmed-free
  *  supply fact covering the routing timeout horizon. Returns null when the
@@ -2055,8 +2074,18 @@ function toAutomaticCandidateInput(
   if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
   const quotaEntry = context.snapshot?.entries.find(
     (candidate) => candidate.providerId === choice.provider && candidate.modelId === choice.model,
+  ) ?? context.snapshot?.entries.find(
+    (candidate) => candidate.providerId === choice.provider && candidate.modelId === '*',
   )
-  const requiredQuota = quotaEntry?.requiredQuota ?? []
+  // When the snapshot carries an explicit entry its required constraints are
+  // authoritative, including an upstream-declared empty list (no applicable
+  // quota). A missing entry must never silently bypass quota: build explicit
+  // null constraints for every bound pool from the unified provider metadata
+  // (both usage `quota` and `balance` kinds), so policy sees incomplete/unknown
+  // coverage rather than an unbound candidate.
+  const requiredQuota = quotaEntry !== undefined
+    ? quotaEntry.requiredQuota
+    : missingEntryRequiredQuota(choice.provider, choice.model)
   const freeFact = entry.availability?.freeSupply
   // Verified quota-burn efficiency is a separate, provenance-bearing signal from
   // the pure subscription-economics resolver. It is consulted ONLY when the live

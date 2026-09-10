@@ -10,7 +10,7 @@ import (
 )
 
 func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
-	want := []string{"anthropic", "anthropic-api", "codebuddy", "codex", "codex-spark", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-go", "opencode-native", "opencode-zen", "openrouter", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
+	want := []string{"anthropic", "anthropic-api", "chatgpt", "codebuddy", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-go", "opencode-native", "opencode-zen", "openrouter", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
 	modules := providers.Modules()
 	got := make([]string, len(modules))
 	reg := catalog.DefaultRegistry()
@@ -29,6 +29,50 @@ func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("module ids = %v, want %v", got, want)
+	}
+}
+
+func TestOldProvidersAbsent(t *testing.T) {
+	for _, name := range []string{"codex", "codex-spark"} {
+		if _, ok := providers.Lookup(name); ok {
+			t.Fatalf("obsolete provider %q must not be registered", name)
+		}
+		if _, err := catalog.DefaultRegistry().LookupBinding(name); err == nil {
+			t.Fatalf("obsolete provider %q must not be a registered binding", name)
+		}
+	}
+}
+
+func TestChatGPTSingleProvider(t *testing.T) {
+	module, ok := providers.Lookup("chatgpt")
+	if !ok {
+		t.Fatal("chatgpt builtin module must be registered")
+	}
+	binding := module.Binding()
+	if binding.Name != "chatgpt" || binding.Kind != "builtin" {
+		t.Fatalf("chatgpt binding = %+v", binding)
+	}
+	if binding.QuotaProvider != "chatgpt" {
+		t.Fatalf("chatgpt quota provider = %q, want chatgpt", binding.QuotaProvider)
+	}
+	if !binding.SupportsDialect(catalog.DialectCodex) {
+		t.Fatal("chatgpt provider must support the codex dialect")
+	}
+	if binding.Inference == nil || binding.Inference.CredentialResolver != catalog.CredentialResolverCodex {
+		t.Fatalf("chatgpt must keep the codex credential resolver, got %#v", binding.Inference)
+	}
+	if quota := module.Quota(); quota.Kind != "chatgpt" || quota.Name != "chatgpt" {
+		t.Fatalf("chatgpt quota metadata = %#v, want kind/name chatgpt", quota)
+	}
+	spark, ok := module.Models()["gpt-5.3-codex-spark"]
+	if !ok {
+		t.Fatal("chatgpt must own the gpt-5.3-codex-spark model")
+	}
+	if spark.ID != "gpt-5.3-codex-spark" {
+		t.Fatalf("chatgpt spark model = %+v", spark)
+	}
+	if err := binding.ValidateModel("gpt-5.3-codex-spark"); err != nil {
+		t.Fatalf("chatgpt must allow the spark model: %v", err)
 	}
 }
 
@@ -85,7 +129,7 @@ func TestPublicAPIProviderContracts(t *testing.T) {
 }
 
 func TestPlanAndOpenPlatformCredentialsRemainSeparate(t *testing.T) {
-	for _, pair := range [][2]string{{"minimax", "minimax-coding"}, {"qwen", "qwen-coding"}, {"moonshot", "kimi-coding"}, {"zhipu", "zhipu-coding"}, {"openai", "codex"}, {"anthropic-api", "anthropic"}} {
+	for _, pair := range [][2]string{{"minimax", "minimax-coding"}, {"qwen", "qwen-coding"}, {"moonshot", "kimi-coding"}, {"zhipu", "zhipu-coding"}, {"openai", "chatgpt"}, {"anthropic-api", "anthropic"}} {
 		left, leftOK := providers.Lookup(pair[0])
 		right, rightOK := providers.Lookup(pair[1])
 		if !leftOK || !rightOK || left.ID() == right.ID() {

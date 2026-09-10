@@ -45,7 +45,7 @@ const clients: readonly ClientDefinition[] = [
   { id: 'codebuddy', nativeProvider: 'codebuddy', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
   // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
   // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
-  { id: 'codex', nativeProvider: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
+  { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
   // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
   // (checked 2026-09-10).
   { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true, supportsNativeWebSearch: true },
@@ -150,8 +150,8 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://copilot.tencent.com/v2/chat/completions')],
   },
   {
-    id: 'codex', displayName: 'Codex Subscription', credentialResolver: 'codex',
-    nativeClients: ['codex'], defaultModel: 'gpt-5.6-sol', quotaProvider: 'codex',
+    id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
+    nativeClients: ['codex'], defaultModel: 'gpt-5.6-sol', quotaProvider: 'chatgpt',
     models: [
       model('gpt-5.6-sol', 'GPT-5.6 Sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol']),
       model('gpt-5.6-terra', 'GPT-5.6 Terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra']),
@@ -161,11 +161,6 @@ const builtinProviders: readonly RawProviderDefinition[] = [
       model('gpt-5.5', 'GPT-5.5'), model('gpt-5.4', 'GPT-5.4'), model('gpt-5.4-mini', 'GPT-5.4 Mini'),
     ],
     modelAliases: { 'codex-astra': 'gpt-6-astra' },
-  },
-  {
-    id: 'codex-spark', displayName: 'Codex Spark', credentialResolver: 'codex',
-    nativeClients: ['codex'], defaultModel: 'gpt-5.3-codex-spark', quotaProvider: 'codex-spark',
-    models: [{ ...model('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark']), taskOnly: true }],
   },
   {
     id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
@@ -276,13 +271,9 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     description: 'CodeBuddy 提供的 DeepSeek、混元与 Kimi 模型。',
     setupHint: '请在 CodeBuddy 客户端完成登录，返回啾啾工坊后刷新状态。',
   },
-  codex: {
-    description: 'OpenAI Codex 编程模型与订阅额度。',
+  chatgpt: {
+    description: 'ChatGPT 共享的 Codex 编程模型与订阅额度：标准模型与低延迟 Spark 模型共用同一 ChatGPT 账号，但各自使用独立的额度池。',
     setupHint: '请使用 Codex CLI 完成登录，返回啾啾工坊后刷新状态。',
-  },
-  'codex-spark': {
-    description: '低延迟 Codex Spark 模型与独立额度池。',
-    setupHint: 'Codex Spark 复用 Codex 登录状态；请先使用 Codex CLI 登录。',
   },
   cursor: {
     description: 'Cursor Composer 与 Grok 模型服务。',

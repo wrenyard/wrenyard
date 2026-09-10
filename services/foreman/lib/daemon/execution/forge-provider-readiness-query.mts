@@ -38,10 +38,8 @@ export interface ForgeProviderReadinessSnapshot {
 }
 
 export interface ForgeNativeRoute {
-  /** Canonical Forge provider-status identity (the Catalog credentialResolver),
-   * not necessarily the Catalog provider id. For example, codex-spark shares
-   * the `codex` native credential resolver and readiness row. */
-  readonly credentialResolverId: string
+  /** Canonical provider id returned by Forge provider status. */
+  readonly providerId: string
   readonly client: string
   readonly mode: 'native' | 'gateway'
   readonly nativeClients: readonly string[]
@@ -99,11 +97,11 @@ export function evaluateForgeNativeRouteReadiness(
 ): ForgeNativeRouteReadiness {
   if (
     route.mode !== 'native'
-    || (route.credentialResolverId !== 'codex' && route.credentialResolverId !== 'cursor')
+    || (route.providerId !== 'chatgpt' && route.providerId !== 'cursor')
     || !route.nativeClients.includes(route.client)
   ) return 'unsupported'
   if (snapshot === undefined) return 'unknown'
-  const authOk = snapshot.authByProvider[route.credentialResolverId]
+  const authOk = snapshot.authByProvider[route.providerId]
   return authOk === true ? 'available' : authOk === false ? 'missing' : 'unknown'
 }
 

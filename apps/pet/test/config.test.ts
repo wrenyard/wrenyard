@@ -197,25 +197,27 @@ describe('Config — V1 to V2 migration', () => {
 });
 
 describe('Config — grok to super-grok quota migration', () => {
-  it('defaults contain official popular order: codex, cursor, deepseek, zhipu-coding, kimi-coding, then codex-spark, super-grok', () => {
+  it('defaults contain official popular order: chatgpt, cursor, deepseek, zhipu-coding, kimi-coding, then super-grok', () => {
     const c = normalizeConfig({});
     const ids = c.quota.providers.map((p) => p.id);
-    expect(ids).toEqual(['codex', 'cursor', 'deepseek', 'zhipu-coding', 'kimi-coding', 'codex-spark', 'super-grok']);
+    expect(ids).toEqual(['chatgpt', 'cursor', 'deepseek', 'zhipu-coding', 'kimi-coding', 'super-grok']);
     expect(ids).not.toContain('grok');
+    expect(ids).not.toContain('codex');
+    expect(ids).not.toContain('codex-spark');
   });
 
   it('inserts deepseek exactly once at the popularity position for legacy providers, preserving order/enabled', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'grok', enabled: false },
           { id: 'kimi-coding', enabled: true },
         ],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: false },
@@ -226,11 +228,11 @@ describe('Config — grok to super-grok quota migration', () => {
   it('inserts deepseek at popularity position for legacy pools without duplicating', () => {
     const c = normalizeConfig({
       quota: {
-        pools: ['codex', 'grok', 'kimi-coding'],
+        pools: ['chatgpt', 'grok', 'kimi-coding'],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: true },
@@ -239,10 +241,10 @@ describe('Config — grok to super-grok quota migration', () => {
     expect(c.quota.providers.filter((p) => p.id === 'deepseek')).toHaveLength(1);
   });
 
-  it('defaults contain codex first, cursor second, super-grok, and not grok', () => {
+  it('defaults contain chatgpt first, cursor second, super-grok, and not grok', () => {
     const c = normalizeConfig({});
     const ids = c.quota.providers.map((p) => p.id);
-    expect(ids.slice(0, 2)).toEqual(['codex', 'cursor']);
+    expect(ids.slice(0, 2)).toEqual(['chatgpt', 'cursor']);
     expect(ids).toContain('cursor');
     expect(ids).toContain('super-grok');
     expect(ids).not.toContain('grok');
@@ -252,14 +254,14 @@ describe('Config — grok to super-grok quota migration', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'grok', enabled: false },
           { id: 'kimi-coding', enabled: true },
         ],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: false },
@@ -270,11 +272,11 @@ describe('Config — grok to super-grok quota migration', () => {
   it('migrates legacy quota.pools grok, appending cursor once', () => {
     const c = normalizeConfig({
       quota: {
-        pools: ['codex', 'grok', 'kimi-coding'],
+        pools: ['chatgpt', 'grok', 'kimi-coding'],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
       { id: 'super-grok', enabled: true },
@@ -288,13 +290,13 @@ describe('Config — grok to super-grok quota migration', () => {
         providers: [
           { id: 'grok', enabled: false },
           { id: 'super-grok', enabled: true },
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
         ],
       },
     });
     expect(c.quota.providers).toEqual([
       { id: 'super-grok', enabled: true },
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
     ]);
@@ -304,13 +306,13 @@ describe('Config — grok to super-grok quota migration', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'zhipu-coding', enabled: false },
         ],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'deepseek', enabled: true },
       { id: 'zhipu-coding', enabled: false },
@@ -321,13 +323,13 @@ describe('Config — grok to super-grok quota migration', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'cursor', enabled: false },
         ],
       },
     });
     expect(c.quota.providers).toEqual([
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: false },
       { id: 'deepseek', enabled: true },
     ]);
@@ -349,6 +351,45 @@ describe('Config — grok to super-grok quota migration', () => {
       { id: 'cursor', enabled: true },
     ]);
     expect(c.quota.providers.filter((p) => p.id === 'deepseek')).toHaveLength(1);
+  });
+
+  it('normalizes persisted legacy codex and codex-spark entries into a single chatgpt provider', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'codex', enabled: true },
+          { id: 'codex-spark', enabled: false },
+          { id: 'kimi-coding', enabled: true },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'chatgpt', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+      { id: 'kimi-coding', enabled: true },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'chatgpt')).toHaveLength(1);
+    expect(c.quota.providers.map((p) => p.id)).not.toContain('codex');
+    expect(c.quota.providers.map((p) => p.id)).not.toContain('codex-spark');
+  });
+
+  it('lets an explicit chatgpt entry win over a mapped legacy codex entry while preserving unrelated preferences', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'codex', enabled: false },
+          { id: 'chatgpt', enabled: true },
+          { id: 'zhipu-coding', enabled: false },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'chatgpt', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+      { id: 'zhipu-coding', enabled: false },
+    ]);
   });
 });
 
@@ -572,7 +613,7 @@ describe('Desktop-owned Pet settings contract', () => {
       appearance: { houseSkin: 'mushroom' },
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'cursor', enabled: true },
           { id: 'deepseek', enabled: true },
         ],
@@ -592,7 +633,7 @@ describe('Desktop-owned Pet settings contract', () => {
       appearance: { houseSkin: 'mushroom' },
       quota: {
         providers: [
-          { id: 'codex', enabled: true },
+          { id: 'chatgpt', enabled: true },
           { id: 'cursor', enabled: true },
           { id: 'deepseek', enabled: true },
         ],

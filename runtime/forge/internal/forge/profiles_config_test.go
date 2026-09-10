@@ -72,7 +72,7 @@ func TestOfficialOpenAIAPIProviderIsSeparateFromCodex(t *testing.T) {
 	if err != nil {
 		t.Fatal("catalog registry should include the official OpenAI API provider")
 	}
-	codex, err := reg.LookupBinding("codex")
+	codex, err := reg.LookupBinding("chatgpt")
 	if err != nil {
 		t.Fatal(err)
 	}

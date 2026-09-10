@@ -124,7 +124,7 @@ func CodexConfigCheck(deps Dependencies) map[string]interface{} {
 	// Use the auth SSOT ProviderAuthStatus if available, otherwise fall back
 	// to direct path checking (legacy fallback for isolated callers).
 	if deps.ProviderAuthStatus != nil {
-		status := deps.ProviderAuthStatus("codex")
+		status := deps.ProviderAuthStatus("chatgpt")
 		details["auth_path"] = status.SourcePath
 		if !status.OK {
 			details["login_hint"] = "run codex auth login to authenticate"

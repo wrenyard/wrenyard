@@ -1,4 +1,4 @@
-import { createBuiltinCatalog, createBuiltinProviderRuntime } from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, findProviderQuotaBinding } from '@wrenyard/providers'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -56,10 +56,10 @@ interface ProfileFixture {
 
 const PROFILES: ProfileFixture[] = [
   {
-    exactAgentRuntime: 'codex/gpt-5.6-luna:codex',
+    exactAgentRuntime: 'chatgpt/gpt-5.6-luna:codex',
     profile: 'cb-dsf',
     client: 'codex',
-    provider: 'codex',
+    provider: 'chatgpt',
     model: 'gpt-5.6-luna',
     intelligence: 'mid',
     tps: 107,
@@ -67,10 +67,10 @@ const PROFILES: ProfileFixture[] = [
     outputUsd: 1.2,
   },
   {
-    exactAgentRuntime: 'codex/gpt-6.0-nova:codex',
+    exactAgentRuntime: 'chatgpt/gpt-6.0-nova:codex',
     profile: 'codex-luna',
     client: 'codex',
-    provider: 'codex',
+    provider: 'chatgpt',
     model: 'gpt-6.0-nova',
     intelligence: 'high',
     tps: 120,
@@ -469,10 +469,10 @@ const CODEBUDDY_HY3_PROFILE: ProfileFixture = {
 }
 
 const CODEX_QUOTA_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'codex/gpt-5.6-terra:codex',
+  exactAgentRuntime: 'chatgpt/gpt-5.6-terra:codex',
   profile: 'codex-terra-quota',
   client: 'codex',
-  provider: 'codex',
+  provider: 'chatgpt',
   model: 'gpt-5.6-terra',
   intelligence: 'high',
   tps: 90,
@@ -481,10 +481,10 @@ const CODEX_QUOTA_PROFILE: ProfileFixture = {
 }
 
 const CODEX_SPARK_PROFILE: ProfileFixture = {
-    exactAgentRuntime: 'codex-spark/gpt-5.3-codex-spark:codex',
+    exactAgentRuntime: 'chatgpt/gpt-5.3-codex-spark:codex',
     profile: 'codex-spark-native',
     client: 'codex',
-    provider: 'codex-spark',
+    provider: 'chatgpt',
     model: 'gpt-5.3-codex-spark',
     intelligence: 'high',
   tps: 90,
@@ -548,7 +548,7 @@ function codebuddyExhaustionQuotaSnapshotService(): AutoRoutingQuotaSnapshotServ
       Promise.resolve(
         JSON.stringify([
           {
-            pool: 'codebuddy',
+            provider: 'codebuddy',
             status: 'ok',
             stale: false,
             windows: [{ name: 'observed', pct: 100, resets_at: resetsAt }],
@@ -577,7 +577,7 @@ function healthyZhipuQuotaSnapshotService(): AutoRoutingQuotaSnapshotService {
       Promise.resolve(
         JSON.stringify([
           {
-            pool: 'zhipu-coding',
+            provider: 'zhipu-coding',
             status: 'ok',
             stale: false,
             fetched_at: '2026-09-09T13:54:53.000+08:00',
@@ -606,7 +606,7 @@ function zhipuQuotaSnapshotService(
       Promise.resolve(
         JSON.stringify([
           {
-            pool: 'zhipu-coding',
+            provider: 'zhipu-coding',
             status: row.status ?? 'ok',
             stale: row.stale ?? false,
             fetched_at: new Date(nowMs).toISOString(),
@@ -636,10 +636,12 @@ function codexQuotaSnapshotService(
 ): AutoRoutingQuotaSnapshotService {
   return new AutoRoutingQuotaSnapshotService({
     queryJson: () => Promise.resolve(JSON.stringify([{
-      pool: 'codex',
+      provider: 'chatgpt',
       status: row.status ?? 'ok',
       stale: row.stale ?? false,
       fetched_at: new Date(QUOTA_T0).toISOString(),
+      // Fixture represents Pro: upstream declares the absent primary window.
+      not_applicable_windows: windows.some((window) => window.name === '5h') ? [] : ['5h'],
       windows,
     }])),
     now: () => QUOTA_T0,
@@ -699,9 +701,9 @@ const DEEPSEEK_BALANCE_PROFILE: ProfileFixture = {
   outputUsd: 1,
 }
 
-/** A raw quota report with one pool row; `balances` is optional. */
+/** A raw quota report with one provider row; `balances` is optional. */
 function poolQuotaSnapshotService(
-  pool: string,
+  provider: string,
   windows: Array<{ name: string; pct: number; resets_at?: string; window_minutes?: number }>,
   balances?: Array<{ currency: string; amount: string }>,
   row: { status?: string; stale?: boolean } = {},
@@ -709,7 +711,7 @@ function poolQuotaSnapshotService(
 ): AutoRoutingQuotaSnapshotService {
   return new AutoRoutingQuotaSnapshotService({
     queryJson: () => Promise.resolve(JSON.stringify([{
-      pool,
+      provider,
       status: row.status ?? 'ok',
       stale: row.stale ?? false,
       fetched_at: new Date(nowMs).toISOString(),
@@ -959,7 +961,7 @@ describe('daemon task-settings-service (no-model)', () => {
               timeoutMs: 60_000,
               dispatch: {
                 minimumTps: 20,
-                preferredRuntime: { client: 'codex', provider: 'codex', model: 'gpt-5.6-sol' },
+                preferredRuntime: { client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol' },
               },
             },
           },
@@ -1261,9 +1263,9 @@ describe('daemon task-settings-service (no-model)', () => {
     // with the fixture Catalog's deterministic provider/model display labels.
     const autoResolved = commit.automatic_selection?.resolved
     assert.ok(autoResolved)
-    assert.equal(autoResolved.provider, 'codex')
+    assert.equal(autoResolved.provider, 'chatgpt')
     assert.equal(autoResolved.model, 'gpt-5.6-luna')
-    assert.equal(autoResolved.provider_display_name, 'Codex')
+    assert.equal(autoResolved.provider_display_name, 'Chatgpt')
     assert.equal(autoResolved.model_display_name, 'Gpt 5.6 Luna')
 
     // auto-fail resolves through the same automatic resolver path and stays as
@@ -1320,9 +1322,9 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(explicit.readiness.available, true)
     // The resolved explicit projection pairs the canonical provider/model ids
     // with the fixture Catalog's deterministic provider/model display labels.
-    assert.equal(explicit.resolved?.provider, 'codex')
+    assert.equal(explicit.resolved?.provider, 'chatgpt')
     assert.equal(explicit.resolved?.model, 'gpt-6.0-nova')
-    assert.equal(explicit.resolved?.provider_display_name, 'Codex')
+    assert.equal(explicit.resolved?.provider_display_name, 'Chatgpt')
     assert.equal(explicit.resolved?.model_display_name, 'Gpt 6.0 Nova')
     // No legacy runtime choice / resolved-runtime enumeration leaks.
     assert.equal('runtime_choices' in commit, false)
@@ -1917,16 +1919,18 @@ describe('daemon task-settings-service (no-model)', () => {
   }
 
   const availabilityFromNativeSnapshot: TaskSettingsRuntimeAvailabilityCallback = (runtime, availabilityContext) => {
-    const credentialResolverId = runtime.provider === 'codex-spark' ? 'codex' : runtime.provider
+    // The unified ChatGPT provider uses the `codex` native client and credential
+    // resolver; other providers key readiness on their own provider id.
+    const providerId = runtime.provider
     const state = evaluateForgeNativeRouteReadiness(
       availabilityContext?.nativeProviderReadiness ?? undefined,
       {
-        credentialResolverId,
+        providerId,
         client: runtime.client,
         mode: runtime.mode,
-        nativeClients: credentialResolverId === 'codex'
+        nativeClients: providerId === 'chatgpt'
           ? ['codex']
-          : credentialResolverId === 'cursor' ? ['cursor'] : [],
+          : providerId === 'cursor' ? ['cursor'] : [],
       },
     )
     if (state === 'available') {
@@ -1948,7 +1952,7 @@ describe('daemon task-settings-service (no-model)', () => {
     let nativeCalls = 0
     let next: ForgeProviderReadinessSnapshot | Error = {
       sampledAtMs: QUOTA_T0,
-      authByProvider: Object.freeze({ codex: true }),
+      authByProvider: Object.freeze({ chatgpt: true }),
     }
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: [CODEX_QUOTA_PROFILE] }),
@@ -1970,7 +1974,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(authenticated.dispatch?.auto_routing?.quota_coverage_complete, true)
     assert.equal(nativeCalls, 1)
 
-    next = { sampledAtMs: QUOTA_T0 + 1, authByProvider: Object.freeze({ codex: false }) }
+    next = { sampledAtMs: QUOTA_T0 + 1, authByProvider: Object.freeze({ chatgpt: false }) }
     await assert.rejects(
       service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
       (error) => error instanceof NoEligiblePlanError && error.resolutionFailureCode === 'no_available_provider',
@@ -1985,7 +1989,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(nativeCalls, 3)
   })
 
-  it('samples shared Codex readiness for the distinct codex-spark provider id', async () => {
+  it('samples shared Codex readiness for the unified ChatGPT provider Spark model', async () => {
     writeConfig({})
     let nativeCalls = 0
     const service = context!.makeService({
@@ -1993,7 +1997,7 @@ describe('daemon task-settings-service (no-model)', () => {
       quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
       nativeProviderReadiness: async () => {
         nativeCalls += 1
-        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ chatgpt: true }) }
       },
       runtimeAvailability: availabilityFromNativeSnapshot,
     })
@@ -2003,7 +2007,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(nativeCalls, 1, 'the native codex client must trigger one shared readiness sample')
   })
 
-  it('shares Codex auth but keeps blocked codex-spark quota independent from healthy Codex quota', async () => {
+  it('routes the standard ChatGPT model when both standard and Spark pools share one healthy ChatGPT row', async () => {
     writeConfig({})
     let nativeCalls = 0
     const resets5h = new Date(QUOTA_T0 + 3 * 60 * 60_000).toISOString()
@@ -2011,20 +2015,15 @@ describe('daemon task-settings-service (no-model)', () => {
     const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
       queryJson: () => Promise.resolve(JSON.stringify([
         {
-          pool: 'codex',
-          status: 'ok',
-          stale: false,
-          fetched_at: new Date(QUOTA_T0).toISOString(),
-          windows: [{ name: '7d', pct: 20, resets_at: resets7d, window_minutes: 10_080 }],
-        },
-        {
-          pool: 'codex-spark',
+          provider: 'chatgpt',
           status: 'ok',
           stale: false,
           fetched_at: new Date(QUOTA_T0).toISOString(),
           windows: [
-            { name: '5h', pct: 100, resets_at: resets5h, window_minutes: 300 },
-            { name: '7d', pct: 100, resets_at: resets7d, window_minutes: 10_080 },
+            { name: '5h', pct: 20, resets_at: resets5h, window_minutes: 300 },
+            { name: '7d', pct: 20, resets_at: resets7d, window_minutes: 10_080 },
+            { name: 'spark-5h', pct: 100, resets_at: resets5h, window_minutes: 300 },
+            { name: 'spark-7d', pct: 100, resets_at: resets7d, window_minutes: 10_080 },
           ],
         },
       ])),
@@ -2035,15 +2034,81 @@ describe('daemon task-settings-service (no-model)', () => {
       quotaSnapshots,
       nativeProviderReadiness: async () => {
         nativeCalls += 1
-        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ chatgpt: true }) }
       },
       runtimeAvailability: availabilityFromNativeSnapshot,
     })
 
+    // The standard model's healthy standard pools admit it; the Spark model's
+    // exhausted Spark pools eliminate it — both read the same ChatGPT row.
     const resolved = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
     assert.equal(resolved.exactAgentRuntime, CODEX_QUOTA_PROFILE.exactAgentRuntime)
     assert.equal(resolved.dispatch?.auto_routing?.quota_coverage_complete, true)
-    assert.equal(nativeCalls, 1, 'both provider ids must share one Codex auth sample only')
+    assert.equal(nativeCalls, 1, 'one unified ChatGPT provider shares a single Codex auth sample only')
+  })
+
+  it('applies provider quota to a dynamically discovered model', async () => {
+    writeConfig({})
+    const discovered = {
+      ...CODEX_QUOTA_PROFILE,
+      model: 'gpt-new-model',
+      exactAgentRuntime: 'chatgpt/gpt-new-model:codex',
+    }
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [discovered] }),
+      quotaSnapshots: poolQuotaSnapshotService('chatgpt', [{ name: '7d', pct: 100 }]),
+      nativeProviderReadiness: () => Promise.resolve({
+        sampledAtMs: QUOTA_T0,
+        authByProvider: Object.freeze({ chatgpt: true }),
+      }),
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      /no eligible dispatch plan/i,
+    )
+  })
+
+  it('uses nonempty unknown bindings for a candidate whose model has no snapshot entry', async () => {
+    writeConfig({})
+    // The snapshot carries only the standard ChatGPT model row; the Spark model
+    // has no entry, so its candidate must still receive explicit null
+    // constraints for every bound pool instead of silently bypassing quota.
+    const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
+      queryJson: () => Promise.resolve(JSON.stringify([
+        {
+          provider: 'chatgpt',
+          status: 'ok',
+          stale: false,
+          fetched_at: new Date(QUOTA_T0).toISOString(),
+          windows: [
+            { name: '5h', pct: 20, resets_at: new Date(QUOTA_T0 + 3 * 60 * 60_000).toISOString(), window_minutes: 300 },
+            { name: '7d', pct: 20, resets_at: new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString(), window_minutes: 10_080 },
+          ],
+        },
+      ])),
+      now: () => QUOTA_T0,
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE] }),
+      quotaSnapshots,
+      nativeProviderReadiness: () => Promise.resolve({
+        sampledAtMs: QUOTA_T0,
+        authByProvider: Object.freeze({ chatgpt: true }),
+      }),
+      runtimeAvailability: availabilityFromNativeSnapshot,
+    })
+
+    const binding = findProviderQuotaBinding('chatgpt', 'gpt-5.3-codex-spark')
+    assert.ok(binding, 'the Spark model must have a non-empty bound pool set')
+    assert.ok(binding.pools.length > 0)
+    assert.ok(binding.pools.every((pool) => pool.quotaPoolId.length > 0))
+
+    // The missing entry still emits the binding's null constraints, so quota
+    // coverage stays incomplete rather than reporting a falsely complete row.
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.dispatch?.auto_routing?.quota_coverage_complete, false)
+    assert.notEqual(resolution.dispatch?.auto_routing?.quota_tier, 'healthy')
   })
 
   it('requires quota independently even when native Codex auth is available', async () => {
@@ -2051,10 +2116,10 @@ describe('daemon task-settings-service (no-model)', () => {
     const expensiveCodex = { ...CODEX_QUOTA_PROFILE, outputUsd: 12 }
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: [expensiveCodex] }),
-      quotaSnapshots: poolQuotaSnapshotService('codex', [{ name: '7d', pct: 100 }]),
+      quotaSnapshots: poolQuotaSnapshotService('chatgpt', [{ name: '7d', pct: 100 }]),
       nativeProviderReadiness: () => Promise.resolve({
         sampledAtMs: QUOTA_T0,
-        authByProvider: Object.freeze({ codex: true }),
+        authByProvider: Object.freeze({ chatgpt: true }),
       }),
       runtimeAvailability: availabilityFromNativeSnapshot,
     })
@@ -2582,7 +2647,7 @@ describe('daemon task-settings-service (no-model)', () => {
       quotaSnapshots: quotaService,
       nativeProviderReadiness: async () => {
         nativeReadinessCalls += 1
-        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ codex: true }) }
+        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ chatgpt: true }) }
       },
       runtimeAvailability: (runtime) => {
         probeTriples.push(runtime)

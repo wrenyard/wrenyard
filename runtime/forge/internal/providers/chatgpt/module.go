@@ -1,4 +1,4 @@
-package codex
+package chatgpt
 
 import "github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
 
@@ -14,13 +14,13 @@ func Module() schema.ProviderModule {
 		"gpt-5.4-mini":        {ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini"},
 	}
 	return schema.StaticModule{
-		ProviderID: "codex", ModelSet: models,
+		ProviderID: "chatgpt", ModelSet: models,
 		Provider: schema.Provider{
-			Name: "codex", Kind: "builtin",
+			Name: "chatgpt", Kind: "builtin",
 			CompatibleDialects: []schema.Dialect{schema.DialectCodex},
-			QuotaProvider:      "codex",
+			QuotaProvider:      "chatgpt",
 			Inference:          &schema.InferenceBinding{Protocol: "openai-chat-completions", CredentialResolver: schema.CredentialResolverCodex},
 		},
-		QuotaInfo: schema.QuotaMetadata{Kind: "codex", Name: "codex"},
+		QuotaInfo: schema.QuotaMetadata{Kind: "chatgpt", Name: "chatgpt"},
 	}
 }

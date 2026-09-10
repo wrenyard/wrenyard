@@ -244,10 +244,8 @@ func openCodeQuotaLabel(label string) string {
 		return "Zhipu"
 	case "kimi-coding":
 		return "Kimi"
-	case "codex-spark":
-		return "Codex Spark"
-	case "codex":
-		return "Codex"
+	case "chatgpt":
+		return "ChatGPT"
 	default:
 		return label
 	}

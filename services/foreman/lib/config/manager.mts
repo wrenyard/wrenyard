@@ -11,6 +11,7 @@ import {
   resolveForemanConfigPath,
   resolveWriteForemanConfigPath,
 } from './path.mts'
+import { migrateForemanChatGPTReferences } from './chatgpt-migration.mts'
 import {
   normalizeForemanServiceConfig,
   type NormalizeForemanConfigOptions,
@@ -44,6 +45,18 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
       throw new Error(
         `Invalid config JSON at ${configPath}: root must be an object`,
       )
+    }
+
+    // Migrate persisted ChatGPT identity references (legacy codex/codex-spark
+    // target refs and exclusion ids) to their canonical chatgpt form. The
+    // migration only touches known identity fields; unrelated data is left
+    // unchanged. When something changed it is persisted exactly once through
+    // the existing atomic write so task pins/exclusions resolve canonically.
+    const migrated = migrateForemanChatGPTReferences(parsed)
+    if (migrated.changed) {
+      const record = migrated.record as ConfigRecord
+      this.write(configPath, record)
+      return record
     }
 
     return parsed as ConfigRecord

@@ -62,6 +62,12 @@ type Quota struct {
 	Source    string         `json:"source,omitempty"`
 	Message   string         `json:"message,omitempty"`
 
+	// NotApplicableWindows lists window names that the upstream explicitly
+	// confirms are absent for this provider row, e.g. a Pro plan whose
+	// primary rate-limit window is null. It is distinct from a malformed or
+	// missing response, which must never be reported as absent.
+	NotApplicableWindows []string `json:"not_applicable_windows,omitempty"`
+
 	// Unavailable is set by the cache layer when auto-refresh has given up
 	// and a cooldown is active. It signals to rendering code that the data
 	// is not just stale — it's genuinely unavailable because the provider

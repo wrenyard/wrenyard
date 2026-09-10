@@ -29,6 +29,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { formatRunSyntax, parseRunSyntax } from '@wrenyard/catalog';
+import { migrateRuntimeChatGPTReferences } from '../config/chatgpt-migration.mts';
 
 export type StoreFileSystem = Pick<
   typeof defaultFs,
@@ -303,6 +304,7 @@ export class RuntimeAliasStore {
 
   /** Load the current revision, usable (canonical) aliases, and per-entry issues. */
   async load(): Promise<AliasStoreSnapshot> {
+    await this.migratePersistedChatGPTReferences();
     const state = await this.readState();
     return {
       revision: state.revision,
@@ -314,10 +316,10 @@ export class RuntimeAliasStore {
 
   /** Convenience: only the usable aliases, keyed by raw name with canonical values. */
   async list(): Promise<Record<string, string>> {
+    await this.migratePersistedChatGPTReferences();
     const state = await this.readState();
     return { ...state.validAliases };
   }
-
   /**
    * Set `alias` to `target`. The re-read / expectedRevision CAS / atomic
    * rewrite sequence runs inside the shared per-store mutation queue, so two
@@ -337,7 +339,7 @@ export class RuntimeAliasStore {
     const canonical = canonicalResult.canonical;
 
     return this.enqueueMutation(async () => {
-      const state = await this.readState();
+      const state = await this.migrateStateInsideQueue();
       this.assertRevision(state.revision, expectedRevision);
       const revision = state.revision + 1;
       const aliases: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
@@ -358,7 +360,7 @@ export class RuntimeAliasStore {
   async remove(alias: string, expectedRevision?: number): Promise<AliasRemovalResult> {
     validateAliasName(alias);
     return this.enqueueMutation(async () => {
-      const state = await this.readState();
+      const state = await this.migrateStateInsideQueue();
       this.assertRevision(state.revision, expectedRevision);
       if (!Object.prototype.hasOwnProperty.call(state.rawAliases, alias)) {
         return { alias, removed: false, revision: state.revision };
@@ -380,6 +382,45 @@ export class RuntimeAliasStore {
     }
   }
 
+  /**
+   * Re-read state from inside the mutation queue and apply the one-time
+   * ChatGPT identity migration. When the persisted document contains legacy
+   * `codex`/`codex-spark` alias targets, provider keys, or policy provider
+   * keys, they are rewritten to `chatgpt`, the revision is bumped exactly
+   * once, and the result is persisted atomically before the caller's own
+   * mutation proceeds. This runs inside the queue (never re-enqueues) so it
+   * cannot deadlock and the caller's CAS uses the migrated revision.
+   */
+  private async migrateStateInsideQueue(): Promise<ReadState> {
+    const state = await this.readState();
+    if (!state.exists) return state;
+
+    const migrated = migrateRuntimeChatGPTReferences({
+      aliases: state.rawAliases,
+      ...state.extra,
+    });
+    if (!migrated.changed) return state;
+
+    const record = migrated.record as Record<string, unknown>;
+    const { aliases, ...extra } = record;
+    const rawAliases =
+      typeof aliases === 'object' && aliases !== null && !Array.isArray(aliases)
+        ? (aliases as Record<string, unknown>)
+        : state.rawAliases;
+    const revision = state.revision + 1;
+    await this.writeJson({ ...extra, revision, aliases: rawAliases });
+    return this.readState();
+  }
+
+  /**
+   * Ensure the persisted document is migrated to canonical ChatGPT identity
+   * references exactly once, preserving unknown/unrelated runtime config
+   * fields. Serialized through the mutation queue so concurrent load/list
+   * calls cannot race the rewrite or double-bump the revision.
+   */
+  private async migratePersistedChatGPTReferences(): Promise<void> {
+    await this.enqueueMutation(() => this.migrateStateInsideQueue().then(() => undefined));
+  }
   /**
    * Append a mutation onto the per-store queue. The returned promise adopts
    * the mutation outcome (success or rejection); the queue tail itself always

@@ -253,7 +253,9 @@ test("full_cycle legal reset/window math and headroom values", () => {
   assert.equal(strainedSlow.coverageComplete, true);
 });
 
-test("binding min is taken across joint healthy full-cycle constraints", () => {
+test("equal arithmetic mean is taken across joint healthy full-cycle constraints", () => {
+  // Each constraint is one pool resource and participates equally:
+  // (0.90 + 0.70 + 0.85) / 3 = 0.816666...
   const joint = assessRequiredQuota(NOW, [
     q("wide", fullCycleEv(90, 1)),
     q("tight", fullCycleEv(60, 0.3)),
@@ -262,7 +264,7 @@ test("binding min is taken across joint healthy full-cycle constraints", () => {
   assert.equal(joint.state, "healthy");
   assert.equal(joint.coverageComplete, true);
   assert.equal(joint.headroomTrusted, true);
-  close(joint.headroom!, 0.7, 1e-9, "min across healthy headrooms");
+  close(joint.headroom!, (0.9 + 0.7 + 0.85) / 3, 1e-9, "mean across healthy headrooms");
 });
 
 test("complete full-cycle weekly evidence at 28% remaining with ~84% expected remaining is strained, never unknown", () => {
@@ -288,7 +290,7 @@ test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is hea
   assert.equal(result.state, "healthy");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, true);
-  close(result.headroom!, Math.min(1, 0.96), 1e-9, "min healthy H");
+  close(result.headroom!, (1 + 0.96) / 2, 1e-9, "mean healthy H");
   assert.deepEqual(
     result.constraints.map((constraint) => constraint.state),
     ["healthy", "healthy"]
@@ -469,7 +471,7 @@ test("blocked + missing stays blocked", () => {
   assert.equal(result.coverageComplete, false);
 });
 
-test("strained + missing stays strained with incomplete coverage", () => {
+test("strained + missing averages in the neutral unknown contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("monthly", null),
@@ -477,10 +479,10 @@ test("strained + missing stays strained with incomplete coverage", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, false);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, 0.04, 1e-12, "proven strained H retained");
+  close(result.headroom!, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "strained + missing mean H");
 });
 
-test("strained + unknown stays strained, never neutral .5", () => {
+test("strained + unknown averages in the neutral unknown contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("unknown", rollingEv(50)),
@@ -488,7 +490,7 @@ test("strained + unknown stays strained, never neutral .5", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, 0.04, 1e-12, "proven strained H beats neutral .5");
+  close(result.headroom!, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
 });
 
 // ---------------------------------------------------------------------------
@@ -603,6 +605,81 @@ test("zero remaining blocks the candidate", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Equal arithmetic-mean aggregation of required quota constraints
+// ---------------------------------------------------------------------------
+
+test("two healthy constraints average equally: 0.8 and 1.0 mean to 0.9", () => {
+  const result = assessRequiredQuota(NOW, [
+    q("a", rollingEv(80)),
+    q("b", rollingEv(100)),
+  ]);
+  assert.equal(result.state, "healthy");
+  assert.equal(result.coverageComplete, true);
+  assert.equal(result.headroomTrusted, true);
+  close(result.headroom!, 0.9, 1e-12, "mean of 0.8 and 1.0");
+  close(result.constraints[0].headroom!, 0.8, 1e-12, "constraint a H");
+  close(result.constraints[1].headroom!, 1, 1e-12, "constraint b H");
+});
+
+test("three constraints average equally regardless of order", () => {
+  const expected = (0.9 + 0.04 + NEUTRAL_HEADROOM) / 3;
+  const forward = assessRequiredQuota(NOW, [
+    q("h", rollingEv(90)),
+    q("s", rollingEv(4)),
+    q("u", rollingEv(50)),
+  ]);
+  const reversed = assessRequiredQuota(NOW, [
+    q("u", rollingEv(50)),
+    q("s", rollingEv(4)),
+    q("h", rollingEv(90)),
+  ]);
+  assert.equal(forward.state, "strained");
+  assert.equal(reversed.state, "strained");
+  close(forward.headroom!, expected, 1e-12, "forward 3-way mean");
+  close(reversed.headroom!, expected, 1e-12, "reversed 3-way mean");
+});
+
+test("unknown 0.5 contributes without discarding a healthy peer", () => {
+  const result = assessRequiredQuota(NOW, [
+    q("h", rollingEv(80)),
+    q("u", rollingEv(50)),
+  ]);
+  assert.equal(result.state, "unknown");
+  assert.equal(result.coverageComplete, true);
+  assert.equal(result.headroomTrusted, false);
+  // strict equality also holds here: (0.8 + 0.5) / 2 === 0.65 exactly.
+  assert.equal(result.headroom, 0.65);
+});
+
+test("positive balance contributes neutral 0.5 alongside a healthy peer", () => {
+  const result = assessRequiredQuota(NOW, [
+    q("q", rollingEv(80)),
+    {
+      id: "deepseek-balance",
+      evidence: null,
+      kind: "balance",
+      balance: { amount: "12.50", observedAtMs: NOW - 1_000, validForMs: HOUR_MS },
+    },
+  ]);
+  assert.equal(result.state, "healthy");
+  assert.equal(result.coverageComplete, true);
+  // strict equality also holds here: (0.8 + 0.5) / 2 === 0.65 exactly.
+  assert.equal(result.headroom, 0.65);
+});
+
+test("any exhausted (zero) constraint rejects the candidate even alongside a healthy peer", () => {
+  const blocked = expectRejected(
+    cand({ requiredQuota: [q("z", rollingEv(0)), q("h", rollingEv(90))] }),
+    "quota_blocked"
+  );
+  assert.ok(blocked!.detail!.includes("z"));
+  const pool = assessRequiredQuota(NOW, [q("z", rollingEv(0)), q("h", rollingEv(90))]);
+  assert.equal(pool.state, "blocked");
+  assert.equal(pool.headroom, null);
+  assert.deepEqual(pool.blockedConstraintIds, ["z"]);
+});
+
+// ---------------------------------------------------------------------------
 // Tier, gate, and incomplete-strained behavior on evaluateCandidate
 // ---------------------------------------------------------------------------
 
@@ -614,7 +691,7 @@ test("incomplete-strained reference is accepted at any listed price", () => {
   assert.equal(accepted!.tier, "strained");
   assert.equal(accepted!.coverageComplete, false);
   assert.equal(accepted!.headroomTrusted, false);
-  close(accepted!.headroom, 0.04, 1e-12, "incomplete-strained H");
+  close(accepted!.headroom, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "incomplete-strained H");
 
   // An unknown/incomplete quota is not price-gated: a high listed reference
   // price no longer rejects it.

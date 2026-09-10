@@ -64,11 +64,11 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
 
 test('derived task plans key representative native and gateway combinations canonically', () => {
   const plans = deriveTaskDispatchPlans(createBuiltinCatalog());
-  assert.deepEqual(plans['codex/gpt-5.6-sol:codex'], {
-    client: 'codex', provider: 'codex', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
+  assert.deepEqual(plans['chatgpt/gpt-5.6-sol:codex'], {
+    client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
   });
-  assert.deepEqual(plans['codex-spark/gpt-5.3-codex-spark:codex'], {
-    client: 'codex', provider: 'codex-spark', model: 'gpt-5.3-codex-spark', mode: 'native', reasoningEffort: 'xhigh',
+  assert.deepEqual(plans['chatgpt/gpt-5.3-codex-spark:codex'], {
+    client: 'codex', provider: 'chatgpt', model: 'gpt-5.3-codex-spark', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
   });
   assert.deepEqual(plans['codebuddy/minimax-m3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'minimax-m3', mode: 'native',
@@ -106,8 +106,8 @@ test('native web search is admitted only for explicitly supported native client/
   const plans = deriveTaskDispatchPlans(catalog);
 
   // Built-in native combinations that declare supportsNativeWebSearch are admitted.
-  assert.equal(plans['codex/gpt-5.6-sol:codex'].supportsWebSearch, true);
-  assert.equal(plans['codex/gpt-5.6-terra:codex'].supportsWebSearch, true);
+  assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].supportsWebSearch, true);
+  assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].supportsWebSearch, true);
   assert.equal(plans['cursor/composer-2.5:cur'].supportsWebSearch, true);
   assert.equal(plans['cursor/cursor-grok-4.6-high:cur'].supportsWebSearch, true);
   assert.equal(plans['spacex-ai/grok-4.5:gk'].supportsWebSearch, true);
@@ -143,9 +143,9 @@ test('derived task plans carry canonical keys only — no legacy profile, policy
   assert.ok(!keys.some((key) => key.includes('hy3-preview')), 'hy3-preview near id never becomes a model target');
   assert.ok(!keys.some((key) => key.includes('codex-astra')));
   assert.ok(!keys.some((key) => key.endsWith(':dsh')), 'dsh is not a direct Task adapter');
-  assert.equal(plans['codex/gpt-6-astra:codex']?.model, 'gpt-6-astra');
-  // taskOnly hides codex-spark from Gateway /models yet keeps it a Task target.
-  assert.equal(plans['codex-spark/gpt-5.3-codex-spark:codex']?.mode, 'native');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex']?.model, 'gpt-6-astra');
+  // Spark is a model of ChatGPT and remains a native Task target.
+  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex']?.mode, 'native');
   // dsh stays a parseable public key and a compatible gateway route.
   assert.equal(catalog.resolveRun('dsh', 'codebuddy', 'glm-5.3').mode, 'gateway');
 });
@@ -160,7 +160,7 @@ test('dispatch plans contain no provider endpoint or credential metadata', () =>
 
 test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical premium profile target', () => {
   const catalog = createBuiltinCatalog();
-  const provider = catalog.provider('codex');
+  const provider = catalog.provider('chatgpt');
   assert.ok(provider, 'codex provider must exist');
   const astra = provider!.models.find((entry) => entry.id === 'gpt-6-astra');
   assert.ok(astra, 'gpt-6-astra model must exist');
@@ -174,24 +174,24 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.equal(astra!.pricing?.source, 'https://developers.openai.com');
   assert.deepEqual(astra!.capabilities, ['text', 'image']);
   const plans = deriveTaskDispatchPlans(catalog);
-  assert.equal(plans['codex/gpt-6-astra:codex'].model, 'gpt-6-astra');
-  assert.equal(plans['codex/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].model, 'gpt-6-astra');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
 });
 
 test('Codex/OpenAI GPT plans carry xhigh reasoning effort and never max/ultra', () => {
   const catalog = createBuiltinCatalog();
   const plans = deriveTaskDispatchPlans(catalog);
   // Representative Codex execution plans, including GPT-6 Astra as the cap.
-  assert.equal(plans['codex/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['codex/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['codex/gpt-5.6-terra:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['codex/gpt-5.6-luna:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['codex-spark/gpt-5.3-codex-spark:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.6-luna:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex'].reasoningEffort, 'xhigh');
   assert.equal(plans['openai/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
   // max/ultra are not part of the product field, in metadata or in any plan.
   const serialized = JSON.stringify(plans);
   assert.doesNotMatch(serialized, /"reasoningEffort":"(max|ultra)"/u);
-  for (const model of catalog.provider('codex')!.models) {
+  for (const model of catalog.provider('chatgpt')!.models) {
     if (model.reasoningEffort) assert.ok(['low', 'medium', 'high', 'xhigh'].includes(model.reasoningEffort));
   }
   // Levels are declared product metadata, never inferred: unrelated plans stay unset.
@@ -287,15 +287,15 @@ test('built-in models carry their configured accessibility tier with optional pr
   assert.equal(tier('codebuddy', 'glm-5.3-flash'), 'mid');
   assert.equal(ev('codebuddy', 'glm-5.3-flash').score, 42);
 
-  assert.equal(tier('codex', 'gpt-5.6-sol'), 'high');
-  assert.equal(ev('codex', 'gpt-5.6-sol').score, 44);
-  assert.equal(ev('codex', 'gpt-5.6-sol').reasoningConfiguration, 'xhigh');
+  assert.equal(tier('chatgpt', 'gpt-5.6-sol'), 'high');
+  assert.equal(ev('chatgpt', 'gpt-5.6-sol').score, 44);
+  assert.equal(ev('chatgpt', 'gpt-5.6-sol').reasoningConfiguration, 'xhigh');
 
-  assert.equal(tier('codex', 'gpt-5.6-terra'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.6-terra').score, 38);
+  assert.equal(tier('chatgpt', 'gpt-5.6-terra'), 'mid');
+  assert.equal(ev('chatgpt', 'gpt-5.6-terra').score, 38);
 
-  assert.equal(tier('codex', 'gpt-5.6-luna'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.6-luna').score, 35);
+  assert.equal(tier('chatgpt', 'gpt-5.6-luna'), 'mid');
+  assert.equal(ev('chatgpt', 'gpt-5.6-luna').score, 35);
 
   assert.equal(tier('cursor', 'cursor-grok-4.6-high'), 'high');
   assert.equal(ev('cursor', 'cursor-grok-4.6-high').score, 44);
@@ -305,8 +305,8 @@ test('built-in models carry their configured accessibility tier with optional pr
     source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10',
   });
 
-  assert.equal(tier('codex', 'gpt-6-astra'), 'premium');
-  assert.equal(ev('codex', 'gpt-6-astra').score, 53);
+  assert.equal(tier('chatgpt', 'gpt-6-astra'), 'premium');
+  assert.equal(ev('chatgpt', 'gpt-6-astra').score, 53);
 
   // Kimi K3 and k3 are exact canonical equivalents and share a high tier.
   assert.equal(tier('codebuddy', 'kimi-k3'), 'high');
@@ -340,8 +340,8 @@ test('built-in models carry their configured accessibility tier with optional pr
   assert.equal(ev('zhipu', 'glm-5-turbo').score, 27);
   assert.equal(tier('zhipu', 'glm-5.2'), 'mid');
   assert.equal(ev('zhipu', 'glm-5.2').score, 39);
-  assert.equal(tier('codex', 'gpt-5.4'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.4').score, 39);
+  assert.equal(tier('chatgpt', 'gpt-5.4'), 'mid');
+  assert.equal(ev('chatgpt', 'gpt-5.4').score, 39);
   assert.equal(tier('moonshot', 'kimi-k2.5'), 'low');
   assert.equal(ev('moonshot', 'kimi-k2.5').score, 23);
   assert.equal(tier('moonshot', 'kimi-k2.6'), 'mid');
@@ -353,7 +353,7 @@ test('built-in models carry their configured accessibility tier with optional pr
   // an unknown exact route (never inferred from a generic sibling id).
   for (const [provider, model] of [
     ['cursor', 'composer-2.5'],
-    ['codex', 'gpt-5.3-codex-spark'],
+    ['chatgpt', 'gpt-5.3-codex-spark'],
     ['qwen-coding', 'qwen3-coder-plus'],
     ['qwen-coding', 'qwen3.5-plus'],
     ['qwen', 'qwen3.7-flash'],
@@ -410,7 +410,7 @@ test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', 
   assert.equal(plans['codebuddy/glm-5.3:cb'].model, 'glm-5.3');
   assert.equal(plans['kimi-coding/k3:cc'].model, 'k3');
   assert.equal(plans['codebuddy/kimi-k3:cb'].model, 'kimi-k3');
-  assert.equal(plans['codex/gpt-5.6-sol:codex'].model, 'gpt-5.6-sol');
+  assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].model, 'gpt-5.6-sol');
 });
 
 test('shared canonical model metadata is explicit, version-exact, and label-consistent', () => {

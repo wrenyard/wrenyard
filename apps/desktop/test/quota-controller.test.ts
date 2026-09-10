@@ -6,7 +6,7 @@ import { DesktopQuotaController, projectQuotaSnapshot } from '../src/quota-contr
 
 const providers: QuotaProviderState[] = [
   {
-    id: 'codex',
+    id: 'chatgpt',
     label: 'Codex',
     status: 'ok',
     stale: false,
@@ -33,16 +33,16 @@ test('quota projection follows provider order, ignores legacy enablement, and sh
   const snapshot = projectQuotaSnapshot(providers, [
     { id: 'deepseek', enabled: true },
     { id: 'cursor', enabled: false },
-    { id: 'codex', enabled: false },
+    { id: 'chatgpt', enabled: false },
   ], 123, undefined, [
     { id: 'deepseek', configured: true, authMode: 'environment' },
     { id: 'cursor', configured: false, authMode: 'native' },
-    { id: 'codex', configured: true, authMode: 'native' },
+    { id: 'chatgpt', configured: true, authMode: 'native' },
   ]);
 
   assert.equal(snapshot.status, 'available');
   assert.equal(snapshot.refreshedAt, 123);
-  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['deepseek', 'codex']);
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['deepseek', 'chatgpt']);
   assert.deepEqual(snapshot.providers[0].balances, [{ currency: 'CNY', amount: '12.50', display: '¥12.50' }]);
   assert.deepEqual(snapshot.providers[1].windows, [{ name: '7d', remainingPct: 75.8, expectedRemainingPct: 64.2 }]);
 });
@@ -68,7 +68,7 @@ test('quota projection clamps malformed percentages at the renderer boundary', (
       windows: [{ name: '7d', usedPct: 0, remainingPct: 130, expectedRemainingPct: -20 }],
     },
   };
-  const snapshot = projectQuotaSnapshot([malformed], [{ id: 'codex', enabled: true }]);
+  const snapshot = projectQuotaSnapshot([malformed], [{ id: 'chatgpt', enabled: true }]);
 
   assert.equal(snapshot.providers[0].windows[0].remainingPct, 100);
   assert.equal(snapshot.providers[0].windows[0].expectedRemainingPct, 0);
@@ -86,8 +86,8 @@ test('catalog keeps inactive providers visible while quota surfaces show only ac
     { id: 'kimi-coding', enabled: true },
   ], 123, undefined, discovered);
 
-  assert.deepEqual(snapshot.providers.map((p) => p.id), ['deepseek', 'codex']);
-  assert.deepEqual(snapshot.catalog.map((c) => c.id), ['deepseek', 'codex', 'cursor', 'kimi-coding']);
+  assert.deepEqual(snapshot.providers.map((p) => p.id), ['deepseek', 'chatgpt']);
+  assert.deepEqual(snapshot.catalog.map((c) => c.id), ['deepseek', 'chatgpt', 'cursor', 'kimi-coding']);
   assert.deepEqual(snapshot.providerOrder, [
     { id: 'deepseek', enabled: true },
     { id: 'cursor', enabled: true },
@@ -146,21 +146,21 @@ test('successful runtime quota overrides a false native discovery result', () =>
   const snapshot = projectQuotaSnapshot(
     [providers[0], cursor, authRequired],
     [
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
       { id: 'cursor', enabled: true },
       { id: 'super-grok', enabled: true },
     ],
     1,
     undefined,
     [
-      { id: 'codex', displayName: 'Codex', configured: false, authMode: 'native' },
+      { id: 'chatgpt', displayName: 'ChatGPT', configured: false, authMode: 'native' },
       { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
       { id: 'super-grok', displayName: 'SuperGrok', configured: true, authMode: 'native' },
     ],
   );
 
-  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['codex', 'cursor']);
-  assert.equal(snapshot.catalog.find((entry) => entry.id === 'codex')?.configured, true);
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['chatgpt', 'cursor']);
+  assert.equal(snapshot.catalog.find((entry) => entry.id === 'chatgpt')?.configured, true);
   assert.equal(snapshot.catalog.find((entry) => entry.id === 'cursor')?.configured, true);
   assert.equal(snapshot.catalog.find((entry) => entry.id === 'super-grok')?.configured, false);
 });
@@ -202,7 +202,7 @@ test('catalog configuration modes follow product rules for kimi/glm/deepseek/nat
     { id: 'kimi-coding', configured: false, authMode: 'api-key' },
     { id: 'zhipu-coding', configured: true, authMode: 'api-key' },
     { id: 'deepseek', configured: true, authMode: 'environment' },
-    { id: 'codex', configured: false, authMode: 'native' },
+    { id: 'chatgpt', configured: false, authMode: 'native' },
     { id: 'super-grok', configured: false, authMode: 'native' },
   ];
   const snapshot = projectQuotaSnapshot(providers, [], undefined, undefined, discovered);
@@ -210,7 +210,7 @@ test('catalog configuration modes follow product rules for kimi/glm/deepseek/nat
   assert.equal(byId.get('kimi-coding')!.authMode, 'api-key');
   assert.equal(byId.get('zhipu-coding')!.authMode, 'api-key');
   assert.equal(byId.get('deepseek')!.authMode, 'environment');
-  assert.equal(byId.get('codex')!.authMode, 'native');
+  assert.equal(byId.get('chatgpt')!.authMode, 'native');
   assert.equal(byId.get('super-grok')!.authMode, 'native');
 });
 
@@ -385,7 +385,7 @@ test('controller sends Pet only the active quota subset in provider order', asyn
     source: { listProviders: async () => [providers[0], missingSuperGrok, providers[1]] },
     providerSource: {
       listProviders: async () => [
-        { id: 'codex', configured: true, authMode: 'native' },
+        { id: 'chatgpt', configured: true, authMode: 'native' },
         { id: 'super-grok', configured: false, authMode: 'native' },
         { id: 'deepseek', configured: true, authMode: 'environment' },
       ],
@@ -393,7 +393,7 @@ test('controller sends Pet only the active quota subset in provider order', asyn
     getProviderOrder: () => [
       { id: 'deepseek', enabled: false },
       { id: 'super-grok', enabled: true },
-      { id: 'codex', enabled: true },
+      { id: 'chatgpt', enabled: true },
     ],
     onChanged: (_snapshot, next) => { projected = next; },
     refreshIntervalMs: 60_000,
@@ -402,6 +402,6 @@ test('controller sends Pet only the active quota subset in provider order', asyn
 
   const snapshot = await controller.start();
 
-  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['deepseek', 'codex']);
-  assert.deepEqual(projected.map((provider) => provider.id), ['deepseek', 'codex']);
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['deepseek', 'chatgpt']);
+  assert.deepEqual(projected.map((provider) => provider.id), ['deepseek', 'chatgpt']);
 });

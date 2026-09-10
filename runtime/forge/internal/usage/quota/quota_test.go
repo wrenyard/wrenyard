@@ -2729,7 +2729,7 @@ func TestQuotaRefreshProviderRejectsSymlinkParentAlias(t *testing.T) {
 	}
 }
 
-// TestCachePathCanonicalContract verifies that poolCachePath produces the
+// TestCachePathCanonicalContract verifies that providerCachePath produces the
 // exact same cache filenames that existing readers depend on. Any mismatch
 // here would mean refresh-provider validates a different path than the
 // foreground cache reads, causing stale render or silent misbehavior.
@@ -2738,8 +2738,7 @@ func TestCachePathCanonicalContract(t *testing.T) {
 		pool string
 		want string // expected relative path under <dataDir>/quota/
 	}{
-		{"codex", "codex.json"},
-		{"codex-spark", "codex-spark.json"},
+		{"chatgpt", "chatgpt.json"},
 		{"cursor", "cursor.json"},
 		{"kimi-coding", "kimi-coding.json"},
 		{"zhipu-coding", "zhipu-coding.json"},
@@ -2748,10 +2747,10 @@ func TestCachePathCanonicalContract(t *testing.T) {
 	dataDir := "/some/data"
 	for _, tc := range tests {
 		t.Run(tc.pool, func(t *testing.T) {
-			got := poolCachePath(dataDir, tc.pool)
+			got := providerCachePath(dataDir, tc.pool)
 			want := filepath.Join(dataDir, "quota", tc.want)
 			if got != want {
-				t.Fatalf("poolCachePath(%q) = %q, want %q", tc.pool, got, want)
+				t.Fatalf("providerCachePath(%q) = %q, want %q", tc.pool, got, want)
 			}
 		})
 	}
@@ -2763,7 +2762,7 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 	now := fixedNow()
 
 	// Seed a codex cache with a single 7d window (no fake 5h).
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -2832,44 +2831,44 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 		t.Fatalf("failed to parse JSON output: %v\nOutput: %s", err, string(data))
 	}
 
-	// Find codex entry — must have a single 7d window, no fake 5h.
+	// Find chatgpt entry — must have a single 7d window, no fake 5h.
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
-		if pool == "codex" {
+		pool, _ := e["provider"].(string)
+		if pool == "chatgpt" {
 			windows, _ := e["windows"].([]any)
 			if windows != nil && len(windows) == 2 {
-				t.Fatalf("codex should not have 2 windows (no fake 5h): %#v", windows)
+				t.Fatalf("chatgpt should not have 2 windows (no fake 5h): %#v", windows)
 			}
 			if windows != nil {
 				w0 := windows[0].(map[string]any)
 				if name, _ := w0["name"].(string); name != "7d" {
-					t.Fatalf("codex window name = %q, want 7d", name)
+					t.Fatalf("chatgpt window name = %q, want 7d", name)
 				}
 			}
 			label, _ := e["label"].(string)
-			if label != "Codex" {
-				t.Fatalf("codex label = %q, want Codex", label)
+			if label != "ChatGPT" {
+				t.Fatalf("chatgpt label = %q, want ChatGPT", label)
 			}
 			// Pace must be a JSON object with delta_pct and text
 			if pace, hasPace := e["pace"]; !hasPace {
-				t.Fatal("codex requires pace (single 7d window)")
+				t.Fatal("chatgpt requires pace (single 7d window)")
 			} else {
 				paceObj, ok := pace.(map[string]any)
 				if !ok {
-					t.Fatalf("codex pace should be an object, got %T: %#v", pace, pace)
+					t.Fatalf("chatgpt pace should be an object, got %T: %#v", pace, pace)
 				}
 				if _, hasDP := paceObj["delta_pct"]; !hasDP {
-					t.Fatal("codex pace missing delta_pct")
+					t.Fatal("chatgpt pace missing delta_pct")
 				}
 				if text, hasText := paceObj["text"]; !hasText {
-					t.Fatal("codex pace missing text")
+					t.Fatal("chatgpt pace missing text")
 				} else if _, ok := text.(string); !ok {
-					t.Fatalf("codex pace text should be string, got %T", text)
+					t.Fatalf("chatgpt pace text should be string, got %T", text)
 				}
 			}
 			// Reset must be absent (no ResetsAt on windows)
 			if _, hasReset := e["reset"]; hasReset {
-				t.Fatal("codex should not have reset when no ResetsAt set")
+				t.Fatal("chatgpt should not have reset when no ResetsAt set")
 			}
 		}
 		if pool == "kimi-coding" {
@@ -2918,7 +2917,7 @@ func TestQuotaListAllJSONLegacyCompat(t *testing.T) {
 	tmpDir := t.TempDir()
 	now := time.Now()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -2968,8 +2967,8 @@ func TestQuotaListAllJSONLegacyCompat(t *testing.T) {
 
 	for _, e := range entries {
 		// Legacy fields must be present
-		if _, hasPool := e["pool"]; !hasPool {
-			t.Error("missing 'pool' field")
+		if _, hasProvider := e["provider"]; !hasProvider {
+			t.Error("missing 'provider' field")
 		}
 		if _, hasStatus := e["status"]; !hasStatus {
 			t.Error("missing 'status' field")
@@ -2982,9 +2981,8 @@ func TestCLIAliasResolution(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"codex", "codex"},
-		{"codex-spark", "codex-spark"},
-		{"spark", "codex-spark"},
+		{"chatgpt", "chatgpt"},
+		{"codex", "chatgpt"},
 		{"cursor", "cursor"},
 		{"kimi-coding", "kimi-coding"},
 		{"kimi", "kimi-coding"},
@@ -3009,6 +3007,12 @@ func TestCLIAliasRejectsUnknown(t *testing.T) {
 	}
 	if got := canonicalName("grok"); got != "" {
 		t.Fatalf("expected legacy grok to be rejected, got %q", got)
+	}
+	if got := canonicalName("codex-spark"); got != "" {
+		t.Fatalf("expected removed codex-spark provider to be rejected, got %q", got)
+	}
+	if got := canonicalName("spark"); got != "" {
+		t.Fatalf("expected removed spark alias to be rejected, got %q", got)
 	}
 }
 
@@ -3083,8 +3087,8 @@ func TestQuotaShowOneJSONWithWindows(t *testing.T) {
 		t.Fatalf("failed to parse JSON: %s\nOutput: %s", err, string(data))
 	}
 
-	if pool, _ := result["pool"].(string); pool != "zhipu-coding" {
-		t.Fatalf("pool = %q, want zhipu-coding", pool)
+	if pool, _ := result["provider"].(string); pool != "zhipu-coding" {
+		t.Fatalf("provider = %q, want zhipu-coding", pool)
 	}
 	if label, _ := result["label"].(string); label != "GLM" {
 		t.Fatalf("label = %q, want GLM", label)
@@ -3186,9 +3190,9 @@ func TestQuotaShowOneJSONViaAlias(t *testing.T) {
 		t.Fatalf("failed to parse JSON: %s", err)
 	}
 
-	pool, _ := result["pool"].(string)
+	pool, _ := result["provider"].(string)
 	if pool != "kimi-coding" {
-		t.Fatalf("pool = %q, want kimi-coding (canonical), not alias 'kimi'", pool)
+		t.Fatalf("provider = %q, want kimi-coding (canonical), not alias 'kimi'", pool)
 	}
 	label, _ := result["label"].(string)
 	if label != "KIMI" {
@@ -3224,8 +3228,8 @@ func TestQuotaShowOneSuperGrokReturnsUnavailable(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
 		t.Fatalf("failed to parse JSON output: %v\nraw: %s", err, buf.String())
 	}
-	if result["pool"] != "super-grok" {
-		t.Fatalf("expected pool=super-grok, got %v", result["pool"])
+	if result["provider"] != "super-grok" {
+		t.Fatalf("expected provider=super-grok, got %v", result["provider"])
 	}
 	if result["label"] != "super-grok" {
 		t.Fatalf("expected label=super-grok, got %v", result["label"])
@@ -3243,12 +3247,12 @@ func TestQuotaListAllJSONWithProviderError(t *testing.T) {
 	tmpDir := t.TempDir()
 	now := time.Now()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cachedQ := Quota{
-		Provider:  "codex",
+		Provider:  "chatgpt",
 		Used:      Float64(500),
 		Total:     Float64(7000),
 		FetchedAt: now.Add(-10 * time.Minute),
@@ -3275,8 +3279,8 @@ func TestQuotaListAllJSONWithProviderError(t *testing.T) {
 					Windows:   []Window{{Name: "Cursor", Pct: 10, WindowMinutes: 43200}},
 				}}
 			}
-			if name == "codex" {
-				return fakeProvider{name: "codex", err: errors.New("simulated fetch error")}
+			if name == "chatgpt" {
+				return fakeProvider{name: "chatgpt", err: errors.New("simulated fetch error")}
 			}
 			return innerProviderFor(deps, name, billing)
 		},
@@ -3305,18 +3309,18 @@ func TestQuotaListAllJSONWithProviderError(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
-		if pool == "codex" {
+		pool, _ := e["provider"].(string)
+		if pool == "chatgpt" {
 			status, _ := e["status"].(string)
 			if status != "error" {
-				t.Fatalf("codex status = %q, want error", status)
+				t.Fatalf("chatgpt status = %q, want error", status)
 			}
 			errMsg, _ := e["error"].(string)
 			if !strings.Contains(errMsg, "simulated fetch error") {
-				t.Fatalf("codex error = %q, want 'simulated fetch error'", errMsg)
+				t.Fatalf("chatgpt error = %q, want 'simulated fetch error'", errMsg)
 			}
-			if _, hasPool := e["pool"]; !hasPool {
-				t.Error("missing pool field")
+			if _, hasProvider := e["provider"]; !hasProvider {
+				t.Error("missing provider field")
 			}
 			if _, hasStatus := e["status"]; !hasStatus {
 				t.Error("missing status field")
@@ -3380,7 +3384,7 @@ func TestSuperGrokListUnavailableEvenWithFreshCache(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
+		pool, _ := e["provider"].(string)
 		if pool == "super-grok" {
 			status, _ := e["status"].(string)
 			if status != "unavailable" {
@@ -3403,7 +3407,7 @@ func TestListCacheHitCopiesStale(t *testing.T) {
 	setFixedNow(t)
 	now := fixedNow()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -3454,8 +3458,8 @@ func TestListCacheHitCopiesStale(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
-		if pool == "codex" {
+		pool, _ := e["provider"].(string)
+		if pool == "chatgpt" {
 			stale, _ := e["stale"].(bool)
 			if !stale {
 				t.Fatal("cache hit should copy Stale=true from cached entry")
@@ -3469,7 +3473,7 @@ func TestSingleJSONRetainsZeroUsedTotal(t *testing.T) {
 	setFixedNow(t)
 	now := fixedNow()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -3539,7 +3543,7 @@ func TestQuotaListAllJSONZeroUsedTotal(t *testing.T) {
 	setFixedNow(t)
 	now := fixedNow()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -3589,8 +3593,8 @@ func TestQuotaListAllJSONZeroUsedTotal(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
-		if pool == "codex" {
+		pool, _ := e["provider"].(string)
+		if pool == "chatgpt" {
 			used, hasUsed := e["used"].(float64)
 			if !hasUsed {
 				t.Fatal("list JSON must include 'used' field even at zero")
@@ -3614,7 +3618,7 @@ func TestQuotaShowOneJSONCachedFromCache(t *testing.T) {
 	setFixedNow(t)
 	now := fixedNow()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -3840,13 +3844,13 @@ func TestCursorCanonicalLabelAndAlias(t *testing.T) {
 }
 
 func TestCanonicalPoolsOrder(t *testing.T) {
-	want := []string{"codex", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "codex-spark", "anthropic", "super-grok"}
-	if len(canonicalPools) != len(want) {
-		t.Fatalf("canonicalPools length = %d, want %d", len(canonicalPools), len(want))
+	want := []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "anthropic", "super-grok"}
+	if len(canonicalProviders) != len(want) {
+		t.Fatalf("canonicalProviders length = %d, want %d", len(canonicalProviders), len(want))
 	}
 	for i := range want {
-		if canonicalPools[i] != want[i] {
-			t.Fatalf("canonicalPools[%d] = %q, want %q", i, canonicalPools[i], want[i])
+		if canonicalProviders[i] != want[i] {
+			t.Fatalf("canonicalProviders[%d] = %q, want %q", i, canonicalProviders[i], want[i])
 		}
 	}
 }
@@ -3879,8 +3883,8 @@ func TestQuotaShowOneDeepSeekBalancesJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if pool, _ := result["pool"].(string); pool != "deepseek" {
-		t.Fatalf("pool = %q, want deepseek", pool)
+	if pool, _ := result["provider"].(string); pool != "deepseek" {
+		t.Fatalf("provider = %q, want deepseek", pool)
 	}
 	balances, ok := result["balances"].([]any)
 	if !ok || len(balances) != 2 {
@@ -3903,24 +3907,24 @@ func TestQuotaShowOneDeepSeekBalancesJSON(t *testing.T) {
 }
 
 func TestCursorFailClosedAndRequiredSource(t *testing.T) {
-	if !failClosedPool("cursor") {
+	if !failClosedProvider("cursor") {
 		t.Fatal("cursor must be a fail-closed pool")
 	}
 	if got := requiredSource("cursor"); got != "cursor-dashboard" {
 		t.Fatalf("requiredSource(cursor) = %q, want cursor-dashboard", got)
 	}
-	// Existing pools remain unchanged.
-	if got := requiredSource("codex"); got != "codex-app-server" {
-		t.Fatalf("requiredSource(codex) = %q, want codex-app-server", got)
+	// Existing providers remain unchanged.
+	if got := requiredSource("chatgpt"); got != "codex-app-server" {
+		t.Fatalf("requiredSource(chatgpt) = %q, want codex-app-server", got)
 	}
-	if !failClosedPool("codex") || !failClosedPool("codex-spark") {
-		t.Fatal("codex and codex-spark must remain fail-closed")
+	if !failClosedProvider("chatgpt") {
+		t.Fatal("chatgpt must remain fail-closed")
 	}
-	if failClosedPool("kimi-coding") || failClosedPool("anthropic") {
+	if failClosedProvider("kimi-coding") || failClosedProvider("anthropic") {
 		t.Fatal("kimi-coding and anthropic must not be fail-closed")
 	}
 	// DeepSeek is a fail-closed quota-only pool with authoritative source.
-	if !failClosedPool("deepseek") {
+	if !failClosedProvider("deepseek") {
 		t.Fatal("deepseek must be a fail-closed pool")
 	}
 	if got := requiredSource("deepseek"); got != "deepseek-balance" {
@@ -3931,15 +3935,15 @@ func TestCursorFailClosedAndRequiredSource(t *testing.T) {
 func TestCursorCacheRequiresCursorDashboardSource(t *testing.T) {
 	now := timeNow()
 	// Correct source is eligible within TTL.
-	if !cacheEligibleForPool(Quota{Source: "cursor-dashboard", FetchedAt: now}, "cursor") {
+	if !cacheEligibleForProvider(Quota{Source: "cursor-dashboard", FetchedAt: now}, "cursor") {
 		t.Fatal("cursor cache with cursor-dashboard source must be eligible")
 	}
 	// Wrong source must be rejected even when fresh.
-	if cacheEligibleForPool(Quota{Source: "codex-app-server", FetchedAt: now}, "cursor") {
+	if cacheEligibleForProvider(Quota{Source: "codex-app-server", FetchedAt: now}, "cursor") {
 		t.Fatal("cursor cache with wrong source must be rejected")
 	}
 	// Absent source must be rejected.
-	if cacheEligibleForPool(Quota{FetchedAt: now}, "cursor") {
+	if cacheEligibleForProvider(Quota{FetchedAt: now}, "cursor") {
 		t.Fatal("cursor cache with absent source must be rejected")
 	}
 }
@@ -4126,18 +4130,18 @@ func TestCachedProviderFailClosedNeverReportsStale(t *testing.T) {
 	}
 }
 
-func TestCachedProviderFailClosedCodexSparkTTLExpired(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "spark-quota.json")
+func TestCachedProviderFailClosedChatGPTTTLExpired(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chatgpt-quota.json")
 	old := timeNow().Add(-2 * time.Minute)
-	oldQ := Quota{Provider: "codex-spark", Windows: []Window{{Name: "5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
+	oldQ := Quota{Provider: "chatgpt", Windows: []Window{{Name: "spark-5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
 	if err := writeCache(path, oldQ); err != nil {
 		t.Fatal(err)
 	}
 
 	p := &CachedProvider{
 		Inner: fakeProvider{
-			name: "codex-spark",
-			q:    Quota{Provider: "codex-spark", Windows: []Window{{Name: "5h", Pct: 60, WindowMinutes: 300}}, FetchedAt: timeNow()},
+			name: "chatgpt",
+			q:    Quota{Provider: "chatgpt", Windows: []Window{{Name: "spark-5h", Pct: 60, WindowMinutes: 300}}, FetchedAt: timeNow()},
 		},
 		Path:       path,
 		TTL:        60 * time.Second,
@@ -4152,22 +4156,22 @@ func TestCachedProviderFailClosedCodexSparkTTLExpired(t *testing.T) {
 		t.Fatalf("expected refreshed windows with Pct=60, got %#v", q.Windows)
 	}
 	if q.Stale {
-		t.Fatal("codex-spark fail-closed must never return stale=true")
+		t.Fatal("chatgpt fail-closed must never return stale=true")
 	}
 }
 
-func TestCachedProviderFailClosedCodexSparkAPIFailureReturnsError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "spark-quota.json")
+func TestCachedProviderFailClosedChatGPTAPIFailureReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chatgpt-quota.json")
 	old := timeNow().Add(-2 * time.Minute)
-	oldQ := Quota{Provider: "codex-spark", Windows: []Window{{Name: "5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
+	oldQ := Quota{Provider: "chatgpt", Windows: []Window{{Name: "5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
 	if err := writeCache(path, oldQ); err != nil {
 		t.Fatal(err)
 	}
 
 	p := &CachedProvider{
 		Inner: fakeProvider{
-			name: "codex-spark",
-			err:  errors.New("spark API failure"),
+			name: "chatgpt",
+			err:  errors.New("chatgpt API failure"),
 		},
 		Path:       path,
 		TTL:        60 * time.Second,
@@ -4175,8 +4179,8 @@ func TestCachedProviderFailClosedCodexSparkAPIFailureReturnsError(t *testing.T) 
 	}
 
 	_, err := p.Fetch(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "spark API failure") {
-		t.Fatalf("expected 'spark API failure' error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "chatgpt API failure") {
+		t.Fatalf("expected 'chatgpt API failure' error, got %v", err)
 	}
 }
 
@@ -4454,7 +4458,7 @@ func TestQuotaShowOneCodexForegroundFetchErrorReplacesCache(t *testing.T) {
 	now := fixedNow()
 
 	// Seed a valid correct-source codex cache.
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -4502,18 +4506,18 @@ func TestQuotaShowOneCodexForegroundFetchErrorReplacesCache(t *testing.T) {
 	}
 }
 
-func TestQuotaListAllCodexSparkForegroundFetchErrorReplacesCache(t *testing.T) {
+func TestQuotaListAllChatGPTForegroundFetchErrorReplacesCache(t *testing.T) {
 	tmpDir := t.TempDir()
 	setFixedNow(t)
 	now := fixedNow()
 
-	// Seed a valid correct-source codex-spark cache.
-	cachePath := filepath.Join(tmpDir, "quota", "codex-spark.json")
+	// Seed a valid correct-source chatgpt cache.
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cachedQ := Quota{
-		Provider:  "codex-spark",
+		Provider:  "chatgpt",
 		Source:    "codex-app-server",
 		Used:      Float64(100),
 		Total:     Float64(2000),
@@ -4526,8 +4530,8 @@ func TestQuotaListAllCodexSparkForegroundFetchErrorReplacesCache(t *testing.T) {
 
 	deps := testQuotaCommandDeps(tmpDir)
 	deps.ProviderForOverride = func(name string, billing BillingInfo) Provider {
-		if name == "codex-spark" {
-			return fakeProvider{name: "codex-spark", err: errors.New("spark error")}
+		if name == "chatgpt" {
+			return fakeProvider{name: "chatgpt", err: errors.New("chatgpt error")}
 		}
 		return fakeProvider{
 			name: name,
@@ -4556,10 +4560,10 @@ func TestQuotaListAllCodexSparkForegroundFetchErrorReplacesCache(t *testing.T) {
 	// Cache must now contain a failure marker.
 	e, ok := readCache(cachePath)
 	if !ok || e.FailedAt.IsZero() {
-		t.Fatal("expected failure marker in cache after codex-spark foreground fetch error")
+		t.Fatal("expected failure marker in cache after chatgpt foreground fetch error")
 	}
-	if !strings.Contains(e.Error, "spark error") {
-		t.Fatalf("failure marker error = %q, want 'spark error'", e.Error)
+	if !strings.Contains(e.Error, "chatgpt error") {
+		t.Fatalf("failure marker error = %q, want 'chatgpt error'", e.Error)
 	}
 }
 
@@ -4632,7 +4636,7 @@ func TestQuotaListAllWritesCacheAfterSuccessfulFetch(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 		ProviderForOverride: func(name string, billing BillingInfo) Provider {
-			if name == "codex" || name == "codex-spark" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
+			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
 				return fakeProvider{
 					name: name,
 					q: Quota{
@@ -4661,14 +4665,14 @@ func TestQuotaListAllWritesCacheAfterSuccessfulFetch(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
 
-	// Verify cache was written for codex.
-	cachePath := poolCachePath(tmpDir, "codex")
+	// Verify cache was written for chatgpt.
+	cachePath := providerCachePath(tmpDir, "chatgpt")
 	if _, err := os.Stat(cachePath); err != nil {
-		t.Fatalf("codex cache should exist after successful fetch: %v", err)
+		t.Fatalf("chatgpt cache should exist after successful fetch: %v", err)
 	}
 	q, ok := ReadCache(cachePath)
 	if !ok {
-		t.Fatal("codex cache should be readable")
+		t.Fatal("chatgpt cache should be readable")
 	}
 	if q.Used == nil || *q.Used != 100 {
 		t.Fatalf("expected used=100, got %#v", q.Used)
@@ -4713,7 +4717,7 @@ func TestQuotaShowOneWritesCacheAfterSuccessfulFetch(t *testing.T) {
 	}
 
 	// Verify cache was written.
-	cachePath := poolCachePath(tmpDir, "kimi-coding")
+	cachePath := providerCachePath(tmpDir, "kimi-coding")
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("cache should exist after successful fetch: %v", err)
 	}
@@ -4737,7 +4741,7 @@ func TestQuotaListAllWithRefreshStillWritesCache(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 		ProviderForOverride: func(name string, billing BillingInfo) Provider {
-			if name == "codex" || name == "codex-spark" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
+			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
 				return fakeProvider{
 					name: name,
 					q: Quota{
@@ -4768,13 +4772,13 @@ func TestQuotaListAllWithRefreshStillWritesCache(t *testing.T) {
 	}
 
 	// Verify cache was written even with --refresh.
-	cachePath := poolCachePath(tmpDir, "codex")
+	cachePath := providerCachePath(tmpDir, "chatgpt")
 	if _, err := os.Stat(cachePath); err != nil {
-		t.Fatalf("codex cache should exist after --refresh fetch: %v", err)
+		t.Fatalf("chatgpt cache should exist after --refresh fetch: %v", err)
 	}
 	q, ok := ReadCache(cachePath)
 	if !ok {
-		t.Fatal("codex cache should be readable after --refresh")
+		t.Fatal("chatgpt cache should be readable after --refresh")
 	}
 	if q.Used == nil || *q.Used != 300 {
 		t.Fatalf("expected used=300, got %#v", q.Used)
@@ -4787,7 +4791,7 @@ func TestQuotaListAllAPIErrorJSONNoWindows(t *testing.T) {
 	now := fixedNow()
 
 	// Seed stale cache (10min old, past 60s TTL) so Fetch is called.
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -4837,15 +4841,15 @@ func TestQuotaListAllAPIErrorJSONNoWindows(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		pool, _ := e["pool"].(string)
-		if pool == "codex" {
+		pool, _ := e["provider"].(string)
+		if pool == "chatgpt" {
 			status, _ := e["status"].(string)
 			if status != "error" {
-				t.Fatalf("codex status = %q, want error", status)
+				t.Fatalf("chatgpt status = %q, want error", status)
 			}
 			errMsg, _ := e["error"].(string)
 			if !strings.Contains(errMsg, "API failure") {
-				t.Fatalf("codex error = %q, want 'API failure'", errMsg)
+				t.Fatalf("chatgpt error = %q, want 'API failure'", errMsg)
 			}
 			// Must not have stale windows or stale data.
 			if _, hasWindows := e["windows"]; hasWindows {
@@ -5005,7 +5009,7 @@ func TestQuotaListAllCacheEligibleRejectsLegacyCodexSource(t *testing.T) {
 	setFixedNow(t)
 	now := fixedNow()
 
-	cachePath := filepath.Join(tmpDir, "quota", "codex.json")
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -5024,12 +5028,12 @@ func TestQuotaListAllCacheEligibleRejectsLegacyCodexSource(t *testing.T) {
 	var providerCalled bool
 	deps := testQuotaCommandDeps(tmpDir)
 	deps.ProviderForOverride = func(name string, billing BillingInfo) Provider {
-		if name == "codex" {
+		if name == "chatgpt" {
 			providerCalled = true
 			return fakeProvider{
-				name: "codex",
+				name: "chatgpt",
 				q: Quota{
-					Provider:  "codex",
+					Provider:  "chatgpt",
 					Source:    "codex-app-server",
 					Used:      Float64(300),
 					Total:     Float64(7000),
@@ -5045,7 +5049,7 @@ func TestQuotaListAllCacheEligibleRejectsLegacyCodexSource(t *testing.T) {
 		t.Fatalf("quotaShowOne exit code = %d, want 0", code)
 	}
 	if !providerCalled {
-		t.Fatal("Provider must be called when legacy codex cache is rejected")
+		t.Fatal("Provider must be called when legacy chatgpt cache is rejected")
 	}
 	if used, _ := result["used"].(float64); used != 300 {
 		t.Fatalf("used = %f, want 300 (from provider)", used)
@@ -5106,18 +5110,15 @@ func TestQuotaShowOneFutureDatedCacheBypassed(t *testing.T) {
 }
 
 func TestCacheEligibleForPoolBlankSourceAcceptedByNonCodex(t *testing.T) {
-	// Non-Codex pools must accept blank source.
-	if !cacheEligibleForPool(Quota{FetchedAt: time.Now(), Source: ""}, "kimi-coding") {
+	// Non-chatgpt providers must accept blank source.
+	if !cacheEligibleForProvider(Quota{FetchedAt: time.Now(), Source: ""}, "kimi-coding") {
 		t.Fatal("kimi-coding should accept blank source")
 	}
-	if !cacheEligibleForPool(Quota{FetchedAt: time.Now(), Source: "codex-app-server"}, "codex") {
-		t.Fatal("codex with correct source should be accepted")
+	if !cacheEligibleForProvider(Quota{FetchedAt: time.Now(), Source: "codex-app-server"}, "chatgpt") {
+		t.Fatal("chatgpt with correct source should be accepted")
 	}
-	if cacheEligibleForPool(Quota{FetchedAt: time.Now(), Source: ""}, "codex") {
-		t.Fatal("codex with blank source must be rejected")
-	}
-	if cacheEligibleForPool(Quota{FetchedAt: time.Now(), Source: ""}, "codex-spark") {
-		t.Fatal("codex-spark with blank source must be rejected")
+	if cacheEligibleForProvider(Quota{FetchedAt: time.Now(), Source: ""}, "chatgpt") {
+		t.Fatal("chatgpt with blank source must be rejected")
 	}
 }
 
@@ -5157,9 +5158,9 @@ func captureQuotaListAllJSON(t *testing.T, deps CommandDeps) ([]map[string]any, 
 func TestCanonicalPoolsExcludeCodeBuddy(t *testing.T) {
 	// codebuddy is never a declared provider quota binding; it appears in list
 	// output only through the observed store projection.
-	for _, pool := range canonicalPools {
+	for _, pool := range canonicalProviders {
 		if pool == "codebuddy" {
-			t.Fatal("codebuddy must not be a canonical quota pool")
+			t.Fatal("codebuddy must not be a canonical quota provider")
 		}
 	}
 	if canonicalName("codebuddy") != "" {
@@ -5171,7 +5172,7 @@ func TestCanonicalPoolsExcludeCodeBuddy(t *testing.T) {
 // quota list, or nil when the projection was omitted.
 func findObservedCodeBuddyEntry(entries []map[string]any) map[string]any {
 	for _, e := range entries {
-		if pool, _ := e["pool"].(string); pool == "codebuddy" {
+		if pool, _ := e["provider"].(string); pool == "codebuddy" {
 			return e
 		}
 	}
@@ -5433,5 +5434,175 @@ func TestQuotaListAllObservedCodeBuddyLegacyV1Inert(t *testing.T) {
 func TestCanonicalLabelCodeBuddy(t *testing.T) {
 	if got := CanonicalLabel("codebuddy"); got != "CodeBuddy" {
 		t.Fatalf("CanonicalLabel(codebuddy) = %q, want CodeBuddy", got)
+	}
+}
+
+// --- ChatGPT single-source / not-applicable-windows projection tests ---
+
+// chatGPTFixtureProvider returns a ProviderForOverride stub that serves a fixed
+// chatgpt Quota for the canonical chatgpt provider and a harmless default for
+// every other provider.
+func chatGPTFixtureProvider(q Quota) func(string, BillingInfo) Provider {
+	return func(name string, billing BillingInfo) Provider {
+		if name == "chatgpt" {
+			return fakeProvider{name: "chatgpt", q: q}
+		}
+		return fakeProvider{
+			name: name,
+			q:    Quota{Provider: name, Used: Float64(1), Total: Float64(10), FetchedAt: timeNow()},
+		}
+	}
+}
+
+// TestChatGPTSingleProviderRowWithBothWindows verifies the canonical list
+// output contains exactly one chatgpt row carrying all four windows (5h/7d and
+// spark-5h/spark-7d) and no separate spark provider row.
+func TestChatGPTSingleProviderRowWithBothWindows(t *testing.T) {
+	tmpDir := t.TempDir()
+	setFixedNow(t)
+	now := fixedNow()
+
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ProviderForOverride = chatGPTFixtureProvider(Quota{
+		Provider:  "chatgpt",
+		Source:    "codex-app-server",
+		FetchedAt: now,
+		Windows: []Window{
+			{Name: "5h", Pct: 12, WindowMinutes: 300},
+			{Name: "7d", Pct: 96, WindowMinutes: 10080},
+			{Name: "spark-5h", Pct: 66, WindowMinutes: 300},
+			{Name: "spark-7d", Pct: 10, WindowMinutes: 10080},
+		},
+	})
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+
+	var chatgptRows int
+	for _, e := range entries {
+		provider, _ := e["provider"].(string)
+		if provider == "codex" || provider == "codex-spark" || provider == "spark" {
+			t.Fatalf("legacy provider row %q must not appear: %#v", provider, e)
+		}
+		if provider != "chatgpt" {
+			continue
+		}
+		chatgptRows++
+		if label, _ := e["label"].(string); label != "ChatGPT" {
+			t.Fatalf("chatgpt label = %q, want ChatGPT", label)
+		}
+		windows, _ := e["windows"].([]any)
+		if len(windows) != 4 {
+			t.Fatalf("chatgpt windows = %d, want 4: %#v", len(windows), windows)
+		}
+		got := make([]string, 0, 4)
+		for _, raw := range windows {
+			w := raw.(map[string]any)
+			got = append(got, w["name"].(string))
+		}
+		want := []string{"5h", "7d", "spark-5h", "spark-7d"}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("window[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+			}
+		}
+	}
+	if chatgptRows != 1 {
+		t.Fatalf("chatgpt rows = %d, want exactly 1", chatgptRows)
+	}
+}
+
+// TestChatGPTNotApplicableWindowsPropagatedToCacheListShow verifies that
+// Quota.NotApplicableWindows survives the cache round-trip and is projected
+// into both the list and single-show JSON.
+func TestChatGPTNotApplicableWindowsPropagatedToCacheListShow(t *testing.T) {
+	tmpDir := t.TempDir()
+	setFixedNow(t)
+	now := fixedNow()
+
+	cachePath := filepath.Join(tmpDir, "quota", "chatgpt.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cachedQ := Quota{
+		Provider:             "chatgpt",
+		Source:               "codex-app-server",
+		FetchedAt:            now,
+		NotApplicableWindows: []string{"5h"},
+		Windows:              []Window{{Name: "7d", Pct: 96, WindowMinutes: 10080}},
+	}
+	cacheData, _ := json.MarshalIndent(cacheEntry{Quota: cachedQ, FetchedAt: now}, "", "  ")
+	if err := os.WriteFile(cachePath, cacheData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cache round-trip preserves the marker.
+	reread, ok := ReadCache(cachePath)
+	if !ok {
+		t.Fatal("cache should be readable")
+	}
+	if len(reread.NotApplicableWindows) != 1 || reread.NotApplicableWindows[0] != "5h" {
+		t.Fatalf("cache NotApplicableWindows = %#v, want [5h]", reread.NotApplicableWindows)
+	}
+
+	deps := testQuotaCommandDeps(tmpDir)
+	deps.ProviderForOverride = chatGPTFixtureProvider(cachedQ)
+
+	entries, code := captureQuotaListAllJSON(t, deps)
+	if code != 0 {
+		t.Fatalf("quotaListAll exit code = %d, want 0", code)
+	}
+	foundList := false
+	for _, e := range entries {
+		if provider, _ := e["provider"].(string); provider != "chatgpt" {
+			continue
+		}
+		foundList = true
+		na, _ := e["not_applicable_windows"].([]any)
+		if len(na) != 1 || na[0] != "5h" {
+			t.Fatalf("list not_applicable_windows = %#v, want [5h]", e["not_applicable_windows"])
+		}
+	}
+	if !foundList {
+		t.Fatal("chatgpt row missing from list output")
+	}
+
+	show, code := captureQuotaShowOneJSON(t, deps, "chatgpt")
+	if code != 0 {
+		t.Fatalf("quotaShowOne exit code = %d, want 0", code)
+	}
+	na, _ := show["not_applicable_windows"].([]any)
+	if len(na) != 1 || na[0] != "5h" {
+		t.Fatalf("show not_applicable_windows = %#v, want [5h]", show["not_applicable_windows"])
+	}
+}
+
+// TestChatGPTProviderMalformedWindowNotAbsenceViaCommand verifies that a
+// malformed window in the upstream response surfaces as an error row, never as
+// a not_applicable_windows entry.
+func TestChatGPTProviderMalformedWindowNotAbsenceViaCommand(t *testing.T) {
+	fake := newFakeRPC(t, map[string]json.RawMessage{
+		"initialize": json.RawMessage(`{"capabilities":{}}`),
+		"account/rateLimits/read": func() json.RawMessage {
+			resp := GetAccountRateLimitsResponse{
+				RateLimitsByLimitID: map[string]RateLimitsEntry{
+					"codex": {Primary: &RateLimitWindow{UsedPercent: nil}, PlanType: "pro"},
+				},
+			}
+			raw, _ := json.Marshal(resp)
+			return raw
+		}(),
+	})
+	chatGPTRunRPC = fake.run
+	t.Cleanup(func() { chatGPTRunRPC = nil })
+
+	_, err := ChatGPTProvider{}.Fetch(context.Background())
+	if err == nil {
+		t.Fatal("malformed window must be an error, not an absence marker")
+	}
+	if strings.Contains(err.Error(), "not_applicable") {
+		t.Fatalf("error must not mention not_applicable: %v", err)
 	}
 }
