@@ -2,12 +2,16 @@ name: Release
 
 # Public dev prerelease pipeline. Builds the two maintained targets, verifies
 # the complete internal release evidence, and publishes only the portable suite
-# and Desktop archives users install. Packed-install E2E is optional
-# (`pnpm release:e2e`) and is not a publish gate.
+# and Desktop archives users install. A tag push (v1.0.0-dev.*) runs the full
+# preflight, then stages a draft release, uploads all four public archives, and
+# only then publishes the draft as a prerelease. `workflow_dispatch` runs the
+# same native preflight without creating a tag or release, so a release can be
+# validated before it is tagged.
 on:
   push:
     tags:
       - 'v1.0.0-dev.*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,6 +31,7 @@ jobs:
           - os: windows-latest
             target: win32-x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -41,6 +46,7 @@ jobs:
           go-version: 1.26.x
           cache: false
       - name: Validate tag matches the root package version
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -63,8 +69,14 @@ jobs:
       - run: pnpm check:identifiers
       - run: pnpm check:secrets
       - run: pnpm release:legal
-      - run: pnpm build
+      - run: pnpm check
+      - run: pnpm audit --prod --audit-level high
       - run: pnpm release:local
+      - run: pnpm desktop:smoke -- --release-dir .artifacts/release
+      - name: Run packed-install release E2E
+        env:
+          WRENYARD_E2E_RELEASE_DIR: ${{ github.workspace }}/.artifacts/release
+        run: pnpm release:e2e
       - name: Verify target-qualified manifests and checksums
         shell: bash
         run: |
@@ -95,10 +107,11 @@ jobs:
           else
             printf 'unsigned-preview\n' > .artifacts/release/signing-status.txt
           fi
-      # Hop only: the durable product lives on the GitHub Release. Keep the
-      # Actions copy for one day so a failed aggregate can still be diagnosed,
-      # then delete it after publish so Free-org 500 MB artifact quota is not
-      # filled by two large platform packs per tag.
+      # Hop only: the durable product lives on the GitHub Release. The Actions
+      # copy is kept for one day so a failed aggregate can still be diagnosed,
+      # then dropped once staging/publication succeeds (or a manual preflight
+      # passes) so the two large platform packs never accumulate toward the
+      # Free-org 500 MB artifact quota.
       - uses: actions/upload-artifact@v4
         with:
           name: wrenyard-release-${{ matrix.target }}
@@ -140,6 +153,8 @@ jobs:
 
           version="$(node -p "require('./package.json').version")"
           mkdir -p release-assets
+          # Every maintainable release publishes exactly the four public
+          # archives: the portable suite and Desktop pack for macOS and Windows.
           for target in darwin-arm64 win32-x64; do
             source_dir="artifacts/wrenyard-release-$target"
             suite="$source_dir/wrenyard-$version-$target-suite.zip"
@@ -147,25 +162,17 @@ jobs:
             test -f "$suite"
             test -f "$desktop"
             cp "$suite" "$desktop" release-assets/
-
-            # dev20 clients still discover and verify updates through checksum
-            # sidecars. Publish the four migration sidecars for dev21 only;
-            # digest-aware dev21 clients let every later release expose just the
-            # four suite/Desktop archives.
-            if [ "$version" = "1.0.0-dev.21" ]; then
-              cp "$suite.sha256" "$desktop.sha256" release-assets/
-            fi
           done
 
           expected_count=4
-          if [ "$version" = "1.0.0-dev.21" ]; then expected_count=8; fi
           actual_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
           if [ "$actual_count" -ne "$expected_count" ]; then
             echo "expected $expected_count public assets, found $actual_count" >&2
             find release-assets -maxdepth 1 -type f -print >&2
             exit 1
           fi
-      - name: Create or update GitHub prerelease
+      - name: Create draft prerelease and upload all public archives
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -173,22 +180,43 @@ jobs:
           set -euo pipefail
           VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
           TAG="v$VERSION"
+          # Never delete or overwrite an existing published release. If the tag
+          # already has a release, fail safely and leave it untouched.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; refusing to delete or overwrite it" >&2
+            exit 1
+          fi
           MAC_SIGNING="$(cat artifacts/wrenyard-release-darwin-arm64/signing-status.txt)"
           WIN_SIGNING="$(cat artifacts/wrenyard-release-win32-x64/signing-status.txt)"
           NOTES="Public Wrenyard $VERSION development prerelease.
           Built from commit $GITHUB_SHA.
           Signing status: macOS $MAC_SIGNING; Windows $WIN_SIGNING (preview-grade)."
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release delete "$TAG" --yes
-          fi
+          # Stage a draft first so the release is only visible once every one of
+          # the four public archives has uploaded successfully.
           gh release create "$TAG" \
             --title "Wrenyard $VERSION" \
             --notes "$NOTES" \
-            --prerelease
+            --prerelease \
+            --draft
           while IFS= read -r f; do
             gh release upload "$TAG" "$f"
           done < <(find release-assets -maxdepth 1 -type f | sort)
-      - name: Drop hop artifacts after the GitHub Release is published
+      - name: Publish the draft prerelease after a complete upload
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
+          TAG="v$VERSION"
+          gh release edit "$TAG" --draft=false --prerelease
+      # Hop only: the durable product lives on the GitHub Release. The Actions
+      # copy exists so a failed aggregate can still be diagnosed, and is dropped
+      # after successful staging/publication — including a successful manual
+      # preflight — so the large platform packs never accumulate toward the
+      # Free-org 500 MB artifact quota.
+      - name: Drop hop artifacts after staging/publication
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash

@@ -2,13 +2,13 @@ package statusline
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 )
 
@@ -625,28 +625,21 @@ func TestVisualWidthEmojiAndCJK(t *testing.T) {
 	}
 }
 
-// TestModelDisplayNameGolden covers every model ID in the
-// model_display_names map from models.json, asserting that modelDisplayName
-// returns the mapped display value for each key. It also includes explicit
-// edge cases for model IDs not in the map (bracketed variants, models that
-// fall through to autoDisplayName).
+// TestModelDisplayNameGolden covers model display names sourced from the live
+// registered provider catalog (the production billing path), asserting that
+// modelDisplayName returns each catalog-provided display value. It also
+// includes explicit edge cases for model IDs not in the catalog (bracketed
+// variants, models that fall through to autoDisplayName).
 func TestModelDisplayNameGolden(t *testing.T) {
-	// Load the authoritative model_display_names map from models.json.
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "internal", "forge", "data", "legacy", "models.json"))
-	if err != nil {
-		t.Fatalf("failed to read models.json: %v", err)
+	// Use the real registered provider catalog as the authoritative source of
+	// model display names — the same path production billing uses.
+	billing := LoadBillingCatalog(catalog.DefaultRegistry())
+	if len(billing.ModelDisplayNames) == 0 {
+		t.Fatal("catalog-provided model display names must not be empty")
 	}
-	type modelDisplayNamesJSON struct {
-		ModelDisplayNames map[string]string `json:"model_display_names"`
-	}
-	var md modelDisplayNamesJSON
-	if err := json.Unmarshal(data, &md); err != nil {
-		t.Fatalf("failed to parse models.json: %v", err)
-	}
-	billing := Billing{ModelDisplayNames: md.ModelDisplayNames}
 
-	// Data-driven: assert every key in models.json returns its display value.
-	for modelID, want := range md.ModelDisplayNames {
+	// Data-driven: assert every catalog-provided display name resolves.
+	for modelID, want := range billing.ModelDisplayNames {
 		t.Run(modelID, func(t *testing.T) {
 			got := modelDisplayName(modelID, billing)
 			if got != want {
@@ -655,8 +648,8 @@ func TestModelDisplayNameGolden(t *testing.T) {
 		})
 	}
 
-	// Explicit sanity table for model IDs not in the map (bracketed variants,
-	// fall-through autoDisplayName paths, etc.).
+	// Explicit sanity table for model IDs not in the catalog (bracketed
+	// variants, fall-through autoDisplayName paths, etc.).
 	sanity := []struct {
 		modelID string
 		want    string

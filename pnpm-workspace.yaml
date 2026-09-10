@@ -6,10 +6,16 @@ packages:
 # Build-tool tar 6.x still appears via node-gyp/cacache; force the patched 7.5 line.
 # Vitest 3.2 still resolves Vite 5; the open advisories are fixed in 6.4.3.
 # AJV consumers receive fast-uri transitively; 3.1.6 fixes the current high-severity URL parsing advisories.
+# Scoped overrides for audited vulnerable transitives; each pin is the patched release for its advisory range.
 overrides:
   tar@<7.5.21: 7.5.22
   vite@<6.4.3: 6.4.3
   fast-uri@<3.1.6: 3.1.6
+  '@xmldom/xmldom@>=0.7.0 <0.8.15': 0.8.15
+  'sharp@<0.35.4': 0.35.4
+  'js-yaml@>=4.0.0 <4.3.2': 4.3.2
+  'qs@>=2.2.5 <6.16.0': 6.16.0
+  'hono@<4.13.5': 4.13.5
 
 # Deployable workspace packages are injected as real package snapshots instead
 # of symlinks. This keeps `pnpm deploy` isolated and reproducible for release

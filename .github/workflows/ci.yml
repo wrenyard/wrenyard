@@ -2,8 +2,8 @@ name: CI
 
 # Keep routine validation deliberately cheap: one Linux runner, one install,
 # and no release packaging. Cross-platform binaries belong to release.yml and
-# run only for an explicit prerelease tag. Packed-install E2E is optional
-# local (`pnpm release:e2e`), not a CI or publish gate.
+# run for manual preflight and explicit prerelease tags. Native packed-install
+# E2E and packaged Desktop smoke are required by the release workflow.
 on:
   pull_request:
   push:

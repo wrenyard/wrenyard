@@ -2,7 +2,6 @@ package statusline
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
@@ -24,18 +23,9 @@ type ModelRate struct {
 	Output      float64 `json:"output"`
 }
 
-// LoadBilling reads billing data from a models.json path.
-func LoadBilling(path string) (Billing, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Billing{}, err
-	}
-	return LoadBillingData(raw)
-}
-
 // LoadBillingCatalog constructs billing info from the catalog provider model
-// definitions. This is the production billing source; models.json is no longer
-// embedded or loaded.
+// definitions. This is the production billing source; the retired models.json
+// is neither embedded nor loaded.
 func LoadBillingCatalog(reg *catalog.Registry) Billing {
 	b := Billing{
 		USDToCNY:          7.2,

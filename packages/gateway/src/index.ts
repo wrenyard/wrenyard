@@ -297,7 +297,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       // the forwarded session header. Other providers are left untouched and
       // never receive these identity values.
       if (resolved.provider.id === 'opencode-zen' || resolved.provider.id === 'opencode-go') {
-        headers.set('user-agent', 'wrenyard/1.0.0-dev.23');
+        headers.set('user-agent', 'wrenyard');
         const session = openCodeSessionHeader(request.headers);
         if (session) headers.set('x-opencode-session', session);
       }
