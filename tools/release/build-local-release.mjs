@@ -547,7 +547,7 @@ process.exitCode = result.error ? 1 : (result.status ?? 1);
 // The exact release temp dir and source worktree are rejected everywhere; the
 // generic developer-home values are rejected only in first-party files, because
 // an upstream dependency can publicly ship bytes compiled under the same CI
-// home (e.g. fsevents.node under /Users/runner) without being a local leak.
+// home (e.g. the upstream fsevents.node build) without being a local leak.
 // Third-party dependency assets are not automatically secrets: upstream source
 // maps and public documentation/certificate examples under node_modules are
 // normal runtime assets, so only first-party source maps and the explicit
@@ -599,7 +599,7 @@ function pathByteVariants(candidate) {
 // legitimate payload content, so they are rejected in ALL files. The generic
 // developer-home values (os.homedir/HOME/USERPROFILE) are only distinct because
 // a third-party dependency's publicly compiled bytes can legitimately embed the
-// public CI build home (e.g. upstream fsevents.node containing /Users/runner),
+// public CI build home (e.g. an upstream fsevents.node build),
 // so those are enforced against first-party files only.
 function buildPathNeedles(buildTmp, worktree) {
   const values = new Set();
