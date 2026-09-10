@@ -15,6 +15,7 @@ import {
   DAEMON_PLANNED_RESTART_MESSAGE,
 } from '../lib/daemon/dispatch-control.mts'
 import { PlannedRestartStore, type PlannedRestartPlan } from '../lib/daemon/planned-restart-store.mts'
+import { foremanStateRoot } from '../lib/config/state.mts'
 import { closeDb, initDb, run as dbRun } from '../lib/db/connection.mts'
 import { INVALID_PARAMS, METHOD_NOT_FOUND, ProtocolError, TASK_NOT_FOUND } from '../lib/protocol/errors.mts'
 import { connectIpcClientTransport } from '../lib/transport/ipc-client.mts'
@@ -503,6 +504,54 @@ test('failed service startup closes HTTP when IPC endpoint is occupied', async (
     await assertHttpUnavailable(port)
   } finally {
     await occupiedIpcServer.close()
+    resetRegistry()
+    rmSync(endpoint.dir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
+test('failed service startup closes HTTP when gateway credential helper cannot be created', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'foreman-service-helper-occupied-'))
+  const workspaceProject = join(workDir, 'projects', 'workspace')
+  mkdirSync(workspaceProject, { recursive: true })
+  writeFileSync(
+    join(workspaceProject, 'workspace.fmproj'),
+    'name: workspace\ndescription: Workspace shared resources\n',
+    'utf-8',
+  )
+  const helperName = process.platform === 'win32' ? 'gateway-credential-helper.mjs' : 'gateway-credential-helper'
+  mkdirSync(join(foremanStateRoot(), 'client-configuration', helperName), { recursive: true })
+  const endpoint = createTestIpcEndpoint('helper-fail')
+  const port = await allocateFreeTcpPort()
+  const { startForemanDaemon } = await import('../lib/daemon/daemon.mts')
+
+  try {
+    await assert.rejects(
+      startForemanDaemon({
+        service: {
+          enabled: true,
+          host: '127.0.0.1',
+          port,
+          ipc: { path: endpoint.path },
+        },
+        workspaceRoot: workDir,
+        message: testMessageConfig(),
+        messageDelivery: {
+          enabled: false,
+          default: ['system'],
+          channels: {},
+        },
+      }),
+      { code: 'EISDIR' },
+    )
+
+    const rebound = createServer()
+    try {
+      await listenTestServer(rebound, port)
+    } finally {
+      await closeTestServer(rebound)
+    }
+  } finally {
     resetRegistry()
     rmSync(endpoint.dir, { recursive: true, force: true })
     rmSync(workDir, { recursive: true, force: true })

@@ -498,7 +498,11 @@ async function startForemanDaemonWithRuntime(
   const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
   const clientDiscovery = new InstalledClientDiscovery()
   const clientOwnership = new JsonClientOwnershipStore(join(stateRoot, 'client-configuration', 'ownership.json'))
-  const credentialHelperPath = join(stateRoot, 'client-configuration', 'gateway-credential-helper')
+  const credentialHelperPath = join(
+    stateRoot,
+    'client-configuration',
+    process.platform === 'win32' ? 'gateway-credential-helper.mjs' : 'gateway-credential-helper',
+  )
   let activeIpcPath = resolveForemanServiceIpcPath({
     port: config.service.port,
     path: config.service.ipc?.path,
@@ -744,9 +748,9 @@ async function startForemanDaemonWithRuntime(
     path: config.service.ipc?.path,
   })
   activeIpcPath = ipcPath
-  await ensureGatewayCredentialHelper(credentialHelperPath, activeIpcPath)
   let ipcServer: IpcServer | undefined
   try {
+    await ensureGatewayCredentialHelper(credentialHelperPath, activeIpcPath)
     ipcServer = await createIpcServer({
       path: ipcPath,
       onMessage: (message) => rpcRouter.handleMessage(message, { transport: 'ipc' }),

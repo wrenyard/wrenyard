@@ -26,7 +26,7 @@ export class DaemonGatewayClientSource {
       ...base,
       credential: this.options.credential(),
       credentialHelperPath: this.options.credentialHelperPath,
-      credentialHelperCommand: [this.options.credentialHelperPath],
+      credentialHelperCommand: gatewayCredentialHelperCommand(this.options.credentialHelperPath),
       models: await availableClientModels(this.options.catalog, this.options.providers),
     }
   }
@@ -82,8 +82,11 @@ export async function loadOrCreateGatewayCredential(path: string): Promise<strin
   }
 }
 
+export function gatewayCredentialHelperCommand(path: string, nodePath = process.execPath, platform = process.platform): string[] {
+  return platform === 'win32' ? [nodePath, path] : [path]
+}
+
 export async function ensureGatewayCredentialHelper(path: string, ipcPath: string, nodePath = process.execPath): Promise<void> {
-  if (process.platform === 'win32') throw new Error('Gateway credential helper is not implemented on Windows yet')
   const script = gatewayCredentialHelperScript(nodePath, ipcPath)
   try {
     if (await readFile(path, 'utf8') === script) {
