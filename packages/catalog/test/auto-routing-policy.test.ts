@@ -1173,7 +1173,7 @@ test("verified-free changes routing price/P only and has no priority bucket", ()
     assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
   })
 
-test("expected premium ranks the eligible premium candidate above a cheaper faster high", () => {
+test("recommendation contributes to total score without overriding a cheaper faster high", () => {
   const premium = cand({
     canonicalId: "premium-cand",
     referenceUsdPerM: 30,
@@ -1192,9 +1192,10 @@ test("expected premium ranks the eligible premium candidate above a cheaper fast
     intelligenceExpectedRank: 3,
   })
   const result = rankAutoRoutingCandidates([high, premium])
-  assert.deepEqual(rankedIds(result), ["premium-cand", "high-cand"])
-  assert.equal(result.ranked[0].intelligenceShortfall, 0)
-  assert.equal(result.ranked[1].intelligenceShortfall, 1)
+  assert.deepEqual(rankedIds(result), ["high-cand", "premium-cand"])
+  assert.ok(result.ranked[0].score > result.ranked[1].score)
+  assert.equal(result.ranked[0].intelligenceShortfall, 1)
+  assert.equal(result.ranked[1].intelligenceShortfall, 0)
 })
 
 test("expected premium falls back to the eligible high when premium is blocked by a hard gate", () => {

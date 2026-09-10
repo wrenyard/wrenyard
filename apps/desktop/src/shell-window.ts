@@ -24,7 +24,10 @@ import {
   type RuntimeAliasSnapshot,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
+  type TaskSettingsAutomaticDispatch,
+  type TaskRoutingTestParams,
   type TaskRoutingTestResult,
+  type TaskRoutingTestTasksResult,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -70,7 +73,8 @@ export interface ShellWindowOptions {
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
-  requestTaskRoutingTest(taskId: string): Promise<TaskRoutingTestResult>;
+  requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
+  requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -266,6 +270,28 @@ function validateRuntimeAliasRemoveRequest(value: unknown): RuntimeAliasRemoveRe
   const name = value.name;
   if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('运行时别名格式无效');
   return { expected_revision: expectedRevision, name };
+}
+
+/**
+ * IPC-boundary validation for task.settings.routingTest. Desktop validates the
+ * typed form DTO shape and bounds only; the daemon owns evaluation, scoring,
+ * and ranking, so the validated request is passed through unchanged. Unknown
+ * automatic keys are rejected — an imported payload must round-trip verbatim.
+ */
+function validateTaskRoutingTestParams(value: unknown): TaskRoutingTestParams {
+  if (!isBoundedPlainObject(value)) throw new Error('路由测试请求无效');
+  const automatic = value.automatic;
+  if (!isBoundedPlainObject(automatic)) throw new Error('自动约束无效');
+  validateAutomaticDispatch(automatic);
+  const timeoutMs = value.timeout_ms;
+  if (timeoutMs !== undefined) {
+    if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');
+  }
+  const params: TaskRoutingTestParams = {
+    automatic: { ...automatic } as TaskSettingsAutomaticDispatch,
+  };
+  if (timeoutMs !== undefined) params.timeout_ms = timeoutMs;
+  return params;
 }
 
 export class ShellWindowController {
@@ -484,10 +510,13 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.runtimeAliasRemove(validateRuntimeAliasRemoveRequest(request));
     });
-    ipcMain.handle(SHELL_CHANNELS.taskRoutingTest, async (event, taskId: unknown) => {
+    ipcMain.handle(SHELL_CHANNELS.taskRoutingTest, async (event, params: unknown) => {
       assertShellSender(event.sender);
-      if (typeof taskId !== 'string' || !taskId || taskId.length > 512) throw new Error('任务 id 无效');
-      return options.requestTaskRoutingTest(taskId);
+      return options.requestTaskRoutingTest(validateTaskRoutingTestParams(params));
+    });
+    ipcMain.handle(SHELL_CHANNELS.taskRoutingTestTasks, async (event) => {
+      assertShellSender(event.sender);
+      return options.requestRoutingTestTasks();
     });
   }
 
@@ -523,6 +552,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.runtimeAliasPut,
       SHELL_CHANNELS.runtimeAliasRemove,
       SHELL_CHANNELS.taskRoutingTest,
+      SHELL_CHANNELS.taskRoutingTestTasks,
     ]) ipcMain.removeHandler(channel);
   }
 

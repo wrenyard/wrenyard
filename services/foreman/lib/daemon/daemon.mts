@@ -43,7 +43,6 @@ import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
 import { createBuiltinCatalog, createBuiltinProviderRuntime, deriveTaskDispatchPlans } from '@wrenyard/providers'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
-import { readTrustedSpeedSamples31d } from '../events/stats-query.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { ClientConfigurationService } from '../client-configuration/service.mts'
@@ -983,16 +982,13 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
-    // Lazy per-candidate trusted local agent_turn_v1 speed evidence. The stats
-    // query reports samples keyed by the exact persisted provider/model, the
-    // same exact identity resolveModelSpeed matches against the Catalog model.
-    localSpeed: () => readTrustedSpeedSamples31d().map((sample) => ({
-      provider: sample.provider,
-      model: sample.model,
-      tps: sample.tps,
-      sampleCount: sample.sampleCount,
-      checkedAt: sample.checkedAt,
-    })),
+    // No automatic-routing local speed evidence is injected: the stats
+    // turn_usage tps_contract is WALL agent-turn throughput (including tool
+    // time and waits), not model-generation TPS, and no current adapter emits
+    // trustworthy generation-only timing. Automatic routing therefore uses
+    // provider_override/catalog_default until real matched generation evidence
+    // exists. The catalog local speed helper remains available on the resolver
+    // for a genuinely supplied measurement.
   })
 
   try {

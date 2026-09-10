@@ -25,7 +25,7 @@ import { ProviderService } from './provider-service.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
@@ -621,9 +621,16 @@ async function bootstrap(): Promise<void> {
     return (await requestForeman('task.settings.snapshot', params)) as TaskSettingsSnapshot;
   };
   // Read-only routing test: the daemon owns evaluation, ranking, and scoring.
-  // Desktop only forwards the exact task id and transports the result back.
-  const requestTaskRoutingTest = async (taskId: string): Promise<TaskRoutingTestResult> => {
-    return (await requestForeman('task.settings.routingTest', { task_id: taskId })) as TaskRoutingTestResult;
+  // Desktop only forwards the typed form request and transports the result back.
+  const requestTaskRoutingTest = async (params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> => {
+    const request: Record<string, unknown> = { automatic: params.automatic };
+    if (params.timeout_ms !== undefined) request.timeout_ms = params.timeout_ms;
+    return (await requestForeman('task.settings.routingTest', request)) as TaskRoutingTestResult;
+  };
+  // Read-only import list: raw definition automatic configuration for every
+  // valid builtin and project task. No effective user settings, no inference.
+  const requestRoutingTestTasks = async (): Promise<TaskRoutingTestTasksResult> => {
+    return (await requestForeman('task.settings.routingTestTasks', {})) as TaskRoutingTestTasksResult;
   };
   const saveTaskSettings = async (request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> => {
     const params: Record<string, unknown> = {
@@ -789,7 +796,8 @@ async function bootstrap(): Promise<void> {
     runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
     runtimeAliasPut: (request: RuntimeAliasPutRequest) => putRuntimeAlias(request),
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
-    requestTaskRoutingTest: (taskId: string) => requestTaskRoutingTest(taskId),
+    requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
+    requestRoutingTestTasks: () => requestRoutingTestTasks(),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

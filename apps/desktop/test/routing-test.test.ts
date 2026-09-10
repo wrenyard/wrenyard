@@ -6,134 +6,113 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   SHELL_CHANNELS,
+  type TaskRoutingTestParams,
   type TaskRoutingTestResult,
-  type TaskSettingsAutomaticDispatch,
+  type TaskRoutingTestTask,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
 import {
-  ROUTING_TEST_PRESETS,
   RoutingTestController,
-  formatEffectiveRequirements,
+  defaultRoutingTestForm,
+  formFromTask,
   renderRoutingTestResult,
   routingTestErrorMessage,
-  routingTestFactorRows,
-  routingTestPresetLabel,
+  routingTestTaskLabel,
+  serializeRoutingTestRequest,
+  type RoutingTestFormState,
 } from '../src/renderer/routing-test.js';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-function effectiveRequirements(): TaskSettingsAutomaticDispatch {
+function importedTask(overrides: Partial<TaskRoutingTestTask> = {}): TaskRoutingTestTask {
   return {
-    expected_tps: 20,
-    minimum_tps: 10,
-    intelligence_min: 'mid',
-    max_output_usd_per_million: 5,
-    required_capabilities: ['text'],
-    exclude_provider_ids: ['deprecated'],
-  };
-}
-
-function candidateRow() {
-  return {
-    exact_runtime: 'moonshot/kimi-k3:kimi',
-    rank: 1,
-    intelligence_shortfall: 0,
-    reference_output_usd_per_million: 3.5,
-    routing_output_usd_per_million: 2.25,
-    effective_tps: 42.5,
-    quota_tier: 'healthy' as const,
-    quota_coverage_complete: true,
-    quota_headroom_trusted: true,
-    supply_class: 'standard' as const,
-    price_factor: 0.8,
-    speed_factor: 0.6,
-    quota_factor: 1,
-    intelligence_factor: 0.9,
-    score: 0.83,
-    notes: ['额度快照已绑定'],
-  };
-}
-
-function routingResult(overrides: Partial<TaskRoutingTestResult> = {}): TaskRoutingTestResult {
-  return {
-    task_id: 'edit',
-    effective_output_cap_usd_per_million: 5,
-    effective_requirements: effectiveRequirements(),
-    timeout_ms: 120_000,
-    snapshot_id: 'quota-snap-1',
-    now_ms: 1_700_000_000_000,
-    checked_at: '2026-09-10T10:00:00.000Z',
-    ranking_weights: { price: 0.3, speed: 0.2, quota: 0.35, intelligence: 0.15 },
-    ordering: '先按建议智能差距从小到大，再按加权总分降序。',
-    stages: { eligible: 5, quota_blocked: 1, readiness_rejected: 0, collapsed: 4, scored: 3, ranked: 3, excluded: 1 },
-    candidates: [candidateRow()],
-    exclusions: [{ exact_runtime: 'zhipu/glm:cc', stage: 'quota_blocked', code: 'quota_insufficient', detail: '剩余额度不足' }],
-    selection: {
-      exact_runtime: 'moonshot/kimi-k3:kimi',
-      resolved: {
-        runtime: 'moonshot/kimi-k3:kimi',
-        client: 'kimi',
-        provider: 'moonshot',
-        model: 'kimi-k3',
-        model_id: 'moonshot/kimi-k3',
-        provider_display_name: 'Moonshot',
-        model_display_name: 'Kimi K3',
-      },
-      reason: '额度健康且智能缺口最小。',
+    identity: 'builtin:edit',
+    name: 'edit',
+    display_name: '编辑文件',
+    automatic: {
+      expected_tps: 20,
+      minimum_tps: 10,
+      intelligence_min: 'mid',
+      intelligence_expected: 'premium',
+      max_output_usd_per_million: 5,
+      required_capabilities: ['text', 'image'],
+      requires_web_search: true,
+      exclude_model_ids: ['legacy-model'],
+      exclude_profile_ids: ['legacy-profile'],
+      exclude_provider_ids: ['legacy-provider'],
+      exclude_client_ids: ['legacy-client'],
     },
-    failure: null,
-    static_eligibility: null,
+    timeout_ms: 120_000,
     ...overrides,
   };
 }
 
-test('routing test exposes exactly the four read-only presets with Chinese labels', () => {
-  assert.deepEqual(
-    ROUTING_TEST_PRESETS.map((preset) => [preset.taskId, preset.label]),
-    [
-      ['edit', '编辑文件'],
-      ['code-review', '变更审查'],
-      ['oracle', '分析顾问'],
-      ['librarian', '资料研究'],
-    ],
-  );
-  assert.equal(routingTestPresetLabel('edit'), '编辑文件');
-  assert.equal(routingTestPresetLabel('unknown-task'), 'unknown-task');
-});
+function resultRow(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: 'moonshot',
+    provider_name: 'Moonshot',
+    model: 'kimi-k3',
+    model_name: 'Kimi K3',
+    effective_tps: 42.5,
+    price_score: 0.24,
+    speed_score: 0.12,
+    quota_score: 0.35,
+    intelligence_score: 0.135,
+    score: 0.845,
+    rank: 1,
+    reason: null,
+    ...overrides,
+  };
+}
 
-test('routing test IPC channel and typed API surface exist', () => {
+function routingResult(rows = [resultRow()]): TaskRoutingTestResult {
+  return { rows };
+}
+
+test('routing test IPC channels and typed API surface exist', () => {
   assert.equal(SHELL_CHANNELS.taskRoutingTest, 'wrenyard-shell:task-routing-test');
-  const api: Pick<WrenyardShellApi, 'requestTaskRoutingTest'> = {
+  assert.equal(SHELL_CHANNELS.taskRoutingTestTasks, 'wrenyard-shell:task-routing-test-tasks');
+  const api: Pick<WrenyardShellApi, 'requestTaskRoutingTest' | 'requestRoutingTestTasks'> = {
     requestTaskRoutingTest: async () => routingResult(),
+    requestRoutingTestTasks: async () => ({ tasks: [importedTask()] }),
   };
   assert.equal(typeof api.requestTaskRoutingTest, 'function');
+  assert.equal(typeof api.requestRoutingTestTasks, 'function');
 });
 
-test('preload forwards the routing test with strict string input and no raw IPC', () => {
+test('preload forwards the typed form request and lazily imports tasks without raw IPC', () => {
   const preload = readFileSync(join(desktopRoot, 'src', 'preload.ts'), 'utf8');
   assert.match(
     preload,
-    /requestTaskRoutingTest\(taskId: string\): Promise<TaskRoutingTestResult> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.taskRoutingTest, taskId\)/,
+    /requestTaskRoutingTest\(params: TaskRoutingTestParams\): Promise<TaskRoutingTestResult> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.taskRoutingTest, params\)/,
+  );
+  assert.match(
+    preload,
+    /requestRoutingTestTasks\(\): Promise<TaskRoutingTestTasksResult> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.taskRoutingTestTasks\)/,
   );
 });
 
-test('shell-window validates the sender, the bounded string input, and disposes the channel', () => {
+test('shell-window validates the sender, the typed form, and disposes both channels', () => {
   const win = readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
-  assert.match(win, /requestTaskRoutingTest\(taskId: string\): Promise<TaskRoutingTestResult>;/);
-  assert.match(win, /ipcMain\.handle\(SHELL_CHANNELS\.taskRoutingTest, async \(event, taskId: unknown\) => \{/);
-  assert.match(win, /assertShellSender\(event\.sender\);\s*if \(typeof taskId !== 'string' \|\| !taskId \|\| taskId\.length > 512\) throw new Error\('任务 id 无效'\);/);
-  assert.match(win, /return options\.requestTaskRoutingTest\(taskId\);/);
-  assert.match(win, /SHELL_CHANNELS\.taskRoutingTest,\s*\]\) ipcMain\.removeHandler\(channel\);/);
+  assert.match(win, /requestTaskRoutingTest\(params: TaskRoutingTestParams\): Promise<TaskRoutingTestResult>;/);
+  assert.match(win, /requestRoutingTestTasks\(\): Promise<TaskRoutingTestTasksResult>;/);
+  assert.match(win, /function validateTaskRoutingTestParams\(value: unknown\): TaskRoutingTestParams \{/);
+  assert.match(win, /ipcMain\.handle\(SHELL_CHANNELS\.taskRoutingTest, async \(event, params: unknown\) => \{\s*assertShellSender\(event\.sender\);\s*return options\.requestTaskRoutingTest\(validateTaskRoutingTestParams\(params\)\);/);
+  assert.match(win, /ipcMain\.handle\(SHELL_CHANNELS\.taskRoutingTestTasks, async \(event\) => \{\s*assertShellSender\(event\.sender\);\s*return options\.requestRoutingTestTasks\(\);/);
+  assert.match(win, /SHELL_CHANNELS\.taskRoutingTestTasks,\s*\]\) ipcMain\.removeHandler\(channel\);/);
 });
 
-test('main bridges task.settings.routingTest with the exact task_id param and read-only callback', () => {
+test('main bridges the typed form request and routingTestTasks import with requestForeman', () => {
   const main = readFileSync(join(desktopRoot, 'src', 'main.ts'), 'utf8');
-  assert.match(main, /requestForeman\('task\.settings\.routingTest', \{ task_id: taskId \}\)/);
-  assert.match(main, /const requestTaskRoutingTest = async \(taskId: string\): Promise<TaskRoutingTestResult>/);
-  assert.match(main, /requestTaskRoutingTest: \(taskId: string\) => requestTaskRoutingTest\(taskId\),/);
+  assert.match(main, /requestForeman\('task\.settings\.routingTest', request\)/);
+  assert.match(main, /requestForeman\('task\.settings\.routingTestTasks', \{\}\)/);
+  assert.match(main, /const requestTaskRoutingTest = async \(params: TaskRoutingTestParams\): Promise<TaskRoutingTestResult>/);
+  assert.match(main, /const requestRoutingTestTasks = async \(\): Promise<TaskRoutingTestTasksResult>/);
+  assert.match(main, /requestTaskRoutingTest: \(params: TaskRoutingTestParams\) => requestTaskRoutingTest\(params\),/);
+  assert.match(main, /requestRoutingTestTasks: \(\) => requestRoutingTestTasks\(\),/);
 });
 
-test('HTML hosts supply/routing tabs, keeps the supply config together, and only a preset selector + run button', async () => {
+test('HTML hosts supply/routing tabs, keeps the supply config together, and turns routing into a form', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="quota-tabs" role="tablist"/);
   assert.match(html, /data-quota-tab="supply"[^>]*>供应配置</);
@@ -141,119 +120,192 @@ test('HTML hosts supply/routing tabs, keeps the supply config together, and only
   assert.match(html, /id="quota-panel-supply" role="tabpanel"/);
   assert.match(html, /id="quota-panel-routing" role="tabpanel"[^>]*hidden/);
 
-  // Aliases and the auto cap remain together inside the first (supply) panel.
   const supplyStart = html.indexOf('id="quota-panel-supply"');
   const supplyEnd = html.indexOf('id="quota-panel-routing"');
   const supplyMarkup = html.slice(supplyStart, supplyEnd);
   assert.match(supplyMarkup, /id="auto-cap-title"/);
   assert.match(supplyMarkup, /id="alias-title"/);
 
-  // The routing panel is only a preset selector and a run button — no
-  // requirement editors and no JSON input.
   const routingStart = supplyEnd;
   const routingEnd = html.indexOf('id="clients-page"');
   const routingMarkup = html.slice(routingStart, routingEnd);
-  assert.match(routingMarkup, /id="routing-test-preset"/);
-  assert.match(routingMarkup, /<option value="edit">编辑文件<\/option>/);
-  assert.match(routingMarkup, /<option value="code-review">变更审查<\/option>/);
-  assert.match(routingMarkup, /<option value="oracle">分析顾问<\/option>/);
-  assert.match(routingMarkup, /<option value="librarian">资料研究<\/option>/);
-  assert.match(routingMarkup, /id="routing-test-run"[^>]*>测试路由</);
-  assert.doesNotMatch(routingMarkup, /<textarea|type="number"|id="routing-test-json"/);
+  assert.match(routingMarkup, /id="routing-test-run"[^>]*>测试</);
+  assert.match(routingMarkup, /id="routing-test-import"[^>]*>从 Task 导入</);
+  assert.match(routingMarkup, /id="routing-test-expected-tps"/);
+  assert.match(routingMarkup, /id="routing-test-output-cap"/);
+  assert.match(routingMarkup, /id="routing-test-require-image"[^>]*type="checkbox"/);
+  assert.match(routingMarkup, /id="routing-test-require-search"[^>]*type="checkbox"/);
+  // No preset selector, verbose notes, or JSON input remains.
+  assert.doesNotMatch(routingMarkup, /id="routing-test-preset"/);
+  assert.doesNotMatch(routingMarkup, /routing-test-note/);
+  assert.doesNotMatch(routingMarkup, /<textarea|id="routing-test-json"/);
 });
 
-test('normalized factors are paired with the actual response weights for inspection', () => {
-  const result = routingResult();
-  const rows = routingTestFactorRows(result.candidates[0]!, result);
-  assert.deepEqual(rows.map((row) => row.key), ['price', 'speed', 'quota', 'intelligence']);
-  assert.deepEqual(rows.map((row) => row.weight), [0.3, 0.2, 0.35, 0.15]);
-  assert.ok(Math.abs(rows[0]!.contribution - 0.8 * 0.3) < 1e-9);
-  assert.ok(Math.abs(rows[3]!.contribution - 0.9 * 0.15) < 1e-9);
+test('default form has recommended mid with no minimum or extra capabilities', () => {
+  const request = serializeRoutingTestRequest(defaultRoutingTestForm());
+  assert.deepEqual(request, { automatic: { intelligence_expected: 'mid' } });
+  assert.equal('expected_tps' in request.automatic, false);
+  assert.equal('minimum_tps' in request.automatic, false);
+  assert.equal('max_output_usd_per_million' in request.automatic, false);
+  assert.equal('intelligence_min' in request.automatic, false);
+  assert.equal('timeout_ms' in request, false);
 });
 
-test('effective requirements render compactly and stay absent when unset', () => {
-  assert.match(formatEffectiveRequirements(effectiveRequirements()), /期望 ≥ 20 TPS/);
-  assert.match(formatEffectiveRequirements(effectiveRequirements()), /排除 提供方 1 个/);
-  assert.equal(formatEffectiveRequirements({}), '无额外自动派发约束');
-  assert.equal(formatEffectiveRequirements({ intelligence_min: 'low', intelligence_expected: 'mid' }), '智能最低 low · 推荐智能 mid');
+test('form serialization carries numbers, capabilities, search, and comma lists', () => {
+  const form: RoutingTestFormState = {
+    ...defaultRoutingTestForm(),
+    expectedTps: '30',
+    minimumTps: '12.5',
+    maxOutputUsdPerMillion: '4',
+    intelligenceMin: 'high',
+    intelligenceExpected: 'premium',
+    requireText: true,
+    requireImage: true,
+    requireWebSearch: true,
+    excludeModelIds: 'legacy-a, legacy-b\nlegacy-a',
+    excludeProviderIds: 'old-provider',
+    timeoutMs: '90000',
+  };
+  const request = serializeRoutingTestRequest(form);
+  assert.equal(request.automatic.expected_tps, 30);
+  assert.equal(request.automatic.minimum_tps, 12.5);
+  assert.equal(request.automatic.max_output_usd_per_million, 4);
+  assert.equal(request.automatic.intelligence_min, 'high');
+  assert.deepEqual(request.automatic.required_capabilities, ['text', 'image']);
+  assert.equal(request.automatic.requires_web_search, true);
+  assert.deepEqual(request.automatic.exclude_model_ids, ['legacy-a', 'legacy-b']);
+  assert.deepEqual(request.automatic.exclude_provider_ids, ['old-provider']);
+  assert.equal(request.timeout_ms, 90000);
 });
 
-test('candidate detail reports the backend weighted total verbatim, never a re-derived one', () => {
-  const candidate = candidateRow();
-  const whole = renderRoutingTestResult(routingResult());
-  const detailText = collectText(whole);
-  // The displayed total is the backend score; a re-derived factor sum differs.
-  assert.match(detailText, /加权总分（后台计算）：0\.83/);
-  const reDerived = routingTestFactorRows(candidate, routingResult())
-    .reduce((sum, row) => sum + row.contribution, 0);
-  assert.ok(Math.abs(reDerived - candidate.score) > 1e-9);
+test('invalid numeric form input is rejected rather than silently ignored', () => {
+  const form = { ...defaultRoutingTestForm(), expectedTps: 'abc' };
+  assert.throws(() => serializeRoutingTestRequest(form), /大于 0/);
 });
 
-test('result shows the exact recommended runtime, timestamp, ordering, stages, and exclusions', () => {
-  const text = collectText(renderRoutingTestResult(routingResult()));
-  assert.match(text, /moonshot\/kimi-k3:kimi/);
-  assert.match(text, /供应配置变化后请重新测试/);
-  assert.match(text, /先按建议智能差距从小到大/);
-  assert.match(text, /静态符合 5 · 额度阻断 1/);
-  assert.match(text, /zhipu\/glm:cc/);
-  assert.match(text, /额度不足|额度阻断/);
+test('copying a task preserves capabilities, exclusions, and timeout verbatim', () => {
+  const form = formFromTask(importedTask());
+  assert.equal(form.expectedTps, '20');
+  assert.equal(form.minimumTps, '10');
+  assert.equal(form.maxOutputUsdPerMillion, '5');
+  assert.equal(form.intelligenceMin, 'mid');
+  assert.equal(form.intelligenceExpected, 'premium');
+  assert.equal(form.requireImage, true);
+  assert.equal(form.requireWebSearch, true);
+  assert.equal(form.excludeModelIds, 'legacy-model');
+  assert.equal(form.excludeProviderIds, 'legacy-provider');
+  assert.deepEqual(form.excludeProfileIds, ['legacy-profile']);
+  assert.deepEqual(form.excludeClientIds, ['legacy-client']);
+  assert.equal(form.timeoutMs, '120000');
+
+  // Round-trip through serialization keeps the imported exclusions/capabilities.
+  const request: TaskRoutingTestParams = serializeRoutingTestRequest(form);
+  assert.deepEqual(request.automatic.exclude_profile_ids, ['legacy-profile']);
+  assert.deepEqual(request.automatic.exclude_client_ids, ['legacy-client']);
+  assert.deepEqual(request.automatic.required_capabilities, ['text', 'image']);
+  assert.equal(request.automatic.requires_web_search, true);
 });
 
-test('unknown or skipped evidence is surfaced without a fabricated score', () => {
-  const noCandidates = routingResult({ candidates: [], selection: null });
-  const text = collectText(renderRoutingTestResult(noCandidates));
-  assert.match(text, /本次没有可排序的候选/);
-  assert.match(text, /未选出运行配置/);
-  // No numeric score line is emitted for a skipped candidate.
-  assert.doesNotMatch(text, /加权总分（后台计算）：/);
-  assert.doesNotMatch(text, /#0/);
+test('picker labels distinguish project tasks and Chinese names', () => {
+  assert.equal(routingTestTaskLabel(importedTask()), '编辑文件');
+  assert.equal(
+    routingTestTaskLabel(importedTask({ identity: 'project:core:build', project: 'core', display_name: '构建' })),
+    '构建（项目 core）',
+  );
+});
+
+test('result table uses the exact semantic columns and shows rejected rows as dashes', () => {
+  const accepted = resultRow();
+  const rejected = resultRow({
+    provider: 'zhipu', provider_name: 'Zhipu', model: 'glm', model_name: 'GLM',
+    effective_tps: null, price_score: null, speed_score: null, quota_score: null,
+    intelligence_score: null, score: null, rank: null, reason: '额度不足',
+  });
+  const text = collectText(renderRoutingTestResult(routingResult([accepted, rejected])));
+  for (const header of ['排名', '供应商', '模型', 'TPS', '价格分', '速度分', '额度分', '智能分', '总分', '原因']) {
+    assert.match(text, new RegExp(header));
+  }
+  assert.match(text, /0\.845/);
+  assert.match(text, /42\.5/);
+  assert.match(text, /额度不足/);
+  // Rejected row emits dashes, never a fabricated number.
+  assert.match(text, /—/);
+});
+
+test('result table preserves backend row order', () => {
+  const first = resultRow({ rank: 1, provider_name: 'First' });
+  const second = resultRow({ rank: 2, provider_name: 'Second' });
+  const text = collectText(renderRoutingTestResult(routingResult([first, second])));
+  assert.ok(text.indexOf('First') < text.indexOf('Second'), 'rows render in backend order');
+});
+
+test('empty result renders a brief empty state', () => {
+  const text = collectText(renderRoutingTestResult(routingResult([])));
+  assert.match(text, /暂无可用模型/);
 });
 
 test('a late response from an invalidated run is discarded and stale results cleared', async () => {
   const harness = controllerHarness();
-  harness.preset.value = 'edit';
   const first = harness.controller.run();
-  harness.preset.value = 'oracle';
-  harness.controller.onPresetChanged([...ROUTING_TEST_PRESETS]);
-  assert.equal(harness.result.childElementCount, 0, 'preset change clears the stale result');
-  // A second run supersedes the first; both resolve, only the latest renders.
-  harness.preset.value = 'code-review';
+  assert.equal(harness.runButton.disabled, true);
+  // A form change invalidates the in-flight run.
+  harness.controller.onFormChanged();
+  assert.equal(harness.result.childElementCount, 0, 'form change clears the stale result');
   const second = harness.controller.run();
-  // Resolve the *latest* request first, then let the superseded one settle late.
-  harness.resolveAt(1, routingResult({ task_id: 'code-review', candidates: [candidateRow()] }));
+  assert.equal(harness.queue.length, 2, 'a second run is issued after invalidation');
+  // Resolve the latest request first, then let the superseded one settle late.
+  harness.resolveAt(1, routingResult([resultRow({ provider_name: 'Latest' })]));
   await second;
   const afterSecond = harness.result.childElementCount;
-  harness.resolveAt(0, routingResult({ task_id: 'edit' }));
+  harness.resolveAt(0, routingResult([resultRow({ provider_name: 'Stale' })]));
   await first;
   assert.equal(harness.result.childElementCount, afterSecond, 'late response never overwrites the latest result');
+  assert.match(collectText(harness.result), /Latest/);
+  assert.doesNotMatch(collectText(harness.result), /Stale/);
 });
 
 test('duplicate runs are blocked while a test is in flight', async () => {
   const harness = controllerHarness();
-  harness.preset.value = 'edit';
   const first = harness.controller.run();
   assert.equal(harness.runButton.disabled, true);
   assert.equal(harness.runButton.textContent, '测试中…');
   assert.equal(harness.status.textContent, '测试中…');
-  // A second invocation during flight is a no-op: still only one pending request.
   await harness.controller.run();
-  assert.equal(harness.pending().length, 1);
+  assert.equal(harness.queue.length, 1, 'second invocation is a no-op');
   harness.resolveNext(routingResult());
   await first;
   assert.equal(harness.runButton.disabled, false);
-  assert.equal(harness.runButton.textContent, '测试路由');
+  assert.equal(harness.runButton.textContent, '测试');
 });
 
-test('an empty result reports 无候选 and error exposes a bounded message', async () => {
+test('importing tasks is lazy: it only fires on demand and can be re-imported', async () => {
   const harness = controllerHarness();
-  harness.preset.value = 'edit';
-  const run = harness.controller.run();
-  harness.resolveNext(routingResult({ candidates: [], selection: null }));
-  await run;
-  assert.equal(harness.status.textContent, '无候选');
-  assert.match(harness.status.className, /status-pill/);
+  assert.equal(harness.importQueue.length, 0, 'no import happens before the button is used');
+  const firstImport = harness.controller.importTasks();
+  assert.equal(harness.importButton.disabled, true);
+  // A duplicate import during flight is a no-op.
+  await harness.controller.importTasks();
+  assert.equal(harness.importQueue.length, 1);
+  harness.resolveImportNext({ tasks: [importedTask()] });
+  await firstImport;
+  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.status.textContent, '');
+  assert.equal(harness.picker.children.length, 2, 'placeholder + one imported task');
+});
 
-  harness.preset.value = 'oracle';
+test('selecting an imported task copies its fields into the form and clears stale results', async () => {
+  const harness = controllerHarness();
+  const importRun = harness.controller.importTasks();
+  harness.resolveImportNext({ tasks: [importedTask()] });
+  await importRun;
+  harness.picker.value = 'builtin:edit';
+  harness.controller.selectImportedTask();
+  assert.deepEqual(harness.applied, [importedTask()]);
+  assert.equal(harness.result.childElementCount, 0);
+});
+
+test('an error exposes a bounded message', async () => {
+  const harness = controllerHarness();
   const failing = harness.controller.run();
   harness.rejectNext(new Error("Error invoking remote method 'x': Error: 网关不可用"));
   await failing;
@@ -264,39 +316,54 @@ test('an empty result reports 无候选 and error exposes a bounded message', as
 
 interface Harness {
   controller: RoutingTestController;
-  preset: HTMLSelectElement;
   runButton: HTMLButtonElement;
+  importButton: HTMLButtonElement;
+  picker: HTMLSelectElement;
   status: HTMLElement;
   result: HTMLElement;
-  pending(): Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }>;
+  applied: TaskRoutingTestTask[];
+  queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }>;
+  importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }>;
   resolveAt(index: number, value: TaskRoutingTestResult): void;
   resolveNext(value: TaskRoutingTestResult): void;
   rejectNext(error: unknown): void;
+  resolveImportNext(value: { tasks: TaskRoutingTestTask[] }): void;
 }
 
 function controllerHarness(): Harness {
-  const preset = fakeElement('select') as unknown as HTMLSelectElement;
   const runButton = fakeElement('button') as unknown as HTMLButtonElement;
+  const importButton = fakeElement('button') as unknown as HTMLButtonElement;
+  const picker = fakeElement('select') as unknown as HTMLSelectElement;
   const status = fakeElement('p') as unknown as HTMLElement;
   const result = fakeElement('div') as unknown as HTMLElement;
   const queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }> = [];
+  const importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }> = [];
+  const applied: TaskRoutingTestTask[] = [];
   const controller = new RoutingTestController({
     request: () => new Promise<TaskRoutingTestResult>((resolve, reject) => { queue.push({ resolve, reject }); }),
-    presetSelect: preset,
+    importTasks: () => new Promise<{ tasks: TaskRoutingTestTask[] }>((resolve, reject) => { importQueue.push({ resolve, reject }); }),
     runButton,
+    importButton,
+    taskPicker: picker,
     status,
     result,
+    readForm: () => defaultRoutingTestForm(),
+    applyTask: (task) => { applied.push(task); },
   });
   return {
     controller,
-    preset,
     runButton,
+    importButton,
+    picker,
     status,
     result,
-    pending: () => [...queue],
+    applied,
+    queue,
+    importQueue,
     resolveAt: (index, value) => { queue[index]?.resolve(value); },
     resolveNext: (value) => { queue.shift()?.resolve(value); },
     rejectNext: (error) => { queue.shift()?.reject(error); },
+    resolveImportNext: (value) => { importQueue.shift()?.resolve(value); },
   };
 }
 
@@ -309,6 +376,7 @@ interface FakeElement {
   hidden: boolean;
   disabled: boolean;
   value: string;
+  checked: boolean;
   className: string;
   append(...nodes: unknown[]): void;
   replaceChildren(...nodes: unknown[]): void;
@@ -328,6 +396,7 @@ function fakeElement(tagName: string): FakeElement {
     hidden: false,
     disabled: false,
     value: '',
+    checked: false,
     className: '',
     append(...nodes: unknown[]) {
       for (const node of nodes) {

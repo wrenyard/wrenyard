@@ -22,7 +22,7 @@ import type {
   TaskSettingsTaskRow,
   WrenyardShellApi,
 } from '../shell-contract.js';
-import { ROUTING_TEST_PRESETS, RoutingTestController } from './routing-test.js';
+import { RoutingTestController, defaultRoutingTestForm, formFromTask, type RoutingTestFormState } from './routing-test.js';
 import type {
   ClientConfigurationId,
   ClientConfigurationPlanDto,
@@ -127,17 +127,52 @@ const autoCapStatus = requireElement<HTMLElement>('auto-cap-status');
 const quotaTabs = requireElement<HTMLElement>('quota-tabs');
 const quotaPanelSupply = requireElement<HTMLElement>('quota-panel-supply');
 const quotaPanelRouting = requireElement<HTMLElement>('quota-panel-routing');
-const routingTestPreset = requireElement<HTMLSelectElement>('routing-test-preset');
 const routingTestRun = requireElement<HTMLButtonElement>('routing-test-run');
+const routingTestImport = requireElement<HTMLButtonElement>('routing-test-import');
+const routingTestImportSelect = requireElement<HTMLSelectElement>('routing-test-import-select');
 const routingTestStatus = requireElement<HTMLElement>('routing-test-status');
 const routingTestResult = requireElement<HTMLElement>('routing-test-result');
+const routingTestIntelligenceMin = requireElement<HTMLSelectElement>('routing-test-intelligence-min');
+const routingTestIntelligenceExpected = requireElement<HTMLSelectElement>('routing-test-intelligence-expected');
+const routingTestExpectedTps = requireElement<HTMLInputElement>('routing-test-expected-tps');
+const routingTestMinimumTps = requireElement<HTMLInputElement>('routing-test-minimum-tps');
+const routingTestOutputCap = requireElement<HTMLInputElement>('routing-test-output-cap');
+const routingTestRequireImage = requireElement<HTMLInputElement>('routing-test-require-image');
+const routingTestRequireSearch = requireElement<HTMLInputElement>('routing-test-require-search');
+const routingTestExcludeModels = requireElement<HTMLInputElement>('routing-test-exclude-models');
+const routingTestExcludeProviders = requireElement<HTMLInputElement>('routing-test-exclude-providers');
+
+/** Mutable form state backing the routing test controls. */
+let routingForm: RoutingTestFormState = defaultRoutingTestForm();
+
+function applyRoutingForm(form: RoutingTestFormState): void {
+  routingForm = form;
+  routingTestIntelligenceMin.value = form.intelligenceMin;
+  routingTestIntelligenceExpected.value = form.intelligenceExpected;
+  routingTestExpectedTps.value = form.expectedTps;
+  routingTestMinimumTps.value = form.minimumTps;
+  routingTestOutputCap.value = form.maxOutputUsdPerMillion;
+  routingTestRequireImage.checked = form.requireImage;
+  routingTestRequireSearch.checked = form.requireWebSearch;
+  routingTestExcludeModels.value = form.excludeModelIds;
+  routingTestExcludeProviders.value = form.excludeProviderIds;
+}
 
 const routingTest = new RoutingTestController({
-  request: (taskId) => window.wrenyardShell.requestTaskRoutingTest(taskId),
-  presetSelect: routingTestPreset,
+  request: (params) => window.wrenyardShell.requestTaskRoutingTest(params),
+  importTasks: () => window.wrenyardShell.requestRoutingTestTasks(),
   runButton: routingTestRun,
+  importButton: routingTestImport,
+  taskPicker: routingTestImportSelect,
+  importRow: requireElement<HTMLElement>('routing-test-import-row'),
   status: routingTestStatus,
   result: routingTestResult,
+  readForm: () => routingForm,
+  applyTask: (task) => {
+    // Selecting an imported task copies its raw fields/timeout into the form;
+    // imported exclusions/capabilities are preserved verbatim.
+    applyRoutingForm(formFromTask(task));
+  },
 });
 
 let petDraft: PetCompanionSettings | null = null;
@@ -947,6 +982,7 @@ function renderAutoCapEffective(): void {
  * user's unsaved text (used by the quota refresh button).
  */
 async function loadAutoCapState(preserveDraft = false): Promise<void> {
+  if (currentQuotaTab() === 'routing') return;
   autoCapSaveButton.disabled = true;
   const draft = autoCapInput.value;
   autoCapStatus.classList.remove('is-error');
@@ -1148,7 +1184,7 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
     return;
   }
   list.replaceChildren(
-    tableHeader(['模型', '运行', 'Token', '平均 TPS']),
+    tableHeader(['模型', '运行', 'Token', '任务吞吐（Token/s）']),
     ...rows.slice(0, 12).map((row) => {
       // The main cell shows only the unified short model display name from the
       // server; when it is absent we render a safe dash, never a raw id.
@@ -2267,7 +2303,7 @@ refreshButton.addEventListener('click', () => {
 });
 statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => {
-  routingTest.onPresetChanged(ROUTING_TEST_PRESETS);
+  routingTest.onFormChanged();
   void refreshQuota(true);
   void loadRuntimeAliases();
   void loadAutoCapState(true);
@@ -2288,8 +2324,43 @@ quotaTabs.addEventListener('keydown', (event) => {
   selectQuotaTab(next, true);
   event.preventDefault();
 });
+routingTestIntelligenceMin.addEventListener('change', () => {
+  routingForm.intelligenceMin = routingTestIntelligenceMin.value;
+  const tiers = ['low', 'mid', 'high', 'premium'];
+  if (tiers.indexOf(routingForm.intelligenceExpected) < tiers.indexOf(routingForm.intelligenceMin)) {
+    routingForm.intelligenceExpected = routingForm.intelligenceMin;
+    routingTestIntelligenceExpected.value = routingForm.intelligenceExpected;
+  }
+  routingTest.onFormChanged();
+});
+routingTestIntelligenceExpected.addEventListener('change', () => {
+  routingForm.intelligenceExpected = routingTestIntelligenceExpected.value;
+  routingTest.onFormChanged();
+});
 routingTestRun.addEventListener('click', () => void routingTest.run());
-routingTestPreset.addEventListener('change', () => routingTest.onPresetChanged(ROUTING_TEST_PRESETS));
+routingTestImport.addEventListener('click', () => void routingTest.importTasks());
+routingTestImportSelect.addEventListener('change', () => routingTest.selectImportedTask());
+const routingTextControls: Array<[HTMLInputElement, keyof RoutingTestFormState]> = [
+  [routingTestExpectedTps, 'expectedTps'],
+  [routingTestMinimumTps, 'minimumTps'],
+  [routingTestOutputCap, 'maxOutputUsdPerMillion'],
+  [routingTestExcludeModels, 'excludeModelIds'],
+  [routingTestExcludeProviders, 'excludeProviderIds'],
+];
+for (const [control, key] of routingTextControls) {
+  control.addEventListener('input', () => {
+    routingForm = { ...routingForm, [key]: control.value };
+    routingTest.onFormChanged();
+  });
+}
+routingTestRequireImage.addEventListener('change', () => {
+  routingForm = { ...routingForm, requireImage: routingTestRequireImage.checked };
+  routingTest.onFormChanged();
+});
+routingTestRequireSearch.addEventListener('change', () => {
+  routingForm = { ...routingForm, requireWebSearch: routingTestRequireSearch.checked };
+  routingTest.onFormChanged();
+});
 clientsRefreshButton.addEventListener('click', () => void refreshClients());
 clientsContent.addEventListener('click', (event) => {
   const tabButton = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-client-tab-target]');

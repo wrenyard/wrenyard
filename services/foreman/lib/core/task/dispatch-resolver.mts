@@ -124,6 +124,31 @@ export type TaskDispatchEligibleResult =
   | { ok: false; error: NoEligiblePlanError }
 
 /**
+ * One diagnostic choice of the read-only routing form. `available` records
+ * BASELINE availability (the candidate can produce a truthful resolved
+ * snapshot with no submitted gates at all), so a pair rejected by a submitted
+ * task gate still appears. `admitted` carries the resolved dispatch when every
+ * submitted requirement admitted the candidate; `rejectionCode` is the closed
+ * code of the first submitted gate that rejected it. Clients are never
+ * projected or split through this surface — consumers collapse to
+ * provider+model.
+ */
+export interface TaskDispatchDiagnosticChoice {
+  exactAgentRuntime: string
+  /** Baseline availability with NO submitted requirements. */
+  available: boolean
+  baseline?: TaskResolvedDispatch
+  /** Truthful resolved dispatch when the submitted requirements admitted it. */
+  admitted?: TaskResolvedDispatch
+  /** Closed code of the first submitted gate that rejected the candidate. */
+  rejectionCode?: TaskResolutionFailureCode
+}
+
+export type TaskDispatchDiagnosticResult =
+  | { ok: true; choices: TaskDispatchDiagnosticChoice[] }
+  | { ok: false; error: NoEligiblePlanError }
+
+/**
  * Explicit-resolution input: an EXACT canonical dynamic target pin. Unlike
  * automatic resolution there is no machine preference, no automatic
  * speed/reference-price/exclude preference surface, and no ranking. The caller
@@ -205,6 +230,18 @@ export interface TaskDispatchResolver {
    * Eligibility is never relaxed against resolve admission.
    */
   eligible(input: TaskDispatchEligibleInput): TaskDispatchEligibleResult
+
+  /**
+   * Read-only per-exact-candidate diagnostic over the same candidate pool and
+   * admission as `eligible`. Baseline availability is evaluated with NO
+   * submitted requirements (so a candidate rejected by a submitted task gate
+   * still reports `available: true`), and every submitted requirement is then
+   * replayed through the authoritative admission to classify the candidate as
+   * `admitted` or with its first closed `rejectionCode`. This reuses the exact
+   * `evaluate`/gate-replay path `resolve` and `eligible` use — no duplicate
+   * filter, scorer, or probe. Pure and side-effect free.
+   */
+  diagnose(input: TaskDispatchEligibleInput): TaskDispatchDiagnosticResult
 
   /**
    * Resolves one EXACT canonical dynamic target, bypassing every automatic
@@ -672,6 +709,41 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         ok: false,
         error: new NoEligiblePlanError(input.taskName, pool, input.requirements, failure?.code),
       }
+    },
+
+    diagnose(input: TaskDispatchEligibleInput): TaskDispatchDiagnosticResult {
+      const pool = selectCandidatePool(input)
+      if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
+
+      // One immutable local speed sample read shared by every candidate's
+      // baseline and submitted-gate evaluation, matching `eligible`.
+      const localSpeed = deps.localSpeed ? deps.localSpeed() : undefined
+      const choices: TaskDispatchDiagnosticChoice[] = []
+      for (const candidate of pool) {
+        // Baseline availability: no submitted requirements at all, so a
+        // candidate that a submitted gate later rejects still surfaces here.
+        const baseline = evaluate(
+          { taskName: input.taskName, requirements: {}, declaredRuntime: input.declaredRuntime },
+          [candidate],
+          localSpeed,
+        )
+        const admitted = evaluate(
+          { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
+          [candidate],
+          localSpeed,
+        )
+        const rejection = admitted.ok
+          ? undefined
+          : eliminationForCandidate(candidate, input.requirements, localSpeed)
+        choices.push({
+          exactAgentRuntime: canonicalTargetOf(candidate),
+          available: baseline.ok,
+          ...(baseline.ok ? { baseline: baseline.resolved } : {}),
+          ...(admitted.ok ? { admitted: admitted.resolved } : {}),
+          ...(rejection !== undefined ? { rejectionCode: rejection.code } : {}),
+        })
+      }
+      return { ok: true, choices }
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {

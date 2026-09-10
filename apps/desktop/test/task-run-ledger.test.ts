@@ -193,7 +193,7 @@ test('model statistics renders server-provided model display name with provider 
   const renderStart = appSource.indexOf('function renderProfiles');
   const renderEnd = appSource.indexOf('function renderTasks', renderStart);
   const renderBody = appSource.slice(renderStart, renderEnd);
-  assert.ok(renderBody.includes("tableHeader(['模型', '运行', 'Token', '平均 TPS'])"), 'first column is 模型');
+  assert.ok(renderBody.includes("tableHeader(['模型', '运行', 'Token', '任务吞吐（Token/s）'])"), 'first column is 模型');
   assert.ok(renderBody.includes("emptyRow('暂无模型统计')"), 'empty state names model statistics');
   // First cell reads only the server-provided display name; no raw ids.
   assert.ok(renderBody.includes('modelDisplayName'), 'model statistics reads the server model display name');

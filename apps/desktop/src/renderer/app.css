@@ -642,51 +642,33 @@ button, input, select { accent-color: var(--moss-deep); }
 .quota-tabpanel { margin-top: 8px; }
 .quota-tabpanel[hidden] { display: none; }
 
-/* Read-only routing test (模型供应 → 路由测试) */
+/* Form-first routing test (模型供应 → 路由测试) */
 .routing-test-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
+.routing-test-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .routing-test-head h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 18px; }
-.routing-test-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.routing-test-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.routing-test-import-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.routing-test-import-row label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
+.routing-test-import-row select { min-height: 34px; border: 1px solid var(--line); border-radius: 4px; padding: 0 9px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 12px; }
+.routing-test-form { display: grid; grid-template-columns: max-content minmax(120px, 1fr) max-content minmax(120px, 1fr); align-items: center; gap: 12px; margin-top: 14px; }
 .routing-test-form label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
-.routing-test-form select { min-height: 34px; border: 1px solid var(--line); border-radius: 4px; padding: 0 9px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 12px; }
-.routing-test-note { margin: 12px 0 0; color: var(--ink-soft); font-size: 10px; line-height: 1.55; }
+.routing-test-form select, .routing-test-form input[type="number"], .routing-test-form input[type="text"] { min-height: 34px; border: 1px solid var(--line); border-radius: 4px; padding: 0 9px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 12px; }
+.routing-test-form input[type="text"] { min-width: 180px; }
+.routing-test-check { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.routing-test-check input { margin: 0; }
 .routing-test-status { display: inline-block; margin-top: 12px; }
 .routing-test-result { margin-top: 14px; }
-.routing-test-meta { margin: 0; color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.6; }
-.routing-test-requirements { margin: 6px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
-.routing-test-ordering { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
-.routing-test-selection { margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: rgba(255, 250, 240, .6); }
-.routing-test-selection h3, .routing-test-result h3 { margin: 0 0 8px; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 15px; }
-.routing-test-result h3 { margin-top: 18px; }
-.routing-test-selection-runtime { margin: 0; color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
-.routing-test-selection-reason { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.routing-test-selection-resolved { margin: 4px 0 0; color: var(--slate); font-size: 10px; }
-.routing-test-stages { margin: 12px 0 0; color: var(--slate); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.6; }
 .routing-test-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; scrollbar-color: rgba(94, 124, 70, .35) transparent; scrollbar-width: thin; }
-.routing-test-table { min-width: 960px; }
-.routing-test-table .table-row { grid-template-columns: minmax(200px, 1.5fr) 96px 96px 132px 132px 108px 76px 88px; align-items: start; }
-.routing-test-row { grid-auto-rows: min-content; }
-.routing-test-row > .routing-test-detail { overflow: visible; white-space: normal; text-overflow: clip; }
-.routing-test-detail { grid-column: 1 / -1; }
-.routing-test-detail summary { color: var(--moss-deep); cursor: pointer; font-size: 10px; font-weight: 750; }
-.routing-test-factor-table { margin-top: 8px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
-.routing-test-factor-table .table-row { grid-template-columns: minmax(0, 1fr) 96px 96px 104px; }
-.routing-test-detail-total { margin: 8px 0 0; color: var(--ink-soft); font-size: 10px; }
-.routing-test-notes { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.routing-test-table { width: 100%; min-width: 840px; border-collapse: collapse; font-size: 12px; }
+.routing-test-table th, .routing-test-table td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.routing-test-table th { color: var(--ink-soft); background: rgba(94, 124, 70, .06); white-space: nowrap; }
+.routing-test-import-row[hidden] { display: none; }
+.routing-test-row.is-rejected { color: var(--muted); }
 .routing-test-empty { margin: 0; padding: 14px; color: var(--muted); font-size: 11px; }
 .routing-test-empty.is-error { color: var(--terracotta); }
-.routing-test-exclusions { margin-top: 18px; }
-.routing-test-eligibility { margin: 0 0 8px; color: var(--ink-soft); font-size: 11px; line-height: 1.55; }
-.routing-test-exclusions-empty { margin: 0; color: var(--muted); font-size: 10px; }
-.routing-test-exclusion-list { display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: rgba(212, 201, 168, .5); }
-.routing-test-exclusion-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.2fr) 120px minmax(0, 1.6fr); align-items: center; gap: 12px; min-height: 40px; padding: 6px 12px; background: rgba(255, 250, 240, .55); }
-.routing-test-exclusion-row strong { overflow: hidden; color: var(--ink-soft); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.routing-test-exclusion-row span { color: var(--slate); font-size: 10px; }
-.routing-test-exclusion-reason { overflow-wrap: anywhere; }
 @media (max-width: 820px) {
-  .routing-test-form { align-items: stretch; flex-direction: column; }
-  .routing-test-form select { width: 100%; }
-  .routing-test-exclusion-row { grid-template-columns: minmax(0, 1fr); }
+  .routing-test-form { grid-template-columns: max-content minmax(0, 1fr); }
+  .routing-test-import-row { align-items: stretch; flex-direction: column; }
+  .routing-test-form input[type="number"], .routing-test-form input[type="text"], .routing-test-import-row select { width: 100%; }
 }
 
 /* Provider configuration dialog */
