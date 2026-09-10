@@ -675,7 +675,7 @@ describe('standard-library dispatch preset contracts', () => {
   it('FREQUENT stays low..high with current TPS, price cap, and exclusions', () => {
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMax, 'high')
-    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'low')
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 80)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.minimumTps, 60)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 6)
@@ -704,13 +704,18 @@ describe('standard-library dispatch preset contracts', () => {
   it('ULTRA is high..premium preserving TPS/price', () => {
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMax, 'premium')
-    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceExpected, 'premium')
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.expectedTps, 20)
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.minimumTps, 8)
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
   })
 
 
+  it('librarian requires native search on top of general dispatch requirements', () => {
+    const entry = BUILTIN_TASKS.find((e) => e.name === 'librarian')
+    assert.ok(entry)
+    assert.deepEqual(entry.definition.config.dispatch, { ...GENERAL_DISPATCH_REQUIREMENTS, requiresWebSearch: true })
+  })
 
   it('the review builtin targets high via REVIEW_DISPATCH_REQUIREMENTS', () => {
     const entry = BUILTIN_TASKS.find((e) => e.name === 'code-review')

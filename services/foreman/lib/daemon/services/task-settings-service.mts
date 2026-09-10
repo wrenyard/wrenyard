@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, type IntelligenceTier } from '@wrenyard/catalog'
 import type { CandidateInput } from '@wrenyard/catalog'
 import {
   resolveDeepSeekReferencePricing,
@@ -555,6 +555,8 @@ export class TaskSettingsService {
         taskName: params.taskName,
         exactRuntime: target,
         ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+        ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
+        ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
       })
       if (!explicitResolution.ok) {
         // Explicit mode bypasses automatic ranking and never falls back.
@@ -819,6 +821,8 @@ export class TaskSettingsService {
           taskName,
           exactRuntime: target,
           ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+          ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
+          ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
         })
         if (!explicitResolution.ok) {
           throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
@@ -938,6 +942,8 @@ export class TaskSettingsService {
             taskName: summary.name,
             exactRuntime: target,
             ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
+          ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
+          ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
           })
           if (explicitResolution.ok) {
             resolvedTarget = explicitResolution.exactAgentRuntime
@@ -1280,10 +1286,24 @@ export class TaskSettingsService {
       minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
       intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
       intelligenceMaxRank: intelligenceRankOf(params.requirements.intelligenceMax, INTELLIGENCE_ORDER.premium),
-      intelligenceExpectedRank:
-        params.requirements.intelligenceExpected === undefined
-          ? undefined
-          : intelligenceRankOf(params.requirements.intelligenceExpected, INTELLIGENCE_ORDER.premium),
+      intelligenceExpectedRank: (() => {
+        const expectedTier = params.requirements.intelligenceExpected
+        if (expectedTier !== undefined) {
+          return intelligenceRankOf(expectedTier, INTELLIGENCE_ORDER.premium)
+        }
+        // Missing expectation defaults to `mid`, clamped to the effective hard
+        // min/max so it is always an admissible target (consistent with the
+        // settings resolver, which also defaults to `mid`).
+        let resolved: IntelligenceTier = 'mid'
+        const minTier = params.requirements.intelligenceMin
+        const maxTier = params.requirements.intelligenceMax
+        if (minTier !== undefined && INTELLIGENCE_ORDER.mid < INTELLIGENCE_ORDER[minTier]) {
+          resolved = minTier
+        } else if (maxTier !== undefined && INTELLIGENCE_ORDER.mid > INTELLIGENCE_ORDER[maxTier]) {
+          resolved = maxTier
+        }
+        return INTELLIGENCE_ORDER[resolved]
+      })(),
     }
 
     const inputs: CandidateInput[] = []
@@ -1795,6 +1815,7 @@ function automaticSelectionFailure(
 }
 
 interface TaskSettingsEffectiveAutomaticDto {
+  requires_web_search?: { value: boolean | null; source: TaskSettingsSourceLayer }
   expected_tps: { value: number | null; source: TaskSettingsSourceLayer }
   minimum_tps: { value: number | null; source: TaskSettingsSourceLayer }
   intelligence_min: { value: 'low' | 'mid' | 'high' | 'premium' | null; source: TaskSettingsSourceLayer }

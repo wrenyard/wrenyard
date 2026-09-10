@@ -271,6 +271,11 @@ export interface CandidateAssessment {
   speedFactor: number;
   /** Intelligence factor I used in the score (bounded [0, 1]). */
   intelligenceFactor: number;
+  /** Intelligence shortfall diagnostic: max(0, expectedRank - modelRank). Zero
+   *  when the model meets or exceeds the expected rank; an absent expected rank
+   *  retains the legacy zero shortfall, so shortfall never reshuffles candidates
+   *  that carry no expectation. */
+  intelligenceShortfall: number;
   /**
    * Unified normalized ranking score (see SCORE_WEIGHTS): score = .50*P + .20*S
    * + .20*Q + .10*I, where every factor is bounded in [0, 1], so the score is
@@ -312,6 +317,7 @@ export interface RankedCandidate {
   priceFactor: number;
   speedFactor: number;
   intelligenceFactor: number;
+  intelligenceShortfall: number;
   verifiedEfficiency: number | null;
   coverageComplete: boolean;
   headroomTrusted: boolean;
@@ -974,6 +980,14 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     intelligenceFactor = clamp01(candidate.intelligenceRank / 3);
   }
 
+  // Typed intelligence shortfall diagnostic: the distance the model rank falls
+  // short of the expected rank (never negative). Absent expected rank keeps the
+  // legacy zero shortfall so candidates without an expectation are ordered by
+  // score exactly as before.
+  const intelligenceShortfall = expectedRank === undefined
+    ? 0
+    : Math.max(0, expectedRank - candidate.intelligenceRank)
+
   // Unified normalized ranking score in [0, 1]:
   //   score = .50*P + .20*S + .20*Q + .10*I
   // Every factor is bounded in [0, 1], so the score is itself within [0, 1].
@@ -998,6 +1012,7 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     priceFactor,
     speedFactor,
     intelligenceFactor,
+    intelligenceShortfall,
     score,
     verifiedEfficiency,
     coverageComplete: quota.coverageComplete,
@@ -1034,6 +1049,7 @@ function toRankedCandidate(
     priceFactor: assessment.priceFactor,
     speedFactor: assessment.speedFactor,
     intelligenceFactor: assessment.intelligenceFactor,
+    intelligenceShortfall: assessment.intelligenceShortfall,
     verifiedEfficiency: assessment.verifiedEfficiency,
     coverageComplete: assessment.coverageComplete,
     headroomTrusted: assessment.headroomTrusted,
@@ -1102,15 +1118,27 @@ export function rankAutoRoutingCandidates(
       compareLex(a.snapshotId, b.snapshotId)
   );
 
-  // Single global stable ranking over every accepted candidate: by score
-  // descending, then canonicalId, then snapshotId ascending. Supply class and
-  // tier are reported as diagnostic fields only, never as sort keys.
+  // Single global stable ranking over every accepted candidate. Candidates are
+  // ordered first by intelligence shortfall ascending (a model meeting or
+  // exceeding its expected rank has shortfall 0 and leads; among those that
+  // fall short, the smaller nonnegative shortfall wins), then by the existing
+  // normalized score descending, then deterministic canonicalId/snapshotId
+  // ascending. Supply class and tier are reported as diagnostic fields only,
+  // never as sort keys. Every readiness/quota/reference-price hard gate has
+  // already excluded ineligible candidates, so the shortfall is bounded by the
+  // effective intelligence minimum.
   const rankedAssessments = accepted.slice().sort(
     (a, b) =>
+      a.intelligenceShortfall - b.intelligenceShortfall ||
       b.score - a.score ||
       compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId)
   );
+
+  const selected = rankedAssessments[0]
+  if (selected !== undefined && selected.intelligenceShortfall > 0) {
+    selected.notes.push('intelligence_below_expected')
+  }
 
   const ranked: RankedCandidate[] = rankedAssessments.map((assessment, index) =>
     toRankedCandidate(assessment, index + 1)

@@ -867,6 +867,34 @@ describe('daemon task-settings-service (no-model)', () => {
     )
   })
 
+  it('forwards hidden search and minimum intelligence gates through save, snapshot and run', async () => {
+    writeConfig({ tasks: { settings: { global: {
+      dispatch: { requiresWebSearch: true, intelligenceMin: 'high' },
+    } } } })
+    const resolver = createResolverFixture()
+    const original = resolver.resolveExplicit.bind(resolver)
+    let calls = 0
+    resolver.resolveExplicit = (input) => {
+      calls += 1
+      assert.equal(input.requiresWebSearch, true)
+      assert.equal(input.intelligenceMin, 'high')
+      return original(input)
+    }
+    const service = context!.makeService({ resolver })
+    const before = await service.snapshot({})
+    await service.save({
+      scope: 'task', task_id: 'commit', expected_revision: before.revision,
+      patch: { mode: 'explicit', explicit_runtime: { kind: 'target', target: PROFILES[1]!.exactAgentRuntime } },
+    })
+    assert.ok(calls > 0)
+    calls = 0
+    await service.snapshot({ task_id: 'commit' })
+    assert.ok(calls > 0)
+    calls = 0
+    await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(calls, 1)
+  })
+
   it('save persists an explicit inline target reference under the stable identity', async () => {
     writeConfig({})
     const service = context!.makeService()
@@ -1527,8 +1555,9 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(decision!.snapshot_id.length > 0, true)
     assert.ok(Array.isArray(decision!.reasons))
     assert.equal(decision!.scoring?.version, 'normalized-v1')
-    // No target means rank/3; the selected mid model contributes 1/3.
-    assert.equal(decision!.scoring!.intelligence, 1 / 3)
+    // The system default expectation is `mid`; the selected mid model meets it,
+    // so the intelligence factor is 1 (not the legacy rank/3).
+    assert.equal(decision!.scoring!.intelligence, 1)
     const factors = decision!.scoring!
     assert.ok(Math.abs(decision!.score - (0.5 * factors.price + 0.2 * factors.speed + 0.2 * factors.quota + 0.1 * factors.intelligence)) < 1e-12)
     const targeted = await service.resolveForRun({
@@ -1541,6 +1570,82 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.ok(!serialized.includes('native-codebuddy-token'))
     assert.ok(!serialized.includes('-ioa'))
     assert.ok(!serialized.includes('authorization'))
+  })
+
+  // Local fixture profiles (prices < 10 so the reference-price gate never
+  // triggers under the default unknown-quota snapshot) used to prove the
+  // implicit `mid` expectation and explicit min/expected semantics end to end.
+  const A_MID_P: ProfileFixture = {
+    exactAgentRuntime: 'auto/mid:m', profile: 'auto-mid', client: 'm',
+    provider: 'auto', model: 'mid', intelligence: 'mid', tps: 100,
+    inputUsd: 0.2, outputUsd: 1.2,
+  }
+  const A_HIGH_P: ProfileFixture = {
+    exactAgentRuntime: 'auto/high:m', profile: 'auto-high', client: 'm',
+    provider: 'auto', model: 'high', intelligence: 'high', tps: 100,
+    inputUsd: 0.2, outputUsd: 2.0,
+  }
+  const A_PREMIUM_P: ProfileFixture = {
+    exactAgentRuntime: 'auto/premium:m', profile: 'auto-premium', client: 'm',
+    provider: 'auto', model: 'premium', intelligence: 'premium', tps: 100,
+    inputUsd: 0.2, outputUsd: 4.0,
+  }
+
+  it('omitted task requirements default to mid expectation with no minimum', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }),
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    // No minimum => every profile is eligible; the default `mid` expectation is
+    // met by all three (shortfall 0), so the cheapest score wins (mid).
+    assert.equal(resolution.exactAgentRuntime, A_MID_P.exactAgentRuntime)
+    assert.equal(resolution.dispatch?.auto_routing?.scoring?.intelligence, 1)
+    assert.equal(resolution.sources.automatic?.intelligence_expected, 'system')
+  })
+
+  it('min high with expected premium selects the eligible premium and never a mid', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'automatic',
+            dispatch: { intelligenceMin: 'high', intelligenceExpected: 'premium' },
+          },
+        },
+      },
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }),
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.exactAgentRuntime, A_PREMIUM_P.exactAgentRuntime)
+    assert.equal(resolution.sources.automatic?.intelligence_expected, 'user_global')
+    assert.equal(resolution.sources.automatic?.intelligence_min, 'user_global')
+  })
+
+  it('falls back to high only when premium is unavailable and never picks mid', async () => {
+    writeConfig({
+      tasks: {
+        settings: {
+          global: {
+            selectionMode: 'automatic',
+            dispatch: { intelligenceMin: 'high', intelligenceExpected: 'premium' },
+          },
+        },
+      },
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({
+        profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P],
+        unavailable: { commit: A_PREMIUM_P.exactAgentRuntime },
+      }),
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.exactAgentRuntime, A_HIGH_P.exactAgentRuntime)
+    assert.notEqual(resolution.exactAgentRuntime, A_MID_P.exactAgentRuntime)
+    assert.notEqual(resolution.exactAgentRuntime, A_PREMIUM_P.exactAgentRuntime)
+    assert.ok(resolution.dispatch?.auto_routing?.reasons.includes('intelligence_below_expected'))
   })
 
   it('automatic selection collapses eligible client variants to the native model route before weighted ranking', async () => {

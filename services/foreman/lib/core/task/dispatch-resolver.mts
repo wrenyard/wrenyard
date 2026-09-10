@@ -1,6 +1,7 @@
 import type {
   Catalog,
   DispatchCandidate,
+  DispatchPlan,
   LocalSpeedSample,
   ModelDefinition,
   ModelPricing,
@@ -125,17 +126,24 @@ export type TaskDispatchEligibleResult =
 /**
  * Explicit-resolution input: an EXACT canonical dynamic target pin. Unlike
  * automatic resolution there is no machine preference, no automatic
- * speed/intelligence/reference-price/exclude requirement surface, and no
- * ranking: the caller names the exact target, and the only further eligibility
- * constraint is the optional required model capabilities.
+ * speed/reference-price/exclude preference surface, and no ranking. The caller
+ * names the exact target; required capabilities, native search and minimum
+ * intelligence remain hard eligibility constraints.
  */
 export interface ResolveExplicitDispatchInput {
   taskName: string
   /** Exact canonical dynamic target, e.g. `codebuddy/deepseek-v4.1-flash:cb`.
    *  Never a policy alias. */
   exactRuntime: string
-  /** Sole eligibility constraint beyond intrinsic availability. */
+  /** Required model input capabilities. */
   requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities']
+  /** Hidden hard gate: the resolved plan must admit native web search. When
+   *  true, gateway and unsupported combinations fail closed (no automatic
+   *  fallback). Never a UI control. */
+  requiresWebSearch?: boolean
+  /** Hard intelligence minimum enforced even in explicit mode (the catalog's
+   *  constrained probe owns the actual gate). */
+  intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
 }
 
 export type TaskDispatchExplicitResolution =
@@ -146,6 +154,10 @@ export type TaskDispatchExplicitResolution =
 export interface TaskDispatchExactRuntimeListInput {
   taskName: string
   requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities']
+  /** Hidden hard gate passed through to each explicit evaluation. */
+  requiresWebSearch?: boolean
+  /** Hard intelligence minimum passed through to each explicit evaluation. */
+  intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
 }
 
 /**
@@ -196,10 +208,9 @@ export interface TaskDispatchResolver {
 
   /**
    * Resolves one EXACT canonical dynamic target, bypassing every automatic
-   * selection constraint (expected/minimum speed, intelligence range,
-   * reference-price ceiling, automatic exclusion lists, machine preference,
-   * and ranking) and applying only intrinsic availability
-   * plus optional required capabilities. Failure is terminal: an unavailable,
+   * selection preference (speed, recommended intelligence, price, exclusions
+   * and ranking), while enforcing intrinsic availability, required capabilities,
+   * native search and minimum intelligence. Failure is terminal: an unavailable,
    * unknown, non-task-capable, policy, capability-incompatible, or non-truthful
    * target returns `ExplicitRuntimeUnavailableError` and never falls back to
    * another candidate.
@@ -335,11 +346,14 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return { code: 'no_available_provider' }
     }
 
-    let plan: { client: string; provider: string; model: string }
+    let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
     try {
       plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
     } catch {
       // Unresolvable plan mirrors the authoritative continue: no truthful path.
+      return { code: 'no_available_provider' }
+    }
+    if (requirements.requiresWebSearch === true && plan.supportsWebSearch !== true) {
       return { code: 'no_available_provider' }
     }
     const provider = catalog.provider(plan.provider)
@@ -484,9 +498,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // validated only for intrinsic availability (it resolves through the
   // Catalog, exists as a task-capable canonical candidate with a compiled
   // runtime plan/credential route, and can yield truthful resolved dispatch
-  // metadata) plus the caller's required capabilities. None of the automatic
-  // selection machinery runs here: no expected/minimum speed, no intelligence
-  // range, no reference-price ceiling, no exclusion lists, no machine preference,
+  // metadata) plus required capabilities, native search and minimum intelligence.
+  // No automatic preferences run here: no expected/minimum speed, no recommended
+  // intelligence, no reference-price ceiling, no exclusion lists, no machine preference,
   // and no ranking. A failure is terminal — the explicit
   // error is returned and no other candidate is ever evaluated as a fallback.
   const evaluateExplicitTarget = (
@@ -494,6 +508,8 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     exactAgentRuntime: string,
     candidate: DispatchCandidate,
     requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
+    requiresWebSearch?: boolean,
+    intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
   ): TaskDispatchExplicitResolution => {
     const canonicalTarget = canonicalTargetOf(candidate)
     if (canonicalTarget !== exactAgentRuntime) {
@@ -515,6 +531,56 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           exactAgentRuntime,
           `target '${canonicalTarget}' has no compiled runtime plan or credential route`,
         ),
+      }
+    }
+
+    // Hard gate: native web search requirement. We read the same Catalog plan the
+    // automatic path relies on (resolveRun computes supportsWebSearch from the
+    // native-provider allowlist); we never duplicate that allowlist here. Gateway
+    // and unsupported combinations fail closed via no_available_provider.
+    if (requiresWebSearch === true) {
+      let plan: DispatchPlan
+      try {
+        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
+      } catch {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' cannot resolve through the Catalog for native web search admission`,
+          ),
+        }
+      }
+      if (plan.supportsWebSearch !== true) {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' does not support native web search required by the task`,
+          ),
+        }
+      }
+    }
+
+    // Hard gate: intelligence minimum, enforced through the same constrained
+    // Catalog probe the automatic path uses (no separate allowlist). Fail closed
+    // for below-minimum targets rather than substituting another candidate.
+    if (intelligenceMin !== undefined) {
+      const probed = evaluate(
+        { taskName, requirements: { intelligenceMin }, declaredRuntime: exactAgentRuntime },
+        [candidate],
+      )
+      if (!probed.ok) {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' cannot satisfy the required intelligence minimum '${intelligenceMin}'`,
+          ),
+        }
       }
     }
 
@@ -613,7 +679,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
-      const { taskName, exactRuntime, requiredCapabilities } = input
+      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin } = input
       const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
         ok: false,
         error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
@@ -647,14 +713,21 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
       const items: TaskDispatchExactRuntimeListItem[] = []
       for (const candidate of allCandidates) {
         const exactAgentRuntime = canonicalTargetOf(candidate)
-        const outcome = evaluateExplicitTarget(input.taskName, exactAgentRuntime, candidate, input.requiredCapabilities)
+        const outcome = evaluateExplicitTarget(
+          input.taskName,
+          exactAgentRuntime,
+          candidate,
+          input.requiredCapabilities,
+          input.requiresWebSearch,
+          input.intelligenceMin,
+        )
         if (outcome.ok) {
           items.push({ exactAgentRuntime, available: true, resolved: outcome.resolved })
         } else {

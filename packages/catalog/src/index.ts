@@ -124,6 +124,10 @@ export interface TaskDispatchRequirements {
   excludeProfileIds?: readonly string[];
   excludeClientIds?: readonly string[];
   excludeProviderIds?: readonly string[];
+  /** Hidden requirement: the dispatched plan must admit native web search.
+   * This is enforced as a hard gate and fails closed for gateway and unknown
+   * combinations; it is not surfaced in any search settings UI. */
+  requiresWebSearch?: boolean;
 }
 
 export interface DispatchCandidate {
@@ -189,6 +193,11 @@ export interface ClientDefinition {
   // Task-capable clients are enumerated as derived task dispatch candidates.
   // Parseable public run syntax alone does not make a client task-capable.
   taskCapable?: boolean;
+  /** Native provider web search capability. True ONLY when this client can run
+   * native web search against its EXACT nativeProvider. It is NOT a claim of
+   * third-party gateway web search support: a gateway route — even from a flagged
+   * client to a non-native provider — is never marked supported. */
+  supportsNativeWebSearch?: boolean;
 }
 
 export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel' | 'intelligenceEvidence'> & {
@@ -210,6 +219,11 @@ export interface DispatchPlan {
   model: string;
   mode: 'native' | 'gateway';
   protocol?: GatewayProtocol;
+  // Native web search is admitted only for an explicitly supported native
+  // client/provider pair (client.supportsNativeWebSearch === true AND provider
+  // id === client.nativeProvider AND mode native). Gateway and unknown
+  // combinations are never marked supported.
+  supportsWebSearch?: boolean;
   // The model's own product-owned upstream reasoning effort. It travels from the
   // resolved model definition into the plan; aliases never own effort policy.
   reasoningEffort?: ReasoningEffort;
@@ -492,7 +506,15 @@ export class Catalog {
     // plan. Effort is product metadata on the model, never inferred lexically.
     const effort = modelDef.reasoningEffort ? { reasoningEffort: modelDef.reasoningEffort } : {};
     if (provider.nativeClients?.includes(clientID)) {
-      return { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effort };
+      // Native web search is admitted ONLY for an explicitly supported native
+      // client/provider pair: the client must declare supportsNativeWebSearch and
+      // the resolved provider must be that client's exact nativeProvider. This is
+      // native-provider capability alone — never third-party gateway support.
+      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effort };
+      if (client.supportsNativeWebSearch === true && client.nativeProvider === providerID) {
+        plan.supportsWebSearch = true;
+      }
+      return plan;
     }
     if (client.unsupportedGatewayProviders?.includes(providerID)) {
       throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
@@ -541,6 +563,12 @@ export function resolveConstrainedDispatch(
     if (!provider) continue;
     const modelDef = provider.models.find((entry) => entry.id === plan.model);
     if (!modelDef) continue;
+
+    // Hard constraint: native web search requirement, enforced before any
+    // capability/intelligence/price scoring. Admitted only when the resolved
+    // plan explicitly supports native web search; gateway and unknown
+    // combinations fail closed.
+    if (requirements.requiresWebSearch && plan.supportsWebSearch !== true) continue;
 
     // Canonical-alias exclusion: a candidate supplied via an alias must not
     // bypass exclusion of its resolved canonical model (e.g. legacy-glm ->

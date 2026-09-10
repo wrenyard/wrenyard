@@ -919,3 +919,77 @@ test('task candidate enumeration never emits model alias duplicates', () => {
   assert.equal(canonicalCount, 1);
   assert.equal(new Set(candidates.map((candidate) => candidate.profileId)).size, candidates.length);
 });
+
+test('native web search is admitted only for a supported native client/provider pair', () => {
+  const catalog = new Catalog();
+  // Flagged native client whose nativeProvider matches the provider id.
+  catalog.registerClient({ id: 'nsearch', nativeProvider: 'vendor', gatewayProtocols: ['openai_chat'], supportsNativeWebSearch: true });
+  // Unmarked native client (flag absent) sharing the same nativeProvider.
+  catalog.registerClient({ id: 'nplain', nativeProvider: 'vendor', gatewayProtocols: ['openai_chat'] });
+  // Gateway-only client that claims the flag but whose nativeProvider is different.
+  catalog.registerClient({ id: 'gwclaim', nativeProvider: 'other', gatewayProtocols: ['openai_chat'], supportsNativeWebSearch: true });
+  catalog.registerProvider({
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    nativeClients: ['nsearch', 'nplain'],
+    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  catalog.registerProvider({
+    id: 'other', displayName: 'Other', credentialResolver: 'forge-managed',
+    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://other.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+
+  // Supported native pair: flag true AND provider === nativeProvider AND mode native.
+  const supported = catalog.resolveRun('nsearch', 'vendor', 'm');
+  assert.equal(supported.mode, 'native');
+  assert.equal(supported.supportsWebSearch, true);
+
+  // Unmarked native client: never marked supported.
+  assert.equal(catalog.resolveRun('nplain', 'vendor', 'm').supportsWebSearch, undefined);
+
+  // Gateway route from a flag-claiming client to a non-native provider: not supported.
+  const gw = catalog.resolveRun('gwclaim', 'other', 'm');
+  assert.equal(gw.mode, 'gateway');
+  assert.equal(gw.supportsWebSearch, undefined);
+
+  // The same model reached through a non-native gateway client must not be trusted.
+  const nonNativeGw = catalog.resolveRun('gwclaim', 'vendor', 'm');
+  assert.equal(nonNativeGw.supportsWebSearch, undefined);
+});
+
+test('requiresWebSearch filters unsupported combinations but keeps supported dispatch', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'nsearch', nativeProvider: 'vendor', gatewayProtocols: ['openai_chat'], supportsNativeWebSearch: true });
+  catalog.registerClient({ id: 'gw', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    nativeClients: ['nsearch'],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 1, source: 'spec', checkedAt: '2026-09-05' } }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  const nativeCand: DispatchCandidate = { profileId: 'vendor/m:nsearch', client: 'nsearch', provider: 'vendor', model: 'm' };
+  const gwCand: DispatchCandidate = { profileId: 'vendor/m:gw', client: 'gw', provider: 'vendor', model: 'm' };
+
+  // Without the requirement both are eligible; collapse prefers the native route.
+  const noReq = resolveConstrainedDispatch(catalog, [gwCand, nativeCand], {});
+  assert.equal(noReq.ok, true);
+  assert.equal(noReq.selected.plan.client, 'nsearch');
+
+  // With requiresWebSearch the unsupported gateway route is filtered out and the
+  // supported native route is retained.
+  const req = resolveConstrainedDispatch(catalog, [gwCand, nativeCand], { requiresWebSearch: true });
+  assert.equal(req.ok, true);
+  assert.equal(req.selected.plan.client, 'nsearch');
+  assert.equal(req.selected.plan.supportsWebSearch, true);
+
+  // requiresWebSearch with only an unsupported candidate fails closed.
+  const onlyGw = resolveConstrainedDispatch(catalog, [gwCand], { requiresWebSearch: true });
+  assert.equal(onlyGw.ok, false);
+  assert.equal(onlyGw.reason, 'no-eligible-candidate');
+
+  // A normal task (no requirement) is unaffected by the web search metadata.
+  const normal = resolveConstrainedDispatch(catalog, [nativeCand], {});
+  assert.equal(normal.ok, true);
+  assert.equal(normal.selected.plan.model, 'm');
+});

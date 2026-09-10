@@ -279,7 +279,7 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.match(html, /id="stats-task-runs-list"/);
   // The Task page still has exactly four compact editable rows (mode, timeout,
   // 输入要求, conditional explicit runtime) and never hosts the auto cap.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 6);
   const tasksStart = html.indexOf('product-page tasks-page');
   const tasksEnd = html.indexOf('provider-dialog-backdrop');
   assert.ok(tasksStart > 0 && tasksEnd > tasksStart);
@@ -315,7 +315,7 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
   assert.match(app, /草稿仍保留/);
-  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; inputTypes: string \}/);
+  assert.match(app, /interface TaskFormDraft \{ mode: TaskSettingsMode; runtime: string; timeout: string; imageRequired: boolean; intelligenceMin: string; intelligenceExpected: string \}/);
 });
 
 test('renderer edits inherited mode and runtime from the effective baseline without creating incidental pins', async () => {
@@ -373,31 +373,81 @@ test('renderer edits inherited mode and runtime from the effective baseline with
     'reset deletes only per-task overrides so the next snapshot returns to global effective values');
 });
 
-test('renderer 输入要求 row pins required_capabilities only on a real change, respects declared-image, and preserves draft', async () => {
+test('renderer 需要图片 row is one native checkbox with correct inheritance and mandatory handling, and preserves draft', async () => {
   const app = await rendererSource();
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
-  // The new row is a plain tasks-setting-row, visible in both automatic and
+  // The row is a plain tasks-setting-row, visible in both automatic and
   // explicit modes (never nested inside the explicit-only row).
-  assert.match(html, /<label for="tasks-input-types">输入要求<\/label>/u);
-  assert.match(html, /<select id="tasks-input-types">/u);
-  assert.match(html, /<option value="inherit">沿用默认<\/option>/u);
-  assert.match(html, /<option value="text">文本<\/option>/u);
-  assert.match(html, /<option value="image">文本和图片<\/option>/u);
+  assert.match(html, /<label for="tasks-input-types">需要图片<\/label>/u);
+  assert.match(html, /<input id="tasks-input-types" type="checkbox" \/>/u);
+  assert.doesNotMatch(html, /<select id="tasks-input-types">/u);
   assert.match(html, /id="tasks-input-types-effective">—</);
   assert.doesNotMatch(html, /tasks-explicit-row[^]*id="tasks-input-types"/u);
+  // No search checkbox/UI is added by this task.
+  assert.doesNotMatch(html, /tasks-search|id="tasks-search"/u);
   // Executable patch/inheritance behavior is covered by task-input-types.test.ts.
-  assert.match(app, /inputTypesPatch\(row\.user_task\.automatic\?\.required_capabilities,/u);
-  // A declared-image task disables the text-only option but keeps inherit/image.
-  assert.match(app, /option\.disabled = option\.value === 'text' && builtinRequiresImage;/u);
-  // Draft now remembers the 输入要求 selection so a CAS conflict keeps it.
-  assert.match(app, /inputTypes: tasksInputTypesSelect\.value/u);
-  assert.match(app, /tasksInputTypesSelect\.value = draft\.inputTypes;/u);
-  // The save path merges the input-types patch under automatic without clobbering
+  assert.match(app, /imageCapabilitiesPatch\(row, taskSettings\?\.user_global \?\? \{\}, tasksInputTypesCheckbox\.checked\)/u);
+  assert.match(app, /imageRequiredFromRow\(row\)/u);
+  // A mandatory builtin image requirement disables the checkbox.
+  assert.match(app, /tasksInputTypesCheckbox\.disabled = tasksSaveBusy \|\| builtinRequiresImage\(row\);/u);
+  // After save finalization the mandatory disabled state is re-derived, never blanket re-enabled.
+  assert.match(app, /tasksInputTypesCheckbox\.disabled = savedRow \? builtinRequiresImage\(savedRow\) : true;/u);
+  // Draft remembers the boolean so a CAS conflict keeps it.
+  assert.match(app, /imageRequired: tasksInputTypesCheckbox\.checked/u);
+  assert.match(app, /tasksInputTypesCheckbox\.checked = draft\.imageRequired;/u);
+  // The save path merges the image patch under automatic without clobbering
   // unrelated layer fields.
-  assert.match(app, /const inputPatch = inputTypesPatch\(/u);
+  assert.match(app, /const inputPatch = imageCapabilitiesPatch\(/u);
   assert.match(app, /patch\.automatic = \{ \.\.\.\(patch\.automatic \?\? \{\}\), \.\.\.inputPatch\.automatic \};/u);
   // The reset path still deletes the whole automatic override via the shared loop.
   assert.match(app, /for \(const field of \['mode', 'explicit_runtime', 'timeout_ms', 'automatic'\] as const\)/);
+});
+
+test('renderer intelligence selectors edit min/expected on the user_task layer and merge a narrow automatic patch', async () => {
+  const app = await rendererSource();
+  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
+  // Two compact rows, visible in both modes, with the same inherit/low/mid/high/premium choices.
+  assert.match(html, /<label for="tasks-min-intelligence">最低智能<\/label>/u);
+  assert.match(html, /<select id="tasks-min-intelligence">/u);
+  assert.match(html, /<option value="inherit">沿用默认<\/option>/u);
+  assert.match(html, /<option value="low">低<\/option>/u);
+  assert.match(html, /<option value="mid">中<\/option>/u);
+  assert.match(html, /<option value="high">高<\/option>/u);
+  assert.match(html, /<option value="premium">旗舰<\/option>/u);
+  assert.match(html, /id="tasks-min-intelligence-effective">—</);
+  assert.match(html, /<label for="tasks-expected-intelligence">建议智能<\/label>/u);
+  assert.match(html, /<select id="tasks-expected-intelligence">/u);
+  assert.match(html, /id="tasks-expected-intelligence-effective">—</);
+  // The two rows are always visible, never nested inside the explicit-only row.
+  assert.doesNotMatch(html, /tasks-explicit-row[^]*id="tasks-min-intelligence"/u);
+  // Renderer reads the editable user_task layer (not the effective value) and
+  // patch-generation compares against that same layer.
+  assert.match(app, /intelligenceSelectionFromRow\(row\)/u);
+  assert.match(app, /intelligencePatch\(row\.user_task\.automatic,/u);
+  // Draft keeps both selections so a CAS conflict restores them.
+  assert.match(app, /intelligenceMin: tasksMinIntelligenceSelect\.value/u);
+  assert.match(app, /intelligenceExpected: tasksExpectedIntelligenceSelect\.value/u);
+  assert.match(app, /tasksMinIntelligenceSelect\.value = draft\.intelligenceMin;/u);
+  assert.match(app, /tasksExpectedIntelligenceSelect\.value = draft\.intelligenceExpected;/u);
+  // The save path merges intelligence leaves under automatic without clobbering
+  // unrelated layer fields.
+  assert.match(app, /patch\.automatic = \{ \.\.\.\(patch\.automatic \?\? \{\}\), \.\.\.intelPatch\.automatic \};/u);
+  // Both selects are disabled while saving and re-enabled afterwards.
+  assert.match(app, /tasksMinIntelligenceSelect\.disabled = true;/u);
+  assert.match(app, /tasksExpectedIntelligenceSelect\.disabled = false;/u);
+  // Effective hints: absent minimum shows 无最低要求, absent expected falls back to mid.
+  assert.match(app, /无最低要求/u);
+  assert.match(app, /未设置，按默认中/u);
+  // No search UI is added alongside the new intelligence controls.
+  assert.doesNotMatch(app, /tasksSearch|searchCheckbox|native-search/u);
+  assert.doesNotMatch(html, /tasks-search|id="tasks-search"/u);
+});
+
+test('renderer catalog model label reports image support from exact entry metadata only', async () => {
+  const conversation = await readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8');
+  assert.match(conversation, /entry\.inputTypes === undefined\n\s*\? '图片：未知'/u);
+  assert.match(conversation, /inputTypes\.includes\('image'\) \? '图片：支持' : '图片：不支持'/u);
+  assert.doesNotMatch(conversation, /支持输入：/u);
 });
 
 test('renderer builds 内置/项目 hierarchy with authoritative labels and stable identity leaves', async () => {
@@ -430,7 +480,7 @@ test('detail header shows display name, stable exact id, and resolved provider/m
   assert.doesNotMatch(app, /tasksPreviewTitle/);
   // Additive only: the Task page still has exactly four editable setting rows
   // and no new automatic-selection row or editable control.
-  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 4);
+  assert.equal((html.match(/<div class="tasks-setting-row/g) ?? []).length, 6);
   assert.doesNotMatch(html, /automatic-selection-row|tasks-auto-selection|id="tasks-automatic"/);
 });
 

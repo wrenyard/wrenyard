@@ -40,6 +40,9 @@ export interface TaskDispatchRequirements {
   excludeProfileIds?: readonly string[]
   excludeClientIds?: readonly string[]
   excludeProviderIds?: readonly string[]
+  /** Hidden dispatch requirement: the dispatched plan must admit native web
+   *  search. Enforced as a hard gate; never surfaced in any search settings UI. */
+  requiresWebSearch?: boolean
 }
 
 export interface TaskDefinitionSummary {
@@ -243,6 +246,7 @@ const taskDispatchRequirementsSchema = {
     excludeProfileIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeClientIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeProviderIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    requiresWebSearch: { type: 'boolean' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -598,6 +602,8 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_profile_ids?: readonly string[]
   exclude_client_ids?: readonly string[]
   exclude_provider_ids?: readonly string[]
+  /** Hidden web search requirement; mirrors TaskDispatchRequirements.requiresWebSearch. Not a UI control. */
+  requires_web_search?: boolean
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -643,6 +649,8 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>
+  /** Hidden web search requirement; sourced from the same dispatch merge. Not a UI control. */
+  requires_web_search?: TaskSettingsSourcedValue<boolean | null>
 }
 
 export interface TaskSettingsEffective {
@@ -895,6 +903,7 @@ export const taskSettingsAutomaticDispatchSchema = {
     exclude_profile_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_client_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_provider_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
+    requires_web_search: { type: 'boolean' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -914,6 +923,7 @@ const taskSettingsAutomaticPatchSchema = {
     intelligence_expected: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
     max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
+    requires_web_search: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
     exclude_model_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_client_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
@@ -1040,6 +1050,16 @@ const taskSettingsSourcedIntelligenceSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskSettingsSourcedBooleanSchema = {
+  type: 'object',
+  required: ['value', 'source'],
+  properties: {
+    value: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+    source: taskSettingsSourceLayerSchema,
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskSettingsEffectiveAutomaticSchema = {
   type: 'object',
   required: [
@@ -1067,6 +1087,7 @@ const taskSettingsEffectiveAutomaticSchema = {
     exclude_profile_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_client_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_provider_ids: taskSettingsSourcedNullableStringArraySchema,
+    requires_web_search: taskSettingsSourcedBooleanSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

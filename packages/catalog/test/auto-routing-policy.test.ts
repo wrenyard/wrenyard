@@ -1164,8 +1164,136 @@ test("verified-free changes routing price/P only and has no priority bucket", ()
   assert.equal(s.routingPriceUsdPerM, 0);
   assert.equal(s.priceFactor, 1);
   assert.ok(s.score > f.score, "standard outranks free by score, not priority");
-  const result = rankAutoRoutingCandidates([free, standard]);
-  assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
+    const result = rankAutoRoutingCandidates([free, standard]);
+    assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
+  })
+
+test("expected premium ranks the eligible premium candidate above a cheaper faster high", () => {
+  const premium = cand({
+    canonicalId: "premium-cand",
+    referenceUsdPerM: 30,
+    effectiveCapUsdPerM: 40,
+    intelligenceRank: 3,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const high = cand({
+    canonicalId: "high-cand",
+    referenceUsdPerM: 1,
+    effectiveCapUsdPerM: 10,
+    effectiveTps: 200,
+    intelligenceRank: 2,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const result = rankAutoRoutingCandidates([high, premium])
+  assert.deepEqual(rankedIds(result), ["premium-cand", "high-cand"])
+  assert.equal(result.ranked[0].intelligenceShortfall, 0)
+  assert.equal(result.ranked[1].intelligenceShortfall, 1)
+})
+
+test("expected premium falls back to the eligible high when premium is blocked by a hard gate", () => {
+  const premiumBlocked = cand({
+    canonicalId: "premium-blocked",
+    intelligenceRank: 3,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+    requiredQuota: [q("z", rollingEv(0))],
+  })
+  const high = cand({
+    canonicalId: "high-ok",
+    referenceUsdPerM: 1,
+    effectiveCapUsdPerM: 10,
+    intelligenceRank: 2,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const result = rankAutoRoutingCandidates([high, premiumBlocked])
+  assert.deepEqual(rankedIds(result), ["high-ok"])
+  assert.deepEqual(result.excluded.map((entry) => entry.canonicalId), ["premium-blocked"])
+})
+
+test("intelligenceMin high excludes a mid candidate and keeps the eligible high", () => {
+  const mid = cand({
+    canonicalId: "mid-excluded",
+    intelligenceRank: 1,
+    intelligenceMinRank: 2,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const high = cand({
+    canonicalId: "high-ok",
+    intelligenceRank: 2,
+    intelligenceMinRank: 2,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const result = rankAutoRoutingCandidates([mid, high])
+  assert.deepEqual(rankedIds(result), ["high-ok"])
+  assert.equal(
+    result.excluded.find((entry) => entry.canonicalId === "mid-excluded")?.reason,
+    "intelligence_out_of_range"
+  )
+})
+
+test("same expectation keeps the score tie-break and deterministic canon order", () => {
+  const cheaper = cand({
+    canonicalId: "cheaper",
+    referenceUsdPerM: 1,
+    effectiveCapUsdPerM: 10,
+    intelligenceRank: 1,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 1,
+  })
+  const pricier = cand({
+    canonicalId: "pricier",
+    referenceUsdPerM: 6,
+    effectiveCapUsdPerM: 10,
+    intelligenceRank: 1,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 1,
+  })
+  const result = rankAutoRoutingCandidates([pricier, cheaper])
+  assert.deepEqual(rankedIds(result), ["cheaper", "pricier"])
+  assert.deepEqual(result.ranked.map((entry) => entry.intelligenceShortfall), [0, 0])
+})
+
+test("absent expected rank yields zero shortfall and preserves score ordering", () => {
+  const c1 = cand({ canonicalId: "c1", referenceUsdPerM: 6, effectiveCapUsdPerM: 10 })
+  const c2 = cand({ canonicalId: "c2", referenceUsdPerM: 1, effectiveCapUsdPerM: 10 })
+  const result = rankAutoRoutingCandidates([c1, c2])
+  assert.deepEqual(rankedIds(result), ["c2", "c1"])
+  assert.deepEqual(result.ranked.map((entry) => entry.intelligenceShortfall), [0, 0])
+})
+
+test("selected candidate below expected surfaces an intelligence_below_expected note", () => {
+  const premiumBlocked = cand({
+    canonicalId: "premium-blocked",
+    intelligenceRank: 3,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+    requiredQuota: [q("z", rollingEv(0))],
+  })
+  const high = cand({
+    canonicalId: "high",
+    referenceUsdPerM: 1,
+    effectiveCapUsdPerM: 10,
+    intelligenceRank: 2,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
+    intelligenceExpectedRank: 3,
+  })
+  const result = rankAutoRoutingCandidates([high, premiumBlocked])
+  assert.deepEqual(rankedIds(result), ["high"])
+  assert.equal(result.ranked[0].intelligenceShortfall, 1)
+  assert.ok(result.ranked[0].notes.includes("intelligence_below_expected"))
 });
 
 test("all factors and the score stay within [0,1]", () => {

@@ -30,6 +30,8 @@ Search and retrieve high-quality information to answer the user's questions unde
 - If no search capability is available, say so. Do not fabricate answers from training data.
 - Prefer primary sources (official docs, papers, authoritative sites) and cross-reference across sources.
 
+Use native web search and cite retrieved source URLs. If the search tool is unavailable, report that inability explicitly; never fabricate retrieval or substitute local file search.
+
 ## Goal
 `,
 `
@@ -108,7 +110,7 @@ const definition = {
   config: {
     description:
       'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and returns structured findings and evidences. Read-only; never fabricates or mutates files.',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    dispatch: { ...GENERAL_DISPATCH_REQUIREMENTS, requiresWebSearch: true },
     permission: 'readonly',
     instructions: [shellUsage],
     input: LibrarianInputSchema,

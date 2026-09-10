@@ -719,3 +719,80 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
     assert.match(error.message, /no eligible dispatch plan/u)
   })
 })
+
+describe('core task dispatch-resolver requiresWebSearch (no-model)', () => {
+  let resolver: TaskDispatchResolver
+  let probeCatalog: Catalog
+
+  beforeEach(async () => {
+    resolver = await createTaskDispatchResolver({
+      catalog: createBuiltinCatalog(),
+      runtime: createBuiltinProviderRuntime(),
+      localSpeed: localSamples,
+    })
+    probeCatalog = createBuiltinCatalog()
+  })
+
+  // codex/*:codex is a native web-search-capable client/provider pair; the
+  // gateway projections (openai/...:cb, kimi-coding/...:gk) are not.
+  it('explicit admits a native web-search-capable exact target', () => {
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-search-ok',
+      exactRuntime: LUNA_CODEX,
+      requiresWebSearch: true,
+    })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, LUNA_CODEX)
+  })
+
+  it('explicit rejects a gateway/text-capable target that cannot serve web search', () => {
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-search-bad',
+      exactRuntime: K3_GK,
+      requiresWebSearch: true,
+    })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(explicit.error.reason, /native web search/)
+  })
+
+  it('explicit rejects a non-search native target with no web search support even when capable', () => {
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-search-openai',
+      exactRuntime: LUNA_OPENAI_CB,
+      requiresWebSearch: true,
+    })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(explicit.error.reason, /native web search/)
+  })
+
+  it('automatic requiresWebSearch selects only web-search-capable plans', () => {
+    const resolution = resolver.resolve({
+      taskName: 'auto-search',
+      requirements: { requiresWebSearch: true, minimumTps: 1 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(resolution.ok, true)
+    const resolved = resolution.resolved
+    const plan = probeCatalog.resolveRun(resolved.client, resolved.provider, resolved.model)
+    assert.equal(plan.supportsWebSearch, true)
+  })
+
+  it('explicit below the hard intelligence minimum is rejected with no fallback', () => {
+    // GLM_CB is 'high'; a 'premium' minimum must reject it in explicit mode.
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-intel-min',
+      exactRuntime: GLM_CB,
+      intelligenceMin: 'premium',
+    })
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.match(explicit.error.reason, /cannot satisfy the required intelligence minimum/)
+  })
+
+  it('ordinary explicit targets without search/intelligence requirements are unaffected', () => {
+    const explicit = resolver.resolveExplicit({ taskName: 'explicit-plain', exactRuntime: GLM_CB })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, GLM_CB)
+  })
+})

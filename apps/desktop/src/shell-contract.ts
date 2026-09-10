@@ -460,6 +460,7 @@ export interface TaskSettingsAutomaticDispatch {
   intelligence_expected?: TaskSettingsIntelligence;
   max_output_usd_per_million?: number;
   required_capabilities?: readonly TaskSettingsCapability[];
+  requires_web_search?: boolean;
   exclude_model_ids?: readonly string[];
   exclude_profile_ids?: readonly string[];
   exclude_client_ids?: readonly string[];
@@ -516,6 +517,7 @@ export interface TaskSettingsEffectiveAutomatic {
   intelligence_expected?: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
   max_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
   required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>;
+  requires_web_search?: TaskSettingsSourcedValue<boolean | null>;
   exclude_model_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_profile_ids: TaskSettingsSourcedValue<string[] | null>;
   exclude_client_ids: TaskSettingsSourcedValue<string[] | null>;
