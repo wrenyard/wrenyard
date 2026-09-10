@@ -24,8 +24,6 @@ export type MessageConfigData = ConfigRecord & {
   }
 }
 
-export type TaskAgentRuntimeOverrides = Record<string, string>
-
 /** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while
  *  staying open to unknown/forward-compatible keys. */
 export type TaskSettingsLayerData = ConfigRecord & TaskSettingsLayer
@@ -39,11 +37,6 @@ export type TaskSettingsData = ConfigRecord & {
 }
 
 export type TasksConfigData = ConfigRecord & {
-  /** Legacy local per-task agentRuntime overlay, kept for read compatibility
-   *  with existing configs. Prefer `settings.byTask`; this map only serves as a
-   *  bare builtin fallback when no new per-task selection is present. Do not
-   *  ship Codex-specific pins in the suite. */
-  agentRuntime?: TaskAgentRuntimeOverrides
   /** Layered task settings resolved in order: system defaults -> builtin Task
    *  defaults -> user global -> user task -> invocation. */
   settings?: TaskSettingsData

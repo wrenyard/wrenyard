@@ -31,8 +31,9 @@ export type TaskRunStatus = typeof taskRunStatusValues[number]
 export interface TaskDispatchRequirements {
   expectedTps?: number
   minimumTps?: number
-  intelligenceMin?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
-  intelligenceMax?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+  intelligenceMin?: 'low' | 'mid' | 'high' | 'premium'
+  intelligenceMax?: 'low' | 'mid' | 'high' | 'premium'
+  intelligenceExpected?: 'low' | 'mid' | 'high' | 'premium'
   maxOutputUsdPerMillion?: number
   requiredCapabilities?: readonly ('text' | 'image')[]
   excludeModelIds?: readonly string[]
@@ -233,8 +234,9 @@ const taskDispatchRequirementsSchema = {
   properties: {
     expectedTps: { type: 'number', exclusiveMinimum: 0 },
     minimumTps: { type: 'number', exclusiveMinimum: 0 },
-    intelligenceMin: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
-    intelligenceMax: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
+    intelligenceMin: { enum: ['low', 'mid', 'high', 'premium'] },
+    intelligenceMax: { enum: ['low', 'mid', 'high', 'premium'] },
+    intelligenceExpected: { enum: ['low', 'mid', 'high', 'premium'] },
     maxOutputUsdPerMillion: { type: 'number', exclusiveMinimum: 0 },
     requiredCapabilities: { type: 'array', items: { enum: ['text', 'image'] } },
     excludeModelIds: { type: 'array', items: { type: 'string', minLength: 1 } },
@@ -279,6 +281,9 @@ export const taskDefinitionDetailSchema = {
     profile: { type: 'string' },
     input_schema: {},
     output_schema: {},
+    /** Same four-tier dispatch contract as the summary schema: definition output
+     *  is strictly current and rejects the legacy `frontier` alias. */
+    dispatch: taskDispatchRequirementsSchema,
     structured: { type: 'boolean' },
     input_example: recordSchema,
     gates: {
@@ -549,7 +554,7 @@ export const taskRunEventsResultSchema = {
 
 export type TaskSettingsMode = 'automatic' | 'explicit'
 
-export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium'
 export type TaskSettingsCapability = 'text' | 'image'
 
 /** Source layer that supplied an effective settings field; higher index wins. */
@@ -586,6 +591,7 @@ export interface TaskSettingsAutomaticDispatch {
   minimum_tps?: number
   intelligence_min?: TaskSettingsIntelligence
   intelligence_max?: TaskSettingsIntelligence
+  intelligence_expected?: TaskSettingsIntelligence
   max_output_usd_per_million?: number
   required_capabilities?: readonly TaskSettingsCapability[]
   exclude_model_ids?: readonly string[]
@@ -630,6 +636,7 @@ export interface TaskSettingsEffectiveAutomatic {
   minimum_tps: TaskSettingsSourcedValue<number | null>
   intelligence_min: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
   intelligence_max: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
+  intelligence_expected: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>
   max_output_usd_per_million: TaskSettingsSourcedValue<number | null>
   required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>
   exclude_model_ids: TaskSettingsSourcedValue<string[] | null>
@@ -804,7 +811,7 @@ const taskSettingsModeSchema = {
 } as const satisfies JsonSchema
 
 const taskSettingsIntelligenceSchema = {
-  enum: ['low', 'mid', 'high', 'frontier', 'premium'],
+  enum: ['low', 'mid', 'high', 'premium'],
 } as const satisfies JsonSchema
 
 const taskSettingsCapabilitySchema = {
@@ -860,6 +867,7 @@ export const taskSettingsAutomaticDispatchSchema = {
     minimum_tps: { type: 'number', exclusiveMinimum: 0 },
     intelligence_min: taskSettingsIntelligenceSchema,
     intelligence_max: taskSettingsIntelligenceSchema,
+    intelligence_expected: taskSettingsIntelligenceSchema,
     max_output_usd_per_million: { type: 'number', exclusiveMinimum: 0 },
     required_capabilities: { type: 'array', items: taskSettingsCapabilitySchema },
     exclude_model_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
@@ -874,6 +882,7 @@ const taskSettingsNullableAutomaticSchema = {
   anyOf: [taskSettingsAutomaticDispatchSchema, { type: 'null' }],
 } as const satisfies JsonSchema
 
+/** Strict (four-tier, no `frontier`) automatic dispatch patch schema. */
 const taskSettingsAutomaticPatchSchema = {
   type: 'object',
   properties: {
@@ -881,6 +890,7 @@ const taskSettingsAutomaticPatchSchema = {
     minimum_tps: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     intelligence_min: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
     intelligence_max: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
+    intelligence_expected: { anyOf: [taskSettingsIntelligenceSchema, { type: 'null' }] },
     max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
     exclude_model_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
@@ -900,6 +910,18 @@ const taskSettingsNullableNonNegativeNumberSchema = {
 } as const satisfies JsonSchema
 
 export const taskSettingsLayerSchema = {
+  type: 'object',
+  properties: {
+    mode: taskSettingsModeSchema,
+    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
+    timeout_ms: taskSettingsNullableNumberSchema,
+    automatic: taskSettingsNullableAutomaticSchema,
+    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskSettingsLayerInputSchema = {
   type: 'object',
   properties: {
     mode: taskSettingsModeSchema,
@@ -1004,6 +1026,7 @@ const taskSettingsEffectiveAutomaticSchema = {
     'minimum_tps',
     'intelligence_min',
     'intelligence_max',
+    'intelligence_expected',
     'max_output_usd_per_million',
     'required_capabilities',
     'exclude_model_ids',
@@ -1016,6 +1039,7 @@ const taskSettingsEffectiveAutomaticSchema = {
     minimum_tps: taskSettingsSourcedNullableNumberSchema,
     intelligence_min: taskSettingsSourcedIntelligenceSchema,
     intelligence_max: taskSettingsSourcedIntelligenceSchema,
+    intelligence_expected: taskSettingsSourcedIntelligenceSchema,
     max_output_usd_per_million: taskSettingsSourcedNullableNumberSchema,
     required_capabilities: taskSettingsSourcedCapabilityArraySchema,
     exclude_model_ids: taskSettingsSourcedNullableStringArraySchema,
@@ -1190,38 +1214,6 @@ const taskSettingsExplicitRowSchema = {
   additionalProperties: true,
 } as const satisfies JsonSchema
 
-/** Privacy-safe safe auto-routing decision schema (no raw account/credential data). */
-const taskSettingsAutoRoutingDecisionSchema = {
-  type: 'object',
-  required: [
-    'snapshot_id',
-    'selected_rank',
-    'supply_class',
-    'quota_tier',
-    'quota_coverage_complete',
-    'quota_headroom_trusted',
-    'reference_output_usd_per_million',
-    'routing_output_usd_per_million',
-    'effective_cap_usd_per_million',
-    'score',
-    'reasons',
-  ],
-  properties: {
-    snapshot_id: { type: 'string', minLength: 1 },
-    selected_rank: { type: 'integer', minimum: 1 },
-    supply_class: { enum: ['confirmed_free', 'standard'] },
-    quota_tier: { enum: ['healthy', 'unknown', 'strained'] },
-    quota_coverage_complete: { type: 'boolean' },
-    quota_headroom_trusted: { type: 'boolean' },
-    reference_output_usd_per_million: { type: 'number' },
-    routing_output_usd_per_million: { type: 'number' },
-    effective_cap_usd_per_million: { type: 'number' },
-    score: { type: 'number' },
-    reasons: { type: 'array', items: { type: 'string' } },
-  },
-  additionalProperties: true,
-} as const satisfies JsonSchema
-
 /** Resolved dispatch wire schema extended with the additive safe auto_routing
  *  decision and the additive Catalog display labels (backward compatible: all
  *  original fields and shape are kept). */
@@ -1229,7 +1221,6 @@ const taskSettingsAutomaticResolvedDispatchSchema = {
   ...taskResolvedDispatchSchema,
   properties: {
     ...taskResolvedDispatchSchema.properties,
-    auto_routing: taskSettingsAutoRoutingDecisionSchema,
     provider_display_name: { type: 'string', minLength: 1 },
     model_display_name: { type: 'string', minLength: 1 },
   },
@@ -1312,7 +1303,7 @@ export const taskRunCreateParamsSchema = {
     worktree: { type: 'string', minLength: 1 },
     input: {},
     ctx: recordSchema,
-    invocation_settings: taskSettingsLayerSchema,
+    invocation_settings: taskSettingsLayerInputSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

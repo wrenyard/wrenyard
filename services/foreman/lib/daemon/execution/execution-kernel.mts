@@ -24,7 +24,6 @@ import {
   ensureDiscovered,
   resolveTaskTarget,
 } from '../../workspace/task-loader.mts'
-import { taskRuntimeOverridePreference } from '../../config/task-runtime-override.mts'
 import { installRuntimeGlobals } from './runtime-globals.mts'
 import {
   compileSchema,
@@ -345,11 +344,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
 
     const definition = target.definition as TaskDefinition
     config = definition.config
-    // A legacy soft runtime override preference is read separately from any
-    // declared runtime. Automatic selection currently ignores it, so it can
-    // never relax, skip, or bypass a hard dispatch requirement. Active Task
-    // definitions never declare a fixed runtime pin.
-    const runtimeOverridePreference = taskRuntimeOverridePreference(target.name)
 
     // Effective runtime/timeout placeholders. Production execution resolves them
     // through the daemon TaskSettingsService exactly once, after pre-gates and
@@ -384,7 +378,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         const resolution = options.taskDispatchResolver.resolve({
           taskName: target.name,
           requirements: config.dispatch,
-          machinePreference: runtimeOverridePreference,
         })
         if (!resolution.ok) throw resolution.error
         exactAgentRuntime = resolution.exactAgentRuntime

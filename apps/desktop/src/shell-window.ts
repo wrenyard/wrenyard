@@ -77,6 +77,7 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'minimum_tps',
   'intelligence_min',
   'intelligence_max',
+  'intelligence_expected',
   'max_output_usd_per_million',
   'required_capabilities',
   'exclude_model_ids',
@@ -84,7 +85,7 @@ const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'exclude_client_ids',
   'exclude_provider_ids',
 ]);
-const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'frontier', 'premium']);
+const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'premium']);
 const TASK_SETTINGS_CAPABILITY_VALUES = new Set(['text', 'image']);
 const RUNTIME_ALIAS_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const RUNTIME_ALIAS_REVISION_MAX = 512;
@@ -153,7 +154,7 @@ function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false):
     if (allowFieldReset && value === null) continue;
     if (value !== undefined && !isFinitePositiveNumber(value)) throw new Error('自动约束无效');
   }
-  for (const field of ['intelligence_min', 'intelligence_max'] as const) {
+  for (const field of ['intelligence_min', 'intelligence_max', 'intelligence_expected'] as const) {
     const value = automatic[field];
     if (allowFieldReset && value === null) continue;
     if (value !== undefined && (typeof value !== 'string' || !TASK_SETTINGS_INTELLIGENCE_VALUES.has(value))) {
@@ -227,7 +228,7 @@ function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSaveReques
   const request: TaskSettingsSaveRequest = {
     scope,
     expected_revision: expectedRevision,
-    patch: patch as unknown as TaskSettingsSaveRequest['patch'],
+    patch: patch as TaskSettingsSaveRequest['patch'],
   };
   if (taskId !== undefined && taskId !== null) request.task_id = taskId;
   if (project !== undefined) request.project = project;

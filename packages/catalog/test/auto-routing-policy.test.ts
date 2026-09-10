@@ -3,10 +3,14 @@
  *
  * Covers the pure two-file (source + test) contract: quota evidence
  * semantics, full-cycle/rolling aggregation, hard guards, marginal price and
- * verified quota-burn efficiency economic evidence, tier-ordered ranking by a
- * single unified descending score ((P+S) * (0.01 * raw effectiveTps -
- * routingPriceUsdPerM) + Q * quotaQuality + I * intelligenceFactor), stable
- * deterministic tie-breaks, and defensive input snapshots.
+ * verified quota-burn efficiency economic evidence, and the approved normalized
+ * ranking score:
+ *   score = .50*P + .20*S + .20*Q + .10*I
+ * where P is the continuous price-factor from fixed anchors, S = min(TPS/200,1),
+ * Q is quota headroom quality, and I is the intelligence factor. Every factor is
+ * bounded in [0, 1], so the score is always within [0, 1]. Ranking is one global
+ * deterministic descending-score pass; supply class and quota tier are retained
+ * only as diagnostic fields and never as sort keys.
  *
  * Note: ranking fixtures use synthetic labels ("ds-flash-like",
  * "glm-flash-like") purely to make canonical/snapshot ids readable. No real
@@ -16,12 +20,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SCORE_WEIGHTS,
-  SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS,
+  PRICE_FACTOR_ANCHORS,
   NEUTRAL_HEADROOM,
+  EFFICIENCY_HEADROOM_WEIGHT,
+  EFFICIENCY_EVIDENCE_WEIGHT,
   assessRequiredQuota,
   evaluateCandidate,
   rankAutoRoutingCandidates,
   type CandidateInput,
+  type CandidateAssessment,
   type QuotaEvidence,
   type RequiredQuotaConstraint,
 } from "../src/auto-routing-policy.ts";
@@ -89,11 +96,10 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
     effectiveCapUsdPerM: 100,
     timeoutMs: MINUTE_MS,
     minimumTps: 5,
-    expectedTps: 20,
     effectiveTps: 25,
-    intelligenceRank: 1,
-    intelligenceMinRank: 1,
-    intelligenceMaxRank: 5,
+    intelligenceRank: 3,
+    intelligenceMinRank: 0,
+    intelligenceMaxRank: 3,
     requiredQuota: [q("monthly", fullCycleEv(60, 0.5))],
     marginalPrice: null,
     verifiedEfficiency: null,
@@ -101,33 +107,45 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
   return { ...base, ...over };
 }
 
-// Mirrored expectation helpers for the documented diagnostic/score formulas.
-// expScore mirrors the authorized score exactly: (P + S) weights the marginal
-// speed/price exchange at SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS (0.01) on raw
-// effectiveTps minus the routing price, then Q and I weights are added.
-function expPriceFactor(routing: number, cap: number): number {
-  if (routing <= 0) return 1;
-  if (cap <= 0) return 0;
-  return Math.min(
-    1,
-    Math.max(0, 1 - Math.log(1 + routing) / Math.log(1 + cap))
-  );
+// Mirrored expectation helpers for the approved normalized diagnostic/score
+// formulas. interpPrice mirrors interpolatePriceFactor exactly: P is the
+// continuous anchor-interpolated price factor; S saturates effective TPS at 200.
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
+function interpPrice(priceUsdPerM: number): number {
+  if (!Number.isFinite(priceUsdPerM) || priceUsdPerM <= 0) return 1;
+  const anchors = PRICE_FACTOR_ANCHORS;
+  const last = anchors[anchors.length - 1];
+  if (priceUsdPerM >= last[0]) return 0;
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const [p0, v0] = anchors[i];
+    const [p1, v1] = anchors[i + 1];
+    if (priceUsdPerM >= p0 && priceUsdPerM <= p1) {
+      const t = (priceUsdPerM - p0) / (p1 - p0);
+      return v0 + t * (v1 - v0);
+    }
+  }
+  return 0;
 }
 
 function expScore(
-  candidate: { effectiveTps: number },
-  assessment: {
-    routingPriceUsdPerM: number;
-    quotaQuality: number;
-    intelligenceFactor: number;
-  }
+  input: CandidateInput,
+  assessment: CandidateAssessment
 ): number {
+  const P = interpPrice(assessment.routingPriceUsdPerM);
+  const S = clamp01(input.effectiveTps / 200);
+  const Q = assessment.quotaQuality;
+  const I = assessment.intelligenceFactor;
   return (
-    (SCORE_WEIGHTS.P + SCORE_WEIGHTS.S) *
-      (SPEED_PRICE_TRADEOFF_USD_PER_M_PER_TPS * candidate.effectiveTps -
-        assessment.routingPriceUsdPerM) +
-    SCORE_WEIGHTS.Q * assessment.quotaQuality +
-    SCORE_WEIGHTS.I * assessment.intelligenceFactor
+    SCORE_WEIGHTS.P * P +
+    SCORE_WEIGHTS.S * S +
+    SCORE_WEIGHTS.Q * Q +
+    SCORE_WEIGHTS.I * I
   );
 }
 
@@ -144,6 +162,7 @@ function expectAccepted(c: CandidateInput) {
 function expectRejected(c: CandidateInput, reason: string) {
   const ev = evaluateCandidate(c);
   assert.equal(ev.kind, "rejected", `expected rejection for ${c.canonicalId}`);
+  assert.equal(ev.kind === "rejected" ? ev.reason : "", reason);
   return ev.kind === "rejected" ? ev : null;
 }
 
@@ -248,10 +267,6 @@ test("binding min is taken across joint healthy full-cycle constraints", () => {
 });
 
 test("complete full-cycle weekly evidence at 28% remaining with ~84% expected remaining is strained, never unknown", () => {
-  // resetHorizonMs/windowMs = 0.84 => expectedRemaining 0.84 and healthy
-  // threshold 0.8 * 0.84 = 0.672. The 0.28 remaining ratio stays below it, so
-  // the complete, trustworthy constraint is strained and must never fall back
-  // to the unknown neutral headroom just because it is not healthy.
   const weekly = assessRequiredQuota(NOW, [q("7d", fullCycleEv(28, 0.84))]);
   assert.equal(weekly.state, "strained");
   assert.equal(weekly.coverageComplete, true);
@@ -530,10 +545,6 @@ test("invalid candidates and fields reject with machine reasons", () => {
     "speed_below_minimum"
   );
   expectRejected(
-    cand({ expectedTps: Number.NaN }),
-    "invalid_speed"
-  );
-  expectRejected(
     cand({ intelligenceRank: 99 }),
     "intelligence_out_of_range"
   );
@@ -568,7 +579,6 @@ test("listed zero reference is rejected; verified_free zero is the only zero", (
 });
 
 test("cap zero admits only verified-free at zero", () => {
-  // Verified-free at zero with cap zero routes with price factor 1.
   const freeCand = cand({
     referenceUsdPerM: 0,
     referenceKind: "verified_free",
@@ -627,7 +637,7 @@ test("unknown tier with reference >= 10 is rejected even when covered", () => {
   );
 });
 
-test("healthy tiers compute quota metrics and score exactly", () => {
+test("healthy tiers compute quota metrics and normalized score exactly", () => {
   const input = cand({
     canonicalId: "healthy-a",
     referenceUsdPerM: 2,
@@ -644,37 +654,143 @@ test("healthy tiers compute quota metrics and score exactly", () => {
   assert.equal(a!.verifiedEfficiency, null);
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
-  close(a!.priceFactor, expPriceFactor(2, 20), 1e-12, "diagnostic P");
-  close(a!.speedFactor, 1, 1e-12, "diagnostic S saturated");
+  close(a!.priceFactor, interpPrice(2), 1e-12, "diagnostic P");
+  close(a!.speedFactor, clamp01(25 / 200), 1e-12, "diagnostic S saturated at 200");
   close(a!.intelligenceFactor, 1, 1e-12, "I saturated");
-  close(a!.score, expScore(input, a!), 1e-12, "unified score");
+  close(a!.score, expScore(input, a!), 1e-12, "normalized score");
 });
 
-test("expected <= minimum yields S=1; minimum intelligence preferred", () => {
-  const sat = expectAccepted(
-    cand({ minimumTps: 10, expectedTps: 10, effectiveTps: 12 })
-  );
-  close(sat!.speedFactor, 1, 1e-12, "expected<=minimum S=1");
+// ---------------------------------------------------------------------------
+// Approved normalized formula: weights, price anchors, speed, quota, intelligence
+// ---------------------------------------------------------------------------
 
-  const partial = expectAccepted(
-    cand({ minimumTps: 10, expectedTps: 20, effectiveTps: 15 })
-  );
-  close(partial!.speedFactor, 0.5, 1e-12, "half headroom S=0.5");
+test("score weights sum to 1 with .50/.20/.20/.10", () => {
+  assert.equal(SCORE_WEIGHTS.P, 0.5);
+  assert.equal(SCORE_WEIGHTS.S, 0.2);
+  assert.equal(SCORE_WEIGHTS.Q, 0.2);
+  assert.equal(SCORE_WEIGHTS.I, 0.1);
+  close(SCORE_WEIGHTS.P + SCORE_WEIGHTS.S + SCORE_WEIGHTS.Q + SCORE_WEIGHTS.I, 1, 1e-12);
+});
 
-  const bestIntel = expectAccepted(
-    cand({ intelligenceRank: 1, intelligenceMinRank: 1, intelligenceMaxRank: 5 })
-  );
-  close(bestIntel!.intelligenceFactor, 1, 1e-12, "min rank I=1");
+test("price factor anchors interpolate continuously, monotonically, and floor at >=50", () => {
+  const anchors = PRICE_FACTOR_ANCHORS;
+  // Exact anchor values: 0/.5/1/2/6/30/50.
+  close(interpPrice(0), 1, 1e-12, "P(0)");
+  close(interpPrice(0.5), 0.85, 1e-12, "P(0.5)");
+  close(interpPrice(1), 0.75, 1e-12, "P(1)");
+  close(interpPrice(2), 0.6, 1e-12, "P(2)");
+  close(interpPrice(6), 0.35, 1e-12, "P(6)");
+  close(interpPrice(30), 0.05, 1e-12, "P(30)");
+  close(interpPrice(50), 0, 1e-12, "P(50)");
 
-  const worstIntel = expectAccepted(
-    cand({ intelligenceRank: 5, intelligenceMinRank: 1, intelligenceMaxRank: 5 })
-  );
-  close(worstIntel!.intelligenceFactor, 0, 1e-12, "max rank I=0");
+  // Interpolation between anchors is continuous and strictly non-increasing.
+  let prev = Number.POSITIVE_INFINITY;
+  for (let p = 0; p <= 50; p += 0.1) {
+    const v = interpPrice(p);
+    assert.ok(v <= 1 + 1e-9 && v >= -1e-9, `P(${p}) within [0,1]`);
+    if (p > 0) assert.ok(v <= prev + 1e-9, `P(${p}) monotonic non-increasing`);
+    prev = v;
+  }
+  // Prices at or above the final anchor score 0.
+  assert.equal(interpPrice(50), 0);
+  assert.equal(interpPrice(1000), 0);
+  // Non-positive or non-finite prices score P=1 (free/unknown).
+  assert.equal(interpPrice(0), 1);
+  assert.equal(interpPrice(-1), 1);
+  assert.equal(interpPrice(Number.NaN), 1);
+  assert.equal(interpPrice(Number.POSITIVE_INFINITY), 1);
 
-  const degenerate = expectAccepted(
-    cand({ intelligenceRank: 3, intelligenceMinRank: 3, intelligenceMaxRank: 3 })
+  // The same anchors drive the assessed price factor.
+  const a = expectAccepted(cand({ referenceUsdPerM: 2 }));
+  close(a!.priceFactor, interpPrice(2), 1e-12, "assessed P");
+  // Invalid reference price rejects the candidate rather than scoring.
+  expectRejected(cand({ referenceUsdPerM: Number.NaN }), "invalid_reference_price");
+  expectRejected(cand({ referenceUsdPerM: -0.01 }), "invalid_reference_price");
+});
+
+test("speed factor S is effective TPS saturated at 200", () => {
+  const s = (tps: number) => clamp01(tps / 200);
+  close(s(0), 0, 1e-12, "S(0)");
+  close(s(100), 0.5, 1e-12, "S(100)");
+  close(s(200), 1, 1e-12, "S(200)");
+  close(s(1000), 1, 1e-12, "S saturated");
+  const a = expectAccepted(cand({ effectiveTps: 25 }));
+  close(a!.speedFactor, clamp01(25 / 200), 1e-12, "assessed S");
+});
+
+test("unknown tier uses neutral headroom 0.5 for Q; verified efficiency blends into Q only", () => {
+  const unknown = expectAccepted(cand({ requiredQuota: [q("u", rollingEv(50))] }));
+  assert.equal(unknown!.tier, "unknown");
+  close(unknown!.headroom, NEUTRAL_HEADROOM, 1e-12, "neutral H");
+  close(unknown!.quotaQuality, NEUTRAL_HEADROOM, 1e-12, "Q=neutral");
+  // Efficiency blends into Q while H/tier stay neutral.
+  const blended = expectAccepted(
+    cand({ requiredQuota: [q("u", rollingEv(50))], verifiedEfficiency: coveredEfficiency(0.9) })
   );
-  close(degenerate!.intelligenceFactor, 1, 1e-12, "degenerate range I=1");
+  close(
+    blended!.quotaQuality,
+    EFFICIENCY_HEADROOM_WEIGHT * NEUTRAL_HEADROOM + EFFICIENCY_EVIDENCE_WEIGHT * 0.9,
+    1e-12,
+    "blended Q"
+  );
+  assert.equal(blended!.tier, "unknown");
+});
+
+test("intelligence factor I rewards exact expected, tiers above/below, and absent ranks 0..1/3..1", () => {
+  // exact: model rank equals expected -> I=1
+  const exact = expectAccepted(
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+  );
+  close(exact!.intelligenceFactor, 1, 1e-12, "exact I=1");
+  // one tier above expected (rank 3 vs 2): d=1 -> penalty 0.1 -> I=0.9
+  const above = expectAccepted(
+    cand({ intelligenceRank: 3, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+  );
+  close(above!.intelligenceFactor, 0.9, 1e-12, "one above I=0.9");
+  // one tier below expected (rank 1 vs 2): d=-1 -> penalty 0.25 -> I=0.75
+  const below = expectAccepted(
+    cand({ intelligenceRank: 1, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 2 })
+  );
+  close(below!.intelligenceFactor, 0.75, 1e-12, "one below I=0.75");
+  // absent expected rank: I = rank/3
+  for (const [rank, expectedI] of [
+    [0, 0],
+    [1, 1 / 3],
+    [2, 2 / 3],
+    [3, 1],
+  ] as const) {
+    const a = expectAccepted(
+      cand({ intelligenceRank: rank, intelligenceMinRank: 0, intelligenceMaxRank: 3 })
+    );
+    close(a!.intelligenceFactor, expectedI, 1e-12, `absent I rank ${rank}`);
+  }
+});
+
+test("intelligenceExpectedRank outside [min,max] or non-integer is rejected", () => {
+  expectRejected(
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 5 }),
+    "invalid_intelligence"
+  );
+  expectRejected(
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: -1 }),
+    "invalid_intelligence"
+  );
+  expectRejected(
+    cand({ intelligenceRank: 2, intelligenceMinRank: 0, intelligenceMaxRank: 3, intelligenceExpectedRank: 1.5 }),
+    "invalid_intelligence"
+  );
+});
+
+test("minimum TPS gate rejects regardless of other strengths", () => {
+  // Strong price, quota, and intelligence cannot outweigh a speed deficit.
+  expectRejected(
+    cand({ minimumTps: 100, effectiveTps: 50, referenceUsdPerM: 0, referenceKind: "verified_free" }),
+    "speed_below_minimum"
+  );
+  const accepted = expectAccepted(
+    cand({ minimumTps: 5, effectiveTps: 5, referenceUsdPerM: 0, referenceKind: "verified_free" })
+  );
+  close(accepted!.speedFactor, clamp01(5 / 200), 1e-12, "min met S");
 });
 
 // ---------------------------------------------------------------------------
@@ -709,7 +825,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
   assert.equal(withMargin!.coverageComplete, true);
   close(withMargin!.headroom, 0.7, 1e-9, "H untouched by discount");
   close(withMargin!.quotaQuality, 0.7, 1e-9, "Q untouched");
-  close(withMargin!.priceFactor, expPriceFactor(4, 20), 1e-12, "P on marginal");
+  close(withMargin!.priceFactor, interpPrice(4), 1e-12, "P on marginal");
   assert.ok(withMargin!.notes.includes("marginal_price_applied"));
 
   const noMargin = expectAccepted(
@@ -727,7 +843,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
   close(withMargin!.headroom, noMargin!.headroom, 1e-12, "H equal");
 });
 
-test("a marginal discount only feeds the unified score; it never re-tiers or fabricates an advantage", () => {
+test("a marginal discount only feeds the normalized score; Q advantage can outweigh a small P premium", () => {
   const baseline = cand({
     canonicalId: "cheap-2",
     referenceUsdPerM: 2,
@@ -747,11 +863,10 @@ test("a marginal discount only feeds the unified score; it never re-tiers or fab
   close(d!.headroom, 0.7, 1e-9, "H unchanged by discount");
 
   const result = rankAutoRoutingCandidates([baseline, discounted]);
-  // Same 25 TPS on both: routing USD2.90 vs USD2.00 leaves a USD0.90/M premium
-  // (weighted 0.585) that the Q headroom gain of 0.45 (weighted 0.135) cannot
-  // offset, so the cheaper baseline still ranks first in the single
-  // descending-score pass.
-  assert.deepEqual(rankedIds(result), ["cheap-2", "marg-3"]);
+  // Baseline P(2)=0.6, Q=0.25; discounted P(2.9)=0.54375, Q=0.70. The Q
+  // advantage (0.70 vs 0.25, weighted 0.2 => +0.09) outweighs the P premium
+  // (weighted 0.5 => -0.028), so the discounted candidate ranks first.
+  assert.deepEqual(rankedIds(result), ["marg-3", "cheap-2"]);
 });
 
 test("invalid or stale marginal evidence falls back to reference", () => {
@@ -909,7 +1024,7 @@ test("valid efficiency changes Q only; H/tier/diagnostics unchanged", () => {
   assert.ok(blended!.notes.includes("quota_burn_efficiency_evidence_applied"));
 });
 
-test("verified efficiency lifts Q only; it cannot overcome a large economic gap alone", () => {
+test("verified efficiency lifts Q only; its score contribution can outweigh an economic gap", () => {
   const baseline = cand({
     canonicalId: "cheap-eff",
     referenceUsdPerM: 2,
@@ -925,10 +1040,11 @@ test("verified efficiency lifts Q only; it cannot overcome a large economic gap 
   });
   const h = expectAccepted(highEff);
   close(h!.quotaQuality, 0.85 * 0.7 + 0.15 * 0.9, 1e-12, "boosted Q");
-  // Boosted Q still leaves a USD2/M price gap worth 1.3 in the score, so the
-  // cheaper candidate leads on the unified score.
+  // The Q boost (0.73 vs 0.25, weighted 0.2 => +0.096) outweighs the P gap
+  // (P(4)=0.475 vs P(2)=0.6, weighted 0.5 => -0.0625), so the higher-efficiency
+  // candidate leads on the normalized score.
   const result = rankAutoRoutingCandidates([baseline, highEff]);
-  assert.deepEqual(rankedIds(result), ["cheap-eff", "eff-strong"]);
+  assert.deepEqual(rankedIds(result), ["eff-strong", "cheap-eff"]);
 });
 
 test("invalid or stale efficiency evidence is ignored; bare numbers never apply", () => {
@@ -973,154 +1089,121 @@ test("invalid or stale efficiency evidence is ignored; bare numbers never apply"
 });
 
 // ---------------------------------------------------------------------------
-// Same-tier ranking is one deterministic descending unified score:
-// (P + S) * (0.01 * raw effectiveTps - routingPriceUsdPerM) + Q * quotaQuality
-// + I * intelligenceFactor. +1 TPS is worth USD0.01/M and +100 TPS USD1/M; raw
-// speed above expectedTps still counts; the score may be negative and is never
-// a price/bill. There is no cheapest-set prefilter and no
-// HEADROOM_CHALLENGE_MIN_GAP admission gate anymore.
+// Approved normalized ranking: single global deterministic score order
 // ---------------------------------------------------------------------------
 
-test("same-price candidates contend by quota quality, intelligence, and raw speed", () => {
-  const a = cand({
-    canonicalId: "cont-a",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
-    minimumTps: 10,
-    expectedTps: 20,
-    effectiveTps: 15, // slower raw speed term and I 0.5 below
-    intelligenceRank: 3, // I 0.5
-  });
-  const b = cand({
-    canonicalId: "cont-b",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 10,
+test("global ranking is one deterministic descending score order", () => {
+  const c1 = cand({ canonicalId: "c1", referenceUsdPerM: 6, requiredQuota: [q("q", hQ(0.5))] });
+  const c2 = cand({ canonicalId: "c2", referenceUsdPerM: 1, requiredQuota: [q("q", hQ(0.8))] });
+  const c3 = cand({ canonicalId: "c3", referenceUsdPerM: 30, requiredQuota: [q("q", hQ(0.95))] });
+  // c1: P(6)=0.35, Q0.5  -> 0.175 + 0.025 + 0.1 + 0.1 = 0.40
+  // c2: P(1)=0.75, Q0.8  -> 0.375 + 0.025 + 0.16 + 0.1 = 0.66
+  // c3: P(30)=0.05, Q0.95 -> 0.025 + 0.025 + 0.19 + 0.1 = 0.34
+  const forward = rankAutoRoutingCandidates([c1, c2, c3]);
+  const reversed = rankAutoRoutingCandidates([c3, c2, c1]);
+  assert.deepEqual(rankedIds(forward), ["c2", "c1", "c3"]);
+  assert.deepEqual(rankedIds(reversed), ["c2", "c1", "c3"]);
+});
+
+test("DS prices 1.2 vs 0.6 produce a score delta of 0.055 with other inputs equal", () => {
+  const a = cand({ canonicalId: "ds-1.2", referenceUsdPerM: 1.2 });
+  const b = cand({ canonicalId: "ds-0.6", referenceUsdPerM: 0.6 });
+  const [ea, eb] = [a, b].map((x) => expectAccepted(x)!);
+  // P(1.2)=0.72, P(0.6)=0.83 -> delta P 0.11, weighted by P=0.5 -> 0.055
+  close(ea.priceFactor, interpPrice(1.2), 1e-12, "P(1.2)");
+  close(eb.priceFactor, interpPrice(0.6), 1e-12, "P(0.6)");
+  close(eb.score - ea.score, 0.055, 1e-9, "delta 0.055");
+});
+
+test("quota tiers can cross by score while blocked remains rejected", () => {
+  // A healthy candidate with a low score can rank below an unknown candidate
+  // with a higher score: tier is no longer an outer sort key.
+  const healthyLow = cand({
+    canonicalId: "healthy-low",
+    referenceUsdPerM: 30, // P(30)=0.05
     requiredQuota: [q("q", hQ(0.9))], // Q 0.90
   });
-  const c = cand({
-    canonicalId: "cont-c",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
+  const unknownHigh = cand({
+    canonicalId: "unknown-high",
+    referenceUsdPerM: 0.5, // P(0.5)=0.85
+    requiredQuota: [q("u", rollingEv(50))], // Q = neutral 0.5
   });
-  const [ra, rb, rc] = [a, b, c].map((x) => expectAccepted(x)!);
-  close(ra.score, expScore(a, ra), 1e-12, "a score");
-  close(rb.score, expScore(b, rb), 1e-12, "b score");
-  close(rc.score, expScore(c, rc), 1e-12, "c score");
-  // Same price and same routing: higher Q lifts b over c; c beats a because a
-  // is slower (15 vs 25 TPS) and carries I 0.5 instead of 1.
-  assert.ok(rb.score > rc.score && rc.score > ra.score);
-
-  const result = rankAutoRoutingCandidates([c, a, b]);
-  assert.deepEqual(rankedIds(result), ["cont-b", "cont-c", "cont-a"]);
+  const blocked = cand({
+    canonicalId: "blocked-x",
+    requiredQuota: [q("z", rollingEv(0))],
+  });
+  const result = rankAutoRoutingCandidates([healthyLow, unknownHigh, blocked]);
+  // unknown-high (P 0.85, Q 0.5 => 0.65) beats healthy-low (P 0.05, Q 0.9 => 0.33)
+  assert.deepEqual(rankedIds(result), ["unknown-high", "healthy-low"]);
+  assert.deepEqual(
+    result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
+    [["blocked-x", "quota_blocked"]]
+  );
 });
 
-test("+100 TPS exactly offsets +USD1/M in the score and the tie stays stable", () => {
-  const slower = cand({
-    canonicalId: "tie-100a",
-    referenceUsdPerM: 2,
-    effectiveTps: 25,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
+test("verified-free changes routing price/P only and has no priority bucket", () => {
+  // A confirmed-free candidate routes for free (P=1) but is still ranked by its
+  // overall score; a higher-scoring standard candidate outranks it, proving
+  // there is no free-supply priority bucket.
+  const free = cand({
+    canonicalId: "free-a",
+    requiredQuota: [q("rolling", rollingEv(50))], // unknown -> Q 0.5
+    confirmedFreeSupply: confirmedFreeSupply(),
   });
-  const fasterPricier = cand({
-    canonicalId: "tie-100b",
-    referenceUsdPerM: 3, // + USD1/M
-    effectiveTps: 125, // +100 TPS
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
+  const standard = cand({
+    canonicalId: "std-a",
+    referenceUsdPerM: 0, // verified_free reference also P=1
+    referenceKind: "verified_free",
+    requiredQuota: [q("q", fullCycleEv(80, 1))], // healthy -> Q 0.8
   });
-  const sa = expectAccepted(slower)!;
-  const fb = expectAccepted(fasterPricier)!;
-  close(sa.score, expScore(slower, sa), 1e-12, "slower score");
-  close(fb.score, expScore(fasterPricier, fb), 1e-12, "faster score");
-  // 0.01 * 100 = USD1/M: the economic terms cancel exactly.
-  assert.equal(sa.score, fb.score);
-  const forward = rankAutoRoutingCandidates([fasterPricier, slower]);
-  const reversed = rankAutoRoutingCandidates([slower, fasterPricier]);
-  assert.deepEqual(rankedIds(forward), ["tie-100a", "tie-100b"]);
-  assert.deepEqual(rankedIds(reversed), ["tie-100a", "tie-100b"]);
+  const [f, s] = [free, standard].map((x) => expectAccepted(x)!);
+  assert.equal(f.supplyClass, "confirmed_free");
+  assert.equal(s.supplyClass, "standard");
+  assert.equal(f.routingPriceUsdPerM, 0);
+  assert.equal(f.priceFactor, 1);
+  assert.equal(s.routingPriceUsdPerM, 0);
+  assert.equal(s.priceFactor, 1);
+  assert.ok(s.score > f.score, "standard outranks free by score, not priority");
+  const result = rankAutoRoutingCandidates([free, standard]);
+  assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
 });
 
-test("faster wins when the speed value exceeds its premium (no cheapest-set veto)", () => {
-  // +40 TPS is worth USD0.40/M; the USD0.20/M premium is smaller, so the
-  // faster USD1.20 candidate outranks the slower USD1.00 one at equal Q/I.
-  // Under the old cheapest-set prefilter this faster pricier candidate could
-  // not even contend without a 0.5 headroom gap; now it simply wins on score.
-  const fast = cand({
-    canonicalId: "fast-60",
-    referenceUsdPerM: 1.2,
-    effectiveTps: 60,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
-  });
-  const slow = cand({
-    canonicalId: "slow-20",
-    referenceUsdPerM: 1,
-    effectiveTps: 20,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
-  });
-  const [fa, so] = [fast, slow].map((x) => expectAccepted(x)!);
-  assert.equal(fa.quotaQuality, so.quotaQuality, "equal Q");
-  close(0.01 * (60 - 20), 0.4, 1e-12, "speed value USD/M");
-  close(fa.score, expScore(fast, fa), 1e-12, "fast score");
-  close(so.score, expScore(slow, so), 1e-12, "slow score");
-  assert.ok(fa.score > so.score);
-  const result = rankAutoRoutingCandidates([slow, fast]);
-  assert.deepEqual(rankedIds(result), ["fast-60", "slow-20"]);
-});
+test("all factors and the score stay within [0,1]", () => {
+  // High price requires healthy quota to pass the independent safety gate.
+  const worst = expectAccepted(
+    cand({
+      canonicalId: "worst",
+      referenceUsdPerM: 1000,
+      effectiveCapUsdPerM: 2000,
+      minimumTps: 0,
+      effectiveTps: 0,
+      intelligenceRank: 0,
+      intelligenceMinRank: 0,
+      intelligenceMaxRank: 3,
+      requiredQuota: [q("u", fullCycleEv(90, 1))],
+    })
+  )!;
+  // P(1000)=0, S(0)=0, I=0; only the admitted quota contributes.
+  for (const factor of [worst.priceFactor, worst.speedFactor, worst.quotaQuality, worst.intelligenceFactor, worst.score]) {
+    assert.ok(factor >= 0 && factor <= 1, `worst factor ${factor} within [0,1]`);
+  }
+  close(worst.score, 0.2 * worst.quotaQuality, 1e-12, "worst score = 0.2*Q");
 
-test("raw effectiveTps above expectedTps keeps ranking even when both speedFactors saturate", () => {
-  // The diagnostic speedFactor clamps at 1 for both (25 and 60 TPS are >= the
-  // expected 20), so there is no second speed bonus; but the +35 TPS raw-speed
-  // advantage is worth USD0.35/M and outranks the USD0.20/M premium.
-  const satSlow = cand({
-    canonicalId: "sat-25",
-    referenceUsdPerM: 2,
-    effectiveTps: 25,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
-  });
-  const satFast = cand({
-    canonicalId: "sat-60",
-    referenceUsdPerM: 2.2,
-    effectiveTps: 60,
-    requiredQuota: [q("q", hQ(0.8))], // Q 0.80
-  });
-  const [ss, sf] = [satSlow, satFast].map((x) => expectAccepted(x)!);
-  close(ss.speedFactor, 1, 1e-12, "slow diagnostic S saturated");
-  close(sf.speedFactor, 1, 1e-12, "fast diagnostic S saturated");
-  close(ss.score, expScore(satSlow, ss), 1e-12, "slow score");
-  close(sf.score, expScore(satFast, sf), 1e-12, "fast score");
-  assert.ok(sf.score > ss.score);
-  const result = rankAutoRoutingCandidates([satSlow, satFast]);
-  assert.deepEqual(rankedIds(result), ["sat-60", "sat-25"]);
-});
-
-test("single-pass descending score replaces cheapest-set rounds and gap gates", () => {
-  const low = cand({
-    canonicalId: "low-1",
-    referenceUsdPerM: 1,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", fullCycleEv(5, 1 / 17))], // H ~0.25
-  });
-  const high = cand({
-    canonicalId: "high-1",
-    referenceUsdPerM: 1,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", hQ(0.85))], // H 0.85
-  });
-  const mid = cand({
-    canonicalId: "mid-2",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", hQ(0.8))], // H 0.80
-  });
-  // One descending score pass, independent of input order: high (H 0.85) >
-  // low (H 0.25) > mid, because the USD1/M premium costs 0.65 in the score
-  // while the Q gain of 0.55 contributes only 0.165. No cheapest-set round
-  // lets the pricier mid-H candidate jump the $1 pair.
-  const forward = rankAutoRoutingCandidates([low, mid, high]);
-  const reversed = rankAutoRoutingCandidates([mid, high, low]);
-  assert.deepEqual(rankedIds(forward), ["high-1", "low-1", "mid-2"]);
-  assert.deepEqual(rankedIds(reversed), ["high-1", "low-1", "mid-2"]);
+  // Best case: free price, max speed, healthy quota, top intelligence.
+  const best = expectAccepted(
+    cand({
+      canonicalId: "best",
+      referenceUsdPerM: 0,
+      referenceKind: "verified_free",
+      effectiveTps: 1000,
+      intelligenceRank: 3,
+      requiredQuota: [q("q", rollingEv(100))],
+    })
+  )!;
+  for (const factor of [best.priceFactor, best.speedFactor, best.quotaQuality, best.intelligenceFactor, best.score]) {
+    assert.ok(factor >= 0 && factor <= 1, `best factor ${factor} within [0,1]`);
+  }
+  close(best.score, 1, 1e-12, "best score = 1");
 });
 
 test("reference cap still rejects an arbitrarily fast candidate", () => {
@@ -1145,193 +1228,6 @@ test("missing, NaN, or infinite speed never creates a bonus and stays rejected",
     cand({ effectiveTps: undefined as unknown as number }),
     "invalid_speed"
   );
-});
-
-test("high quota headroom decides close same-tier economics through Q", () => {
-  const highQ = cand({
-    canonicalId: "hq-202",
-    referenceUsdPerM: 2.02,
-    effectiveCapUsdPerM: 20,
-    requiredQuota: [q("q", hQ(0.95))], // Q 0.95
-  });
-  const lowQ = cand({
-    canonicalId: "lq-200",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 20,
-    requiredQuota: [q("q", fullCycleEv(5, 1 / 17))], // Q ~0.25
-  });
-  const [h, l] = [highQ, lowQ].map((x) => expectAccepted(x)!);
-  close(h.score, expScore(highQ, h), 1e-12, "high-Q score");
-  close(l.score, expScore(lowQ, l), 1e-12, "low-Q score");
-  // The USD0.02/M premium costs only 0.013 in the score; the Q headroom gap of
-  // 0.70 contributes 0.21, so the near-priced higher-headroom candidate wins.
-  assert.ok(h.score > l.score);
-  const result = rankAutoRoutingCandidates([lowQ, highQ]);
-  assert.deepEqual(rankedIds(result), ["hq-202", "lq-200"]);
-});
-
-test("quota tiers are never crossed by speed", () => {
-  // A 50,000 TPS candidate in a lower tier cannot outrank a far slower
-  // candidate in a higher tier: supply class and tier order are outer buckets
-  // that hold even when the lower tier carries a much higher raw-speed term.
-  const healthySlow = cand({
-    canonicalId: "tier-healthy-slow",
-    referenceUsdPerM: 9,
-    requiredQuota: [q("q", hQ(0.9))],
-    minimumTps: 5,
-    expectedTps: 6,
-    effectiveTps: 6,
-  });
-  const unknownFast = cand({
-    canonicalId: "tier-unknown-fast",
-    referenceUsdPerM: 0.3,
-    requiredQuota: [q("u", rollingEv(50))],
-    effectiveTps: 50_000,
-  });
-  const strainedFast = cand({
-    canonicalId: "tier-strained-fast",
-    referenceUsdPerM: 0.2,
-    requiredQuota: [q("s", rollingEv(4))],
-    effectiveTps: 50_000,
-  });
-  const [hs, uf, sf] = [healthySlow, unknownFast, strainedFast].map(
-    (x) => expectAccepted(x)!
-  );
-  // The lower tiers actually carry the highest raw-speed economic terms.
-  assert.ok(sf.score > hs.score && uf.score > hs.score);
-  const result = rankAutoRoutingCandidates([
-    strainedFast,
-    healthySlow,
-    unknownFast,
-  ]);
-  assert.deepEqual(rankedIds(result), [
-    "tier-healthy-slow",
-    "tier-unknown-fast",
-    "tier-strained-fast",
-  ]);
-  assert.deepEqual(result.ranked.map((r) => r.tier), [
-    "healthy",
-    "unknown",
-    "strained",
-  ]);
-});
-
-test("negative score is a ranking utility only and never fabricates economics", () => {
-  const input = cand({
-    canonicalId: "neg-score",
-    referenceUsdPerM: 8,
-    referenceKind: "listed",
-    effectiveCapUsdPerM: 100,
-    minimumTps: 5,
-    expectedTps: 20,
-    effectiveTps: 10,
-    requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.70
-  });
-  const a = expectAccepted(input)!;
-  assert.ok(a.score < 0, "score may be negative as a pure ranking utility");
-  close(a.score, expScore(input, a), 1e-12, "negative mirror score");
-  // Nothing about the routed economics changes under a negative score: it is
-  // never treated as a bill, a discount, or a fabricated free supply.
-  const result = rankAutoRoutingCandidates([input]);
-  assert.equal(result.excluded.length, 0);
-  const ranked = result.ranked[0];
-  close(ranked.routingPriceUsdPerM, 8, 1e-12, "routing price still equals reference");
-  assert.equal(ranked.referenceUsdPerM, 8);
-  assert.equal(ranked.marginalApplied, false);
-  assert.equal(ranked.supplyClass, "standard");
-  assert.equal(ranked.confirmedFreeSupplyApplied, false);
-  assert.equal(ranked.confirmedFreeSupplyEvidence, null);
-});
-
-// ---------------------------------------------------------------------------
-// Strict tier ordering and synthetic-label same-tier counterexamples
-// ---------------------------------------------------------------------------
-
-test("strict tier order healthy > unknown > strained is preserved", () => {
-  const healthy = cand({
-    canonicalId: "tier-healthy",
-    referenceUsdPerM: 5,
-    effectiveCapUsdPerM: 20,
-    requiredQuota: [q("q", hQ(0.9))],
-  });
-  const unknown = cand({
-    canonicalId: "tier-unknown",
-    referenceUsdPerM: 0.4,
-    requiredQuota: [q("u", rollingEv(50))],
-  });
-  const strained = cand({
-    canonicalId: "tier-strained",
-    referenceUsdPerM: 0.3,
-    requiredQuota: [q("s", rollingEv(4))],
-  });
-  const result = rankAutoRoutingCandidates([strained, unknown, healthy]);
-  assert.deepEqual(rankedIds(result), ["tier-healthy", "tier-unknown", "tier-strained"]);
-  const tiers = result.ranked.map((r) => r.tier);
-  assert.deepEqual(tiers, ["healthy", "unknown", "strained"]);
-});
-
-test("synthetic labels: ds-flash-like 91 TPS at USD1.32 loses to glm-flash-like 47.4 TPS at USD0.50", () => {
-  // Synthetic-only fixture labels: NO real provider pricing/quota is claimed.
-  // Equal Q and I leave the pure economic term: the faster candidate's +43.6
-  // TPS is worth 0.01 * 43.6 = USD0.436/M, below its USD0.82/M premium
-  // (1.32 - 0.50), so the slower cheaper candidate wins the same tier.
-  const ds = cand({
-    snapshotId: "snap-1",
-    canonicalId: "ds-flash-like",
-    referenceUsdPerM: 1.32,
-    effectiveTps: 91,
-    requiredQuota: [q("q", hQ(0.8))],
-  });
-  const glm = cand({
-    snapshotId: "snap-1",
-    canonicalId: "glm-flash-like",
-    referenceUsdPerM: 0.5,
-    effectiveTps: 47.4,
-    requiredQuota: [q("q", hQ(0.8))],
-  });
-  const [a, b] = [ds, glm].map((x) => expectAccepted(x)!);
-  assert.equal(a.quotaQuality, b.quotaQuality, "equal Q");
-  assert.equal(a.intelligenceFactor, b.intelligenceFactor, "equal I");
-  close(0.01 * (91 - 47.4), 0.436, 1e-12, "speed value USD/M");
-  close(1.32 - 0.5, 0.82, 1e-12, "premium USD/M");
-  close(a.score, expScore(ds, a), 1e-12, "ds score");
-  close(b.score, expScore(glm, b), 1e-12, "glm score");
-  assert.ok(b.score > a.score);
-  const result = rankAutoRoutingCandidates([ds, glm]);
-  assert.deepEqual(rankedIds(result), ["glm-flash-like", "ds-flash-like"]);
-});
-
-test("synthetic off-peak labels: ds-flash-like 91 TPS at USD0.66 beats glm-flash-like 47.4 TPS at USD0.50", () => {
-  // Synthetic-only fixture labels: NO real provider pricing/quota is claimed.
-  // Equal Q and I leave the pure economic term: +43.6 TPS is worth
-  // USD0.436/M, which exceeds the faster candidate's USD0.16/M premium.
-  const ds = cand({
-    snapshotId: "snap-1",
-    canonicalId: "ds-flash-like-off-peak",
-    referenceUsdPerM: 0.66,
-    effectiveTps: 91,
-    requiredQuota: [q("q", hQ(0.8))],
-  });
-  const glm = cand({
-    snapshotId: "snap-1",
-    canonicalId: "glm-flash-like-off-peak",
-    referenceUsdPerM: 0.5,
-    effectiveTps: 47.4,
-    requiredQuota: [q("q", hQ(0.8))],
-  });
-  const [a, b] = [ds, glm].map((candidate) => expectAccepted(candidate)!);
-  assert.equal(a.quotaQuality, b.quotaQuality, "equal Q");
-  assert.equal(a.intelligenceFactor, b.intelligenceFactor, "equal I");
-  close(0.01 * (91 - 47.4), 0.436, 1e-12, "speed value USD/M");
-  close(0.66 - 0.5, 0.16, 1e-12, "premium USD/M");
-  close(a.score, expScore(ds, a), 1e-12, "ds off-peak score");
-  close(b.score, expScore(glm, b), 1e-12, "glm score");
-  assert.ok(a.score > b.score);
-  const result = rankAutoRoutingCandidates([glm, ds]);
-  assert.deepEqual(rankedIds(result), [
-    "ds-flash-like-off-peak",
-    "glm-flash-like-off-peak",
-  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -1530,36 +1426,6 @@ function confirmedFreeSupply() {
   };
 }
 
-test("confirmed-free supply precedes much faster standard supply", () => {
-  const freeUnknown = cand({
-    canonicalId: "free-unknown",
-    requiredQuota: [q("rolling", rollingEv(50))],
-    minimumTps: 5,
-    expectedTps: 6,
-    effectiveTps: 6,
-    confirmedFreeSupply: confirmedFreeSupply(),
-  });
-  const standardHealthy = cand({
-    canonicalId: "standard-healthy",
-    requiredQuota: [q("rolling", rollingEv(90))],
-    effectiveTps: 50_000,
-  });
-
-  const [free, standard] = [freeUnknown, standardHealthy].map(
-    (candidate) => expectAccepted(candidate)!
-  );
-  assert.ok(standard.score > free.score, "standard candidate has the higher within-tier utility");
-  const result = rankAutoRoutingCandidates([standardHealthy, freeUnknown]);
-  assert.deepEqual(rankedIds(result), ["free-unknown", "standard-healthy"]);
-  assert.equal(result.ranked[0].supplyClass, "confirmed_free");
-  assert.equal(result.ranked[0].confirmedFreeSupplyApplied, true);
-  assert.deepEqual(result.ranked[0].confirmedFreeSupplyEvidence, {
-    source: "provider-snapshot",
-    ruleId: "confirmed-free-fixture",
-  });
-  assert.equal(result.ranked[1].supplyClass, "standard");
-});
-
 test("blocked confirmed-free supply remains excluded", () => {
   const result = rankAutoRoutingCandidates([
     cand({
@@ -1624,7 +1490,6 @@ test("confirmed-free evidence never bypasses hard gates", () => {
     cand({
       canonicalId: "free-too-slow",
       minimumTps: 60,
-      expectedTps: 80,
       effectiveTps: 59,
       confirmedFreeSupply: free,
     }),

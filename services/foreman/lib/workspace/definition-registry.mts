@@ -21,7 +21,7 @@ import {
 } from '../task-timeouts.mts'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
-import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier } from '@wrenyard/catalog'
 import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
@@ -222,8 +222,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   const {
     expectedTps,
     minimumTps,
-    intelligenceMin,
-    intelligenceMax,
     maxOutputUsdPerMillion,
     requiredCapabilities,
     excludeModelIds,
@@ -236,8 +234,9 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   const hasRecognizedHardRequirement = [
     expectedTps,
     minimumTps,
-    intelligenceMin,
-    intelligenceMax,
+    raw.intelligenceMin,
+    raw.intelligenceMax,
+    raw.intelligenceExpected,
     maxOutputUsdPerMillion,
     requiredCapabilities,
     excludeModelIds,
@@ -267,21 +266,56 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     )
   }
 
-  if (intelligenceMin !== undefined) {
-    if (!isIntelligenceTier(intelligenceMin)) {
-      throw new Error(`${sourcePath} task config dispatch.intelligenceMin must be a valid IntelligenceTier (low|mid|high|frontier|premium)`)
-    }
+  // Strictly validate the intelligence tiers against the four-tier contract.
+  // The current strict normalizer rejects the retired `frontier` alias and any
+  // unknown value; it will be corrected upstream to the final contract. No
+  // legacy normalization or raw mutation is performed here, so the projected
+  // definition stays exactly as authored. Missing expected remains undefined.
+  const normalizedIntelligenceMin =
+    raw.intelligenceMin !== undefined && typeof raw.intelligenceMin === 'string'
+      ? normalizeIntelligenceTier(raw.intelligenceMin)
+      : undefined
+  if (raw.intelligenceMin !== undefined && normalizedIntelligenceMin === undefined) {
+    throw new Error(`${sourcePath} task config dispatch.intelligenceMin must be one of: low, mid, high, premium`)
   }
-  if (intelligenceMax !== undefined) {
-    if (!isIntelligenceTier(intelligenceMax)) {
-      throw new Error(`${sourcePath} task config dispatch.intelligenceMax must be a valid IntelligenceTier (low|mid|high|frontier|premium)`)
-    }
+  const normalizedIntelligenceMax =
+    raw.intelligenceMax !== undefined && typeof raw.intelligenceMax === 'string'
+      ? normalizeIntelligenceTier(raw.intelligenceMax)
+      : undefined
+  if (raw.intelligenceMax !== undefined && normalizedIntelligenceMax === undefined) {
+    throw new Error(`${sourcePath} task config dispatch.intelligenceMax must be one of: low, mid, high, premium`)
   }
-  if (isIntelligenceTier(intelligenceMin) && isIntelligenceTier(intelligenceMax)
-    && INTELLIGENCE_ORDER[intelligenceMin] > INTELLIGENCE_ORDER[intelligenceMax]) {
+  const normalizedIntelligenceExpected =
+    raw.intelligenceExpected !== undefined && typeof raw.intelligenceExpected === 'string'
+      ? normalizeIntelligenceTier(raw.intelligenceExpected)
+      : undefined
+  if (raw.intelligenceExpected !== undefined && normalizedIntelligenceExpected === undefined) {
+    throw new Error(`${sourcePath} task config dispatch.intelligenceExpected must be one of: low, mid, high, premium`)
+  }
+  if (
+    raw.intelligenceMin !== undefined &&
+    raw.intelligenceMax !== undefined &&
+    normalizedIntelligenceMin !== undefined &&
+    normalizedIntelligenceMax !== undefined &&
+    INTELLIGENCE_ORDER[normalizedIntelligenceMin as IntelligenceTier] > INTELLIGENCE_ORDER[normalizedIntelligenceMax as IntelligenceTier]
+  ) {
     throw new Error(
-      `${sourcePath} task config dispatch.intelligenceMin (${intelligenceMin}) must be <= intelligenceMax (${intelligenceMax})`,
+      `${sourcePath} task config dispatch.intelligenceMin (${String(raw.intelligenceMin)}) must be <= intelligenceMax (${String(raw.intelligenceMax)})`,
     )
+  }
+  if (normalizedIntelligenceExpected !== undefined) {
+    if (
+      normalizedIntelligenceMin !== undefined &&
+      INTELLIGENCE_ORDER[normalizedIntelligenceExpected as IntelligenceTier] < INTELLIGENCE_ORDER[normalizedIntelligenceMin as IntelligenceTier]
+    ) {
+      throw new Error(`${sourcePath} task config dispatch.intelligenceExpected cannot be below intelligenceMin`)
+    }
+    if (
+      normalizedIntelligenceMax !== undefined &&
+      INTELLIGENCE_ORDER[normalizedIntelligenceExpected as IntelligenceTier] > INTELLIGENCE_ORDER[normalizedIntelligenceMax as IntelligenceTier]
+    ) {
+      throw new Error(`${sourcePath} task config dispatch.intelligenceExpected cannot exceed intelligenceMax`)
+    }
   }
 
   if (maxOutputUsdPerMillion !== undefined) {
@@ -304,10 +338,6 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
       }
     }
   }
-}
-
-function isIntelligenceTier(value: unknown): value is IntelligenceTier {
-  return value === 'low' || value === 'mid' || value === 'high' || value === 'frontier' || value === 'premium'
 }
 
 const CATEGORY_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u

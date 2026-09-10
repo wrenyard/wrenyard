@@ -18,8 +18,9 @@ import {
 // rows keep their own truthful checked_at dates, asserted inline per model.
 const SPEED_CHECKED_AT = '2026-09-09'
 // Real, injected local sample timestamp — must appear verbatim in the snapshot,
-// never a fabricated `new Date()` value.
-const LOCAL_CHECKED_AT = '2026-09-01T08:30:00.000Z'
+// never a fabricated `new Date()` value. Derived from the current clock so the
+// sample stays within the 31-day freshness window regardless of run time.
+const LOCAL_CHECKED_AT = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
 
 // Canonical dynamic targets (provider/model:client) for the builtin catalog.
 const DSF_CB = 'codebuddy/deepseek-v4-flash:cb'
@@ -35,9 +36,9 @@ const POLICY_RUNTIMES = ['forge/fast', 'forge/general', 'forge/ultra']
 
 function localSamples(): LocalSpeedSample[] {
   return [
-    { profileId: DSF_CB, tps: 82.42, sampleCount: 12, checkedAt: LOCAL_CHECKED_AT },
-    { profileId: HY_CB, tps: 73.89, sampleCount: 9, checkedAt: LOCAL_CHECKED_AT },
-    { profileId: PRO_CB, tps: 65.32, sampleCount: 7, checkedAt: LOCAL_CHECKED_AT },
+    { provider: 'codebuddy', model: 'deepseek-v4-flash', tps: 82.42, sampleCount: 12, checkedAt: LOCAL_CHECKED_AT },
+    { provider: 'codebuddy', model: 'hy4-preview', tps: 73.89, sampleCount: 9, checkedAt: LOCAL_CHECKED_AT },
+    { provider: 'codebuddy', model: 'deepseek-v4-pro', tps: 65.32, sampleCount: 7, checkedAt: LOCAL_CHECKED_AT },
   ]
 }
 
@@ -118,7 +119,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.model, 'hy3')
     assert.equal(resolved.model_id, 'codebuddy/hy3')
     assert.equal(resolved.mode, 'native')
-    assert.equal(resolved.intelligence, 'high')
+    assert.equal(resolved.intelligence, 'low')
     // HY3 has no local sample, so the sourced catalog default is used.
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 93.8)
@@ -151,82 +152,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(withAbsent.exactAgentRuntime, HY3_CB)
   })
 
-  it('canonical machine preference is ignored in automatic selection', () => {
-    // Same 80/60 pool. A machinePreference for a different provider/model
-    // (PRO_CB) or for the same gpt-5.6-luna model over an alternate gateway
-    // client (openai/gpt-5.6-luna:cb) must not pin the pick: the cheaper
-    // eligible HY3 canonical target wins on reference output price (0.556) by
-    // stable canonical identity.
-    const baseline = resolver.resolve({
-      taskName: 'pref-ignored-baseline',
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
-    })
-    assert.equal(baseline.ok, true)
-    assert.equal(baseline.exactAgentRuntime, HY3_CB)
-
-    const differentModel = resolver.resolve({
-      taskName: 'pref-ignored-different-model',
-      machinePreference: PRO_CB,
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
-    })
-    assert.equal(differentModel.ok, true)
-    assert.equal(differentModel.exactAgentRuntime, HY3_CB)
-
-    const sameModelAlternateClient = resolver.resolve({
-      taskName: 'pref-ignored-alt-client',
-      machinePreference: LUNA_OPENAI_CB,
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
-    })
-    assert.equal(sameModelAlternateClient.ok, true)
-    assert.equal(sameModelAlternateClient.exactAgentRuntime, HY3_CB)
-    assert.equal(sameModelAlternateClient.resolved.client, 'codebuddy')
-    assert.equal(sameModelAlternateClient.resolved.provider, 'codebuddy')
-
-    // A legacy forge/<profile> machine preference is not a canonical dynamic
-    // target at all; it is likewise ignored and the default selection applies.
-    const legacyPreference = resolver.resolve({
-      taskName: 'pref-legacy-ignored',
-      machinePreference: 'forge/codex-luna',
-      requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
-    })
-    assert.equal(legacyPreference.ok, true)
-    assert.equal(legacyPreference.exactAgentRuntime, HY3_CB)
-  })
-
-  it('machine preference cannot bypass an exclusion of the same canonical target', () => {
-    // PRO_CB is explicitly excluded: even when a machinePreference names it,
-    // automatic selection must resolve a different eligible target — machine
-    // preference never reopens an excluded canonical target.
-    const resolution = resolver.resolve({
-      taskName: 'pref-exclusion',
-      machinePreference: PRO_CB,
-      requirements: { excludeProfileIds: [PRO_CB] } satisfies TaskDispatchRequirements,
-    })
-
-    assert.equal(resolution.ok, true)
-    assert.match(resolution.exactAgentRuntime, CANONICAL_TARGET_RE)
-    assert.notEqual(resolution.exactAgentRuntime, PRO_CB)
-  })
-
-  it('machine preference cannot bypass an output price cap', () => {
-    // A machinePreference for PRO_CB (output 3.96/m) cannot defeat the $2 cap,
-    // which also excludes HY_CB at 2.501; the resolver resolves the cheaper
-    // GLM Flash target.
-    const resolution = resolver.resolve({
-      taskName: 'pref-cap',
-      machinePreference: PRO_CB,
-      requirements: {
-        maxOutputUsdPerMillion: 2,
-        minimumTps: 40,
-        intelligenceMin: 'high',
-      } satisfies TaskDispatchRequirements,
-    })
-
-    assert.equal(resolution.ok, true)
-    assert.equal(resolution.resolved.model, 'glm-5.3-flash')
-    assert.notEqual(resolution.exactAgentRuntime, PRO_CB)
-  })
-
   it('the pre-existing cap deterministically chooses the native GLM Flash target without any machine preference', () => {
     // No machine preference participates: the canonical codebuddy GLM-5.3-Flash
     // target satisfies the cap/min-tps/intelligence requirements, and client
@@ -238,7 +163,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
       requirements: {
         maxOutputUsdPerMillion: 2,
         minimumTps: 40,
-        intelligenceMin: 'high',
+        intelligenceMin: 'mid',
       } satisfies TaskDispatchRequirements,
     })
 
@@ -247,7 +172,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     const resolved = resolution.resolved
     assert.equal(resolved.profile, GLMF_CB)
     assert.equal(resolved.model, 'glm-5.3-flash')
-    assert.equal(resolved.intelligence, 'high')
+    assert.equal(resolved.intelligence, 'mid')
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 73.1)
     assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
@@ -350,13 +275,13 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     // expose all survivors.
     const resolution = resolver.resolve({
       taskName: 'eligible-vs-resolve',
-      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'high' } satisfies TaskDispatchRequirements,
+      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, true)
 
     const eligible = resolver.eligible({
       taskName: 'eligible-vs-resolve',
-      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'high' } satisfies TaskDispatchRequirements,
+      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(eligible.ok, true)
 
@@ -426,8 +351,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     // truthful local speed and catalog pricing.
     const autoPrice = resolver.resolve({
       taskName: 'explicit-vs-auto-price',
-      machinePreference: PRO_CB,
-      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'high' } satisfies TaskDispatchRequirements,
+      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(autoPrice.ok, true)
     assert.notEqual(autoPrice.exactAgentRuntime, PRO_CB)
@@ -440,7 +364,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(resolved.requested_agent_runtime, PRO_CB)
     assert.equal(resolved.client, 'codebuddy')
     assert.equal(resolved.model, 'deepseek-v4-pro')
-    assert.equal(resolved.intelligence, 'high')
+    assert.equal(resolved.intelligence, 'mid')
     assert.equal(resolved.speed.source, 'local_31d')
     assert.equal(resolved.speed.effective_tps, 65.32)
     assert.equal(resolved.speed.expected_tps_met, true)
@@ -453,7 +377,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     // required image capability is satisfied.
     const auto = resolver.resolve({
       taskName: 'explicit-vs-auto-intel',
-      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'high' } satisfies TaskDispatchRequirements,
+      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(auto.ok, true)
     assert.notEqual(auto.exactAgentRuntime, K3_GK)
@@ -473,7 +397,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(resolved.model_id, 'kimi-coding/k3')
     assert.equal(resolved.mode, 'gateway')
     assert.equal(resolved.protocol, 'openai_chat')
-    assert.equal(resolved.intelligence, 'frontier')
+    assert.equal(resolved.intelligence, 'high')
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 39.7)
     assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
@@ -552,7 +476,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     const unavailable = resolver.resolveExplicit({ taskName: 'explicit-no-fallback', exactRuntime: 'codebuddy/minimax-m3:cb' })
     const auto = resolver.resolve({
       taskName: 'explicit-no-fallback',
-      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'high' } satisfies TaskDispatchRequirements,
+      requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
     })
     assert.equal(unavailable.ok, false)
     assert.equal(unavailable.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
@@ -647,23 +571,6 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
     assert.match(error.message, /no eligible dispatch plan/u)
   })
 
-  it('eligible reports intelligence_requirement when every remaining candidate fails the intelligence band', () => {
-    // LUNA (mid) and PRO (high) both sit below a frontier floor, so the first
-    // real gate they trip is the intelligence band.
-    const result = resolver.eligible({
-      taskName: 'code-intelligence-band',
-      requirements: {
-        intelligenceMin: 'frontier',
-        excludeProfileIds: excluding(LUNA_CODEX, PRO_CB),
-      } satisfies TaskDispatchRequirements,
-    })
-    assert.equal(result.ok, false)
-    const error = result.error
-    assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
-    assert.equal(error.resolutionFailureCode, 'intelligence_requirement')
-    assert.match(error.message, /no eligible dispatch plan/u)
-  })
-
   it('eligible reports speed_requirement when no candidate meets the minimum TPS', () => {
     // A floor far above every trusted speed sample and catalog default drives
     // the whole pool onto the minimum-speed gate.
@@ -740,10 +647,11 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
 
   it('lets a usable exact local sample win over the provider override', async () => {
     const overrideResolver = await createSpeedOverrideResolver(100, 10, [{
-      profileId: 'p/m:cb',
+      provider: 'p',
+      model: 'm',
       tps: 80,
       sampleCount: 2,
-      checkedAt: '2026-09-03',
+      checkedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     }])
     const result = overrideResolver.resolve({
       taskName: 'local-wins',
@@ -757,10 +665,11 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
 
   it('ignores an unusable local sample and reports the provider override gate', async () => {
     const overrideResolver = await createSpeedOverrideResolver(100, 10, [{
-      profileId: 'p/m:cb',
+      provider: 'p',
+      model: 'm',
       tps: 999,
       sampleCount: 0,
-      checkedAt: '2026-09-03',
+      checkedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     }])
     const result = overrideResolver.resolve({
       taskName: 'invalid-local-falls-back',
@@ -772,15 +681,15 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
   })
 
   it('mixed singleton eliminations resolve deterministically to the cheapest candidate gate', () => {
-    // LUNA (mid) fails the frontier floor -> intelligence_requirement at
-    // $1.2/m; K3 (frontier) clears the band but fails the $2 price gate ->
-    // price_limit at $15/m. selectTaskResolutionFailure must surface LUNA's
-    // intelligence_requirement because it is the candidate the deterministic
-    // router would have ranked first had its gate passed.
+    // LUNA (mid) fails the high floor -> intelligence_requirement at $1.2/m;
+    // K3 clears the band but fails the $2 price gate -> price_limit at $15/m.
+    // selectTaskResolutionFailure must surface LUNA's intelligence_requirement
+    // because it is the candidate the deterministic router would have ranked
+    // first had its gate passed.
     const result = resolver.eligible({
       taskName: 'code-mixed',
       requirements: {
-        intelligenceMin: 'frontier',
+        intelligenceMin: 'high',
         maxOutputUsdPerMillion: 2,
         excludeProfileIds: excluding(LUNA_CODEX, K3_GK),
       } satisfies TaskDispatchRequirements,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { query as dbQuery, run as dbRun } from '../../lib/db/connection.mts'
-import { readStatsSummary, readTodayStats } from '../../lib/events/stats-query.mts'
+import { readStatsSummary, readTodayStats, readTrustedSpeedSamples31d } from '../../lib/events/stats-query.mts'
 import type { StatsSummaryResult } from '../../lib/protocol/methods/stats.mts'
 import { parseMethodResult } from '../../lib/protocol/validate.mts'
 import { closeTestDb, initTestDb } from '../helpers/test-db.mts'
@@ -2081,6 +2081,96 @@ describe('stats-query readStatsSummary', () => {
     assert.deepEqual(result.byProfile[0].provider_display_names, ['CodeBuddy'], 'same provider name is de-duplicated')
     assert.equal(result.byProfile[0].model_display_name, 'M')
     assert.deepEqual(result.windows?.[0].byProfile[0].provider_display_names, ['CodeBuddy'])
+    closeTestDb()
+  })
+})
+
+describe('readTrustedSpeedSamples31d (exact persisted provider/model grouping)', () => {
+  const DAY = '2026-07-15'
+  const FIXED_NOW = new Date('2026-07-19T12:00:00.000Z')
+
+  function seedIdentity(executionId: string, taskRunId: string, provider: string, model: string, modelId: string, client = 'codebuddy'): void {
+    seedTask(taskRunId, 'edit', DAY, 'done')
+    seedExecution(executionId, client, taskRunId)
+    seedAttemptDispatch(executionId, taskRunId, provider, model, modelId, client)
+  }
+
+  function seedTrusted(
+    executionId: string,
+    taskRunId: string,
+    provider: string,
+    model: string,
+    modelId: string,
+    outputTokens: number,
+    durationMs: number,
+    client = 'codebuddy',
+  ): void {
+    seedIdentity(executionId, taskRunId, provider, model, modelId, client)
+    seedUsageWithDuration(DAY, 30, outputTokens, durationMs, 'agent_turn', executionId, taskRunId, 'agent_turn', 'agent_turn_v1')
+  }
+
+  it('groups trusted agent_turn_v1 samples by exact provider/model across clients with weighted TPS', () => {
+    initTestDb()
+    // Same exact provider/model observed under two different clients: they share
+    // one aggregated local-evidence group, never split by client.
+    seedTrusted('exec-a', 'task-a', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 2000, 4000, 'cb')
+    seedTrusted('exec-b', 'task-b', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 1000, 1000, 'gk')
+    const result = readTrustedSpeedSamples31d(FIXED_NOW)
+    assert.equal(result.length, 1)
+    const sample = result[0]
+    assert.equal(sample.provider, 'codebuddy')
+    assert.equal(sample.model, 'deepseek-v4-flash')
+    assert.equal(sample.sampleCount, 2)
+    // 1000 * (2000 + 1000) / (4000 + 1000) = 600
+    assert.equal(sample.tps, 600)
+    closeTestDb()
+  })
+
+  it('isolates different provider/model into separate groups', () => {
+    initTestDb()
+    seedTrusted('exec-a', 'task-a', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 2000, 4000, 'cb')
+    seedTrusted('exec-b', 'task-b', 'cursor', 'model-b', 'cursor/model-b', 800, 2000, 'cur')
+    const result = readTrustedSpeedSamples31d(FIXED_NOW)
+    assert.equal(result.length, 2)
+    const byKey = new Map(result.map((s) => [`${s.provider}/${s.model}`, s]))
+    assert.ok(byKey.has('codebuddy/deepseek-v4-flash'))
+    assert.ok(byKey.has('cursor/model-b'))
+    assert.equal(byKey.get('codebuddy/deepseek-v4-flash')!.tps, 500)
+    assert.equal(byKey.get('cursor/model-b')!.tps, 400)
+    closeTestDb()
+  })
+
+  it('drops a sample whose persisted identity is incomplete or mismatched', () => {
+    initTestDb()
+    // Valid group.
+    seedTrusted('exec-a', 'task-a', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 2000, 4000, 'cb')
+    // Mismatched model_id (model vs model_id) is never tolerated.
+    seedIdentity('exec-bad', 'task-b', 'codebuddy', 'm', 'codebuddy/DIFFERENT', 'cb')
+    seedUsageWithDuration(DAY, 30, 999, 1000, 'agent_turn', 'exec-bad', 'task-b', 'agent_turn', 'agent_turn_v1')
+    // Usage with no persisted task_run_attempt_dispatch identity is omitted.
+    seedTask('task-orphan', 'edit', DAY, 'done')
+    seedExecution('exec-orphan', 'cb', 'task-orphan')
+    seedUsageWithDuration(DAY, 30, 999, 1000, 'agent_turn', 'exec-orphan', 'task-orphan', 'agent_turn', 'agent_turn_v1')
+    const result = readTrustedSpeedSamples31d(FIXED_NOW)
+    assert.equal(result.length, 1)
+    assert.equal(result[0].provider, 'codebuddy')
+    assert.equal(result[0].model, 'deepseek-v4-flash')
+    closeTestDb()
+  })
+
+  it('excludes samples older than 31 days and samples dated after now', () => {
+    initTestDb()
+    // Within the 31-day window.
+    seedTrusted('exec-a', 'task-a', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 2000, 4000, 'cb')
+    // Outside the 31-day window (older than the trailing start).
+    seedIdentity('exec-old', 'task-old', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 'cb')
+    seedUsageWithDuration('2026-06-01', 30, 999, 1000, 'agent_turn', 'exec-old', 'task-old', 'agent_turn', 'agent_turn_v1')
+    // Dated after now: excluded even though within the calendar window.
+    const afterNow = new Date(2026, 6, 15, 6, 0, 0)
+    seedIdentity('exec-future', 'task-future', 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash', 'cb')
+    seedUsageWithDuration(DAY, 30, 999, 1000, 'agent_turn', 'exec-future', 'task-future', 'agent_turn', 'agent_turn_v1')
+    const result = readTrustedSpeedSamples31d(afterNow)
+    assert.equal(result.length, 0, 'only the single stale/after-now groups exist, both excluded')
     closeTestDb()
   })
 })

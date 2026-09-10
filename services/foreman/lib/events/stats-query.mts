@@ -932,55 +932,65 @@ function rankTaskDuration(durationByTask: Map<string, number>, limit: number): A
 }
 
 export interface TrustedSpeedSample {
-  /** Resolved profile the samples were observed under. */
-  resolvedProfile: string
+  /** Exact persisted canonical provider id the samples were observed under. */
+  provider: string
+  /** Exact persisted canonical model id. */
+  model: string
   /** Number of valid trusted `agent_turn_v1` usage samples (NOT dispatch count). */
   sampleCount: number
-  /** Average turns-per-second over the trusted usage samples. */
+  /** Weighted turns-per-second over the trusted usage samples (1000*sumTokens/sumDurationMs). */
   tps: number
   /** ISO timestamp of the latest real trusted sample; never synthesized. */
   checkedAt: string
 }
 
 /**
- * Rolling 31-day trusted `agent_turn_v1` speed samples grouped by resolved
- * profile. Only `turn_usage` events whose exact three-field contract is
- * `agent_turn_v1` (reusing `parseAgentTurnUsage`) count as samples; plain
- * `dispatch` events and legacy/unversioned usage are excluded, so `sampleCount`
- * is the count of valid usage samples rather than dispatches. `checkedAt` is the
- * latest real sample timestamp, never fabricated. Existing stats (recentRuns,
- * windows, rankings) are untouched.
+ * Rolling 31-day trusted `agent_turn_v1` speed samples grouped by the exact
+ * persisted provider/model from `task_run_attempt_dispatch`. Only `turn_usage`
+ * events whose exact three-field contract is `agent_turn_v1` (reusing
+ * `parseAgentTurnUsage`) count as samples; plain `dispatch` events and
+ * legacy/unversioned usage are excluded, so `sampleCount` is the count of valid
+ * usage samples rather than dispatches. Rows whose persisted provider/model/model_id
+ * is incomplete or mismatched (via `eligibleModelIdentity`) are excluded, and no
+ * alias or resolved_profile remap is applied — historical rows keep their exact
+ * identity. Samples dated after `now` are excluded. `checkedAt` is the latest
+ * real sample timestamp, never synthesized. Existing stats (recentRuns, windows,
+ * rankings) are untouched.
  */
 export function readTrustedSpeedSamples31d(now = new Date()): TrustedSpeedSample[] {
   const window = localDayWindow(now)
   const startIso = localDayOffsetStartIso(now, -(31 - 1))
   const endIso = window.endAt
   const rows = dbQuery<StatsEventRow>(
-    `SELECT e.type, e.data, e.created_at, ex.resolved_profile
+    `SELECT e.type, e.data, e.created_at, tra.provider AS provider, tra.model AS model, tra.model_id AS model_id
      FROM events e INDEXED BY idx_event_created_at
-     LEFT JOIN executions ex ON e.execution_id = ex.id
+     LEFT JOIN task_run_attempt_dispatch tra ON e.execution_id = tra.execution_id
      WHERE e.type = 'turn_usage'
        AND e.created_at >= ? AND e.created_at < ?`,
     startIso,
     endIso,
   )
-  const byProfile = new Map<string, { samples: number; outputTokens: number; durationMs: number; latestAt: string }>()
+  const byModel = new Map<string, { provider: string; model: string; samples: number; outputTokens: number; durationMs: number; latestAt: string }>()
   for (const row of rows) {
+    const persisted = eligibleModelIdentity(row)
+    if (!persisted) continue
     const data = parseJsonValue(row.data)
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue
     const usage = parseAgentTurnUsage(data as JsonRecord)
     if (!usage) continue
-    const profile = normalizeResolvedProfile(row.resolved_profile)
-    if (!profile) continue
-    const g = byProfile.get(profile) ?? { samples: 0, outputTokens: 0, durationMs: 0, latestAt: '' }
+    // Exclude samples dated after the query's now (future relative to the clock).
+    if (new Date(row.created_at).getTime() > now.getTime()) continue
+    const key = `${persisted.provider}/${persisted.model}`
+    const g = byModel.get(key) ?? { provider: persisted.provider, model: persisted.model, samples: 0, outputTokens: 0, durationMs: 0, latestAt: '' }
     g.samples++
     g.outputTokens += usage.outputTokens
     g.durationMs += usage.durationMs
     if (row.created_at > g.latestAt) g.latestAt = row.created_at
-    byProfile.set(profile, g)
+    byModel.set(key, g)
   }
-  return [...byProfile.entries()].map(([resolvedProfile, g]) => ({
-    resolvedProfile,
+  return [...byModel.entries()].map(([, g]) => ({
+    provider: g.provider,
+    model: g.model,
     sampleCount: g.samples,
     tps: g.durationMs > 0 ? (1000 * g.outputTokens) / g.durationMs : 0,
     checkedAt: g.latestAt,

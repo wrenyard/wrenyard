@@ -82,7 +82,7 @@ const PROFILES: ProfileFixture[] = [
     client: 'cc',
     provider: 'claude',
     model: 'claude-opus-4',
-    intelligence: 'frontier',
+    intelligence: 'premium',
     tps: 60,
     inputUsd: 5,
     outputUsd: 15,
@@ -413,12 +413,12 @@ const CODEX_QUOTA_PROFILE: ProfileFixture = {
 }
 
 const CODEX_SPARK_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'codex-spark/gpt-5.3-codex-spark:codex',
-  profile: 'codex-spark-native',
-  client: 'codex',
-  provider: 'codex-spark',
-  model: 'gpt-5.3-codex-spark',
-  intelligence: 'frontier',
+    exactAgentRuntime: 'codex-spark/gpt-5.3-codex-spark:codex',
+    profile: 'codex-spark-native',
+    client: 'codex',
+    provider: 'codex-spark',
+    model: 'gpt-5.3-codex-spark',
+    intelligence: 'high',
   tps: 90,
   inputUsd: 0.1,
   outputUsd: 1,
@@ -1469,6 +1469,16 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(decision!.selected_rank, 1)
     assert.equal(decision!.snapshot_id.length > 0, true)
     assert.ok(Array.isArray(decision!.reasons))
+    assert.equal(decision!.scoring?.version, 'normalized-v1')
+    // No target means rank/3; the selected mid model contributes 1/3.
+    assert.equal(decision!.scoring!.intelligence, 1 / 3)
+    const factors = decision!.scoring!
+    assert.ok(Math.abs(decision!.score - (0.5 * factors.price + 0.2 * factors.speed + 0.2 * factors.quota + 0.1 * factors.intelligence)) < 1e-12)
+    const targeted = await service.resolveForRun({
+      taskName: 'commit', kind: 'builtin',
+      defaults: { dispatch: { expectedTps: 80, intelligenceExpected: 'mid' } },
+    })
+    assert.equal(targeted.dispatch!.auto_routing!.scoring!.intelligence, 1)
     // No secret/domain/upstream suffix leaks through the safe decision.
     const serialized = JSON.stringify(decision)
     assert.ok(!serialized.includes('native-codebuddy-token'))
@@ -2286,7 +2296,7 @@ describe('daemon task-settings-service (no-model)', () => {
     writeConfig({
       tasks: {
         settings: {
-          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'premium' } },
+          global: { selectionMode: 'automatic', dispatch: { intelligenceMin: 'premium', intelligenceExpected: 'premium' } },
         },
       },
     })

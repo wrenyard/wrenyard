@@ -441,7 +441,7 @@ export type TaskSettingsExplicitReference =
   | { kind: 'target'; target: string };
 
 /** Automatic dispatch field enums (mirrors the task dispatch requirements). */
-export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'frontier' | 'premium';
+export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium';
 export type TaskSettingsCapability = 'text' | 'image';
 
 /** JSON-safe snake_case automatic dispatch constraints a user layer may set. */
@@ -450,6 +450,7 @@ export interface TaskSettingsAutomaticDispatch {
   minimum_tps?: number;
   intelligence_min?: TaskSettingsIntelligence;
   intelligence_max?: TaskSettingsIntelligence;
+  intelligence_expected?: TaskSettingsIntelligence;
   max_output_usd_per_million?: number;
   required_capabilities?: readonly TaskSettingsCapability[];
   exclude_model_ids?: readonly string[];
@@ -505,6 +506,7 @@ export interface TaskSettingsEffectiveAutomatic {
   minimum_tps: TaskSettingsSourcedValue<number | null>;
   intelligence_min: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
   intelligence_max: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
+  intelligence_expected?: TaskSettingsSourcedValue<TaskSettingsIntelligence | null>;
   max_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
   required_capabilities: TaskSettingsSourcedValue<TaskSettingsCapability[] | null>;
   exclude_model_ids: TaskSettingsSourcedValue<string[] | null>;

@@ -295,6 +295,50 @@ describe('normalizeTaskSettingsLayer validation', () => {
     )
   })
 
+  it('rejects the legacy frontier intelligence alias through camel and snake keys', () => {
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'frontier' } }),
+      /dispatch\.intelligenceMin must be one of: low, mid, high, premium/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligence_min: 'frontier' } }),
+      /intelligenceMin must be one of/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMax: 'frontier' } }),
+      /intelligenceMax must be one of/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceExpected: 'frontier' } }),
+      /intelligenceExpected must be one of/,
+    )
+  })
+
+  it('carries optional intelligenceExpected with per-field inheritance and rejects out-of-range', () => {
+    // absent stays absent (never defaults to a minimum)
+    const base = normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'low', intelligenceMax: 'high' } })
+    assert.equal((base.dispatch as { intelligenceExpected?: string }).intelligenceExpected, undefined)
+
+    // per-field inheritance: invocation wins over user global
+    const layered = resolveEffectiveTaskSettings({
+      userGlobal: { dispatch: { intelligenceMin: 'low', intelligenceMax: 'high', intelligenceExpected: 'low' } },
+      invocation: { dispatch: { intelligenceExpected: 'mid' } },
+    })
+    assert.equal(layered.dispatch.intelligenceExpected, 'mid')
+    assert.equal(layered.sources.dispatch?.intelligenceExpected, 'invocation')
+
+    // out-of-range below min is rejected
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'mid', intelligenceMax: 'high', intelligenceExpected: 'low' } }),
+      /intelligenceExpected cannot be below dispatch.intelligenceMin/,
+    )
+    // out-of-range above max is rejected
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { intelligenceMin: 'low', intelligenceMax: 'mid', intelligenceExpected: 'high' } }),
+      /intelligenceExpected cannot exceed dispatch.intelligenceMax/,
+    )
+  })
+
   it('accepts the persisted snake explicit_runtime alias', () => {
     const layer = normalizeTaskSettingsLayer({
       selection_mode: 'explicit',

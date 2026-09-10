@@ -43,6 +43,14 @@ export interface TaskAutoRoutingDecision {
   routing_output_usd_per_million: number
   effective_cap_usd_per_million: number
   score: number
+  /** Frozen normalized factors; absent on historical pre-normalization decisions. */
+  scoring?: {
+    version: 'normalized-v1'
+    price: number
+    speed: number
+    quota: number
+    intelligence: number
+  }
   reasons: string[]
 }
 

@@ -7,7 +7,7 @@ import type {
   SpeedEvidence,
   TaskDispatchRequirements,
 } from '@wrenyard/catalog'
-import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveConstrainedDispatch } from '@wrenyard/catalog'
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveConstrainedDispatch, resolveModelSpeed } from '@wrenyard/catalog'
 import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { parseAgentRuntime } from '../agent-runtime.mts'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
@@ -36,8 +36,7 @@ import {
  * resolved runtime task plans: an absent declaredRuntime or a legacy policy
  * string (fast/general/ultra) opens the full task-capable candidate pool and a
  * non-policy legacy `forge/<profile>` declaration no longer maps to any source
- * preset and fails closed. A machine/global `machinePreference` is ignored by
- * automatic selection: a concrete runtime/alias choice exists only in explicit mode. Every candidate
+ * preset and fails closed. Every candidate
  * passes the same hard gates, then `resolveConstrainedDispatch` collapses
  * provider/model clients (native > grok > claude/others) and ranks the models.
  * `resolveConstrainedDispatch` is the sole filter/order; this
@@ -92,10 +91,6 @@ export interface ResolveTaskDispatchInput {
   requirements: TaskDispatchRequirements
   /** Exact declared runtime classification (`'forge/fast'`) or absent for auto. */
   declaredRuntime?: string
-  /** Machine/global override preference, retained for interface compatibility.
-   *  Ignored for automatic selection; a concrete runtime/alias choice exists
-   *  only through resolveExplicit. */
-  machinePreference?: string
 }
 
 export type TaskDispatchResolution =
@@ -383,19 +378,8 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       }
     }
 
-    const local = localSpeed?.find((sample) =>
-      sample.profileId === candidate.profileId
-      && Number.isFinite(sample.tps)
-      && sample.tps > 0
-      && Number.isInteger(sample.sampleCount)
-      && sample.sampleCount > 0
-      && typeof sample.checkedAt === 'string'
-      && sample.checkedAt.trim().length > 0,
-    )
-    const speedTps = local?.tps
-      ?? provider.modelSpeedOverrides?.[modelDef.id]?.tps
-      ?? modelDef.speed.tps
-    if (requirements.minimumTps !== undefined && speedTps < requirements.minimumTps) {
+    const speed = resolveModelSpeed(provider, modelDef, localSpeed)
+    if (requirements.minimumTps !== undefined && speed.tps < requirements.minimumTps) {
       return atGate('speed_requirement')
     }
     return undefined
@@ -424,11 +408,6 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   ): TaskDispatchResolution => {
     const req = input.requirements
 
-    // machinePreference is ignored for automatic selection: a machine/global concrete runtime is never parsed
-    // into a preferred candidate. resolveConstrainedDispatch applies every hard
-    // gate, collapses provider/model clients (native > grok > claude/others),
-    // then ranks models by expected-speed group and reference output price. A
-    // concrete runtime/alias choice exists only in explicit mode.
     const localSpeed = localSpeedPreload ?? (deps.localSpeed ? deps.localSpeed() : undefined)
     const constrained = resolveConstrainedDispatch(catalog, candidatePool, req, localSpeed)
     if (!constrained.ok) {

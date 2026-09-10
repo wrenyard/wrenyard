@@ -14,7 +14,7 @@ export type CredentialResolver =
   | 'grok-oauth'
   | 'cursor';
 
-export type IntelligenceTier = 'low' | 'mid' | 'high' | 'frontier' | 'premium';
+export type IntelligenceTier = 'low' | 'mid' | 'high' | 'premium';
 
 // Genuine upstream reasoning-effort levels exposed as a product-owned field on
 // model definitions and dispatch plans. max/ultra are intentionally not part of
@@ -25,9 +25,32 @@ export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   low: 0,
   mid: 1,
   high: 2,
-  frontier: 3,
-  premium: 4,
+  premium: 3,
 };
+
+// Auditable intelligence evidence attached to a model. This is evidence data
+// only: it never changes the runtime reasoningEffort product field.
+export type IntelligenceEvidenceStatus = 'measured' | 'estimated' | 'product_provisional';
+
+export interface IntelligenceEvidence {
+  source: string;
+  checkedAt: string;
+  status: IntelligenceEvidenceStatus;
+  indexVersion?: string;
+  score?: number;
+  reasoningConfiguration?: string;
+  basis?: string;
+}
+
+const CURRENT_INTELLIGENCE_TIERS: ReadonlySet<string> = new Set(['low', 'mid', 'high', 'premium']);
+
+// Strict normalizer: accepts only the four current tiers. Any other value,
+// including unknown legacy tiers or the legacy 'frontier' alias, normalizes to
+// undefined and is never emitted.
+export function normalizeIntelligenceTier(tier: string | undefined): IntelligenceTier | undefined {
+  if (tier === undefined) return undefined;
+  return CURRENT_INTELLIGENCE_TIERS.has(tier) ? (tier as IntelligenceTier) : undefined;
+}
 
 export type ModelCapability = 'text' | 'image';
 
@@ -52,7 +75,8 @@ export interface ModelSpeedMeta {
 export interface SpeedEvidence {
   source: SpeedSource;
   tps: number;
-  profileId?: string;
+  provider?: string;
+  model?: string;
   checkedAt?: string;
   sampleCount?: number;
 }
@@ -78,6 +102,7 @@ export interface ModelDefinition {
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
   intelligence?: IntelligenceTier;
+  intelligenceEvidence?: IntelligenceEvidence;
   reasoningEffort?: ReasoningEffort;
   maxOutputTokens?: number;
   capabilities?: readonly ModelCapability[];
@@ -90,6 +115,7 @@ export interface TaskDispatchRequirements {
   minimumTps?: number;
   intelligenceMin?: IntelligenceTier;
   intelligenceMax?: IntelligenceTier;
+  intelligenceExpected?: IntelligenceTier;
   maxOutputUsdPerMillion?: number;
   requiredCapabilities?: readonly ModelCapability[];
   excludeModelIds?: readonly string[];
@@ -106,7 +132,8 @@ export interface DispatchCandidate {
 }
 
 export interface LocalSpeedSample {
-  profileId: string;
+  provider: string;
+  model: string;
   tps: number;
   sampleCount: number;
   checkedAt: string;
@@ -162,7 +189,7 @@ export interface ClientDefinition {
   taskCapable?: boolean;
 }
 
-export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
+export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel' | 'intelligenceEvidence'> & {
   provider: string;
   publicId: string;
 };
@@ -211,16 +238,63 @@ function validateSpeedMeta(speed: ModelSpeedMeta | undefined, label: string): vo
 }
 
 // A local sample is usable only when it carries a finite positive tps, a positive
-// integer sample count, and a non-empty checkedAt timestamp.
-function isUsableLocalSample(sample: LocalSpeedSample): boolean {
-  return (
-    Number.isFinite(sample.tps) &&
-    sample.tps > 0 &&
-    Number.isInteger(sample.sampleCount) &&
-    sample.sampleCount > 0 &&
-    typeof sample.checkedAt === 'string' &&
-    sample.checkedAt.trim().length > 0
-  );
+// integer sample count, a non-empty checkedAt timestamp that is valid, not in
+// the future, and within the trailing 31-day window.
+const LOCAL_SPEED_FRESH_MS = 31 * 24 * 60 * 60 * 1000
+
+function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
+  if (!Number.isFinite(sample.tps) || sample.tps <= 0) return false
+  if (!Number.isInteger(sample.sampleCount) || sample.sampleCount <= 0) return false
+  if (typeof sample.checkedAt !== 'string' || sample.checkedAt.trim().length === 0) return false
+  const then = new Date(sample.checkedAt).getTime()
+  if (!Number.isFinite(then)) return false
+  const nowMs = now.getTime()
+  if (then > nowMs) return false
+  if (then < nowMs - LOCAL_SPEED_FRESH_MS) return false
+  return true
+}
+
+/**
+ * Resolves the single authoritative speed evidence for an exact model in
+ * exact precedence order: the first usable exact-provider/model local 31-day
+ * agent_turn_v1 sample, then the canonical provider modelSpeedOverride, then the
+ * model's required default speed. Matching is by exact provider.id/modelDef.id
+ * only — no alias, client, or profile remap — and any sample missing, malformed,
+ * future, or older than 31 days is skipped. Used by resolveConstrainedDispatch
+ * and the Foreman failure diagnostics so the precedence logic is never duplicated.
+ */
+export function resolveModelSpeed(
+  provider: ProviderDefinition,
+  modelDef: ModelDefinition,
+  localSpeed?: readonly LocalSpeedSample[],
+  now: Date = new Date(),
+): SpeedEvidence {
+  const local = localSpeed?.find(
+    (sample) => sample.provider === provider.id && sample.model === modelDef.id && isFreshLocalSample(sample, now),
+  )
+  if (local) {
+    return {
+      source: 'local_31d',
+      tps: local.tps,
+      provider: local.provider,
+      model: local.model,
+      checkedAt: local.checkedAt,
+      sampleCount: local.sampleCount,
+    }
+  }
+  const override = provider.modelSpeedOverrides?.[modelDef.id]
+  if (override) {
+    return {
+      source: 'provider_override',
+      tps: override.tps,
+      checkedAt: override.checkedAt,
+    }
+  }
+  return {
+    source: 'catalog_default',
+    tps: modelDef.speed.tps,
+    checkedAt: modelDef.speed.checkedAt,
+  }
 }
 
 export class Catalog {
@@ -491,6 +565,11 @@ export function resolveConstrainedDispatch(
       if (intel === undefined) continue;
       if (requirements.intelligenceMin && INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
       if (requirements.intelligenceMax && INTELLIGENCE_ORDER[intel] > INTELLIGENCE_ORDER[requirements.intelligenceMax]) continue;
+      // High/premium tiers require measured intelligence evidence to be
+      // dispatched at that tier. A model claiming high/premium with absent,
+      // estimated, or product-provisional evidence fails closed, and this
+      // never mutates the runtime reasoningEffort product field.
+      if ((intel === 'high' || intel === 'premium') && !(modelDef.intelligenceEvidence && modelDef.intelligenceEvidence.status === 'measured')) continue;
     }
 
     // Hard constraint: max output price. Fail closed when pricing is unknown.
@@ -499,39 +578,11 @@ export function resolveConstrainedDispatch(
       if (modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) continue;
     }
 
-    // Speed evidence tiers in exact precedence order: the first usable
-    // exact-profile local 31-day agent_turn_v1 sample, then the canonical provider
-    // modelSpeedOverride, then the model default speed. A local sample is
-    // matched only by exact candidate profileId and is never reinterpreted through
-    // an alias onto another profile.
-    const local = localSpeed?.find(
-      (sample) => sample.profileId === candidate.profileId && isUsableLocalSample(sample),
-    );
-    let speed: SpeedEvidence;
-    if (local) {
-      speed = {
-        source: 'local_31d',
-        tps: local.tps,
-        profileId: local.profileId,
-        checkedAt: local.checkedAt,
-        sampleCount: local.sampleCount,
-      };
-    } else {
-      const override = provider.modelSpeedOverrides?.[modelDef.id];
-      if (override) {
-        speed = {
-          source: 'provider_override',
-          tps: override.tps,
-          checkedAt: override.checkedAt,
-        };
-      } else {
-        speed = {
-          source: 'catalog_default',
-          tps: modelDef.speed.tps,
-          checkedAt: modelDef.speed.checkedAt,
-        };
-      }
-    }
+    // Speed evidence tiers in exact precedence order via the shared resolver:
+    // the first usable exact-provider/model local 31-day agent_turn_v1 sample,
+    // then the canonical provider modelSpeedOverride, then the model default
+    // speed. Matching is by exact provider.id/modelDef.id — no alias or client remap.
+    const speed = resolveModelSpeed(provider, modelDef, localSpeed);
 
     // Hard constraint: minimum TPS against the resolved evidence tier.
     if (requirements.minimumTps !== undefined && speed.tps < requirements.minimumTps) continue;
@@ -714,7 +765,6 @@ export {
   FULL_CYCLE_MIN_REMAINING,
   FULL_CYCLE_RESET_PACE,
   FULL_CYCLE_RESET_WEIGHT,
-  HEADROOM_CHALLENGE_MIN_GAP,
   HEALTHY_ROLLING_REMAINING,
   NEUTRAL_HEADROOM,
   REFERENCE_PRICE_GATE_USD_PER_M,

@@ -1,4 +1,4 @@
-import { GENERAL_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
+import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import {
   AcceptanceCriterionSchema,
@@ -111,7 +111,7 @@ const definition = {
   config: {
     description:
       'Code quality reviewer - inspects current changes, reports only blocking must-fix issues, and emits file-targeted repair changes when needed. Read-only; never edits.',
-    dispatch: GENERAL_DISPATCH_REQUIREMENTS,
+    dispatch: REVIEW_DISPATCH_REQUIREMENTS,
     permission: 'readonly',
     instructions: [shellUsage],
     input: CodeReviewInputSchema,

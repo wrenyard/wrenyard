@@ -645,7 +645,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         family: 'claude',
         claudeTier: 'sonnet',
         supports1MContext: true,
-        intelligence: 'frontier',
+        intelligence: 'high',
         maxOutputTokens: 8192,
         capabilities: ['text', 'image'],
         reasoningEffort: 'high',
@@ -1414,6 +1414,7 @@ describe('lib/protocol JSON-RPC contract', () => {
             minimum_tps: { value: 10, source: 'builtin' },
             intelligence_min: { value: null, source: 'system' },
             intelligence_max: { value: null, source: 'system' },
+            intelligence_expected: { value: null, source: 'system' },
             max_output_usd_per_million: { value: null, source: 'system' },
             required_capabilities: { value: null, source: 'system' },
             exclude_model_ids: { value: null, source: 'system' },
@@ -1689,6 +1690,127 @@ describe('lib/protocol JSON-RPC contract', () => {
         },
       )
     }
+  })
+
+  it('rejects the legacy frontier alias on every path including settings input', () => {
+    // Current definition/gateway output is strictly four-tier and rejects the
+    // legacy `frontier` alias.
+    const dispatchSummary = {
+      name: 'dispatch-task',
+      source: 'workspace',
+      displayName: '调度任务',
+      dispatch: {
+        expectedTps: 20,
+        minimumTps: 10,
+        intelligenceMin: 'high',
+        intelligenceMax: 'premium',
+        maxOutputUsdPerMillion: 5,
+        requiredCapabilities: ['text'],
+        excludeModelIds: ['model-old'],
+        excludeProfileIds: ['profile-old'],
+        excludeClientIds: ['client-old'],
+        excludeProviderIds: ['provider-old'],
+      },
+    }
+    const frontierSummary = { ...dispatchSummary, dispatch: { ...dispatchSummary.dispatch, intelligenceMax: 'frontier' } }
+    const frontierDetail = {
+      ...dispatchSummary,
+      path: '/tmp/dispatch.task.ts',
+      permission: 'readonly',
+      dispatch: { ...dispatchSummary.dispatch, intelligenceMin: 'frontier' },
+    }
+    // A frontier intel value is rejected on the four-tier output contract.
+    assert.throws(
+      () => parseMethodResult('task.definition.list', [frontierSummary]),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+    assert.throws(
+      () => parseMethodResult('task.definition.describe', frontierDetail),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // The snapshot/effective settings output (also four-tier) rejects frontier.
+    const snapshotWithFrontier = {
+      config_path: '/tmp/wrenyard/config.json',
+      revision: 'rev-1',
+      user_global: {},
+      aliases: [],
+      rows: [{
+        identity: 'builtin:commit',
+        name: 'commit',
+        display_name: 'Commit',
+        builtin: {
+          identity: 'builtin:commit',
+          name: 'commit',
+          source: 'workspace',
+          prompt_template: 'dynamic',
+          instruction_template: [],
+          timeout_ms: 900000,
+          dispatch: {},
+        },
+        user_task: {},
+        effective: {
+          mode: { value: 'automatic', source: 'system' },
+          explicit_runtime: { value: null, source: 'system' },
+          timeout_ms: { value: 900000, source: 'system' },
+          max_auto_output_usd_per_million: { value: null, source: 'system' },
+          automatic: {
+            expected_tps: { value: null, source: 'system' },
+            minimum_tps: { value: null, source: 'system' },
+            intelligence_min: { value: null, source: 'system' },
+            intelligence_max: { value: 'frontier', source: 'system' },
+            intelligence_expected: { value: null, source: 'system' },
+            max_output_usd_per_million: { value: null, source: 'system' },
+            required_capabilities: { value: null, source: 'system' },
+            exclude_model_ids: { value: null, source: 'system' },
+            exclude_profile_ids: { value: null, source: 'system' },
+            exclude_client_ids: { value: null, source: 'system' },
+            exclude_provider_ids: { value: null, source: 'system' },
+          },
+        },
+        issues: [],
+      }],
+    }
+    assert.throws(
+      () => parseMethodResult('task.settings.snapshot', snapshotWithFrontier),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // The legacy `frontier` alias is rejected on the settings save patch input.
+    assert.throws(
+      () => parseMethodParams('task.settings.save', {
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: 'rev-1',
+        patch: { automatic: { intelligence_max: 'frontier' } },
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+
+    // The legacy `frontier` alias is rejected on task.run.create invocation_settings input.
+    assert.throws(
+      () => parseMethodParams('task.run.create', {
+        task_id: 'commit',
+        project: 'foreman',
+        invocation_settings: { mode: 'automatic', automatic: { intelligence_min: 'frontier' } },
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
   })
 
   it('validates runtime.alias snapshot/put/remove params and result shapes', () => {

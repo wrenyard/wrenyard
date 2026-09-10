@@ -18,7 +18,7 @@ export interface GatewayConnectionResult {
     family?: 'claude'
     claudeTier?: 'haiku' | 'sonnet' | 'opus'
     supports1MContext?: boolean
-    intelligence?: 'low' | 'mid' | 'high' | 'frontier' | 'premium'
+    intelligence?: 'low' | 'mid' | 'high' | 'premium'
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
@@ -61,7 +61,7 @@ export const gatewayConnectionResultSchema = {
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
           taskOnly: { type: 'boolean' }, family: { const: 'claude' },
           claudeTier: { enum: ['haiku', 'sonnet', 'opus'] }, supports1MContext: { type: 'boolean' },
-          intelligence: { enum: ['low', 'mid', 'high', 'frontier', 'premium'] },
+          intelligence: { enum: ['low', 'mid', 'high', 'premium'] },
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
           reasoningEffort: { enum: ['low', 'medium', 'high', 'xhigh'] },
