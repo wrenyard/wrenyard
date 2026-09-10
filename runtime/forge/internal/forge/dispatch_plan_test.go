@@ -331,6 +331,14 @@ func writeCodeBuddyAuthFile(t *testing.T, authPath, domain, uid, accessToken str
 func writeCodeBuddyAuthFixture(t *testing.T, domain, uid, accessToken string) string {
 	t.Helper()
 	home := t.TempDir()
+	// Point HOME, USERPROFILE, and LOCALAPPDATA at the temporary home before
+	// resolving or writing the auth fixture, so the path computed here is the
+	// same one the resolver reads on every platform (including Windows, where
+	// the resolver derives its location from LOCALAPPDATA).
+	localAppData := filepath.Join(home, "AppData", "Local")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", localAppData)
 	authPath := codeBuddyAuthFixturePath(home)
 	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -355,9 +363,6 @@ func writeCodeBuddyAuthFixture(t *testing.T, domain, uid, accessToken string) st
 	if err := os.WriteFile(productPath, productRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("ACC_PRODUCT_CONFIG_PATH", productPath)
 	return authPath
 }
