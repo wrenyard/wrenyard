@@ -320,8 +320,20 @@ function createIsolation(baseDir) {
   for (const dir of [home, stateHome, configHome, dataHome, appData, localAppData]) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // Only OS launch variables are inherited; host provider secrets/config
+  // overrides (e.g. CODEX_HOME, CLAUDE_CONFIG_DIR, ACC_PRODUCT_CONFIG_PATH,
+  // NODE_OPTIONS, provider keys) are intentionally dropped so the fake HOME
+  // and isolated config/state/data actually take effect.
+  const names = new Set([
+    'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE',
+    'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'DISPLAY',
+    'WAYLAND_DISPLAY', 'XAUTHORITY', 'CI', 'TERM',
+  ]);
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => names.has(name.toUpperCase())),
+  );
   const env = {
-    ...process.env,
+    ...inherited,
     HOME: home,
     USERPROFILE: home,
     APPDATA: appData,
@@ -333,8 +345,6 @@ function createIsolation(baseDir) {
     WRENYARD_STATE_HOME: stateHome,
     FOREMAN_DB_PATH: path.join(stateHome, 'wrenyard.db'),
   };
-  delete env.WRENYARD_CONFIG;
-  delete env.ELECTRON_RUN_AS_NODE;
   return { home, stateHome, configHome, dataHome, appData, localAppData, env };
 }
 
