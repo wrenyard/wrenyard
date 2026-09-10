@@ -45,9 +45,6 @@ export const PRICE_FACTOR_ANCHORS: ReadonlyArray<readonly [number, number]> = [
 /** Neutral headroom used whenever evidence is genuinely unknown. */
 export const NEUTRAL_HEADROOM = 0.5;
 
-/** Reference prices at or above this threshold reject while the tier is unknown or coverage is incomplete. */
-export const REFERENCE_PRICE_GATE_USD_PER_M = 10;
-
 /** Full-cycle replenishment assessment constants. */
 export const FULL_CYCLE_MIN_REMAINING = 0.05;
 export const FULL_CYCLE_RESET_PACE = 0.8;
@@ -87,10 +84,33 @@ export interface QuotaEvidence {
   windowMs?: number;
 }
 
-/** One required quota constraint; null evidence means the constraint is uncovered. */
+/**
+ * One required quota constraint; null evidence means the constraint is
+ * uncovered. A constraint is either a windowed quota constraint (percent +
+ * replenishment evidence) or a discriminated monetary balance constraint.
+ *
+ * Balance evidence comes from the existing Forge balances source (raw
+ * `{ currency, amount }` decimal string). A fresh, valid amount strictly
+ * greater than zero means not exhausted with neutral quota quality (it never
+ * boosts subscription pace); exactly zero blocks; malformed/negative/stale/
+ * missing amounts are unknown and never fabricated as zero.
+ */
 export interface RequiredQuotaConstraint {
   id: string;
   evidence: QuotaEvidence | null;
+  /** Present when this constraint is a mandatory monetary balance resource. */
+  balance?: BalanceEvidence | null;
+  kind?: "quota" | "balance";
+}
+
+/** Discriminated monetary balance evidence for one required balance resource. */
+export interface BalanceEvidence {
+  /** Raw decimal amount string from Forge balances (authoritative). */
+  amount: string;
+  /** Timestamp (epoch ms) the observation was taken. */
+  observedAtMs: number;
+  /** How long after observedAtMs the observation is considered fresh. */
+  validForMs: number;
 }
 
 /** Canonical conservative marker required on every routed evidence object. */
@@ -203,7 +223,8 @@ export type ConstraintRejectCode =
   | "invalid_replenishment_kind"
   | "invalid_reset_time"
   | "invalid_cycle_duration"
-  | "reset_horizon_beyond_duration";
+  | "reset_horizon_beyond_duration"
+  | "invalid_balance_amount";
 
 export interface ConstraintAssessment {
   id: string;
@@ -238,7 +259,6 @@ export type ExcludedReason =
   | "invalid_intelligence"
   | "intelligence_out_of_range"
   | "quota_blocked"
-  | "reference_price_gate"
   | "marginal_above_reference"
   | "snapshot_context_mismatch";
 
@@ -382,6 +402,51 @@ function compareLex(a: string, b: string): number {
 // Quota assessment
 // ---------------------------------------------------------------------------
 
+/**
+ * Assesses one mandatory monetary balance resource by the same constraint
+ * path as quota windows. A fresh, valid amount strictly greater than zero
+ * means not exhausted with neutral quota quality (headroom null -> NEUTRAL
+ * HEADROOM; it never boosts subscription pace). Exactly zero blocks. Malformed,
+ * negative, non-finite, stale, future or missing amounts are unknown
+ * (uncovered): they are never fabricated as zero and never block.
+ */
+function assessBalanceConstraint(
+  nowMs: number,
+  id: string,
+  balance: BalanceEvidence | null | undefined
+): ConstraintAssessment {
+  if (balance === null || balance === undefined || typeof balance !== "object") {
+    return { id, state: "missing", headroom: null, rejectCode: null };
+  }
+  if (!isFiniteNumber(nowMs)) {
+    return { id, state: "rejected", headroom: null, rejectCode: "invalid_now" };
+  }
+  const observedAtMs = balance.observedAtMs;
+  if (!isFiniteNumber(observedAtMs)) {
+    return { id, state: "rejected", headroom: null, rejectCode: "observation_time_not_finite" };
+  }
+  if (observedAtMs > nowMs) {
+    return { id, state: "rejected", headroom: null, rejectCode: "future_observation" };
+  }
+  const validForMs = balance.validForMs;
+  if (!isFiniteNumber(validForMs) || validForMs <= 0) {
+    return { id, state: "rejected", headroom: null, rejectCode: "invalid_freshness_window" };
+  }
+  if (nowMs - observedAtMs > validForMs) {
+    return { id, state: "rejected", headroom: null, rejectCode: "stale_observation" };
+  }
+  // Validate decimal syntax and test exact zero without floating-point loss.
+  const amount = balance.amount;
+  if (typeof amount !== "string" || !/^\d+(?:\.\d+)?$/.test(amount)) {
+    return { id, state: "rejected", headroom: null, rejectCode: "invalid_balance_amount" };
+  }
+  if (!/[1-9]/.test(amount)) {
+    return { id, state: "blocked", headroom: 0, rejectCode: null };
+  }
+  // amount > 0: available, neutral quality, never a subscription-pace boost.
+  return { id, state: "healthy", headroom: null, rejectCode: null };
+}
+
 function assessConstraint(
   nowMs: number,
   constraint: RequiredQuotaConstraint
@@ -390,6 +455,10 @@ function assessConstraint(
     return { id: "", state: "missing", headroom: null, rejectCode: null };
   }
   const id = typeof constraint.id === "string" ? constraint.id : "";
+  const balance = constraint.balance;
+  if (constraint.kind === "balance" || balance != null) {
+    return assessBalanceConstraint(nowMs, id, balance);
+  }
   const evidence = constraint.evidence;
   if (evidence === null || evidence === undefined || typeof evidence !== "object") {
     return { id, state: "missing", headroom: null, rejectCode: null };
@@ -506,6 +575,9 @@ export function assessRequiredQuota(
   let hasStrained = false;
   let hasUnknown = false;
   let hasMissingOrRejected = false;
+  /** True when a healthy mandatory balance is the only healthy constraint:
+   *  balances are neutral quality and must never be read as full quota. */
+  let hasNeutralBalance = false;
   const blockedConstraintIds: string[] = [];
   const headroomPool: number[] = [];
 
@@ -523,6 +595,7 @@ export function assessRequiredQuota(
         break;
       case "healthy":
         if (assessment.headroom !== null) headroomPool.push(assessment.headroom);
+        else hasNeutralBalance = true;
         break;
       case "unknown":
         hasUnknown = true;
@@ -559,7 +632,8 @@ export function assessRequiredQuota(
   } else if (state === "unknown") {
     headroom = NEUTRAL_HEADROOM;
   } else if (headroomPool.length === 0) {
-    headroom = state === "healthy" ? 1 : NEUTRAL_HEADROOM;
+    // A healthy mandatory balance is neutral quality: no full-quota boost.
+    headroom = state === "healthy" && !hasNeutralBalance ? 1 : NEUTRAL_HEADROOM;
   } else {
     headroom = minOf(headroomPool);
   }
@@ -586,6 +660,24 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
           return { id: "", evidence: null };
         }
         const id = typeof constraint.id === "string" ? constraint.id : "";
+        // A discriminated balance constraint carries balance evidence instead
+        // of percent/replenishment quota evidence; copy it defensively.
+        if (constraint.kind === "balance") {
+          const balance = constraint.balance;
+          if (balance === null || balance === undefined || typeof balance !== "object") {
+            return { id, evidence: null, kind: "balance", balance: null };
+          }
+          return {
+            id,
+            evidence: null,
+            kind: "balance",
+            balance: {
+              amount: balance.amount,
+              observedAtMs: balance.observedAtMs,
+              validForMs: balance.validForMs,
+            },
+          };
+        }
         const evidence = constraint.evidence;
         if (evidence === null || evidence === undefined || typeof evidence !== "object") {
           return { id, evidence: null };
@@ -792,20 +884,6 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     );
   }
   const tier: QuotaTier = quota.state;
-
-  // Reference price is the hard guard: >= 10 rejects whenever the tier is
-  // unknown OR trustworthy required coverage is incomplete (incl. incomplete-strained).
-  if (
-    candidate.referenceUsdPerM >= REFERENCE_PRICE_GATE_USD_PER_M &&
-    (tier === "unknown" || !quota.coverageComplete)
-  ) {
-    return rejected(
-      snapshotId,
-      canonicalId,
-      "reference_price_gate",
-      `reference price >= 10 with tier=${tier}; coverageComplete=${quota.coverageComplete}`
-    );
-  }
 
   const notes: string[] = [];
 

@@ -230,7 +230,6 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(glmf.pricing?.source, 'https://docs.z.ai/guides/overview/pricing');
   assert.equal(glmf.intelligence, 'mid');
   assert.deepEqual(glmf.capabilities, ['text']);
-  assert.equal(glmf.intelligenceEvidence?.status, 'measured');
   assert.equal(glmf.intelligenceEvidence?.score, 42);
   assert.equal(glmf.intelligenceEvidence?.checkedAt, '2026-09-09');
   assert.equal(glmf.intelligenceEvidence?.source, 'https://artificialanalysis.ai/models/glm-5-3-flash/');
@@ -261,7 +260,6 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   const hy3 = codebuddy.models.find((entry) => entry.id === 'hy3')!;
   assert.equal(hy3.intelligence, 'low');
   assert.deepEqual(hy3.capabilities, ['text']);
-  assert.equal(hy3.intelligenceEvidence?.status, 'measured');
   assert.equal(hy3.intelligenceEvidence?.score, 26);
   assert.equal(hy3.intelligenceEvidence?.checkedAt, '2026-09-09');
   assert.equal(hy3.intelligenceEvidence?.source, 'https://artificialanalysis.ai/models/hy3/');
@@ -274,38 +272,32 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(hy3.pricing?.checkedAt, '2026-09-08');
 });
 
-test('built-in models carry auditable intelligence evidence per the verified table', () => {
+test('built-in models carry their configured accessibility tier with optional provenance', () => {
   const catalog = createBuiltinCatalog();
   const find = (provider: string, model: string) =>
     catalog.provider(provider)!.models.find((entry) => entry.id === model)!;
   const ev = (provider: string, model: string) => find(provider, model).intelligenceEvidence!;
   const tier = (provider: string, model: string) => find(provider, model).intelligence;
 
-  // Direct measured mappings.
+  // The configured tier is authoritative; provenance is descriptive only.
   assert.equal(tier('codebuddy', 'hy3'), 'low');
-  assert.equal(ev('codebuddy', 'hy3').status, 'measured');
   assert.equal(ev('codebuddy', 'hy3').score, 26);
   assert.equal(ev('codebuddy', 'hy3').checkedAt, '2026-09-09');
 
   assert.equal(tier('codebuddy', 'glm-5.3-flash'), 'mid');
-  assert.equal(ev('codebuddy', 'glm-5.3-flash').status, 'measured');
   assert.equal(ev('codebuddy', 'glm-5.3-flash').score, 42);
 
   assert.equal(tier('codex', 'gpt-5.6-sol'), 'high');
-  assert.equal(ev('codex', 'gpt-5.6-sol').status, 'measured');
   assert.equal(ev('codex', 'gpt-5.6-sol').score, 44);
   assert.equal(ev('codex', 'gpt-5.6-sol').reasoningConfiguration, 'xhigh');
 
   assert.equal(tier('codex', 'gpt-5.6-terra'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.6-terra').status, 'measured');
   assert.equal(ev('codex', 'gpt-5.6-terra').score, 38);
 
   assert.equal(tier('codex', 'gpt-5.6-luna'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.6-luna').status, 'measured');
   assert.equal(ev('codex', 'gpt-5.6-luna').score, 35);
 
   assert.equal(tier('cursor', 'cursor-grok-4.6-high'), 'high');
-  assert.equal(ev('cursor', 'cursor-grok-4.6-high').status, 'measured');
   assert.equal(ev('cursor', 'cursor-grok-4.6-high').score, 44);
   assert.equal(ev('cursor', 'cursor-grok-4.6-high').reasoningConfiguration, 'high');
   assert.deepEqual(find('cursor', 'cursor-grok-4.6-high').pricing, {
@@ -314,68 +306,51 @@ test('built-in models carry auditable intelligence evidence per the verified tab
   });
 
   assert.equal(tier('codex', 'gpt-6-astra'), 'premium');
-  assert.equal(ev('codex', 'gpt-6-astra').status, 'measured');
   assert.equal(ev('codex', 'gpt-6-astra').score, 53);
 
-  // Kimi K3 and k3 are exact canonical equivalents and share measured high evidence.
+  // Kimi K3 and k3 are exact canonical equivalents and share a high tier.
   assert.equal(tier('codebuddy', 'kimi-k3'), 'high');
   assert.equal(tier('kimi-coding', 'k3'), 'high');
-  assert.equal(ev('codebuddy', 'kimi-k3').status, 'measured');
-  assert.equal(ev('kimi-coding', 'k3').status, 'measured');
   assert.equal(ev('codebuddy', 'kimi-k3').score, 44);
   assert.equal(ev('kimi-coding', 'k3').score, 44);
   assert.equal(ev('codebuddy', 'kimi-k3').reasoningConfiguration, 'max');
 
-  // Product provisional: page evidence retained but status is not measured.
+  // GLM-5.3 is a confirmed high tier; provenance carries the page score.
   assert.equal(tier('codebuddy', 'glm-5.3'), 'high');
-  assert.equal(ev('codebuddy', 'glm-5.3').status, 'product_provisional');
   assert.equal(ev('codebuddy', 'glm-5.3').score, 45);
   assert.equal(tier('codebuddy', 'hy4-preview'), 'mid');
-  assert.equal(ev('codebuddy', 'hy4-preview').status, 'product_provisional');
   assert.equal(ev('codebuddy', 'hy4-preview').score, undefined);
   assert.equal(tier('codebuddy', 'deepseek-v4.1-flash'), 'mid');
-  assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').status, 'product_provisional');
   assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').score, undefined);
   assert.equal(ev('codebuddy', 'deepseek-v4.1-flash').checkedAt, '2026-09-10');
   assert.equal(tier('tokenhub', 'deepseek/deepseek-flash'), 'mid');
-  assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').status, 'product_provisional');
   assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').score, undefined);
   assert.equal(ev('tokenhub', 'deepseek/deepseek-flash').checkedAt, '2026-09-10');
   assert.equal(tier('anthropic-api', 'claude-fable-5'), 'premium');
-  assert.equal(ev('anthropic-api', 'claude-fable-5').status, 'product_provisional');
   assert.equal(ev('anthropic-api', 'claude-fable-5').score, undefined);
   assert.equal(tier('anthropic-api', 'claude-opus-5'), 'premium');
-  assert.equal(ev('anthropic-api', 'claude-opus-5').status, 'product_provisional');
   assert.equal(ev('anthropic-api', 'claude-opus-5').score, 51);
 
-  // Estimated: not verified high, status is estimated.
+  // Lower tiers carry provenance without any status classification.
   assert.equal(tier('anthropic-api', 'claude-haiku-4-5-20251001'), 'low');
-  assert.equal(ev('anthropic-api', 'claude-haiku-4-5-20251001').status, 'estimated');
   assert.equal(ev('anthropic-api', 'claude-haiku-4-5-20251001').score, 15);
   assert.equal(tier('zhipu', 'glm-4.7-flash'), 'low');
-  assert.equal(ev('zhipu', 'glm-4.7-flash').status, 'estimated');
   assert.equal(ev('zhipu', 'glm-4.7-flash').score, 15);
   assert.equal(tier('zhipu', 'glm-5-turbo'), 'low');
-  assert.equal(ev('zhipu', 'glm-5-turbo').status, 'estimated');
   assert.equal(ev('zhipu', 'glm-5-turbo').score, 27);
   assert.equal(tier('zhipu', 'glm-5.2'), 'mid');
-  assert.equal(ev('zhipu', 'glm-5.2').status, 'estimated');
   assert.equal(ev('zhipu', 'glm-5.2').score, 39);
   assert.equal(tier('codex', 'gpt-5.4'), 'mid');
-  assert.equal(ev('codex', 'gpt-5.4').status, 'estimated');
   assert.equal(ev('codex', 'gpt-5.4').score, 39);
   assert.equal(tier('moonshot', 'kimi-k2.5'), 'low');
-  assert.equal(ev('moonshot', 'kimi-k2.5').status, 'estimated');
   assert.equal(ev('moonshot', 'kimi-k2.5').score, 23);
   assert.equal(tier('moonshot', 'kimi-k2.6'), 'mid');
-  assert.equal(ev('moonshot', 'kimi-k2.6').status, 'estimated');
   assert.equal(ev('moonshot', 'kimi-k2.6').score, 31);
   assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
-  assert.equal(ev('qwen-coding', 'qwen3.6-plus').status, 'estimated');
   assert.equal(ev('qwen-coding', 'qwen3.6-plus').score, 27);
 
-  // Unknown exact routes: no tier and no evidence (never inherited from a
-  // generic sibling id).
+  // The configured tier and provenance are never fabricated or inherited by
+  // an unknown exact route (never inferred from a generic sibling id).
   for (const [provider, model] of [
     ['cursor', 'composer-2.5'],
     ['codex', 'gpt-5.3-codex-spark'],
