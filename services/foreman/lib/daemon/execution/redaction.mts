@@ -46,6 +46,11 @@ function isTokenUsageKey(normalizedKey: string): boolean {
     // token or credential; preserving it is required for the versioned TPS
     // contract. Credential-shaped keys such as access_token remain redacted.
     'tokenscope',
+    // Source timestamp (first_token_at_ms) in the TPS sample. This is a
+    // numeric timestamp describing when the first token was produced, not a
+    // credential. It must survive redaction; credential keys such as
+    // access_token / auth_token remain redacted.
+    'firsttokenatms',
   ].includes(normalizedKey)
 }
 

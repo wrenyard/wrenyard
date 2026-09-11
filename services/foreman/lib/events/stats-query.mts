@@ -783,7 +783,7 @@ function buildWindow(
     }
   }
 
-  // Attach execution-based TPS samples for this window to the same model
+  // Attach response-paired TPS samples for this window to the same model
   // display grouping used for tokens/runs, resolved through the existing
   // identity resolver. Ended-but-outside-window samples are filtered by endedAt.
   for (const sample of options.tpsSamples) {

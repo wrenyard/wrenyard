@@ -1002,7 +1002,7 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
-    // Share execution-based TPS across statistics and automatic routing.
+    // Share response-paired TPS across statistics and automatic routing.
     localSpeed: () => readLocalSpeedSamples(),
   })
 

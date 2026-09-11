@@ -176,9 +176,9 @@ describe('activity.snapshot', () => {
     assert.equal(node('no_task').runtime_ms, undefined)
   })
 
-  it('derives node TPS from the shared complete-execution calculation and ignores the misleading native duration', async () => {
+  it('derives node TPS from shared paired response samples and ignores native duration', async () => {
     const db = getDb()
-    // Wall interval 1000ms, output 500 -> 500 TPS. The native duration_ms of
+    // Paired generation interval 1000ms, output 500 -> 500 TPS. The native duration_ms of
     // 99999 would give ~5 TPS under the legacy formula; it must not be used.
     insertTask(db, { id: 'task_tps_ok', template: 'build', project: 'p1', worktree: null, input: '{}', status: 'running' })
     insertCompletedExecution(db, {
@@ -418,6 +418,8 @@ function insertCompletedExecution(db: ForemanDatabase, execution: {
       token_scope: 'agent_turn',
       duration_scope: 'agent_turn',
       tps_contract: 'agent_turn_v1',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{ response_id: execution.id + ':r1', model: 'sonnet', output_tokens: execution.outputTokens, first_token_at_ms: execution.startedMs, completed_at_ms: execution.endedMs }],
       input_tokens: 10,
       output_tokens: execution.outputTokens,
       duration_ms: execution.nativeDurationMs ?? 1,

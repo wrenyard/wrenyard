@@ -248,9 +248,9 @@ export interface TaskRunUsage {
   cacheCreationInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
-  agentTurnMs?: number;
+  generationMs?: number;
   outputTps?: number;
-  tpsContract?: 'agent_turn_v1';
+  tpsContract?: 'response_v1';
   /** Estimated reference cost in USD. Absent (`undefined`) when CORE omits the numeric; never a fabricated value. */
   referenceCostUsd?: number;
   /** True when CORE fully costed this run; partial runs omit the cost. */

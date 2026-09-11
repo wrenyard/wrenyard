@@ -108,6 +108,15 @@ function codeBuddyUpstreamWireModel(model: string): string {
   return CODEBUDDY_IOA_UPSTREAM_MODELS[model] ?? model;
 }
 
+/** Reverse only the exact known CodeBuddy iOA wire ids observed at runtime. */
+export function canonicalizeObservedProviderModelId(provider: string, model: string): string {
+  if (provider !== 'codebuddy') return model;
+  for (const [canonical, upstream] of Object.entries(CODEBUDDY_IOA_UPSTREAM_MODELS)) {
+    if (upstream === model) return canonical;
+  }
+  return model;
+}
+
 /**
  * Canonical-to-wire resolution scoped to one already-classified environment.
  * Shared by the runtime methods and the active snapshot so neither code path

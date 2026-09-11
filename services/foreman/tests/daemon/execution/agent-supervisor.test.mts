@@ -191,6 +191,27 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     assert.equal((JSON.parse(usage.data) as Record<string, unknown>).input_tokens, 14)
   })
 
+  it('preserves paired TPS samples through the real child stream and persistence path', async () => {
+    const cwd = makeTempDir('foreman-agent-supervisor-tps-')
+    const sample = { response_id: 'r1', model: 'sonnet', output_tokens: 300, first_token_at_ms: 1000, completed_at_ms: 4000 }
+    installFakeForgeLines(cwd, [
+      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
+      forgeStreamEvent(2, 'turn_usage', {
+        input_tokens: 10, output_tokens: 500, duration_ms: 99999,
+        tps_sampling_contract: 'response_v1',
+        tps_samples: [{ ...sample, private_payload: 'must-not-persist' }],
+      }),
+      forgeStreamEvent(3, 'run_finished', { status: 'done', exit_code: 0, summary: 'sampled' }),
+    ])
+    const handle = await makeSupervisor().startExecution({ profile: 'test', permission: 'readonly', cwd, prompt: 'test sampling transport' })
+    assert.equal((await handle.wait()).status, 'done')
+    const row = db.prepare<unknown[], EventRow>("SELECT type, data FROM events WHERE execution_id = ? AND type = 'turn_usage'").get(handle.executionId)
+    const data = JSON.parse(row!.data!)
+    assert.equal(data.tps_sampling_contract, 'response_v1')
+    assert.deepEqual(data.tps_samples, [sample])
+    assert.equal(data.output_tokens, 500, 'accounting totals remain independent of the sampled subset')
+  })
+
   it('persists Codex command execution items as tool call events', async () => {
     const cwd = makeTempDir('foreman-agent-supervisor-')
     installFakeForgeLines(cwd, [

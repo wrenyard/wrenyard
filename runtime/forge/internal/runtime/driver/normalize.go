@@ -24,7 +24,7 @@ const (
 
 // Versioned provenance for additive current-invocation usage. These wire tags
 // remain stable across clients. Foreman validates them for output token counts
-// and calculates TPS from its stored execution interval, ignoring duration_ms.
+// for accounting only. TPS requires separate response_v1 paired samples.
 const (
 	tokenScopeAgentTurn    = "agent_turn"
 	durationScopeAgentTurn = "agent_turn"
@@ -33,10 +33,10 @@ const (
 
 // trustedContractFields is the full additive field set the agent_turn_v1
 // contract owns. Removing every one of them is how a turn_usage fails closed
-// so untrusted usage can never feed the TPS formula.
+// so untrusted usage cannot be counted as additive accounting.
 var trustedContractFields = []string{"token_scope", "duration_scope", "tps_contract"}
 
-// applyTrustedAgentTurnContract attaches the explicit agent_turn_v1 TPS
+// applyTrustedAgentTurnContract attaches the legacy agent_turn_v1 accounting
 // contract scope fields to a turn_usage data map. It is the single shared
 // helper used identically by the Claude result, native Codex turn.completed,
 // the CodeBuddy canonical turn_usage, and the valid successful Grok canonical
@@ -142,6 +142,11 @@ type TranscriptTee struct {
 	// measured agent_turn duration to finalization.
 	grokTurnStarted time.Time
 
+	// responseTPSampler observes raw partial protocol lines before they enter
+	// client-specific normalization. It is intentionally separate from legacy
+	// full-message accounting and is enabled only for Claude-family clients.
+	responseTPSampler *responseTPSSampler
+
 	// now is the monotonic-capable clock used to measure native Codex agent
 	// turn intervals. It is injectable so tests can drive deterministic time.
 	now func() time.Time
@@ -170,7 +175,7 @@ type TranscriptTee struct {
 	// invocation immediately before process launch. CodeBuddy's native
 	// terminal duration_ms resets across compaction while the summed
 	// current-invocation assistant usage spans the whole invocation, so the
-	// denominator used for TPS must be this measured wall interval, which is
+	// accounting duration metadata uses this measured wall interval, which is
 	// never reset by compaction or a native duration reset.
 	codebuddyTurnStarted time.Time
 	// codebuddyTerminalOK holds the last observed terminal result's success so
@@ -366,6 +371,13 @@ func (t *TranscriptTee) FinalizeGrokStream() GrokStreamValidity {
 }
 
 func (t *TranscriptTee) processLine(line []byte) {
+	if responseTPSClientFamily(t.clientFamily) {
+		if t.responseTPSampler == nil {
+			sampler := newResponseTPSSampler(func() time.Time { return t.now() })
+			t.responseTPSampler = &sampler
+		}
+		t.responseTPSampler.observe(line)
+	}
 	grokType := ""
 	if t.clientFamily == "grok" {
 		before := t.grokStream.records
@@ -444,6 +456,7 @@ func (t *TranscriptTee) processLine(line []byte) {
 		if t.clientFamily == "codebuddy" && event.Type == "turn_usage" {
 			t.codeBuddyTurnUsage(&event)
 		}
+		t.attachResponseTPSSamples(&event)
 		if t.eventHandler != nil {
 			t.eventHandler(event)
 		}
@@ -694,7 +707,7 @@ func codeBuddyAssistantUsage(event map[string]any) (input, output int, present, 
 // whole invocation. Every other path (missing/incomplete usage, error result,
 // no start boundary, sub-millisecond interval, overflow, duplicate terminal,
 // malformed data) preserves the terminal cumulative metadata but removes all
-// trust fields so untrusted usage can never feed TPS.
+// trust fields so untrusted usage cannot feed additive accounting.
 func (t *TranscriptTee) codeBuddyTurnUsage(event *protocol.Event) {
 	if event == nil || event.Data == nil {
 		return

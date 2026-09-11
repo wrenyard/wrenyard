@@ -139,9 +139,9 @@ test('stats snapshot maps recentRuns without inventing calculations', async () =
             cache_creation_input_tokens: 0,
             output_tokens: 900,
             total_tokens: 900,
-            agent_turn_ms: 48000,
+            generation_ms: 48000,
             output_tps: 18.75,
-            tps_contract: 'agent_turn_v1',
+            tps_contract: 'response_v1',
             reference_cost_usd: 0.0123,
             reference_cost_complete: true,
             reference_cost_basis: 'local-31d',
@@ -207,7 +207,7 @@ test('stats snapshot maps recentRuns without inventing calculations', async () =
   // selection speed is distinct from actual measured TPS
   assert.notEqual(complete.speed?.effectiveTps, complete.usage.outputTps);
   assert.equal(complete.usage.outputTps, 18.75);
-  assert.equal(complete.usage.tpsContract, 'agent_turn_v1');
+  assert.equal(complete.usage.tpsContract, 'response_v1');
   assert.equal(complete.usage.referenceCostUsd, 0.0123);
 
   const partial = snapshot.recentTaskRuns[1];

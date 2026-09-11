@@ -3,6 +3,7 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
@@ -145,14 +146,26 @@ func dshTurnEndEvents(event map[string]any) []protocol.Event {
 	if usage, ok := event["usage"].(map[string]any); ok {
 		durationMs := dshDurationMS(event)
 		usageData := map[string]any{
-			"input_tokens":  intValue(usage["input_tokens"]),
-			"output_tokens": intValue(usage["output_tokens"]),
+			"input_tokens":  dshUsageInt(usage, "input_tokens", "inputTokens"),
+			"output_tokens": dshUsageInt(usage, "output_tokens", "outputTokens"),
 			"duration_ms":   durationMs,
 		}
+		// Cache partitions are forwarded only when the bridge actually
+		// reported them; missing partitions are never fabricated.
+		if cacheRead, ok := dshUsageToken(usage, "cache_read_input_tokens", "cacheReadInputTokens"); ok {
+			usageData["cache_read_input_tokens"] = cacheRead
+		}
+		if cacheWrite, ok := dshUsageToken(usage, "cache_creation_input_tokens", "cacheCreationInputTokens"); ok {
+			usageData["cache_creation_input_tokens"] = cacheWrite
+		}
 		if status == "done" && durationMs > 0 {
-			if _, _, ok := completeUsageTokens(usage); ok {
+			if _, _, ok := dshCompleteUsageTokens(usage); ok {
 				applyTrustedAgentTurnContract(usageData)
 			}
+		}
+		if samples, ok := validatedDSHTPSSamples(event); ok {
+			usageData["tps_sampling_contract"] = "response_v1"
+			usageData["tps_samples"] = samples
 		}
 		out = append(out, protocol.Event{Type: "turn_usage", Data: usageData})
 	}
@@ -329,4 +342,118 @@ func dshErrorValue(event map[string]any) any {
 		}
 	}
 	return "DSH runtime failed"
+}
+
+const dshMaxSafeInteger = 9007199254740991
+
+func dshUsageInt(usage map[string]any, keys ...string) int {
+	for _, key := range keys {
+		if value, ok := usage[key]; ok {
+			switch number := value.(type) {
+			case int:
+				return number
+			case int64:
+				return int(number)
+			case float64:
+				if number >= 0 && number <= dshMaxSafeInteger && math.Trunc(number) == number {
+					return int(number)
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func dshCompleteUsageTokens(usage map[string]any) (int, int, bool) {
+	input, inputOK := dshUsageToken(usage, "input_tokens", "inputTokens")
+	output, outputOK := dshUsageToken(usage, "output_tokens", "outputTokens")
+	return input, output, inputOK && outputOK
+}
+
+func dshUsageToken(usage map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		value, ok := usage[key]
+		if !ok {
+			continue
+		}
+		switch number := value.(type) {
+		case int:
+			if number >= 0 {
+				return number, true
+			}
+		case int64:
+			if number >= 0 {
+				return int(number), true
+			}
+		case float64:
+			if number >= 0 && number <= dshMaxSafeInteger && math.Trunc(number) == number {
+				return int(number), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func validatedDSHTPSSamples(event map[string]any) ([]any, bool) {
+	if event["tps_sampling_contract"] != "response_v1" {
+		return nil, false
+	}
+	raw, ok := event["tps_samples"].([]any)
+	if !ok {
+		return nil, false
+	}
+	validated := make([]any, 0, len(raw))
+	for _, value := range raw {
+		sample, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		responseID, responseOK := sample["response_id"].(string)
+		model, modelOK := sample["model"].(string)
+		output, outputOK := dshSafeNonnegativeInteger(sample["output_tokens"])
+		first, firstOK := dshFiniteNumber(sample["first_token_at_ms"])
+		completed, completedOK := dshFiniteNumber(sample["completed_at_ms"])
+		if !responseOK || strings.TrimSpace(responseID) == "" || !modelOK || strings.TrimSpace(model) == "" || !outputOK || !firstOK || !completedOK || completed <= first {
+			return nil, false
+		}
+		validated = append(validated, map[string]any{
+			"response_id":        responseID,
+			"model":              model,
+			"output_tokens":      output,
+			"first_token_at_ms":  first,
+			"completed_at_ms":    completed,
+		})
+	}
+	return validated, true
+}
+
+func dshFiniteNumber(value any) (float64, bool) {
+	switch number := value.(type) {
+	case int:
+		return float64(number), true
+	case int64:
+		return float64(number), true
+	case float64:
+		return number, !math.IsNaN(number) && !math.IsInf(number, 0)
+	default:
+		return 0, false
+	}
+}
+
+func dshSafeNonnegativeInteger(value any) (any, bool) {
+	switch number := value.(type) {
+	case int:
+		if number >= 0 && int64(number) <= dshMaxSafeInteger {
+			return number, true
+		}
+	case int64:
+		if number >= 0 && number <= dshMaxSafeInteger {
+			return number, true
+		}
+	case float64:
+		if number >= 0 && number <= dshMaxSafeInteger && math.Trunc(number) == number && !math.IsNaN(number) && !math.IsInf(number, 0) {
+			return number, true
+		}
+	}
+	return nil, false
 }

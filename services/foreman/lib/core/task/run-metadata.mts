@@ -185,17 +185,14 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   }
 
   // --- TPS projection ---------------------------------------------------
-  // Unified execution-based rate: current-invocation output tokens over actual
-  // execution elapsed (executions.started_at -> ended_at), never the sums of
-  // native event duration_ms. `readTaskTps` returns a value only when EVERY
+  // Shared response-paired rate. `readTaskTps` returns a value only when EVERY
   // attempt is done and carries a complete sample, so a partial/failed attempt
-  // omits both fields. `tps_contract` is retained unchanged for wire
-  // compatibility; there is no second metric.
+  // omits the speed fields. There is no second metric.
   const taskTps = readTaskTps(taskRunId)
   if (taskTps) {
-    usage.agent_turn_ms = taskTps.durationMs
+    usage.generation_ms = taskTps.durationMs
     usage.output_tps = taskTps.tps
-    usage.tps_contract = 'agent_turn_v1'
+    usage.tps_contract = 'response_v1'
   }
 
   // --- Cost projection --------------------------------------------------

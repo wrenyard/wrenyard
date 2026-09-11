@@ -323,3 +323,20 @@ func TestClaudeCodeKimiK3ValidationPresentationMapping(t *testing.T) {
 		t.Fatal("unrecognized kimi-coding [1m] model must fail closed")
 	}
 }
+func TestAppendClaudeCodeOptionsAddsPartialMessagesOnce(t *testing.T) {
+	for _, client := range []catalog.Client{
+		{Name: "codebuddy", DialectFlags: catalog.DialectFlags{SupportsVerbose: true}},
+		{Name: "claude", DialectFlags: catalog.DialectFlags{SupportsVerbose: true}},
+	} {
+		args := appendClaudeCodeOptions(nil, PlanRequest{}, client)
+		count := 0
+		for _, arg := range args {
+			if arg == "--include-partial-messages" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("client %q partial-message flag count = %d in %#v", client.Name, count, args)
+		}
+	}
+}

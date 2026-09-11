@@ -1,21 +1,18 @@
 import { getDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import type { LocalSpeedSample } from '@wrenyard/catalog'
+import { canonicalizeObservedProviderModelId } from '@wrenyard/providers'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 
 /**
- * Unified task-efficiency TPS.
+ * Unified response-paired TPS.
  *
- * TPS means current-invocation output tokens divided by ACTUAL execution
- * elapsed milliseconds, measured from `executions.started_at` to
- * `executions.ended_at`. It is deliberately NOT native event `duration_ms`:
- * a single stable task-efficiency proxy that is comparable across clients.
+ * TPS means paired generated output tokens divided by their paired generation
+ * milliseconds. It is independent of execution wall time and native event
+ * `duration_ms`, so tool waits do not change the speed estimate.
  *
- * The persisted `turn_usage` events keep their additive token provenance and
- * their `token_scope`/`duration_scope`/`tps_contract` version tags, but those
- * tags only validate that the output tokens are additive agent-turn output.
- * The native `duration_ms` carried by those events is never used as a
- * denominator and never influences the produced rate.
+ * The persisted `turn_usage` events keep their billing/accounting provenance,
+ * but those fields never influence speed.
  */
 
 export interface ExecutionTpsSample {
@@ -39,7 +36,6 @@ export interface TpsEstimate {
 interface ExecutionSampleRow {
   executionId: string
   taskId: string | null
-  startedAt: string | null
   endedAt: string | null
   provider: string | null
   model: string | null
@@ -55,7 +51,7 @@ interface UsageDataRow {
 const LOCAL_SPEED_WINDOW_MS = 31 * 24 * 60 * 60 * 1000
 /** Minimum per-execution output tokens eligible for the speed estimate. */
 const MIN_SAMPLE_OUTPUT_TOKENS = 256
-/** Minimum per-execution elapsed milliseconds eligible for the speed estimate. */
+/** Minimum per-execution paired generation milliseconds eligible for speed. */
 const MIN_SAMPLE_DURATION_MS = 5000
 /** Maximum newest executions considered for the speed estimate. */
 const MAX_SAMPLES = 50
@@ -69,16 +65,13 @@ export interface ReadExecutionTpsOptions {
 }
 
 /**
- * Reads completed, successful executions and ALL of their `turn_usage` events,
+ * Reads completed, successful executions and their normalized response samples,
  * producing one sample per execution. An execution qualifies only when it is a
- * `done` run with finite positive stored `started_at`/`ended_at` elapsed and at
- * least one event that is additive agent-turn output carrying a safe integer
- * output >= 0.
+ * `done` run with a marked response sampling contract and at least one valid
+ * paired response sample.
  *
- * The versioned scopes (`token_scope=agent_turn`, `duration_scope=agent_turn`,
- * `tps_contract=agent_turn_v1`) validate additive token provenance only. Output
- * tokens are summed exactly once per execution while the whole execution time
- * is counted exactly once, so repeated usage never inflates the rate.
+ * Legacy accounting scopes remain available for billing but never influence
+ * speed. Output tokens and generation time are summed from the same samples.
  *
  * Missing/failed/cancelled/incomplete runs produce no sample. Persisted events
  * are never modified.
@@ -88,7 +81,7 @@ export function readExecutionTpsSamples(
   db?: ForemanDatabase,
 ): ExecutionTpsSample[] {
   const database = db ?? getDb()
-  const conditions = ["e.status = 'done'", 'e.started_at IS NOT NULL', 'e.ended_at IS NOT NULL']
+  const conditions = ["e.status = 'done'", 'e.ended_at IS NOT NULL']
   const params: unknown[] = []
   if (options.startAt !== undefined) {
     conditions.push('e.ended_at >= ?')
@@ -106,7 +99,7 @@ export function readExecutionTpsSamples(
   const executionRows = dbQueryOn<ExecutionSampleRow>(
     database,
     `SELECT e.id AS executionId, e.task_id AS taskId,
-            e.started_at AS startedAt, e.ended_at AS endedAt,
+            e.ended_at AS endedAt,
             tra.provider AS provider, tra.model AS model, tra.model_id AS modelId
      FROM executions e
      INNER JOIN task_run_attempt_dispatch tra ON tra.execution_id = e.id
@@ -115,6 +108,7 @@ export function readExecutionTpsSamples(
   )
   if (executionRows.length === 0) return []
 
+  const executionById = new Map(executionRows.map((row) => [row.executionId, row]))
   const executionIds = executionRows.map((row) => row.executionId)
   const usageRows = dbQueryOn<UsageDataRow>(
     database,
@@ -122,20 +116,29 @@ export function readExecutionTpsSamples(
      WHERE type = 'turn_usage' AND execution_id IN (${executionIds.map(() => '?').join(', ')})`,
     executionIds,
   )
-  const outputByExecution = new Map<string, number>()
-  const hasEventByExecution = new Map<string, boolean>()
-  const validByExecution = new Map<string, boolean>()
+  const totalsByExecution = new Map<string, { outputTokens: number; durationMs: number }>()
+  const seenByExecution = new Map<string, Map<string, ResponseSample>>()
+  const invalidByExecution = new Set<string>()
   for (const row of usageRows) {
-    if (!hasEventByExecution.has(row.execution_id)) hasEventByExecution.set(row.execution_id, true)
-    const parsed = parseAdditiveOutput(row.data)
-    // Any event on the execution that is not additive agent-turn output makes
-    // the whole execution ineligible rather than silently under-counting.
-    if (parsed === undefined) {
-      validByExecution.set(row.execution_id, false)
-      continue
+    const execution = executionById.get(row.execution_id)
+    if (!execution) continue
+    const parsed = parseResponseSamples(row.data, execution.model, execution.provider)
+    if (parsed === undefined) continue
+    if (parsed.invalid) invalidByExecution.add(row.execution_id)
+    const seen = seenByExecution.get(row.execution_id) ?? new Map<string, ResponseSample>()
+    for (const sample of parsed.samples) {
+      const previous = seen.get(sample.responseId)
+      if (previous) {
+        if (!sameResponseSample(previous, sample)) invalidByExecution.add(row.execution_id)
+        continue
+      }
+      seen.set(sample.responseId, sample)
+      const current = totalsByExecution.get(row.execution_id) ?? { outputTokens: 0, durationMs: 0 }
+      current.outputTokens += sample.outputTokens
+      current.durationMs += sample.completedAtMs - sample.firstTokenAtMs
+      totalsByExecution.set(row.execution_id, current)
     }
-    if (!validByExecution.has(row.execution_id)) validByExecution.set(row.execution_id, true)
-    outputByExecution.set(row.execution_id, (outputByExecution.get(row.execution_id) ?? 0) + parsed)
+    seenByExecution.set(row.execution_id, seen)
   }
 
   const samples: ExecutionTpsSample[] = []
@@ -146,19 +149,15 @@ export function readExecutionTpsSamples(
     const model = safeIdentity(row.model)
     const modelId = safeIdentity(row.modelId)
     if (provider === undefined || model === undefined || modelId === undefined) continue
-    if (hasEventByExecution.get(row.executionId) !== true) continue
-    if (validByExecution.get(row.executionId) !== true) continue
-
-    const startedMs = parseTimestampMs(row.startedAt)
     const endedMs = parseTimestampMs(row.endedAt)
-    if (startedMs === undefined || endedMs === undefined) continue
-    const durationMs = endedMs - startedMs
-    if (!Number.isFinite(durationMs) || durationMs <= 0) continue
+    if (endedMs === undefined) continue
+    if (invalidByExecution.has(row.executionId)) continue
 
-    const outputTokens = outputByExecution.get(row.executionId) ?? 0
-    if (!isSafeInteger(outputTokens) || outputTokens <= 0) continue
+    const totals = totalsByExecution.get(row.executionId)
+    if (!totals || !isSafeInteger(totals.outputTokens) || totals.outputTokens <= 0) continue
+    if (!Number.isFinite(totals.durationMs) || totals.durationMs <= 0) continue
 
-    const tps = ratePerSecond(outputTokens, durationMs)
+    const tps = ratePerSecond(totals.outputTokens, totals.durationMs)
     if (tps === undefined) continue
 
     samples.push({
@@ -168,8 +167,8 @@ export function readExecutionTpsSamples(
       model,
       modelId,
       endedAt: row.endedAt as string,
-      outputTokens,
-      durationMs,
+      outputTokens: totals.outputTokens,
+      durationMs: totals.durationMs,
       tps,
     })
   }
@@ -179,7 +178,8 @@ export function readExecutionTpsSamples(
 /**
  * Median estimate of per-execution TPS over recent eligible samples.
  *
- * Only samples with >= 256 output tokens and >= 5000ms elapsed are considered;
+ * Only samples with >= 256 paired output tokens and >= 5000ms paired generation
+ * time are considered;
  * the newest 50 by `endedAt` are kept and at least 3 must remain. The estimate
  * is the median of per-execution TPS (the average of the central pair for an
  * even count). Fewer than 3 usable samples yield undefined so a small sample
@@ -245,10 +245,8 @@ export interface TaskTps {
 
 /**
  * Task-level TPS. Every attempt (execution) for the task must be done AND carry
- * a complete execution-based sample; otherwise undefined. Each attempt's output
- * and whole-execution elapsed are summed exactly once, and the rate is derived
- * from those corrected totals — never from the old native `duration_ms` sums or
- * from materialized telemetry timing.
+ * a complete response-paired sample; otherwise undefined. Each attempt's paired
+ * output and generation time are summed exactly once.
  */
 export function readTaskTps(taskId: string, db?: ForemanDatabase): TaskTps | undefined {
   const databases = db ?? getDb()
@@ -279,12 +277,15 @@ export function readTaskTps(taskId: string, db?: ForemanDatabase): TaskTps | und
 }
 
 /**
- * Parses one persisted turn_usage payload into its additive agent-turn output
- * token count. Returns undefined when the payload is missing/invalid, is not
- * additive agent-turn output, or carries an unsafe/non-integer output. The
- * version tags validate token provenance only; native duration is ignored.
+ * Parses one normalized response sampling payload. Invalid or incomplete
+ * samples are omitted because adapters may omit responses lacking timing or
+ * usage; tokens are never borrowed from an unpaired response.
  */
-function parseAdditiveOutput(value: string | null): number | undefined {
+function parseResponseSamples(
+  value: string | null,
+  dispatchModel: string | null,
+  provider: string | null,
+): { samples: ResponseSample[]; invalid: boolean } | undefined {
   if (value === null) return undefined
   let parsed: unknown
   try {
@@ -294,12 +295,65 @@ function parseAdditiveOutput(value: string | null): number | undefined {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
   const record = parsed as Record<string, unknown>
-  if (record.token_scope !== 'agent_turn') return undefined
-  if (record.duration_scope !== 'agent_turn') return undefined
-  if (record.tps_contract !== 'agent_turn_v1') return undefined
-  const output = record.output_tokens
-  if (typeof output !== 'number' || !isSafeInteger(output) || output < 0) return undefined
-  return output
+  if (record.tps_sampling_contract !== 'response_v1') return undefined
+  if (!Array.isArray(record.tps_samples)) return undefined
+  const seen = new Map<string, ResponseSample>()
+  let invalid = false
+  for (const value of record.tps_samples) {
+    const sample = parseResponseSample(value, dispatchModel, provider)
+    if (sample === undefined) continue
+    if (sample.mismatchedModel) {
+      invalid = true
+      continue
+    }
+    const previous = seen.get(sample.responseId)
+    if (previous) {
+      if (!sameResponseSample(previous, sample)) invalid = true
+      continue
+    }
+    seen.set(sample.responseId, sample)
+  }
+  return { samples: [...seen.values()], invalid }
+}
+
+interface ResponseSample {
+  responseId: string
+  model: string
+  outputTokens: number
+  firstTokenAtMs: number
+  completedAtMs: number
+}
+
+function parseResponseSample(value: unknown, dispatchModel: string | null, provider: string | null): (ResponseSample & { mismatchedModel?: false }) | { responseId: string; mismatchedModel: true } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const responseId = record.response_id
+  const model = record.model
+  const outputTokens = record.output_tokens
+  const firstTokenAtMs = record.first_token_at_ms
+  const completedAtMs = record.completed_at_ms
+  if (typeof responseId !== 'string' || responseId.trim() === '') return undefined
+  if (typeof model !== 'string' || model.trim() === '') return undefined
+  if (typeof outputTokens !== 'number' || !Number.isSafeInteger(outputTokens) || outputTokens < 0) return undefined
+  if (typeof firstTokenAtMs !== 'number' || !Number.isFinite(firstTokenAtMs) || firstTokenAtMs <= 0) return undefined
+  if (typeof completedAtMs !== 'number' || !Number.isFinite(completedAtMs) || completedAtMs <= firstTokenAtMs) return undefined
+  const normalized = {
+    responseId: responseId.trim(),
+    model: canonicalizeObservedProviderModelId(provider ?? '', model.trim()),
+    outputTokens,
+    firstTokenAtMs,
+    completedAtMs,
+  }
+  if (dispatchModel?.trim() !== normalized.model) return { responseId: normalized.responseId, mismatchedModel: true }
+  return normalized
+}
+
+function sameResponseSample(a: ResponseSample, b: ResponseSample): boolean {
+  return a.responseId === b.responseId
+    && a.model === b.model
+    && a.outputTokens === b.outputTokens
+    && a.firstTokenAtMs === b.firstTokenAtMs
+    && a.completedAtMs === b.completedAtMs
 }
 
 /** Single rate validation helper: finite, positive tokens over finite positive ms. */
