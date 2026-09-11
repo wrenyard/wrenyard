@@ -4,7 +4,10 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model-display-names": "./src/model-display-names.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
