@@ -24,6 +24,7 @@ import type {
 } from '../shell-contract.js';
 import { RoutingTestController, defaultRoutingTestForm, formFromTask, type RoutingTestFormState } from './routing-test.js';
 import { SearchableMultiSelect } from './multi-select.js';
+import { SearchableSingleSelect } from './single-select.js';
 import type {
   ClientConfigurationId,
   ClientConfigurationPlanDto,
@@ -129,7 +130,7 @@ const quotaTabs = requireElement<HTMLElement>('quota-tabs');
 const quotaPanelSupply = requireElement<HTMLElement>('quota-panel-supply');
 const quotaPanelRouting = requireElement<HTMLElement>('quota-panel-routing');
 const routingTestRun = requireElement<HTMLButtonElement>('routing-test-run');
-const routingTestImportSelect = requireElement<HTMLSelectElement>('routing-test-import-select');
+const routingTestImportHost = requireElement<HTMLElement>('routing-test-import-select');
 const routingTestResult = requireElement<HTMLElement>('routing-test-result');
 const routingTestIntelligenceMin = requireElement<HTMLSelectElement>('routing-test-intelligence-min');
 const routingTestIntelligenceExpected = requireElement<HTMLSelectElement>('routing-test-intelligence-expected');
@@ -160,6 +161,13 @@ const routingExcludeProviders = new SearchableMultiSelect(routingTestExcludeProv
     routingForm = { ...routingForm, excludeProviderIds: [...values] };
     routingTest.onFormChanged();
   },
+});
+
+const routingTestImportSelect = new SearchableSingleSelect(routingTestImportHost, {
+  placeholder: '选择 Task',
+  label: 'Task 模板',
+  onOpen: () => void routingTest.importTasks(),
+  onChange: () => routingTest.selectImportedTask(),
 });
 
 function applyRoutingForm(form: RoutingTestFormState): void {
@@ -2366,9 +2374,6 @@ routingTestIntelligenceExpected.addEventListener('change', () => {
   routingTest.onFormChanged();
 });
 routingTestRun.addEventListener('click', () => void routingTest.run());
-routingTestImportSelect.addEventListener('focus', () => void routingTest.importTasks());
-routingTestImportSelect.addEventListener('pointerdown', () => void routingTest.importTasks());
-routingTestImportSelect.addEventListener('change', () => routingTest.selectImportedTask());
 const routingTextControls: Array<[HTMLInputElement, keyof RoutingTestFormState]> = [
   [routingTestExpectedTps, 'expectedTps'],
   [routingTestMinimumTps, 'minimumTps'],
