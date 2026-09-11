@@ -150,7 +150,7 @@ const CHATGPT_SPARK_7D_POOL = quotaPool('chatgpt/spark-7d', [
 const CHATGPT_SPARK_MODEL_ID = 'gpt-5.3-codex-spark';
 
 const explicitBindings: ProviderQuotaBinding[] = [
-  binding('cursor', 'cursor-grok-4.6-high', [CURSOR_POOL]),
+  binding('cursor', 'grok-4.6', [CURSOR_POOL]),
   binding('cursor', 'composer-2.5', [CURSOR_POOL]),
   // Third-party Cursor models consume the Other allowance, not the Cursor pool.
   binding('cursor', 'kimi-k3', [CURSOR_OTHER_POOL]),

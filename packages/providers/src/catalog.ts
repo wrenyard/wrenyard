@@ -1,4 +1,4 @@
-import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
+import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ThinkingLevel } from '@wrenyard/catalog';
 import { builtinModelDisplayName, type BuiltinModelId } from './model-display-names.ts';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
@@ -89,17 +89,37 @@ const model = (
   contextWindow?: number,
   maxTokens?: number,
   canonicalModel?: CanonicalModelDefinition,
+  thinkingLevels?: readonly ThinkingLevel[],
 ): RawModelDefinition => ({
   id, displayName: builtinModelDisplayName(id),
   ...(contextWindow ? { contextWindow } : {}),
   ...(maxTokens ? { maxTokens } : {}),
   ...(canonicalModel ? { canonicalModel } : {}),
+  ...(thinkingLevels ? { thinkingLevels } : {}),
 });
 
 const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'openai_chat' as const, endpoint, authScheme });
 const anthropic = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'anthropic_messages' as const, endpoint, authScheme });
+
+// Public thinking levels declared by confirmed model families. GPT-5.6/6
+// use the full five-level ladder; older GPT-5.5/5.4/Spark
+// cap at xhigh; DeepSeek Flash and Kimi K3 support low/high/max.
+const THINKING_FULL: readonly ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const THINKING_UP_TO_XHIGH: readonly ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh'];
+const THINKING_LOW_HIGH_MAX: readonly ThinkingLevel[] = ['low', 'high', 'max'];
+
+// A level ladder expressed as a runtime effort alias (identity alias). Used for
+// native Codex/CodeBuddy effort flags and gateway effort flags.
+const effortLadder = (levels: readonly ThinkingLevel[]): Readonly<Record<string, { effort: string }>> =>
+  Object.fromEntries(levels.map((level) => [level, { effort: level }]));
+
+// Cursor GPT-5.6 exposes thinking by model id substitution; the target carries
+// the 272k context, the exact reasoning level and fast=false, so no separate
+// effort argument is ever emitted.
+const cursorGptThinkingMappings = (modelId: string): Readonly<Record<ThinkingLevel, { model: string }>> =>
+  Object.fromEntries(THINKING_FULL.map((level) => [level, { model: `${modelId}[context=272k,reasoning=${level},fast=false]` }])) as Readonly<Record<ThinkingLevel, { model: string }>>;
 
 const builtinProviders: readonly RawProviderDefinition[] = [
   {
@@ -121,56 +141,97 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
     nativeClients: ['codebuddy'], defaultModel: 'deepseek-v4.1-flash', useClientBinary: true,
     models: [
-      model('deepseek-v4.1-flash', 1_000_000, 50_000),
+      model('deepseek-v4.1-flash', 1_000_000, 50_000, undefined, THINKING_LOW_HIGH_MAX),
       model('hy4-preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']),
       model('hy3'),
       model('minimax-m3', undefined, undefined, CANONICAL_MODELS['minimax-m3']),
-      model('kimi-k3', undefined, undefined, CANONICAL_MODELS['kimi-k3']),
+      model('kimi-k3', undefined, undefined, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
       model('glm-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']),
       model('glm-5.3-flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']),
     ],
     modelAliases: { 'hy4-preview-ioa': 'hy4-preview' },
+    // Native CodeBuddy CLI `--effort` accepts low/medium/high/xhigh/max, so the
+    // confirmed Flash + K3 families map each declared level to its exact wire alias.
+    thinkingMappings: {
+      'deepseek-v4.1-flash': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
+      'kimi-k3': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
+    },
     protocols: [openAI('https://copilot.tencent.com/v2/chat/completions')],
   },
   {
     id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
     nativeClients: ['codex'], defaultModel: 'gpt-5.6-sol', quotaProvider: 'chatgpt',
     models: [
-      model('gpt-5.6-sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol']),
-      model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra']),
-      model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna']),
-      model('gpt-6-astra', 1_050_000, 128_000),
-      model('gpt-5.3-codex-spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark']),
-      model('gpt-5.5'), model('gpt-5.4'), model('gpt-5.4-mini'),
+      model('gpt-5.6-sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol'], THINKING_FULL),
+      model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra'], THINKING_FULL),
+      model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'], THINKING_FULL),
+      model('gpt-6-astra', 1_050_000, 128_000, undefined, THINKING_FULL),
+      model('gpt-5.3-codex-spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark'], THINKING_UP_TO_XHIGH),
+      { ...model('gpt-5.5', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
+      { ...model('gpt-5.4', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
+      { ...model('gpt-5.4-mini', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
     ],
     modelAliases: { 'codex-astra': 'gpt-6-astra' },
+    // Native Codex wire identity effort: each declared level is sent as the exact
+    // effort token; the public canonical model id is retained.
+    thinkingMappings: {
+      'gpt-5.6-sol': { codex: effortLadder(THINKING_FULL) },
+      'gpt-5.6-terra': { codex: effortLadder(THINKING_FULL) },
+      'gpt-5.6-luna': { codex: effortLadder(THINKING_FULL) },
+      'gpt-6-astra': { codex: effortLadder(THINKING_FULL) },
+      'gpt-5.3-codex-spark': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
+      'gpt-5.5': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
+      'gpt-5.4': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
+      'gpt-5.4-mini': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
+    },
   },
   {
     id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
     defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
     models: [
       { ...model('composer-2.5', 200_000), pricing: { inputUsdPerMillion: 0.5, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 2.5, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
-      model('cursor-grok-4.6-high', 256_000),
+      model('grok-4.6', 256_000, undefined, undefined, ['high']),
       model('kimi-k3', 1_048_576, undefined, CANONICAL_MODELS['kimi-k3']),
       { ...model('claude-opus-5', 300_000, undefined, CANONICAL_MODELS['claude-opus-5']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 25, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
-      { ...model('gpt-5.6-luna', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-luna']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
-      { ...model('gpt-5.6-terra', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-terra']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
-      { ...model('gpt-5.6-sol', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-sol']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-luna', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-luna'], THINKING_FULL), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-terra', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-terra'], THINKING_FULL), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-sol', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-sol'], THINKING_FULL), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
       { ...model('claude-sonnet-5', 300_000), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 10, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
       model('muse-spark-1.3', 300_000),
       model('gemini-3.8-flash', 1_000_000),
       { ...model('claude-fable-5', 300_000), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: 'https://cursor.com/docs/models/claude-fable-5', checkedAt: '2026-09-11' } },
       model('claude-fable-5-1', 300_000),
     ],
+    modelAliases: { 'cursor-grok-4.6-high': 'grok-4.6' },
+    // Cursor GPT-5.6 materializes a level as a suffixed model id plus an inline
+    // [context=272k,reasoning=LEVEL,fast=false] target; effort is never an
+    // argument. Cursor Grok is only confirmed at high, as the public grok-4.6
+    // id mapping to the exact cursor-grok-4.6-high model.
+    thinkingMappings: {
+      'gpt-5.6-sol': { cursor: cursorGptThinkingMappings('gpt-5.6-sol') },
+      'gpt-5.6-terra': { cursor: cursorGptThinkingMappings('gpt-5.6-terra') },
+      'gpt-5.6-luna': { cursor: cursorGptThinkingMappings('gpt-5.6-luna') },
+      'grok-4.6': { cursor: { high: { model: 'cursor-grok-4.6-high' } } },
+    },
   },
   {
     id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'forge-managed',
     defaultModel: 'k3', quotaProvider: 'kimi-coding',
-    models: [model('k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'])],
+    models: [model('k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX)],
     protocols: [
       openAI('https://api.kimi.com/coding/v1/chat/completions'),
       anthropic('https://api.kimi.com/coding/v1/messages'),
     ],
+    // Gateway clients may materialize K3 thinking once their native syntax
+    // supports it; the exact wire alias is the level itself.
+    thinkingMappings: {
+      k3: {
+        codex: effortLadder(THINKING_LOW_HIGH_MAX),
+        claude: effortLadder(THINKING_LOW_HIGH_MAX),
+        codebuddy: effortLadder(THINKING_LOW_HIGH_MAX),
+        grok: effortLadder(THINKING_LOW_HIGH_MAX),
+      },
+    },
   },
   {
     id: 'minimax', displayName: 'MiniMax Open Platform', credentialResolver: 'forge-managed', defaultModel: 'MiniMax-M3',
@@ -189,7 +250,10 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'openai', displayName: 'OpenAI API', credentialResolver: 'forge-managed', defaultModel: 'gpt-5.6-sol',
-    models: [model('gpt-5.6-sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol']), model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra']), model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'])],
+    models: [model('gpt-5.6-sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol'], THINKING_FULL), model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra'], THINKING_FULL), model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'], THINKING_FULL)],
+    thinkingMappings: Object.fromEntries(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'].map(id => [id, {
+      codex: effortLadder(THINKING_FULL), codebuddy: effortLadder(THINKING_FULL), grok: effortLadder(THINKING_FULL),
+    }])),
     protocols: [
       openAI('https://api.openai.com/v1/chat/completions'),
       { protocol: 'openai_responses', endpoint: 'https://api.openai.com/v1/responses', authScheme: 'bearer' },
@@ -370,7 +434,7 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'claude-opus-5': speedDefault(50, 'https://artificialanalysis.ai/models/claude-opus-5-xhigh/', 'Artificial Analysis output-speed baseline for Claude Opus 5 xhigh.'),
   'claude-sonnet-5': speedDefault(60, 'https://artificialanalysis.ai/models/claude-sonnet-5-non-reasoning/', 'Artificial Analysis output-speed baseline for Claude Sonnet 5 non-reasoning.'),
   'composer-2.5': speedDefault(40, 'user-specified', 'User-selected Wrenyard baseline for exact standard cursor/composer-2.5; no measured source and not composer-2.5-fast.'),
-  'cursor-grok-4.6-high': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
+  'grok-4.6': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
   'muse-spark-1.3': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
   'gemini-3.8-flash': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
   'claude-fable-5-1': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
@@ -413,8 +477,8 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
 };
 
 type ModelMeta = {
+  thinkingLevels?: readonly ThinkingLevel[];
   intelligence: IntelligenceTier;
-  reasoningEffort?: ReasoningEffort;
   capabilities: readonly ModelCapability[];
   maxOutputTokens?: number;
   pricing?: ModelPricing;
@@ -422,11 +486,13 @@ type ModelMeta = {
 
 const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'deepseek-v4.1-flash': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
   'deepseek/deepseek-flash': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
@@ -445,41 +511,38 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     pricing: { inputUsdPerMillion: 0.139, cachedInputUsdPerMillion: 0.035, outputUsdPerMillion: 0.556, source: SRC_TENCENT_TOKENHUB, checkedAt: '2026-09-08' },
   },
   'gpt-6-astra': {
-    reasoningEffort: 'xhigh',
     intelligence: 'premium',
     capabilities: ['text', 'image'],
     maxOutputTokens: 128_000,
     pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.3-codex-spark': {
-    reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text'],
   },
   'gpt-5.6-sol': {
-    reasoningEffort: 'xhigh',
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.6-terra': {
-    reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'gpt-5.6-luna': {
-    reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'kimi-k3': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
   },
   'k3': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
@@ -518,7 +581,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'high',
     capabilities: ['text', 'image'],
   },
-  'cursor-grok-4.6-high': {
+  'grok-4.6': {
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6, source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10' },
@@ -660,7 +723,7 @@ function withMeta(def: RawModelDefinition): ModelDefinition {
   return {
     ...def,
     intelligence,
-    reasoningEffort: def.reasoningEffort ?? meta.reasoningEffort,
+    ...(def.thinkingLevels ?? meta.thinkingLevels ? { thinkingLevels: def.thinkingLevels ?? meta.thinkingLevels } : {}),
     capabilities: def.capabilities ?? meta.capabilities,
     speed,
     maxOutputTokens: def.maxOutputTokens ?? meta.maxOutputTokens,

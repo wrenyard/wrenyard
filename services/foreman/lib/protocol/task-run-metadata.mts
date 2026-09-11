@@ -11,7 +11,9 @@ export type {
   TaskResolvedSpeed,
   TaskUsage,
   TaskUsageCompleteness,
+  ThinkingLevel,
 } from '../task-run-metadata-types.mts'
+export { THINKING_LEVELS, isThinkingLevel } from '../task-run-metadata-types.mts'
 
 /**
  * Exclusive shared protocol schema for a task run's resolved dispatch and
@@ -97,6 +99,7 @@ export const taskResolvedDispatchSchema = {
     model_id: { type: 'string' },
     mode: { enum: ['native', 'gateway'] },
     protocol: { type: 'string' },
+    thinking: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
     auto_routing: taskAutoRoutingDecisionSchema,
     speed: {
       type: 'object',

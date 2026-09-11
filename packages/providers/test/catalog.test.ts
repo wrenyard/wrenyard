@@ -66,10 +66,10 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
 test('derived task plans key representative native and gateway combinations canonically', () => {
   const plans = deriveTaskDispatchPlans(createBuiltinCatalog());
   assert.deepEqual(plans['chatgpt/gpt-5.6-sol:codex'], {
-    client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
+    client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol', mode: 'native', thinking: 'max', reasoningEffort: 'max', supportsWebSearch: true,
   });
   assert.deepEqual(plans['chatgpt/gpt-5.3-codex-spark:codex'], {
-    client: 'codex', provider: 'chatgpt', model: 'gpt-5.3-codex-spark', mode: 'native', reasoningEffort: 'xhigh', supportsWebSearch: true,
+    client: 'codex', provider: 'chatgpt', model: 'gpt-5.3-codex-spark', mode: 'native', thinking: 'xhigh', reasoningEffort: 'xhigh', supportsWebSearch: true,
   });
   assert.deepEqual(plans['codebuddy/minimax-m3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'minimax-m3', mode: 'native',
@@ -80,8 +80,11 @@ test('derived task plans key representative native and gateway combinations cano
   assert.deepEqual(plans['codebuddy/hy3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'hy3', mode: 'native',
   });
+  assert.deepEqual(plans['codebuddy/deepseek-v4.1-flash:cb'], {
+    client: 'codebuddy', provider: 'codebuddy', model: 'deepseek-v4.1-flash', mode: 'native', thinking: 'max', reasoningEffort: 'max',
+  });
   assert.deepEqual(plans['codebuddy/kimi-k3:cb'], {
-    client: 'codebuddy', provider: 'codebuddy', model: 'kimi-k3', mode: 'native',
+    client: 'codebuddy', provider: 'codebuddy', model: 'kimi-k3', mode: 'native', thinking: 'max', reasoningEffort: 'max',
   });
   assert.deepEqual(plans['codebuddy/glm-5.3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3', mode: 'native',
@@ -90,7 +93,7 @@ test('derived task plans key representative native and gateway combinations cano
     client: 'codebuddy', provider: 'codebuddy', model: 'glm-5.3-flash', mode: 'native',
   });
   assert.deepEqual(plans['kimi-coding/k3:cc'], {
-    client: 'claude', provider: 'kimi-coding', model: 'k3', mode: 'gateway', protocol: 'anthropic_messages',
+    client: 'claude', provider: 'kimi-coding', model: 'k3', mode: 'gateway', protocol: 'anthropic_messages', thinking: 'max', reasoningEffort: 'max',
   });
   assert.deepEqual(plans['zhipu-coding/glm-5.3-flash:cc'], {
     client: 'claude', provider: 'zhipu-coding', model: 'glm-5.3-flash', mode: 'gateway', protocol: 'anthropic_messages',
@@ -110,7 +113,7 @@ test('native web search is admitted only for explicitly supported native client/
   assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].supportsWebSearch, true);
   assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].supportsWebSearch, true);
   assert.equal(plans['cursor/composer-2.5:cur'].supportsWebSearch, true);
-  assert.equal(plans['cursor/cursor-grok-4.6-high:cur'].supportsWebSearch, true);
+  assert.equal(plans['cursor/grok-4.6:cur'].supportsWebSearch, true);
   assert.equal(plans['spacex-ai/grok-4.5:gk'].supportsWebSearch, true);
 
   // CodeBuddy/DeepSeek native routes are NOT marked: the client does not declare
@@ -168,7 +171,7 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.equal(astra!.contextWindow, 1_050_000);
   assert.equal(astra!.maxOutputTokens, 128_000);
   assert.equal(astra!.intelligence, 'premium');
-  assert.equal(astra!.reasoningEffort, 'xhigh');
+  assert.deepEqual(astra!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(astra!.pricing?.inputUsdPerMillion, 10);
   assert.equal(astra!.pricing?.cachedInputUsdPerMillion, 1);
   assert.equal(astra!.pricing?.outputUsdPerMillion, 50);
@@ -176,28 +179,32 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.deepEqual(astra!.capabilities, ['text', 'image']);
   const plans = deriveTaskDispatchPlans(catalog);
   assert.equal(plans['chatgpt/gpt-6-astra:codex'].model, 'gpt-6-astra');
-  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].thinking, 'max');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'max');
 });
 
-test('Codex/OpenAI GPT plans carry xhigh reasoning effort and never max/ultra', () => {
+test('Codex GPT plans default to the highest mapped thinking level and never invent transport', () => {
   const catalog = createBuiltinCatalog();
   const plans = deriveTaskDispatchPlans(catalog);
-  // Representative Codex execution plans, including GPT-6 Astra as the cap.
-  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.6-luna:codex'].reasoningEffort, 'xhigh');
+  // Representative Codex execution plans: the newest GPT families default to max.
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].thinking, 'max');
+  assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].thinking, 'max');
+  assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].thinking, 'max');
+  assert.equal(plans['chatgpt/gpt-5.6-luna:codex'].thinking, 'max');
+  assert.equal(plans['openai/gpt-5.6-sol:codex'].thinking, 'max');
+  // Older GPT families cap at xhigh with the exact wire effort.
+  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex'].reasoningEffort, 'xhigh');
-  assert.equal(plans['openai/gpt-5.6-sol:codex'].reasoningEffort, 'xhigh');
-  // max/ultra are not part of the product field, in metadata or in any plan.
-  const serialized = JSON.stringify(plans);
-  assert.doesNotMatch(serialized, /"reasoningEffort":"(max|ultra)"/u);
-  for (const model of catalog.provider('chatgpt')!.models) {
-    if (model.reasoningEffort) assert.ok(['low', 'medium', 'high', 'xhigh'].includes(model.reasoningEffort));
-  }
-  // Levels are declared product metadata, never inferred: unrelated plans stay unset.
-  assert.equal(plans['kimi-coding/k3:cc'].reasoningEffort, undefined);
-  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].reasoningEffort, undefined);
+  assert.equal(plans['chatgpt/gpt-5.5:codex'].thinking, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.4:codex'].thinking, 'xhigh');
+  assert.equal(plans['chatgpt/gpt-5.4-mini:codex'].thinking, 'xhigh');
+  // An explicit request must be both declared and mapped; unmapped levels fail closed.
+  assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.6-sol', 'low').reasoningEffort, 'low');
+  assert.throws(() => catalog.resolveRun('codex', 'chatgpt', 'gpt-5.4', 'max'), /does not support thinking level max/);
+  // An unmapped model family leaves thinking unset rather than inventing transport.
+  assert.equal(plans['zhipu-coding/glm-5.3-flash:cc'].reasoningEffort, undefined);
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].thinking, 'max');
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].reasoningEffort, 'max');
 });
 
 test('reference metadata has real provenance and unknown fields stay absent', () => {
@@ -288,8 +295,8 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('chatgpt', 'gpt-5.6-sol'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.6-terra'), 'mid');
   assert.equal(tier('chatgpt', 'gpt-5.6-luna'), 'mid');
-  assert.equal(tier('cursor', 'cursor-grok-4.6-high'), 'high');
-  assert.deepEqual(find('cursor', 'cursor-grok-4.6-high').pricing, {
+  assert.equal(tier('cursor', 'grok-4.6'), 'high');
+  assert.deepEqual(find('cursor', 'grok-4.6').pricing, {
     inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6,
     source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10',
   });
@@ -490,7 +497,7 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   const cursor = catalog.provider('cursor')!;
   assert.deepEqual(cursor.models.map((entry) => entry.id), [
     'composer-2.5',
-    'cursor-grok-4.6-high',
+    'grok-4.6',
     'kimi-k3',
     'claude-opus-5',
     'gpt-5.6-luna',
@@ -513,7 +520,9 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['muse-spark-1.3']!.intelligence, 'mid');
   assert.equal(byId['gemini-3.8-flash']!.intelligence, 'mid');
   assert.equal(byId['composer-2.5']!.intelligence, 'high');
-  assert.equal(byId['cursor-grok-4.6-high']!.intelligence, 'high');
+  assert.equal(byId['grok-4.6']!.intelligence, 'high');
+  assert.deepEqual(byId['grok-4.6']!.thinkingLevels, ['high']);
+  assert.deepEqual(byId['gpt-5.6-sol']!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(byId['kimi-k3']!.intelligence, 'high');
   for (const model of cursor.models) {
     assert.deepEqual(model.capabilities, ['text', 'image'], `${model.id} must support text and image`);
@@ -545,4 +554,25 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   });
   assert.ok(!('unavailable' in byId['claude-fable-5']!));
   assert.ok(!('unavailable' in byId['claude-fable-5-1']!));
+});
+
+test('Cursor GPT-5.6 thinking maps all five levels into model substitution without a redundant effort argument', () => {
+  const catalog = createBuiltinCatalog();
+  for (const modelId of ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']) {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const plan = catalog.resolveRun('cursor', 'cursor', modelId, level);
+      assert.equal(plan.model, modelId, 'the public canonical model id is retained');
+      assert.equal(plan.thinking, level);
+      assert.equal(plan.upstreamModel, `${modelId}[context=272k,reasoning=${level},fast=false]`);
+      assert.equal(plan.reasoningEffort, undefined, 'no separate effort argument is emitted');
+    }
+    // Omitting the request selects the highest declared+mapped level.
+    assert.equal(catalog.resolveRun('cursor', 'cursor', modelId).thinking, 'max');
+  }
+  // Grok is only confirmed at high, mapping to the exact cursor-grok-4.6-high id.
+  assert.deepEqual(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').thinking, 'high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').upstreamModel, 'cursor-grok-4.6-high');
+  assert.throws(() => catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'max'), /does not support thinking level max/);
+  // The legacy saved-config id remains a provider input alias to the canonical id.
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'cursor-grok-4.6-high').model, 'grok-4.6');
 });
