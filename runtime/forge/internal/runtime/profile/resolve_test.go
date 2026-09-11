@@ -8,17 +8,88 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
-func TestCursorGPT56EffortMatchesDeclaredPlan(t *testing.T) {
-	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"} {
-		env := map[string]string{}
-		applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: model, ReasoningEffort: "xhigh"})
-		if got, want := env[catalog.EnvCursorModel], model+"[context=272k,reasoning=xhigh,fast=false]"; got != want {
-			t.Fatalf("Cursor model = %q, want %q", got, want)
-		}
-		applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: model})
-		if env[catalog.EnvCursorModel] != model {
-			t.Fatal("unspecified effort should retain the bare model")
-		}
+func TestCursorUsesExplicitUpstreamModelWithoutInference(t *testing.T) {
+	// The TS plan sends the exact upstream wire model; Go must not construct a
+	// reasoning variant from the canonical model name.
+	env := map[string]string{}
+	applyDispatchModel(env, DispatchPlan{
+		Client: "cursor", Model: "gpt-5.6-sol",
+		UpstreamModel: "gpt-5.6-sol[context=272k,reasoning=max,fast=false]",
+	})
+	if got, want := env[catalog.EnvCursorModel], "gpt-5.6-sol[context=272k,reasoning=max,fast=false]"; got != want {
+		t.Fatalf("Cursor model = %q, want %q", got, want)
+	}
+
+	// A bare canonical model with no upstream mapping stays bare: no effort
+	// level is inferred from the model name.
+	env = map[string]string{}
+	applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: "gpt-5.6-sol", ReasoningEffort: "xhigh"})
+	if env[catalog.EnvCursorModel] != "gpt-5.6-sol" {
+		t.Fatalf("Cursor model = %q, want bare canonical gpt-5.6-sol", env[catalog.EnvCursorModel])
+	}
+
+	// An explicit upstream grok identity is honored verbatim.
+	env = map[string]string{}
+	applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: "grok-4.6", UpstreamModel: "cursor-grok-4.6-high"})
+	if got, want := env[catalog.EnvCursorModel], "cursor-grok-4.6-high"; got != want {
+		t.Fatalf("Cursor model = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeAndCodeBuddyMaterializeEffortArg(t *testing.T) {
+	// Claude keeps its own canonical --model and gains the mapped --effort.
+	claude := Launcher{DefaultArgs: []string{"--model", "k3"}}
+	applyDispatchLauncherModel(&claude, DispatchPlan{Client: "claude", Model: "k3", ReasoningEffort: "max"})
+	applyDispatchEffortArgs(&claude, DispatchPlan{Client: "claude", Model: "k3", ReasoningEffort: "max"})
+	if want := []string{"--model", "k3", "--effort", "max"}; !reflect.DeepEqual(claude.DefaultArgs, want) {
+		t.Fatalf("claude default args = %#v, want %#v", claude.DefaultArgs, want)
+	}
+
+	// CodeBuddy presents the wire model on argv and the mapped --effort.
+	codebuddy := Launcher{DefaultArgs: []string{"--model", "hy4-preview"}}
+	plan := DispatchPlan{Client: "codebuddy", Model: "hy4-preview", UpstreamModel: "hy4-preview-ioa", ReasoningEffort: "max"}
+	applyDispatchLauncherModel(&codebuddy, plan)
+	applyDispatchEffortArgs(&codebuddy, plan)
+	if want := []string{"--model", "hy4-preview-ioa", "--effort", "max"}; !reflect.DeepEqual(codebuddy.DefaultArgs, want) {
+		t.Fatalf("codebuddy default args = %#v, want %#v", codebuddy.DefaultArgs, want)
+	}
+}
+
+func TestEffortArgReplacesStaleValueAndPreservesUnrelatedFlags(t *testing.T) {
+	launcher := Launcher{DefaultArgs: []string{"--verbose", "--effort", "low", "--replay-user-messages"}}
+	applyDispatchEffortArgs(&launcher, DispatchPlan{Client: "claude", Model: "k3", ReasoningEffort: "max"})
+	want := []string{"--verbose", "--effort", "max", "--replay-user-messages"}
+	if !reflect.DeepEqual(launcher.DefaultArgs, want) {
+		t.Fatalf("default args = %#v, want %#v", launcher.DefaultArgs, want)
+	}
+
+	// Assignment form is replaced in place too.
+	launcher = Launcher{DefaultArgs: []string{"--effort=low", "--verbose"}}
+	applyDispatchEffortArgs(&launcher, DispatchPlan{Client: "codebuddy", Model: "hy4-preview", ReasoningEffort: "max"})
+	if got, want := launcher.DefaultArgs, []string{"--effort=max", "--verbose"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("default args = %#v, want %#v", got, want)
+	}
+}
+
+func TestNoEffortArgFabricatedWhenPlanOmitsIt(t *testing.T) {
+	launcher := Launcher{DefaultArgs: []string{"--model", "k3"}}
+	applyDispatchEffortArgs(&launcher, DispatchPlan{Client: "claude", Model: "k3"})
+	if !reflect.DeepEqual(launcher.DefaultArgs, []string{"--model", "k3"}) {
+		t.Fatalf("default args = %#v, want unchanged model-only args", launcher.DefaultArgs)
+	}
+}
+
+func TestGrokMaterializesMappedReasoningEffortEnv(t *testing.T) {
+	env := map[string]string{}
+	applyDispatchModel(env, DispatchPlan{Client: "grok", Provider: "zhipu-coding", Model: "glm-5.3", Mode: "gateway", ReasoningEffort: "low"})
+	if got := env[reasoningEffortEnv]; got != "low" {
+		t.Fatalf("%s = %q, want low", reasoningEffortEnv, got)
+	}
+	// A plan without an effort leaves the private env absent.
+	env = map[string]string{}
+	applyDispatchModel(env, DispatchPlan{Client: "grok", Provider: "zhipu-coding", Model: "glm-5.3", Mode: "gateway"})
+	if _, ok := env[reasoningEffortEnv]; ok {
+		t.Fatalf("%s set without a plan effort", reasoningEffortEnv)
 	}
 }
 
@@ -81,7 +152,10 @@ func TestResolveDispatchUsesDaemonResolvedCodeBuddyUpstreamModel(t *testing.T) {
 			Name: "cb-hy", Client: "codebuddy", Provider: "codebuddy",
 			Launcher: map[string]interface{}{"default_args": []interface{}{"--model", "hy4-preview"}},
 		},
-		DispatchPlan{Client: "codebuddy", Provider: "codebuddy", Model: "hy4-preview-ioa", Mode: "native"},
+		DispatchPlan{
+			Client: "codebuddy", Provider: "codebuddy",
+			Model: "hy4-preview", UpstreamModel: "hy4-preview-ioa", Mode: "native",
+		},
 		catalog.Client{Name: "codebuddy", Dialect: catalog.DialectCodeBuddy},
 		schema.Provider{Name: "codebuddy", CredentialResolver: schema.CredentialResolverCodeBuddy},
 		Callbacks{Credential: CredentialCallbacks{
@@ -102,8 +176,10 @@ func TestResolveDispatchUsesDaemonResolvedCodeBuddyUpstreamModel(t *testing.T) {
 			t.Fatalf("default args = %#v, want %#v", resolved.Launcher.DefaultArgs, want)
 		}
 	}
+	// Native provider validation and argv use the wire model; the source plan
+	// retains canonical identity.
 	if resolved.Provider.DefaultModel != "hy4-preview-ioa" {
-		t.Fatalf("provider model = %q, want final upstream model", resolved.Provider.DefaultModel)
+		t.Fatalf("provider model = %q, want wire hy4-preview-ioa", resolved.Provider.DefaultModel)
 	}
 }
 

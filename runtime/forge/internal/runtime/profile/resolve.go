@@ -8,15 +8,29 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
+// reasoningEffortEnv is the profile-private env var that carries the mapped
+// wire reasoning effort from plan materialization to the Grok plan builder.
+const reasoningEffortEnv = "WRENYARD_REASONING_EFFORT"
+
 type DispatchPlan struct {
-	Client   string                  `json:"client"`
-	Provider string                  `json:"provider"`
+	Client   string `json:"client"`
+	Provider string `json:"provider"`
+	// Model is the canonical provider/model identity. It stays canonical
+	// in the plan; native adapter restrictions materialize the wire form.
 	Model    string                  `json:"model"`
 	Mode     string                  `json:"mode"`
 	Protocol catalog.GatewayProtocol `json:"protocol,omitempty"`
-	// ReasoningEffort mirrors the TS Catalog plan field (camelCase). It is the
-	// model's product-owned upstream reasoning effort. Codex and the registered
-	// Cursor GPT-5.6 models materialize it using their native parameter syntax.
+	// Thinking mirrors the TS Catalog public thinking plan (camelCase). It is
+	// the product-owned thinking selection, but Go never infers an effort level
+	// from it or from the model name.
+	Thinking string `json:"thinking,omitempty"`
+	// UpstreamModel is the explicit native wire model for the client binary.
+	// When set it is used for the actual native client model argv/env, while
+	// Model stays canonical in the source plan and Gateway lookups.
+	UpstreamModel string `json:"upstreamModel,omitempty"`
+	// ReasoningEffort is the already-mapped wire reasoning-effort string. Go
+	// materializes it verbatim in the consuming client's native parameter
+	// syntax and never derives a level itself.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
@@ -49,8 +63,14 @@ func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Clien
 	if plan.Mode == "gateway" && plan.Protocol == "" {
 		return out, fmt.Errorf("dispatch plan for profile %q is missing its Gateway protocol", input.Name)
 	}
+	// Gateway lookup uses canonical ids; native adapter validation uses the
+	// exact materialized wire model. The dispatch plan identity stays canonical.
 	provider.DefaultModel = plan.Model
 	provider.AllowedModels = []string{plan.Model}
+	if plan.Mode == "native" {
+		provider.DefaultModel = dispatchNativeModel(plan)
+		provider.AllowedModels = []string{provider.DefaultModel}
+	}
 	provider.GatewayRouted = plan.Mode == "gateway"
 	provider.GatewayProtocol = plan.Protocol
 	if plan.Client == "codebuddy" {
@@ -61,6 +81,7 @@ func ResolveDispatch(input InputProfile, plan DispatchPlan, client catalog.Clien
 	out.Compatibility = CompatibilityNone
 	applyDispatchModel(out.Env, plan)
 	applyDispatchLauncherModel(&out.Launcher, plan)
+	applyDispatchEffortArgs(&out.Launcher, plan)
 	applyCCKimiMaterialization(&out, plan)
 	if plan.Mode == "gateway" {
 		out.Credential.Value = ""
@@ -81,7 +102,10 @@ func applyDispatchLauncherModel(launcher *Launcher, plan DispatchPlan) {
 	if plan.Client != "codebuddy" {
 		return
 	}
-	model := plan.Model
+	// A Gateway route must present the canonical provider/model public id so
+	// the local Gateway can look it up. A native route uses the explicit
+	// upstream wire model when the plan supplies one.
+	model := dispatchNativeModel(plan)
 	if plan.Mode == "gateway" {
 		model = plan.Provider + "/" + plan.Model
 	}
@@ -98,16 +122,60 @@ func applyDispatchLauncherModel(launcher *Launcher, plan DispatchPlan) {
 	launcher.DefaultArgs = append(launcher.DefaultArgs, "--model", model)
 }
 
+// dispatchNativeModel returns the explicit upstream wire model when the plan
+// declares one, otherwise the canonical plan model. It never derives a wire
+// form from the canonical model name.
+func dispatchNativeModel(plan DispatchPlan) string {
+	if wire := strings.TrimSpace(plan.UpstreamModel); wire != "" {
+		return wire
+	}
+	return plan.Model
+}
+
+// applyDispatchEffortArgs materializes the already-mapped wire reasoning effort
+// as --effort <value> on the Claude-family launchers (Claude and CodeBuddy). It
+// replaces any stale --effort value and preserves every unrelated flag. When
+// the plan omits an effort, no arg is fabricated and any caller-provided value
+// is left untouched.
+func applyDispatchEffortArgs(launcher *Launcher, plan DispatchPlan) {
+	if plan.Client != "claude" && plan.Client != "codebuddy" {
+		return
+	}
+	effort := strings.TrimSpace(plan.ReasoningEffort)
+	if effort == "" {
+		return
+	}
+	args := launcher.DefaultArgs
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--effort" && i+1 < len(args):
+			args[i+1] = effort
+			launcher.DefaultArgs = args
+			return
+		case strings.HasPrefix(args[i], "--effort="):
+			args[i] = "--effort=" + effort
+			launcher.DefaultArgs = args
+			return
+		}
+	}
+	launcher.DefaultArgs = append(args, "--effort", effort)
+}
+
 func applyDispatchModel(env map[string]string, plan DispatchPlan) {
 	switch plan.Client {
 	case "claude":
-		env["ANTHROPIC_MODEL"] = plan.Model
+		if plan.Mode == "gateway" {
+			// Gateway lookup consumes the canonical provider/model identity.
+			env["ANTHROPIC_MODEL"] = plan.Model
+		} else {
+			env["ANTHROPIC_MODEL"] = dispatchNativeModel(plan)
+		}
 	case "codebuddy":
 		if plan.Mode == "gateway" {
 			env["ANTHROPIC_MODEL"] = plan.Provider + "/" + plan.Model
 		}
 	case "codex":
-		env["CODEX_MODEL"] = plan.Model
+		env["CODEX_MODEL"] = dispatchNativeModel(plan)
 		// Reasoning effort is declared on the TS-resolved plan; materialize it
 		// only for the codex client and only when the plan names a level, so a
 		// caller-provided value is preserved when the plan omits the field.
@@ -119,18 +187,18 @@ func applyDispatchModel(env map[string]string, plan DispatchPlan) {
 	case "dsh":
 		env[catalog.EnvDSHModel] = plan.Provider + "/" + plan.Model
 	case "grok":
-		env["GROK_MODEL"] = grok.ModelID(plan.Provider, plan.Model)
-	case "cursor":
-		env[catalog.EnvCursorModel] = plan.Model
-		// Cursor's bare GPT-5.6 IDs default to medium. Preserve the Catalog's
-		// declared effort rather than silently running a different variant.
-		switch plan.Model {
-		case "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol":
-			switch plan.ReasoningEffort {
-			case "none", "low", "medium", "high", "xhigh", "max":
-				env[catalog.EnvCursorModel] = plan.Model + "[context=272k,reasoning=" + plan.ReasoningEffort + ",fast=false]"
-			}
+		env["GROK_MODEL"] = grok.ModelID(plan.Provider, dispatchNativeModel(plan))
+		// The Grok plan builder consumes the mapped wire effort from this
+		// profile-private env var and emits --reasoning-effort. Nothing is
+		// fabricated when the plan omits the effort.
+		if effort := strings.TrimSpace(plan.ReasoningEffort); effort != "" {
+			env[reasoningEffortEnv] = effort
 		}
+	case "cursor":
+		// Cursor's wire model is sent explicitly by the plan (for example
+		// cursor-grok-4.6-high or gpt-5.6-sol[context=272k,reasoning=max,fast=false]).
+		// Go never constructs a reasoning variant from the canonical model.
+		env[catalog.EnvCursorModel] = dispatchNativeModel(plan)
 	}
 }
 

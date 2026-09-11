@@ -650,11 +650,11 @@ function codexQuotaSnapshotService(
 
 /** Cursor Grok native profile draws on the cursor-models pool. */
 const CURSOR_GROK_QUOTA_PROFILE: ProfileFixture = {
-  exactAgentRuntime: 'cursor/cursor-grok-4.6-high:cur',
+  exactAgentRuntime: 'cursor/grok-4.6:cur',
   profile: 'cursor-grok-quota',
   client: 'cursor',
   provider: 'cursor',
-  model: 'cursor-grok-4.6-high',
+  model: 'grok-4.6',
   intelligence: 'high',
   tps: 90,
   inputUsd: 1,

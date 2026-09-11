@@ -13,7 +13,7 @@ func Module() schema.ProviderModule {
 			QuotaProvider:      "cursor",
 			CompatibleDialects: []schema.Dialect{schema.DialectCursor},
 			CredentialResolver: schema.CredentialResolverCursor,
-			AllowedModels:      []string{"composer-2.5", "cursor-grok-4.6-high", "kimi-k3", "claude-opus-5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", "muse-spark-1.3", "gemini-3.8-flash", "claude-fable-5", "claude-fable-5-1"},
+			AllowedModels:      []string{"composer-2.5", "grok-4.6", "kimi-k3", "claude-opus-5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", "muse-spark-1.3", "gemini-3.8-flash", "claude-fable-5", "claude-fable-5-1"},
 			DefaultModel:       "composer-2.5",
 			UseClientBinary:    true,
 		},
@@ -21,8 +21,8 @@ func Module() schema.ProviderModule {
 			"composer-2.5": {
 				ID: "composer-2.5", DisplayName: "Composer 2.5", ContextWindow: 200000,
 			},
-			"cursor-grok-4.6-high": {
-				ID: "cursor-grok-4.6-high", DisplayName: "Cursor Grok 4.6 High", ContextWindow: 256000,
+			"grok-4.6": {
+				ID: "grok-4.6", DisplayName: "Grok 4.6", ContextWindow: 256000,
 			},
 			"kimi-k3": {
 				ID: "kimi-k3", DisplayName: "Kimi K3", ContextWindow: 1048576,

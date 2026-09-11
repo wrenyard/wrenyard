@@ -7,7 +7,9 @@ import type {
   TaskResolvedSpeed,
   TaskUsage,
   TaskUsageCompleteness,
+  ThinkingLevel,
 } from '../../task-run-metadata-types.mts'
+import { isThinkingLevel } from '../../task-run-metadata-types.mts'
 
 /**
  * Canonical, DB-backed projection of a task run's resolved dispatch and
@@ -45,6 +47,7 @@ interface AttemptDispatchRow {
   speed_expected_tps_met: number | null
   speed_degradation_reason: string | null
   intelligence: string | null
+  thinking: string | null
   reference_pricing_input: number | null
   reference_pricing_output: number | null
   reference_pricing_cache: number | null
@@ -74,6 +77,7 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
             speed_effective_tps, speed_source, speed_sample_count,
             speed_checked_at, speed_expected_tps_met, speed_degradation_reason,
             intelligence,
+            thinking,
             reference_pricing_input, reference_pricing_output, reference_pricing_cache,
             reference_pricing_cache_write,
             reference_pricing_source, reference_pricing_checked_at,
@@ -271,12 +275,26 @@ function toResolvedDispatch(row: AttemptDispatchRow): TaskResolvedDispatch | und
     reference_pricing: pricing,
   }
   if (row.protocol) resolved.protocol = row.protocol
+  // Only a legal persisted thinking level is projected back into run metadata.
+  // NULL (legacy rows) or any unknown value is omitted rather than invented.
+  const thinking = toThinkingLevel(row.thinking)
+  if (thinking) resolved.thinking = thinking
   // Automatic attempts carry an optional routing decision. A missing, NULL,
   // malformed, incomplete, or tampered auto_routing payload is omitted without
   // invalidating the otherwise complete resolved dispatch.
   const autoRouting = parseAutoRoutingDecision(row.auto_routing)
   if (autoRouting) resolved.auto_routing = autoRouting
   return resolved
+}
+
+/**
+ * Project a persisted thinking column back into run metadata only when it is
+ * one of the legal ThinkingLevel values. NULL (legacy rows that predate the
+ * column) and any other/unknown value are omitted; a historical thinking level
+ * is never invented.
+ */
+function toThinkingLevel(raw: string | null): ThinkingLevel | undefined {
+  return isThinkingLevel(raw) ? raw : undefined
 }
 
 function toSpeed(row: AttemptDispatchRow): TaskResolvedSpeed | undefined {

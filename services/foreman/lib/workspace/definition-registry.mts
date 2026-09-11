@@ -21,7 +21,7 @@ import {
 } from '../task-timeouts.mts'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
-import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/catalog'
 import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
@@ -229,6 +229,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeClientIds,
     excludeProviderIds,
     requiresWebSearch,
+    thinking,
   } = raw
 
   // The dispatch object must contain at least one recognized hard requirement.
@@ -244,6 +245,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeClientIds,
     excludeProviderIds,
     requiresWebSearch,
+    thinking,
   ].some((value) => value !== undefined)
   if (!hasRecognizedHardRequirement) {
     throw new Error(
@@ -310,6 +312,15 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
   // hidden gate (never a search settings UI control). Accept only booleans.
   if (requiresWebSearch !== undefined && requiresWebSearch !== null && typeof requiresWebSearch !== 'boolean') {
     throw new Error(`${sourcePath} task config dispatch.requiresWebSearch must be a boolean`)
+  }
+
+  // Thinking level is a recognized dispatch requirement. It is optional both
+  // here and in the effective settings: when omitted, the Catalog selects the
+  // highest thinking level the resolved runtime supports. Only the five
+  // canonical levels are accepted (with the input alias `midium` normalized to
+  // `medium`); the definition itself is never mutated.
+  if (thinking !== undefined && (typeof thinking !== 'string' || normalizeThinkingLevel(thinking) === undefined)) {
+    throw new Error(`${sourcePath} task config dispatch.thinking must be one of: low, medium, high, xhigh, max`)
   }
 
   for (const axis of ['excludeModelIds', 'excludeProfileIds', 'excludeClientIds', 'excludeProviderIds'] as const) {
@@ -562,6 +573,11 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
   }
   validateTaskRuntimePin(definition.config, absolutePath)
   validateTaskDispatch(definition.config, absolutePath)
+  if (definition.config.dispatch?.thinking !== undefined) {
+    definition.config = { ...definition.config, dispatch: { ...definition.config.dispatch,
+      thinking: normalizeThinkingLevel(definition.config.dispatch.thinking),
+    } }
+  }
   resolveTaskCategory(definition.config, absolutePath)
   resolveTaskDisplayName(definition.config, absolutePath)
 

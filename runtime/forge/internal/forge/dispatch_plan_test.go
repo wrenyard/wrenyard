@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
       "gk-kimi":{"client":"grok","provider":"kimi-coding","model":"k3","mode":"gateway","protocol":"openai_chat"},
       "gk-grok":{"client":"grok","provider":"spacex-ai","model":"grok-4.5","mode":"native"},
       "cur-composer":{"client":"cursor","provider":"cursor","model":"composer-2.5","mode":"native"},
-      "cur-grok":{"client":"cursor","provider":"cursor","model":"cursor-grok-4.6-high","mode":"native"},
+      "cur-grok":{"client":"cursor","provider":"cursor","model":"grok-4.6","upstreamModel":"cursor-grok-4.6-high","mode":"native"},
       "cur-kimi":{"client":"cursor","provider":"cursor","model":"kimi-k3","mode":"native"},
       "cur-opus":{"client":"cursor","provider":"cursor","model":"claude-opus-5","mode":"native"}
     }`)
@@ -410,8 +410,11 @@ func TestDispatchPlanCodeBuddyIOAAdmissionMaterializesWireModels(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: canonical model %s must be admitted in the ioa environment: %v", label, model, err)
 		}
-		if plan.Model != wantWire {
-			t.Fatalf("%s: plan model = %q, want exact wire id %q", label, plan.Model, wantWire)
+		if plan.Model != model {
+			t.Fatalf("%s: canonical plan model = %q, want unchanged %q", label, plan.Model, model)
+		}
+		if plan.UpstreamModel != wantWire {
+			t.Fatalf("%s: upstream model = %q, want exact wire id %q", label, plan.UpstreamModel, wantWire)
 		}
 	}
 
@@ -450,6 +453,9 @@ func TestDispatchPlanCodeBuddyExternalAdmissionKeepsCanonicalModel(t *testing.T)
 	if plan.Model != "hy4-preview" {
 		t.Fatalf("external plan model = %q, want unchanged canonical hy4-preview", plan.Model)
 	}
+	if plan.UpstreamModel != "hy4-preview" {
+		t.Fatalf("external plan upstream model = %q, want unchanged canonical hy4-preview", plan.UpstreamModel)
+	}
 }
 
 func TestDispatchPlanCodeBuddyTokenRefreshKeepsStableIdentityAdmitted(t *testing.T) {
@@ -465,8 +471,8 @@ func TestDispatchPlanCodeBuddyTokenRefreshKeepsStableIdentityAdmitted(t *testing
 	if err != nil {
 		t.Fatalf("first admission must succeed: %v", err)
 	}
-	if plan.Model != "hy4-preview-ioa" {
-		t.Fatalf("plan model = %q, want hy4-preview-ioa", plan.Model)
+	if plan.Model != "hy4-preview" || plan.UpstreamModel != "hy4-preview-ioa" {
+		t.Fatalf("plan = model %q upstream %q, want canonical hy4-preview with wire hy4-preview-ioa", plan.Model, plan.UpstreamModel)
 	}
 
 	// Refresh the access token: same stable identity, domain, and environment,
@@ -476,8 +482,8 @@ func TestDispatchPlanCodeBuddyTokenRefreshKeepsStableIdentityAdmitted(t *testing
 	if err != nil {
 		t.Fatalf("token refresh with a stable identity must remain admitted: %v", err)
 	}
-	if plan.Model != "hy4-preview-ioa" {
-		t.Fatalf("post-refresh plan model = %q, want hy4-preview-ioa", plan.Model)
+	if plan.Model != "hy4-preview" || plan.UpstreamModel != "hy4-preview-ioa" {
+		t.Fatalf("post-refresh plan = model %q upstream %q, want canonical hy4-preview with wire hy4-preview-ioa", plan.Model, plan.UpstreamModel)
 	}
 }
 
@@ -646,5 +652,29 @@ func TestDispatchPlanNonCodeBuddyPlansUnaffectedByMissingContext(t *testing.T) {
 	}
 	if gateway.Client != "claude" || gateway.Provider != "kimi-coding" || gateway.Model != "k3" {
 		t.Fatalf("gateway plan mutated without admission context: %#v", gateway)
+	}
+}
+
+func TestDaemonThinkingJSONContract(t *testing.T) {
+	t.Setenv("WRENYARD_DISPATCH_PLANS_JSON", `{
+  "chatgpt/gpt-5.6-sol:codex":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-sol","mode":"native","thinking":"low","reasoningEffort":"low"},
+  "chatgpt/gpt-6-astra:codex":{"client":"codex","provider":"chatgpt","model":"gpt-6-astra","mode":"native","thinking":"max","reasoningEffort":"max"},
+  "cursor/grok-4.6:cur":{"client":"cursor","provider":"cursor","model":"grok-4.6","mode":"native","thinking":"high","upstreamModel":"cursor-grok-4.6-high"}
+ }`)
+	for target, expected := range map[string]string{"chatgpt/gpt-5.6-sol:codex": "low", "chatgpt/gpt-6-astra:codex": "max", "cursor/grok-4.6:cur": "high"} {
+		plan, err := dispatchPlanForProfile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Thinking != expected {
+			t.Fatalf("thinking = %q, want %q", plan.Thinking, expected)
+		}
+		if plan.Client == "cursor" {
+			if plan.Model != "grok-4.6" || plan.UpstreamModel != "cursor-grok-4.6-high" {
+				t.Fatalf("bad Cursor model contract: %#v", plan)
+			}
+		} else if plan.ReasoningEffort != expected {
+			t.Fatalf("wire effort = %q", plan.ReasoningEffort)
+		}
 	}
 }

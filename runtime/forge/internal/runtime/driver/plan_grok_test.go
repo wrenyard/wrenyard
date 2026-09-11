@@ -131,6 +131,34 @@ func TestGrokRestrictedOAuthPlanGuardsSourceAndMaterializedDestination(t *testin
 	}
 }
 
+func TestGrokPlanMaterializesMappedReasoningEffort(t *testing.T) {
+	req := grokPlanRequest(t, catalog.PermissionReadonly)
+	req.Spec.Env = map[string]string{
+		"GROK_MODEL":                       "forge-zhipu-coding--glm-5-3",
+		"WRENYARD_REASONING_EFFORT":        "low",
+	}
+	plan, err := buildGrokPlan(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsOrderedArgs(plan.Command, "--model", "forge-zhipu-coding--glm-5-3", "--reasoning-effort", "low") {
+		t.Fatalf("Grok plan missing mapped --reasoning-effort: %v", plan.Command)
+	}
+	if containsArg(plan.Command, "max") {
+		t.Fatalf("Grok plan fabricated an effort: %v", plan.Command)
+	}
+}
+
+func TestGrokPlanOmitsReasoningEffortWhenPlanOmitsIt(t *testing.T) {
+	plan, err := buildGrokPlan(grokPlanRequest(t, catalog.PermissionReadonly))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(plan.Command, "--reasoning-effort") {
+		t.Fatalf("Grok plan fabricated --reasoning-effort without a plan value: %v", plan.Command)
+	}
+}
+
 func TestGrokPlanResumeAndCapabilityBashEncoding(t *testing.T) {
 	req := grokPlanRequest(t, catalog.PermissionEdit)
 	req.ResumeSessionID = "native-session-123"

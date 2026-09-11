@@ -2257,6 +2257,7 @@ import { writeFileSync } from 'node:fs'
 const inherited = Object.fromEntries(Object.entries(process.env))
 writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({
   FOREMAN_TASK_RUN_ID: process.env.FOREMAN_TASK_RUN_ID,
+  WRENYARD_DISPATCH_PLANS_JSON: process.env.WRENYARD_DISPATCH_PLANS_JSON,
   PATH: process.env.PATH,
   FOREMAN_ENV_TEST_SENTINEL: process.env.FOREMAN_ENV_TEST_SENTINEL,
   WRENYARD_CODEBUDDY_EXPECTED_SCOPE: inherited.WRENYARD_CODEBUDDY_EXPECTED_SCOPE,
@@ -2318,3 +2319,40 @@ function runFinishedFinalEvent(): Record<string, unknown> {
     },
   }
 }
+
+
+it('spawns automatic low and max with isolated per-attempt plans', async () => {
+  const cwd = makeTempDir('foreman-thinking-plans-')
+  const now = new Date().toISOString()
+  const taskId = 'task_thinking_isolation'
+  db.prepare(`INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
+    VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`).run(taskId, now, now)
+  const profile = 'chatgpt/gpt-5.6-sol:codex'
+  const previous = process.env.WRENYARD_DISPATCH_PLANS_JSON
+  const defaults = JSON.stringify({ other: { model: 'other' }, [profile]: { thinking: 'max' } })
+  process.env.WRENYARD_DISPATCH_PLANS_JSON = defaults
+  const supervisor = makeSupervisor()
+  try {
+    for (const thinking of ['low', 'max'] as const) {
+      const envPath = join(cwd, `${thinking}.json`)
+      installFakeForgeEnvRecorder(cwd, envPath, [forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0 })])
+      const snapshot: TaskResolvedDispatch = {
+        requested_agent_runtime: '', profile, client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol',
+        model_id: 'chatgpt/gpt-5.6-sol', mode: 'native', thinking, intelligence: 'high',
+        speed: { effective_tps: 60, source: 'catalog_default', sample_count: 0, checked_at: now, expected_tps_met: true },
+        reference_pricing: { source: 'catalog', checked_at: now },
+      }
+      const handle = await supervisor.startExecution({ profile, cwd, prompt: 'echo', permission: 'readonly', taskId, dispatchSnapshot: snapshot })
+      assert.equal((await handle.wait()).status, 'done')
+      const plans = JSON.parse(JSON.parse(readFileSync(envPath, 'utf8')).WRENYARD_DISPATCH_PLANS_JSON)
+      assert.equal(plans[profile].thinking, thinking)
+      assert.equal(plans[profile].reasoningEffort, thinking)
+      assert.equal(plans[profile].model, 'gpt-5.6-sol')
+      assert.deepEqual(plans.other, { model: 'other' })
+      assert.equal(process.env.WRENYARD_DISPATCH_PLANS_JSON, defaults)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.WRENYARD_DISPATCH_PLANS_JSON
+    else process.env.WRENYARD_DISPATCH_PLANS_JSON = previous
+  }
+})

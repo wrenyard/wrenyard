@@ -619,7 +619,7 @@ test('Cursor Other shares the raw cursor row but binds cursor/other using indepe
     windows: ['Cursor', 'Other', 'Claude'].map((name) => ({ name, pct: name === 'Cursor' ? 100 : 25, resets_at: iso(T0 + 86_400_000), window_minutes: 43_800 })),
   }]).snapshot();
 
-  const grok = entryFor(snapshot, 'cursor', 'cursor-grok-4.6-high');
+  const grok = entryFor(snapshot, 'cursor', 'grok-4.6');
   assert.deepEqual([...grok.quotaPoolIds], ['cursor/cursor']);
   assert.deepEqual(grok.requiredQuota.map((constraint) => constraint.id), ['cursor/cursor']);
   assert.equal(grok.requiredQuota[0]!.evidence!.remainingPercent, 0);

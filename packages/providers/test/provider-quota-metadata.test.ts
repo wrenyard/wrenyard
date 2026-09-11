@@ -80,7 +80,7 @@ test('there is exactly one ChatGPT provider and no codex-spark provider remains'
 });
 
 test('Cursor binds Grok and Composer to the Cursor pool and third-party models to Other', () => {
-  const grok = expectBinding('cursor', 'cursor-grok-4.6-high');
+  const grok = expectBinding('cursor', 'grok-4.6');
   assert.deepEqual(bindingWindowIds(grok), ['Cursor']);
   assert.deepEqual(bindingPoolIds(grok), ['cursor/cursor']);
 
@@ -191,7 +191,7 @@ test('unsupported providers, models, and near variants resolve by provider fallb
   // Unknown provider -> no binding at all.
   assert.equal(findProviderQuotaBinding('unknown-provider', 'claude-sonnet-4.5'), undefined);
   // Registered provider + unknown model -> provider-default binding, never exact catalog resources.
-  const variant = findProviderQuotaBinding('cursor', 'cursor-grok-4.6');
+  const variant = findProviderQuotaBinding('cursor', 'cursor-grok-4.6-high');
   assert.ok(variant);
   assert.deepEqual(bindingWindowIds(variant!), []);
 });

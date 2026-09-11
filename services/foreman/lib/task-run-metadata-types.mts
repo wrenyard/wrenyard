@@ -7,6 +7,14 @@
 
 export type TaskUsageCompleteness = 'complete' | 'partial' | 'unavailable'
 
+import { THINKING_LEVELS, type ThinkingLevel } from '@wrenyard/catalog'
+export type { ThinkingLevel } from '@wrenyard/catalog'
+export { THINKING_LEVELS } from '@wrenyard/catalog'
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value)
+}
+
 export interface TaskResolvedSpeed {
   effective_tps: number
   source: 'local_31d' | 'provider_override' | 'catalog_default'
@@ -66,6 +74,8 @@ export interface TaskResolvedDispatch {
   intelligence: string
   reference_pricing: TaskReferencePricing
   protocol?: string
+  /** Legal per-run thinking level; absent on legacy dispatches that never chose one. */
+  thinking?: ThinkingLevel
   /** Present only on a resolved automatic dispatch; never on an explicit one. */
   auto_routing?: TaskAutoRoutingDecision
 }

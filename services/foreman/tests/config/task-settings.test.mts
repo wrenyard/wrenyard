@@ -335,6 +335,55 @@ describe('resolveEffectiveTaskSettings requiresWebSearch', () => {
   })
 })
 
+describe('resolveEffectiveTaskSettings thinking', () => {
+  it('stays absent by default so the Catalog selects the highest supported level', () => {
+    const result = resolveEffectiveTaskSettings({})
+    assert.equal(result.dispatch.thinking, undefined)
+    assert.equal(result.sources.dispatch?.thinking, undefined)
+  })
+
+  it('normalizes the canonical levels low and max through camel and snake keys', () => {
+    const low = normalizeTaskSettingsLayer({ dispatch: { thinking: 'low' } })
+    assert.equal(low.dispatch?.thinking, 'low')
+    const maxSnake = normalizeTaskSettingsLayer({ dispatch: { thinking: 'max' } })
+    assert.equal(maxSnake.dispatch?.thinking, 'max')
+  })
+
+  it('accepts midium only as an input alias and normalizes it to medium', () => {
+    const normalized = normalizeTaskSettingsLayer({ dispatch: { thinking: 'midium' } })
+    assert.equal(normalized.dispatch?.thinking, 'medium')
+  })
+
+  it('rejects an unknown or non-string thinking value', () => {
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { thinking: 'frontier' } }),
+      /dispatch\.thinking must be one of: low, medium, high, xhigh, max/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { thinking: 3 as unknown as string } }),
+      /dispatch\.thinking must be one of: low, medium, high, xhigh, max/,
+    )
+  })
+
+  it('merges thinking per field with rightmost-defined precedence and per-field source', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { thinking: 'low' } },
+      userTask: { dispatch: { thinking: 'high' } },
+    })
+    assert.equal(result.dispatch.thinking, 'high')
+    assert.equal(result.sources.dispatch?.thinking, 'user_task')
+  })
+
+  it('re-inherits the lower thinking value when the winning layer omits it', () => {
+    const result = resolveEffectiveTaskSettings({
+      builtin: { dispatch: { thinking: 'low' } },
+      userTask: { dispatch: { minimumTps: 42 } },
+    })
+    assert.equal(result.dispatch.thinking, 'low')
+    assert.equal(result.sources.dispatch?.thinking, 'builtin_task')
+  })
+})
+
 describe('resolveEffectiveTaskSettings mode switching', () => {
   it('ignores an inherited explicit reference when a higher layer is automatic', () => {
     const result = resolveEffectiveTaskSettings(

@@ -191,20 +191,39 @@ test('runtime task plans compile canonical targets and keep CodeBuddy iOA remap 
   assert.equal(logical['codebuddy/glm-5.3-flash:cb']?.model, 'glm-5.3-flash');
 
   const plans = await resolveRuntimeTaskPlans(catalog, runtime);
-  assert.equal(plans['codebuddy/hy4-preview:cb']?.model, 'hy4-preview-ioa');
-  assert.equal(plans['codebuddy/hy3:cb']?.model, 'hy3-ioa');
-  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb']?.model, 'deepseek-v4.1-flash-ioa');
+  // The public canonical model id is retained; the private iOA remap lands in upstreamModel.
+  assert.equal(plans['codebuddy/hy4-preview:cb']?.model, 'hy4-preview');
+  assert.equal(plans['codebuddy/hy4-preview:cb']?.upstreamModel, 'hy4-preview-ioa');
+  assert.equal(plans['codebuddy/hy3:cb']?.model, 'hy3');
+  assert.equal(plans['codebuddy/hy3:cb']?.upstreamModel, 'hy3-ioa');
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb']?.model, 'deepseek-v4.1-flash');
+  assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb']?.upstreamModel, 'deepseek-v4.1-flash-ioa');
   assert.equal(plans['codebuddy/deepseek-v4-pro:cb'], undefined);
   assert.equal(plans['codebuddy/deepseek-v4-flash:cb'], undefined);
-  assert.equal(plans['codebuddy/minimax-m3:cb']?.model, 'minimax-m3-ioa');
+  assert.equal(plans['codebuddy/minimax-m3:cb']?.model, 'minimax-m3');
+  assert.equal(plans['codebuddy/minimax-m3:cb']?.upstreamModel, 'minimax-m3-ioa');
   assert.equal(plans['codebuddy/kimi-k3:cb']?.model, 'kimi-k3');
+  assert.equal(plans['codebuddy/kimi-k3:cb']?.upstreamModel, undefined);
   assert.equal(plans['codebuddy/glm-5.3:cb']?.model, 'glm-5.3');
+  assert.equal(plans['codebuddy/glm-5.3:cb']?.upstreamModel, undefined);
   assert.equal(plans['codebuddy/glm-5.3-flash:cb']?.model, 'glm-5.3-flash');
+  assert.equal(plans['codebuddy/glm-5.3-flash:cb']?.upstreamModel, undefined);
   // Canonical target keys are preserved through the runtime remap.
   assert.deepEqual(Object.keys(plans), Object.keys(logical));
-  // The private iOA suffix never leaks into public plan keys.
+  // The private iOA suffix never leaks into public plan keys or the public model field.
   assert.ok(!Object.keys(logical).some((key) => key.includes('hy3-ioa')));
   assert.ok(!Object.keys(plans).some((key) => key.includes('hy3-ioa')));
+  assert.ok(!Object.values(plans).some((plan) => plan.model.includes('-ioa')));
+});
+
+test('runtime task plans honor an explicit thinking-mapped upstream model over the provider remap', async () => {
+  const catalog = createBuiltinCatalog();
+  // A native Cursor run has no provider-level remap; the thinking mapping's
+  // own upstream substitution must survive compilation.
+  const runtime = createBuiltinProviderRuntime({ readFile: async () => '' });
+  const plans = await resolveRuntimeTaskPlans(catalog, runtime);
+  assert.equal(plans['cursor/gpt-5.6-sol:cur']?.model, 'gpt-5.6-sol');
+  assert.equal(plans['cursor/gpt-5.6-sol:cur']?.upstreamModel, 'gpt-5.6-sol[context=272k,reasoning=max,fast=false]');
 });
 
 test('CodeBuddy iOA credentials confirm free only for the exact verified HY3/HY4 canonical and wire models', async () => {

@@ -478,10 +478,11 @@ func isCodeBuddyNativePlan(plan profilepkg.DispatchPlan) bool {
 // environment, and expected wire model, supplied through the Forge-private
 // driver env names) matches the current login resolved independently from
 // current auth/product state via CodeBuddyActiveScope. On success it returns a
-// copy whose Model has been replaced in memory with the wire model derived
-// from the current environment and the plan's canonical model. Errors are
-// generic and never contain actual or expected scope, environment, domain,
-// account, token, or wire values.
+// copy whose UpstreamModel has been replaced in memory with the wire model
+// derived from the current environment and the plan's canonical model; the
+// canonical Model is never mutated. Errors are generic and never contain
+// actual or expected scope, environment, domain, account, token, or wire
+// values.
 func bindCodeBuddyDispatchPlan(plan profilepkg.DispatchPlan) (profilepkg.DispatchPlan, error) {
 	expectedScope := strings.TrimSpace(os.Getenv(driver.CodeBuddyExpectedScopeEnv))
 	expectedEnvironment := strings.TrimSpace(os.Getenv(driver.CodeBuddyExpectedEnvironmentEnv))
@@ -496,10 +497,13 @@ func bindCodeBuddyDispatchPlan(plan profilepkg.DispatchPlan) (profilepkg.Dispatc
 	if current.Scope != expectedScope || current.Environment != expectedEnvironment {
 		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan does not match the current login")
 	}
-	if wire := codeBuddyWireModel(current.Environment, plan.Model); wire != expectedWire {
+	wire := codeBuddyWireModel(current.Environment, plan.Model)
+	if wire != expectedWire {
 		return profilepkg.DispatchPlan{}, fmt.Errorf("codebuddy dispatch plan does not match the current environment")
 	}
-	plan.Model = codeBuddyWireModel(current.Environment, plan.Model)
+	// The wire remap is private to the native client model form; the canonical
+	// plan Model stays canonical for every other consumer.
+	plan.UpstreamModel = wire
 	return plan, nil
 }
 

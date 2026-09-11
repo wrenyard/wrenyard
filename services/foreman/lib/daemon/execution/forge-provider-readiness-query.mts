@@ -1,3 +1,4 @@
+import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers'
 /**
  * Bounded, non-inference access to Forge's authoritative provider auth status.
  *
@@ -141,7 +142,11 @@ function projectCursorModelAvailabilityMap(raw: unknown): Readonly<Record<string
     if (!isSafeModelId(id)) continue
     const parsed = parseOneModelAvailability(value)
     if (parsed === undefined) continue
-    projected[id] = parsed
+    const canonicalId = canonicalizeBuiltinPublicModelId(`cursor/${id}`).slice('cursor/'.length)
+    const previous = projected[canonicalId]
+    projected[canonicalId] = previous !== undefined
+      && (previous.status !== parsed.status || previous.reason !== parsed.reason)
+      ? { status: 'unknown' } : parsed
   }
   return Object.freeze(projected)
 }

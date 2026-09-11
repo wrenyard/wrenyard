@@ -85,7 +85,7 @@ const definition = {
   config: {
     description:
       'File-level edit executor - apply precise create/update/remove instructions and report changes as evidence.',
-    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
+    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
     permission: 'edit',
     writeTargets: (input: unknown): readonly string[] => {
       const editInput = input as EditInput

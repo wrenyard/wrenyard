@@ -16,6 +16,7 @@ import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protoc
 import { RepoWriteLocks, requiresRepoWriteLock } from './repo-write-locks.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
 import { parseRunSyntax } from '@wrenyard/catalog'
+import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,
   AgentRuntimePermission,
@@ -231,12 +232,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
               execution_id, task_run_id, requested_agent_runtime,
               profile, client, provider, model, model_id, mode, protocol,
               speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
-              speed_expected_tps_met, speed_degradation_reason, intelligence,
+              speed_expected_tps_met, speed_degradation_reason, intelligence, thinking,
               reference_pricing_input, reference_pricing_output, reference_pricing_cache,
               reference_pricing_cache_write, reference_pricing_source, reference_pricing_checked_at,
               auto_routing,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             executionId,
             opts.taskId,
             snap.requested_agent_runtime ?? null,
@@ -254,6 +255,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             snap.speed.expected_tps_met ? 1 : 0,
             snap.speed.degradation_reason ?? null,
             snap.intelligence ?? null,
+            snap.thinking ?? null,
             snap.reference_pricing.input_usd_per_million ?? null,
             snap.reference_pricing.output_usd_per_million ?? null,
             snap.reference_pricing.cached_input_usd_per_million ?? null,
@@ -617,6 +619,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           process.env,
           opts.taskId,
           entry.codeBuddyExecution,
+          this.buildThinkingPlanEnv(entry.executionId),
         ),
       })
     } catch (error) {
@@ -1388,6 +1391,32 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     return row?.resolved_profile ?? null
   }
 
+  /**
+   * Resolve the dispatch-plan override for this exact execution attempt's
+   * persisted thinking choice. The snapshot is read from the attempt's own
+   * `task_run_attempt_dispatch` row (never the latest attempt of the task), so
+   * a queued execution promoted later still spawns with the thinking level it
+   * was admitted with. Only when a legal thinking value is persisted does this
+   * build a fresh plan through the builtin catalog; legacy runs without a
+   * snapshot return undefined and spawn exactly as before. The returned value
+   * is a plan keyed by the attempt's own canonical profile only — it never
+   * mutates the process env or any global/default plans.
+   */
+  private buildThinkingPlanEnv(executionId: string): ThinkingPlanEnvOverride | undefined {
+    const row = this.get<AttemptThinkingRow>(
+      `SELECT thinking, provider, model, profile, mode, requested_agent_runtime, client
+       FROM task_run_attempt_dispatch WHERE execution_id = ?`,
+      executionId,
+    )
+    const thinking = row ? toPersistedThinkingLevel(row.thinking) : undefined
+    if (!row || !thinking) return undefined
+    if ((row.mode !== 'native' && row.mode !== 'gateway') || !row.client || !row.provider || !row.model || !row.profile) {
+      throw new Error('Persisted thinking dispatch is incomplete')
+    }
+    const plan = createBuiltinCatalog().resolveRun(row.client, row.provider, row.model, thinking)
+    return { profile: row.profile, plan }
+  }
+
   private captureResolvedProfileOnce(executionId: string, profile: string, timestamp: string): void {
     this.run(
       `UPDATE executions
@@ -1483,10 +1512,36 @@ const CODEBUDDY_PRIVATE_ENV_NAMES = new Set([
   CODEBUDDY_EXPECTED_WIRE_MODEL_ENV,
 ].map((name) => name.toLowerCase()))
 
-function resolveTaskAgentEnv(
+/** Child-env key carrying the per-run dispatch plan map, copied and narrowed per spawn. */
+const DISPATCH_PLANS_ENV = 'WRENYARD_DISPATCH_PLANS_JSON'
+
+/** A single per-run dispatch plan override keyed by its canonical profile. */
+interface ThinkingPlanEnvOverride {
+  profile: string
+  plan: unknown
+}
+
+interface AttemptThinkingRow {
+  thinking: string | null
+  provider: string | null
+  model: string | null
+  profile: string | null
+  mode: string | null
+  requested_agent_runtime: string | null
+  client: string | null
+}
+
+function toPersistedThinkingLevel(raw: string | null): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
+  return raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
+    ? raw
+    : undefined
+}
+
+export function resolveTaskAgentEnv(
   env: NodeJS.ProcessEnv,
   taskRunId?: string,
   codeBuddyExecution?: CodeBuddyExecutionBinding,
+  thinkingPlan?: ThinkingPlanEnvOverride,
 ): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
   // Forge child unchanged, then drop any stale inherited task context...
@@ -1506,7 +1561,34 @@ function resolveTaskAgentEnv(
     next[CODEBUDDY_EXPECTED_ENVIRONMENT_ENV] = codeBuddyExecution.expectedEnvironment
     next[CODEBUDDY_EXPECTED_WIRE_MODEL_ENV] = codeBuddyExecution.expectedWireModel
   }
+  // Per-run thinking plan: overwrite ONLY this run's canonical profile entry in a
+  // freshly parsed copy of the inherited plan map, preserving every other plan.
+  // The process env and any global/default plan map are never mutated, so
+  // concurrent children cannot leak a thinking level into one another.
+  if (thinkingPlan) {
+    const plans = parseDispatchPlans(next[DISPATCH_PLANS_ENV])
+    plans[thinkingPlan.profile] = thinkingPlan.plan
+    next[DISPATCH_PLANS_ENV] = JSON.stringify(plans)
+  }
   return next
+}
+
+/**
+ * Parse the inherited dispatch-plan map exactly, without mutating the source
+ * string. Malformed or non-object values yield an empty map so only this run's
+ * plan is injected rather than corrupting the child's plan configuration.
+ */
+function parseDispatchPlans(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { ...(parsed as Record<string, unknown>) }
+    }
+  } catch {
+    // fall through to an empty map
+  }
+  return {}
 }
 
 export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] {

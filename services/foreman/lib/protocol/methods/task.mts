@@ -42,6 +42,9 @@ export interface TaskDispatchRequirements {
   /** Hidden dispatch requirement: the dispatched plan must admit native web
    *  search. Enforced as a hard gate; never surfaced in any search settings UI. */
   requiresWebSearch?: boolean
+  /** Optional thinking level the dispatched runtime must support. When omitted,
+   *  the highest level the resolved runtime supports is selected. */
+  thinking?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
 export interface TaskDefinitionSummary {
@@ -245,6 +248,7 @@ const taskDispatchRequirementsSchema = {
     excludeClientIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeProviderIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     requiresWebSearch: { type: 'boolean' },
+    thinking: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -558,6 +562,7 @@ export type TaskSettingsMode = 'automatic' | 'explicit'
 
 export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium'
 export type TaskSettingsCapability = 'text' | 'image'
+export type TaskSettingsThinking = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Source layer that supplied an effective settings field; higher index wins. */
 export type TaskSettingsSourceLayer =
@@ -601,6 +606,9 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_provider_ids?: readonly string[]
   /** Hidden web search requirement; mirrors TaskDispatchRequirements.requiresWebSearch. Not a UI control. */
   requires_web_search?: boolean
+  /** Optional thinking level; mirrors TaskDispatchRequirements.thinking. Absent
+   *  means the Catalog selects the highest level the runtime supports. */
+  thinking?: TaskSettingsThinking
 }
 
 export type TaskSettingsAutomaticPatch = {
@@ -647,6 +655,9 @@ export interface TaskSettingsEffectiveAutomatic {
   exclude_provider_ids: TaskSettingsSourcedValue<string[] | null>
   /** Hidden web search requirement; sourced from the same dispatch merge. Not a UI control. */
   requires_web_search?: TaskSettingsSourcedValue<boolean | null>
+  /** Thinking level; sourced from the same dispatch merge. Absent means the
+   *  Catalog selects the highest level the runtime supports. */
+  thinking?: TaskSettingsSourcedValue<TaskSettingsThinking | null>
 }
 
 export interface TaskSettingsEffective {
@@ -901,6 +912,10 @@ const taskSettingsCapabilitySchema = {
   enum: ['text', 'image'],
 } as const satisfies JsonSchema
 
+const taskSettingsThinkingSchema = {
+  enum: ['low', 'medium', 'high', 'xhigh', 'max'],
+} as const satisfies JsonSchema
+
 const taskSettingsSourceLayerSchema = {
   enum: ['system', 'builtin', 'user_global', 'user_task', 'invocation'],
 } as const satisfies JsonSchema
@@ -957,6 +972,7 @@ export const taskSettingsAutomaticDispatchSchema = {
     exclude_client_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_provider_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     requires_web_search: { type: 'boolean' },
+    thinking: { enum: ['low', 'medium', 'midium', 'high', 'xhigh', 'max'] },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -976,6 +992,7 @@ const taskSettingsAutomaticPatchSchema = {
     max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
     requires_web_search: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+    thinking: { anyOf: [{ enum: ['low', 'medium', 'midium', 'high', 'xhigh', 'max'] }, { type: 'null' }] },
     exclude_model_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_client_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
@@ -1112,6 +1129,16 @@ const taskSettingsSourcedBooleanSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskSettingsSourcedThinkingSchema = {
+  type: 'object',
+  required: ['value', 'source'],
+  properties: {
+    value: { anyOf: [taskSettingsThinkingSchema, { type: 'null' }] },
+    source: taskSettingsSourceLayerSchema,
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskSettingsEffectiveAutomaticSchema = {
   type: 'object',
   required: [
@@ -1138,6 +1165,7 @@ const taskSettingsEffectiveAutomaticSchema = {
     exclude_client_ids: taskSettingsSourcedNullableStringArraySchema,
     exclude_provider_ids: taskSettingsSourcedNullableStringArraySchema,
     requires_web_search: taskSettingsSourcedBooleanSchema,
+    thinking: taskSettingsSourcedThinkingSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
