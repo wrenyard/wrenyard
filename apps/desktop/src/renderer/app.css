@@ -749,6 +749,22 @@ button, input, select { accent-color: var(--moss-deep); }
 .routing-test-form .multi-select-search,
 .routing-test-form .multi-select-option { min-width: 0; white-space: normal; }
 
+/* Searchable single-select: reuses the multi-select foundation, adds a
+   trigger width so long task labels ellipsize and a bounded option scroll. */
+.single-select { position: relative; min-width: 0; }
+.single-select-popup { max-height: min(280px, 50vh); }
+.single-select-option {
+  min-height: 30px;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.single-select-option::after { content: none; }
+.single-select-option[aria-selected="true"] { color: var(--ink); background: #f8f0dc; box-shadow: inset 2px 0 var(--moss-deep); }
+.routing-test-toolbar .single-select { flex: 0 1 240px; min-width: 0; }
+.routing-test-toolbar .single-select .multi-select-trigger { min-height: 34px; font-size: 12px; }
+
 @media (max-width: 820px) {
   .routing-test-form { grid-template-columns: max-content minmax(0, 1fr); }
   .routing-test-head { align-items: stretch; }

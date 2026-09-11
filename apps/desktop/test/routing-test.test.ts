@@ -131,7 +131,8 @@ test('HTML hosts supply/routing tabs, keeps the supply config together, and turn
   const routingMarkup = html.slice(routingStart, routingEnd);
   assert.match(routingMarkup, /id="routing-test-run"[^>]*>测试</);
   assert.match(routingMarkup, /id="routing-test-import-select"/);
-  assert.match(routingMarkup, /aria-label="Task 模板"/);
+  const app = await readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8');
+  assert.match(app, /label: 'Task 模板'/);
   assert.match(routingMarkup, /id="routing-test-minimum-tps"/);
   assert.match(routingMarkup, /id="routing-test-expected-tps"/);
   assert.match(routingMarkup, /id="routing-test-output-cap"/);
@@ -224,7 +225,11 @@ test('picker labels distinguish project tasks and Chinese names', () => {
   assert.equal(routingTestTaskLabel(importedTask()), '编辑文件');
   assert.equal(
     routingTestTaskLabel(importedTask({ identity: 'project:core:build', project: 'core', display_name: '构建' })),
-    '构建（项目 core）',
+    '构建 · core',
+  );
+  assert.equal(
+    routingTestTaskLabel(importedTask({ identity: 'project:gol:build', project: 'gol', display_name: '构建' })),
+    '构建 · GOL',
   );
 });
 
@@ -299,7 +304,7 @@ test('importing tasks is lazy, caches a successful list, and suppresses concurre
   assert.equal(harness.importQueue.length, 1, 'concurrent fetch is suppressed');
   harness.resolveImportNext({ tasks: [importedTask()] });
   await firstImport;
-  assert.equal(harness.picker.children.length, 2, 'placeholder + one imported task');
+  assert.equal(harness.picker.options.length, 2, 'placeholder + one imported task');
   await harness.controller.importTasks();
   assert.equal(harness.importQueue.length, 0, 'successful list is cached');
 });
@@ -314,7 +319,7 @@ test('failed import stays visible in the result region and can be retried', asyn
   assert.equal(harness.importQueue.length, 1, 'failure allows retry');
   harness.resolveImportNext({ tasks: [importedTask()] });
   await retry;
-  assert.equal(harness.picker.children.length, 2);
+  assert.equal(harness.picker.options.length, 2);
 });
 
 test('selecting an imported task copies its fields and does not request a test or persist', async () => {
@@ -356,7 +361,7 @@ test('an error exposes a bounded message', async () => {
 interface Harness {
   controller: RoutingTestController;
   runButton: HTMLButtonElement;
-  picker: HTMLSelectElement;
+  picker: FakePicker;
   result: HTMLElement;
   applied: TaskRoutingTestTask[];
   queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }>;
@@ -368,9 +373,24 @@ interface Harness {
   rejectImportNext(error: unknown): void;
 }
 
+/** Minimal stand-in for the picker's {value, setOptions} surface. */
+interface FakePicker {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  setOptions(options: { value: string; label: string }[]): void;
+}
+
+function fakePicker(): FakePicker {
+  return {
+    value: '',
+    options: [],
+    setOptions(options) { this.options = options; },
+  };
+}
+
 function controllerHarness(): Harness {
   const runButton = fakeElement('button') as unknown as HTMLButtonElement;
-  const picker = fakeElement('select') as unknown as HTMLSelectElement;
+  const picker = fakePicker();
   const result = fakeElement('div') as unknown as HTMLElement;
   const queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }> = [];
   const importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }> = [];
