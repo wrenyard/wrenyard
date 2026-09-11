@@ -118,9 +118,6 @@ const CURSOR_POOL = quotaPool('cursor/cursor', [
 const CURSOR_OTHER_POOL = quotaPool('cursor/other', [
   quotaWindow('Other', 'full_cycle', 'provider_parser', CURSOR_PARSER, '2026-09-10'),
 ]);
-const CURSOR_CLAUDE_POOL = quotaPool('cursor/claude', [
-  quotaWindow('Claude', 'full_cycle', 'provider_parser', CURSOR_PARSER, '2026-09-10'),
-]);
 
 const KIMI_5H_POOL = quotaPool('kimi-coding/5h', [
   quotaWindow('5h', 'rolling_partial', 'official_docs', KIMI_DOCS),
@@ -154,10 +151,18 @@ const CHATGPT_SPARK_MODEL_ID = 'gpt-5.3-codex-spark';
 
 const explicitBindings: ProviderQuotaBinding[] = [
   binding('cursor', 'cursor-grok-4.6-high', [CURSOR_POOL]),
-  // K3 consumes the Other allowance, independently of the Cursor model pool.
-  binding('cursor', 'kimi-k3', [CURSOR_OTHER_POOL]),
   binding('cursor', 'composer-2.5', [CURSOR_POOL]),
-  binding('cursor', 'claude-opus-5', [CURSOR_CLAUDE_POOL]),
+  // Third-party Cursor models consume the Other allowance, not the Cursor pool.
+  binding('cursor', 'kimi-k3', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'claude-opus-5', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'gpt-5.6-luna', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'gpt-5.6-terra', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'gpt-5.6-sol', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'claude-sonnet-5', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'muse-spark-1.3', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'gemini-3.8-flash', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'claude-fable-5', [CURSOR_OTHER_POOL]),
+  binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),
   binding('kimi-coding', 'k3', [KIMI_5H_POOL, KIMI_7D_POOL]),
   // HY models draw jointly on the HY family allowance and the account monthly allowance.
   // No raw window evidence has been reviewed: both pools stay empty/unknown.
