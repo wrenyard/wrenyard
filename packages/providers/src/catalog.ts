@@ -16,6 +16,7 @@ const SPEED_CHECKED_AT = '2026-09-09';
 const SRC_OPENCODE_ZEN = 'https://opencode.ai/docs/zen/';
 const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
+const SRC_CURSOR = 'https://cursor.com/docs/models-and-pricing';
 
 const clients: readonly ClientDefinition[] = [
   // Native WebSearch is documented at https://code.claude.com/docs/en/tools-reference
@@ -147,7 +148,20 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   {
     id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
     defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
-    models: [model('composer-2.5', 'Composer 2.5', 200_000), model('cursor-grok-4.6-high', 'Grok 4.6 High', 256_000), model('kimi-k3', 'Kimi K3', 1_048_576, undefined, CANONICAL_MODELS['kimi-k3']), model('claude-opus-5', 'Claude Opus 5', 300_000, undefined, CANONICAL_MODELS['claude-opus-5'])],
+    models: [
+      { ...model('composer-2.5', 'Composer 2.5', 200_000), pricing: { inputUsdPerMillion: 0.5, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 2.5, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      model('cursor-grok-4.6-high', 'Grok 4.6 High', 256_000),
+      model('kimi-k3', 'Kimi K3', 1_048_576, undefined, CANONICAL_MODELS['kimi-k3']),
+      { ...model('claude-opus-5', 'Claude Opus 5', 300_000, undefined, CANONICAL_MODELS['claude-opus-5']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 25, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-luna', 'GPT-5.6 Luna', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-luna']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-terra', 'GPT-5.6 Terra', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-terra']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('gpt-5.6-sol', 'GPT-5.6 Sol', 272_000, undefined, CANONICAL_MODELS['gpt-5.6-sol']), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      { ...model('claude-sonnet-5', 'Claude Sonnet 5', 300_000), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 10, source: SRC_CURSOR, checkedAt: '2026-09-11' } },
+      model('muse-spark-1.3', 'Muse Spark 1.3', 300_000),
+      model('gemini-3.8-flash', 'Gemini 3.8 Flash', 1_000_000),
+      { ...model('claude-fable-5', 'Claude Fable 5', 300_000), capabilities: ['text', 'image'], pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: 'https://cursor.com/docs/models/claude-fable-5', checkedAt: '2026-09-11' } },
+      model('claude-fable-5-1', 'Claude Fable 5.1', 300_000),
+    ],
   },
   {
     id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'forge-managed',
@@ -258,7 +272,7 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     setupHint: '请使用 Codex CLI 完成登录，返回啾啾工坊后刷新状态。',
   },
   cursor: {
-    description: 'Cursor Composer 与 Grok 模型服务。',
+    description: 'Cursor 提供 Composer、Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',
     setupHint: '请在 Cursor Desktop 中完成登录，返回啾啾工坊后刷新状态。',
   },
   'kimi-coding': {
@@ -357,6 +371,9 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'claude-sonnet-5': speedDefault(60, 'https://artificialanalysis.ai/models/claude-sonnet-5-non-reasoning/', 'Artificial Analysis output-speed baseline for Claude Sonnet 5 non-reasoning.'),
   'composer-2.5': speedDefault(40, 'user-specified', 'User-selected Wrenyard baseline for exact standard cursor/composer-2.5; no measured source and not composer-2.5-fast.'),
   'cursor-grok-4.6-high': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
+  'muse-spark-1.3': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
+  'gemini-3.8-flash': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
+  'claude-fable-5-1': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
   'doubao-seed-2-0-lite-260215': speedDefault(35.1, 'https://aihubmix.com/compare/doubao-seed-2-0-lite-260215/qwen3.8-max-preview', 'AIHubMix public rolling output-throughput measurement for the exact dated Doubao model.'),
   'glm-4.7-flash': speedDefault(102.5, 'https://artificialanalysis.ai/models/glm-4-7-flash/', 'Artificial Analysis output-speed measurement for GLM-4.7 Flash.'),
   'glm-5-turbo': speedDefault(42, 'https://openrouter.ai/z-ai/glm-5-turbo/pricing', 'OpenRouter public output-throughput snapshot for exact GLM-5 Turbo.'),
@@ -499,12 +516,27 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   },
   'composer-2.5': {
     intelligence: 'high',
-    capabilities: ['text'],
+    capabilities: ['text', 'image'],
   },
   'cursor-grok-4.6-high': {
     intelligence: 'high',
-    capabilities: ['text'],
+    capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6, source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10' },
+  },
+  'muse-spark-1.3': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 1.25, cachedInputUsdPerMillion: 0.15, outputUsdPerMillion: 4.25, source: SRC_CURSOR, checkedAt: '2026-09-11' },
+  },
+  'gemini-3.8-flash': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 3.5, source: SRC_CURSOR, checkedAt: '2026-09-11' },
+  },
+  'claude-fable-5-1': {
+    intelligence: 'premium',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 0.25, outputUsdPerMillion: 50, source: SRC_CURSOR, checkedAt: '2026-09-11' },
   },
   'grok-4.5': {
     intelligence: 'high',

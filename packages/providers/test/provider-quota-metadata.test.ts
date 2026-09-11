@@ -79,22 +79,43 @@ test('there is exactly one ChatGPT provider and no codex-spark provider remains'
   assert.deepEqual(sparkOwners.map((provider) => provider.id), ['chatgpt']);
 });
 
-test('Cursor binds Grok to the Cursor pool, Other to cursor/other, and Opus to cursor/claude', () => {
+test('Cursor binds Grok and Composer to the Cursor pool and third-party models to Other', () => {
   const grok = expectBinding('cursor', 'cursor-grok-4.6-high');
   assert.deepEqual(bindingWindowIds(grok), ['Cursor']);
   assert.deepEqual(bindingPoolIds(grok), ['cursor/cursor']);
 
-  const other = expectBinding('cursor', 'kimi-k3');
-  assert.deepEqual(bindingWindowIds(other), ['Other']);
-  assert.deepEqual(bindingPoolIds(other), ['cursor/other']);
-  assert.notDeepEqual(bindingPoolIds(other), bindingPoolIds(grok));
-
   const composer = expectBinding('cursor', 'composer-2.5');
   assert.deepEqual(bindingPoolIds(composer), ['cursor/cursor']);
 
-  const opus = expectBinding('cursor', 'claude-opus-5');
-  assert.deepEqual(bindingWindowIds(opus), ['Claude']);
-  assert.deepEqual(bindingPoolIds(opus), ['cursor/claude']);
+  const otherModelIds = [
+    'kimi-k3',
+    'claude-opus-5',
+    'gpt-5.6-luna',
+    'gpt-5.6-terra',
+    'gpt-5.6-sol',
+    'claude-sonnet-5',
+    'muse-spark-1.3',
+    'gemini-3.8-flash',
+    'claude-fable-5',
+    'claude-fable-5-1',
+  ];
+  for (const modelId of otherModelIds) {
+    const other = expectBinding('cursor', modelId);
+    assert.deepEqual(bindingWindowIds(other), ['Other']);
+    assert.deepEqual(bindingPoolIds(other), ['cursor/other']);
+  }
+  assert.notDeepEqual(bindingPoolIds(expectBinding('cursor', 'kimi-k3')), bindingPoolIds(grok));
+
+  const cursor = BUILTIN_PROVIDERS.find((provider) => provider.id === 'cursor')!;
+  assert.equal(cursor.models.length, 12);
+  for (const model of cursor.models) {
+    const bound = expectBinding('cursor', model.id);
+    assert.equal(bound.modelId, model.id);
+    assert.equal(bound.pools.length, 1);
+  }
+  assert.ok(!PROVIDER_QUOTA_BINDINGS.some((binding) =>
+    binding.pools.some((pool) => pool.quotaPoolId === 'cursor/claude'),
+  ));
 });
 
 test('kimi-coding k3 binds independent 5h rolling and 7d full-cycle pools', () => {
