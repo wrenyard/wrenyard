@@ -34,7 +34,7 @@ test('native routing wins over a shared gateway protocol', () => {
   catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    nativeClients: ['native'], models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    nativeClients: ['native'], models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://example.com/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.equal(catalog.resolveRun('native', 'vendor', 'm').mode, 'native');
@@ -48,6 +48,7 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
     models: [{
       id: 'm',
       displayName: 'M',
+      intelligence: 'mid',
       canonicalModel: { id: 'shared-m', displayName: 'Shared M' },
       speed: speedFixture(),
     }],
@@ -66,7 +67,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   const mk = (
     id: string,
-    intelligence: undefined | 'low' | 'mid' | 'high' | 'premium',
+    intelligence: IntelligenceTier,
     tps: number,
     outUsd: number | undefined,
     capabilities: readonly ModelCapability[] = ['text'] as readonly ModelCapability[],
@@ -86,7 +87,6 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
       mk('mslow', 'mid', 5, 1),
       mk('mlow', 'low', 40, 3),
       mk('mnoprice', 'mid', 50, undefined),
-      mk('mnointel', undefined, 50, 2),
       mk('mtextonly', 'mid', 50, 2, ['text']),
       mk('mvision', 'mid', 50, 4, ['text', 'image']),
     ],
@@ -104,42 +104,8 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     { profileId: 'slow', client: 'c1', provider: 'p', model: 'mslow' },
     { profileId: 'low', client: 'c1', provider: 'p', model: 'mlow' },
     { profileId: 'noprice', client: 'c1', provider: 'p', model: 'mnoprice' },
-    { profileId: 'nointel', client: 'c1', provider: 'p', model: 'mnointel' },
     { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
     { profileId: 'vision', client: 'c1', provider: 'p', model: 'mvision' },
-  ];
-  return { catalog, candidates };
-}
-
-function buildEvidenceCatalog(): { catalog: Catalog; candidates: DispatchCandidate[] } {
-  const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
-  const mk = (
-    id: string,
-    intelligence: 'low' | 'mid' | 'high' | 'premium',
-    provenance?: { source: string; checkedAt: string; score?: number },
-  ) => ({
-    id, displayName: id, intelligence,
-    ...(provenance ? { intelligenceEvidence: provenance } : {}),
-    speed: { tps: 50, source: 'bench-evidence', checkedAt: '2026-09-09' },
-  });
-  catalog.registerProvider({
-    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [
-      mk('high-with-provenance', 'high', { source: 'https://aa.test/high', checkedAt: '2026-09-09', score: 44 }),
-      mk('high-no-provenance', 'high'),
-      mk('premium-no-provenance', 'premium'),
-      mk('mid-with-provenance', 'mid', { source: 'https://aa.test/mid', checkedAt: '2026-09-09', score: 30 }),
-      mk('low-no-provenance', 'low'),
-    ],
-    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
-  });
-  const candidates: DispatchCandidate[] = [
-    { profileId: 'high-prov', client: 'c1', provider: 'p', model: 'high-with-provenance' },
-    { profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' },
-    { profileId: 'premium-bare', client: 'c1', provider: 'p', model: 'premium-no-provenance' },
-    { profileId: 'mid-prov', client: 'c1', provider: 'p', model: 'mid-with-provenance' },
-    { profileId: 'low-bare', client: 'c1', provider: 'p', model: 'low-no-provenance' },
   ];
   return { catalog, candidates };
 }
@@ -258,54 +224,32 @@ test('compatibility normalizer accepts only the four current tiers and rejects f
   assert.equal(normalizeIntelligenceTier('legacy-unknown'), undefined);
 });
 
-test('low eligibility is satisfied by the configured tier regardless of provenance', () => {
-  const { catalog, candidates } = buildEvidenceCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'low-no-provenance'), { intelligenceMin: 'low' });
+test('low eligibility is satisfied by the configured tier', () => {
+  const { catalog, candidates } = buildDispatchCatalog();
+  const result = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'mlow'), { intelligenceMin: 'low' });
   assert.equal(result.ok, true);
-  // A low tier without any evidence metadata still qualifies.
   assert.equal(result.selected.model.intelligence, 'low');
 });
 
-test('high dispatch is admitted by the configured high tier with or without provenance', () => {
-  const { catalog, candidates } = buildEvidenceCatalog();
-  // Only the bare high candidate is offered: no evidence status field exists,
-  // yet the configured high tier satisfies a high minimum.
-  const bareHigh: DispatchCandidate[] = [{ profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }];
-  const bare = resolveConstrainedDispatch(catalog, bareHigh, { intelligenceMin: 'high' });
-  assert.equal(bare.ok, true);
-  assert.equal(bare.selected.model.intelligence, 'high');
-
-  // A high candidate that carries optional provenance is equally admitted.
-  const withProv: DispatchCandidate[] = [{ profileId: 'high-prov', client: 'c1', provider: 'p', model: 'high-with-provenance' }];
-  const prov = resolveConstrainedDispatch(catalog, withProv, { intelligenceMin: 'high' });
-  assert.equal(prov.ok, true);
-  assert.equal(prov.selected.model.intelligence, 'high');
+test('high dispatch is admitted by the configured high tier', () => {
+  const { catalog, candidates } = buildDispatchCatalog();
+  const high = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'mmid'), { intelligenceMin: 'high' });
+  assert.equal(high.ok, true);
+  assert.equal(high.selected.model.intelligence, 'high');
 });
 
 test('a high-tier model fails a premium minimum while a premium tier qualifies', () => {
-  const { catalog, candidates } = buildEvidenceCatalog();
-  const highOnly: DispatchCandidate[] = [{ profileId: 'high-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }];
+  const { catalog, candidates } = buildDispatchCatalog();
+  const highOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' }];
   const high = resolveConstrainedDispatch(catalog, highOnly, { intelligenceMin: 'premium' });
   assert.equal(high.ok, false);
   assert.equal(high.reason, 'no-eligible-candidate');
 
-  const premiumOnly: DispatchCandidate[] = [{ profileId: 'premium-bare', client: 'c1', provider: 'p', model: 'premium-no-provenance' }];
+  const premiumOnly: DispatchCandidate[] = [{ profileId: 'premium', client: 'c1', provider: 'p', model: 'mpremium' }];
   const premium = resolveConstrainedDispatch(catalog, premiumOnly, { intelligenceMin: 'premium' });
   assert.equal(premium.ok, true);
   assert.equal(premium.selected.model.intelligence, 'premium');
   void candidates;
-});
-
-test('optional provenance never gates routing', () => {
-  const { catalog } = buildEvidenceCatalog();
-  // Same configured tier, one with provenance and one without: both resolve
-  // exactly the same way because the evidence payload is descriptive only.
-  const withProv = resolveConstrainedDispatch(catalog, [{ profileId: 'mid-prov', client: 'c1', provider: 'p', model: 'mid-with-provenance' }], { intelligenceMin: 'mid' });
-  const bare = resolveConstrainedDispatch(catalog, [{ profileId: 'mid-bare', client: 'c1', provider: 'p', model: 'high-no-provenance' }], { intelligenceMin: 'high' });
-  assert.equal(withProv.ok, true);
-  assert.equal(bare.ok, true);
-  assert.equal(catalog.provider('p')!.models.find(m => m.id === 'mid-with-provenance')!.intelligenceEvidence?.score, 30);
-  assert.equal(catalog.provider('p')!.models.find(m => m.id === 'high-no-provenance')!.intelligenceEvidence, undefined);
 });
 
 test('missing price metadata fails closed under a max-output-price requirement', () => {
@@ -319,14 +263,35 @@ test('missing price metadata fails closed under a max-output-price requirement',
   void catalog;
 });
 
-test('missing intelligence metadata fails closed under an intelligence requirement', () => {
-  const { catalog, candidates } = buildDispatchCatalog();
-  const onlyNoIntel: DispatchCandidate[] = [{ profileId: 'nointel', client: 'c1', provider: 'p', model: 'mnointel' }];
-  const result = resolveConstrainedDispatch(catalog, onlyNoIntel, { intelligenceMin: 'mid' });
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, 'no-eligible-candidate');
-  void catalog;
-  void candidates;
+test('registerProvider rejects missing, null, and invalid intelligence atomically', () => {
+  const catalog = new Catalog();
+  const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
+  const invalidModels: Array<[string, object]> = [
+    ['missing', { id: 'm', displayName: 'M', speed: speedFixture() }],
+    ['null', { id: 'm', displayName: 'M', intelligence: null, speed: speedFixture() }],
+    ['invalid', { id: 'm', displayName: 'M', intelligence: 'frontier', speed: speedFixture() }],
+  ];
+  for (const [providerID, model] of invalidModels) {
+    assert.throws(
+      () => catalog.registerProvider({
+        id: providerID, displayName: providerID, credentialResolver: 'forge-managed',
+        models: [{ ...model, canonicalModel: { id: 'atomic-intelligence', displayName: 'Bad Name' } } as ModelDefinition],
+        protocols,
+      }),
+      new RegExp(`provider ${providerID} model m.*intelligence`),
+    );
+    assert.equal(catalog.provider(providerID), undefined);
+  }
+  catalog.registerProvider({
+    id: 'valid', displayName: 'Valid', credentialResolver: 'forge-managed',
+    models: [{
+      id: 'm', displayName: 'M', intelligence: 'mid',
+      canonicalModel: { id: 'atomic-intelligence', displayName: 'Good Name' },
+      speed: speedFixture(),
+    }],
+    protocols,
+  });
+  assert.ok(catalog.provider('valid'));
 });
 
 test('registerProvider rejects a model missing its required speed default', () => {
@@ -336,7 +301,7 @@ test('registerProvider rejects a model missing its required speed default', () =
   assert.throws(
     () => catalog.registerProvider({
       id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-      models: [{ id: 'm', displayName: 'M' } as ModelDefinition],
+      models: [{ id: 'm', displayName: 'M', intelligence: 'mid' } as ModelDefinition],
       protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
     }),
     /speed/,
@@ -360,7 +325,7 @@ test('registerProvider rejects non-positive, non-finite, and empty-evidence defa
     assert.throws(
       () => catalog.registerProvider({
         id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-        models: [{ id: 'm', displayName: 'M', speed }],
+        models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed }],
         protocols,
       }),
       /speed/,
@@ -382,6 +347,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
     models: [{
       id: 'route-model',
       displayName: `${displayName} route`,
+      intelligence: 'mid' as const,
       canonicalModel: { id: 'shared-model-v1', displayName: canonicalDisplayName },
       speed: speedFixture(),
     }],
@@ -404,6 +370,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
       models: [{
         id: 'other-route',
         displayName: 'Other route',
+        intelligence: 'mid',
         canonicalModel: { id: 'atomic-model-v1', displayName: 'Staged Bad Name' },
         speed: speedFixture(),
       }],
@@ -415,6 +382,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
     models: [{
       id: 'other-route',
       displayName: 'Other route',
+      intelligence: 'mid',
       canonicalModel: { id: 'atomic-model-v1', displayName: 'Committed Good Name' },
       speed: speedFixture(),
     }],
@@ -424,7 +392,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
 
 test('registerProvider validates modelSpeedOverrides evidence and exact canonical keys only', () => {
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
-  const canonicalModel = { id: 'glm-5.3', displayName: 'GLM 5.3', speed: speedFixture(40) };
+  const canonicalModel = { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid' as const, speed: speedFixture(40) };
   const register = (extra: object) => new Catalog().registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [canonicalModel],
@@ -828,7 +796,7 @@ test('codex/gpt-6-astra:cc parses to the claude client yet still fails resolutio
   catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
   catalog.registerProvider({
     id: 'codex', displayName: 'Codex', credentialResolver: 'codex',
-    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra', speed: speedFixture() }],
+    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codex.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   // Parseable identity is not proof of compatibility: resolution fails closed.
@@ -841,7 +809,7 @@ test('a compatible target resolves exactly through Catalog.resolveRun with no fa
   catalog.registerProvider({
     id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
     nativeClients: ['claude'],
-    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', speed: speedFixture() }],
+    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-4:cc');
@@ -859,14 +827,14 @@ function buildTaskCatalog(): Catalog {
     id: 'anthropic-api', displayName: 'Anthropic', credentialResolver: 'forge-managed',
     modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
     models: [
-      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', speed: speedFixture() },
-      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true, speed: speedFixture() },
+      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', intelligence: 'mid', speed: speedFixture() },
+      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true, intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   catalog.registerProvider({
     id: 'vendor-api', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return catalog;
@@ -926,7 +894,7 @@ test('client gateway provider boundaries reject protocol-compatible but unexecut
   });
   catalog.registerProvider({
     id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
-    models: [{ id: 'hy3', displayName: 'HY3', speed: speedFixture() }],
+    models: [{ id: 'hy3', displayName: 'HY3', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codebuddy.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.throws(() => catalog.resolveRun('grok', 'codebuddy', 'hy3'), /cannot serve client grok/);
@@ -966,12 +934,12 @@ test('native web search is admitted only for a supported native client/provider 
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
     nativeClients: ['nsearch', 'nplain'],
-    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   catalog.registerProvider({
     id: 'other', displayName: 'Other', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', speed: speedFixture() }],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://other.example/v1/chat/completions', authScheme: 'bearer' }],
   });
 

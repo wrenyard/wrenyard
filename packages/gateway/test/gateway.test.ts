@@ -15,6 +15,7 @@ function fixture(
     models: [{
       id: 'public',
       displayName: 'Public',
+      intelligence: 'mid',
       speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
     }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://upstream.test/v1/chat/completions', authScheme: 'bearer' }],
@@ -160,6 +161,7 @@ function headerFixture(fetchImpl: typeof fetch) {
       models: [{
         id: model,
         displayName: model,
+        intelligence: 'mid',
         speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
