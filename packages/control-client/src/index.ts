@@ -73,7 +73,7 @@ export interface WrenyardGatewayModel {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
-  intelligence?: 'low' | 'mid' | 'high' | 'premium';
+  intelligence: 'low' | 'mid' | 'high' | 'premium';
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';

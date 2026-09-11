@@ -18,7 +18,7 @@ export interface GatewayConnectionResult {
     family?: 'claude'
     claudeTier?: 'haiku' | 'sonnet' | 'opus'
     supports1MContext?: boolean
-    intelligence?: 'low' | 'mid' | 'high' | 'premium'
+    intelligence: 'low' | 'mid' | 'high' | 'premium'
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
@@ -55,7 +55,7 @@ export const gatewayConnectionResultSchema = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'publicId', 'provider', 'displayName'],
+        required: ['id', 'publicId', 'provider', 'displayName', 'intelligence'],
         properties: {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },

@@ -28,18 +28,6 @@ export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   premium: 3,
 };
 
-// Optional provenance attached to a model's configured intelligence tier. This
-// is descriptive reference data only and never gates routing: the configured
-// intelligence tier is the sole tier admission fact.
-export interface IntelligenceEvidence {
-  source: string;
-  checkedAt: string;
-  indexVersion?: string;
-  score?: number;
-  reasoningConfiguration?: string;
-  basis?: string;
-}
-
 const CURRENT_INTELLIGENCE_TIERS: ReadonlySet<string> = new Set(['low', 'mid', 'high', 'premium']);
 
 // Strict normalizer: accepts only the four current tiers. Any other value,
@@ -99,8 +87,7 @@ export interface ModelDefinition {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
-  intelligence?: IntelligenceTier;
-  intelligenceEvidence?: IntelligenceEvidence;
+  intelligence: IntelligenceTier;
   reasoningEffort?: ReasoningEffort;
   maxOutputTokens?: number;
   /** Supported input types, including image content returned by tools; not output generation. */
@@ -197,7 +184,7 @@ export interface ClientDefinition {
   supportsNativeWebSearch?: boolean;
 }
 
-export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel' | 'intelligenceEvidence'> & {
+export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
   publicId: string;
 };
@@ -326,6 +313,11 @@ export class Catalog {
     for (const model of provider.models) {
       if (!model.id.trim()) throw new Error(`provider ${provider.id} has an empty model id`);
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
+      if (!CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
+        throw new Error(
+          `provider ${provider.id} model ${model.id} has invalid intelligence tier: ${JSON.stringify(model.intelligence)}`,
+        );
+      }
       // A model's default speed is required: a registration without one is
       // rejected up front, before any further validation.
       validateSpeedMeta(model.speed, `provider ${provider.id} model ${model.id}`);
@@ -460,7 +452,7 @@ export class Catalog {
           ...(model.family === undefined ? {} : { family: model.family }),
           ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
           ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
-          ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
+          intelligence: model.intelligence,
           ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
           ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
           ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
@@ -587,10 +579,9 @@ export function resolveConstrainedDispatch(
     }
 
     // Hard constraint: intelligence minimum. The configured intelligence tier
-    // is the sole admission fact; fail closed when intelligence is unknown.
+    // is the sole admission fact.
     if (requirements.intelligenceMin) {
       const intel = modelDef.intelligence;
-      if (intel === undefined) continue;
       if (INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
     }
 

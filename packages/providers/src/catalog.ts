@@ -1,4 +1,4 @@
-import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceEvidence, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
+import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ReasoningEffort } from '@wrenyard/catalog';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
@@ -13,27 +13,6 @@ const SRC_AA_LUNA = 'https://artificialanalysis.ai/models/gpt-5-6-luna-xhigh/';
 const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol-xhigh/';
 const DEFAULT_CHECKED_AT = '2026-09-05';
 const SPEED_CHECKED_AT = '2026-09-09';
-const INTEL_CHECKED_AT = '2026-09-09';
-const SRC_AA_HY3 = 'https://artificialanalysis.ai/models/hy3/';
-const SRC_AA_MINIMAX_M27 = 'https://artificialanalysis.ai/models/minimax-m2-7/';
-const SRC_AA_MINIMAX_M3 = 'https://artificialanalysis.ai/models/minimax-m3/';
-const SRC_AA_GROK46 = 'https://artificialanalysis.ai/models/grok-4-6-high/';
-const SRC_AA_TERRA = 'https://artificialanalysis.ai/models/gpt-5-6-terra-xhigh/';
-const SRC_AA_ASTRA = 'https://artificialanalysis.ai/models/gpt-6-astra-xhigh/';
-const SRC_AA_QCN = 'https://artificialanalysis.ai/models/qwen3-coder-next/';
-const SRC_AA_Q37 = 'https://artificialanalysis.ai/models/qwen3-7-plus/';
-const SRC_AA_Q38 = 'https://artificialanalysis.ai/models/qwen3-8-max/';
-const SRC_AA_GLM = 'https://artificialanalysis.ai/models/glm-5-3/';
-const SRC_AA_FABLE = 'https://artificialanalysis.ai/models/claude-fable-5/';
-const SRC_AA_OPUS = 'https://artificialanalysis.ai/models/claude-opus-5-xhigh/';
-const SRC_AA_HAIKU = 'https://artificialanalysis.ai/models/claude-4-5-haiku/';
-const SRC_AA_GLM47 = 'https://artificialanalysis.ai/models/glm-4-7-flash/';
-const SRC_AA_GLM5 = 'https://artificialanalysis.ai/models/glm-5-turbo/';
-const SRC_AA_GLM52 = 'https://artificialanalysis.ai/models/glm-5-2/';
-const SRC_AA_GPT54 = 'https://artificialanalysis.ai/models/gpt-5-4/';
-const SRC_AA_KIMI25 = 'https://artificialanalysis.ai/models/kimi-k2-5/providers';
-const SRC_AA_KIMI26 = 'https://artificialanalysis.ai/models/kimi-k2-6/';
-const SRC_AA_Q36 = 'https://artificialanalysis.ai/models/qwen3-6-plus/';
 const SRC_OPENCODE_ZEN = 'https://opencode.ai/docs/zen/';
 const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
@@ -73,7 +52,10 @@ export function isBuiltinClientGatewayProviderSupported(clientID: string, provid
   return client !== undefined && !client.unsupportedGatewayProviders?.includes(providerID);
 }
 
-type RawModelDefinition = Omit<ModelDefinition, 'speed'> & { speed?: ModelSpeedMeta };
+type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence'> & {
+  speed?: ModelSpeedMeta;
+  intelligence?: IntelligenceTier;
+};
 type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly RawModelDefinition[] };
 
 // Shared identities are deliberately opt-in. Each entry represents an exact,
@@ -251,7 +233,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     models: [
       { ...model('glm-5.3-flash', 'GLM-5.3 Flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']), capabilities: ['text'], pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.03, outputUsdPerMillion: 0.50, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
       { ...model('glm-5.3', 'GLM-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']), capabilities: ['text'], pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
-      { ...model('deepseek-flash', 'DeepSeek V4.1 Flash', 1_000_000, 384_000), capabilities: ['text', 'image'], intelligence: 'mid', pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' }, intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10' } },
+      { ...model('deepseek-flash', 'DeepSeek V4.1 Flash', 1_000_000, 384_000), capabilities: ['text', 'image'], intelligence: 'mid', pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
       { ...model('hy3', 'HY3'), capabilities: ['text'], pricing: { inputUsdPerMillion: 0.14, cachedInputUsdPerMillion: 0.035, outputUsdPerMillion: 0.58, source: SRC_OPENCODE_GO, checkedAt: '2026-09-10' } },
     ],
     protocols: [openAI('https://opencode.ai/zen/go/v1/chat/completions')],
@@ -414,8 +396,7 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
 };
 
 type ModelMeta = {
-  intelligence?: IntelligenceTier;
-  intelligenceEvidence?: IntelligenceEvidence;
+  intelligence: IntelligenceTier;
   reasoningEffort?: ReasoningEffort;
   capabilities: readonly ModelCapability[];
   maxOutputTokens?: number;
@@ -427,19 +408,16 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
   'deepseek/deepseek-flash': {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
   'hy4-preview': {
     intelligence: 'mid',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0.834, cachedInputUsdPerMillion: 0.042, outputUsdPerMillion: 2.501, source: SRC_TENCENT_HY, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_TENCENT_HY, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3' },
   },
   'hy3': {
     intelligence: 'low',
@@ -448,7 +426,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     // official Tencent TokenHub CNY list 1/0.25/4 (input/cached/output) using
     // the repository's fixed 7.2 CNY/USD with three-decimal convention.
     pricing: { inputUsdPerMillion: 0.139, cachedInputUsdPerMillion: 0.035, outputUsdPerMillion: 0.556, source: SRC_TENCENT_TOKENHUB, checkedAt: '2026-09-08' },
-    intelligenceEvidence: { source: SRC_AA_HY3, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 26 },
   },
   'gpt-6-astra': {
     reasoningEffort: 'xhigh',
@@ -456,172 +433,182 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text', 'image'],
     maxOutputTokens: 128_000,
     pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_ASTRA, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 53, reasoningConfiguration: 'xhigh' },
   },
   'gpt-5.3-codex-spark': {
     reasoningEffort: 'xhigh',
+    intelligence: 'mid',
     capabilities: ['text'],
-    // Spark has no exact AA intelligence match; left unknown.
   },
   'gpt-5.6-sol': {
     reasoningEffort: 'xhigh',
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.4, outputUsdPerMillion: 20, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_SOL, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 44, reasoningConfiguration: 'xhigh' },
   },
   'gpt-5.6-terra': {
     reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 12, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_TERRA, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 38, reasoningConfiguration: 'xhigh' },
   },
   'gpt-5.6-luna': {
     reasoningEffort: 'xhigh',
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_LUNA, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 35, reasoningConfiguration: 'xhigh' },
   },
   'kimi-k3': {
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_KIMI, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 44, reasoningConfiguration: 'max', basis: 'AA max evidence' },
   },
   'k3': {
     intelligence: 'high',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 0.30, outputUsdPerMillion: 15, source: SRC_KIMI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_KIMI, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 44, reasoningConfiguration: 'max', basis: 'AA max evidence' },
   },
   'glm-5.3': {
     intelligence: 'high',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_GLM, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 45, reasoningConfiguration: 'max' },
   },
   'glm-5.3-flash': {
     intelligence: 'mid',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.03, outputUsdPerMillion: 0.50, source: SRC_ZAI, checkedAt: DEFAULT_CHECKED_AT },
-    intelligenceEvidence: { source: SRC_AA_GLMF, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 42 },
   },
   'minimax-m2.7': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_MINIMAX_M27, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 23 },
   },
   'MiniMax-M2.7': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_MINIMAX_M27, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 23 },
+  },
+  'MiniMax-M2.7-highspeed': {
+    intelligence: 'low',
+    capabilities: ['text'],
   },
   'minimax-m3': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_MINIMAX_M3, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 30 },
   },
   'MiniMax-M3': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_MINIMAX_M3, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 30 },
+  },
+  'composer-2.5': {
+    intelligence: 'high',
+    capabilities: ['text'],
   },
   'cursor-grok-4.6-high': {
     intelligence: 'high',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6, source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_AA_GROK46, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 44, reasoningConfiguration: 'high' },
+  },
+  'grok-4.5': {
+    intelligence: 'high',
+    capabilities: ['text'],
   },
   'qwen3-coder-next': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_QCN, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 10 },
+  },
+  'qwen3-coder-plus': {
+    intelligence: 'low',
+    capabilities: ['text'],
   },
   'qwen3.7-plus': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_Q37, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 26 },
+  },
+  'qwen3.7-flash': {
+    intelligence: 'low',
+    capabilities: ['text'],
   },
   'qwen3.8-max': {
     intelligence: 'mid',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_Q38, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 40 },
   },
   'claude-haiku-4-5-20251001': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_HAIKU, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 15, reasoningConfiguration: 'non-reasoning' },
   },
   'glm-4.7-flash': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_GLM47, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 15, reasoningConfiguration: 'reasoning' },
   },
   'glm-5-turbo': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_GLM5, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 27 },
   },
   'glm-5.2': {
     intelligence: 'mid',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_GLM52, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 39, reasoningConfiguration: 'max' },
   },
   'gpt-5.4': {
     intelligence: 'mid',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_GPT54, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 39, reasoningConfiguration: 'xhigh' },
+  },
+  'gpt-5.4-mini': {
+    intelligence: 'low',
+    capabilities: ['text'],
+  },
+  'gpt-5.5': {
+    intelligence: 'high',
+    capabilities: ['text'],
   },
   'kimi-k2.5': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_KIMI25, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 23, reasoningConfiguration: 'reasoning' },
   },
   'kimi-k2.6': {
     intelligence: 'mid',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_KIMI26, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 31 },
   },
   'qwen3.6-plus': {
     intelligence: 'low',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_Q36, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 27 },
+  },
+  'qwen3.5-plus': {
+    intelligence: 'low',
+    capabilities: ['text'],
   },
   'claude-fable-5': {
     intelligence: 'premium',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_FABLE, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', reasoningConfiguration: 'adaptive max' },
   },
   'claude-opus-5': {
     intelligence: 'premium',
     capabilities: ['text'],
-    intelligenceEvidence: { source: SRC_AA_OPUS, checkedAt: INTEL_CHECKED_AT, indexVersion: 'v4.3', score: 51, reasoningConfiguration: 'adaptive max' },
+  },
+  'claude-sonnet-5': {
+    intelligence: 'high',
+    capabilities: ['text'],
+  },
+  'doubao-seed-2-0-lite-260215': {
+    intelligence: 'low',
+    capabilities: ['text'],
   },
   'mimo-v2.5-free': {
     intelligence: 'mid',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
   },
   'ling-3.0-flash-fin-free': {
     intelligence: 'low',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
   },
   'nex-agi/nex-n2.5-mini:free': {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
   },
   'cohere/north-mini-code:free': {
     intelligence: 'low',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
-    intelligenceEvidence: { source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
   },
 };
 
@@ -631,13 +618,16 @@ function withMeta(def: RawModelDefinition): ModelDefinition {
     throw new Error(`built-in model ${def.id} is missing required default speed metadata`);
   }
   const meta = MODEL_METADATA[def.id];
+  const intelligence = def.intelligence ?? meta?.intelligence;
+  if (intelligence !== 'low' && intelligence !== 'mid' && intelligence !== 'high' && intelligence !== 'premium') {
+    throw new Error(`built-in model ${def.id} is missing required intelligence tier`);
+  }
   if (!meta) {
-    return { ...def, capabilities: def.capabilities ?? ['text'], speed };
+    return { ...def, intelligence, capabilities: def.capabilities ?? ['text'], speed };
   }
   return {
     ...def,
-    intelligence: def.intelligence ?? meta.intelligence,
-    intelligenceEvidence: def.intelligenceEvidence ?? meta.intelligenceEvidence,
+    intelligence,
     reasoningEffort: def.reasoningEffort ?? meta.reasoningEffort,
     capabilities: def.capabilities ?? meta.capabilities,
     speed,

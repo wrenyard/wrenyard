@@ -25,6 +25,7 @@ const connection: WrenyardGatewayConnection = {
       publicId: 'zhipu-coding/glm-5.3',
       provider: 'zhipu-coding',
       displayName: 'GLM 5.3',
+      intelligence: 'high',
       contextWindow: 204800,
       maxTokens: 32768,
     },
@@ -33,6 +34,7 @@ const connection: WrenyardGatewayConnection = {
       publicId: 'codebuddy/deepseek-v4.1-flash',
       provider: 'codebuddy',
       displayName: 'DeepSeek V4.1 Flash',
+      intelligence: 'mid',
     },
   ],
 };

@@ -33,9 +33,9 @@ test('settings snapshot exposes health and credential presence without secrets',
     buildTime: '2026-09-01T02:03:04.000Z',
     readHealth: async () => ({ connected: true, uptimeMs: 125_000 }),
     readGatewayModels: async () => [
-      { id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3' },
-      { id: 'glm-5.3', publicId: 'zhipu-coding/glm-5.3', provider: 'zhipu-coding', displayName: 'GLM 5.3' },
-      { id: 'glm-5.3-flash', publicId: 'zhipu-coding/glm-5.3-flash', provider: 'zhipu-coding', displayName: 'GLM 5.3 Flash' },
+      { id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3', intelligence: 'high' },
+      { id: 'glm-5.3', publicId: 'zhipu-coding/glm-5.3', provider: 'zhipu-coding', displayName: 'GLM 5.3', intelligence: 'high' },
+      { id: 'glm-5.3-flash', publicId: 'zhipu-coding/glm-5.3-flash', provider: 'zhipu-coding', displayName: 'GLM 5.3 Flash', intelligence: 'mid' },
     ],
     readPet: async () => pet,
     readUpdate: () => ({
