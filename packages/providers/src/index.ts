@@ -5,6 +5,8 @@ export {
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
 } from './catalog.ts';
+export { builtinModelDisplayName } from './model-display-names.ts';
+export type { BuiltinModelId } from './model-display-names.ts';
 export { resolveConstrainedDispatch } from '@wrenyard/catalog';
 export type { ConstrainedDispatch, DispatchCandidate, DispatchResolution, IntelligenceTier, LocalSpeedSample, ModelPricing, SpeedEvidence, SpeedSource, TaskDispatchRequirements } from '@wrenyard/catalog';
 export { createBuiltinProviderRuntime, resolveRuntimeTaskPlans, upstreamAuthHeaders } from './runtime.ts';
