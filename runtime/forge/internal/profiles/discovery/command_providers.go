@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
@@ -17,6 +19,9 @@ type ProviderDeps struct {
 	PrintJSON       func(value interface{}) int
 	// AuthStatus resolves authentication status for all resolver types.
 	AuthStatus func(providerID string) auth.ProviderAuthStatus
+	// CursorModelAvailability, when set, is invoked at most once per list while
+	// Cursor is authenticated. A failed check yields an empty/unknown map.
+	CursorModelAvailability func() (map[string]cursor.Availability, error)
 }
 
 // ProvidersCommand runs the "forge providers" command.
@@ -56,11 +61,13 @@ func providersList(deps ProviderDeps, args []string) int {
 	}
 
 	type entry struct {
-		ID      string `json:"id"`
-		APIKind string `json:"api_kind"`
-		AuthOK  bool   `json:"auth_ok"`
+		ID                string                          `json:"id"`
+		APIKind           string                          `json:"api_kind"`
+		AuthOK            bool                            `json:"auth_ok"`
+		ModelAvailability *map[string]cursor.Availability `json:"model_availability,omitempty"`
 	}
 
+	cursorAvailability := cursorAvailabilityForList(deps, filtered)
 	entries := make([]entry, 0, len(filtered))
 	for _, name := range filtered {
 		binding, err := reg.LookupBinding(name)
@@ -76,7 +83,11 @@ func providersList(deps ProviderDeps, args []string) int {
 		if err == nil && binding.Inference != nil {
 			apiKind = binding.Inference.Protocol
 		}
-		entries = append(entries, entry{ID: name, APIKind: apiKind, AuthOK: authOK})
+		item := entry{ID: name, APIKind: apiKind, AuthOK: authOK}
+		if name == "cursor" && cursorAvailability != nil {
+			item.ModelAvailability = cursorAvailability
+		}
+		entries = append(entries, item)
 	}
 
 	if deps.HasFlag(args, "--json") {
@@ -173,4 +184,57 @@ func providersAuth(deps ProviderDeps, args []string) int {
 		fmt.Fprintf(os.Stderr, "forge providers auth: expected login or logout, got %s\n", op)
 		return 2
 	}
+}
+
+func cursorAvailabilityForList(deps ProviderDeps, names []string) *map[string]cursor.Availability {
+	if deps.CursorModelAvailability == nil {
+		return nil
+	}
+	authenticated := false
+	for _, name := range names {
+		if name != "cursor" {
+			continue
+		}
+		if deps.AuthStatus != nil && deps.AuthStatus("cursor").OK {
+			authenticated = true
+		}
+		break
+	}
+	if !authenticated {
+		return nil
+	}
+	avail, err := deps.CursorModelAvailability()
+	if err != nil || avail == nil {
+		empty := map[string]cursor.Availability{}
+		return &empty
+	}
+	projected := copyCursorAvailability(avail)
+	return &projected
+}
+
+func copyCursorAvailability(in map[string]cursor.Availability) map[string]cursor.Availability {
+	out := make(map[string]cursor.Availability, len(in))
+	for id, av := range in {
+		if id == "" || len(id) > 120 || strings.TrimSpace(id) != id {
+			continue
+		}
+		if av.Status != cursor.StatusAvailable && av.Status != cursor.StatusBlocked && av.Status != cursor.StatusUnknown {
+			continue
+		}
+		reason := ""
+		switch av.Reason {
+		case cursor.ReasonAdminBlocked, cursor.ReasonConsentRequired, cursor.ReasonModelDisabled, cursor.ReasonUnsupported:
+			reason = av.Reason
+		}
+		copied := cursor.Availability{Status: av.Status}
+		if av.Status == cursor.StatusBlocked && reason != "" {
+			copied.Reason = reason
+		}
+		if existing, ok := out[id]; ok && existing != copied {
+			out[id] = cursor.Availability{Status: cursor.StatusUnknown}
+			continue
+		}
+		out[id] = copied
+	}
+	return out
 }

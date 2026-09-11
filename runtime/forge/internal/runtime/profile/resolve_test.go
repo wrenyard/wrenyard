@@ -8,6 +8,20 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
+func TestCursorGPT56EffortMatchesDeclaredPlan(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"} {
+		env := map[string]string{}
+		applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: model, ReasoningEffort: "xhigh"})
+		if got, want := env[catalog.EnvCursorModel], model+"[context=272k,reasoning=xhigh,fast=false]"; got != want {
+			t.Fatalf("Cursor model = %q, want %q", got, want)
+		}
+		applyDispatchModel(env, DispatchPlan{Client: "cursor", Model: model})
+		if env[catalog.EnvCursorModel] != model {
+			t.Fatal("unspecified effort should retain the bare model")
+		}
+	}
+}
+
 func TestResolveDispatchConsumesGatewayPlanWithoutProviderCredential(t *testing.T) {
 	resolved, err := ResolveDispatch(
 		InputProfile{Name: "cc-kimi", Client: "legacy", Provider: "legacy", Env: map[string]string{}},

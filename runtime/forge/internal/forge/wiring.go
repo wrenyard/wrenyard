@@ -16,6 +16,7 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/profiles/selection"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/capability"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
@@ -162,6 +163,13 @@ func wiredDiscoveryProviderDeps(reg *catalog.Registry) discovery.ProviderDeps {
 		},
 		AuthStatus: func(providerID string) auth.ProviderAuthStatus {
 			return providerAuthStatus(providerID)
+		},
+		CursorModelAvailability: func() (map[string]cursor.Availability, error) {
+			token, ok := authStatusCredential("cursor")
+			if !ok || strings.TrimSpace(token) == "" {
+				return nil, fmt.Errorf("cursor credential unavailable")
+			}
+			return (cursor.Reader{Token: token}).Availability()
 		},
 		HasFlag:   func(args []string, flag string) bool { return hasFlag(args, flag) },
 		PrintJSON: func(value interface{}) int { return printJSON(value) },

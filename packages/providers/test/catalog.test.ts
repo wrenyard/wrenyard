@@ -328,7 +328,7 @@ test('every registered built-in model has a valid authoritative speed default', 
     provider.models.map((model) => ({ provider: provider.id, model })),
   );
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
-  assert.equal(uniqueIds.size, 46, 'the complete exact registered model-id inventory is covered');
+  assert.equal(uniqueIds.size, 49, 'the complete exact registered model-id inventory is covered');
 
   for (const { provider, model } of entries) {
     assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);
@@ -341,6 +341,10 @@ test('every registered built-in model has a valid authoritative speed default', 
       assert.match(model.speed.basis!, /exact standard cursor\/composer-2\.5/u);
       assert.doesNotMatch(model.speed.basis!, /external benchmark/u);
       assert.match(model.speed.basis!, /not composer-2\.5-fast/u);
+    } else if (model.speed.source === 'bootstrap') {
+      assert.equal(model.speed.tps, 40);
+      assert.equal(model.speed.conservative, true);
+      assert.match(model.speed.basis!, /unmeasured fallback/iu);
     } else if (!model.speed.source.startsWith('local-benchmark')) {
       assert.match(model.speed.source, /^https:\/\//u, `${provider}/${model.id} needs a public evidence URL`);
     }
@@ -442,4 +446,66 @@ test('new Flash ignores retired model speed history and TokenHub baseline is mar
   assert.equal(tokenhub.speed?.tps, 207);
   assert.equal(tokenhub.speed?.conservative, true);
   assert.match(tokenhub.speed?.basis ?? '', /TokenHub endpoint is unmeasured/);
+});
+
+test('Cursor registers twelve multi-vendor models with intelligence, images, and known pricing', () => {
+  const catalog = createBuiltinCatalog();
+  const cursor = catalog.provider('cursor')!;
+  assert.deepEqual(cursor.models.map((entry) => entry.id), [
+    'composer-2.5',
+    'cursor-grok-4.6-high',
+    'kimi-k3',
+    'claude-opus-5',
+    'gpt-5.6-luna',
+    'gpt-5.6-terra',
+    'gpt-5.6-sol',
+    'claude-sonnet-5',
+    'muse-spark-1.3',
+    'gemini-3.8-flash',
+    'claude-fable-5',
+    'claude-fable-5-1',
+  ]);
+  const byId = Object.fromEntries(cursor.models.map((entry) => [entry.id, entry]));
+  assert.equal(byId['gpt-5.6-sol']!.intelligence, 'high');
+  assert.equal(byId['gpt-5.6-terra']!.intelligence, 'mid');
+  assert.equal(byId['gpt-5.6-luna']!.intelligence, 'mid');
+  assert.equal(byId['claude-sonnet-5']!.intelligence, 'high');
+  assert.equal(byId['claude-fable-5']!.intelligence, 'premium');
+  assert.equal(byId['claude-opus-5']!.intelligence, 'premium');
+  assert.equal(byId['claude-fable-5-1']!.intelligence, 'premium');
+  assert.equal(byId['muse-spark-1.3']!.intelligence, 'mid');
+  assert.equal(byId['gemini-3.8-flash']!.intelligence, 'mid');
+  assert.equal(byId['composer-2.5']!.intelligence, 'high');
+  assert.equal(byId['cursor-grok-4.6-high']!.intelligence, 'high');
+  assert.equal(byId['kimi-k3']!.intelligence, 'high');
+  for (const model of cursor.models) {
+    assert.deepEqual(model.capabilities, ['text', 'image'], `${model.id} must support text and image`);
+  }
+  assert.equal(byId['gpt-5.6-luna']!.contextWindow, 272_000);
+  assert.equal(byId['claude-sonnet-5']!.contextWindow, 300_000);
+  assert.equal(byId['muse-spark-1.3']!.contextWindow, 300_000);
+  assert.equal(byId['gemini-3.8-flash']!.contextWindow, 1_000_000);
+  const cursorPrice = (id: string, input: number, cached: number, output: number) => {
+    const pricing = byId[id]!.pricing!;
+    assert.equal(pricing.inputUsdPerMillion, input);
+    assert.equal(pricing.cachedInputUsdPerMillion, cached);
+    assert.equal(pricing.outputUsdPerMillion, output);
+    assert.equal(pricing.source, 'https://cursor.com/docs/models-and-pricing');
+    assert.equal(pricing.checkedAt, '2026-09-11');
+  };
+  cursorPrice('gpt-5.6-luna', 0.2, 0.02, 1.2);
+  cursorPrice('gpt-5.6-terra', 2, 0.2, 12);
+  cursorPrice('gpt-5.6-sol', 4, 0.4, 20);
+  cursorPrice('claude-sonnet-5', 2, 0.2, 10);
+  cursorPrice('claude-opus-5', 5, 0.5, 25);
+  cursorPrice('muse-spark-1.3', 1.25, 0.15, 4.25);
+  cursorPrice('gemini-3.8-flash', 0.75, 0.075, 3.5);
+  cursorPrice('composer-2.5', 0.5, 0.2, 2.5);
+  cursorPrice('claude-fable-5-1', 10, 0.25, 50);
+  assert.deepEqual(byId['claude-fable-5']!.pricing, {
+    inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50,
+    source: 'https://cursor.com/docs/models/claude-fable-5', checkedAt: '2026-09-11',
+  });
+  assert.ok(!('unavailable' in byId['claude-fable-5']!));
+  assert.ok(!('unavailable' in byId['claude-fable-5-1']!));
 });

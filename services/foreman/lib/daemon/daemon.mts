@@ -379,6 +379,7 @@ async function startForemanDaemonWithRuntime(
           client,
           mode,
           nativeClients: providerDef.nativeClients ?? [],
+          model,
         })
         if (state === 'available') {
           return {
@@ -392,6 +393,14 @@ async function startForemanDaemonWithRuntime(
           return {
             providerCredential: 'missing',
             providerLive: 'unknown',
+            quota: 'unknown',
+            available: false,
+          }
+        }
+        if (state === 'blocked') {
+          return {
+            providerCredential: 'available',
+            providerLive: 'unavailable',
             quota: 'unknown',
             available: false,
           }

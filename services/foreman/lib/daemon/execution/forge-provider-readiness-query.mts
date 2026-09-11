@@ -2,7 +2,8 @@
  * Bounded, non-inference access to Forge's authoritative provider auth status.
  *
  * The child runs exactly `forge providers list --json`. Only the public
- * `{id, auth_ok}` projection is retained; benign additional fields are ignored
+ * `{id, auth_ok}` projection plus a strictly validated optional Cursor
+ * `model_availability` map are retained; benign additional fields are ignored
  * and no credential, token, path, stderr, or raw response is returned through
  * this module. Native-route admission remains a separate caller decision.
  */
@@ -30,11 +31,25 @@ export class ForgeProviderReadinessError extends Error {
   }
 }
 
+export type ForgeModelAvailabilityStatus = 'available' | 'blocked' | 'unknown'
+export type ForgeModelAvailabilityReason =
+  | 'admin_blocked'
+  | 'consent_required'
+  | 'model_disabled'
+  | 'unsupported'
+
+export interface ForgeModelAvailability {
+  readonly status: ForgeModelAvailabilityStatus
+  readonly reason?: ForgeModelAvailabilityReason
+}
+
 export interface ForgeProviderReadinessSnapshot {
   /** Completion time of the authoritative non-inference status read. */
   readonly sampledAtMs: number
   /** Exact canonical provider id -> current Forge auth status. */
   readonly authByProvider: Readonly<Record<string, boolean>>
+  /** Safe Cursor per-model access; absent/malformed data never means available. */
+  readonly cursorModelAvailability?: Readonly<Record<string, ForgeModelAvailability>>
 }
 
 export interface ForgeNativeRoute {
@@ -43,9 +58,11 @@ export interface ForgeNativeRoute {
   readonly client: string
   readonly mode: 'native' | 'gateway'
   readonly nativeClients: readonly string[]
+  /** Exact runtime model id; required for Cursor native admission. */
+  readonly model?: string
 }
 
-export type ForgeNativeRouteReadiness = 'available' | 'missing' | 'unknown' | 'unsupported'
+export type ForgeNativeRouteReadiness = 'available' | 'missing' | 'unknown' | 'unsupported' | 'blocked'
 
 interface QueryOptions {
   env?: NodeJS.ProcessEnv
@@ -90,6 +107,79 @@ export function parseForgeProviderReadinessJson(text: string): Readonly<Record<s
   return Object.freeze(projected)
 }
 
+const SAFE_MODEL_STATUS = new Set<ForgeModelAvailabilityStatus>(['available', 'blocked', 'unknown'])
+const SAFE_MODEL_REASON = new Set<ForgeModelAvailabilityReason>([
+  'admin_blocked',
+  'consent_required',
+  'model_disabled',
+  'unsupported',
+])
+
+function isSafeModelId(id: string): boolean {
+  return id.length > 0 && id.trim() === id && id.length <= 120 && !/[\u0000-\u001f\u007f]/.test(id)
+}
+
+function parseOneModelAvailability(value: unknown): ForgeModelAvailability | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const status = row.status
+  if (typeof status !== 'string' || !SAFE_MODEL_STATUS.has(status as ForgeModelAvailabilityStatus)) return undefined
+  const projected: ForgeModelAvailability = { status: status as ForgeModelAvailabilityStatus }
+  if (typeof row.reason === 'string' && SAFE_MODEL_REASON.has(row.reason as ForgeModelAvailabilityReason)) {
+    return { ...projected, reason: row.reason as ForgeModelAvailabilityReason }
+  }
+  return projected
+}
+
+function projectCursorModelAvailabilityMap(raw: unknown): Readonly<Record<string, ForgeModelAvailability>> | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return Object.freeze(Object.create(null) as Record<string, ForgeModelAvailability>)
+  }
+  const projected: Record<string, ForgeModelAvailability> = Object.create(null) as Record<string, ForgeModelAvailability>
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isSafeModelId(id)) continue
+    const parsed = parseOneModelAvailability(value)
+    if (parsed === undefined) continue
+    projected[id] = parsed
+  }
+  return Object.freeze(projected)
+}
+
+/** Projects Cursor model_availability from a providers-list payload already auth-validated. */
+export function parseForgeCursorModelAvailability(text: string): Readonly<Record<string, ForgeModelAvailability>> | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new ForgeProviderReadinessError('invalid_response')
+  }
+  if (!Array.isArray(value)) throw new ForgeProviderReadinessError('invalid_response')
+  let found: Readonly<Record<string, ForgeModelAvailability>> | undefined
+  let sawCursor = false
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const row = item as Record<string, unknown>
+    if (row.id !== 'cursor') continue
+    const incoming = projectCursorModelAvailabilityMap(row.model_availability)
+    if (!sawCursor) {
+      found = incoming
+    } else {
+      const merged: Record<string, ForgeModelAvailability> = Object.create(null)
+      for (const id of new Set([...Object.keys(found ?? {}), ...Object.keys(incoming ?? {})])) {
+        const a = found?.[id]
+        const b = incoming?.[id]
+        merged[id] = a !== undefined && b !== undefined && a.status === b.status && a.reason === b.reason
+          ? a : { status: 'unknown' }
+      }
+      found = Object.freeze(merged)
+    }
+    sawCursor = true
+  }
+  if (!sawCursor) return undefined
+  return found
+}
+
 /** Native auth is valid only for the exact native route and exact provider. */
 export function evaluateForgeNativeRouteReadiness(
   snapshot: ForgeProviderReadinessSnapshot | undefined,
@@ -102,7 +192,18 @@ export function evaluateForgeNativeRouteReadiness(
   ) return 'unsupported'
   if (snapshot === undefined) return 'unknown'
   const authOk = snapshot.authByProvider[route.providerId]
-  return authOk === true ? 'available' : authOk === false ? 'missing' : 'unknown'
+  if (route.providerId === 'chatgpt') {
+    return authOk === true ? 'available' : authOk === false ? 'missing' : 'unknown'
+  }
+  if (authOk === false) return 'missing'
+  if (authOk !== true) return 'unknown'
+  const model = route.model
+  if (typeof model !== 'string' || !isSafeModelId(model)) return 'unknown'
+  const availability = snapshot.cursorModelAvailability?.[model]
+  if (availability === undefined) return 'unknown'
+  if (availability.status === 'available') return 'available'
+  if (availability.status === 'blocked') return 'blocked'
+  return 'unknown'
 }
 
 /** Runs one bounded status read and returns only the immutable safe projection. */
@@ -111,9 +212,11 @@ export async function queryForgeProviderReadiness(
 ): Promise<ForgeProviderReadinessSnapshot> {
   const text = await collectProviderStatus(options)
   const authByProvider = parseForgeProviderReadinessJson(text)
+  const cursorModelAvailability = parseForgeCursorModelAvailability(text)
   return Object.freeze({
     sampledAtMs: (options.now ?? (() => Date.now()))(),
     authByProvider,
+    ...(cursorModelAvailability === undefined ? {} : { cursorModelAvailability }),
   })
 }
 

@@ -8,12 +8,21 @@ import { fileURLToPath } from 'node:url'
 import {
   evaluateForgeNativeRouteReadiness,
   ForgeProviderReadinessError,
+  parseForgeCursorModelAvailability,
   parseForgeProviderReadinessJson,
   queryForgeProviderReadiness,
 } from '../../lib/daemon/execution/forge-provider-readiness-query.mts'
 
 const fixture = fileURLToPath(new URL('../fixtures/provider-readiness-forge.mjs', import.meta.url))
 const temporaryDirectories: string[] = []
+
+test('conflicting duplicate Cursor rows never grant model access', () => {
+  const denied = { id: 'cursor', auth_ok: true, model_availability: { model: { status: 'blocked', reason: 'admin_blocked' } } }
+  const allowed = { id: 'cursor', auth_ok: true, model_availability: { model: { status: 'available' } } }
+  for (const rows of [[denied, allowed], [allowed, denied], [{ id: 'cursor', auth_ok: true }, allowed]]) {
+    assert.equal(parseForgeCursorModelAvailability(JSON.stringify(rows))?.model?.status, 'unknown')
+  }
+})
 
 afterEach(() => {
   for (const path of temporaryDirectories.splice(0)) rmSync(path, { recursive: true, force: true })
@@ -55,12 +64,15 @@ test('native readiness is exact-provider and never promotes native auth into gat
   const snapshot = {
     sampledAtMs: 1,
     authByProvider: Object.freeze({ chatgpt: true, cursor: false }),
+    cursorModelAvailability: Object.freeze({
+      'composer-1': { status: 'available' as const },
+    }),
   }
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
     providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: ['codex'],
   }), 'available')
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
-    providerId: 'cursor', client: 'cursor', mode: 'native', nativeClients: ['cursor'],
+    providerId: 'cursor', client: 'cursor', mode: 'native', nativeClients: ['cursor'], model: 'composer-1',
   }), 'missing')
   assert.equal(evaluateForgeNativeRouteReadiness({
     sampledAtMs: 1,
@@ -77,6 +89,106 @@ test('native readiness is exact-provider and never promotes native auth into gat
   assert.equal(evaluateForgeNativeRouteReadiness(snapshot, {
     providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: [],
   }), 'unsupported', 'a credential resolver cannot bypass the provider native-client allowlist')
+})
+
+const cursorNative = {
+  providerId: 'cursor' as const,
+  client: 'cursor',
+  mode: 'native' as const,
+  nativeClients: ['cursor'],
+}
+
+test('authenticated Cursor requires exact available model status', () => {
+  const blocked = {
+    sampledAtMs: 1,
+    authByProvider: Object.freeze({ chatgpt: true, cursor: true }),
+    cursorModelAvailability: Object.freeze({
+      'arbitrary-team-model': { status: 'blocked' as const, reason: 'admin_blocked' as const },
+    }),
+  }
+  assert.equal(evaluateForgeNativeRouteReadiness(blocked, {
+    ...cursorNative, model: 'arbitrary-team-model',
+  }), 'blocked')
+  const allowed = {
+    sampledAtMs: 2,
+    authByProvider: Object.freeze({ chatgpt: true, cursor: true }),
+    cursorModelAvailability: Object.freeze({
+      'arbitrary-team-model': { status: 'available' as const },
+      'non-default-model': { status: 'available' as const },
+    }),
+  }
+  assert.equal(evaluateForgeNativeRouteReadiness(allowed, {
+    ...cursorNative, model: 'arbitrary-team-model',
+  }), 'available')
+  assert.equal(evaluateForgeNativeRouteReadiness(allowed, {
+    ...cursorNative, model: 'non-default-model',
+  }), 'available')
+  assert.equal(evaluateForgeNativeRouteReadiness(allowed, {
+    providerId: 'chatgpt', client: 'codex', mode: 'native', nativeClients: ['codex'],
+  }), 'available', 'ChatGPT stays auth-only')
+  const unblocked = {
+    sampledAtMs: 3,
+    authByProvider: Object.freeze({ chatgpt: true, cursor: true }),
+    cursorModelAvailability: Object.freeze({
+      'arbitrary-team-model': { status: 'available' as const },
+    }),
+  }
+  assert.equal(evaluateForgeNativeRouteReadiness(unblocked, {
+    ...cursorNative, model: 'arbitrary-team-model',
+  }), 'available')
+})
+
+test('absent malformed or unknown Cursor model data is not available', () => {
+  const authed = {
+    sampledAtMs: 1,
+    authByProvider: Object.freeze({ cursor: true }),
+  }
+  assert.equal(evaluateForgeNativeRouteReadiness(authed, {
+    ...cursorNative, model: 'composer-1',
+  }), 'unknown')
+  assert.equal(evaluateForgeNativeRouteReadiness({
+    ...authed,
+    cursorModelAvailability: Object.freeze({
+      'composer-1': { status: 'unknown' as const },
+    }),
+  }, { ...cursorNative, model: 'composer-1' }), 'unknown')
+  assert.equal(evaluateForgeNativeRouteReadiness({
+    ...authed,
+    cursorModelAvailability: Object.freeze({
+      'other-model': { status: 'available' as const },
+    }),
+  }, { ...cursorNative, model: 'composer-1' }), 'unknown')
+  const malformed = JSON.stringify([
+    { id: 'cursor', auth_ok: true, model_availability: 'nope', extra: { token: 'do-not-echo' } },
+  ])
+  parseForgeProviderReadinessJson(malformed)
+  const projected = parseForgeCursorModelAvailability(malformed)
+  assert.deepEqual({ ...projected }, {})
+  assert.equal(evaluateForgeNativeRouteReadiness({
+    sampledAtMs: 1,
+    authByProvider: Object.freeze({ cursor: true }),
+    cursorModelAvailability: projected,
+  }, { ...cursorNative, model: 'composer-1' }), 'unknown')
+})
+
+test('Cursor model_availability keeps only safe ids status and reason', () => {
+  const text = JSON.stringify([{
+    id: 'cursor',
+    auth_ok: true,
+    model_availability: {
+      'ok-model': { status: 'available', leak: 'nope' },
+      'blocked-model': { status: 'blocked', reason: 'admin_blocked', raw: 'team_settings_blocked' },
+      'bad status': { status: 'nope' },
+      ' ': { status: 'available' },
+    },
+  }])
+  const projected = parseForgeCursorModelAvailability(text)
+  assert.deepEqual({ ...projected }, {
+    'ok-model': { status: 'available' },
+    'blocked-model': { status: 'blocked', reason: 'admin_blocked' },
+  })
+  assert.equal(JSON.stringify(projected).includes('leak'), false)
+  assert.equal(JSON.stringify(projected).includes('team_settings_blocked'), false)
 })
 
 test('nonzero command errors are sanitized and never expose stderr', async () => {

@@ -15,8 +15,8 @@ type DispatchPlan struct {
 	Mode     string                  `json:"mode"`
 	Protocol catalog.GatewayProtocol `json:"protocol,omitempty"`
 	// ReasoningEffort mirrors the TS Catalog plan field (camelCase). It is the
-	// model's product-owned upstream reasoning effort and is materialized only
-	// for the codex client; caller-provided values win when the plan omits it.
+	// model's product-owned upstream reasoning effort. Codex and the registered
+	// Cursor GPT-5.6 models materialize it using their native parameter syntax.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
@@ -122,6 +122,15 @@ func applyDispatchModel(env map[string]string, plan DispatchPlan) {
 		env["GROK_MODEL"] = grok.ModelID(plan.Provider, plan.Model)
 	case "cursor":
 		env[catalog.EnvCursorModel] = plan.Model
+		// Cursor's bare GPT-5.6 IDs default to medium. Preserve the Catalog's
+		// declared effort rather than silently running a different variant.
+		switch plan.Model {
+		case "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol":
+			switch plan.ReasoningEffort {
+			case "none", "low", "medium", "high", "xhigh", "max":
+				env[catalog.EnvCursorModel] = plan.Model + "[context=272k,reasoning=" + plan.ReasoningEffort + ",fast=false]"
+			}
+		}
 	}
 }
 
