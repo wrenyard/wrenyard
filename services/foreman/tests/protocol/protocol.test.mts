@@ -650,7 +650,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         intelligence: 'high',
         maxOutputTokens: 8192,
         capabilities: ['text', 'image'],
-        reasoningEffort: 'high',
+        thinkingLevels: ['low', 'high', 'max'],
         speed: {
           tps: 40,
           source: 'catalog',

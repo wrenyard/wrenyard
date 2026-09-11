@@ -553,9 +553,10 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
 }
 
 // Compile Catalog-derived task dispatch plans into runtime plans. Preserves the
-// canonical target keys, caches credentials per provider, and keeps the private
-// CodeBuddy iOA upstream remap runtime-owned. User alias loading is daemon
-// composition and never happens here.
+// public canonical model id in plan.model and puts the private CodeBuddy iOA
+// remap into plan.upstreamModel, respecting any upstreamModel already selected
+// by an explicit thinking mapping. Caches credentials per provider; user alias
+// loading is daemon composition and never happens here.
 export async function resolveRuntimeTaskPlans(
   catalog: Catalog,
   runtime: ProviderRuntime,
@@ -575,7 +576,12 @@ export async function resolveRuntimeTaskPlans(
     const provider = catalog.provider(plan.provider);
     if (!provider) return [target, plan] as const;
     const credential = await resolveCredential(provider);
-    return [target, { ...plan, model: runtime.resolveUpstreamModel(provider, plan.model, credential) }] as const;
+    // A thinking mapping may already have substituted the upstream model; that
+    // exact selection wins over the provider-level runtime remap.
+    if (plan.upstreamModel !== undefined) return [target, plan] as const;
+    const upstreamModel = runtime.resolveUpstreamModel(provider, plan.model, credential);
+    if (upstreamModel === plan.model) return [target, plan] as const;
+    return [target, { ...plan, upstreamModel }] as const;
   })));
 }
 

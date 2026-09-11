@@ -13,7 +13,6 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'claude-opus-5': 'Claude Opus 5',
   'claude-sonnet-5': 'Claude Sonnet 5',
   'composer-2.5': 'Composer 2.5',
-  'cursor-grok-4.6-high': 'Grok 4.6 High',
   'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
   'doubao-seed-2-0-lite': 'Doubao Seed 2.0 Lite',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
@@ -31,6 +30,7 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'gpt-5.6-terra': 'GPT 5.6 Terra',
   'gpt-6-astra': 'GPT 6 Astra',
   'grok-4.5': 'Grok 4.5',
+  'grok-4.6': 'Grok 4.6',
   'hunyuan-hy3': 'HY3',
   'hunyuan-hy4-preview': 'Hunyuan HY4 Preview',
   'kimi-k2.5': 'Kimi K2.5',
@@ -63,6 +63,7 @@ export type BuiltinModelName = keyof typeof BUILTIN_MODEL_DISPLAY_NAMES;
  */
 const BUILTIN_MODEL_NAME_ALIASES = {
   'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+  'cursor-grok-4.6-high': 'grok-4.6',
   'deepseek-flash': 'deepseek-v4.1-flash',
   'deepseek/deepseek-flash': 'deepseek-v4.1-flash',
   'doubao-seed-2-0-lite-260215': 'doubao-seed-2-0-lite',

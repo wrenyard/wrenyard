@@ -739,6 +739,7 @@ export class TaskSettingsService {
         ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
         ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
         ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
+        ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
       })
       if (!explicitResolution.ok) {
         // Explicit mode bypasses automatic ranking and never falls back.
@@ -1107,6 +1108,7 @@ export class TaskSettingsService {
           ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
           ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
           ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
+          ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
         })
         if (!explicitResolution.ok) {
           throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
@@ -1228,6 +1230,7 @@ export class TaskSettingsService {
             ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
           ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
           ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
+          ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
           })
           if (explicitResolution.ok) {
             resolvedTarget = explicitResolution.exactAgentRuntime
@@ -2186,6 +2189,7 @@ interface TaskSettingsEffectiveAutomaticDto {
   exclude_profile_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_client_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_provider_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
+  thinking?: { value: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null; source: TaskSettingsSourceLayer }
 }
 
 function toEffectiveAutomatic(

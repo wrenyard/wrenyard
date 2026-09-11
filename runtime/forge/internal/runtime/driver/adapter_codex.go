@@ -29,18 +29,19 @@ func (a *CodexAdapter) BuildRunCommand(profile string, prompt string, workDir st
 }
 
 func (a *CodexAdapter) BuildRunCommandWithLastMessage(profile string, prompt string, workDir string, outputLastMessage string, opts CommandOptions) *exec.Cmd {
-	effort := a.reasoningEffort()
 	sandbox := a.sandboxForPermission(opts)
 	args := []string{
 		"--search",
 		"exec",
 		"--strict-config",
 		"-c", "approval_policy=\"" + catalog.CodexApprovalPolicy(opts.Permission) + "\"",
-		"-c", "model_reasoning_effort=\"" + effort + "\"",
 		"--model", a.Model,
 		"--json",
 		"--sandbox", sandbox,
 		"--skip-git-repo-check",
+	}
+	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
 	}
 	// Always ignore user config to prevent workspace-level skills from interfering with automated task execution.
 	args = append(args, "--ignore-user-config")
@@ -63,18 +64,19 @@ func (a *CodexAdapter) BuildRunCommandWithLastMessage(profile string, prompt str
 }
 
 func (a *CodexAdapter) BuildResumeCommand(profile string, nativeSessionID string, prompt string, workDir string, opts CommandOptions) *exec.Cmd {
-	effort := a.reasoningEffort()
 	sandbox := a.sandboxForPermission(opts)
 	args := []string{
 		"--search",
 		"exec", "resume", nativeSessionID,
 		"--strict-config",
 		"-c", "approval_policy=\"" + catalog.CodexApprovalPolicy(opts.Permission) + "\"",
-		"-c", "model_reasoning_effort=\"" + effort + "\"",
 		"-c", fmt.Sprintf("sandbox_mode=\"%s\"", sandbox),
 		"--model", a.Model,
 		"--json",
 		"--skip-git-repo-check",
+	}
+	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
 	}
 	// Always ignore user config to prevent workspace-level skills from interfering with automated task execution.
 	args = append(args, "--ignore-user-config")
@@ -128,14 +130,6 @@ func (a *CodexAdapter) sandboxForPermission(opts CommandOptions) string {
 		return sandbox
 	}
 	return "workspace-write"
-}
-
-func (a *CodexAdapter) reasoningEffort() string {
-	effort := strings.TrimSpace(a.ReasoningEffort)
-	if effort == "" {
-		return "xhigh"
-	}
-	return effort
 }
 
 func (a *CodexAdapter) ParseSessionID(logPath string) (string, error) {

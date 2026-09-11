@@ -2,7 +2,9 @@ import {
   INTELLIGENCE_ORDER,
   type IntelligenceTier,
   type TaskDispatchRequirements as CatalogTaskDispatchRequirements,
+  type ThinkingLevel,
   normalizeIntelligenceTier,
+  normalizeThinkingLevel,
 } from '@wrenyard/catalog'
 
 /**
@@ -93,6 +95,7 @@ export const TASK_DISPATCH_FIELDS = [
   'excludeProviderIds',
   'requiredCapabilities',
   'requiresWebSearch',
+  'thinking',
 ] as const
 
 export type TaskDispatchField = (typeof TASK_DISPATCH_FIELDS)[number]
@@ -111,6 +114,7 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   excludeProviderIds: ['excludeProviderIds', 'exclude_provider_ids'],
   requiredCapabilities: ['requiredCapabilities', 'required_capabilities'],
   requiresWebSearch: ['requiresWebSearch', 'requires_web_search'],
+  thinking: ['thinking'],
 }
 
 const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
@@ -135,6 +139,8 @@ const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 const BOOLEAN_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'requiresWebSearch',
 ])
+
+const THINKING_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['thinking'])
 
 /* -------------------------------------------------------------------------- *
  * Layer model
@@ -346,6 +352,18 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
         fail(scope, `dispatch.${field} must be a boolean`)
       }
       ;(out as Record<string, unknown>)[field] = value
+      continue
+    }
+
+    if (THINKING_FIELDS.has(field)) {
+      if (typeof value !== 'string') {
+        fail(scope, `dispatch.${field} must be one of: low, medium, high, xhigh, max`)
+      }
+      const normalized: ThinkingLevel | undefined = normalizeThinkingLevel(value)
+      if (normalized === undefined) {
+        fail(scope, `dispatch.${field} must be one of: low, medium, high, xhigh, max`)
+      }
+      ;(out as Record<string, unknown>)[field] = normalized
       continue
     }
 

@@ -223,3 +223,16 @@ test('timeout kills the detached Forge process tree before rejecting', async () 
   const grandchildPid = Number(readFileSync(marker, 'utf8'))
   assert.throws(() => process.kill(grandchildPid, 0), (error: NodeJS.ErrnoException) => error.code === 'ESRCH')
 })
+
+
+test('Cursor wire Grok availability is projected to canonical model identity', () => {
+  const parsed = parseForgeCursorModelAvailability(JSON.stringify([{ id: 'cursor', auth_ok: true,
+    model_availability: { 'cursor-grok-4.6-high': { status: 'blocked', reason: 'admin_blocked' } },
+  }]))
+  assert.deepEqual(parsed?.['grok-4.6'], { status: 'blocked', reason: 'admin_blocked' })
+  assert.equal(parsed?.['cursor-grok-4.6-high'], undefined)
+  const conflict = parseForgeCursorModelAvailability(JSON.stringify([{ id: 'cursor', auth_ok: true,
+    model_availability: { 'cursor-grok-4.6-high': { status: 'available' }, 'grok-4.6': { status: 'blocked' } },
+  }]))
+  assert.equal(conflict?.['grok-4.6']?.status, 'unknown')
+})
