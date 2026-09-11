@@ -1,0 +1,217 @@
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "message_start", "message": {"id": "168df636ccc54e94bf793c75aad4112b", "model": "deepseek-v4.1-flash-ioa", "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_start"}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_stop"}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_start"}}}
+{"at_ms": 1789107989302, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989367, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989369, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989397, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989397, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989397, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989404, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989404, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989404, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989422, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989422, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989422, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989446, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989446, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989474, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_stop"}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_start"}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": ""}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989537, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989538, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989538, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989538, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989564, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989565, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989575, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}}}}
+{"at_ms": 1789107989590, "record": {"type": "stream_event", "event": {"type": "content_block_stop"}}}
+{"at_ms": 1789107989590, "record": {"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 24646, "output_tokens": 79, "cache_read_input_tokens": 24448, "cache_creation_input_tokens": 198}}}}
+{"at_ms": 1789107989770, "record": {"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 24646, "output_tokens": 79, "cache_read_input_tokens": 24448, "cache_creation_input_tokens": 0}}}}
+{"at_ms": 1789107989771, "record": {"type": "stream_event", "event": {"type": "message_stop"}}}
+{"at_ms": 1789107989784, "record": {"type": "assistant", "message": {"id": "168df636ccc54e94bf793c75aad4112b", "model": "deepseek-v4.1-flash-ioa", "content": [], "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}}
+{"at_ms": 1789107989785, "record": {"type": "assistant", "message": {"id": "168df636ccc54e94bf793c75aad4112b", "model": "deepseek-v4.1-flash-ioa", "content": [], "usage": {"input_tokens": 24646, "output_tokens": 79, "cache_read_input_tokens": 24448, "cache_creation_input_tokens": 198}}}}
+{"at_ms": 1789107996628, "record": {"type": "stream_event", "event": {"type": "message_start", "message": {"id": "935f50a09ccb49ecaf947cb650fdc870", "model": "deepseek-v4.1-flash-ioa", "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}}}
+{"at_ms": 1789107996629, "record": {"type": "stream_event", "event": {"type": "content_block_start"}}}
+{"at_ms": 1789107996629, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}}}}
+{"at_ms": 1789107996630, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}}}}
+{"at_ms": 1789107996630, "record": {"type": "stream_event", "event": {"type": "content_block_stop"}}}
+{"at_ms": 1789107996630, "record": {"type": "stream_event", "event": {"type": "content_block_start"}}}
+{"at_ms": 1789107996630, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996640, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996651, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996651, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996651, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996674, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996674, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996693, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996693, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996693, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996694, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996718, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996726, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996726, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996739, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996755, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996770, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996784, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996784, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996784, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996801, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996806, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996829, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996830, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996834, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996834, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996853, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996853, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996853, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996853, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996921, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996921, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996921, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996921, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996921, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996934, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996934, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996934, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996951, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996951, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996970, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996970, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996970, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996982, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107996996, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997031, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997031, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997146, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997150, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997150, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997150, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997150, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997165, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997181, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997181, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997192, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997192, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997217, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997217, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997252, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997252, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997252, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997252, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997252, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997268, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997269, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997296, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997297, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997302, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997328, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997329, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997329, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997344, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997357, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997370, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997370, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997371, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997383, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997397, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997397, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997415, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997416, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997420, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997420, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997420, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997420, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997432, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997432, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997447, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997447, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997478, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997478, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997478, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997478, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997491, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997491, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997500, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997500, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997514, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997528, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997544, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997545, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997545, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997557, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997557, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997585, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997585, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997585, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997585, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997585, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997589, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997592, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997592, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997608, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997608, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997620, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997620, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997635, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997635, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997635, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997635, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997649, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997649, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997672, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997672, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997684, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997699, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997727, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997727, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997727, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997751, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997751, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997760, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997761, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997761, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997792, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997792, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997799, "record": {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x"}}}}
+{"at_ms": 1789107997841, "record": {"type": "stream_event", "event": {"type": "content_block_stop"}}}
+{"at_ms": 1789107997971, "record": {"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 24765, "output_tokens": 147, "cache_read_input_tokens": 24576, "cache_creation_input_tokens": 0}}}}
+{"at_ms": 1789107997971, "record": {"type": "stream_event", "event": {"type": "message_stop"}}}
+{"at_ms": 1789107997971, "record": {"type": "assistant", "message": {"id": "935f50a09ccb49ecaf947cb650fdc870", "model": "deepseek-v4.1-flash-ioa", "content": [], "usage": {"input_tokens": 24765, "output_tokens": 147, "cache_read_input_tokens": 24576, "cache_creation_input_tokens": 189}}}}
+{"at_ms": 1789107997978, "record": {"type": "result", "subtype": "success", "is_error": false, "usage": {"input_tokens": 49411, "output_tokens": 226}, "duration_ms": 18000}}

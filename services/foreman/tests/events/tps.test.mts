@@ -16,7 +16,7 @@ function iso(ms: number): string {
   return new Date(ms).toISOString()
 }
 
-/** Seeds a completed successful execution with an exact started/ended interval. */
+/** Seeds a completed successful execution; wall time is irrelevant to TPS. */
 function seedExecution(params: {
   executionId: string
   taskId: string
@@ -67,21 +67,33 @@ function seedDispatch(executionId: string, taskRunId: string, provider: string, 
 interface UsageOptions {
   output: number
   durationMs?: number | null
+  model?: string
   tokenScope?: string | null
   durationScope?: string | null
   tpsContract?: string | null
   seq?: number
 }
 
-/** Seeds an additive agent-turn usage event; native duration is deliberately irrelevant. */
+/** Seeds a normalized response-paired usage event. */
 function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
   const seq = o.seq ?? 0
   const data: Record<string, unknown> = {
     token_scope: o.tokenScope === undefined ? 'agent_turn' : o.tokenScope,
     duration_scope: o.durationScope === undefined ? 'agent_turn' : o.durationScope,
-    tps_contract: o.tpsContract === undefined ? 'agent_turn_v1' : o.tpsContract,
+    tps_sampling_contract: o.tpsContract === undefined ? 'response_v1' : o.tpsContract,
     input_tokens: 10,
     output_tokens: o.output,
+  }
+  if (o.tpsContract === undefined && o.tokenScope === undefined && o.durationScope === undefined) {
+    const first = BASE + seq * 20_000 + 1
+    const sample: Record<string, unknown> = {
+      response_id: `${executionId}-response-${seq}`,
+      model: o.model ?? 'sonnet',
+      output_tokens: o.output,
+      first_token_at_ms: first,
+    }
+    if (o.durationMs !== null) sample.completed_at_ms = first + (o.durationMs ?? 10_000)
+    data.tps_samples = [sample]
   }
   if (o.durationMs !== null && o.durationMs !== undefined) data.duration_ms = o.durationMs
   dbRun(
@@ -96,7 +108,20 @@ function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
   )
 }
 
-/** One execution with a given output and execution elapsed. */
+function seedResponseUsage(executionId: string, taskId: string, samples: unknown[], seq = 0): void {
+  dbRun(
+    `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
+     VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
+    executionId,
+    taskId,
+    seq,
+    iso(BASE),
+    JSON.stringify({ tps_sampling_contract: 'response_v1', tps_samples: samples }),
+    iso(BASE),
+  )
+}
+
+/** One execution with a given output and paired generation durations. */
 function seedSample(params: {
   taskId: string
   executionId: string
@@ -118,15 +143,14 @@ function seedSample(params: {
   })
   seedDispatch(params.executionId, params.taskId, params.provider, params.model, params.client)
   params.outputs.forEach((output, index) => {
-    seedUsage(params.executionId, params.taskId, { output, seq: index })
+    seedUsage(params.executionId, params.taskId, { output, model: params.model, seq: index })
   })
 }
 
 describe('readExecutionTpsSamples / TPS denominator', () => {
-  it('uses actual execution elapsed, correcting the historical 8075ms native denominator to the 392914ms execution interval', () => {
+  it('uses paired generation time and ignores the large execution wall interval', () => {
     initTestDb()
-    // Historical wrong denominator: native event duration sums to 8075ms but the
-    // execution actually ran 392914ms. 41094 output over 392914ms -> ~104.59 TPS.
+    // The execution runs for 392914ms, while the paired samples total 8075ms.
     seedTask('task-hist')
     seedExecution({ executionId: 'exec-hist', taskId: 'task-hist', startedMs: BASE, endedMs: BASE + 392914 })
     seedDispatch('exec-hist', 'task-hist', 'anthropic', 'sonnet')
@@ -137,13 +161,13 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     assert.equal(samples.length, 1)
     const sample = samples[0]
     assert.equal(sample.outputTokens, 41094)
-    assert.equal(sample.durationMs, 392914)
-    assert.equal(sample.tps, (1000 * 41094) / 392914)
-    assert.ok(Math.abs(sample.tps - 104.588) < 0.01, `expected ~104.59 TPS, got ${sample.tps}`)
+    assert.equal(sample.durationMs, 8075)
+    assert.equal(sample.tps, (1000 * 41094) / 8075)
+    assert.ok(Math.abs(sample.tps - 5089.0) < 0.1, `expected ~5089.0 TPS, got ${sample.tps}`)
     closeTestDb()
   })
 
-  it('sums repeated usage exactly once per execution and counts whole-execution time once', () => {
+  it('sums paired responses exactly once per execution', () => {
     initTestDb()
     seedTask('task-repeat')
     seedExecution({ executionId: 'exec-repeat', taskId: 'task-repeat', startedMs: BASE, endedMs: BASE + 10000 })
@@ -155,8 +179,9 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     const samples = readExecutionTpsSamples()
     assert.equal(samples.length, 1)
     assert.equal(samples[0].outputTokens, 300)
-    // 300 / 10000ms -> 30 TPS, not 3x the per-event rates.
-    assert.equal(samples[0].tps, 30)
+    // 300 / 30000ms -> 10 TPS.
+    assert.equal(samples[0].durationMs, 30000)
+    assert.equal(samples[0].tps, 10)
     closeTestDb()
   })
 
@@ -178,18 +203,18 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('never trusts native event duration for the denominator', () => {
+  it('does not use execution wall time as the denominator', () => {
     initTestDb()
     seedTask('task-native')
-    // Execution ran 20000ms; native durations sum to only 2000ms.
+    // Execution ran 20000ms; paired generation totals 2000ms.
     seedExecution({ executionId: 'exec-native', taskId: 'task-native', startedMs: BASE, endedMs: BASE + 20000 })
     seedDispatch('exec-native', 'task-native', 'anthropic', 'sonnet')
     seedUsage('exec-native', 'task-native', { output: 1000, durationMs: 1000, seq: 0 })
     seedUsage('exec-native', 'task-native', { output: 1000, durationMs: 1000, seq: 1 })
 
     const samples = readExecutionTpsSamples()
-    assert.equal(samples[0].durationMs, 20000)
-    assert.equal(samples[0].tps, 100)
+    assert.equal(samples[0].durationMs, 2000)
+    assert.equal(samples[0].tps, 1000)
     closeTestDb()
   })
 
@@ -221,17 +246,17 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('returns nothing when stored elapsed is not finite positive', () => {
+  it('returns nothing when paired timing is not finite positive', () => {
     initTestDb()
     seedTask('task-zero')
     seedExecution({ executionId: 'exec-zero', taskId: 'task-zero', startedMs: BASE, endedMs: BASE })
     seedDispatch('exec-zero', 'task-zero', 'anthropic', 'sonnet')
-    seedUsage('exec-zero', 'task-zero', { output: 500 })
+    seedUsage('exec-zero', 'task-zero', { output: 500, durationMs: 0 })
     assert.equal(readExecutionTpsSamples().length, 0)
     closeTestDb()
   })
 
-  it('ignores events that are not additive agent-turn output', () => {
+  it('ignores legacy unmarked events and never infers speed from them', () => {
     initTestDb()
     seedTask('task-scope')
     seedExecution({ executionId: 'exec-scope', taskId: 'task-scope', startedMs: BASE, endedMs: BASE + 10000 })
@@ -239,6 +264,82 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedUsage('exec-scope', 'task-scope', { output: 500, tokenScope: 'agent_turn_cumulative', seq: 0 })
     seedUsage('exec-scope', 'task-scope', { output: 500, tokenScope: 'model_output', seq: 1 })
     // Non-additive provenance invalidates the execution rather than under-counting.
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('uses a ratio of paired sums, not an arithmetic mean of response rates', () => {
+    initTestDb()
+    seedTask('task-ratio')
+    seedExecution({ executionId: 'exec-ratio', taskId: 'task-ratio', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-ratio', 'task-ratio', 'anthropic', 'sonnet')
+    seedUsage('exec-ratio', 'task-ratio', { output: 300, durationMs: 10000, seq: 0 })
+    seedUsage('exec-ratio', 'task-ratio', { output: 300, durationMs: 30000, seq: 1 })
+    const sample = readExecutionTpsSamples()[0]
+    assert.equal(sample.outputTokens, 600)
+    assert.equal(sample.durationMs, 40000)
+    assert.equal(sample.tps, 15)
+    closeTestDb()
+  })
+
+  it('omits a response with missing timing without borrowing its tokens', () => {
+    initTestDb()
+    seedTask('task-missing-timing')
+    seedExecution({ executionId: 'exec-missing-timing', taskId: 'task-missing-timing', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-missing-timing', 'task-missing-timing', 'anthropic', 'sonnet')
+    seedResponseUsage('exec-missing-timing', 'task-missing-timing', [
+      { response_id: 'good', model: 'sonnet', output_tokens: 300, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001 },
+      { response_id: 'missing', model: 'sonnet', output_tokens: 9000 },
+    ])
+    const sample = readExecutionTpsSamples()[0]
+    assert.equal(sample.outputTokens, 300)
+    assert.equal(sample.durationMs, 10000)
+    closeTestDb()
+  })
+
+  it('deduplicates identical response IDs and rejects conflicting duplicates', () => {
+    initTestDb()
+    seedTask('task-duplicates')
+    seedExecution({ executionId: 'exec-dedup', taskId: 'task-duplicates', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-dedup', 'task-duplicates', 'anthropic', 'sonnet')
+    const response = { response_id: 'same', model: 'sonnet', output_tokens: 300, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001 }
+    seedResponseUsage('exec-dedup', 'task-duplicates', [response, response])
+    seedResponseUsage('exec-dedup', 'task-duplicates', [response], 1)
+    assert.equal(readExecutionTpsSamples()[0].outputTokens, 300)
+
+    seedExecution({ executionId: 'exec-conflict', taskId: 'task-duplicates', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-conflict', 'task-duplicates', 'anthropic', 'sonnet')
+    seedResponseUsage('exec-conflict', 'task-duplicates', [response])
+    seedResponseUsage('exec-conflict', 'task-duplicates', [{ ...response, output_tokens: 301 }], 1)
+    assert.equal(readExecutionTpsSamples().some((sample) => sample.executionId === 'exec-conflict'), false)
+    closeTestDb()
+  })
+
+  it('maps only registered provider wire identities, never a different or legacy model', () => {
+    initTestDb()
+    seedTask('wire-task')
+    for (const [id, provider, wire] of [
+      ['wire-good', 'codebuddy', 'deepseek-v4.1-flash-ioa'],
+      ['wire-wrong-provider', 'other', 'deepseek-v4.1-flash-ioa'],
+      ['wire-old', 'codebuddy', 'deepseek-v4-flash'],
+    ]) {
+      seedExecution({ executionId: id, taskId: 'wire-task', startedMs: BASE, endedMs: BASE + 90000 })
+      seedDispatch(id, 'wire-task', provider, 'deepseek-v4.1-flash')
+      seedResponseUsage(id, 'wire-task', [{ response_id: 'r1', model: wire, output_tokens: 500, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001 }])
+    }
+    assert.deepEqual(readExecutionTpsSamples().map(sample => sample.executionId), ['wire-good'])
+    closeTestDb()
+  })
+
+  it('rejects samples whose source model differs from dispatch model', () => {
+    initTestDb()
+    seedTask('task-model')
+    seedExecution({ executionId: 'exec-model', taskId: 'task-model', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-model', 'task-model', 'anthropic', 'sonnet')
+    seedResponseUsage('exec-model', 'task-model', [{
+      response_id: 'wrong-model', model: 'opus', output_tokens: 500,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+    }])
     assert.equal(readExecutionTpsSamples().length, 0)
     closeTestDb()
   })
@@ -373,8 +474,8 @@ describe('readTaskTps', () => {
     seedExecution({ executionId: 'e2', taskId: 'task-sum', startedMs: BASE + 10000, endedMs: BASE + 30000 })
     seedDispatch('e1', 'task-sum', 'anthropic', 'sonnet')
     seedDispatch('e2', 'task-sum', 'anthropic', 'sonnet')
-    seedUsage('e1', 'task-sum', { output: 1000, durationMs: 1 })
-    seedUsage('e2', 'task-sum', { output: 2000, durationMs: 1 })
+    seedUsage('e1', 'task-sum', { output: 1000, durationMs: 10000 })
+    seedUsage('e2', 'task-sum', { output: 2000, durationMs: 20000 })
 
     const tps = readTaskTps('task-sum')
     assert.ok(tps)

@@ -168,9 +168,9 @@ export interface WrenyardTaskUsage {
   cache_creation_input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
-  agent_turn_ms?: number;
+  generation_ms?: number;
   output_tps?: number;
-  tps_contract?: 'agent_turn_v1';
+  tps_contract?: 'response_v1';
   reference_cost_usd?: number;
   reference_cost_complete: boolean;
   reference_cost_basis?: 'catalog_reference';

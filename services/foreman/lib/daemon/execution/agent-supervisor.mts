@@ -1703,11 +1703,10 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
         cache_creation_input_tokens: numberProp(event, 'cache_creation_input_tokens'),
         total_tokens: numberProp(event, 'total_tokens'),
         duration_ms: numberProp(event, 'duration_ms'),
-        // Preserve the exact normalized three-field versioned contract so only
-        // a genuine token_scope=agent_turn, duration_scope=agent_turn, and
-        // tps_contract=agent_turn_v1 event can reach the telemetry gate. A
-        // missing value is omitted and a wrong value is never upgraded; the
-        // mapper never infers or upgrades provenance.
+        // Preserve normalized response sampling provenance only when supplied;
+        // the mapper never infers or upgrades provenance.
+        tps_sampling_contract: stringProp(event, 'tps_sampling_contract') ?? undefined,
+        tps_samples: mapTpsSamples(event.tps_samples),
         token_scope: stringProp(event, 'token_scope') ?? undefined,
         duration_scope: stringProp(event, 'duration_scope') ?? undefined,
         tps_contract: stringProp(event, 'tps_contract') ?? undefined,
@@ -1719,6 +1718,20 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
     type: item.type,
     data: dropUndefined(item.data),
   }))
+}
+
+function mapTpsSamples(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return []
+    return [dropUndefined({
+      response_id: stringProp(item, 'response_id') ?? undefined,
+      model: stringProp(item, 'model') ?? undefined,
+      output_tokens: numberProp(item, 'output_tokens'),
+      first_token_at_ms: numberProp(item, 'first_token_at_ms'),
+      completed_at_ms: numberProp(item, 'completed_at_ms'),
+    })]
+  })
 }
 
 function normalizeForgeStreamEvent(event: StreamEventRecord): StreamEventRecord | undefined {
