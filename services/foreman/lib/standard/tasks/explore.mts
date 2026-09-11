@@ -164,7 +164,7 @@ const definition: TaskDefinition = {
   config: {
     description:
       'Read-only investigation of code, Git history, notes, logs, or other declared targets. Answer concrete questions with evidence; diagnose causes without editing or requiring a staged workflow.',
-    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
+    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
     permission: 'readonly',
     instructions: [],
     input: ExploreInputSchema,

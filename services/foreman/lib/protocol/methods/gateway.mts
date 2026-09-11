@@ -21,7 +21,12 @@ export interface GatewayConnectionResult {
     intelligence: 'low' | 'mid' | 'high' | 'premium'
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
+    /**
+     * The legal thinking levels this model accepts, in ascending intensity.
+     * Replaces the legacy fixed `reasoningEffort` field so a per-run thinking
+     * choice can be validated against this exact ladder.
+     */
+    thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[]
     speed?: {
       tps: number
       source: string
@@ -64,7 +69,10 @@ export const gatewayConnectionResultSchema = {
           intelligence: { enum: ['low', 'mid', 'high', 'premium'] },
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
-          reasoningEffort: { enum: ['low', 'medium', 'high', 'xhigh'] },
+          thinkingLevels: {
+            type: 'array',
+            items: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+          },
           speed: {
             type: 'object',
             required: ['tps', 'source', 'checkedAt'],

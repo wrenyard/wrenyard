@@ -13,6 +13,10 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 )
 
+// grokReasoningEffortEnv is the profile-private env var carrying the mapped
+// wire reasoning effort from plan materialization into the Grok plan builder.
+const grokReasoningEffortEnv = "WRENYARD_REASONING_EFFORT"
+
 func buildGrokPlan(req PlanRequest) (CommandPlan, error) {
 	spec := req.Spec
 	home, err := materializeRuntimePreparation(spec.Runtime)
@@ -137,6 +141,12 @@ func buildGrokPlan(req PlanRequest) (CommandPlan, error) {
 		return CommandPlan{Resources: []ExecutionResource{resource}, ConfigDir: home}, fmt.Errorf("profile %q has no Grok wire model", spec.Name)
 	}
 	command = append(command, "--model", model)
+	// The mapped wire reasoning effort rides on the plan-materialized profile
+	// env. Emit it only when present so no effort is fabricated for plans that
+	// omit it.
+	if effort := strings.TrimSpace(spec.Env[grokReasoningEffortEnv]); effort != "" {
+		command = append(command, "--reasoning-effort", effort)
+	}
 	if resumeID != "" {
 		command = append(command, spec.ClientDesc.ResumeFlag, resumeID)
 	}

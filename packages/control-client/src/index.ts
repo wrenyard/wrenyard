@@ -76,7 +76,12 @@ export interface WrenyardGatewayModel {
   intelligence: 'low' | 'mid' | 'high' | 'premium';
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
-  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * The legal thinking levels this model accepts, in ascending intensity.
+   * Replaces the legacy fixed `reasoningEffort` field on the public gateway
+   * contract; absent for models that do not expose thinking controls.
+   */
+  thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
   speed?: WrenyardGatewayModelSpeed;
   pricing?: WrenyardGatewayModelPricing;
 }
@@ -147,6 +152,8 @@ export interface WrenyardTaskResolvedDispatch {
   speed: WrenyardTaskResolvedSpeed;
   intelligence: string;
   reference_pricing: WrenyardTaskReferencePricing;
+  /** Mirrors the frozen snake_case wire DTO `ThinkingLevel`. */
+  thinking?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   protocol?: string;
 }
 

@@ -16,7 +16,6 @@ func TestCodexAdapterBuildRunCommand(t *testing.T) {
 	want := []string{
 		"codex", "--search", "exec", "--strict-config",
 		"-c", `approval_policy="never"`,
-		"-c", `model_reasoning_effort="xhigh"`,
 		"--model", "default-model",
 		"--json", "--sandbox", "read-only", "--skip-git-repo-check",
 		"--ignore-user-config",
@@ -43,7 +42,6 @@ func TestCodexAdapterBuildResumeCommand(t *testing.T) {
 		"codex", "--search", "exec", "resume", "thread-abc",
 		"--strict-config",
 		"-c", `approval_policy="never"`,
-		"-c", `model_reasoning_effort="xhigh"`,
 		"-c", `sandbox_mode="read-only"`,
 		"--model", "default-model", "--json", "--skip-git-repo-check",
 		"--ignore-user-config",
@@ -206,4 +204,23 @@ func containsFlagPrefix(args []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func TestCodexMappedThinkingSurvivesRunAndResume(t *testing.T) {
+	for _, effort := range []string{"low", "max", "xhigh"} {
+		adapter := &CodexAdapter{Model: "gpt-5.6-sol", ReasoningEffort: effort}
+		run := adapter.BuildRunCommand("", "hello", "/tmp", CommandOptions{})
+		resume := adapter.BuildResumeCommand("", "thread-test", "hello", "/tmp", CommandOptions{})
+		for _, args := range [][]string{run.Args, resume.Args} {
+			found := false
+			for _, arg := range args {
+				if arg == "model_reasoning_effort="+tomlString(effort) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("mapped effort %q missing from %v", effort, args)
+			}
+		}
+	}
 }

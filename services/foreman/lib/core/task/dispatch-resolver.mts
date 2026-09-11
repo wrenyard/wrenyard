@@ -169,6 +169,9 @@ export interface ResolveExplicitDispatchInput {
   /** Hard intelligence minimum enforced even in explicit mode (the catalog's
    *  constrained probe owns the actual gate). */
   intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
+  /** Requested thinking level. Unsupported levels fail closed in explicit mode
+   *  (no fallback to another target or to an unrequested level). */
+  thinking?: TaskDispatchRequirements['thinking']
 }
 
 export type TaskDispatchExplicitResolution =
@@ -183,6 +186,8 @@ export interface TaskDispatchExactRuntimeListInput {
   requiresWebSearch?: boolean
   /** Hard intelligence minimum passed through to each explicit evaluation. */
   intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
+  /** Requested thinking level passed through to each explicit evaluation. */
+  thinking?: TaskDispatchRequirements['thinking']
 }
 
 /**
@@ -286,7 +291,7 @@ function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['refere
 function toResolvedDispatch(
   requestedAgentRuntime: string,
   profileId: string,
-  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string },
+  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; thinking?: TaskResolvedDispatch['thinking'] },
   model: ModelDefinition,
   speed: SpeedEvidence & { checkedAt: string },
   pricing: ModelPricing,
@@ -313,6 +318,7 @@ function toResolvedDispatch(
     reference_pricing: toReferencePricing(pricing),
   }
   if (plan.protocol) resolved.protocol = plan.protocol
+  if (plan.thinking !== undefined) resolved.thinking = plan.thinking
   return resolved
 }
 
@@ -385,7 +391,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
     try {
-      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
+      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.thinking)
     } catch {
       // Unresolvable plan mirrors the authoritative continue: no truthful path.
       return { code: 'no_available_provider' }
@@ -543,6 +549,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
     requiresWebSearch?: boolean,
     intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
+    thinking?: TaskDispatchRequirements['thinking'],
   ): TaskDispatchExplicitResolution => {
     const canonicalTarget = canonicalTargetOf(candidate)
     if (canonicalTarget !== exactAgentRuntime) {
@@ -574,7 +581,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (requiresWebSearch === true) {
       let plan: DispatchPlan
       try {
-        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
+        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, thinking)
       } catch {
         return {
           ok: false,
@@ -617,15 +624,46 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       }
     }
 
+    // Hard gate: requested thinking level must be supported by the exact
+    // target. A requested level the Catalog cannot resolve against this runtime
+    // is terminal — explicit mode never falls back to another target nor to an
+    // unrequested level.
+    if (thinking !== undefined) {
+      let plan: DispatchPlan
+      try {
+        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, thinking)
+      } catch {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' does not support the required thinking level '${thinking}'`,
+          ),
+        }
+      }
+      if (plan.thinking !== thinking) {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' does not support the required thinking level '${thinking}'`,
+          ),
+        }
+      }
+    }
+
     const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
       { taskName, requirements, declaredRuntime: exactAgentRuntime },
       [candidate],
     )
 
-    // Availability-only probe. The pool is exactly this candidate and the
-    // requirements carry no automatic constraint, so admission here means the
-    // target can produce a truthful resolved snapshot — never a fabricated one.
-    const availability = probe({})
+    // Availability probe. The pool is exactly this candidate and the
+    // requirements carry only the requested thinking level (admission for it is
+    // already gated above), so admission here means the target can produce a
+    // truthful resolved snapshot — never a fabricated one.
+    const availability = probe(thinking !== undefined ? { thinking } : {})
     if (!availability.ok) {
       return {
         ok: false,
@@ -640,7 +678,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!requiredCapabilities || requiredCapabilities.length === 0) return availability
 
     // Capability compatibility is the only remaining eligibility constraint.
-    const capable = probe({ requiredCapabilities })
+    const capable = probe({ requiredCapabilities, ...(thinking !== undefined ? { thinking } : {}) })
     if (!capable.ok) {
       return {
         ok: false,
@@ -747,7 +785,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
-      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin } = input
+      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, thinking } = input
       const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
         ok: false,
         error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
@@ -765,7 +803,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
       // Resolve through the Catalog (canonicalizing model aliases) and require
       // the exact canonical target to exist in the task-capable candidate set.
-      let resolvedPlan: { client: string; provider: string; model: string }
+      let resolvedPlan: { client: string; provider: string; model: string; thinking?: string }
       try {
         resolvedPlan = catalog.resolveRun(parsed.client, parsed.provider, parsed.model)
       } catch (error) {
@@ -781,7 +819,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, thinking)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
@@ -795,6 +833,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           input.requiredCapabilities,
           input.requiresWebSearch,
           input.intelligenceMin,
+          input.thinking,
         )
         if (outcome.ok) {
           items.push({ exactAgentRuntime, available: true, resolved: outcome.resolved })

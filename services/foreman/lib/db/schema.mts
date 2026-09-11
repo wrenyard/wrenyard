@@ -27,6 +27,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   createTaskRunAttemptDispatchTable(database)
   reconcileTaskRunAttemptDispatchCacheWriteColumn(database)
   reconcileTaskRunAttemptDispatchAutoRoutingColumn(database)
+  reconcileTaskRunAttemptDispatchThinkingColumn(database)
   recreateTaskIndexes(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
@@ -653,6 +654,7 @@ const TASK_RUN_ATTEMPT_DISPATCH_TABLE_SQL = `CREATE TABLE task_run_attempt_dispa
   speed_expected_tps_met INTEGER,
   speed_degradation_reason TEXT,
   intelligence        TEXT,
+  thinking            TEXT,
   reference_pricing_input     REAL,
   reference_pricing_output    REAL,
   reference_pricing_cache     REAL,
@@ -1141,6 +1143,23 @@ function reconcileTaskRunAttemptDispatchAutoRoutingColumn(database: ForemanDatab
     .map((column) => column.name))
   if (!columns.has('auto_routing')) {
     database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN auto_routing TEXT').run()
+  }
+}
+
+/**
+ * Idempotent migration adding the nullable thinking TEXT column to
+ * task_run_attempt_dispatch so each attempt durably carries the legal per-run
+ * thinking level it executed with. Only adds the column when absent; legacy
+ * rows keep NULL and remain readable — historical thinking is never invented
+ * or backfilled from the current catalog/task defaults.
+ */
+function reconcileTaskRunAttemptDispatchThinkingColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_attempt_dispatch)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('thinking')) {
+    database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN thinking TEXT').run()
   }
 }
 

@@ -682,6 +682,84 @@ ${extraConfig}  permission: 'readonly',
     assert.equal(getLoadErrors(workspace).length, 0)
   })
 
+  it('leaves dispatch.thinking absent when the declaration omits it', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-default-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'no-thinking.task.ts'), taskSource("'no-thinking'", `  dispatch: {
+    minimumTps: 5,
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('no-thinking', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.thinking, undefined)
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('lists an optional dispatch.thinking declaration for low and max', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-valid-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'think-low.task.ts'), taskSource("'think-low'", `  dispatch: {
+    thinking: 'low',
+  },
+`), 'utf-8')
+    writeFileSync(join(projectDir, 'think-max.task.ts'), taskSource("'think-max'", `  dispatch: {
+    thinking: 'max',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const low = resolveTaskTarget('think-low', workspace, 'app')
+    assertTaskTarget(low)
+    assert.equal(low.definition.config.dispatch?.thinking, 'low')
+    const max = resolveTaskTarget('think-max', workspace, 'app')
+    assertTaskTarget(max)
+    assert.equal(max.definition.config.dispatch?.thinking, 'max')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('accepts the midium input alias for dispatch.thinking and normalizes it in settings', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-alias-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'think-alias.task.ts'), taskSource("'think-alias'", `  dispatch: {
+    thinking: 'midium',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    // The alias is accepted at input validation; the projected definition
+    // emits the canonical spelling.
+    const target = resolveTaskTarget('think-alias', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.thinking, 'medium')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects an unknown dispatch.thinking value', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-bad-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    const taskPath = join(projectDir, 'bad-thinking.task.ts')
+    writeFileSync(taskPath, taskSource("'bad-thinking'", "  dispatch: { thinking: 'maximum' },\n"), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('bad-thinking', workspace, 'app')
+    assert.equal(target, null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(
+      errors.some((error) => error.load_error.includes('dispatch.thinking must be one of: low, medium, high, xhigh, max')),
+      errors.map((e) => e.load_error).join('; '),
+    )
+  })
+
   it('rejects the legacy frontier intelligence alias in dispatch', async () => {
     const workspace = makeTempDir('foreman-v2-loader-dispatch-frontier-')
     const projectDir = join(workspace, 'projects', 'app')
