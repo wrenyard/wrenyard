@@ -163,10 +163,10 @@ export function formFromTask(task: TaskRoutingTestTask): RoutingTestFormState {
   return form;
 }
 
-/** Chinese display label for an imported task, distinguishing project tasks. */
+/** Display label for an imported task, marking project tasks with their scope. */
 export function routingTestTaskLabel(task: TaskRoutingTestTask): string {
   return task.project !== undefined && task.project.length > 0
-    ? `${task.display_name}（项目 ${task.project}）`
+    ? `${task.display_name} · ${task.project === 'gol' ? 'GOL' : task.project}`
     : task.display_name;
 }
 
@@ -255,11 +255,17 @@ export function renderRoutingTestResult(result: TaskRoutingTestResult): Document
   return fragment;
 }
 
+/** Minimal picker surface the controller needs: read the value, push options. */
+export interface RoutingTestTaskPicker {
+  value: string;
+  setOptions(options: { value: string; label: string }[]): void;
+}
+
 export interface RoutingTestControllerOptions {
   request(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   importTasks(): Promise<{ tasks: TaskRoutingTestTask[] }>;
   runButton: HTMLButtonElement;
-  taskPicker: HTMLSelectElement;
+  taskPicker: RoutingTestTaskPicker;
   result: HTMLElement;
   /** Reads the current editable form state. */
   readForm(): RoutingTestFormState;
@@ -293,7 +299,7 @@ export class RoutingTestController {
    * Lazily fetches raw task definitions on first picker interaction. A
    * successful list is cached; concurrent fetches are suppressed; a failed
    * fetch can be retried. A late response from a superseded import is
-   * discarded. Populates the picker with Chinese task labels.
+   * discarded. Populates the picker with task labels.
    */
   async importTasks(): Promise<void> {
     if (this.importedTasks !== null) return;
@@ -353,17 +359,10 @@ export class RoutingTestController {
 
   private populatePicker(tasks: TaskRoutingTestTask[]): void {
     const picker = this.options.taskPicker;
-    picker.replaceChildren();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = '选择 Task';
-    picker.append(placeholder);
-    for (const task of tasks) {
-      const option = document.createElement('option');
-      option.value = task.identity;
-      option.textContent = routingTestTaskLabel(task);
-      picker.append(option);
-    }
+    picker.setOptions([
+      { value: '', label: '选择 Task' },
+      ...tasks.map((task) => ({ value: task.identity, label: routingTestTaskLabel(task) })),
+    ]);
     picker.value = '';
   }
 
