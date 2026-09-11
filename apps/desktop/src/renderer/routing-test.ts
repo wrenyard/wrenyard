@@ -48,10 +48,10 @@ export interface RoutingTestFormState {
   requireImage: boolean;
   /** Requires web search (`requires_web_search`). */
   requireWebSearch: boolean;
-  /** Newline/comma text for imported model exclusions. */
-  excludeModelIds: string;
-  /** Newline/comma text for imported provider exclusions. */
-  excludeProviderIds: string;
+  /** Exact model exclusion IDs; imported unknowns are held verbatim. */
+  excludeModelIds: string[];
+  /** Exact provider exclusion IDs; imported unknowns are held verbatim. */
+  excludeProviderIds: string[];
   /** Imported profile exclusions, held verbatim; not edited by the form UI. */
   excludeProfileIds: string[];
   /** Imported client exclusions, held verbatim; not edited by the form UI. */
@@ -72,8 +72,8 @@ export function defaultRoutingTestForm(): RoutingTestFormState {
     intelligenceExpected: 'mid',
     requireImage: false,
     requireWebSearch: false,
-    excludeModelIds: '',
-    excludeProviderIds: '',
+    excludeModelIds: [],
+    excludeProviderIds: [],
     excludeProfileIds: [],
     excludeClientIds: [],
     requireText: false,
@@ -87,13 +87,6 @@ function parsePositiveNumber(text: string): number | null {
   const value = Number(trimmed);
   if (!Number.isFinite(value) || value <= 0) throw new Error('请输入大于 0 的数值');
   return value;
-}
-
-function splitList(text: string): string[] {
-  return text
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
 }
 
 function unique(values: readonly string[]): string[] {
@@ -125,9 +118,9 @@ export function serializeRoutingTestRequest(form: RoutingTestFormState): TaskRou
   if (capabilities.length > 0) automatic.required_capabilities = capabilities;
   if (form.requireWebSearch) automatic.requires_web_search = true;
 
-  const excludeModelIds = unique(splitList(form.excludeModelIds));
+  const excludeModelIds = unique(form.excludeModelIds);
   if (excludeModelIds.length > 0) automatic.exclude_model_ids = excludeModelIds;
-  const excludeProviderIds = unique(splitList(form.excludeProviderIds));
+  const excludeProviderIds = unique(form.excludeProviderIds);
   if (excludeProviderIds.length > 0) automatic.exclude_provider_ids = excludeProviderIds;
   const excludeProfileIds = unique(form.excludeProfileIds);
   if (excludeProfileIds.length > 0) automatic.exclude_profile_ids = excludeProfileIds;
@@ -162,8 +155,8 @@ export function formFromTask(task: TaskRoutingTestTask): RoutingTestFormState {
   form.requireText = capabilities.includes('text');
   form.requireImage = capabilities.includes('image');
   form.requireWebSearch = automatic.requires_web_search === true;
-  form.excludeModelIds = (automatic.exclude_model_ids ?? []).join('\n');
-  form.excludeProviderIds = (automatic.exclude_provider_ids ?? []).join('\n');
+  form.excludeModelIds = [...(automatic.exclude_model_ids ?? [])];
+  form.excludeProviderIds = [...(automatic.exclude_provider_ids ?? [])];
   form.excludeProfileIds = [...(automatic.exclude_profile_ids ?? [])];
   form.excludeClientIds = [...(automatic.exclude_client_ids ?? [])];
   if (task.timeout_ms !== undefined) form.timeoutMs = String(task.timeout_ms);
@@ -266,10 +259,7 @@ export interface RoutingTestControllerOptions {
   request(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   importTasks(): Promise<{ tasks: TaskRoutingTestTask[] }>;
   runButton: HTMLButtonElement;
-  importButton: HTMLButtonElement;
   taskPicker: HTMLSelectElement;
-  importRow?: HTMLElement;
-  status: HTMLElement;
   result: HTMLElement;
   /** Reads the current editable form state. */
   readForm(): RoutingTestFormState;
@@ -278,9 +268,9 @@ export interface RoutingTestControllerOptions {
 }
 
 /**
- * Owns the routing-test run lifecycle: lazily imports the task list on the
- * import button only, disables duplicate runs, handles late responses, and
- * invalidates stale results whenever the form changes or a newer import/test
+ * Owns the routing-test run lifecycle: lazily imports the task list on first
+ * picker interaction, disables duplicate runs, handles late responses, and
+ * invalidates stale results whenever the form changes or a newer test
  * response arrives. It never auto-fetches tasks/settings or auto-runs on entry.
  */
 export class RoutingTestController {
@@ -297,39 +287,34 @@ export class RoutingTestController {
     this.runToken += 1;
     this.options.result.replaceChildren();
     if (this.busy) this.setBusy(false);
-    this.setStatus('未运行', 'is-pending');
   }
 
   /**
-   * Lazily fetches raw task definitions ONLY when invoked. The list is cached
-   * for subsequent clicks; a late response from a superseded import is
+   * Lazily fetches raw task definitions on first picker interaction. A
+   * successful list is cached; concurrent fetches are suppressed; a failed
+   * fetch can be retried. A late response from a superseded import is
    * discarded. Populates the picker with Chinese task labels.
    */
   async importTasks(): Promise<void> {
+    if (this.importedTasks !== null) return;
     if (this.importing) return;
     this.importing = true;
     this.importToken += 1;
     const token = this.importToken;
-    this.options.importButton.disabled = true;
     try {
       const tasks = (await this.options.importTasks()).tasks;
       if (token !== this.importToken) return;
       this.importedTasks = tasks;
       this.populatePicker(tasks);
-      if (this.options.importRow) this.options.importRow.hidden = false;
-      this.setStatus(tasks.length === 0 ? '无可用任务' : '', 'is-connected');
+      this.options.result.replaceChildren();
     } catch (error) {
       if (token !== this.importToken) return;
-      this.setStatus('导入失败', 'is-unavailable');
       const message = document.createElement('p');
       message.className = 'routing-test-empty is-error';
       message.textContent = `导入失败：${routingTestErrorMessage(error)}`;
       this.options.result.replaceChildren(message);
     } finally {
-      if (token === this.importToken) {
-        this.importing = false;
-        this.options.importButton.disabled = false;
-      }
+      if (token === this.importToken) this.importing = false;
     }
   }
 
@@ -350,16 +335,13 @@ export class RoutingTestController {
     const token = this.runToken;
     this.options.result.replaceChildren();
     this.setBusy(true);
-    this.setStatus('测试中…', 'is-pending');
     try {
       const result = await this.options.request(serializeRoutingTestRequest(this.options.readForm()));
       // Late responses from an invalidated run are discarded.
       if (token !== this.runToken) return;
-      this.setStatus(result.rows.length === 0 ? '无结果' : `已返回 ${result.rows.length} 行`, 'is-connected');
       this.options.result.replaceChildren(renderRoutingTestResult(result));
     } catch (error) {
       if (token !== this.runToken) return;
-      this.setStatus('失败', 'is-unavailable');
       const message = document.createElement('p');
       message.className = 'routing-test-empty is-error';
       message.textContent = `测试失败：${routingTestErrorMessage(error)}`;
@@ -389,11 +371,6 @@ export class RoutingTestController {
     this.busy = busy;
     this.options.runButton.disabled = busy;
     this.options.runButton.textContent = busy ? '测试中…' : '测试';
-  }
-
-  private setStatus(label: string, className: string): void {
-    this.options.status.textContent = label;
-    this.options.status.className = `routing-test-status status-pill ${className}`;
   }
 }
 

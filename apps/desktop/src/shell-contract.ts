@@ -315,6 +315,7 @@ export interface ProviderAuthStatus {
   setupHint?: string;
   configured: boolean;
   authMode: ProviderAuthMode;
+  models?: Array<{ id: string; displayName: string }>;
 }
 
 export interface ProviderCatalogSnapshot {
@@ -325,6 +326,7 @@ export interface ProviderCatalogSnapshot {
   authMode: ProviderAuthMode;
   setupHint: string;
   quota?: QuotaProviderSnapshot;
+  models?: Array<{ id: string; displayName: string }>;
 }
 
 export interface ProviderOrderSnapshot {

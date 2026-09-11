@@ -119,6 +119,41 @@ test('catalog projects discovered auth status and attaches quota by id', () => {
   assert.equal(kimi.quota, undefined);
 });
 
+test('catalog projects discovered model id/displayName choices without extra fields', () => {
+  const discovered: ProviderAuthStatus[] = [
+    {
+      id: 'deepseek',
+      displayName: 'DeepSeek',
+      configured: true,
+      authMode: 'environment',
+      models: [
+        { id: 'deepseek-chat', displayName: 'DeepSeek Chat' },
+        { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+      ],
+    },
+    {
+      id: 'kimi-coding',
+      displayName: 'Kimi Coding',
+      configured: false,
+      authMode: 'api-key',
+      models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', endpoint: 'must-not-leak' } as { id: string; displayName: string }],
+    },
+    { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
+  ];
+  const snapshot = projectQuotaSnapshot(providers, [{ id: 'deepseek', enabled: true }], 1, undefined, discovered);
+  const deepseek = snapshot.catalog.find((entry) => entry.id === 'deepseek')!;
+  assert.deepEqual(deepseek.models, [
+    { id: 'deepseek-chat', displayName: 'DeepSeek Chat' },
+    { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+  ]);
+  const kimi = snapshot.catalog.find((entry) => entry.id === 'kimi-coding')!;
+  assert.deepEqual(kimi.models, [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5' }]);
+  assert.equal(JSON.stringify(kimi.models).includes('endpoint'), false);
+  assert.equal(JSON.stringify(kimi.models).includes('must-not-leak'), false);
+  const cursor = snapshot.catalog.find((entry) => entry.id === 'cursor')!;
+  assert.deepEqual(cursor.models, []);
+});
+
 test('successful runtime quota overrides a false native discovery result', () => {
   const cursor: QuotaProviderState = {
     ...providers[0],

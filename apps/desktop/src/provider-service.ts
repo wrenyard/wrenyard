@@ -34,6 +34,7 @@ export class ProviderService {
         setupHint: provider.setupHint,
         configured: provider.configured,
         authMode: provider.authMode,
+        models: provider.models.map(({ id, displayName }) => ({ id, displayName })),
       }));
     } finally {
       client.close();

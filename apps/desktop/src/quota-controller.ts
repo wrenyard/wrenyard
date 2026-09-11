@@ -263,6 +263,7 @@ function projectCatalog(
       setupHint: discoveredStatus?.setupHint ?? (authMode === 'native'
         ? '请在对应的原生客户端完成登录，返回啾啾工坊后刷新状态。'
         : '该来源没有独立 API Key 配置入口。'),
+      models: (discoveredStatus?.models ?? []).map(({ id: modelId, displayName }) => ({ id: modelId, displayName })),
     };
   });
   return sortProvidersByAvailability(catalog, configuredOrder);

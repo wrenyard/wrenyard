@@ -23,6 +23,7 @@ import type {
   WrenyardShellApi,
 } from '../shell-contract.js';
 import { RoutingTestController, defaultRoutingTestForm, formFromTask, type RoutingTestFormState } from './routing-test.js';
+import { SearchableMultiSelect } from './multi-select.js';
 import type {
   ClientConfigurationId,
   ClientConfigurationPlanDto,
@@ -128,9 +129,7 @@ const quotaTabs = requireElement<HTMLElement>('quota-tabs');
 const quotaPanelSupply = requireElement<HTMLElement>('quota-panel-supply');
 const quotaPanelRouting = requireElement<HTMLElement>('quota-panel-routing');
 const routingTestRun = requireElement<HTMLButtonElement>('routing-test-run');
-const routingTestImport = requireElement<HTMLButtonElement>('routing-test-import');
 const routingTestImportSelect = requireElement<HTMLSelectElement>('routing-test-import-select');
-const routingTestStatus = requireElement<HTMLElement>('routing-test-status');
 const routingTestResult = requireElement<HTMLElement>('routing-test-result');
 const routingTestIntelligenceMin = requireElement<HTMLSelectElement>('routing-test-intelligence-min');
 const routingTestIntelligenceExpected = requireElement<HTMLSelectElement>('routing-test-intelligence-expected');
@@ -139,11 +138,29 @@ const routingTestMinimumTps = requireElement<HTMLInputElement>('routing-test-min
 const routingTestOutputCap = requireElement<HTMLInputElement>('routing-test-output-cap');
 const routingTestRequireImage = requireElement<HTMLInputElement>('routing-test-require-image');
 const routingTestRequireSearch = requireElement<HTMLInputElement>('routing-test-require-search');
-const routingTestExcludeModels = requireElement<HTMLInputElement>('routing-test-exclude-models');
-const routingTestExcludeProviders = requireElement<HTMLInputElement>('routing-test-exclude-providers');
+const routingTestExcludeModels = requireElement<HTMLElement>('routing-test-exclude-models');
+const routingTestExcludeProviders = requireElement<HTMLElement>('routing-test-exclude-providers');
 
 /** Mutable form state backing the routing test controls. */
 let routingForm: RoutingTestFormState = defaultRoutingTestForm();
+let routingTest!: RoutingTestController;
+
+const routingExcludeModels = new SearchableMultiSelect(routingTestExcludeModels, {
+  label: '排除模型',
+  selected: routingForm.excludeModelIds,
+  onChange: (values: string[]) => {
+    routingForm = { ...routingForm, excludeModelIds: [...values] };
+    routingTest.onFormChanged();
+  },
+});
+const routingExcludeProviders = new SearchableMultiSelect(routingTestExcludeProviders, {
+  label: '排除供应商',
+  selected: routingForm.excludeProviderIds,
+  onChange: (values: string[]) => {
+    routingForm = { ...routingForm, excludeProviderIds: [...values] };
+    routingTest.onFormChanged();
+  },
+});
 
 function applyRoutingForm(form: RoutingTestFormState): void {
   routingForm = form;
@@ -154,23 +171,18 @@ function applyRoutingForm(form: RoutingTestFormState): void {
   routingTestOutputCap.value = form.maxOutputUsdPerMillion;
   routingTestRequireImage.checked = form.requireImage;
   routingTestRequireSearch.checked = form.requireWebSearch;
-  routingTestExcludeModels.value = form.excludeModelIds;
-  routingTestExcludeProviders.value = form.excludeProviderIds;
+  routingExcludeModels.setSelected(form.excludeModelIds);
+  routingExcludeProviders.setSelected(form.excludeProviderIds);
 }
 
-const routingTest = new RoutingTestController({
+routingTest = new RoutingTestController({
   request: (params) => window.wrenyardShell.requestTaskRoutingTest(params),
   importTasks: () => window.wrenyardShell.requestRoutingTestTasks(),
   runButton: routingTestRun,
-  importButton: routingTestImport,
   taskPicker: routingTestImportSelect,
-  importRow: requireElement<HTMLElement>('routing-test-import-row'),
-  status: routingTestStatus,
   result: routingTestResult,
   readForm: () => routingForm,
   applyTask: (task) => {
-    // Selecting an imported task copies its raw fields/timeout into the form;
-    // imported exclusions/capabilities are preserved verbatim.
     applyRoutingForm(formFromTask(task));
   },
 });
@@ -534,6 +546,7 @@ function renderStats(snapshot: StatsSnapshot): void {
 function renderQuota(snapshot: QuotaSnapshot): void {
   currentQuota = snapshot;
   conversationView.setQuotaSnapshot(snapshot);
+  syncRoutingExclusionOptions(snapshot);
   const available = snapshot.status === 'available';
   const status = requireElement('quota-status');
   status.textContent = available ? '模型供应已同步' : '暂不可用';
@@ -550,6 +563,21 @@ function renderQuota(snapshot: QuotaSnapshot): void {
     return;
   }
   list.replaceChildren(...catalog.map((entry, index) => quotaProviderRow(entry, index, catalog)));
+}
+
+function syncRoutingExclusionOptions(snapshot: QuotaSnapshot): void {
+  const providers = (snapshot.catalog ?? []).map((entry) => ({ value: entry.id, label: entry.label }));
+  const models: Array<{ value: string; label: string }> = [];
+  const seen = new Set<string>();
+  for (const entry of snapshot.catalog ?? []) {
+    for (const model of entry.models ?? []) {
+      if (seen.has(model.id)) continue;
+      seen.add(model.id);
+      models.push({ value: model.id, label: model.displayName });
+    }
+  }
+  routingExcludeModels.setOptions(models);
+  routingExcludeProviders.setOptions(providers);
 }
 
 function quotaProviderRow(
@@ -2338,14 +2366,13 @@ routingTestIntelligenceExpected.addEventListener('change', () => {
   routingTest.onFormChanged();
 });
 routingTestRun.addEventListener('click', () => void routingTest.run());
-routingTestImport.addEventListener('click', () => void routingTest.importTasks());
+routingTestImportSelect.addEventListener('focus', () => void routingTest.importTasks());
+routingTestImportSelect.addEventListener('pointerdown', () => void routingTest.importTasks());
 routingTestImportSelect.addEventListener('change', () => routingTest.selectImportedTask());
 const routingTextControls: Array<[HTMLInputElement, keyof RoutingTestFormState]> = [
   [routingTestExpectedTps, 'expectedTps'],
   [routingTestMinimumTps, 'minimumTps'],
   [routingTestOutputCap, 'maxOutputUsdPerMillion'],
-  [routingTestExcludeModels, 'excludeModelIds'],
-  [routingTestExcludeProviders, 'excludeProviderIds'],
 ];
 for (const [control, key] of routingTextControls) {
   control.addEventListener('input', () => {
@@ -2505,6 +2532,7 @@ workspaceSaveButton.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && event.target instanceof Element && event.target.closest('.multi-select')) return;
   if (event.key === 'Escape' && !providerDialog.hidden) {
     event.preventDefault();
     closeProviderDialog();

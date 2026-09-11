@@ -130,11 +130,25 @@ test('HTML hosts supply/routing tabs, keeps the supply config together, and turn
   const routingEnd = html.indexOf('id="clients-page"');
   const routingMarkup = html.slice(routingStart, routingEnd);
   assert.match(routingMarkup, /id="routing-test-run"[^>]*>测试</);
-  assert.match(routingMarkup, /id="routing-test-import"[^>]*>从 Task 导入</);
+  assert.match(routingMarkup, /id="routing-test-import-select"/);
+  assert.match(routingMarkup, /aria-label="Task 模板"/);
+  assert.match(routingMarkup, /id="routing-test-minimum-tps"/);
   assert.match(routingMarkup, /id="routing-test-expected-tps"/);
   assert.match(routingMarkup, /id="routing-test-output-cap"/);
   assert.match(routingMarkup, /id="routing-test-require-image"[^>]*type="checkbox"/);
   assert.match(routingMarkup, /id="routing-test-require-search"[^>]*type="checkbox"/);
+  assert.match(routingMarkup, /id="routing-test-exclude-models"/);
+  assert.match(routingMarkup, /id="routing-test-exclude-providers"/);
+  assert.ok(
+    routingMarkup.indexOf('routing-test-minimum-tps') < routingMarkup.indexOf('routing-test-expected-tps'),
+    'minimum TPS controls stay left of expected TPS',
+  );
+  assert.doesNotMatch(routingMarkup, /routing-test-import-row/);
+  assert.doesNotMatch(routingMarkup, /routing-test-status/);
+  assert.doesNotMatch(routingMarkup, /从 Task 导入/);
+  assert.doesNotMatch(routingMarkup, /未运行/);
+  assert.doesNotMatch(routingMarkup, /for="routing-test-exclude-models"/);
+  assert.doesNotMatch(routingMarkup, /for="routing-test-exclude-providers"/);
   // No preset selector, verbose notes, or JSON input remains.
   assert.doesNotMatch(routingMarkup, /id="routing-test-preset"/);
   assert.doesNotMatch(routingMarkup, /routing-test-note/);
@@ -151,7 +165,7 @@ test('default form has recommended mid with no minimum or extra capabilities', (
   assert.equal('timeout_ms' in request, false);
 });
 
-test('form serialization carries numbers, capabilities, search, and comma lists', () => {
+test('form serialization carries numbers, capabilities, search, and exclusion arrays', () => {
   const form: RoutingTestFormState = {
     ...defaultRoutingTestForm(),
     expectedTps: '30',
@@ -162,8 +176,8 @@ test('form serialization carries numbers, capabilities, search, and comma lists'
     requireText: true,
     requireImage: true,
     requireWebSearch: true,
-    excludeModelIds: 'legacy-a, legacy-b\nlegacy-a',
-    excludeProviderIds: 'old-provider',
+    excludeModelIds: ['legacy-a', 'legacy-b', 'legacy-a'],
+    excludeProviderIds: ['old-provider'],
     timeoutMs: '90000',
   };
   const request = serializeRoutingTestRequest(form);
@@ -192,8 +206,8 @@ test('copying a task preserves capabilities, exclusions, and timeout verbatim', 
   assert.equal(form.intelligenceExpected, 'premium');
   assert.equal(form.requireImage, true);
   assert.equal(form.requireWebSearch, true);
-  assert.equal(form.excludeModelIds, 'legacy-model');
-  assert.equal(form.excludeProviderIds, 'legacy-provider');
+  assert.deepEqual(form.excludeModelIds, ['legacy-model']);
+  assert.deepEqual(form.excludeProviderIds, ['legacy-provider']);
   assert.deepEqual(form.excludeProfileIds, ['legacy-profile']);
   assert.deepEqual(form.excludeClientIds, ['legacy-client']);
   assert.equal(form.timeoutMs, '120000');
@@ -269,7 +283,6 @@ test('duplicate runs are blocked while a test is in flight', async () => {
   const first = harness.controller.run();
   assert.equal(harness.runButton.disabled, true);
   assert.equal(harness.runButton.textContent, '测试中…');
-  assert.equal(harness.status.textContent, '测试中…');
   await harness.controller.run();
   assert.equal(harness.queue.length, 1, 'second invocation is a no-op');
   harness.resolveNext(routingResult());
@@ -278,22 +291,33 @@ test('duplicate runs are blocked while a test is in flight', async () => {
   assert.equal(harness.runButton.textContent, '测试');
 });
 
-test('importing tasks is lazy: it only fires on demand and can be re-imported', async () => {
+test('importing tasks is lazy, caches a successful list, and suppresses concurrent fetches', async () => {
   const harness = controllerHarness();
-  assert.equal(harness.importQueue.length, 0, 'no import happens before the button is used');
+  assert.equal(harness.importQueue.length, 0, 'no import happens before first interaction');
   const firstImport = harness.controller.importTasks();
-  assert.equal(harness.importButton.disabled, true);
-  // A duplicate import during flight is a no-op.
   await harness.controller.importTasks();
-  assert.equal(harness.importQueue.length, 1);
+  assert.equal(harness.importQueue.length, 1, 'concurrent fetch is suppressed');
   harness.resolveImportNext({ tasks: [importedTask()] });
   await firstImport;
-  assert.equal(harness.importButton.disabled, false);
-  assert.equal(harness.status.textContent, '');
   assert.equal(harness.picker.children.length, 2, 'placeholder + one imported task');
+  await harness.controller.importTasks();
+  assert.equal(harness.importQueue.length, 0, 'successful list is cached');
 });
 
-test('selecting an imported task copies its fields into the form and clears stale results', async () => {
+test('failed import stays visible in the result region and can be retried', async () => {
+  const harness = controllerHarness();
+  const firstImport = harness.controller.importTasks();
+  harness.rejectImportNext(new Error('网关不可用'));
+  await firstImport;
+  assert.match(collectText(harness.result), /导入失败：网关不可用/);
+  const retry = harness.controller.importTasks();
+  assert.equal(harness.importQueue.length, 1, 'failure allows retry');
+  harness.resolveImportNext({ tasks: [importedTask()] });
+  await retry;
+  assert.equal(harness.picker.children.length, 2);
+});
+
+test('selecting an imported task copies its fields and does not request a test or persist', async () => {
   const harness = controllerHarness();
   const importRun = harness.controller.importTasks();
   harness.resolveImportNext({ tasks: [importedTask()] });
@@ -302,6 +326,22 @@ test('selecting an imported task copies its fields into the form and clears stal
   harness.controller.selectImportedTask();
   assert.deepEqual(harness.applied, [importedTask()]);
   assert.equal(harness.result.childElementCount, 0);
+  assert.equal(harness.queue.length, 0);
+});
+
+test('template unknown model and provider exclusions are preserved', () => {
+  const form = formFromTask(importedTask({
+    automatic: {
+      ...importedTask().automatic,
+      exclude_model_ids: ['unknown-model'],
+      exclude_provider_ids: ['unknown-provider'],
+    },
+  }));
+  assert.deepEqual(form.excludeModelIds, ['unknown-model']);
+  assert.deepEqual(form.excludeProviderIds, ['unknown-provider']);
+  const request = serializeRoutingTestRequest(form);
+  assert.deepEqual(request.automatic.exclude_model_ids, ['unknown-model']);
+  assert.deepEqual(request.automatic.exclude_provider_ids, ['unknown-provider']);
 });
 
 test('an error exposes a bounded message', async () => {
@@ -309,7 +349,6 @@ test('an error exposes a bounded message', async () => {
   const failing = harness.controller.run();
   harness.rejectNext(new Error("Error invoking remote method 'x': Error: 网关不可用"));
   await failing;
-  assert.equal(harness.status.textContent, '失败');
   assert.match(collectText(harness.result), /测试失败：网关不可用/);
   assert.equal(routingTestErrorMessage(new Error('boom')), 'boom');
 });
@@ -317,9 +356,7 @@ test('an error exposes a bounded message', async () => {
 interface Harness {
   controller: RoutingTestController;
   runButton: HTMLButtonElement;
-  importButton: HTMLButtonElement;
   picker: HTMLSelectElement;
-  status: HTMLElement;
   result: HTMLElement;
   applied: TaskRoutingTestTask[];
   queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }>;
@@ -328,13 +365,12 @@ interface Harness {
   resolveNext(value: TaskRoutingTestResult): void;
   rejectNext(error: unknown): void;
   resolveImportNext(value: { tasks: TaskRoutingTestTask[] }): void;
+  rejectImportNext(error: unknown): void;
 }
 
 function controllerHarness(): Harness {
   const runButton = fakeElement('button') as unknown as HTMLButtonElement;
-  const importButton = fakeElement('button') as unknown as HTMLButtonElement;
   const picker = fakeElement('select') as unknown as HTMLSelectElement;
-  const status = fakeElement('p') as unknown as HTMLElement;
   const result = fakeElement('div') as unknown as HTMLElement;
   const queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }> = [];
   const importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }> = [];
@@ -343,9 +379,7 @@ function controllerHarness(): Harness {
     request: () => new Promise<TaskRoutingTestResult>((resolve, reject) => { queue.push({ resolve, reject }); }),
     importTasks: () => new Promise<{ tasks: TaskRoutingTestTask[] }>((resolve, reject) => { importQueue.push({ resolve, reject }); }),
     runButton,
-    importButton,
     taskPicker: picker,
-    status,
     result,
     readForm: () => defaultRoutingTestForm(),
     applyTask: (task) => { applied.push(task); },
@@ -353,9 +387,7 @@ function controllerHarness(): Harness {
   return {
     controller,
     runButton,
-    importButton,
     picker,
-    status,
     result,
     applied,
     queue,
@@ -364,6 +396,7 @@ function controllerHarness(): Harness {
     resolveNext: (value) => { queue.shift()?.resolve(value); },
     rejectNext: (error) => { queue.shift()?.reject(error); },
     resolveImportNext: (value) => { importQueue.shift()?.resolve(value); },
+    rejectImportNext: (error) => { importQueue.shift()?.reject(error); },
   };
 }
 
