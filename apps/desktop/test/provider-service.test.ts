@@ -15,7 +15,7 @@ class FakeClient implements ProviderControlClient {
         configured: true,
         authMode: 'native' as const,
         protocols: ['openai_chat' as const],
-        models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview' }],
+        models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', secret: 'must-not-leak' } as { id: string; displayName: string }],
       },
       {
         id: 'kimi-coding',
@@ -47,6 +47,7 @@ test('provider list comes only from daemon IPC', async () => {
       setupHint: 'Sign in through CodeBuddy.',
       configured: true,
       authMode: 'native',
+      models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview' }],
     },
     {
       id: 'kimi-coding',
@@ -55,9 +56,19 @@ test('provider list comes only from daemon IPC', async () => {
       setupHint: 'Configure an API key.',
       configured: false,
       authMode: 'api-key',
+      models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5' }],
     },
   ]);
   assert.equal(client.closed, true);
+});
+
+test('provider list projects only sanitized model id and displayName', async () => {
+  const client = new FakeClient();
+  const service = new ProviderService({ ipcPath: '/tmp/wrenyard.sock', clientFactory: () => client });
+  const listed = await service.listProviders();
+  assert.deepEqual(listed[0]?.models, [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview' }]);
+  assert.equal(JSON.stringify(listed).includes('must-not-leak'), false);
+  assert.equal(JSON.stringify(listed).includes('secret'), false);
 });
 
 test('API key is sent through daemon IPC without a child process', async () => {

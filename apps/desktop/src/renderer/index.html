@@ -274,23 +274,22 @@
               <div>
                 <h2 id="routing-test-title">路由测试</h2>
               </div>
-              <button class="secondary-button" id="routing-test-import" type="button">从 Task 导入</button>
-            </div>
-            <div class="routing-test-import-row" id="routing-test-import-row" hidden>
-              <label for="routing-test-import-select">Task</label>
-              <select id="routing-test-import-select">
-                <option value="">选择 Task</option>
-              </select>
+              <div class="routing-test-toolbar">
+                <select id="routing-test-import-select" aria-label="Task 模板">
+                  <option value="">选择 Task</option>
+                </select>
+                <button class="primary-button" id="routing-test-run" type="button">测试</button>
+              </div>
             </div>
             <div class="routing-test-form">
               <label for="routing-test-intelligence-min">最低智能</label>
               <select id="routing-test-intelligence-min"><option value="">不限</option><option value="low">低</option><option value="mid">中</option><option value="high">高</option><option value="premium">旗舰</option></select>
               <label for="routing-test-intelligence-expected">推荐智能</label>
               <select id="routing-test-intelligence-expected"><option value="low">低</option><option value="mid" selected>中</option><option value="high">高</option><option value="premium">旗舰</option></select>
-              <label for="routing-test-expected-tps">期望 TPS</label>
-              <input id="routing-test-expected-tps" type="number" min="1" step="1" placeholder="可选" />
               <label for="routing-test-minimum-tps">最低 TPS</label>
               <input id="routing-test-minimum-tps" type="number" min="1" step="1" placeholder="可选" />
+              <label for="routing-test-expected-tps">期望 TPS</label>
+              <input id="routing-test-expected-tps" type="number" min="1" step="1" placeholder="可选" />
               <label for="routing-test-output-cap">输出单价上限</label>
               <input id="routing-test-output-cap" type="number" min="0" step="0.5" placeholder="可选，USD / 百万 Token" />
               <label class="routing-test-check">
@@ -301,13 +300,11 @@
                 <input id="routing-test-require-search" type="checkbox" />
                 <span>需要联网搜索</span>
               </label>
-              <label for="routing-test-exclude-models">排除模型</label>
-              <input id="routing-test-exclude-models" type="text" spellcheck="false" autocomplete="off" placeholder="逗号分隔，可选" />
-              <label for="routing-test-exclude-providers">排除供应商</label>
-              <input id="routing-test-exclude-providers" type="text" spellcheck="false" autocomplete="off" placeholder="逗号分隔，可选" />
-              <button class="primary-button" id="routing-test-run" type="button">测试</button>
+              <label>排除模型</label>
+              <div id="routing-test-exclude-models"></div>
+              <label>排除供应商</label>
+              <div id="routing-test-exclude-providers"></div>
             </div>
-            <span class="routing-test-status status-pill is-pending" id="routing-test-status" role="status" aria-live="polite">未运行</span>
             <div class="routing-test-result" id="routing-test-result" aria-live="polite"></div>
           </section>
         </div>
