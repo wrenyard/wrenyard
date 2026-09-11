@@ -339,15 +339,12 @@ func appendClaudeCodeOptions(args []string, req PlanRequest, desc catalog.Client
 		args = appendCodeBuddyToolScopePrompt(args, permMode)
 	}
 
-	flags := desc.FilterFlags([]string{
-		"--verbose",
-		"--replay-user-messages",
-	})
-	args = append(args,
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-	)
+	flags := desc.FilterFlags([]string{"--verbose", "--replay-user-messages"})
+	args = append(args, "--input-format", "stream-json", "--output-format", "stream-json")
 	args = append(args, flags...)
+	if (desc.Name == "codebuddy" || desc.Name == "claude") && !hasFlag(args, "--include-partial-messages") {
+		args = append(args, "--include-partial-messages")
+	}
 
 	if desc.DialectFlags.SupportsDevelopmentChannels {
 		args = mergeDevelopmentChannels(args)

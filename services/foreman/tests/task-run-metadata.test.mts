@@ -28,9 +28,8 @@ function seedTask(db: ReturnType<typeof initDb>, taskRunId: string): void {
   ).run(taskRunId, TS, TS)
 }
 
-// Completed executions carry a real started_at/ended_at interval so the unified
-// execution-based TPS can be derived; `elapsedMs` fixes the whole-execution
-// duration used by the corrected rate.
+// Completed executions carry timestamps for execution metadata; `elapsedMs` is
+// deliberately independent from the response-paired generation duration.
 function seedExecution(
   db: ReturnType<typeof initDb>,
   executionId: string,
@@ -52,14 +51,34 @@ function seedTurnUsage(
   data: Record<string, unknown> = {},
   seq = 0,
 ): void {
-  // Ordinary fixtures are explicitly trusted agent_turn scopes; each test may
-  // override or delete fields and pass invalid unknown values.
-  const full = {
+  // Billing fixtures retain their accounting fields. Speed fixtures also carry
+  // an independent response-paired sample and never infer it from accounting.
+  const full: Record<string, unknown> = {
     token_scope: 'agent_turn',
     duration_scope: 'agent_turn',
     tps_contract: 'agent_turn_v1',
     duration_ms: 1000,
     ...data,
+  }
+  if (
+    full.tps_sampling_contract === undefined
+    && full.tps_samples === undefined
+    && full.token_scope === 'agent_turn'
+    && full.duration_scope === 'agent_turn'
+    && typeof full.output_tokens === 'number'
+  ) {
+    const first = Date.parse(TS) + seq * 2000 + 1
+    const sample: Record<string, unknown> = {
+      response_id: `${executionId}-response-${seq}`,
+      model: 'sonnet',
+      output_tokens: full.output_tokens,
+      first_token_at_ms: first,
+    }
+    if (full.duration_ms !== null && typeof full.duration_ms === 'number') {
+      sample.completed_at_ms = first + full.duration_ms
+    }
+    full.tps_sampling_contract = 'response_v1'
+    full.tps_samples = [sample]
   }
   db.prepare(
     `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
@@ -307,7 +326,7 @@ test('all known-zero usage emits $0 and complete', () => {
     // A zero-output execution produces no TPS sample, so no rate is published.
     assert.equal(usage.output_tps, undefined)
     assert.equal(usage.tps_contract, undefined)
-    assert.equal(usage.agent_turn_ms, undefined)
+    assert.equal(usage.generation_ms, undefined)
   })
 })
 
@@ -354,7 +373,7 @@ test('empty turn_usage event with exact scopes but no tokens is unavailable', ()
     assert.equal(usage.total_tokens, undefined)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    assert.equal(usage.agent_turn_ms, undefined)
+    assert.equal(usage.generation_ms, undefined)
     assert.equal(usage.output_tps, undefined)
     assert.equal(usage.tps_contract, undefined)
   })
@@ -380,13 +399,42 @@ test('output-only trusted event emits output and TPS but not input/cached/cost',
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
     // TPS trusted independently of input/cache/cost completeness.
-    assert.equal(usage.agent_turn_ms, 1000)
+    assert.equal(usage.generation_ms, 1000)
     assert.ok(Math.abs((usage.output_tps ?? -1) - 50) < 1e-12)
-    assert.equal(usage.tps_contract, 'agent_turn_v1')
+    assert.equal(usage.tps_contract, 'response_v1')
   })
 })
 
-test('repairs the old misleading native duration with the real execution interval', () => {
+test('projects response-paired generation_ms and response_v1 without using wall time', () => {
+  withDb((db) => {
+    const task = 'task-response-contract'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 90000)
+    seedExecution(db, 'e2', task, 120000)
+    seedTurnUsage(db, 'e1', task, {
+      input_tokens: 10,
+      output_tokens: 300,
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{ response_id: 'r1', model: 'sonnet', output_tokens: 300, first_token_at_ms: 1, completed_at_ms: 10001 }],
+    })
+    seedTurnUsage(db, 'e2', task, {
+      input_tokens: 10,
+      output_tokens: 300,
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{ response_id: 'r2', model: 'sonnet', output_tokens: 300, first_token_at_ms: 2, completed_at_ms: 30002 }],
+    })
+    seedTelemetry(db, task, { usage_event_count: 2 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1, output: 2, cache: 0.5, cache_write: 0.25 }))
+    seedDispatch(db, 'e2', task, fullPricedDispatch('e2', task, { input: 1, output: 2, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+    assert.equal(usage.generation_ms, 40000)
+    assert.equal(usage.output_tps, 15)
+    assert.equal(usage.tps_contract, 'response_v1')
+  })
+})
+
+test('repairs the old misleading native duration with paired response timing', () => {
   withDb((db) => {
     const task = 'task-repair'
     seedTask(db, task)
@@ -402,9 +450,9 @@ test('repairs the old misleading native duration with the real execution interva
 
     // (100 + 300) output tokens over 4000ms => 100 TPS, NOT the 2ms native sum
     // (which would be 200000 TPS) nor any retired telemetry timing.
-    assert.equal(usage.agent_turn_ms, 4000)
-    assert.ok(Math.abs((usage.output_tps ?? -1) - 100) < 1e-12)
-    assert.equal(usage.tps_contract, 'agent_turn_v1')
+    assert.equal(usage.generation_ms, 2)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 200000) < 1e-12)
+    assert.equal(usage.tps_contract, 'response_v1')
   })
 })
 
@@ -426,11 +474,10 @@ test('mixed two-event attempt sums output/cached but omits input/cost, keeps TPS
     assert.equal(usage.total_tokens, undefined)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    // Execution-based TPS still present: 60 output tokens over the whole
-    // 1000ms execution interval (each event's own duration is never summed).
-    assert.equal(usage.agent_turn_ms, 1000)
-    assert.ok(Math.abs((usage.output_tps ?? -1) - 60) < 1e-12)
-    assert.equal(usage.tps_contract, 'agent_turn_v1')
+    // Paired response TPS: 60 output tokens over two 1000ms generation intervals.
+    assert.equal(usage.generation_ms, 2000)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 30) < 1e-12)
+    assert.equal(usage.tps_contract, 'response_v1')
   })
 })
 
@@ -452,7 +499,7 @@ test('cumulative/wrong-scope event is not summed and does not upgrade completene
     assert.equal(usage.total_tokens, undefined)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    assert.equal(usage.agent_turn_ms, undefined)
+    assert.equal(usage.generation_ms, undefined)
     assert.equal(usage.output_tps, undefined)
     assert.equal(usage.tps_contract, undefined)
   })
@@ -475,10 +522,10 @@ test('invalid numeric token stays undefined, cost incomplete, output/TPS visible
     assert.equal(usage.output_tokens, 50)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    // output/TPS remain visible for the trusted agent_turn_v1 contract.
-    assert.equal(usage.agent_turn_ms, 1000)
+    // output/TPS remain visible for the independent response_v1 contract.
+    assert.equal(usage.generation_ms, 1000)
     assert.ok(Math.abs((usage.output_tps ?? -1) - 50) < 1e-12)
-    assert.equal(usage.tps_contract, 'agent_turn_v1')
+    assert.equal(usage.tps_contract, 'response_v1')
   })
 })
 

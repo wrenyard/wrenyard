@@ -279,6 +279,7 @@ function seedUsageWithDuration(
   taskId?: string,
   tokenScope: string | null = null,
   tpsContract: string | null = null,
+  model = 'deepseek-v4-flash',
 ): void {
   const ts = new Date(localNoon(dayKey))
   const row = dbQuery<{ next_seq: number }>(
@@ -290,7 +291,19 @@ function seedUsageWithDuration(
   if (durationMs !== null) data.duration_ms = durationMs
   if (durationScope !== null) data.duration_scope = durationScope
   if (tokenScope !== null) data.token_scope = tokenScope
-  if (tpsContract !== null) data.tps_contract = tpsContract
+  if (tpsContract !== null) {
+    data.tps_sampling_contract = tpsContract
+    if (tpsContract === 'response_v1') {
+      const sample: Record<string, unknown> = {
+        response_id: `${executionId ?? 'unbound'}-response-${seq}`,
+        model,
+        output_tokens: outputTokens,
+        first_token_at_ms: ts.getTime() + 1,
+      }
+      if (durationMs !== null) sample.completed_at_ms = ts.getTime() + 1 + durationMs
+      data.tps_samples = [sample]
+    }
+  }
   dbRun(
     `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
      VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
@@ -1173,14 +1186,13 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('computes the median execution-based TPS over eligible completed executions', () => {
+  it('computes the median response-paired TPS over eligible completed executions', () => {
     initTestDb()
     const fixedNow = new Date('2026-07-19T12:00:00.000Z')
     const today = '2026-07-19'
     // Three completed executions for the same provider/model, each with a
-    // complete interval and additive agent-turn output. Native event durations
-    // are deliberately inconsistent with the execution elapsed: the rate must
-    // come from execution timing, not from duration_ms.
+    // response-paired sample. Execution wall time is deliberately independent
+    // from the generation timing used by the rate.
     const specs = [
       { exec: 'exec-tps-1', startedAt: '2026-07-19T00:00:00.000Z', endedAt: '2026-07-19T00:00:10.000Z', output: 1000 }, // 100 TPS
       { exec: 'exec-tps-2', startedAt: '2026-07-19T01:00:00.000Z', endedAt: '2026-07-19T01:00:20.000Z', output: 2000 }, // 100 TPS
@@ -1193,16 +1205,16 @@ describe('stats-query readStatsSummary', () => {
         endedAt: spec.endedAt,
       })
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
-      // Native duration is intentionally wrong (1ms): the rate must come from
-      // the execution interval, not from the event's duration_ms.
-      seedUsageWithDuration(today, 30, spec.output, 1, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+      // Paired generation time is explicit and independent of execution wall time.
+      const generationMs = spec.output === 2000 ? 20000 : 10000
+      seedUsageWithDuration(today, 30, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1')
     }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
     const window = result.windows?.find((candidate) => candidate.period === '1mo')
     const row = window?.byProfile.find((candidate) => candidate.model === 'codebuddy/deepseek-v4-flash')
     assert.ok(row)
-    // Median of [100, 100, 150] = 100, not the native-duration weighted rate.
+    // Median of [100, 100, 150] = 100, using paired generation timing.
     assert.equal(row.averageTps, 100)
     closeTestDb()
   })
@@ -1223,7 +1235,7 @@ describe('stats-query readStatsSummary', () => {
         endedAt: spec.endedAt,
       })
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
-      seedUsageWithDuration(today, 30, spec.output, 1, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+      seedUsageWithDuration(today, 30, spec.output, 10000, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1')
     }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
@@ -2032,7 +2044,8 @@ describe('stats-query readStatsSummary', () => {
         endedAt: spec.endedAt,
       })
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'm', 'codebuddy/m')
-      seedUsageWithDuration(today, 10, spec.output, 999, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'agent_turn_v1')
+      const generationMs = (1000 * spec.output) / spec.tps
+      seedUsageWithDuration(today, 10, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1', 'm')
     }
     // A failed execution with usage must never contribute a sample.
     seedTask('task-failed', 'tps', today, 'done')
@@ -2041,14 +2054,13 @@ describe('stats-query readStatsSummary', () => {
       endedAt: '2026-07-19T03:00:10.000Z',
     })
     seedAttemptDispatch('exec-failed', 'task-failed', 'codebuddy', 'm', 'codebuddy/m')
-    seedUsageWithDuration(today, 10, 999999, 1, 'agent_turn', 'exec-failed', 'task-failed', 'agent_turn', 'agent_turn_v1')
+    seedUsageWithDuration(today, 10, 999999, 1, 'agent_turn', 'exec-failed', 'task-failed', 'agent_turn', 'response_v1', 'm')
     dbRun(`UPDATE executions SET status = 'failed' WHERE id = 'exec-failed'`)
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
     const row = result.windows?.[0].byProfile[0]
     assert.ok(row)
-    // Median of [100, 150, 200] = 150, driven by execution timing and not by
-    // native durations (all seeded as a misleading 999ms).
+    // Median of [100, 150, 200] = 150, driven by paired generation timing.
     assert.equal(row.averageTps, 150)
     closeTestDb()
   })
