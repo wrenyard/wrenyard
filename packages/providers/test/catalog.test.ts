@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   BUILTIN_PROVIDERS,
+  builtinModelDisplayName,
   createBuiltinCatalog,
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
@@ -386,7 +387,7 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
     ['cursor', 'kimi-k3'],
     ['kimi-coding', 'k3'],
   ] as const) {
-    assert.deepEqual(route(provider, model).canonicalModel, { id: 'kimi-k3', displayName: 'Kimi K3' });
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'kimi-k3', displayName: builtinModelDisplayName('kimi-k3') });
   }
 
   // MiniMax and Tencent's official model tables identify these exact versions
@@ -396,19 +397,19 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
     ['minimax', 'MiniMax-M3'],
     ['minimax-coding', 'MiniMax-M3'],
   ] as const) {
-    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m3', displayName: 'MiniMax M3' });
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m3', displayName: builtinModelDisplayName('minimax-m3') });
   }
   for (const [provider, model] of [
     ['minimax', 'MiniMax-M2.7'],
     ['minimax-coding', 'MiniMax-M2.7'],
     ['tokenhub', 'minimax-m2.7'],
   ] as const) {
-    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m2.7', displayName: 'MiniMax M2.7' });
+    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m2.7', displayName: builtinModelDisplayName('minimax-m2.7') });
   }
 
   assert.deepEqual(route('codebuddy', 'hy4-preview').canonicalModel, {
     id: 'hunyuan-hy4-preview',
-    displayName: 'Hunyuan HY4 Preview',
+    displayName: builtinModelDisplayName('hunyuan-hy4-preview'),
   });
   assert.deepEqual(route('tokenhub', 'hy4-preview').canonicalModel, route('codebuddy', 'hy4-preview').canonicalModel);
 
@@ -429,6 +430,42 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   }
   for (const [id, labels] of groups) {
     assert.equal(labels.size, 1, `${id} must have one canonical display-name source`);
+  }
+});
+
+test('built-in display names are hyphen-free, sourced from the SSOT, and canonical-consistent', () => {
+  // The display-name SSOT is the only source: every built-in label is
+  // hyphen-free, and every registered route resolves to that same label.
+  for (const provider of BUILTIN_PROVIDERS) {
+    for (const model of provider.models) {
+      assert.doesNotMatch(model.displayName, /-/u, `${provider.id}/${model.id} displayName must not contain a hyphen`);
+      assert.equal(
+        model.displayName,
+        builtinModelDisplayName(model.id as Parameters<typeof builtinModelDisplayName>[0]),
+        `${provider.id}/${model.id} displayName must come from the SSOT`,
+      );
+    }
+  }
+
+  // Each route's own displayName agrees with its canonicalModel displayName.
+  for (const provider of BUILTIN_PROVIDERS) {
+    for (const model of provider.models) {
+      if (!model.canonicalModel) continue;
+      assert.equal(
+        model.displayName,
+        model.canonicalModel.displayName,
+        `${provider.id}/${model.id} route label must agree with its canonical label`,
+      );
+    }
+  }
+
+  for (const [alias, target] of [
+    ['k3', 'kimi-k3'],
+    ['MiniMax-M3', 'minimax-m3'],
+    ['deepseek-flash', 'deepseek-v4.1-flash'],
+    ['hy4-preview', 'hunyuan-hy4-preview'],
+  ] as const) {
+    assert.equal(builtinModelDisplayName(alias), builtinModelDisplayName(target));
   }
 });
 
