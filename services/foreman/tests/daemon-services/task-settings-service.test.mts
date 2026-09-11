@@ -1927,6 +1927,7 @@ describe('daemon task-settings-service (no-model)', () => {
       {
         providerId,
         client: runtime.client,
+        model: runtime.model,
         mode: runtime.mode,
         nativeClients: providerId === 'chatgpt'
           ? ['codex']
@@ -1946,6 +1947,44 @@ describe('daemon task-settings-service (no-model)', () => {
       available: false,
     }
   }
+
+  it('keeps registered Cursor models out of automatic, explicit and test routes until access is restored', async () => {
+    writeConfig({})
+    const model = CURSOR_GROK_QUOTA_PROFILE.model
+    let blocked = true
+    const current = (): ForgeProviderReadinessSnapshot => ({
+      sampledAtMs: QUOTA_T0,
+      authByProvider: { cursor: true },
+      cursorModelAvailability: { [model]: blocked
+        ? { status: 'blocked', reason: 'admin_blocked' }
+        : { status: 'available' } },
+    })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CURSOR_GROK_QUOTA_PROFILE] }),
+      quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
+      nativeProviderReadiness: async () => current(),
+      runtimeAvailability: (runtime, bound) => availabilityFromNativeSnapshot(runtime, bound ?? {
+        codeBuddySnapshot: undefined,
+        nativeProviderReadiness: current(),
+      }),
+    })
+    await assert.rejects(service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }))
+    assert.equal((await service.routingTest({ automatic: {} })).rows.length, 0)
+    blocked = false
+    assert.equal((await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })).exactAgentRuntime,
+      CURSOR_GROK_QUOTA_PROFILE.exactAgentRuntime)
+    assert.equal((await service.routingTest({ automatic: {} })).rows.length, 1)
+    writeConfig({ tasks: { settings: { global: {
+      selectionMode: 'explicit',
+      explicitRuntime: { kind: 'target', target: CURSOR_GROK_QUOTA_PROFILE.exactAgentRuntime },
+    } } } })
+    blocked = true
+    await assert.rejects(service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      /not currently available/)
+    blocked = false
+    assert.equal((await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })).exactAgentRuntime,
+      CURSOR_GROK_QUOTA_PROFILE.exactAgentRuntime)
+  })
 
   it('binds one fresh native readiness sample per run and observes login changes and query errors', async () => {
     writeConfig({})
