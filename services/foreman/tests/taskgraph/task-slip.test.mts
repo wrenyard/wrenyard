@@ -900,9 +900,8 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
     const id = (await service.create({ graph: { nodes: linearGraph() } })).taskgraph.id
 
     const longSummary = `line one\n\n   ${'x'.repeat(300)}`
-    // Wall interval is exactly 1000ms; the native duration_ms of 5 would give
-    // 400_000 TPS under the legacy formula. The shared calculation must use the
-    // execution interval: 1000 * 2000 / 1000 = 2000 TPS.
+    // Paired generation interval is 1000ms. Neither native duration_ms nor
+    // execution wall time supplies the TPS denominator.
     setupTaskAndExecution(db, 'task_1', 'exec_slip_bounds', {
       summary: longSummary,
       profile: 'forge/'.concat('r'.repeat(140)),
@@ -915,6 +914,8 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
       token_scope: 'agent_turn',
       duration_scope: 'agent_turn',
       tps_contract: 'agent_turn_v1',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{ response_id: 'r1', model: 'sonnet', output_tokens: 2000, first_token_at_ms: Date.parse(T0), completed_at_ms: Date.parse(T0) + 1000 }],
     })
     writeEvent(db, 'exec_slip_bounds', 'task_1', 2, 'tool_call', { name: 'bash' })
 
@@ -925,21 +926,21 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
 
     const node = service.slip({ taskgraph_id: id, node_ids: ['work'] }).nodes[0] as SlipNodeWithTelemetry
     assert.equal(node.tool_call_count, 1)
-    assert.equal(node.tps, 2000, 'tps must come from the execution wall interval, not native duration')
+    assert.equal(node.tps, 2000, 'tps must come from the paired response interval, not native duration')
     assert.equal('profile' in node, false, 'over-long profile must be omitted')
     assert.equal(typeof node.summary, 'string')
     assert.equal(node.summary!.length, 280)
     assert.equal(node.summary!.includes('\n'), false)
   })
 
-  it('omits tps for missing/invalid agent_turn and hides the summary for non-done nodes', async () => {
+  it('omits tps for missing/invalid response samples and hides the summary for non-done nodes', async () => {
     const resolver = new SlipContractResolver()
     resolver.set('task', 'edit', 'foreman', { category: { id: 'edit', displayLabel: '编码' } })
     const bridge = new FakeTaskBridge()
     const service = makeService(bridge, resolver)
     const id = (await service.create({ graph: { nodes: linearGraph() } })).taskgraph.id
 
-    // A persisted usage event without an agent_turn scope permanently disables TPS.
+    // Legacy usage without paired response samples does not supply TPS.
     setupTaskAndExecution(db, 'task_1', 'exec_slip_bad', { summary: 'All criteria passed.' })
     writeEvent(db, 'exec_slip_bad', 'task_1', 1, 'turn_usage', { output_tokens: 100, duration_ms: 200 })
     service.signal({ taskgraph_id: id, signal: { type: 'start_graph', input: { seed: 'go' } } })

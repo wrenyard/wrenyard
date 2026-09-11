@@ -223,3 +223,58 @@ func TestDSHAdapterParseSessionID(t *testing.T) {
 		t.Fatalf("session id=%q want sess-9", id)
 	}
 }
+
+func TestDSHTurnEndValidTPSSamplingSurvivesNormalization(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500,"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"exec:turn:step","model":"actual-model","output_tokens":3,"first_token_at_ms":1000,"completed_at_ms":2000}]}`))
+	usages := collectTurnUsage(events)
+	if len(usages) != 1 {
+		t.Fatalf("turn_usage count = %d, want 1; events=%#v", len(usages), events)
+	}
+	usage := usages[0]
+	if usage["tps_sampling_contract"] != "response_v1" {
+		t.Fatalf("sampling contract=%v want response_v1", usage["tps_sampling_contract"])
+	}
+	samples, ok := usage["tps_samples"].([]any)
+	if !ok || len(samples) != 1 {
+		t.Fatalf("tps_samples=%#v want one canonical sample", usage["tps_samples"])
+	}
+	if usage["input_tokens"] != 7 || usage["output_tokens"] != 3 || usage["duration_ms"] != 2500 {
+		t.Fatalf("billing usage changed: %#v", usage)
+	}
+}
+
+func TestDSHLegacyTurnNeverGainsTPSSamplingTrust(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500}`))
+	usage := collectTurnUsage(events)[0]
+	if _, ok := usage["tps_sampling_contract"]; ok {
+		t.Fatalf("legacy turn unexpectedly gained tps_sampling_contract: %#v", usage)
+	}
+	if _, ok := usage["tps_samples"]; ok {
+		t.Fatalf("legacy turn unexpectedly gained tps_samples: %#v", usage)
+	}
+}
+
+func TestDSHInvalidTPSSamplesDoNotBecomeTrusted(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500,"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"exec:turn:step","model":"actual-model","output_tokens":3,"first_token_at_ms":2000,"completed_at_ms":1000}]}`))
+	usage := collectTurnUsage(events)[0]
+	if _, ok := usage["tps_sampling_contract"]; ok {
+		t.Fatalf("invalid sample unexpectedly gained tps_sampling_contract: %#v", usage)
+	}
+	if _, ok := usage["tps_samples"]; ok {
+		t.Fatalf("invalid sample unexpectedly gained tps_samples: %#v", usage)
+	}
+}
+
+func TestDSHTPSSamplingDoesNotChangeFinalAnswerOrBilling(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"final answer","usage":{"input_tokens":11,"output_tokens":5},"duration":1750,"tps_sampling_contract":"response_v1","tps_samples":[]}`))
+	if len(events) != 3 || events[0].Type != "message" || events[0].Data["text"] != "final answer" {
+		t.Fatalf("final answer changed: %#v", events)
+	}
+	usage := collectTurnUsage(events)[0]
+	if usage["input_tokens"] != 11 || usage["output_tokens"] != 5 || usage["duration_ms"] != 1750 {
+		t.Fatalf("billing fields changed: %#v", usage)
+	}
+	if events[len(events)-1].Type != protocol.EventRunFinished {
+		t.Fatalf("terminal ordering changed: %#v", events)
+	}
+}
