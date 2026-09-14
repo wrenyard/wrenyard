@@ -274,6 +274,44 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const quotaVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'quota' && document.getElementById('quota-provider-grid') !== null",
     );
+    // Routing tab real DOM: the button label must stay on a single line and
+    // never clip at constrained toolbar widths, and the stats surfaces must
+    // render. Ledger rows are not required because smoke may have no history.
+    const routingLayoutOk = await shell.window.webContents.executeJavaScript(
+      `(async () => {
+        document.getElementById('quota-tab-routing')?.click();
+        const button = document.getElementById('routing-test-run');
+        const toolbar = document.querySelector('.routing-test-toolbar');
+        if (!(button instanceof HTMLElement) || !(toolbar instanceof HTMLElement) || button.innerText.trim() !== '测试') return false;
+        const statsOk = document.getElementById('stats-task-runs-list') !== null
+          && document.body.textContent.includes('近期任务消耗');
+        const savedCss = toolbar.style.cssText;
+        let layoutOk = true;
+        try {
+          for (const width of ['140px', '320px']) {
+            toolbar.style.width = width;
+            toolbar.style.maxWidth = width;
+            const rects = Array.from((() => {
+              const range = document.createRange();
+              range.selectNodeContents(button);
+              return range.getClientRects();
+            })());
+            const textRects = rects.filter((rect) => rect.width > 0 && rect.height > 0);
+            if (textRects.length === 0) { layoutOk = false; break; }
+            const tops = new Set(textRects.map((rect) => Math.round(rect.top)));
+            if (tops.size !== 1) { layoutOk = false; break; }
+            if (button.scrollWidth > button.clientWidth) { layoutOk = false; break; }
+            if (button.getBoundingClientRect().width <= 0) { layoutOk = false; break; }
+          }
+        } finally {
+          toolbar.style.cssText = savedCss;
+        }
+        return layoutOk && statsOk;
+      })()`,
+    );
+    if (!routingLayoutOk) {
+      throw new Error('smoke failed: routing test button wraps or clips');
+    }
     shell.setPage('clients', false);
     const clientsVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'clients' && window.wrenyardShell.getClientConfiguration().then((value) => Array.isArray(value?.surfaces) && Array.isArray(value?.configurations) && Array.isArray(value?.models)).catch(() => false)",
