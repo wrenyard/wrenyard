@@ -77,10 +77,17 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 	}
 	def.Name = profileName
 
-	// Client gate: disabled client -> dispatch error.
+	// Client config gate: a client disabled in config is a dispatch error.
 	if def.Client != "" {
 		if !deps.ClientEnabled(def.Client) {
 			return driver.CommandPlan{}, "", fmt.Errorf("client %q disabled in config", def.Client)
+		}
+		// Installation gate: config enables the client but its binary is not
+		// actually installed. This is a distinct failure from the config gate
+		// and runs before any driver planning. Nil callback preserves
+		// config-only behavior.
+		if deps.ClientInstalled != nil && !deps.ClientInstalled(def.Client) {
+			return driver.CommandPlan{}, "", fmt.Errorf("client %q is not installed (binary not found)", def.Client)
 		}
 	}
 

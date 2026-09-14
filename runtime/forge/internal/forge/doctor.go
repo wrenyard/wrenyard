@@ -58,7 +58,7 @@ func doctorCommand(args []string) int {
 			target = arg
 		}
 	}
-	if target != "" && target != "codex" {
+	if target != "" && target != "codex" && target != "clients" {
 		fmt.Fprintf(os.Stderr, "forge doctor: unknown target %q\n", target)
 		return 2
 	}

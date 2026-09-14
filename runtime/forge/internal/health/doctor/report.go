@@ -7,6 +7,8 @@ func BuildReport(deps Dependencies, target string) map[string]interface{} {
 	checks := []map[string]interface{}{}
 	if target == "codex" {
 		checks = append(checks, CodexConfigCheck(deps))
+	} else if target == "clients" {
+		checks = append(checks, ClientsDoctorChecks(deps)...)
 	} else {
 		checks = append(checks,
 			ForgeConfigCheck(deps),

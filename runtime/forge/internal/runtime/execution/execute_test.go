@@ -17,10 +17,11 @@ import (
 // are exercised on the gate path before driver side effects.
 type fakeDeps struct {
 	Dependencies
-	loadProfile    func(name string) (ProfileDefinition, bool, error)
-	clientEnabled  func(client string) bool
-	resolveProfile func(def ProfileDefinition) (profile.ResolvedProfile, error)
-	callOrder      []string
+	loadProfile     func(name string) (ProfileDefinition, bool, error)
+	clientEnabled   func(client string) bool
+	clientInstalled func(client string) bool
+	resolveProfile  func(def ProfileDefinition) (profile.ResolvedProfile, error)
+	callOrder       []string
 }
 
 func newFakeDeps(t *testing.T) *fakeDeps {
@@ -30,6 +31,9 @@ func newFakeDeps(t *testing.T) *fakeDeps {
 			return ProfileDefinition{Name: name, Client: "opencode"}, true, nil
 		},
 		clientEnabled: func(client string) bool {
+			return true
+		},
+		clientInstalled: func(client string) bool {
 			return true
 		},
 		resolveProfile: func(def ProfileDefinition) (profile.ResolvedProfile, error) {
@@ -52,6 +56,10 @@ func newFakeDeps(t *testing.T) *fakeDeps {
 		ClientEnabled: func(client string) bool {
 			d.callOrder = append(d.callOrder, "ClientEnabled")
 			return d.clientEnabled(client)
+		},
+		ClientInstalled: func(client string) bool {
+			d.callOrder = append(d.callOrder, "ClientInstalled")
+			return d.clientInstalled(client)
 		},
 		ResolveProfile: func(def ProfileDefinition) (profile.ResolvedProfile, error) {
 			d.callOrder = append(d.callOrder, "ResolveProfile")
@@ -314,6 +322,71 @@ func TestPrepare_DSHDeterministic(t *testing.T) {
 	}
 	if plan.Env[catalog.EnvDSHModel] != "llm-pi-ai.zhipu-coding/glm-5.3" {
 		t.Fatalf("env DSH_MODEL=%q want llm-pi-ai.zhipu-coding/glm-5.3", plan.Env[catalog.EnvDSHModel])
+	}
+}
+
+func TestPrepare_ClientNotInstalled(t *testing.T) {
+	d := newFakeDeps(t)
+	d.loadProfile = func(name string) (ProfileDefinition, bool, error) {
+		return ProfileDefinition{Name: name, Client: "opencode"}, true, nil
+	}
+	d.clientInstalled = func(client string) bool { return false }
+	_, _, err := Prepare(prepareReq("p", "hi", tempDir(t), ""), d.Dependencies)
+	if err == nil {
+		t.Fatal("expected client not installed error")
+	}
+	if err.Error() != `client "opencode" is not installed (binary not found)` {
+		t.Fatalf("got %q, want precise not-installed message", err.Error())
+	}
+	// The installation gate must run before ResolveProfile/driver planning.
+	for _, step := range d.callOrder {
+		if step == "ResolveProfile" {
+			t.Fatalf("ResolveProfile must not run after not-installed gate; order=%v", d.callOrder)
+		}
+	}
+}
+
+func TestPrepare_NilClientInstalledPreservesConfigOnly(t *testing.T) {
+	d := newFakeDeps(t)
+	d.Dependencies.ClientInstalled = nil
+	_, _, err := Prepare(prepareReq("p", "hi", tempDir(t), ""), d.Dependencies)
+	if err != nil {
+		t.Fatalf("nil ClientInstalled must preserve config-only behavior, got %v", err)
+	}
+}
+
+func TestPrepare_DisabledConfigPreservesDisabledMessage(t *testing.T) {
+	d := newFakeDeps(t)
+	d.clientEnabled = func(client string) bool { return false }
+	d.clientInstalled = func(client string) bool { return false }
+	_, _, err := Prepare(prepareReq("p", "hi", tempDir(t), ""), d.Dependencies)
+	if err == nil {
+		t.Fatal("expected client disabled error")
+	}
+	if err.Error() != `client "opencode" disabled in config` {
+		t.Fatalf("got %q, want exact disabled-in-config message", err.Error())
+	}
+	for _, step := range d.callOrder {
+		if step == "ClientInstalled" {
+			t.Fatalf("installed gate must not run when config gate rejects; order=%v", d.callOrder)
+		}
+	}
+}
+
+func TestPrepare_InstalledClientProceeds(t *testing.T) {
+	d := newFakeDeps(t)
+	d.loadProfile = func(name string) (ProfileDefinition, bool, error) {
+		return ProfileDefinition{Name: name, Client: "opencode"}, true, nil
+	}
+	plan, family, err := Prepare(prepareReq("p", "hi", tempDir(t), ""), d.Dependencies)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if family != "opencode" {
+		t.Fatalf("family=%q want opencode", family)
+	}
+	if plan.ProfileName != "p" {
+		t.Fatalf("profile=%q want p", plan.ProfileName)
 	}
 }
 

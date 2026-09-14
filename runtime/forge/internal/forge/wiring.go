@@ -260,9 +260,13 @@ func executionDependencies() execution.Dependencies {
 				Name: name, Client: plan.Client, Provider: plan.Provider,
 			}, true, nil
 		},
-		ClientEnabled: func(client string) bool {
-			return ClientUsability(client) == ClientOK
-		},
+		// ClientEnabled is the pure config gate (IsClientEnabled), independent
+		// of installation state. ClientInstalled carries the authoritative
+		// binary-installed fact so execution can report a precise
+		// not-installed error instead of a lossy ClientUsability == ClientOK
+		// boolean.
+		ClientEnabled:   func(client string) bool { return IsClientEnabled(client) },
+		ClientInstalled: clientInstalled,
 		ResolveProfile: func(def execution.ProfileDefinition) (profilepkg.ResolvedProfile, error) {
 			plan, err := dispatchPlanForProfile(def.Name)
 			if err != nil {

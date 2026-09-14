@@ -58,9 +58,15 @@ type Dependencies struct {
 	// LoadProfile loads the named profile definition, returning found=false
 	// when the profile does not exist (mirroring "profile %q not found").
 	LoadProfile func(name string) (ProfileDefinition, bool, error)
-	// ClientEnabled reports whether the named client is enabled in config
-	// (true when load fails, matching current IsClientEnabled fallback).
+	// ClientEnabled is the pure config gate: it reports whether the named
+	// client is enabled in config (true when load fails, matching current
+	// IsClientEnabled fallback). It must not consider installation state.
 	ClientEnabled func(client string) bool
+	// ClientInstalled optionally reports whether the named client's binary is
+	// actually installed. Nil disables the installation gate entirely so
+	// direct callers keep config-only behavior. When non-nil it is consulted
+	// after the config gate and before driver planning.
+	ClientInstalled func(client string) bool
 	// ResolveProfile resolves a loaded profile definition through the profile
 	// package against the current catalog, returning a ResolvedProfile.
 	ResolveProfile func(def ProfileDefinition) (profile.ResolvedProfile, error)
