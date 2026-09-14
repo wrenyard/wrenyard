@@ -34,6 +34,7 @@ import {
   evaluateForgeNativeRouteReadiness,
   queryForgeProviderReadiness,
 } from './execution/forge-provider-readiness-query.mts'
+import { queryForgeClientReadiness } from './execution/forge-client-readiness-query.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
@@ -325,6 +326,12 @@ async function startForemanDaemonWithRuntime(
   // TaskSettings invokes it once per relevant evaluation and never receives a
   // native credential or promotes native auth into Gateway support.
   const loadNativeProviderReadiness = () => queryForgeProviderReadiness()
+  // Authoritative, non-inference client readiness comes from `forge doctor
+  // clients --json`: ALL catalog/config clients with their enabled/installed
+  // facts, using Forge's own clientInstalled/IsClientEnabled authority rather
+  // than the partial UI surface discovery, which only supports a subset of
+  // clients and probes expensive app capabilities.
+  const loadClientReadiness = () => queryForgeClientReadiness()
   // One daemon-owned TaskSettingsService shares the already-created resolver,
   // the single alias owner, the shared quota snapshot service, and the
   // authoritative config path; no second catalog/resolver/alias store is
@@ -337,6 +344,9 @@ async function startForemanDaemonWithRuntime(
     aliases: runtimeAliasService,
     quotaSnapshots: autoRoutingQuotaSnapshots,
     nativeProviderReadiness: loadNativeProviderReadiness,
+    // The production gate uses Forge's authoritative per-client state for ALL
+    // clients; a client must be enabled AND installed to be admitted.
+    clientReadiness: loadClientReadiness,
     // Non-billable readiness: real daemon admission status (never a paid probe)
     // plus the current provider credential/route availability. Unknown quota is
     // surfaced as `unknown` — never fabricated as available or zero. Exact

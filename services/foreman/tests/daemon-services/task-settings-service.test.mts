@@ -3554,4 +3554,182 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(serialized.includes('effective'), false)
     assert.equal(serialized.includes('user_task'), false)
   })
+
+  // -------------------------------------------------------------------------
+  // Authoritative Forge client readiness gate
+  // -------------------------------------------------------------------------
+
+  /** Immutable client-readiness sample carrying the exact enabled/installed
+   *  facts for the fixture clients. Disabled clients are removed by the gate;
+   *  enabled-but-uninstalled clients are removed as well. */
+  const clientSample = (
+    state: Record<string, { enabled: boolean; installed: boolean }>,
+  ) => ({ sampledAtMs: 1, clientsById: Object.freeze(state) })
+
+  it('automatic selection removes an enabled-but-uninstalled client before collapse and keeps a ready sibling', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE] }),
+      clientReadiness: async () => clientSample({
+        [CODEBUDDY_GROK_PROFILE.client]: { enabled: true, installed: false },
+        [CODEBUDDY_NATIVE_PROFILE.client]: { enabled: true, installed: true },
+      }),
+      runtimeAvailability: defaultRuntimeAvailability,
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    // The unavailable grok client never hides the ready native sibling.
+    assert.equal(resolution.exactAgentRuntime, CODEBUDDY_NATIVE_PROFILE.exactAgentRuntime)
+    assert.equal(resolution.dispatch?.client, CODEBUDDY_NATIVE_PROFILE.client)
+  })
+
+  it('an uninstalled preferred client cannot hide the installed sibling in runs or routing tests', async () => {
+    writeConfig({})
+    let calls = 0
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE] }),
+      clientReadiness: async () => {
+        calls += 1
+        return clientSample({
+          [CODEBUDDY_NATIVE_PROFILE.client]: { enabled: true, installed: false },
+          [CODEBUDDY_GROK_PROFILE.client]: { enabled: true, installed: true },
+        })
+      },
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.exactAgentRuntime, CODEBUDDY_GROK_PROFILE.exactAgentRuntime)
+    assert.equal(calls, 1)
+    const result = await service.routingTest({ automatic: {} })
+    assert.equal(calls, 2, 'routing test takes one fresh sample across both passes and baseline')
+    assert.equal(result.rows.length, 1)
+    assert.equal(result.rows[0]!.rank, 1)
+  })
+
+  it('automatic selection cannot select a client that is disabled in config', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE] }),
+      clientReadiness: async () => clientSample({
+        [CODEBUDDY_NATIVE_PROFILE.client]: { enabled: false, installed: true },
+        [CODEBUDDY_GROK_PROFILE.client]: { enabled: true, installed: false },
+      }),
+    })
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError,
+    )
+  })
+
+  it('routingTest omits pairs whose only client is not installed or disabled', async () => {
+    writeConfig({})
+    const unavailable = { ...A_HIGH_P, client: 'missing', exactAgentRuntime: 'auto/high:missing' }
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P, unavailable] }),
+      clientReadiness: async () => clientSample({
+        [A_MID_P.client]: { enabled: true, installed: true },
+        [unavailable.client]: { enabled: true, installed: false },
+      }),
+    })
+    const result = await service.routingTest({ automatic: {} })
+    assert.deepEqual(result.rows.map((row) => row.model), [A_MID_P.model])
+  })
+
+  it('client readiness is sampled once per request through the shared preview memo', async () => {
+    writeConfig({})
+    let calls = 0
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P] }),
+      clientReadiness: async () => {
+        calls += 1
+        return clientSample({
+          [A_MID_P.client]: { enabled: true, installed: true },
+          [A_HIGH_P.client]: { enabled: true, installed: true },
+        })
+      },
+    })
+    await service.snapshot({})
+    assert.equal(calls, 1, 'one snapshot request samples client readiness once')
+    await service.snapshot({})
+    assert.equal(calls, 2, 'a fresh request samples again')
+  })
+
+  it('a failed client readiness query fails closed for automatic selection', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P] }),
+      clientReadiness: async () => {
+        throw new Error('query failed')
+      },
+    })
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError,
+    )
+  })
+
+  it('a missing client state fails closed when the callback is configured', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [A_MID_P] }),
+      clientReadiness: async () => clientSample({}),
+    })
+    await assert.rejects(
+      service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} }),
+      (error) => error instanceof NoEligiblePlanError,
+    )
+  })
+
+  it('explicit readiness distinguishes disabled from not-installed clients', async () => {
+    const target = { kind: 'target' as const, target: PROFILES[0]!.exactAgentRuntime }
+    const disabled = context!.makeService({
+      clientReadiness: async () => clientSample({
+        [PROFILES[0]!.client]: { enabled: false, installed: true },
+      }),
+    })
+    await assert.rejects(
+      disabled.resolveForRun({
+        taskName: 'commit',
+        kind: 'builtin',
+        defaults: {},
+        invocation: { mode: 'explicit', explicit_runtime: target },
+      }),
+      /client 'codex' is disabled in config/,
+    )
+    const notInstalled = context!.makeService({
+      clientReadiness: async () => clientSample({
+        [PROFILES[0]!.client]: { enabled: true, installed: false },
+      }),
+    })
+    await assert.rejects(
+      notInstalled.resolveForRun({
+        taskName: 'commit',
+        kind: 'builtin',
+        defaults: {},
+        invocation: { mode: 'explicit', explicit_runtime: target },
+      }),
+      /client 'codex' is not installed/,
+    )
+    const unavailableQuery = context!.makeService({
+      clientReadiness: async () => {
+        throw new Error('query failed')
+      },
+    })
+    await assert.rejects(
+      unavailableQuery.resolveForRun({
+        taskName: 'commit',
+        kind: 'builtin',
+        defaults: {},
+        invocation: { mode: 'explicit', explicit_runtime: target },
+      }),
+      /client 'codex' readiness could not be determined/,
+    )
+  })
+
+  it('no clientReadiness callback preserves the existing isolated behavior', async () => {
+    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CODEBUDDY_NATIVE_PROFILE, CODEBUDDY_GROK_PROFILE] }),
+    })
+    const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(resolution.exactAgentRuntime, CODEBUDDY_NATIVE_PROFILE.exactAgentRuntime)
+  })
 })
