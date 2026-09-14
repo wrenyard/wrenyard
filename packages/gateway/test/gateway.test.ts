@@ -8,6 +8,7 @@ import { createModelGateway, type GatewayRequestCompletedEvent } from '../src/in
 function fixture(
   fetchImpl: typeof fetch,
   onRequestCompleted?: Parameters<typeof createModelGateway>[0]['onRequestCompleted'],
+  now?: () => number,
 ) {
   const catalog = new Catalog();
   catalog.registerProvider({
@@ -24,6 +25,7 @@ function fixture(
     catalog,
     fetch: fetchImpl,
     onRequestCompleted,
+    now,
     providers: {
       credential: async () => ({ value: 'upstream-secret' }),
       resolveUpstreamModel: (_provider, model) => model === 'public' ? 'private' : model,
@@ -36,7 +38,7 @@ function fixture(
   });
 }
 
-test('replaces only model and upstream auth, then streams the response', async () => {
+test('replaces only model and upstream auth, then streams the response', async (t) => {
   let seenBody: unknown;
   let seenAuth: string | null = null;
   const gateway = fixture(async (_url, init) => {
@@ -45,6 +47,7 @@ test('replaces only model and upstream auth, then streams the response', async (
     return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('one')); controller.enqueue(new TextEncoder().encode('two')); controller.close(); } }), { headers: { 'content-type': 'text/event-stream' } });
   });
   const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -54,19 +57,20 @@ test('replaces only model and upstream auth, then streams the response', async (
     body: JSON.stringify({ model: 'vendor/public', messages: [{ role: 'user', content: 'hi' }], stream: true }),
   });
   assert.equal(await response.text(), 'onetwo');
-  assert.deepEqual(seenBody, { model: 'private', messages: [{ role: 'user', content: 'hi' }], stream: true });
+  assert.deepEqual(seenBody, { model: 'private', messages: [{ role: 'user', content: 'hi' }], stream: true, stream_options: { include_usage: true } });
   assert.equal(seenAuth, 'Bearer upstream-secret');
   server.close();
   await once(server, 'close');
 });
 
-test('normalizes an upstream JSON response model back to the public model id', async () => {
+test('normalizes an upstream JSON response model back to the public model id', async (t) => {
   const gateway = fixture(async () => new Response(JSON.stringify({
     id: 'chatcmpl-test',
     model: 'private',
     choices: [{ message: { role: 'assistant', content: 'private remains content' } }],
   }), { headers: { 'content-type': 'application/json' } }));
   const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -85,7 +89,7 @@ test('normalizes an upstream JSON response model back to the public model id', a
   await once(server, 'close');
 });
 
-test('normalizes split SSE model fields without changing event content or tool calls', async () => {
+test('normalizes split SSE model fields without changing event content or tool calls', async (t) => {
   const event = `data: ${JSON.stringify({
     id: 'chatcmpl-test',
     model: 'private',
@@ -100,6 +104,7 @@ test('normalizes split SSE model fields without changing event content or tool c
     },
   }), { headers: { 'content-type': 'text/event-stream' } }));
   const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -119,14 +124,123 @@ test('normalizes split SSE model fields without changing event content or tool c
   await once(server, 'close');
 });
 
-test('/models only returns credential-available protocol models', async () => {
+test('scoped openai chat stream forwards the same endpoint, sets include_usage, and is attributed once', async (t) => {
+  let seenUrl: string | undefined;
+  let seenBody: Record<string, unknown> = {};
+  const events: GatewayRequestCompletedEvent[] = [];
+  const stream = 'data: {"id":"r1","model":"private","choices":[{"delta":{"content":"hi"}}]}\n\n'
+    + 'data: {"id":"r1","model":"private","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+    + 'data: {"id":"r1","model":"private","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":7,"total_tokens":8}}\n\n'
+    + 'data: [DONE]\n\n';
+  let sampleTime = 1000;
+  const gateway = fixture(async (url, init) => {
+    seenUrl = String(url);
+    seenBody = JSON.parse(String(init?.body));
+    return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+  }, (event) => { events.push(event); }, () => (sampleTime += 1000));
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/execution/exec_abc/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [], stream: true }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  assert.match(body, /"model":"vendor\/public"/u);
+  // The execution segment is attribution-only and never reaches upstream.
+  assert.equal(seenUrl, 'https://upstream.test/v1/chat/completions');
+  assert.deepEqual(seenBody.stream_options, { include_usage: true });
+  assert.equal(seenBody.stream, true);
+  const completed = events.filter((event) => event.status === 200 && event.tps_samples !== undefined);
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0]!.executionId, 'exec_abc');
+  assert.equal(completed[0]!.tps_sampling_contract, 'response_v1');
+  assert.deepEqual(completed[0]!.tps_samples![0]!.model, 'vendor/public');
+  assert.equal(completed[0]!.tps_samples![0]!.response_id, 'r1');
+  assert.equal(completed[0]!.tps_samples![0]!.output_tokens, 7);
+  assert.ok(!('requestBody' in completed[0]!) && !('prompt' in completed[0]!));
+  server.close();
+  await once(server, 'close');
+});
+
+test('an upstream error on a scoped path emits no sample', async (t) => {
+  const events: GatewayRequestCompletedEvent[] = [];
+  const gateway = fixture(async () => new Response('upstream rejected', { status: 503, headers: { 'content-type': 'text/plain' } }), (event) => { events.push(event); });
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/execution/exec_err/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [], stream: true }),
+  });
+  assert.equal(response.status, 503);
+  assert.equal(events.every((event) => event.tps_samples === undefined), true);
+  assert.equal(events.at(-1)!.executionId, 'exec_err');
+  server.close();
+  await once(server, 'close');
+});
+
+test('a malformed execution scope is not served and stays compatible unscoped', async (t) => {
+  const gateway = fixture(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+  const server = createServer((request, response) => { void gateway.handle(request, response).then((handled) => { if (!handled) { response.writeHead(404); response.end(); } }); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const malformed = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/execution/bad%2Fid/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal(malformed.status, 404);
+  const unscoped = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal(unscoped.status, 200);
+  server.close();
+  await once(server, 'close');
+});
+
+test('unscoped non-streaming requests are unchanged and carry no sample', async (t) => {
+  const events: GatewayRequestCompletedEvent[] = [];
+  let seenBody: Record<string, unknown> = {};
+  const gateway = fixture(async (_url, init) => {
+    seenBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ id: 'chatcmpl-test', model: 'private', choices: [] }), { headers: { 'content-type': 'application/json' } });
+  }, (event) => { events.push(event); });
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal('stream_options' in seenBody, false);
+  assert.equal(events.at(-1)!.tps_samples, undefined);
+  assert.equal(events.at(-1)!.executionId, undefined);
+  server.close();
+  await once(server, 'close');
+});
+
+test('/models only returns credential-available protocol models', async (t) => {
   const gateway = fixture(fetch);
   const connection = await gateway.connection('http://127.0.0.1:8787');
   assert.deepEqual(connection.models.map((entry) => entry.publicId), ['vendor/public']);
   assert.equal(connection.openaiChatBaseUrl, 'http://127.0.0.1:8787/gateway/openai-chat/v1');
 });
 
-test('an upstream failure is returned once without retrying another model id', async () => {
+test('an upstream failure is returned once without retrying another model id', async (t) => {
   let attempts = 0;
   const events: GatewayRequestCompletedEvent[] = [];
   const gateway = fixture(async () => {
@@ -134,6 +248,7 @@ test('an upstream failure is returned once without retrying another model id', a
     return new Response('upstream rejected', { status: 503, headers: { 'content-type': 'text/plain' } });
   }, (event) => { events.push(event); });
   const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -221,7 +336,7 @@ test('opencode service providers receive app UA and forwarded session', async (t
   await once(server, 'close');
 });
 
-test('non-opencode providers do not receive the session header', async () => {
+test('non-opencode providers do not receive the session header', async (t) => {
   let seenSession: string | null = 'unset';
   const gateway = headerFixture(async (_url, init) => {
     seenSession = new Headers(init?.headers).get('x-opencode-session');
@@ -241,7 +356,7 @@ test('non-opencode providers do not receive the session header', async () => {
   await once(server, 'close');
 });
 
-test('invalid x-opencode-session is omitted', async () => {
+test('invalid x-opencode-session is omitted', async (t) => {
   for (const bad of ['a'.repeat(300), 'safe\rleak', 'safe\nleak', ['one', 'two']]) {
     let seenSession: string | null = 'unset';
     const gateway = headerFixture(async (_url, init) => {
@@ -252,7 +367,8 @@ test('invalid x-opencode-session is omitted', async () => {
       request.headers['x-opencode-session'] = bad;
       void gateway.handle(request, response);
     });
-    server.listen(0, '127.0.0.1');
+    t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const address = server.address();
     assert.ok(address && typeof address === 'object');
@@ -268,7 +384,7 @@ test('invalid x-opencode-session is omitted', async () => {
   }
 });
 
-test('429 response forwards retry-after and x-ratelimit headers for all providers', async () => {
+test('429 response forwards retry-after and x-ratelimit headers for all providers', async (t) => {
   const gateway = headerFixture(async () => new Response('{"error":"rate limited"}', {
     status: 429,
     headers: {
@@ -296,7 +412,7 @@ test('429 response forwards retry-after and x-ratelimit headers for all provider
   await once(server, 'close');
 });
 
-test('openrouter free request strips models and route without changing free id', async () => {
+test('openrouter free request strips models and route without changing free id', async (t) => {
   let seenBody: Record<string, unknown> = {};
   const gateway = headerFixture(async (_url, init) => {
     seenBody = JSON.parse(String(init?.body));
