@@ -68,19 +68,7 @@
               <h1 id="conversation-title">新会话</h1>
             </div>
             <div class="conversation-header-actions">
-              <div class="conversation-model-picker" id="conversation-model-picker">
-                <button id="conversation-model-trigger" class="conversation-model-trigger" type="button" aria-label="当前会话模型" aria-haspopup="listbox" aria-expanded="false" aria-controls="conversation-model-list" disabled>
-                  <span class="conversation-model-trigger-copy">
-                    <strong id="conversation-model-name">读取模型…</strong>
-                    <small id="conversation-model-provider">Wrenyard</small>
-                  </span>
-                  <span class="conversation-model-trigger-signal" id="conversation-model-trigger-signal"></span>
-                  <span class="conversation-model-chevron" aria-hidden="true"></span>
-                </button>
-                <div class="conversation-model-popover" id="conversation-model-popover" hidden>
-                  <div class="conversation-model-list" id="conversation-model-list" role="listbox" aria-label="会话模型"></div>
-                </div>
-              </div>
+              <div class="conversation-model-picker" id="conversation-model-picker"></div>
               <span class="conversation-daemon-status is-pending" id="conversation-daemon-status" tabindex="0" role="status" aria-label="Daemon 状态：正在检查" aria-describedby="conversation-daemon-tooltip">
                 <i aria-hidden="true"></i>
                 <span class="conversation-daemon-tooltip" id="conversation-daemon-tooltip" role="tooltip">
@@ -115,22 +103,6 @@
             <p>回答由 DSH 后端生成；执行本地操作前请检查内容。</p>
           </footer>
         </section>
-
-        <div class="workspace-gate" id="workspace-gate" hidden>
-          <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
-            <img src="./icon-256.png" alt="" />
-            <p class="eyebrow">WORKSPACE REQUIRED</p>
-            <h2 id="workspace-gate-title">先为工坊安一个家</h2>
-            <p id="workspace-gate-message">会话必须绑定一个 Wrenyard workspace。配置完成前，聊天功能不会启动。</p>
-            <label for="workspace-gate-input">Workspace 路径</label>
-            <input id="workspace-gate-input" type="text" spellcheck="false" placeholder="/path/to/wrenyard-workspace" />
-            <span class="workspace-gate-error" id="workspace-gate-error"></span>
-            <div class="workspace-gate-actions">
-              <button class="secondary-button" id="workspace-open-settings" type="button">前往设置</button>
-              <button class="primary-button" id="workspace-quick-save" type="button">保存并应用</button>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section class="product-page stats-page" id="stats-page" aria-labelledby="stats-title" hidden>
@@ -358,6 +330,11 @@
               </div>
             </section>
 
+            <section class="settings-section" id="routing-settings">
+              <div class="section-heading"><h2>路由权重</h2></div>
+              <div class="settings-card" id="routing-weights-settings"></div>
+            </section>
+
             <section class="settings-section" id="companion">
               <div class="section-heading section-heading-with-action">
                 <div><h2>桌宠</h2><p>由啾啾工坊直接管理生命周期；退出 App 后桌宠同步退出。</p></div>
@@ -532,6 +509,27 @@
       </div>
 
     </main>
+    <div class="workspace-gate" id="workspace-gate" hidden>
+      <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
+        <img src="./icon-256.png" alt="" />
+        <p class="eyebrow">WORKSPACE REQUIRED</p>
+        <h2 id="workspace-gate-title">先为工坊安一个家</h2>
+        <p id="workspace-gate-message">会话必须绑定一个 Wrenyard workspace。配置完成前，聊天功能不会启动。</p>
+        <label for="workspace-gate-mode">方式</label>
+        <select id="workspace-gate-mode">
+          <option value="existing" selected>选择已有 workspace</option>
+          <option value="create">新建 workspace</option>
+        </select>
+        <label for="workspace-gate-input">Workspace 路径</label>
+        <input id="workspace-gate-input" type="text" spellcheck="false" placeholder="/path/to/wrenyard-workspace" />
+        <span class="workspace-gate-hint" id="workspace-gate-hint"></span>
+        <span class="workspace-gate-error" id="workspace-gate-error"></span>
+        <div class="workspace-gate-actions">
+          <button class="secondary-button" id="workspace-open-settings" type="button">前往设置</button>
+          <button class="primary-button" id="workspace-quick-save" type="button">保存并应用</button>
+        </div>
+      </div>
+    </div>
     <script src="./app.js"></script>
   </body>
 </html>

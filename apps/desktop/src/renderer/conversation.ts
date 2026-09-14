@@ -10,6 +10,7 @@ import {
   conversationProviderPresentation,
   type ConversationProviderPresentation,
 } from './conversation-provider-status.js';
+import { SearchableSingleSelect } from './single-select.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -225,14 +226,6 @@ interface ModelPickerEntry extends ConversationModelOptionSnapshot {
   advertised: boolean;
 }
 
-interface ProviderBinding {
-  providerId: string;
-  label: HTMLElement;
-  signal: HTMLElement;
-  host: HTMLElement;
-  baseTitle?: string;
-}
-
 function appendInlineMarkdown(target: HTMLElement, text: string): void {
   const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
   for (const part of parts) {
@@ -416,59 +409,38 @@ export class ConversationView {
   private readonly input = element<HTMLTextAreaElement>('conversation-input');
   private readonly sendButton = element<HTMLButtonElement>('conversation-send');
   private readonly stopButton = element<HTMLButtonElement>('conversation-stop');
-  private readonly modelPicker = element<HTMLElement>('conversation-model-picker');
-  private readonly modelTrigger = element<HTMLButtonElement>('conversation-model-trigger');
-  private readonly modelName = element<HTMLElement>('conversation-model-name');
-  private readonly modelProvider = element<HTMLElement>('conversation-model-provider');
-  private readonly modelTriggerSignal = element<HTMLElement>('conversation-model-trigger-signal');
-  private readonly modelPopover = element<HTMLElement>('conversation-model-popover');
-  private readonly modelList = element<HTMLElement>('conversation-model-list');
+  private readonly modelPickerHost = element<HTMLElement>('conversation-model-picker');
+  private readonly modelSelect: SearchableSingleSelect;
   private readonly error = element<HTMLElement>('conversation-error');
   private readonly gate = element<HTMLElement>('workspace-gate');
+  private readonly gateMode = element<HTMLSelectElement>('workspace-gate-mode');
   private readonly gateInput = element<HTMLInputElement>('workspace-gate-input');
+  private readonly gateHint = element<HTMLElement>('workspace-gate-hint');
   private readonly gateError = element<HTMLElement>('workspace-gate-error');
   private snapshot: ConversationSnapshot | undefined;
   private readonly expandedItemIds = new Set<string>();
   private refreshing = false;
   private refreshQueued = false;
   private busy = false;
+  private workspaceSaving = false;
   private quotaSnapshot: QuotaSnapshot | undefined;
-  private modelOptions: HTMLButtonElement[] = [];
-  private providerBindings: ProviderBinding[] = [];
-  private modelPickerOpen = false;
-  private activeModelIndex = -1;
+  private modelEntries: ModelPickerEntry[] = [];
+  private modelCategories = new Map<string, ConversationProviderPresentation>();
 
   constructor(api: WrenyardShellApi, openSettings: () => void) {
     this.api = api;
     this.openSettings = openSettings;
+    this.modelSelect = new SearchableSingleSelect(this.modelPickerHost, {
+      label: '会话模型',
+      placeholder: '读取模型…',
+      onChange: (value) => void this.selectModel(value),
+    });
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
     this.stopButton.addEventListener('click', () => void this.cancel());
-    this.modelTrigger.addEventListener('click', () => {
-      if (this.modelPickerOpen) this.closeModelPicker(false);
-      else this.openModelPicker('selected');
-    });
-    this.modelTrigger.addEventListener('keydown', (event) => this.onModelTriggerKeyDown(event));
-    this.modelList.addEventListener('keydown', (event) => this.onModelListKeyDown(event));
-    this.modelList.addEventListener('click', (event) => {
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLButtonElement>('button[data-model-value]')
-        : null;
-      if (!target || target.disabled) return;
-      void this.selectModel(target.dataset.modelValue ?? '');
-    });
-    document.addEventListener('pointerdown', (event) => {
-      if (this.modelPickerOpen && event.target instanceof Node && !this.modelPicker.contains(event.target)) {
-        this.closeModelPicker(false);
-      }
-    });
-    document.addEventListener('focusin', (event) => {
-      if (this.modelPickerOpen && event.target instanceof Node && !this.modelPicker.contains(event.target)) {
-        this.closeModelPicker(false);
-      }
-    });
     element('workspace-open-settings').addEventListener('click', openSettings);
     element('workspace-quick-save').addEventListener('click', () => void this.saveWorkspace());
+    this.gateMode.addEventListener('change', () => this.applyGateMode());
     this.input.addEventListener('input', () => this.resizeComposer());
     this.input.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
@@ -485,7 +457,8 @@ export class ConversationView {
 
   setQuotaSnapshot(snapshot: QuotaSnapshot): void {
     this.quotaSnapshot = snapshot;
-    this.updateProviderBindings();
+    this.modelCategories.clear();
+    if (this.snapshot) this.renderModels(this.snapshot);
   }
 
   async refresh(): Promise<void> {
@@ -509,6 +482,8 @@ export class ConversationView {
 
   private render(snapshot: ConversationSnapshot): void {
     const sessionChanged = snapshot.selectedSessionId !== this.snapshot?.selectedSessionId;
+    const workspaceChanged = snapshot.workspace.path !== this.snapshot?.workspace.path;
+    const gateWasHidden = this.gate.hidden;
     const wasPinned = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
     const previousScrollTop = this.feed.scrollTop;
     const scrollAnchor = sessionChanged ? undefined : this.captureScrollAnchor();
@@ -526,14 +501,15 @@ export class ConversationView {
     this.renderItems(snapshot.items, snapshot.selectedRunning);
     this.gate.hidden = snapshot.status !== 'workspace-required';
     if (!this.gate.hidden) {
-      this.gateInput.value = snapshot.workspace.path ?? '';
+      if (gateWasHidden || workspaceChanged) this.gateInput.value = snapshot.workspace.path ?? '';
       element('workspace-gate-message').textContent = snapshot.message ?? '会话必须绑定一个 Wrenyard workspace。';
       const workspaceFromEnvironment = snapshot.workspace.source === 'environment';
       this.gateInput.readOnly = workspaceFromEnvironment;
       this.gateInput.setAttribute('aria-readonly', String(workspaceFromEnvironment));
+      this.gateMode.disabled = workspaceFromEnvironment || this.workspaceSaving;
       const quickSave = element<HTMLButtonElement>('workspace-quick-save');
-      quickSave.disabled = workspaceFromEnvironment;
-      quickSave.textContent = workspaceFromEnvironment ? '环境变量管理' : '保存并应用';
+      quickSave.disabled = workspaceFromEnvironment || this.workspaceSaving;
+      this.applyGateMode();
     }
     const canPrompt = ready && snapshot.models.routable !== false;
     this.input.disabled = !canPrompt || this.busy;
@@ -559,20 +535,14 @@ export class ConversationView {
   }
 
   private renderModels(snapshot: ConversationSnapshot): void {
-    this.closeModelPicker(false);
     const directory = snapshot.models;
     const currentValue = directory.current
       ? conversationModelValue(directory.current.provider, directory.current.model)
       : '';
-    const providerGroups = new Map<string, ModelPickerEntry[]>();
-    const appendEntry = (entry: ModelPickerEntry): void => {
-      const group = providerGroups.get(entry.catalogProvider) ?? [];
-      group.push(entry);
-      providerGroups.set(entry.catalogProvider, group);
-    };
+    const entries: ModelPickerEntry[] = [];
 
     if (directory.current && !directory.current.advertised) {
-      appendEntry({
+      entries.push({
         provider: directory.current.provider,
         catalogProvider: directory.current.catalogProvider,
         providerLabel: directory.current.providerLabel,
@@ -587,7 +557,7 @@ export class ConversationView {
     for (const group of directory.groups) {
       for (const model of group.models) {
         const value = conversationModelValue(model.provider, model.model);
-        appendEntry({
+        entries.push({
           ...model,
           value,
           current: value === currentValue,
@@ -595,212 +565,72 @@ export class ConversationView {
         });
       }
     }
+    this.modelEntries = entries;
+    this.updateModelSelect();
 
-    this.providerBindings = [];
-    this.modelOptions = [];
-    const groupNodes: HTMLElement[] = [];
-    let groupIndex = 0;
-    let optionIndex = 0;
-    for (const [providerId, entries] of providerGroups) {
-      const section = document.createElement('section');
-      section.className = 'conversation-model-group';
-      section.setAttribute('role', 'group');
-      const heading = document.createElement('div');
-      heading.className = 'conversation-model-group-heading';
-      heading.id = `conversation-model-group-${groupIndex}`;
-      section.setAttribute('aria-labelledby', heading.id);
-      const headingLabel = document.createElement('span');
-      const headingSignal = document.createElement('span');
-      headingSignal.className = 'conversation-provider-signal';
-      heading.append(headingLabel, headingSignal);
-      this.providerBindings.push({
-        providerId,
-        label: headingLabel,
-        signal: headingSignal,
-        host: heading,
-      });
-      section.append(heading);
-
-      for (const entry of entries) {
-        const option = document.createElement('button');
-        option.type = 'button';
-        option.className = `conversation-model-option${entry.current ? ' is-selected' : ''}${entry.advertised ? '' : ' is-unadvertised'}`;
-        option.id = `conversation-model-option-${optionIndex}`;
-        option.dataset.modelValue = entry.value;
-        option.setAttribute('role', 'option');
-        option.setAttribute('aria-selected', String(entry.current));
-        option.tabIndex = -1;
-        option.disabled = !entry.advertised;
-        if (!entry.advertised) option.setAttribute('aria-disabled', 'true');
-        const name = document.createElement('strong');
-        name.textContent = entry.advertised ? entry.label : `${entry.label}（当前）`;
-        const provider = document.createElement('small');
-        provider.className = 'conversation-model-option-provider';
-        const providerLabel = document.createElement('span');
-        const providerSignal = document.createElement('span');
-        providerSignal.className = 'conversation-provider-signal';
-        provider.append(providerLabel, providerSignal);
-        option.append(name, provider);
-        const inputTypes = document.createElement('small');
-        inputTypes.className = 'conversation-model-option-provider';
-        inputTypes.textContent = entry.inputTypes === undefined
-          ? '图片：未知'
-          : entry.inputTypes.includes('image') ? '图片：支持' : '图片：不支持';
-        option.append(inputTypes);
-        this.providerBindings.push({
-          providerId,
-          label: providerLabel,
-          signal: providerSignal,
-          host: option,
-          baseTitle: entry.description ?? entry.model,
-        });
-        if (entry.advertised) this.modelOptions.push(option);
-        section.append(option);
-        optionIndex += 1;
-      }
-      groupNodes.push(section);
-      groupIndex += 1;
-    }
-
-    if (groupNodes.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'conversation-model-empty';
-      empty.textContent = directory.status === 'loading'
-        ? '读取模型…'
-        : snapshot.selectedSessionId ? '暂无可选模型' : '选择模型后开始对话';
-      groupNodes.push(empty);
-    }
-    this.modelList.replaceChildren(...groupNodes);
     const unavailable = snapshot.status !== 'ready'
       || directory.status === 'loading'
-      || this.modelOptions.length === 0;
+      || this.advertisedCount() === 0;
     // DSH emits a transient loading snapshot while it applies a model change.
     // Keep the already-focused trigger in the tab order through that refresh;
     // aria-disabled still exposes and enforces the temporary disabled state.
     const transientLoading = snapshot.status === 'ready'
       && Boolean(snapshot.selectedSessionId)
       && directory.status === 'loading';
-    this.modelTrigger.disabled = unavailable && !transientLoading;
-    this.modelTrigger.setAttribute('aria-disabled', String(unavailable || this.busy));
+    this.modelSelect.setDisabled(unavailable && !transientLoading);
+    this.modelSelect.setLoading(this.busy || transientLoading);
     const current = directory.current;
     const placeholder = directory.status === 'loading'
       ? '读取模型…'
       : snapshot.selectedSessionId ? '选择模型' : '选择模型后开始对话';
-    this.modelName.textContent = current?.label ?? placeholder;
-    this.modelProvider.hidden = !current;
-    this.modelTriggerSignal.hidden = !current;
-    this.modelTrigger.setAttribute('aria-label', current ? `当前会话模型：${current.label}` : placeholder);
-    if (current) {
-      this.providerBindings.push({
-        providerId: current.catalogProvider,
-        label: this.modelProvider,
-        signal: this.modelTriggerSignal,
-        host: this.modelTrigger,
-        baseTitle: `${current.label}${current.reasoningEffort ? ` · ${current.reasoningEffort}` : ''}${current.advertised ? '' : ' · 当前目录未提供'}`,
-      });
-    } else {
-      this.modelTrigger.title = directory.message ?? '当前会话模型';
-      this.modelTriggerSignal.replaceChildren();
-      this.modelTriggerSignal.removeAttribute('role');
-      this.modelTriggerSignal.removeAttribute('aria-label');
-    }
-    this.updateProviderBindings();
+    this.modelSelect.placeholder = placeholder;
+    this.modelSelect.setTitle(current
+      ? [current.label, current.reasoningEffort, current.advertised ? '' : '当前目录未提供',
+          this.providerPresentation(current.catalogProvider).tooltip]
+        .filter(Boolean).join(' · ')
+      : directory.message ?? placeholder);
   }
 
-  private updateProviderBindings(): void {
-    for (const binding of this.providerBindings) {
-      const presentation = conversationProviderPresentation(binding.providerId, this.quotaSnapshot);
-      binding.label.textContent = presentation.label;
-      this.renderProviderSignal(binding.signal, presentation);
-      binding.host.title = [binding.baseTitle, presentation.tooltip].filter(Boolean).join(' · ');
-    }
+  private advertisedCount(): number {
+    return this.modelEntries.filter((entry) => entry.advertised).length;
   }
 
-  private renderProviderSignal(target: HTMLElement, presentation: ConversationProviderPresentation): void {
-    const dot = document.createElement('i');
-    dot.className = `is-${presentation.status}`;
-    dot.dataset.status = presentation.status;
-    dot.setAttribute('aria-hidden', 'true');
-    target.replaceChildren(dot);
-    target.hidden = false;
-    target.setAttribute('role', 'img');
-    target.setAttribute('aria-label', presentation.tooltip);
+  /** Projects provider quota into the picker labels, tooltips and fallback titles. */
+  private providerPresentation(providerId: string): ConversationProviderPresentation {
+    const cached = this.modelCategories.get(providerId);
+    if (cached) return cached;
+    const presentation = conversationProviderPresentation(providerId, this.quotaSnapshot);
+    this.modelCategories.set(providerId, presentation);
+    return presentation;
   }
 
-  private openModelPicker(preferred: 'first' | 'last' | 'selected'): void {
-    if (this.busy
-      || this.modelTrigger.disabled
-      || this.modelTrigger.getAttribute('aria-disabled') === 'true'
-      || this.modelOptions.length === 0) return;
-    this.modelPickerOpen = true;
-    this.modelPopover.hidden = false;
-    this.modelTrigger.setAttribute('aria-expanded', 'true');
-    const selected = this.modelOptions.findIndex((option) => option.getAttribute('aria-selected') === 'true');
-    const index = preferred === 'first'
-      ? 0
-      : preferred === 'last'
-        ? this.modelOptions.length - 1
-        : selected >= 0 ? selected : 0;
-    this.focusModelOption(index);
+  private optionTitle(entry: ModelPickerEntry): string {
+    const capability = entry.inputTypes === undefined
+      ? '图片：未知'
+      : entry.inputTypes.includes('image') ? '图片：支持' : '图片：不支持';
+    const presentation = this.providerPresentation(entry.catalogProvider);
+    return [entry.description ?? entry.model, capability, presentation.tooltip]
+      .filter(Boolean)
+      .join(' · ');
   }
 
-  private closeModelPicker(restoreTriggerFocus: boolean): void {
-    this.modelPickerOpen = false;
-    this.modelPopover.hidden = true;
-    this.modelTrigger.setAttribute('aria-expanded', 'false');
-    this.activeModelIndex = -1;
-    for (const option of this.modelOptions) option.tabIndex = -1;
-    if (restoreTriggerFocus && !this.modelTrigger.disabled) this.modelTrigger.focus();
-  }
-
-  private focusModelOption(index: number): void {
-    if (this.modelOptions.length === 0) return;
-    const normalized = (index + this.modelOptions.length) % this.modelOptions.length;
-    for (const option of this.modelOptions) option.tabIndex = -1;
-    const option = this.modelOptions[normalized];
-    if (!option) return;
-    option.tabIndex = 0;
-    this.activeModelIndex = normalized;
-    option.focus();
-  }
-
-  private onModelTriggerKeyDown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && this.modelPickerOpen) {
-      event.preventDefault();
-      this.closeModelPicker(true);
-      return;
-    }
-    if (!['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return;
-    event.preventDefault();
-    if (!this.modelPickerOpen) {
-      this.openModelPicker(event.key === 'ArrowUp' ? 'last' : 'selected');
-      return;
-    }
-    if (event.key === 'ArrowDown') this.focusModelOption(this.activeModelIndex + 1);
-    if (event.key === 'ArrowUp') this.focusModelOption(this.activeModelIndex - 1);
-  }
-
-  private onModelListKeyDown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.closeModelPicker(true);
-      return;
-    }
-    if (event.key === 'Tab') {
-      this.closeModelPicker(false);
-      return;
-    }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
-      event.preventDefault();
-      if (event.key === 'Home') this.focusModelOption(0);
-      else if (event.key === 'End') this.focusModelOption(this.modelOptions.length - 1);
-      else this.focusModelOption(this.activeModelIndex + (event.key === 'ArrowDown' ? 1 : -1));
-      return;
-    }
-    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof HTMLButtonElement) {
-      event.preventDefault();
-      void this.selectModel(event.target.dataset.modelValue ?? '');
-    }
+  private updateModelSelect(): void {
+    const advertised = this.modelEntries.filter((entry) => entry.advertised);
+    const current = this.modelEntries.find((entry) => entry.current);
+    // The not-in-directory current model stays listed (disabled) so the
+    // selection remains visible while advertised options are available.
+    const options = current && !current.advertised ? [current, ...advertised] : advertised;
+    this.modelSelect.setOptions(options.map((entry) => ({
+      value: entry.value,
+      label: entry.label,
+      secondary: entry.advertised
+        ? this.providerPresentation(entry.catalogProvider).label
+        : '当前会话模型',
+      title: this.optionTitle(entry),
+      disabled: !entry.advertised,
+    })));
+    this.modelSelect.value = current?.value ?? '';
+    this.modelSelect.setSearchLabel('搜索模型');
   }
 
   private renderSessions(snapshot: ConversationSnapshot): void {
@@ -1089,26 +919,38 @@ export class ConversationView {
   }
 
   private async selectModel(value: string): Promise<void> {
+    // The shared control already applied the canonical value optimistically, so
+    // remember it to restore the previous selection when the change fails.
+    const previousValue = this.modelSelect.value;
     const selection = parseConversationModelValue(value);
-    if (!selection || this.busy || this.snapshot?.status !== 'ready') {
-      if (this.snapshot) this.renderModels(this.snapshot);
+    const previousSnapshot = this.snapshot;
+    if (!selection || this.busy || previousSnapshot?.status !== 'ready') {
+      if (previousSnapshot) this.renderModels(previousSnapshot);
       return;
     }
-    const previousSnapshot = this.snapshot;
     this.busy = true;
-    this.closeModelPicker(true);
     this.renderModels(previousSnapshot);
     try {
       this.render(await this.api.selectConversationModel(selection.provider, selection.model));
     } catch (error) {
       this.snapshot = previousSnapshot;
       this.renderModels(previousSnapshot);
+      // Canonical provider/model encoding is preserved on failure.
+      if (previousValue) this.modelSelect.value = previousValue;
       this.showError(errorMessage(error));
     } finally {
       this.busy = false;
       if (this.snapshot) this.renderModels(this.snapshot);
-      if (!this.modelTrigger.disabled) requestAnimationFrame(() => this.modelTrigger.focus({ preventScroll: true }));
+      // The trigger is re-enabled above, so focus can return after the await.
+      if (!this.modelSelectTriggerDisabled()) {
+        requestAnimationFrame(() => this.modelPickerHost.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }));
+      }
     }
+  }
+
+  private modelSelectTriggerDisabled(): boolean {
+    const trigger = this.modelPickerHost.querySelector<HTMLButtonElement>('button');
+    return !trigger || trigger.disabled;
   }
 
   private async send(): Promise<void> {
@@ -1146,19 +988,36 @@ export class ConversationView {
   }
 
   private async saveWorkspace(): Promise<void> {
+    if (this.workspaceSaving) return;
+    this.workspaceSaving = true;
     const button = element<HTMLButtonElement>('workspace-quick-save');
+    const create = this.gateMode.value === 'create';
     this.gateError.textContent = '';
     button.disabled = true;
     button.textContent = '正在保存…';
     try {
-      await this.api.saveWorkspace(this.gateInput.value);
+      await this.api.saveWorkspace(this.gateInput.value, create);
       button.textContent = '已应用';
       await this.refresh();
     } catch (error) {
       this.gateError.textContent = errorMessage(error);
       button.disabled = false;
-      button.textContent = '保存并应用';
+      this.applyGateMode();
+    } finally {
+      this.workspaceSaving = false;
     }
+  }
+
+  /** Project the selected mode onto the confirm label and destination hint. */
+  private applyGateMode(): void {
+    const create = this.gateMode.value === 'create';
+    const quickSave = element<HTMLButtonElement>('workspace-quick-save');
+    quickSave.textContent = quickSave.disabled
+      ? '环境变量管理'
+      : create ? '新建并应用' : '保存并应用';
+    this.gateHint.textContent = create
+      ? '新建模式会初始化一个空的 workspace 目录，已有内容的目录请改用「选择已有 workspace」。'
+      : '选择模式只会绑定已存在的 workspace 目录。';
   }
 
   private resizeComposer(): void {

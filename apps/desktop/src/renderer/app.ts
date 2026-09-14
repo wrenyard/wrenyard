@@ -1,3 +1,4 @@
+import { RoutingWeightsSettings } from './routing-weights-settings.js';
 import type {
   PetCompanionSettings,
   ProviderCatalogSnapshot,
@@ -35,10 +36,11 @@ import type {
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
-import { ConversationView, renderRichText } from './conversation.js';
+import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, formatTaskCompletionTimeTooltip, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
+import { renderInstructionTemplatePreview } from './prompt-template-preview.js';
 import { builtinModelDisplayName } from '@wrenyard/providers/model-display-names';
 
 declare global {
@@ -59,6 +61,7 @@ const statsPage = requireElement<HTMLElement>('stats-page');
 const quotaPage = requireElement<HTMLElement>('quota-page');
 const clientsPage = requireElement<HTMLElement>('clients-page');
 const settingsPage = requireElement<HTMLElement>('settings-page');
+const routingWeightsSettings = new RoutingWeightsSettings(requireElement('routing-weights-settings'), window.wrenyardShell);
 const refreshButton = requireElement<HTMLButtonElement>('refresh-button');
 const refreshLabel = requireElement<HTMLElement>('refresh-label');
 const statsRefreshButton = requireElement<HTMLButtonElement>('stats-refresh-button');
@@ -1525,7 +1528,10 @@ async function navigate(page: ShellPage): Promise<void> {
   }
   if (page === 'clients') await refreshClients();
   if (page === 'tasks') await loadTasks();
-  if (page === 'settings') renderSnapshot(await window.wrenyardShell.getSettings());
+  if (page === 'settings') {
+    renderSnapshot(await window.wrenyardShell.getSettings());
+    await routingWeightsSettings.load();
+  }
 }
 
 async function refreshStats(): Promise<void> {
@@ -1993,21 +1999,7 @@ function renderTasksTemplatePreview(row: TaskSettingsTaskRow): void {
     container.append(empty);
     return;
   }
-  for (const segment of segments) {
-    const item = document.createElement('div');
-    if (segment.kind === 'text') {
-      // Static instruction text is rendered through the safe rich-text renderer
-      // (markdown is escaped, never executed); the surrounding block keeps the
-      // preview boundary styling while placeholder tokens below stay distinct.
-      item.className = 'tasks-preview-segment tasks-preview-text';
-      item.append(renderRichText(segment.text));
-    } else if (segment.kind === 'placeholder') {
-      item.className = 'tasks-preview-segment tasks-preview-placeholder';
-      item.textContent = segment.label;
-    }
-    item.title = segment.source;
-    container.append(item);
-  }
+  container.append(renderInstructionTemplatePreview(segments));
 }
 
 /** Builds the per-task layer patch from the visible controls. The mode baseline
@@ -2680,7 +2672,10 @@ window.wrenyardShell.onViewChanged(async (page) => {
   }
   if (page === 'clients') void refreshClients();
   if (page === 'tasks') void loadTasks();
-  if (page === 'settings') void window.wrenyardShell.getSettings().then(renderSnapshot);
+  if (page === 'settings') {
+    void window.wrenyardShell.getSettings().then(renderSnapshot);
+    void routingWeightsSettings.load();
+  }
 });
 window.wrenyardShell.onQuotaChanged(() => {
   void window.wrenyardShell.getQuota(false).then((snapshot) => {
