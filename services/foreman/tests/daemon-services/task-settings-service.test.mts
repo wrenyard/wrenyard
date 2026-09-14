@@ -1705,7 +1705,7 @@ describe('daemon task-settings-service (no-model)', () => {
     // so the intelligence factor is 1 (not the legacy rank/3).
     assert.equal(decision!.scoring!.intelligence, 1)
     const factors = decision!.scoring!
-    assert.ok(Math.abs(decision!.score - (0.5 * factors.price + 0.2 * factors.speed + 0.2 * factors.quota + 0.1 * factors.intelligence)) < 1e-12)
+    assert.ok(Math.abs(decision!.score - (0.4 * factors.price + 0.3 * factors.speed + 0.2 * factors.quota + 0.1 * factors.intelligence)) < 1e-12)
     const targeted = await service.resolveForRun({
       taskName: 'commit', kind: 'builtin',
       defaults: { dispatch: { expectedTps: 80, intelligenceExpected: 'mid' } },
@@ -3031,6 +3031,7 @@ describe('daemon task-settings-service (no-model)', () => {
               selectionMode: 'automatic',
               timeoutMs: 120_000,
               maxAutoOutputUsdPerMillion: 2,
+              routingWeights: { price: 0.5, speed: 0.2, quota: 0.2, intelligence: 0.1 },
               dispatch: { expectedTps: 1, minimumTps: 1 },
             },
           },
@@ -3393,7 +3394,8 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(Boolean(qualified.length >= 1), true)
     const winner = qualified.find((row) => row.rank === 1)
     assert.ok(winner, 'Expected winner')
-    // Actual weighted contributions sum to the shared scorer score.
+    // Actual weighted contributions sum to the shared scorer score under the
+    // .4/.3/.2/.1 defaults.
     const sum =
       winner.price_score! + winner.speed_score! + winner.quota_score! + winner.intelligence_score!
     assert.equal(Boolean(Math.abs(sum - winner.score!) < 1e-12), true)
@@ -3731,5 +3733,188 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
     assert.equal(resolution.exactAgentRuntime, CODEBUDDY_NATIVE_PROFILE.exactAgentRuntime)
+  })
+
+  // -------------------------------------------------------------------------
+  // Global routing weights: one saved set drives real and diagnostic routing
+  // -------------------------------------------------------------------------
+
+  /** Two profiles whose price/speed ordering is unambiguous: the cheap profile
+   *  is slow, the expensive one is fast. With price weight it wins; with speed
+   *  weight the fast profile wins. */
+  const W_CHEAP_SLOW: ProfileFixture = {
+    exactAgentRuntime: 'weighted/cheap-slow:m', profile: 'weighted-cheap-slow', client: 'm',
+    provider: 'weighted', model: 'cheap-slow', intelligence: 'mid', tps: 10,
+    inputUsd: 0.1, outputUsd: 0.5,
+  }
+  const W_FAST_PRICEY: ProfileFixture = {
+    exactAgentRuntime: 'weighted/fast-pricey:m', profile: 'weighted-fast-pricey', client: 'm',
+    provider: 'weighted', model: 'fast-pricey', intelligence: 'mid', tps: 200,
+    inputUsd: 1, outputUsd: 30,
+  }
+
+  const weights = (price: number, speed: number, quota = 0, intelligence = 0) => ({
+    price, speed, quota, intelligence,
+  })
+
+  it('save, snapshot and read a global routing_weights object and expose its user_global source', async () => {
+    writeConfig({})
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    const after = await service.save({
+      scope: 'global',
+      expected_revision: before.revision,
+      patch: { routing_weights: weights(1, 0) },
+    })
+
+    assert.deepEqual(after.user_global, { routing_weights: weights(1, 0) })
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.deepEqual(commit.effective.routing_weights, {
+      value: weights(1, 0),
+      source: 'user_global',
+    })
+
+    // Persisted in canonical camel-case under tasks.settings.global.
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as { settings: { global: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.global, { routingWeights: weights(1, 0) })
+    assert.equal(tempResidue().length, 0)
+
+    // A fresh snapshot reads the persisted weights back with the same source.
+    const reread = await service.snapshot({ task_id: 'builtin:commit' })
+    const rereadCommit = reread.rows.find((row) => row.identity === 'builtin:commit')
+    assert.deepEqual(rereadCommit?.effective.routing_weights, {
+      value: weights(1, 0),
+      source: 'user_global',
+    })
+  })
+
+  it('global null reset clears routing_weights so the scorer defaults return', async () => {
+    writeConfig({
+      tasks: { settings: { global: { timeoutMs: 60_000, routingWeights: weights(0, 1) } } },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+    assert.deepEqual(before.user_global, {
+      timeout_ms: 60_000,
+      routing_weights: weights(0, 1),
+    })
+
+    const after = await service.save({
+      scope: 'global',
+      expected_revision: before.revision,
+      patch: { routing_weights: null },
+    })
+    assert.deepEqual(after.user_global, { timeout_ms: 60_000 })
+    const commit = after.rows.find((row) => row.identity === 'builtin:commit')
+    assert.ok(commit)
+    assert.equal(commit.effective.routing_weights, undefined)
+
+    const onDisk = readConfig()
+    const tasks = onDisk.tasks as { settings: { global: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.global, { timeoutMs: 60_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('task-scope saves carrying routing_weights are rejected without mutating config', async () => {
+    writeConfig({
+      tasks: { settings: { byTask: { 'builtin:commit': { timeoutMs: 10_000 } } } },
+    })
+    const service = context!.makeService()
+    const before = await service.snapshot({})
+
+    await assert.rejects(
+      service.save({
+        scope: 'task',
+        task_id: 'commit',
+        expected_revision: before.revision,
+        patch: { routing_weights: weights(1, 0) },
+      }),
+      (error) => error instanceof TaskSettingsInvalidSettingsError,
+    )
+
+    const tasks = readConfig().tasks as { settings: { byTask: Record<string, unknown> } }
+    assert.deepEqual(tasks.settings.byTask['builtin:commit'], { timeoutMs: 10_000 })
+    assert.equal(tempResidue().length, 0)
+  })
+
+  it('routingTest scores equal the weighted contributions of the configured global weights and the actual resolver uses the same weights', async () => {
+    // Price-only weights make the cheap-but-slow profile the unique winner.
+    writeConfig({ tasks: { settings: { global: {
+      selectionMode: 'automatic',
+      routing_weights: weights(1, 0),
+    } } } })
+    const pool = [W_CHEAP_SLOW, W_FAST_PRICEY]
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: pool }),
+      quotaSnapshots: unknownQuotaSnapshotService(),
+    })
+
+    // The actual automatic resolver honors the saved weights: price dominates,
+    // so the slow cheap profile wins despite its poor speed.
+    const run = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(run.exactAgentRuntime, W_CHEAP_SLOW.exactAgentRuntime)
+
+    // The diagnostic reports the same choice with contributions that sum to the
+    // shared scorer score, and every speed contribution is exactly 0.
+    const result = await service.routingTest({ automatic: {} })
+    const winner = result.rows.find((row) => row.rank === 1)
+    assert.ok(winner, 'Expected a qualified routingTest winner')
+    assert.equal(winner.model, W_CHEAP_SLOW.model)
+    const sum =
+      winner.price_score! + winner.speed_score! + winner.quota_score! + winner.intelligence_score!
+    assert.equal(Boolean(Math.abs(sum - winner.score!) < 1e-12), true)
+    assert.equal(Boolean(Math.abs(winner.speed_score! - 0) < 1e-12), true)
+    assert.equal(Boolean(Math.abs(winner.quota_score! - 0) < 1e-12), true)
+    assert.equal(Boolean(Math.abs(winner.intelligence_score! - 0) < 1e-12), true)
+    // Under price-only weights the score is exactly the price contribution.
+    assert.equal(Boolean(Math.abs(winner.score! - winner.price_score!) < 1e-12), true)
+  })
+
+  it('speed-only global weights reverse the actual and diagnostic winner together', async () => {
+    writeConfig({ tasks: { settings: { global: {
+      selectionMode: 'automatic',
+      routing_weights: weights(0, 1),
+    } } } })
+    const pool = [W_CHEAP_SLOW, W_FAST_PRICEY]
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: pool }),
+      quotaSnapshots: unknownQuotaSnapshotService(),
+    })
+
+    const run = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
+    assert.equal(run.exactAgentRuntime, W_FAST_PRICEY.exactAgentRuntime)
+
+    const result = await service.routingTest({ automatic: {} })
+    const winner = result.rows.find((row) => row.rank === 1)
+    assert.ok(winner)
+    assert.equal(winner.model, W_FAST_PRICEY.model)
+    assert.equal(Boolean(Math.abs(winner.price_score! - 0) < 1e-12), true)
+    assert.equal(Boolean(Math.abs(winner.score! - winner.speed_score!) < 1e-12), true)
+  })
+
+  it('routingTest reads only global routing weights and ignores unrelated saved task settings', async () => {
+    // A deliberately impossible per-task minimum and a task-scoped routing pin
+    // must not affect the weight-only diagnostic; only the global set is read.
+    writeConfig({ tasks: { settings: {
+      global: { routing_weights: weights(1, 0) },
+      byTask: {
+        'builtin:commit': { dispatch: { minimumTps: 99_999 }, routingWeights: weights(0, 1) },
+      },
+    } } })
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [W_CHEAP_SLOW, W_FAST_PRICEY] }),
+      quotaSnapshots: unknownQuotaSnapshotService(),
+    })
+
+    const result = await service.routingTest({ automatic: {} })
+    const winner = result.rows.find((row) => row.rank === 1)
+    assert.ok(winner)
+    // Price-only global weights still decide the winner despite the per-task
+    // speed-only pin and the impossible per-task speed floor.
+    assert.equal(winner.model, W_CHEAP_SLOW.model)
+    assert.equal(Boolean(Math.abs(winner.price_score! - winner.score!) < 1e-12), true)
   })
 })

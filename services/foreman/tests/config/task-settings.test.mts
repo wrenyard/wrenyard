@@ -831,6 +831,115 @@ describe('maxAutoOutputUsdPerMillion global-only cap', () => {
   })
 })
 
+describe('global routingWeights', () => {
+  const WEIGHTS = { price: 0.4, speed: 0.3, quota: 0.2, intelligence: 0.1 }
+
+  it('normalizes a full four-key object through camel and snake aliases', () => {
+    assert.deepEqual(normalizeTaskSettingsLayer({ routingWeights: WEIGHTS }), {
+      routingWeights: { price: 0.4, speed: 0.3, quota: 0.2, intelligence: 0.1 },
+    })
+    assert.deepEqual(normalizeTaskSettingsLayer({ routing_weights: WEIGHTS }), {
+      routingWeights: { price: 0.4, speed: 0.3, quota: 0.2, intelligence: 0.1 },
+    })
+    // camelCase wins when both aliases are present.
+    assert.deepEqual(
+      normalizeTaskSettingsLayer({
+        routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 },
+        routing_weights: WEIGHTS,
+      }),
+      { routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 } },
+    )
+  })
+
+  it('accepts a full custom set that sums to 1 in any [0, 1] split', () => {
+    for (const custom of [
+      { price: 1, speed: 0, quota: 0, intelligence: 0 },
+      { price: 0, speed: 1, quota: 0, intelligence: 0 },
+      { price: 0.25, speed: 0.25, quota: 0.25, intelligence: 0.25 },
+      { price: 0, speed: 0, quota: 0.5, intelligence: 0.5 },
+    ]) {
+      assert.deepEqual(normalizeTaskSettingsLayer({ routingWeights: custom }), {
+        routingWeights: custom,
+      })
+    }
+  })
+
+  it('rejects missing keys, unknown keys, non-finite/negative/out-of-range values, and a non-1 sum', () => {
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { price: 0.4, speed: 0.3, quota: 0.3 } }),
+      /routingWeights\.intelligence must be a finite number/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({
+        routingWeights: { ...WEIGHTS, extra: 0 },
+      }),
+      /routingWeights has unknown key extra/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { ...WEIGHTS, price: Number.NaN } }),
+      /routingWeights\.price must be a finite number/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { ...WEIGHTS, speed: Number.POSITIVE_INFINITY } }),
+      /routingWeights\.speed must be a finite number/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { price: -0.1, speed: 0.4, quota: 0.4, intelligence: 0.3 } }),
+      /within \[0, 1\]/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { price: 1.5, speed: 0, quota: 0, intelligence: 0 } }),
+      /within \[0, 1\]/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: { price: 0.5, speed: 0.5, quota: 0.5, intelligence: 0.5 } }),
+      /sum to 1/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ routingWeights: 'price=1' }),
+      /must be an object with keys price, speed, quota, intelligence/,
+    )
+  })
+
+  it('stays absent by default and when no layer declares it', () => {
+    const defaults = resolveEffectiveTaskSettings({})
+    assert.equal(defaults.routingWeights, undefined)
+    assert.equal(defaults.sources.routingWeights, undefined)
+  })
+
+  it('sources routingWeights only from userGlobal and ignores task/invocation layers', () => {
+    const fromGlobal = resolveEffectiveTaskSettings({
+      system: { routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 } },
+      builtin: { routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 } },
+      userGlobal: { routingWeights: WEIGHTS },
+      userTask: { routingWeights: { price: 0, speed: 1, quota: 0, intelligence: 0 } },
+      invocation: { routingWeights: { price: 0, speed: 0, quota: 1, intelligence: 0 } },
+    })
+    assert.deepEqual(fromGlobal.routingWeights, WEIGHTS)
+    assert.equal(fromGlobal.sources.routingWeights, 'user_global')
+
+    // Present only on non-userGlobal layers: the resolved field stays absent, so
+    // a task/invocation pin can never leak into routing.
+    const notGlobal = resolveEffectiveTaskSettings({
+      system: { routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 } },
+      builtin: { routingWeights: { price: 1, speed: 0, quota: 0, intelligence: 0 } },
+      userTask: { routingWeights: { price: 0, speed: 1, quota: 0, intelligence: 0 } },
+      invocation: { routingWeights: { price: 0, speed: 0, quota: 1, intelligence: 0 } },
+    })
+    assert.equal(notGlobal.routingWeights, undefined)
+    assert.equal(notGlobal.sources.routingWeights, undefined)
+  })
+
+  it('reads routingWeights from the persisted global layer only', () => {
+    assert.deepEqual(
+      readGlobalTaskSettings({ settings: { global: { routing_weights: WEIGHTS } } })?.routingWeights,
+      WEIGHTS,
+    )
+    assert.equal(readGlobalTaskSettings({ settings: { global: {} } })?.routingWeights, undefined)
+    assert.equal(readGlobalTaskSettings({})?.routingWeights, undefined)
+  })
+})
+
 describe('resolveEffectiveTaskSettings integration', () => {
   it('produces a complete effective result across all five layers', () => {
     const builtin = taskDefaultsToSettingsLayer({ timeoutMs: 30_000 })
@@ -852,6 +961,7 @@ describe('resolveEffectiveTaskSettings integration', () => {
       timeoutMs: 45_000,
       dispatch: { minimumTps: 2, intelligenceExpected: 'mid' },
       maxAutoOutputUsdPerMillion: undefined,
+      routingWeights: undefined,
       sources: {
         selectionMode: 'user_task',
         explicitRuntime: 'user_task',
