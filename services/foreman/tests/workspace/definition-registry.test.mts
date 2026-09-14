@@ -81,6 +81,19 @@ afterEach(() => {
 })
 
 describe('workspace definition registry', () => {
+  it('loads a task from an explicit CommonJS project directory', async () => {
+    const workspace = makeTempDir('wrenyard-cjs-workspace-')
+    const project = join(workspace, 'projects', 'plain')
+    registerProject(project, 'plain')
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ type: 'commonjs' }))
+    writeTask(project, 'portable')
+    await discoverTasks(workspace)
+    const target = resolveTaskTarget('portable', workspace, 'plain')
+    assertTaskTarget(target)
+    assert.equal(await target.definition.config.prompt({}), 'portable')
+    assert.deepEqual(getLoadErrors(workspace), [])
+  })
+
   it('discovers .task.ts files under projects', async () => {
     const workspace = makeTempDir('foreman-v2-loader-')
     const workspaceProject = join(workspace, 'projects', 'app')
