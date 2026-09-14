@@ -976,6 +976,7 @@ export {
   assessRequiredQuota,
   evaluateCandidate,
   rankAutoRoutingCandidates,
+  validateScoreWeights,
 } from './auto-routing-policy.js';
 export type {
   AutoRoutingResult,
@@ -999,5 +1000,6 @@ export type {
   ReferenceKind,
   ReplenishmentKind,
   RequiredQuotaConstraint,
+  ScoreWeights,
   WorstApplicableMarker,
 } from './auto-routing-policy.js';
