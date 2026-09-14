@@ -624,6 +624,18 @@ export interface TaskSettingsLayer {
   /** Global-only auto reference-price ceiling (finite USD per million output
    *  tokens >= 0); null clears it. Never valid inside `automatic`. */
   max_auto_output_usd_per_million?: number | null
+  /** Global-only automatic scoring weights; null clears them. All four numeric
+   *  fields are required, bounded [0, 1], and must sum to 1. */
+  routing_weights?: TaskSettingsRoutingWeights | null
+}
+
+/** Global-only automatic scoring weights, one finite number in [0, 1] per key;
+ *  the four values must sum to 1. Mirrors the catalog scorer keys P/S/Q/I. */
+export interface TaskSettingsRoutingWeights {
+  price: number
+  speed: number
+  quota: number
+  intelligence: number
 }
 
 /** Field-level save patch. `null` deletes that field only at the selected layer. */
@@ -634,6 +646,8 @@ export interface TaskSettingsPatch {
   automatic?: TaskSettingsAutomaticPatch | null
   /** Global-only: set (>= 0) or clear (null) the auto reference-price ceiling. */
   max_auto_output_usd_per_million?: number | null
+  /** Global-only: set (full four-key object) or clear (null) routing weights. */
+  routing_weights?: TaskSettingsRoutingWeights | null
 }
 
 /** An effective value plus the layer it came from. */
@@ -667,6 +681,9 @@ export interface TaskSettingsEffective {
   automatic: TaskSettingsEffectiveAutomatic
   /** Global-only auto ceiling; sourced exclusively from the user_global layer. */
   max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>
+  /** Global-only routing weights; sourced exclusively from the user_global
+   *  layer; a null value means the scorer defaults apply. */
+  routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>
 }
 
 /** Wire-owned closed resolution-failure code. Mirrors the structurally
@@ -1009,6 +1026,22 @@ const taskSettingsNullableNonNegativeNumberSchema = {
   anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsRoutingWeightsSchema = {
+  type: 'object',
+  required: ['price', 'speed', 'quota', 'intelligence'],
+  properties: {
+    price: { type: 'number', minimum: 0, maximum: 1 },
+    speed: { type: 'number', minimum: 0, maximum: 1 },
+    quota: { type: 'number', minimum: 0, maximum: 1 },
+    intelligence: { type: 'number', minimum: 0, maximum: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskSettingsNullableRoutingWeightsSchema = {
+  anyOf: [taskSettingsRoutingWeightsSchema, { type: 'null' }],
+} as const satisfies JsonSchema
+
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
@@ -1017,6 +1050,7 @@ export const taskSettingsLayerSchema = {
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
+    routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -1029,6 +1063,7 @@ export const taskSettingsLayerInputSchema = {
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
+    routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -1041,6 +1076,7 @@ export const taskSettingsPatchSchema = {
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
     max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
+    routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -1139,6 +1175,16 @@ const taskSettingsSourcedThinkingSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskSettingsSourcedNullableRoutingWeightsSchema = {
+  type: 'object',
+  required: ['value', 'source'],
+  properties: {
+    value: taskSettingsNullableRoutingWeightsSchema,
+    source: taskSettingsSourceLayerSchema,
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskSettingsEffectiveAutomaticSchema = {
   type: 'object',
   required: [
@@ -1179,6 +1225,7 @@ const taskSettingsEffectiveSchema = {
     timeout_ms: taskSettingsSourcedNullableNumberSchema,
     automatic: taskSettingsEffectiveAutomaticSchema,
     max_auto_output_usd_per_million: taskSettingsSourcedNullableNonNegativeNumberSchema,
+    routing_weights: taskSettingsSourcedNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

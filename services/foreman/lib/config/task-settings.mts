@@ -5,6 +5,7 @@ import {
   type ThinkingLevel,
   normalizeIntelligenceTier,
   normalizeThinkingLevel,
+  validateScoreWeights,
 } from '@wrenyard/catalog'
 
 /**
@@ -170,6 +171,22 @@ export interface TaskSettingsLayer {
    * user-global layer.
    */
   maxAutoOutputUsdPerMillion?: number
+  /**
+   * Optional user-global-only scoring weights for automatic routing, mapped to
+   * the catalog scorer keys P/S/Q/I. All four keys are required finite numbers
+   * in [0, 1] summing to 1 (validated against the catalog SSOT). `null` is an
+   * explicit unset; during effective resolution the field is sourced
+   * exclusively from the normalized user-global layer.
+   */
+  routingWeights?: TaskRoutingWeights
+}
+
+/** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
+export interface TaskRoutingWeights {
+  price: number
+  speed: number
+  quota: number
+  intelligence: number
 }
 
 /** Five named layers in merge precedence order. All are optional. */
@@ -186,6 +203,7 @@ export interface EffectiveTaskSettingsSources {
   explicitRuntime?: TaskSettingsSourceTag
   timeoutMs?: TaskSettingsSourceTag
   maxAutoOutputUsdPerMillion?: TaskSettingsSourceTag
+  routingWeights?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
@@ -196,6 +214,8 @@ export interface EffectiveTaskSettings {
   dispatch: TaskDispatchRequirements
   /** User-global auto reference-price ceiling; undefined when never set. */
   maxAutoOutputUsdPerMillion: number | undefined
+  /** User-global routing score weights; undefined falls back to scorer defaults. */
+  routingWeights?: TaskRoutingWeights
   /** Winning source per field; dispatch sources are per dispatch field. */
   sources: EffectiveTaskSettingsSources
 }
@@ -381,11 +401,50 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
   return out
 }
 
+/**
+ * Validates and canonicalizes one routing weight set against the catalog
+ * scorer SSOT (keys price/speed/quota/intelligence map to P/S/Q/I). All four
+ * keys are required, unknown keys are rejected, and every value must be a
+ * finite number in [0, 1] with the four summing to 1. Invalid config throws;
+ * it is never silently replaced by scorer defaults.
+ */
+export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutingWeights {
+  if (!isPlainObject(raw)) {
+    fail(scope, 'routingWeights must be an object with keys price, speed, quota, intelligence')
+  }
+  const record = raw as Record<string, unknown>
+  for (const key of Object.keys(record)) {
+    if (key !== 'price' && key !== 'speed' && key !== 'quota' && key !== 'intelligence') {
+      fail(scope, `routingWeights has unknown key ${key}`)
+    }
+  }
+  const canonical: Record<string, number> = {}
+  for (const key of ['price', 'speed', 'quota', 'intelligence'] as const) {
+    const value = record[key]
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      fail(scope, `routingWeights.${key} must be a finite number, got ${String(value)}`)
+    }
+    canonical[key] = value
+  }
+  try {
+    validateScoreWeights({ P: canonical.price, S: canonical.speed, Q: canonical.quota, I: canonical.intelligence })
+  } catch (error) {
+    fail(scope, `invalid routingWeights: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return {
+    price: canonical.price,
+    speed: canonical.speed,
+    quota: canonical.quota,
+    intelligence: canonical.intelligence,
+  }
+}
+
 const LAYER_FIELD_ALIASES = {
   selectionMode: ['selectionMode', 'selection_mode'],
   explicitRuntime: ['explicitRuntime', 'explicit_runtime'],
   timeoutMs: ['timeoutMs', 'timeout_ms'],
   maxAutoOutputUsdPerMillion: ['maxAutoOutputUsdPerMillion', 'max_auto_output_usd_per_million'],
+  routingWeights: ['routingWeights', 'routing_weights'],
   dispatch: ['dispatch'],
 } as const
 
@@ -427,6 +486,11 @@ export function normalizeTaskSettingsLayer(
   const maxAutoOutput = resolveAliased(record, LAYER_FIELD_ALIASES.maxAutoOutputUsdPerMillion)
   if (maxAutoOutput.value !== undefined) {
     layer.maxAutoOutputUsdPerMillion = assertFiniteNonNegativeNumber(maxAutoOutput.value, scope)
+  }
+
+  const routingWeights = resolveAliased(record, LAYER_FIELD_ALIASES.routingWeights)
+  if (routingWeights.value !== undefined) {
+    layer.routingWeights = normalizeRoutingWeights(routingWeights.value, scope)
   }
 
   const dispatch = resolveAliased(record, LAYER_FIELD_ALIASES.dispatch)
@@ -612,6 +676,11 @@ export function resolveEffectiveTaskSettings(
   const userGlobalEntry = entries.find((entry) => entry.tag === 'user_global')
   const maxAutoOutputUsdPerMillion = userGlobalEntry?.layer.maxAutoOutputUsdPerMillion
 
+  // Routing score weights are global-only the same way: sourced exclusively
+  // from the normalized userGlobal layer. Absence lets the catalog scorer use
+  // its own defaults.
+  const routingWeights = userGlobalEntry?.layer.routingWeights
+
   const dispatch: TaskDispatchRequirements = {}
   const dispatchSources: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>> = {}
   for (const field of TASK_DISPATCH_FIELDS) {
@@ -687,6 +756,7 @@ export function resolveEffectiveTaskSettings(
   }
   if (explicitRuntimeSource !== undefined) sources.explicitRuntime = explicitRuntimeSource
   if (maxAutoOutputUsdPerMillion !== undefined) sources.maxAutoOutputUsdPerMillion = 'user_global'
+  if (routingWeights !== undefined) sources.routingWeights = 'user_global'
   sources.dispatch = dispatchSources
 
   return {
@@ -695,6 +765,7 @@ export function resolveEffectiveTaskSettings(
     timeoutMs,
     dispatch,
     maxAutoOutputUsdPerMillion,
+    routingWeights,
     sources,
   }
 }
