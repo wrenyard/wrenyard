@@ -531,7 +531,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tsx = path.join(root, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const source = path.join(root, 'services', 'foreman', 'bin', 'foreman.mts');
 const result = spawnSync(path.join(root, ${JSON.stringify(nodeRelPath)}, ${JSON.stringify(`node${target.exeSuffix}`)}), [tsx, source, ...process.argv.slice(2)], {
-  stdio: 'inherit', shell: false, env: process.env,
+  stdio: 'inherit', shell: false, windowsHide: true, env: process.env,
 });
 if (result.error) console.error('foreman launcher failed:', result.error.message);
 process.exitCode = result.error ? 1 : (result.status ?? 1);
