@@ -225,6 +225,10 @@ test('service IPC task run can target a managed worktree', async () => {
   const fakeForge = join(workDir, 'fake-forge-cwd.mjs')
   writeFileSync(fakeForge, `
 const argv = process.argv.slice(2)
+if (argv[0] === 'doctor' && argv[1] === 'clients') {
+  process.stdout.write('{"ok":true,"checks":[{"adapter":"clients","status":"ok","details":{"codex":{"enabled":true,"installed":true}}}]}')
+  process.exit(0)
+}
 if (argv[0] === 'providers' && argv[1] === 'list') {
   process.stdout.write(JSON.stringify([{ id: 'chatgpt', auth_ok: true }]) + '\\n')
   process.exit(0)
@@ -776,12 +780,16 @@ function installFakeForgeLines(dir: string, events: Array<Record<string, unknown
   const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
   const script = join(dir, 'fake-forge.mjs')
   // The real native provider readiness probe invokes `forge providers list --json`
-  // and `quota --json` before dispatch. Those calls must
+  // and `doctor clients --json` / `quota --json` before dispatch. Those calls must
   // return valid JSON so a clean host without an existing host login still
   // dispatches the task. Every other invocation keeps the exact inference stream
   // fixture unchanged.
   const scriptBody = [
     `const argv = process.argv.slice(2)`,
+    `if (argv[0] === 'doctor' && argv[1] === 'clients') {`,
+    `  process.stdout.write('{"ok":true,"checks":[{"adapter":"clients","status":"ok","details":{"codex":{"enabled":true,"installed":true}}}]}')`,
+    `  process.exit(0)`,
+    `}`,
     `if (argv[0] === 'providers' && argv[1] === 'list') {`,
     `  process.stdout.write(JSON.stringify([{ id: 'chatgpt', auth_ok: true }]) + '\\n')`,
     `  process.exit(0)`,

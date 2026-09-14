@@ -86,6 +86,7 @@ import type {
 } from '../../types.mts'
 import type { CodeBuddyExecutionBinding } from '../../core/operations/types.mts'
 import type { ForgeProviderReadinessSnapshot } from '../execution/forge-provider-readiness-query.mts'
+import type { ForgeClientReadinessSnapshot } from '../execution/forge-client-readiness-query.mts'
 
 export type {
   TaskRunSettingsLayerName,
@@ -211,6 +212,12 @@ export type TaskSettingsRuntimeAvailabilityCallback = (
 export type TaskSettingsNativeProviderReadinessCallback =
   () => Promise<ForgeProviderReadinessSnapshot>
 
+/** One bounded authoritative Forge client readiness read (`doctor clients
+ *  --json`). It carries ALL catalog/config clients with their enabled/installed
+ *  facts and no credentials, paths, or raw stderr. */
+export type TaskSettingsClientReadinessCallback =
+  () => Promise<ForgeClientReadinessSnapshot>
+
 export interface TaskSettingsDaemonStatus {
   accepting: boolean
   /** When false, acceptance could not be verified from a real daemon source. */
@@ -239,6 +246,10 @@ export interface TaskSettingsServiceOptions {
   /** Optional authoritative non-inference native provider status source. It is
    * sampled once only when an evaluation contains native Codex/Cursor choices. */
   nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
+  /** Optional authoritative Forge client readiness source (`doctor clients`).
+   *  When configured, a client must be enabled AND installed to be admitted;
+   *  a failed query or a missing client state fails closed. */
+  clientReadiness?: TaskSettingsClientReadinessCallback
   /** Daemon-owned immutable automatic-routing quota snapshot service shared by
    *  every automatic selection (run and snapshot row preview). Snapshot row
    *  preview takes one immutable snapshot per request; every other selection
@@ -589,6 +600,7 @@ export class TaskSettingsService {
   private readonly daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
   private readonly runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
   private readonly nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
+  private readonly clientReadiness?: TaskSettingsClientReadinessCallback
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
   private readonly now: () => number
 
@@ -601,6 +613,7 @@ export class TaskSettingsService {
     this.daemonAvailability = options.daemonAvailability
     this.runtimeAvailability = options.runtimeAvailability
     this.nativeProviderReadiness = options.nativeProviderReadiness
+    this.clientReadiness = options.clientReadiness
     this.quotaSnapshots = options.quotaSnapshots
     this.now = options.now ?? (() => Date.now())
   }
@@ -944,10 +957,15 @@ export class TaskSettingsService {
     await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, maxAutoOutputUsdPerMillion: undefined }, previewMemo)
     const bound = await previewMemo.quota
     const native = await previewMemo.nativeProviderReadiness
+    const clientSample = await this.clientReadinessSample(previewMemo)
     const availableChoices: TaskDispatchDiagnosticChoice[] = []
     for (const choice of baselineChoices) {
       const dispatch = choice.baseline ?? choice.admitted
       if (!dispatch) continue
+      // The authoritative client gate applies to the routingTest baseline too,
+      // so a pair whose only client is disabled/not-installed is omitted
+      // before the rows are assembled (never hidden by a missing sibling).
+      if (!this.clientAdmitted(dispatch.client, clientSample)) continue
       const availability = await this.previewRuntimeAvailability(TaskSettingsService.tripleOf(dispatch), previewMemo, {
         codeBuddySnapshot: bound?.codeBuddySnapshot,
         nativeProviderReadiness: native ?? null,
@@ -1400,10 +1418,12 @@ export class TaskSettingsService {
     }
   }
 
-  /** Non-billable live daemon admission and provider credential/route
-   *  availability check against an already-selected runtime. No paid probe is
-   *  ever issued, an unknown quota is never treated as available (or zero), and
-   *  failure never falls back to another candidate. */
+  /** Non-billable live daemon admission, authoritative client readiness, and
+   *  provider credential/route availability check against an already-selected
+   *  runtime. No paid probe is ever issued, an unknown quota is never treated
+   *  as available (or zero), and failure never falls back to another candidate.
+   *  A client that is not admitted reports a precise disabled/not-installed/
+   *  query-unavailable message instead of an opaque provider-unavailable one. */
   private async assertLiveRuntimeAvailability(
     taskId: string,
     runtimeId: string,
@@ -1413,6 +1433,38 @@ export class TaskSettingsService {
       const daemon = await this.daemonAvailability()
       if (!daemon.accepting && daemon.known !== false) {
         throw new TaskSettingsRuntimeUnavailableError(taskId, runtimeId, 'daemon is not accepting new task runs')
+      }
+    }
+    if (this.clientReadiness !== undefined) {
+      const sample = await this.clientReadinessSample()
+      if (sample === null) {
+        throw new TaskSettingsRuntimeUnavailableError(
+          taskId,
+          runtimeId,
+          `client '${triple.client}' readiness could not be determined`,
+        )
+      }
+      const state = sample.clientsById[triple.client]
+      if (state === undefined) {
+        throw new TaskSettingsRuntimeUnavailableError(
+          taskId,
+          runtimeId,
+          `client '${triple.client}' is unknown to Forge`,
+        )
+      }
+      if (!state.enabled) {
+        throw new TaskSettingsRuntimeUnavailableError(
+          taskId,
+          runtimeId,
+          `client '${triple.client}' is disabled in config`,
+        )
+      }
+      if (!state.installed) {
+        throw new TaskSettingsRuntimeUnavailableError(
+          taskId,
+          runtimeId,
+          `client '${triple.client}' is not installed`,
+        )
       }
     }
     if (this.runtimeAvailability) {
@@ -1427,6 +1479,44 @@ export class TaskSettingsService {
       return availability
     }
     return undefined
+  }
+
+  /** One authoritative Forge client-readiness sample bound to a single
+   *  evaluation. When a request-scoped preview memo is supplied (automatic
+   *  snapshot rows), the same immutable sample is shared by every relevant row
+   *  in the request; runs/save preflight pass no memo and sample fresh. A
+   *  rejected query resolves to null so callers fail closed. */
+  private async clientReadinessSample(
+    previewMemo?: AutomaticPreviewMemo,
+  ): Promise<ForgeClientReadinessSnapshot | null> {
+    if (this.clientReadiness === undefined) return null
+    if (previewMemo === undefined) return this.loadClientReadiness()
+    const pending = previewMemo.clientReadiness
+      ?? (previewMemo.clientReadiness = this.loadClientReadiness())
+    return await pending
+  }
+
+  private async loadClientReadiness(): Promise<ForgeClientReadinessSnapshot | null> {
+    try {
+      return await this.clientReadiness!()
+    } catch {
+      return null
+    }
+  }
+
+  /** Authoritative admission for one client: enabled AND installed, per the
+   *  Forge client-readiness sample. When the callback is configured, a null
+   *  sample (failed query) and an unknown client both fail closed. When no
+   *  callback is configured the gate is inert for isolation. */
+  private clientAdmitted(
+    client: string,
+    sample: ForgeClientReadinessSnapshot | null,
+  ): boolean {
+    if (this.clientReadiness === undefined) return true
+    if (sample === null) return false
+    const state = sample.clientsById[client]
+    if (state === undefined) return false
+    return state.enabled && state.installed
   }
 
   /** Non-billable live provider credential/route readiness for one canonical
@@ -1530,11 +1620,26 @@ export class TaskSettingsService {
       trace.nowMs = nowMs
     }
 
+    // Bind the authoritative Forge client-readiness sample to this evaluation
+    // when the callback is configured. It is consulted for every exact choice
+    // BEFORE the provider readiness probe and BEFORE collapseAutomaticChoices,
+    // so a client that is disabled or not installed can never admit a pair and
+    // an unavailable client (e.g. grok) cannot hide a ready sibling client.
+    const clientSample = await this.clientReadinessSample(previewMemo)
+
     // Structured actual eliminations, recorded at the exact stage that empties
     // the surviving pool; deterministic selection never parses error text.
     const eliminations: TaskResolutionElimination[] = []
     const probed: AutomaticProbeEntry[] = []
     for (const choice of eligible.choices) {
+      // Authoritative client gate: disabled or not-installed clients are
+      // eliminated before provider readiness, so an unavailable client never
+      // hides a ready sibling client sharing the same provider+model.
+      if (!this.clientAdmitted(choice.client, clientSample)) {
+        eliminations.push({ code: 'no_available_provider' })
+        if (trace !== undefined) trace.readinessRejectedIds.push(choice.exactAgentRuntime)
+        continue
+      }
       if (blocked.has(choice.provider)) {
         // A determinate hard-blocked provider is a real quota gate.
         eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(choice)))
@@ -1878,6 +1983,10 @@ interface AutomaticPreviewMemo {
    * relevant automatic rows in this snapshot request. Null is a sampled
    * failure and must never trigger a second query or optimistic fallback. */
   nativeProviderReadiness?: Promise<ForgeProviderReadinessSnapshot | null>
+  /** One immutable authoritative Forge client readiness sample shared by all
+   * relevant automatic rows in this snapshot request. Null is a sampled
+   * failure and must never trigger a second query or optimistic fallback. */
+  clientReadiness?: Promise<ForgeClientReadinessSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
 }
