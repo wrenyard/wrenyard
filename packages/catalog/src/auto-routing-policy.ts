@@ -14,6 +14,19 @@
 // Exported constants
 // ---------------------------------------------------------------------------
 
+/** Editable weight set: four required keys, each finite in [0, 1], summing to 1. */
+export interface ScoreWeights {
+  P: number;
+  S: number;
+  Q: number;
+  I: number;
+}
+
+const SCORE_WEIGHTS_KEYS: readonly (keyof ScoreWeights)[] = ["P", "S", "Q", "I"];
+
+/** Tolerance for floating-point drift when checking that weights sum to 1. */
+const SCORE_WEIGHTS_SUM_TOLERANCE = 1e-9;
+
 /**
  * Final normalized score weights. The unified ranking score is a convex blend
  * of four bounded [0, 1] factors:
@@ -21,9 +34,61 @@
  *   S = speed factor (effective TPS, saturated at 200),
  *   Q = quota headroom quality,
  *   I = intelligence factor.
- *   score = .50*P + .20*S + .20*Q + .10*I, always within [0, 1].
+ *   score = .40*P + .30*S + .20*Q + .10*I, always within [0, 1].
  */
-export const SCORE_WEIGHTS = { P: 0.5, S: 0.2, Q: 0.2, I: 0.1 } as const;
+export const SCORE_WEIGHTS =
+  { P: 0.4, S: 0.3, Q: 0.2, I: 0.1 } as const satisfies ScoreWeights;
+
+/**
+ * Strictly validates arbitrary input as a complete four-key weight set: every
+ * key P/S/Q/I must be present, finite, and within [0, 1], and the values must
+ * sum to 1 (within a small floating-point tolerance). Throws with a clear
+ * message on any violation; invalid weights are never silently replaced by
+ * the defaults.
+ */
+export function validateScoreWeights(weights: unknown): ScoreWeights {
+  if (
+    typeof weights !== "object" ||
+    weights === null ||
+    Array.isArray(weights)
+  ) {
+    throw new Error(
+      "invalid score weights: expected an object with keys P, S, Q, I"
+    );
+  }
+  const record = weights as Record<string, unknown>;
+  const normalized: Record<string, number> = {};
+  for (const key of SCORE_WEIGHTS_KEYS) {
+    if (!(key in record)) {
+      throw new Error(`invalid score weights: missing required key ${key}`);
+    }
+    const value = record[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`invalid score weights: ${key} must be a finite number`);
+    }
+    if (value < 0 || value > 1) {
+      throw new Error(`invalid score weights: ${key} must be within [0, 1]`);
+    }
+    normalized[key] = value;
+  }
+  for (const key of Object.keys(record)) {
+    if (!(SCORE_WEIGHTS_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`invalid score weights: unknown key ${key}`);
+    }
+  }
+  const sum = normalized.P + normalized.S + normalized.Q + normalized.I;
+  if (Math.abs(sum - 1) > SCORE_WEIGHTS_SUM_TOLERANCE) {
+    throw new Error(
+      `invalid score weights: values must sum to 1 (got ${sum})`
+    );
+  }
+  return { P: normalized.P, S: normalized.S, Q: normalized.Q, I: normalized.I };
+}
+
+/** Defensive immutable copy of a validated weight set. */
+function snapshotScoreWeights(weights: ScoreWeights): ScoreWeights {
+  return Object.freeze({ ...validateScoreWeights(weights) });
+}
 
 /**
  * Fixed continuous price anchors mapping a per-M output token price (USD) to a
@@ -296,11 +361,14 @@ export interface CandidateAssessment {
    *  that carry no expectation. */
   intelligenceShortfall: number;
   /**
-   * Unified normalized ranking score (see SCORE_WEIGHTS): score = .50*P + .20*S
-   * + .20*Q + .10*I, where every factor is bounded in [0, 1], so the score is
-   * itself always within [0, 1].
+   * Unified normalized ranking score (see SCORE_WEIGHTS): score = weights.P*P
+   * + weights.S*S + weights.Q*Q + weights.I*I, where every factor is bounded
+   * in [0, 1], so the score is itself always within [0, 1]. The exact weights
+   * used are carried on `weights`.
    */
   score: number;
+  /** Exact weight set used for this assessment's score. */
+  weights: ScoreWeights;
   verifiedEfficiency: number | null;
   coverageComplete: boolean;
   headroomTrusted: boolean;
@@ -337,6 +405,8 @@ export interface RankedCandidate {
   speedFactor: number;
   intelligenceFactor: number;
   intelligenceShortfall: number;
+  /** Exact weight set used for this candidate's score. */
+  weights: ScoreWeights;
   verifiedEfficiency: number | null;
   coverageComplete: boolean;
   headroomTrusted: boolean;
@@ -773,7 +843,13 @@ function rejected(
  * Validate one candidate against the hard guards and compute its tier/metrics.
  * Pure: returns a fresh evaluation object and never mutates its input.
  */
-export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
+export function evaluateCandidate(
+  input: CandidateInput,
+  weights?: ScoreWeights
+): CandidateEvaluation {
+  // Validate weights first so invalid configuration always throws instead of
+  // silently falling back to the defaults.
+  const effectiveWeights = snapshotScoreWeights(weights ?? SCORE_WEIGHTS);
   if (input === null || typeof input !== "object") {
     return rejected("", "", "invalid_candidate", "input is not an object");
   }
@@ -1060,13 +1136,13 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     : Math.max(0, expectedRank - candidate.intelligenceRank)
 
   // Unified normalized ranking score in [0, 1]:
-  //   score = .50*P + .20*S + .20*Q + .10*I
+  //   score = weights.P*P + weights.S*S + weights.Q*Q + weights.I*I
   // Every factor is bounded in [0, 1], so the score is itself within [0, 1].
   const score =
-    SCORE_WEIGHTS.P * priceFactor +
-    SCORE_WEIGHTS.S * speedFactor +
-    SCORE_WEIGHTS.Q * quotaQuality +
-    SCORE_WEIGHTS.I * intelligenceFactor;
+    effectiveWeights.P * priceFactor +
+    effectiveWeights.S * speedFactor +
+    effectiveWeights.Q * quotaQuality +
+    effectiveWeights.I * intelligenceFactor;
 
   const assessment: CandidateAssessment = {
     snapshotId,
@@ -1085,6 +1161,7 @@ export function evaluateCandidate(input: CandidateInput): CandidateEvaluation {
     intelligenceFactor,
     intelligenceShortfall,
     score,
+    weights: effectiveWeights,
     verifiedEfficiency,
     coverageComplete: quota.coverageComplete,
     headroomTrusted: quota.headroomTrusted,
@@ -1121,6 +1198,7 @@ function toRankedCandidate(
     speedFactor: assessment.speedFactor,
     intelligenceFactor: assessment.intelligenceFactor,
     intelligenceShortfall: assessment.intelligenceShortfall,
+    weights: assessment.weights,
     verifiedEfficiency: assessment.verifiedEfficiency,
     coverageComplete: assessment.coverageComplete,
     headroomTrusted: assessment.headroomTrusted,
@@ -1135,11 +1213,18 @@ function toRankedCandidate(
  * Every accepted candidate is ranked together by a single descending-score
  * pass; supply class and quota tier are retained only as diagnostic fields on
  * each ranked position and are never used as sort keys. Rejected candidates are
- * returned with machine-readable reasons.
+ * returned with machine-readable reasons. When `weights` is omitted the
+ * SCORE_WEIGHTS defaults apply; an invalid weight set throws rather than
+ * falling back to defaults. Each accepted assessment and ranked position
+ * carries the exact weights used so consumers can recompute contributions.
  */
 export function rankAutoRoutingCandidates(
-  inputs: readonly CandidateInput[]
+  inputs: readonly CandidateInput[],
+  weights?: ScoreWeights
 ): AutoRoutingResult {
+  // Validate weights first so invalid configuration always throws instead of
+  // silently falling back to the defaults.
+  const effectiveWeights = snapshotScoreWeights(weights ?? SCORE_WEIGHTS);
   if (inputs === null || typeof inputs !== "object" || !Array.isArray(inputs)) {
     return { ranked: [], excluded: [] };
   }
@@ -1153,7 +1238,7 @@ export function rankAutoRoutingCandidates(
   let contextNowMs: number | null = null;
 
   for (const input of inputs) {
-    const evaluation = evaluateCandidate(input);
+    const evaluation = evaluateCandidate(input, effectiveWeights);
     if (evaluation.kind === "accepted") {
       const assessment = evaluation.assessment;
       if (contextSnapshotId === null) {
