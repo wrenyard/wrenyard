@@ -47,6 +47,43 @@ interface UsageDataRow {
   data: string | null
 }
 
+interface GatewayDataRow {
+  execution_id: string
+  data: string | null
+}
+
+/**
+ * Extracts the persisted Foreman event envelope's nested `data` object.
+ *
+ * Daemon events are stored as
+ * `{schema_version, refs, data: {...}}`; the sampler fields (`provider`,
+ * `publicModel`, `status`, `tps_sampling_contract`, `tps_samples`) live inside
+ * `data`, never at the top level. Legacy flat rows are rejected rather than
+ * silently mis-attributed.
+ */
+function parseEnvelopeData(value: string | null): Record<string, unknown> | undefined {
+  if (value === null) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const envelope = parsed as Record<string, unknown>
+  if (envelope.schema_version !== 'foreman.event.v1') return undefined
+  const nested = envelope.data
+  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined
+  return nested as Record<string, unknown>
+}
+
+/** Normalizes a provider-prefixed sample id to its bare model component. */
+function normalizeSampleModel(provider: string | null, model: string): string {
+  const bare = provider && model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model
+  const canonical = canonicalizeObservedProviderModelId(provider ?? '', bare.trim())
+  return canonical
+}
+
 /** Trailing freshness window for local speed aggregation (31 days). */
 const LOCAL_SPEED_WINDOW_MS = 31 * 24 * 60 * 60 * 1000
 /** Minimum per-execution output tokens eligible for the speed estimate. */
@@ -141,6 +178,45 @@ export function readExecutionTpsSamples(
     seenByExecution.set(row.execution_id, seen)
   }
 
+  // Gateway inference records attributed to an execution take precedence over
+  // any client-recorded usage for the same execution: the gateway sample is
+  // paired with the exact upstream response. The event payload carries only the
+  // execution id — never the supervisor's private cached sequence state.
+  const gatewayRows = dbQueryOn<GatewayDataRow>(
+    database,
+    `SELECT execution_id, data FROM events
+     WHERE type = 'gateway.request.completed' AND json_extract(data, '$.data.executionId') IN (${executionIds.map(() => '?').join(', ')})`,
+    executionIds,
+  )
+  const gatewayByExecution = new Map<string, { samples: ResponseSample[]; invalid: boolean }>()
+  const gatewayFailedByExecution = new Set<string>()
+  for (const row of gatewayRows) {
+    const attribution = parseGatewayAttribution(row.data)
+    if (!attribution) continue
+    const execution = executionById.get(attribution.executionId)
+    if (!execution) continue
+    if (!attribution.ok) {
+      gatewayFailedByExecution.add(attribution.executionId)
+      continue
+    }
+    const bucket = gatewayByExecution.get(attribution.executionId) ?? { samples: [], invalid: false }
+    // The gateway's provider/public model must match the dispatch identity, and
+    // the paired samples come from the nested envelope data.
+    if (attribution.provider !== execution.provider || attribution.publicModel !== `${execution.provider}/${execution.model}`) {
+      bucket.invalid = true
+      gatewayByExecution.set(attribution.executionId, bucket)
+      continue
+    }
+    const payload = parseEnvelopeData(row.data)!
+    const parsed = parseResponseSamples(JSON.stringify(payload), execution.model, execution.provider)
+    if (parsed === undefined || parsed.invalid || parsed.samples.length === 0 || parsed.samples.length !== (payload.tps_samples as unknown[]).length) {
+      bucket.invalid = true
+    } else {
+      for (const sample of parsed.samples) bucket.samples.push(sample)
+    }
+    gatewayByExecution.set(attribution.executionId, bucket)
+  }
+
   const samples: ExecutionTpsSample[] = []
   for (const row of executionRows) {
     // Validate the persisted identity before the one-time provider rename.
@@ -151,8 +227,37 @@ export function readExecutionTpsSamples(
     if (provider === undefined || model === undefined || modelId === undefined) continue
     const endedMs = parseTimestampMs(row.endedAt)
     if (endedMs === undefined) continue
-    if (invalidByExecution.has(row.executionId)) continue
 
+    const gateway = gatewayByExecution.get(row.executionId)
+    // Any attributed gateway inference that failed, or that lacks a valid
+    // complete sample, makes this execution's speed unknown — a partial
+    // measurement must never be published, and client samples for the same
+    // execution are never added on top of gateway samples. The check must run
+    // even when a bucket already exists for the execution: a bucket only ever
+    // accumulates, so a recorded failure must still exclude it.
+    if (gatewayFailedByExecution.has(row.executionId) || gateway) {
+      if (!gateway || gateway.invalid || gateway.samples.length === 0 || gatewayFailedByExecution.has(row.executionId)) continue
+      const totals = sumResponseSamples(gateway.samples)
+      if (!totals) continue
+      const tps = ratePerSecond(totals.outputTokens, totals.durationMs)
+      if (tps === undefined) continue
+      samples.push({
+        executionId: row.executionId,
+        taskId: row.taskId ?? '',
+        provider,
+        model,
+        modelId,
+        endedAt: row.endedAt as string,
+        outputTokens: totals.outputTokens,
+        durationMs: totals.durationMs,
+        tps,
+      })
+      continue
+    }
+
+    // A valid gateway record is authoritative; without one, invalid
+    // client-recorded samples still invalidate the execution.
+    if (invalidByExecution.has(row.executionId)) continue
     const totals = totalsByExecution.get(row.executionId)
     if (!totals || !isSafeInteger(totals.outputTokens) || totals.outputTokens <= 0) continue
     if (!Number.isFinite(totals.durationMs) || totals.durationMs <= 0) continue
@@ -173,6 +278,57 @@ export function readExecutionTpsSamples(
     })
   }
   return samples
+}
+
+type GatewayAttribution =
+  | { ok: true; executionId: string; provider: string; publicModel: string }
+  | { ok: false; executionId: string }
+
+/**
+ * Classifies one persisted gateway completion envelope for attribution. The
+ * nested `data.executionId` is only joined to known done executions by the
+ * caller; here an inference is successful only when the envelope reports the
+ * paired `response_v1` contract and a status of 200. Any other status, missing
+ * contract, or malformed samples marks the attributed inference failed so the
+ * execution is omitted rather than partially measured.
+ */
+function parseGatewayAttribution(value: string | null): GatewayAttribution | undefined {
+  const data = parseEnvelopeData(value)
+  if (data === undefined) return undefined
+  const rawId = data.executionId
+  if (typeof rawId !== 'string' || rawId.trim() === '') return undefined
+  const executionId = rawId.trim()
+  const status = data.status
+  if (typeof status !== 'number' || status !== 200) return { ok: false, executionId }
+  const contract = data.tps_sampling_contract
+  if (contract !== 'response_v1' || !Array.isArray(data.tps_samples) || data.tps_samples.length === 0) {
+    return { ok: false, executionId }
+  }
+  const provider = data.provider
+  const publicModel = data.publicModel
+  if (typeof provider !== 'string' || provider.trim() === '') return { ok: false, executionId }
+  if (typeof publicModel !== 'string' || publicModel.trim() === '') return { ok: false, executionId }
+  return { ok: true, executionId, provider: provider.trim(), publicModel: publicModel.trim() }
+}
+
+/** Sums valid paired samples; conflicting duplicate response ids invalidate the set. */
+function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; durationMs: number } | undefined {
+  const seen = new Map<string, ResponseSample>()
+  let outputTokens = 0
+  let durationMs = 0
+  for (const sample of samples) {
+    const previous = seen.get(sample.responseId)
+    if (previous) {
+      if (!sameResponseSample(previous, sample)) return undefined
+      continue
+    }
+    seen.set(sample.responseId, sample)
+    outputTokens += sample.outputTokens
+    durationMs += sample.completedAtMs - sample.firstTokenAtMs
+  }
+  if (!isSafeInteger(outputTokens) || outputTokens <= 0) return undefined
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return undefined
+  return { outputTokens, durationMs }
 }
 
 /**
@@ -339,7 +495,7 @@ function parseResponseSample(value: unknown, dispatchModel: string | null, provi
   if (typeof completedAtMs !== 'number' || !Number.isFinite(completedAtMs) || completedAtMs <= firstTokenAtMs) return undefined
   const normalized = {
     responseId: responseId.trim(),
-    model: canonicalizeObservedProviderModelId(provider ?? '', model.trim()),
+    model: normalizeSampleModel(provider, model),
     outputTokens,
     firstTokenAtMs,
     completedAtMs,

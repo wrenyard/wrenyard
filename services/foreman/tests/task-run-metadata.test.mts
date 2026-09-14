@@ -892,3 +892,18 @@ test('a queued attempt persists its own thinking level independently of the late
     assert.equal(persisted.thinking, 'low', 'the queued attempt keeps its own thinking level')
   })
 })
+
+
+test('gateway execution attribution scopes child endpoints without changing parent or unrelated URLs', () => {
+  const env = {
+    WRENYARD_GATEWAY_OPENAI_CHAT_URL: 'http://127.0.0.1:8787/gateway/openai-chat/v1',
+    WRENYARD_GATEWAY_OPENAI_RESPONSES_URL: 'http://127.0.0.1:8787/gateway/openai-responses/execution/old/v1',
+    WRENYARD_GATEWAY_ANTHROPIC_URL: 'https://custom.example/v1',
+  }
+  const original = JSON.stringify(env)
+  const child = resolveTaskAgentEnv(env, 'task-a', undefined, undefined, 'exec_new')
+  assert.equal(child.WRENYARD_GATEWAY_OPENAI_CHAT_URL, 'http://127.0.0.1:8787/gateway/openai-chat/execution/exec_new/v1')
+  assert.equal(child.WRENYARD_GATEWAY_OPENAI_RESPONSES_URL, 'http://127.0.0.1:8787/gateway/openai-responses/execution/exec_new/v1')
+  assert.equal(child.WRENYARD_GATEWAY_ANTHROPIC_URL, env.WRENYARD_GATEWAY_ANTHROPIC_URL)
+  assert.equal(JSON.stringify(env), original)
+})
