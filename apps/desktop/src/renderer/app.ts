@@ -1387,15 +1387,38 @@ function taskRunCompletionTimeCell(run: TaskRunSnapshot): HTMLElement {
   return cell;
 }
 
+/** Parse a recorded run timestamp; absent or invalid values remain unknown. */
+function normalizeRunTimestamp(value: string | undefined): number | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** Wall-clock duration cell: terminal runs span startedAt→finishedAt; a running
+ *  run is measured against the current render time (no timer). Queued runs and
+ *  any missing/invalid/negative span render '-'. This is the whole run duration
+ *  including reasoning and tool time, never generation time or TPS. */
+function taskRunDurationCell(run: TaskRunSnapshot): HTMLElement {
+  if (run.status === 'queued' || !run.status) return taskRunCell('-');
+  const started = normalizeRunTimestamp(run.startedAt);
+  const terminal = run.status === 'done' || run.status === 'failed'
+    || run.status === 'cancelled' || run.status === 'interrupted';
+  const finished = terminal ? normalizeRunTimestamp(run.finishedAt) : Date.now();
+  if (started === null || finished === null) return taskRunCell('-');
+  const durationMs = finished - started;
+  if (!Number.isFinite(durationMs) || durationMs < 0) return taskRunCell('-');
+  return taskRunCell(formatTaskDuration(durationMs));
+}
+
 function renderTaskRuns(snapshot: StatsSnapshot): void {
   const list = requireElement('stats-task-runs-list');
   const runs = snapshot.recentTaskRuns;
   if (!runs || runs.length === 0) {
-    list.replaceChildren(emptyRow('暂无近期 Task 运行记录'));
+    list.replaceChildren(emptyRow('暂无近期任务运行记录'));
     return;
   }
   list.replaceChildren(
-    tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '完成时间']),
+    tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '耗时', '完成时间']),
     ...runs.slice(0, 50).map((run) => {
       const active = run.status === 'queued' || run.status === 'running';
       const inputTokens = active || run.usage.inputTokens === undefined
@@ -1415,6 +1438,7 @@ function renderTaskRuns(snapshot: StatsSnapshot): void {
         taskRunModelCell(run),
         taskRunCell(`${inputTokens} / ${outputTokens}`),
         taskRunCell(speedLabel),
+        taskRunDurationCell(run),
         taskRunCompletionTimeCell(run),
       );
       return row;

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import ts from 'typescript';
 
 /**
- * Focused source/markup regression test for the 近期 Task 消耗 (recent
+ * Focused source/markup regression test for the 近期任务消耗 (recent
  * Task-run ledger) renderer in src/renderer/app.ts, its markup container in
  * index.html, and its grid/status styles in app.css. The renderer is a
  * document-building module, so the ledger contract is asserted over the exact
@@ -26,13 +27,13 @@ function ledgerRegion(): string {
   return appSource.slice(start, end);
 }
 
-test('recent-run ledger is a six-column authoritative table without dense cells or fabricated telemetry', () => {
+test('recent-run ledger is a seven-column authoritative table without dense cells or fabricated telemetry', () => {
   const body = ledgerRegion();
 
-  // Exact six headers in exact order, 完成时间 last.
+  // Exact seven headers in exact order, 完成时间 last.
   assert.ok(
-    body.includes("tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '完成时间'])"),
-    'six exact headers in order (状态, 中文任务名, 模型, ↑输入 / ↓输出, 速度, 完成时间)',
+    body.includes("tableHeader(['状态', '中文任务名', '模型', '↑输入 / ↓输出', '速度', '耗时', '完成时间'])"),
+    'seven exact headers in order (状态, 中文任务名, 模型, ↑输入 / ↓输出, 速度, 耗时, 完成时间)',
   );
 
   // Old dense 8-column ledger and estimate/prose columns are gone.
@@ -68,7 +69,7 @@ test('recent-run ledger completion-time column is terminal-only canonical finish
   const body = ledgerRegion();
 
   const start = body.indexOf('function taskRunCompletionTimeCell');
-  const end = body.indexOf('function renderTaskRuns', start);
+  const end = body.indexOf('function normalizeRunTimestamp', start);
   assert.ok(start >= 0 && end > start, 'taskRunCompletionTimeCell must precede renderTaskRuns in app.ts');
   const cell = body.slice(start, end);
 
@@ -133,19 +134,19 @@ test('recent-run ledger resolves display names only through authoritative TaskSe
   assert.ok(ledger.includes('taskDisplayNames.get(identity) ?? run.taskId'), 'settings miss renders the exact task identifier');
 });
 
-test('recent-run ledger panel is plain markup with wrapping six-column styles', () => {
+test('recent-run ledger panel is plain markup with wrapping seven-column styles', () => {
   // index.html: the panel keeps only its title and simplified table; the
   // reference-cost disclaimer/legend is gone.
-  assert.ok(htmlSource.includes('近期 Task 消耗'), 'panel title remains');
+  assert.ok(htmlSource.includes('近期任务消耗'), 'panel title remains');
   assert.ok(htmlSource.includes('id="stats-task-runs-list"'), 'panel table remains');
   assert.ok(!htmlSource.includes('参考费用为估算，非账单'), 'reference-cost disclaimer legend is removed');
 
-  // app.css: six-column grid with the completion-time track last, readable
+  // app.css: seven-column grid with the completion-time track last, readable
   // wrapping for long names/model ids, last three columns right aligned, no
   // orphaned 8-column selectors or forced min-width.
   assert.ok(
-    cssSource.includes('#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(0, 1.3fr) minmax(0, 1.05fr) minmax(112px, .9fr) 88px minmax(96px, .72fr);'),
-    'six-column grid for the ledger rows',
+    cssSource.includes('#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(0, 1.2fr) minmax(0, 1fr) minmax(100px, .9fr) 84px minmax(84px, .7fr) minmax(96px, .85fr);'),
+    'seven-column grid for the ledger rows',
   );
   assert.ok(
     cssSource.includes('#stats-task-runs-list .table-row > :nth-last-child(3), #stats-task-runs-list .table-row > :nth-last-child(2), #stats-task-runs-list .table-row > :last-child'),
@@ -210,4 +211,31 @@ test('model statistics renders server-provided model display name with provider 
   const ledger = ledgerRegion();
   assert.ok(ledger.includes('function taskRunModelLabel(run: TaskRunSnapshot): string | null {'), 'paired display labels helper exists');
   assert.ok(ledger.includes(' · '), 'paired display names are joined by a middle dot');
+});
+
+
+test('duration cells use total wall time and reject incomplete or reversed timestamps', () => {
+  const start = appSource.indexOf('function normalizeRunTimestamp');
+  const end = appSource.indexOf('function renderTaskRuns', start);
+  const compiled = ts.transpileModule(appSource.slice(start, end), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const now = Date.parse('2026-09-14T04:00:10Z');
+  class FixedDate extends Date { static now() { return now; } }
+  const cell = new Function('taskRunCell', 'formatTaskDuration', 'Date',
+    compiled + '; return taskRunDurationCell;')(
+      (value: string) => value, (ms: number) => `${ms}ms`, FixedDate,
+    );
+  const run = { startedAt: '2026-09-14T04:00:00Z', finishedAt: '2026-09-14T04:00:05Z',
+    usage: { generationMs: 1 } };
+  for (const status of ['done', 'failed', 'cancelled', 'interrupted']) {
+    assert.equal(cell({ ...run, status }), '5000ms');
+    assert.equal(cell({ ...run, status, finishedAt: undefined }), '-');
+  }
+  assert.equal(cell({ ...run, status: 'running' }), '10000ms');
+  assert.equal(cell({ ...run, status: 'queued' }), '-');
+  assert.equal(cell({ ...run }), '-');
+  assert.equal(cell({ ...run, status: 'done', startedAt: 'invalid' }), '-');
+  assert.equal(cell({ ...run, status: 'done', startedAt: run.finishedAt }), '0ms');
+  assert.equal(cell({ ...run, status: 'done', finishedAt: '2026-09-14T03:00:00Z' }), '-');
 });
