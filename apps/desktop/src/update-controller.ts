@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { UpdateChannel, UpdateSnapshot } from './shell-contract.js';
@@ -26,6 +26,7 @@ const CHECK_DELAY_MS = 5_000;
 const CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 const CHECK_TIMEOUT_MS = 10_000;
 const CHECK_IDLE_RETRY_MS = 60_000;
+const MANIFEST_SCHEMA = 'wrenyard.update.v1';
 const MAC_APP_NAME = '啾啾工坊.app';
 const WINDOWS_APP_DIR = 'Wrenyard Desktop';
 const WINDOWS_EXE_NAME = 'wrenyard-desktop.exe';
@@ -37,18 +38,16 @@ interface ParsedSemver {
   prerelease: string[];
 }
 
-export interface GithubReleaseAsset {
+export interface UpdateManifestAsset {
   name: string;
-  browser_download_url: string;
-  digest?: string | null;
+  url: string;
+  sha256: string;
 }
 
-export interface GithubRelease {
-  tag_name: string;
-  draft: boolean;
-  prerelease: boolean;
-  published_at?: string;
-  assets: GithubReleaseAsset[];
+export interface UpdateManifest {
+  version: string;
+  publishedAt?: string;
+  assets: UpdateManifestAsset[];
 }
 
 export interface UpdateCandidate {
@@ -108,6 +107,7 @@ export interface DesktopUpdateControllerOptions {
   desktopPath?: string;
   userDataPath: string;
   repository?: string;
+  updateBaseUrl?: string;
   platform?: NodeJS.Platform;
   arch?: string;
   fetcher?: typeof fetch;
@@ -152,6 +152,36 @@ function parseSemver(raw: string): ParsedSemver | null {
   };
 }
 
+/**
+ * The feed is a COMPLETE manifest for exactly the canonical asset set produced by
+ * CI: one suite and one Desktop archive per maintained target. Anything else is
+ * rejected so the updater never acts on a partial or invented feed.
+ */
+function canonicalAssetNames(version: string): string[] {
+  return [
+    `wrenyard-desktop-${version}-darwin-arm64.zip`,
+    `wrenyard-${version}-darwin-arm64-suite.zip`,
+    `wrenyard-desktop-${version}-win32-x64.zip`,
+    `wrenyard-${version}-win32-x64-suite.zip`,
+  ];
+}
+
+function manifestCandidate(manifest: UpdateManifest, target: string): UpdateCandidate | null {
+  if (!parseSemver(manifest.version)) return null;
+  const desktopName = `wrenyard-desktop-${manifest.version}-${target}.zip`;
+  const suiteName = `wrenyard-${manifest.version}-${target}-suite.zip`;
+  const desktop = manifest.assets.find((asset) => asset.name === desktopName);
+  const suite = manifest.assets.find((asset) => asset.name === suiteName);
+  if (!desktop || !suite) return null;
+  return {
+    version: manifest.version,
+    desktopUrl: desktop.url,
+    desktopSha256: desktop.sha256,
+    suiteUrl: suite.url,
+    suiteSha256: suite.sha256,
+  };
+}
+
 function comparePrerelease(left: string[], right: string[]): number {
   if (left.length === 0 || right.length === 0) {
     if (left.length === right.length) return 0;
@@ -190,49 +220,89 @@ export function releaseTarget(platform: NodeJS.Platform, arch: string): string |
 
 export function parseAssetDigest(value: unknown): string {
   if (typeof value !== 'string') throw new Error('invalid asset digest');
-  const match = value.match(/^sha256:([a-f0-9]{64})$/iu);
+  const match = value.match(/^([a-f0-9]{64})$/iu);
   if (!match) throw new Error('invalid asset digest');
   return match[1]!.toLowerCase();
 }
 
-function releaseAsset(release: GithubRelease, name: string): GithubReleaseAsset | undefined {
-  return release.assets.find((asset) => asset.name === name);
-}
-
-function releaseCandidate(release: GithubRelease, target: string): UpdateCandidate | null {
-  const parsed = parseSemver(release.tag_name);
-  if (!parsed) return null;
-  const version = release.tag_name.startsWith('v') ? release.tag_name.slice(1) : release.tag_name;
-  const desktopName = `wrenyard-desktop-${version}-${target}.zip`;
-  const suiteName = `wrenyard-${version}-${target}-suite.zip`;
-  const desktop = releaseAsset(release, desktopName);
-  const suite = releaseAsset(release, suiteName);
-  if (!desktop || !suite) return null;
-  try {
-    return {
-      version,
-      desktopUrl: desktop.browser_download_url,
-      desktopSha256: parseAssetDigest(desktop.digest),
-      suiteUrl: suite.browser_download_url,
-      suiteSha256: parseAssetDigest(suite.digest),
-    };
-  } catch {
-    return null;
+/**
+ * Both dev.json and stable.json (and the release manifests they point at) share
+ * this exact schema: {schema_version, version, published_at, assets}. There is no
+ * channel field and no secondary version fetch — the payload is the whole feed.
+ */
+export function parseUpdateManifest(
+  payload: unknown,
+  channel: UpdateChannel,
+  repository: string,
+): UpdateManifest {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('invalid update manifest');
   }
+  const document = payload as Record<string, unknown>;
+  if (document.schema_version !== MANIFEST_SCHEMA) throw new Error('invalid update manifest schema');
+  const rawVersion = document.version;
+  if (typeof rawVersion !== 'string' || !parseSemver(rawVersion)) {
+    throw new Error('invalid update manifest version');
+  }
+  const parsedVersion = parseSemver(rawVersion)!;
+  const version = rawVersion.startsWith('v') ? rawVersion.slice(1) : rawVersion;
+  if (channel === 'stable' && parsedVersion.prerelease.length > 0) {
+    throw new Error('stable channel cannot serve a prerelease');
+  }
+  if (document.published_at !== undefined && typeof document.published_at !== 'string') {
+    throw new Error('invalid update manifest timestamp');
+  }
+  if (!Array.isArray(document.assets)) throw new Error('invalid update manifest assets');
+  const expected = canonicalAssetNames(version);
+  if (document.assets.length !== expected.length) throw new Error('invalid update manifest assets');
+  const seen = new Set<string>();
+  const assets = document.assets.map((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error('invalid update manifest asset');
+    }
+    const asset = entry as Record<string, unknown>;
+    const name = asset.name;
+    if (typeof name !== 'string' || !expected.includes(name)) {
+      throw new Error('invalid update manifest asset name');
+    }
+    if (seen.has(name)) throw new Error('duplicate update manifest asset');
+    seen.add(name);
+    if (typeof asset.url !== 'string') throw new Error('invalid update manifest asset url');
+    const prefix = `https://github.com/${repository}/releases/download/v${version}/`;
+    if (!asset.url.startsWith(prefix) || asset.url.slice(prefix.length) !== name) {
+      throw new Error('invalid update manifest asset url');
+    }
+    return { name, url: asset.url, sha256: parseAssetDigest(asset.sha256) };
+  });
+  if (seen.size !== expected.length) throw new Error('invalid update manifest assets');
+  return {
+    version,
+    assets,
+    ...(typeof document.published_at === 'string' ? { publishedAt: document.published_at } : {}),
+  };
 }
 
+/**
+ * A channel with no published release has no manifest at all. Within a single
+ * published manifest the version is unique, so selection is simply: accept the
+ * manifest when it is a permitted version for the channel and is newer than the
+ * installed build.
+ */
 export function selectUpdateCandidate(
-  releases: GithubRelease[],
+  manifests: UpdateManifest[],
   currentVersion: string,
   channel: UpdateChannel,
   target: string,
 ): CandidateSelection {
   if (!parseSemver(currentVersion)) throw new Error('invalid current version');
-  const candidates = releases
-    .filter((release) => !release.draft && (channel === 'dev' || !release.prerelease))
-    .map((release) => releaseCandidate(release, target))
-    .filter((candidate): candidate is UpdateCandidate => candidate !== null)
-    .sort((left, right) => compareSemver(right.version, left.version));
+  const candidates = manifests
+    .filter((manifest) => {
+      const parsed = parseSemver(manifest.version);
+      if (!parsed) return false;
+      return channel === 'stable' ? parsed.prerelease.length === 0 : true;
+    })
+    .map((manifest) => manifestCandidate(manifest, target))
+    .filter((candidate): candidate is UpdateCandidate => candidate !== null);
   return {
     candidate: candidates.find((candidate) => compareSemver(candidate.version, currentVersion) > 0),
     hasChannelRelease: candidates.length > 0,
@@ -321,6 +391,7 @@ export class DesktopUpdateController {
   private readonly desktopPath: string;
   private readonly userDataPath: string;
   private readonly repository: string;
+  private readonly updateBaseUrl: string;
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
   private readonly fetcher: typeof fetch;
@@ -342,7 +413,7 @@ export class DesktopUpdateController {
   private snapshotValue: UpdateSnapshot;
   private candidate?: UpdateCandidate;
   private prepared?: PreparedUpdate;
-  private releaseCache?: { fetchedAt: number; releases: GithubRelease[] };
+  private releaseCache?: { fetchedAt: number; channel: UpdateChannel; manifest: UpdateManifest | null };
   private checkPromise?: Promise<UpdateSnapshot>;
   private delayTimer?: unknown;
   private intervalTimer?: unknown;
@@ -355,6 +426,9 @@ export class DesktopUpdateController {
     this.helperRuntimePath = options.helperRuntimePath;
     this.userDataPath = options.userDataPath;
     this.repository = options.repository ?? DEFAULT_REPOSITORY;
+    this.updateBaseUrl = (
+      options.updateBaseUrl ?? `https://raw.githubusercontent.com/${this.repository}/updates`
+    ).replace(/\/+$/u, '');
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
     this.fetcher = options.fetcher ?? fetch;
@@ -450,9 +524,9 @@ export class DesktopUpdateController {
     timeout.unref?.();
     try {
       if (this.target === null) throw new Error('unsupported target');
-      const payload = await this.releases(controller.signal);
+      const manifest = await this.releaseManifest(controller.signal);
       const selection = selectUpdateCandidate(
-        payload,
+        manifest ? [manifest] : [],
         this.currentVersion,
         this.snapshotValue.channel,
         this.target,
@@ -471,7 +545,7 @@ export class DesktopUpdateController {
       } else {
         this.setSnapshot({
           channel: this.snapshotValue.channel,
-          state: this.snapshotValue.channel === 'stable' && !selection.hasChannelRelease
+          state: !selection.hasChannelRelease && this.snapshotValue.channel === 'stable'
             ? 'stable-unavailable'
             : 'up-to-date',
           currentVersion: this.currentVersion,
@@ -496,28 +570,36 @@ export class DesktopUpdateController {
     return this.snapshot();
   }
 
-  private async releases(signal: AbortSignal): Promise<GithubRelease[]> {
-    if (this.releaseCache && this.now() - this.releaseCache.fetchedAt < CHECK_INTERVAL_MS) {
-      return this.releaseCache.releases;
+  /**
+   * Exactly one metadata fetch per channel, cached hourly. A 404 means the
+   * channel simply has no published release yet (`null`); any other failure is
+   * surfaced as an error so a manual check can fail closed.
+   */
+  private async releaseManifest(signal: AbortSignal): Promise<UpdateManifest | null> {
+    const channel = this.snapshotValue.channel;
+    const cached = this.releaseCache;
+    if (cached && cached.channel === channel && this.now() - cached.fetchedAt < CHECK_INTERVAL_MS) {
+      return cached.manifest;
     }
-    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
-    const response = await this.fetcher(
-      `https://api.github.com/repos/${this.repository}/releases?per_page=20`,
-      {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'wrenyard-desktop-updater',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        signal,
-      },
-    );
-    if (!response.ok) throw new Error('release check failed');
-    const payload = await response.json() as unknown;
-    if (!Array.isArray(payload)) throw new Error('invalid release response');
-    const releases = payload as GithubRelease[];
-    this.releaseCache = { fetchedAt: this.now(), releases };
-    return releases;
+    const response = await this.fetcher(`${this.updateBaseUrl}/${channel}.json`, {
+      headers: { 'User-Agent': 'wrenyard-desktop-updater' },
+      signal,
+    });
+    let manifest: UpdateManifest | null;
+    if (response.status === 404 && channel === 'stable') {
+      manifest = null;
+    } else {
+      if (!response.ok) throw new Error('update metadata request failed');
+      let payload: unknown;
+      try {
+        payload = await response.json() as unknown;
+      } catch {
+        throw new Error('invalid update metadata response');
+      }
+      manifest = parseUpdateManifest(payload, channel, this.repository);
+    }
+    this.releaseCache = { fetchedAt: this.now(), channel, manifest };
+    return manifest;
   }
 
   async requestInstall(onInstall?: () => void): Promise<UpdateSnapshot> {
@@ -700,12 +782,8 @@ export class DesktopUpdateController {
     const extractRoot = join(workRoot, 'extract');
     const stagedDesktop = join(stageRoot, this.platform === 'win32' ? WINDOWS_APP_DIR : MAC_APP_NAME);
     try {
-      const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
       const response = await this.fetcher(candidate.desktopUrl, {
-        headers: {
-          'User-Agent': 'wrenyard-desktop-updater',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'User-Agent': 'wrenyard-desktop-updater' },
       });
       if (!response.ok || !response.body) throw new Error('desktop download failed');
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(archive, { mode: 0o600 }));

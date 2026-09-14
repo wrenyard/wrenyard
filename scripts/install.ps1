@@ -3,7 +3,8 @@
     wrenyard installer/updater (Windows)
 
 .DESCRIPTION
-    Downloads a digest-verified suite zip, validates the wrenyard executable
+    Downloads a digest-verified suite zip whose canonical URL and SHA-256 come
+    from the complete version manifest, validates the wrenyard executable
     and release manifest, and installs it under <Prefix>\versions\<version>
     before safely updating the `current` link and the public launcher shim.
     Old versions are retained.
@@ -11,6 +12,8 @@
     This script only moves prebuilt artifacts into place. It never invokes
     go/npm/pnpm, never changes execution policy, and never writes secrets to
     logs (optional private-mirror auth travels as an Authorization header).
+    The update metadata is a static complete version manifest fetched over
+    HTTPS: the installer never calls the GitHub Release API.
 
 .PARAMETER Version
     Version to install (e.g. 1.0.0-dev.0).
@@ -25,7 +28,8 @@
 .PARAMETER SuiteOnly
     Install/update the suite without the Desktop app.
 .PARAMETER Update
-    Install the newest non-draft release (prereleases included).
+    Install the newest published release from the static update metadata
+    (prereleases included).
 
 .EXAMPLE
     .\install.ps1 -Version 1.0.0-dev.0 -Prefix "$env:LOCALAPPDATA\wrenyard"
@@ -55,6 +59,9 @@ $Prefix = [System.IO.Path]::GetFullPath($Prefix)
 $BinDir = if ($BinDir) { [System.IO.Path]::GetFullPath($BinDir) } else { Join-Path $Prefix 'bin' }
 
 $Repo = if ($env:WRENYARD_GITHUB_REPOSITORY) { $env:WRENYARD_GITHUB_REPOSITORY } else { 'wrenyard/wrenyard' }
+$UpdateBaseUrl = if ($env:WRENYARD_UPDATE_BASE_URL) { $env:WRENYARD_UPDATE_BASE_URL } else { "https://raw.githubusercontent.com/$Repo/updates" }
+$UPDATE_SCHEMA_VERSION = 'wrenyard.update.v1'
+$EXPECTED_ASSET_COUNT = 4
 
 # --- Optional private-mirror auth -------------------------------------------
 # The token is passed as an Authorization header and never written to logs.
@@ -62,17 +69,112 @@ $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:
 $headers = @{ 'User-Agent' = 'wrenyard-install' }
 if ($token) { $headers['Authorization'] = "Bearer $token" }
 
-$releaseInfo = $null
+# --- Static update metadata ------------------------------------------------
+# The installer consumes the complete version manifest (dev.json is a single
+# full manifest document, not a release list) over HTTPS; it never calls
+# the GitHub Release API. A document is fetched at most once per run and cached
+# in $documentCache under --update, so the selected manifest supplies the asset
+# lookups without a second versions request.
+$documentCache = @{}
+
+function Get-UpdateDocument {
+    param([string]$Name)
+    if ($documentCache.ContainsKey($Name)) { return $documentCache[$Name] }
+    $uri = "$UpdateBaseUrl/$Name"
+    Write-Log "fetching update metadata: $uri"
+    $text = $null
+    try {
+        $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -Headers $headers -ErrorAction Stop
+        $text = $response.Content
+    } catch {
+        Die "could not fetch update metadata: $uri (base $UpdateBaseUrl)"
+    }
+    if (-not $text) { Die "update metadata is empty: $uri" }
+    $parsed = $null
+    try { $parsed = $text | ConvertFrom-Json } catch { Die "update metadata is not valid JSON: $uri" }
+    $documentCache[$Name] = $parsed
+    return $parsed
+}
+
+function Assert-ExactVersionDocument {
+    param([string]$Name, [string]$ExpectedVersion)
+    $doc = Get-UpdateDocument $Name
+    if ([string]$doc.schema_version -ne $UPDATE_SCHEMA_VERSION) {
+        Die "unsupported update metadata schema in $Name (expected $UPDATE_SCHEMA_VERSION)"
+    }
+    $docVersion = [string]$doc.version -replace '^v', ''
+    if ($docVersion -ne $ExpectedVersion) {
+        Die "update metadata version mismatch for $Name (expected $ExpectedVersion, got $docVersion)"
+    }
+    $assets = @($doc.assets)
+    if ($assets.Count -ne $EXPECTED_ASSET_COUNT) {
+        Die "expected exactly $EXPECTED_ASSET_COUNT release assets in $Name, found $($assets.Count)"
+    }
+    # The four canonical cross-target assets are the published contract on both
+    # platforms. Every record must carry one of these distinct names, so exactly
+    # four valid and distinct records also means the complete set; an unknown or
+    # repeated name is rejected.
+    $expectedNames = @(
+        "wrenyard-$ExpectedVersion-darwin-arm64-suite.zip",
+        "wrenyard-desktop-$ExpectedVersion-darwin-arm64.zip",
+        "wrenyard-$ExpectedVersion-win32-x64-suite.zip",
+        "wrenyard-desktop-$ExpectedVersion-win32-x64.zip"
+    )
+    $seen = @{}
+    foreach ($asset in $assets) {
+        $assetName = [string]$asset.name
+        if (-not $assetName) { Die "update metadata asset without a name in $Name" }
+        if ($expectedNames -notcontains $assetName) {
+            Die "$Name has an unexpected asset name: $assetName"
+        }
+        if ($seen.ContainsKey($assetName)) { Die "$Name has duplicate asset records for $assetName" }
+        $seen[$assetName] = $true
+        # Raw 64-hex digests only: a prefixed sha256: digest is not the
+        # published contract and is rejected rather than normalized.
+        if ([string]$asset.sha256 -notmatch '^[0-9a-f]{64}$') {
+            Die "update metadata has an invalid SHA-256 digest for $assetName"
+        }
+        $expectedUrl = "https://github.com/$Repo/releases/download/v$ExpectedVersion/$assetName"
+        if ([string]$asset.url -ne $expectedUrl) {
+            Die "update metadata asset $assetName URL is not canonical (expected $expectedUrl)"
+        }
+    }
+    foreach ($expectedName in $expectedNames) {
+        if (-not $seen.ContainsKey($expectedName)) {
+            Die "$Name has no asset named $expectedName"
+        }
+    }
+    return $doc
+}
+
+function Get-ExactAsset {
+    param([object]$Document, [string]$Name, [string]$DocumentName)
+    $matches_ = @($Document.assets | Where-Object { [string]$_.name -eq $Name })
+    if ($matches_.Count -eq 0) { Die "$DocumentName has no asset named $Name" }
+    if ($matches_.Count -gt 1) { Die "$DocumentName has duplicate asset records for $Name" }
+    return , $matches_[0]
+}
+
+# --- Resolve -Update from the complete version manifest ---------------------
+# dev.json is one complete version manifest document: the top-level version is
+# the selected release, and the same cached document supplies the asset lookups
+# below without fetching versions/<version>.json a second time.
+$versionDoc = $null
+$versionDocumentName = ''
 if (-not $Version) {
     if ($Update) {
-        # Newest non-draft release from the full releases list, prereleases
-        # included, so the latest v1.0.0-dev.* prerelease is selected.
-        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=100" -Headers $headers
-        $releaseInfo = $releases | Where-Object { -not $_.draft } | Sort-Object published_at -Descending | Select-Object -First 1
-        if (-not $releaseInfo) { Die "could not resolve the latest non-draft release tag for $Repo" }
-        $Version = [string]$releaseInfo.tag_name -replace '^v', ''
+        $devDoc = Get-UpdateDocument 'dev.json'
+        if ([string]$devDoc.schema_version -ne $UPDATE_SCHEMA_VERSION) {
+            Die "unsupported update metadata schema in dev.json (expected $UPDATE_SCHEMA_VERSION)"
+        }
+        $manifestVersion = [string]$devDoc.version
+        if (-not $manifestVersion) { Die 'dev.json publishes no version' }
+        $Version = $manifestVersion
+        $versionDoc = $devDoc
+        $versionDocumentName = 'dev.json'
+        Write-Log "latest published version: $Version"
     } else {
-        Die 'a -Version is required (or pass -Update to install the latest release)'
+        Die 'a -Version is required (or pass -Update to install the latest published version)'
     }
 }
 
@@ -82,13 +184,33 @@ if ($Version -match '[/\\]' -or $Version -match '\.\.' -or $Version -match '\s')
 }
 
 $DirVersion = $Version -replace '^v', ''
-$Tag = if ($Version -match '^v') { $Version } else { "v$Version" }
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITECTURE -ne 'x86_64') {
     Die "unsupported processor architecture: $env:PROCESSOR_ARCHITECTURE (supported: AMD64/x86_64)"
 }
 $CustomUrl = [bool]$Url
+# The canonical suite asset name is defined even on the direct custom-URL
+# bypass, where no static document is inspected at all.
 $AssetName = "wrenyard-$DirVersion-win32-x64-suite.zip"
-if (-not $Url) { $Url = "https://github.com/$Repo/releases/download/$Tag/wrenyard-$DirVersion-win32-x64-suite.zip" }
+# A custom URL with an explicit checksum sidecar and -SuiteOnly is a purely
+# direct install: it must not touch the static update metadata at all, so a
+# local release smoke test works even when the published manifest is behind.
+$directBypass = $CustomUrl -and [bool]$ChecksumUrl -and $SuiteOnly
+if (-not $directBypass) {
+    if (-not $versionDocumentName) { $versionDocumentName = "versions/$DirVersion.json" }
+    # Every selected document - including the cached dev.json from -Update - is
+    # validated here; the cached document previously skipped validation.
+    $versionDoc = Assert-ExactVersionDocument -Name $versionDocumentName -ExpectedVersion $DirVersion
+    $suiteAsset = Get-ExactAsset -Document $versionDoc -Name $AssetName -DocumentName $versionDocumentName
+    $AssetName = [string]$suiteAsset.name
+    if (-not $Url) { $Url = [string]$suiteAsset.url }
+    $suiteSha256 = [string]$suiteAsset.sha256
+    $desktopSha256 = ''
+    if (-not $SuiteOnly) {
+        $desktopAsset = Get-ExactAsset -Document $versionDoc -Name "wrenyard-desktop-$DirVersion-win32-x64.zip" -DocumentName $versionDocumentName
+        $desktopUrlFromDocument = [string]$desktopAsset.url
+        $desktopSha256 = [string]$desktopAsset.sha256
+    }
+}
 if ($CustomUrl -and -not $ChecksumUrl) { Die '-Url requires -ChecksumUrl' }
 $VersionsDir = Join-Path $Prefix 'versions'
 $VersionDir = Join-Path $VersionsDir $DirVersion
@@ -215,15 +337,8 @@ try {
         $expected = ((Get-Content $shaPath | Select-Object -First 1).Split(' ')[0]).Trim().ToLowerInvariant()
         if ($expected -notmatch '^[0-9a-f]{64}$') { Die "checksum sidecar is invalid: $ChecksumUrl" }
     } else {
-        Write-Log "resolving GitHub asset digest: $AssetName"
-        if (-not $releaseInfo -or [string]$releaseInfo.tag_name -ne $Tag) {
-            $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers
-        }
-        $asset = $releaseInfo.assets | Where-Object { [string]$_.name -eq $AssetName } | Select-Object -First 1
-        if (-not $asset) { Die "release $Tag has no asset named $AssetName" }
-        $digestMatch = [regex]::Match([string]$asset.digest, '^sha256:([0-9a-fA-F]{64})$')
-        if (-not $digestMatch.Success) { Die "release $Tag has no SHA-256 digest for $AssetName" }
-        $expected = $digestMatch.Groups[1].Value.ToLowerInvariant()
+        Write-Log "using release metadata digest: $AssetName"
+        $expected = $suiteSha256
     }
     $actual = Get-Sha256 -Path $zipPath
     if ($actual -ne $expected) { Die "checksum mismatch for $Url (expected $expected, got $actual)" }
@@ -296,23 +411,13 @@ try {
     # Desktop update helper invokes this script through `wrenyard update` with
     # -SuiteOnly so the running app can replace itself after exit.
     if (-not $SuiteOnly) {
-        $desktopAssetName = "wrenyard-desktop-$DirVersion-win32-x64.zip"
-        if (-not $releaseInfo -or [string]$releaseInfo.tag_name -ne $Tag) {
-            $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers
-        }
-        $desktopAsset = $releaseInfo.assets | Where-Object { [string]$_.name -eq $desktopAssetName } | Select-Object -First 1
-        if (-not $desktopAsset) { Die "release $Tag has no asset named $desktopAssetName" }
-        $desktopDigest = [regex]::Match([string]$desktopAsset.digest, '^sha256:([0-9a-fA-F]{64})$')
-        if (-not $desktopDigest.Success) {
-            Die "release $Tag has no SHA-256 digest for $desktopAssetName"
-        }
-        $desktopUrl = [string]$desktopAsset.browser_download_url
+        $desktopUrl = $desktopUrlFromDocument
         $desktopZip = Join-Path $tmp 'desktop.zip'
         $desktopExtract = Join-Path $tmp 'desktop-extract'
         Write-Log "downloading Desktop: $desktopUrl"
         Invoke-WebRequest -Uri $desktopUrl -OutFile $desktopZip -UseBasicParsing -Headers $headers
         $desktopActual = Get-Sha256 -Path $desktopZip
-        $desktopExpected = $desktopDigest.Groups[1].Value.ToLowerInvariant()
+        $desktopExpected = $desktopSha256
         if ($desktopActual -ne $desktopExpected) {
             Die "checksum mismatch for $desktopUrl (expected $desktopExpected, got $desktopActual)"
         }

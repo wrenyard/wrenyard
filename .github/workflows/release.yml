@@ -171,6 +171,18 @@ jobs:
             find release-assets -maxdepth 1 -type f -print >&2
             exit 1
           fi
+      - name: Validate static update feed generation (preflight only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Exercise the real generator against the real staged archives so a
+          # malformed asset set or version is caught before anything is tagged.
+          # This writes to a temporary directory and never publishes a feed.
+          version="$(node -p "require('./package.json').version")"
+          node tools/release/update-feed.mjs "$RUNNER_TEMP/updates-preflight" release-assets \
+            --version "$version" \
+            --repository "$GITHUB_REPOSITORY" \
+            --published-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       - name: Create draft prerelease and upload all public archives
         if: github.event_name == 'push'
         env:
@@ -211,6 +223,101 @@ jobs:
           VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
           TAG="v$VERSION"
           gh release edit "$TAG" --draft=false --prerelease
+      - name: Publish static update feed on the updates branch
+        # Only after the draft has been flipped to a published prerelease, so a
+        # manifest can never point at a draft or a partially uploaded release.
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
+          TAG="v$VERSION"
+
+          # The updates branch holds metadata only — never product source,
+          # credentials or binary assets. A fresh temp repo does not inherit the
+          # checkout's persisted extraheader, so pull the existing checkout auth
+          # in through include.path instead of ever putting a token in argv, a
+          # remote URL or a log line.
+          PUBLICATION_DIR="${RUNNER_TEMP}/updates-publication"
+          rm -rf "$PUBLICATION_DIR"
+          mkdir -p "$PUBLICATION_DIR"
+          channel="dev"
+          case "$VERSION" in
+            *-*) channel="dev" ;;
+            *) channel="stable" ;;
+          esac
+
+          remote="$(git -C "$GITHUB_WORKSPACE" remote get-url origin)"
+          git init -q "$PUBLICATION_DIR"
+          cd "$PUBLICATION_DIR"
+          git remote add origin "$remote"
+          git config include.path "$GITHUB_WORKSPACE/.git/config"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          # Distinguish "no updates branch yet" (ls-remote exit 2) from a real
+          # transport/auth failure, which must fail closed instead of silently
+          # starting a second orphan branch.
+          set +e
+          git ls-remote --exit-code --heads origin updates >/dev/null 2>&1
+          branch_status=$?
+          set -e
+          case "$branch_status" in
+            0)
+              git fetch --depth 1 origin updates
+              git checkout -q -B updates FETCH_HEAD
+              ;;
+            2)
+              # No updates branch yet: start a clean orphan metadata branch.
+              git checkout -q --orphan updates
+              git rm -rf -q --ignore-unmatch . >/dev/null 2>&1 || true
+              ;;
+            *)
+              echo "could not query the updates branch (exit $branch_status); refusing to publish a feed" >&2
+              exit 1
+              ;;
+          esac
+
+          # The publication timestamp is taken from the published release, not
+          # from the client or a fresh clock, so retries stay deterministic.
+          PUBLISHED_AT="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json publishedAt --jq '.publishedAt')"
+          if [ -z "$PUBLISHED_AT" ]; then
+            echo "release $TAG has no publication timestamp; refusing to publish a feed" >&2
+            exit 1
+          fi
+
+          # Metadata commits are serialized by conflict-safe normal pushes: no
+          # force, no overwrite. A concurrent release that moved the branch is
+          # absorbed by re-fetching and hard-resetting this temp publication
+          # repo, then regenerating against the merged branch head. Conflicting
+          # channel pointers are never rebased: a rebase would replay this
+          # version's pointer commit on top of the concurrent one and could
+          # regress the channel.
+          for attempt in 1 2 3 4 5; do
+            # Generation and staging run with errexit active so a node error or
+            # a git error stops the workflow instead of being swallowed by an
+            # if-condition and reported as "nothing to publish".
+            node "$GITHUB_WORKSPACE/tools/release/update-feed.mjs" . "$GITHUB_WORKSPACE/release-assets" \
+              --version "$VERSION" \
+              --repository "$GITHUB_REPOSITORY" \
+              --published-at "$PUBLISHED_AT"
+            git add "$channel.json" "versions/$VERSION.json"
+            if git diff --cached --quiet; then
+              echo "update feed already current for $VERSION"
+              exit 0
+            fi
+            git commit -q -m "chore(updates): publish $VERSION feed"
+            if git push origin HEAD:updates; then
+              exit 0
+            fi
+            echo "push rejected on attempt $attempt; refreshing the updates branch"
+            git fetch --depth 1 origin updates
+            git reset --hard FETCH_HEAD
+          done
+          echo "could not publish the update feed after repeated attempts" >&2
+          exit 1
       # Hop only: the durable product lives on the GitHub Release. The Actions
       # copy exists so a failed aggregate can still be diagnosed, and is dropped
       # after successful staging/publication — including a successful manual
