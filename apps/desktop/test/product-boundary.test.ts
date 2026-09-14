@@ -74,8 +74,8 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.doesNotMatch(renderer, /id="models"/);
   assert.match(renderer, /id="conversation-composer"/);
   assert.match(renderer, /id="conversation-workspace">工坊工作区/);
-  assert.match(renderer, /id="conversation-model-trigger"[^>]+aria-label="当前会话模型"[^>]+aria-haspopup="listbox"/);
-  assert.match(renderer, /id="conversation-model-list" role="listbox"/);
+  assert.match(renderer, /id="conversation-model-picker"/);
+  assert.match(conversationRenderer, /new SearchableSingleSelect\(this\.modelPickerHost/);
   assert.doesNotMatch(renderer, /id="conversation-model-select"|<select[^>]+当前会话模型/);
   assert.doesNotMatch(renderer, /<span>模型<\/span>/);
   assert.match(renderer, /id="conversation-daemon-status"[^>]+role="status"/);
@@ -88,23 +88,13 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(conversationRenderer, /createElement\('hr'\)/);
   assert.match(conversationRenderer, /expandedItemIds/);
   assert.match(conversationRenderer, /catalogProvider/);
-  assert.match(conversationRenderer, /ArrowDown/);
-  assert.match(conversationRenderer, /ArrowUp/);
-  assert.match(conversationRenderer, /event\.key === 'Enter'/);
-  assert.match(conversationRenderer, /event\.key === 'Escape'/);
-  assert.match(conversationRenderer, /document\.addEventListener\('pointerdown'/);
+  // Keyboard navigation and disabled options are covered by the shared picker tests.
   assert.match(conversationRenderer, /setQuotaSnapshot/);
-  assert.match(conversationRenderer, /presentation\.status/);
+  assert.match(conversationRenderer, /modelSelect\.setOptions/);
+  assert.match(conversationRenderer, /modelSelect\.setDisabled/);
   assert.doesNotMatch(conversationRenderer, /presentation\.indicators/);
-  assert.match(conversationRenderer, /section\.append\(heading\)/);
-  assert.match(conversationRenderer, /setAttribute\('aria-disabled'/);
-  assert.match(conversationRenderer, /directory\.status === 'loading'/);
-  assert.match(conversationRenderer, /getAttribute\('aria-disabled'\) === 'true'/);
-  assert.match(conversationRenderer, /modelTrigger\.focus\(\{ preventScroll: true \}\)/);
   assert.doesNotMatch(conversationRenderer, /setInterval|listProviders|configureProvider/);
-  assert.match(rendererStyles, /i\.is-green/);
-  assert.match(rendererStyles, /i\.is-yellow/);
-  assert.match(rendererStyles, /i\.is-red/);
+  assert.doesNotMatch(renderer, /conversation-model-trigger-signal/);
   assert.doesNotMatch(rendererStyles, /i\.is-balance|i\.is-quota-plan|i\.is-pace-low|i\.is-quota-low|i\.is-quota-empty/);
   assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);
   assert.match(rendererStyles, /::-webkit-scrollbar-thumb/);

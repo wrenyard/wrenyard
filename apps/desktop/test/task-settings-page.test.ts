@@ -510,7 +510,7 @@ test('task settings acceptance locks the post-fix surface: two-mode select with 
   assert.match(html, /id="tasks-preview-title">指令模板预览<\/h3>/u);
   assert.match(html, /id="tasks-preview"/u);
   assert.match(app, /row\.builtin\.instruction_template/u);
-  assert.match(app, /kind === 'placeholder'/u);
+  assert.match(app, /renderInstructionTemplatePreview\(segments\)/u);
   assert.match(css, /tasks-preview/u);
 
   // The settings DTO exposes authoritative provider/model display labels on the daemon-resolved
