@@ -169,8 +169,12 @@ export interface ResolveExplicitDispatchInput {
   /** Hard intelligence minimum enforced even in explicit mode (the catalog's
    *  constrained probe owns the actual gate). */
   intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
-  /** Requested thinking level. Unsupported levels fail closed in explicit mode
-   *  (no fallback to another target or to an unrequested level). */
+  /** Optional requested thinking level. Thinking is a resolved runtime
+   *  parameter owned by the Catalog adaptation, not an eligibility constraint:
+   *  the request is clamped to the nearest level the exact target can
+   *  materialize and the plan carries the ACTUAL adapted level, or no thinking
+   *  at all when the target has no usable level. It never fails admission and
+   *  never falls back to another target. */
   thinking?: TaskDispatchRequirements['thinking']
 }
 
@@ -577,11 +581,13 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // Hard gate: native web search requirement. We read the same Catalog plan the
     // automatic path relies on (resolveRun computes supportsWebSearch from the
     // native-provider allowlist); we never duplicate that allowlist here. Gateway
-    // and unsupported combinations fail closed via no_available_provider.
+    // and unsupported combinations fail closed via no_available_provider. The
+    // resolved thinking parameter is deliberately not passed: it can never change
+    // web-search admission.
     if (requiresWebSearch === true) {
       let plan: DispatchPlan
       try {
-        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, thinking)
+        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model)
       } catch {
         return {
           ok: false,
@@ -624,46 +630,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       }
     }
 
-    // Hard gate: requested thinking level must be supported by the exact
-    // target. A requested level the Catalog cannot resolve against this runtime
-    // is terminal — explicit mode never falls back to another target nor to an
-    // unrequested level.
-    if (thinking !== undefined) {
-      let plan: DispatchPlan
-      try {
-        plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, thinking)
-      } catch {
-        return {
-          ok: false,
-          error: new ExplicitRuntimeUnavailableError(
-            taskName,
-            exactAgentRuntime,
-            `target '${canonicalTarget}' does not support the required thinking level '${thinking}'`,
-          ),
-        }
-      }
-      if (plan.thinking !== thinking) {
-        return {
-          ok: false,
-          error: new ExplicitRuntimeUnavailableError(
-            taskName,
-            exactAgentRuntime,
-            `target '${canonicalTarget}' does not support the required thinking level '${thinking}'`,
-          ),
-        }
-      }
-    }
-
     const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
       { taskName, requirements, declaredRuntime: exactAgentRuntime },
       [candidate],
     )
 
-    // Availability probe. The pool is exactly this candidate and the
-    // requirements carry only the requested thinking level (admission for it is
-    // already gated above), so admission here means the target can produce a
-    // truthful resolved snapshot — never a fabricated one.
-    const availability = probe(thinking !== undefined ? { thinking } : {})
+    // Availability probe. The pool is exactly this candidate. Thinking is an
+    // optional runtime parameter adapted by the Catalog (requested levels are
+    // clamped to the nearest usable level, or withheld when the exact runtime
+    // has no usable level), never an eligibility constraint. It is forwarded only to adapt the
+    // selected plan parameters. Admission means the target can
+    // produce a truthful resolved snapshot — never a fabricated one.
+    const availability = probe({ thinking })
     if (!availability.ok) {
       return {
         ok: false,
@@ -678,7 +656,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!requiredCapabilities || requiredCapabilities.length === 0) return availability
 
     // Capability compatibility is the only remaining eligibility constraint.
-    const capable = probe({ requiredCapabilities, ...(thinking !== undefined ? { thinking } : {}) })
+    const capable = probe({ requiredCapabilities, thinking })
     if (!capable.ok) {
       return {
         ok: false,
