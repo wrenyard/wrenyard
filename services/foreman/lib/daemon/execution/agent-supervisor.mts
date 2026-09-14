@@ -620,6 +620,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           opts.taskId,
           entry.codeBuddyExecution,
           this.buildThinkingPlanEnv(entry.executionId),
+          entry.executionId,
         ),
       })
     } catch (error) {
@@ -1542,6 +1543,7 @@ export function resolveTaskAgentEnv(
   taskRunId?: string,
   codeBuddyExecution?: CodeBuddyExecutionBinding,
   thinkingPlan?: ThinkingPlanEnvOverride,
+  executionId?: string,
 ): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
   // Forge child unchanged, then drop any stale inherited task context...
@@ -1570,7 +1572,38 @@ export function resolveTaskAgentEnv(
     plans[thinkingPlan.profile] = thinkingPlan.plan
     next[DISPATCH_PLANS_ENV] = JSON.stringify(plans)
   }
+  // Scope the inherited gateway endpoint URLs to this exact execution so the
+  // gateway can attribute paired response samples. Only the three known
+  // gateway family paths ending in a terminal /v1 are rewritten, and an
+  // existing scope is replaced rather than duplicated. Parent env, unrelated
+  // URLs, and credentials are left untouched.
+  if (executionId && /^[A-Za-z0-9_-]{1,128}$/u.test(executionId)) {
+    for (const name of GATEWAY_URL_ENV_NAMES) {
+      const scoped = scopeGatewayUrl(next[name], executionId)
+      if (scoped !== undefined) next[name] = scoped
+    }
+  }
   return next
+}
+
+/** Inherited gateway endpoint URLs rewritten with this execution's scope. */
+const GATEWAY_URL_ENV_NAMES = [
+  'WRENYARD_GATEWAY_OPENAI_CHAT_URL',
+  'WRENYARD_GATEWAY_OPENAI_RESPONSES_URL',
+  'WRENYARD_GATEWAY_ANTHROPIC_URL',
+] as const
+
+/** Scope only recognized gateway URLs; replace a stale parent scope. */
+function scopeGatewayUrl(raw: string | undefined, executionId: string): string | undefined {
+  if (!raw) return undefined
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    const match = /^\/gateway\/(openai-chat|openai-responses|anthropic)(?:\/execution\/[A-Za-z0-9_-]{1,128})?\/v1\/?$/u.exec(url.pathname)
+    if (!match) return undefined
+    url.pathname = `/gateway/${match[1]}/execution/${executionId}/v1`
+    return url.href
+  } catch { return undefined }
 }
 
 /**

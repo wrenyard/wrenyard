@@ -74,7 +74,7 @@ interface UsageOptions {
   seq?: number
 }
 
-/** Seeds a normalized response-paired usage event. */
+/** Seeds a real ForemanEventStore-style client usage event envelope. */
 function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
   const seq = o.seq ?? 0
   const data: Record<string, unknown> = {
@@ -96,31 +96,41 @@ function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
     data.tps_samples = [sample]
   }
   if (o.durationMs !== null && o.durationMs !== undefined) data.duration_ms = o.durationMs
-  dbRun(
-    `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
-     VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
-    executionId,
-    taskId,
-    seq,
-    iso(BASE),
-    JSON.stringify(data),
-    iso(BASE),
-  )
+  seedEnvelopeEvent(executionId, taskId, seq, 'turn_usage', data)
 }
 
 function seedResponseUsage(executionId: string, taskId: string, samples: unknown[], seq = 0): void {
+  seedEnvelopeEvent(executionId, taskId, seq, 'turn_usage', {
+    tps_sampling_contract: 'response_v1',
+    tps_samples: samples,
+  })
+}
+
+/** Inserts a persisted daemon event envelope, matching ForemanEventStore.append. */
+function seedEnvelopeEvent(
+  executionId: string | null,
+  taskId: string,
+  seq: number,
+  type: string,
+  data: Record<string, unknown>,
+): void {
   dbRun(
     `INSERT INTO events (execution_id, task_id, seq, type, timestamp, data, created_at)
-     VALUES (?, ?, ?, 'turn_usage', ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     executionId,
     taskId,
     seq,
+    type,
     iso(BASE),
-    JSON.stringify({ tps_sampling_contract: 'response_v1', tps_samples: samples }),
+    JSON.stringify(type === 'gateway.request.completed' ? { schema_version: 'foreman.event.v1', refs: {}, data } : data),
     iso(BASE),
   )
 }
 
+/** Seeds a gateway completion event carrying an attributable execution scope. */
+function seedGatewayEvent(executionId: string, taskId: string, payload: Record<string, unknown>, seq = 0): void {
+  seedEnvelopeEvent(null, taskId, seq, 'gateway.request.completed', payload)
+}
 /** One execution with a given output and paired generation durations. */
 function seedSample(params: {
   taskId: string
@@ -341,6 +351,199 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
       first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
     }])
     assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('attributes gateway samples by execution id and never also counts client samples', () => {
+    initTestDb()
+    seedTask('task-gw')
+    seedExecution({ executionId: 'exec-gw', taskId: 'task-gw', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gw', 'task-gw', 'anthropic', 'sonnet')
+    // Client-recorded usage for the same execution must be superseded, not added.
+    seedResponseUsage('exec-gw', 'task-gw', [{
+      response_id: 'client', model: 'sonnet', output_tokens: 9999,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 90001,
+    }])
+    seedGatewayEvent('exec-gw', 'task-gw', {
+      protocol: 'openai_chat', publicModel: 'anthropic/sonnet', provider: 'anthropic',
+      status: 200, durationMs: 5000, executionId: 'exec-gw',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-1', model: 'sonnet', output_tokens: 1000,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 1000)
+    assert.equal(samples[0].durationMs, 10000)
+    assert.equal(samples[0].tps, 100)
+    closeTestDb()
+  })
+
+  it('accepts a provider-prefixed gateway sample model by normalizing it to the dispatch model', () => {
+    initTestDb()
+    seedTask('task-gwprefix')
+    seedExecution({ executionId: 'exec-gwprefix', taskId: 'task-gwprefix', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwprefix', 'task-gwprefix', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwprefix', 'task-gwprefix', {
+      status: 200, executionId: 'exec-gwprefix',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-prefix', model: 'anthropic/sonnet', output_tokens: 500,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    })
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 500)
+    closeTestDb()
+  })
+
+  it('excludes an execution whose successful gateway request lacks a sample', () => {
+    initTestDb()
+    seedTask('task-gwsample-less')
+    seedExecution({ executionId: 'exec-gwnosample', taskId: 'task-gwsample-less', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwnosample', 'task-gwsample-less', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwnosample', 'task-gwsample-less', {
+      status: 200, executionId: 'exec-gwnosample',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [],
+    })
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('excludes an execution even when another valid request sampled it but one request failed', () => {
+    initTestDb()
+    seedTask('task-gwalsofail')
+    seedExecution({ executionId: 'exec-gwalsofail', taskId: 'task-gwalsofail', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwalsofail', 'task-gwalsofail', 'anthropic', 'sonnet')
+    // A valid sample exists...
+    seedGatewayEvent('exec-gwalsofail', 'task-gwalsofail', {
+      status: 200, executionId: 'exec-gwalsofail',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-ok', model: 'sonnet', output_tokens: 1000,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    }, 0)
+    // ...but a second attributed request failed, so the whole execution is unknown.
+    seedGatewayEvent('exec-gwalsofail', 'task-gwalsofail', {
+      status: 502, executionId: 'exec-gwalsofail',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+    }, 1)
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('rejects a gateway request whose provider or public model mismatches dispatch', () => {
+    initTestDb()
+    for (const [id, payload] of [
+      ['exec-gwprov', { provider: 'openai', publicModel: 'anthropic/sonnet' }],
+      ['exec-gwmodel2', { provider: 'anthropic', publicModel: 'opus' }],
+    ] as const) {
+      seedTask(`${id}-task`)
+      seedExecution({ executionId: id, taskId: `${id}-task`, startedMs: BASE, endedMs: BASE + 90000 })
+      seedDispatch(id, `${id}-task`, 'anthropic', 'sonnet')
+      seedGatewayEvent(id, `${id}-task`, {
+        status: 200, executionId: id,
+        provider: payload.provider, publicModel: payload.publicModel,
+        tps_sampling_contract: 'response_v1',
+        tps_samples: [{
+          response_id: 'gw-mismatch', model: 'sonnet', output_tokens: 1000,
+          first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+        }],
+      })
+      assert.equal(readExecutionTpsSamples().some((sample) => sample.executionId === id), false)
+    }
+    closeTestDb()
+  })
+
+  it('does not let a stale malformed client sample poison a valid gateway measurement', () => {
+    initTestDb()
+    seedTask('task-gwstale')
+    seedExecution({ executionId: 'exec-gwstale', taskId: 'task-gwstale', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwstale', 'task-gwstale', 'anthropic', 'sonnet')
+    // A malformed client sample would normally invalidate the execution.
+    seedResponseUsage('exec-gwstale', 'task-gwstale', [
+      { response_id: 'client-bad', model: 'opus', output_tokens: 12345, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 90001 },
+    ])
+    seedGatewayEvent('exec-gwstale', 'task-gwstale', {
+      status: 200, executionId: 'exec-gwstale',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-stale-ok', model: 'sonnet', output_tokens: 1000,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    })
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 1000)
+    assert.equal(samples[0].durationMs, 10000)
+    closeTestDb()
+  })
+
+  it('omits an execution whose attributed gateway inference failed or has no valid sample', () => {
+    initTestDb()
+    seedTask('task-gwfail')
+    seedExecution({ executionId: 'exec-gwfail', taskId: 'task-gwfail', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwfail', 'task-gwfail', 'anthropic', 'sonnet')
+    // A valid client sample alone cannot rescue an execution with a failed
+    // attributed inference.
+    seedResponseUsage('exec-gwfail', 'task-gwfail', [{
+      response_id: 'client', model: 'sonnet', output_tokens: 9999,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 90001,
+    }])
+    seedGatewayEvent('exec-gwfail', 'task-gwfail', {
+      protocol: 'anthropic_messages', status: 502, durationMs: 5000, executionId: 'exec-gwfail',
+    })
+    assert.equal(readExecutionTpsSamples().length, 0)
+
+    seedTask('task-gwnone')
+    seedExecution({ executionId: 'exec-gwnone', taskId: 'task-gwnone', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwnone', 'task-gwnone', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwnone', 'task-gwnone', {
+      protocol: 'openai_chat', status: 200, durationMs: 5000, executionId: 'exec-gwnone',
+    })
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('rejects a gateway sample whose model mismatches dispatch or whose id is unknown', () => {
+    initTestDb()
+    seedTask('task-gwmodel')
+    seedExecution({ executionId: 'exec-gwmodel', taskId: 'task-gwmodel', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwmodel', 'task-gwmodel', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwmodel', 'task-gwmodel', {
+      status: 200, durationMs: 5000, executionId: 'exec-gwmodel',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-wrong', model: 'opus', output_tokens: 1000,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    })
+    assert.equal(readExecutionTpsSamples().length, 0)
+
+    // An execution id that does not join a known done execution contributes nothing.
+    seedTask('task-gwunknown')
+    seedExecution({ executionId: 'exec-gwunknown', taskId: 'task-gwunknown', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-gwunknown', 'task-gwunknown', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwunknown', 'task-gwunknown', {
+      status: 200, durationMs: 5000, executionId: 'exec-other-unknown',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-x', model: 'sonnet', output_tokens: 1000,
+        first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+      }],
+    })
+    assert.equal(readExecutionTpsSamples().some((sample) => sample.executionId === 'exec-gwunknown'), false)
     closeTestDb()
   })
 })
