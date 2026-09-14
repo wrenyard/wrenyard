@@ -2,11 +2,15 @@
 #
 # wrenyard installer/updater
 #
-# POSIX bash (set -euo pipefail). Downloads a digest-verified suite zip from a
-# GitHub release (or a direct URL with an explicit checksum sidecar), validates
-# the required wrenyard executable
+# POSIX bash (set -euo pipefail). Downloads a digest-verified suite zip whose
+# canonical URL and SHA-256 come from the complete version manifest (or a
+# direct URL with an explicit checksum sidecar), validates the required wrenyard
+# executable
 # and release manifest, and installs it under <prefix>/versions/<version>
 # before atomically switching the `current` symlink plus the public launcher.
+#
+# The update metadata is a static complete version manifest fetched over
+# HTTPS: the installer never calls the GitHub Release API.
 #
 # This script only ever moves prebuilt artifacts into place. It never invokes
 # go, npm, or pnpm, and it never builds anything on the consumer machine.
@@ -23,11 +27,14 @@ Options:
   --url <url>           Suite zip URL (requires --checksum-url)
   --checksum-url <url>  Explicit suite .sha256 sidecar URL for --url
   --suite-only          Install/update the suite without the Desktop app
-  --update              Install the newest non-draft release (prereleases included)
+  --update              Install the newest published version (prereleases included)
+                        from the static update metadata
   -h, --help            Show this help
 
 Environment:
   WRENYARD_GITHUB_REPOSITORY  GitHub repository for default URLs (default: wrenyard/wrenyard)
+  WRENYARD_UPDATE_BASE_URL    Static update metadata base URL
+                              (default: https://raw.githubusercontent.com/<repo>/updates)
   WRENYARD_PREFIX             Default install prefix
   GH_TOKEN / GITHUB_TOKEN     Optional token for private mirrors; never echoed,
                               only sent through a mode-0600 netrc file
@@ -96,23 +103,22 @@ command -v wget >/dev/null 2>&1 && HAVE_WGET=1 || HAVE_WGET=0
 
 # Optional private-mirror auth. The token is used through a mode-0600 netrc
 # file so it never appears in argv, logs, or process listings.
-TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+TMP_DIR=""
+META_DIR=""
 NETRC=""
+trap 'rm -rf "$TMP_DIR" "$META_DIR" "$NETRC"' EXIT
+TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 if [ -n "$TOKEN" ]; then
   NETRC="$(mktemp "${TMPDIR:-/tmp}/wrenyard-auth.XXXXXX")"
-  printf 'machine api.github.com login x-oauth-basic password %s\n' "$TOKEN" > "$NETRC"
-  printf 'machine github.com login x-oauth-basic password %s\n' "$TOKEN" >> "$NETRC"
+  printf 'machine github.com login x-oauth-basic password %s\n' "$TOKEN" > "$NETRC"
   chmod 600 "$NETRC"
 fi
 
-api_get() {
-  local url="$1"
-  if [ "$HAVE_CURL" -eq 1 ]; then
-    curl -fsSL --retry 3 ${NETRC:+--netrc-file "$NETRC"} "$url"
-  else
-    wget -q ${NETRC:+--netrc-file "$NETRC"} -O - "$url"
-  fi
-}
+# One private temp directory holds every fetched metadata document for the
+# whole run. It is created before the first fetch and is always removed by the
+# EXIT trap alongside the download temp dir. It is initialized here so a
+# metadata-free run (custom URL plus checksum sidecar) still cleans up safely.
+META_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wrenyard-meta.XXXXXX")"
 
 fetch() {
   local dest="$1" src="$2"
@@ -134,69 +140,49 @@ sha256_of() {
   fi
 }
 
-# Resolve the newest non-draft release (prereleases included) from the full
-# GitHub releases list, so a private v1.0.0-dev.* prerelease is selected for
-# --update. Drafts are never selected.
-resolve_latest() {
-  local api="https://api.github.com/repos/$REPO/releases?per_page=100"
-  local body tag=""
-  body="$(api_get "$api")" || die "could not fetch releases for $REPO"
-  tag="$(printf '%s\n' "$body" | awk '
-    /"tag_name"/ {
-      tag = $0; sub(/^.*"tag_name"[[:space:]]*:[[:space:]]*"/, "", tag); sub(/".*$/, "", tag)
-    }
-    /"draft"/ { draft = ($0 ~ /"draft"[[:space:]]*:[[:space:]]*true/) ? 1 : 0 }
-    /"published_at"/ {
-      pub = $0; sub(/^.*"published_at"[[:space:]]*:[[:space:]]*"/, "", pub); sub(/".*$/, "", pub)
-      if (!draft && pub > best) { best = pub; best_tag = tag }
-    }
-    END { print best_tag }
-  ')"
-  [ -n "$tag" ] || die "could not resolve the latest non-draft release tag for $REPO"
-  log "latest release tag: $tag"
-  case "$tag" in
-    v*) printf '%s\n' "${tag#v}" ;;
-    *)  printf '%s\n' "$tag" ;;
-  esac
+# The static version manifest is parsed with macOS's native plutil because the
+# public installer bootstraps on a bare macOS host with no Node, Go or Python.
+# The URLs in the manifest are canonical GitHub release downloads, while the
+# manifest itself is a static file served from the updates base.
+UPDATE_BASE_URL="${WRENYARD_UPDATE_BASE_URL:-https://raw.githubusercontent.com/$REPO/updates}"
+
+# Read a required top-level JSON string with the native plist parser. Any parse
+# failure (missing key, wrong type, malformed document) fails closed.
+json_top_string() {
+  local file="$1" key="$2"
+  /usr/bin/plutil -extract "$key" raw -expect string -o - "$file"
 }
 
-# GitHub computes a sha256 digest for each uploaded release asset. Resolve that
-# server-side digest by exact asset name so the public release does not need a
-# second user-visible checksum file beside every archive.
-resolve_release_asset_sha256() {
-  local tag="$1" wanted="$2"
-  local api="https://api.github.com/repos/$REPO/releases/tags/$tag"
-  local body digest=""
-  body="$(api_get "$api")" || die "could not fetch release $tag for $REPO"
-  digest="$(printf '%s\n' "$body" | awk -v wanted="$wanted" '
-    /"name"[[:space:]]*:/ {
-      name = $0
-      sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name)
-      sub(/".*$/, "", name)
-      matched = (name == wanted)
-      next
-    }
-    matched && /"digest"[[:space:]]*:/ {
-      value = $0
-      sub(/^.*"digest"[[:space:]]*:[[:space:]]*"/, "", value)
-      sub(/".*$/, "", value)
-      if (value ~ /^sha256:[0-9a-fA-F]{64}$/) {
-        print substr(value, 8)
-        exit
-      }
-    }
-  ')"
-  [ -n "$digest" ] || die "release $tag has no SHA-256 digest for $wanted"
-  printf '%s\n' "$digest" | tr '[:upper:]' '[:lower:]'
+# Fetch one static manifest document into the private metadata dir exactly
+# once: a document already fetched during this run is never downloaded again.
+fetch_document() {
+  local cache_name="$1" url="$2"
+  local dest="$META_DIR/$cache_name"
+  [ -f "$dest" ] && return 0
+  mkdir -p "$(dirname "$dest")"
+  log "fetching update metadata: $url"
+  fetch "$dest" "$url" || die "could not fetch update metadata: $url (base $UPDATE_BASE_URL)"
+  [ -s "$dest" ] || die "update metadata is empty: $url"
 }
 
-# Resolve --update before version validation so that --update works without a
-# --version and a non-empty version is guaranteed before any URL is derived.
+# Resolve --update from the complete version manifest at the top level of
+# dev.json before version validation so that --update works without a
+# --version. The manifest becomes the run's selected version document: it is
+# fetched exactly once and reused for the asset lookups below.
 if [ -z "$VERSION" ]; then
   if [ "$UPDATE" -eq 1 ]; then
-    VERSION="$(resolve_latest)"
+    fetch_document dev.json "$UPDATE_BASE_URL/dev.json"
+    DEV_DOC="$META_DIR/dev.json"
+    SCHEMA="$(json_top_string "$DEV_DOC" schema_version)" \
+      || die "update metadata is malformed: dev.json"
+    [ "$SCHEMA" = "wrenyard.update.v1" ] \
+      || die "unsupported update metadata schema in dev.json (expected wrenyard.update.v1)"
+    VERSION="$(json_top_string "$DEV_DOC" version)" \
+      || die "dev.json publishes no version"
+    [ -n "$VERSION" ] || die "dev.json publishes no version"
+    log "latest published version: $VERSION"
   else
-    die "a --version is required (or pass --update to install the latest release)"
+    die "a --version is required (or pass --update to install the latest published version)"
   fi
 fi
 
@@ -217,14 +203,113 @@ case "$(uname -s)" in
     die "unsupported host platform: $(uname -s) (supported: macOS arm64; use install.ps1 on Windows x64)" ;;
 esac
 
-# Normalized suite zip: <repo>/releases/download/<tag>/wrenyard-<version>-<target>-suite.zip
+# Normalized suite zip: <repo>/releases/download/v<version>/wrenyard-<version>-<target>-suite.zip
+# The version manifest supplies the canonical asset URLs and their SHA-256
+# digests; the manifest is fetched once and every asset record is validated
+# against the canonical name and URL before anything is downloaded.
 case "$VERSION" in
-  v*) TAG="$VERSION"; DIR_VERSION="${VERSION#v}" ;;
-  *)  TAG="v$VERSION"; DIR_VERSION="$VERSION" ;;
+  v*) DIR_VERSION="${VERSION#v}" ;;
+  *)  DIR_VERSION="$VERSION" ;;
 esac
-DEFAULT_URL="https://github.com/$REPO/releases/download/$TAG/wrenyard-$DIR_VERSION-$TARGET-suite.zip"
+TAG="v$DIR_VERSION"
+DOC_VERSION_NAME="versions/$DIR_VERSION.json"
+if [ -z "${DEV_DOC:-}" ]; then
+  # A custom --url with an explicit --checksum-url and no Desktop is a purely
+  # direct install: it must not touch the static update metadata at all, so a
+  # local release smoke test works even when the published manifest is behind.
+  if [ "$CUSTOM_URL" -eq 1 ] && [ -n "$CHECKSUM_URL" ] && [ "$SUITE_ONLY" -eq 1 ]; then
+    DOC=""
+  else
+    fetch_document "$DOC_VERSION_NAME" "$UPDATE_BASE_URL/$DOC_VERSION_NAME"
+    DOC="$META_DIR/$DOC_VERSION_NAME"
+  fi
+else
+  # --update already fetched the complete version manifest at the top level of
+  # dev.json; the same cached document supplies the asset lookups below.
+  DOC="$DEV_DOC"
+fi
+
+# When a static version document is present it is the single source of truth:
+# schema, requested version, exactly four asset records, each with a distinct
+# canonical name, the canonical release URL and a raw 64-hex SHA-256 digest.
+if [ -n "$DOC" ]; then
+  DOC_SCHEMA="$(json_top_string "$DOC" schema_version)" \
+    || die "update metadata is malformed: $DOC_VERSION_NAME"
+  [ "$DOC_SCHEMA" = "wrenyard.update.v1" ] \
+    || die "unsupported update metadata schema in $DOC_VERSION_NAME (expected wrenyard.update.v1)"
+  DOC_VERSION="$(json_top_string "$DOC" version)" \
+    || die "update metadata has no version: $DOC_VERSION_NAME"
+  case "$DOC_VERSION" in
+    v*) DOC_VERSION="${DOC_VERSION#v}" ;;
+  esac
+  [ "$DOC_VERSION" = "$DIR_VERSION" ] \
+    || die "update metadata version mismatch for $DOC_VERSION_NAME (expected $DIR_VERSION, got $DOC_VERSION)"
+
+  # The canonical manifest carries exactly four assets; the array length is read
+  # with the native parser before any record is dereferenced by index.
+  ASSET_RECORDS="$(/usr/bin/plutil -extract assets raw -expect array -o - "$DOC")" \
+    || die "update metadata has no assets array: $DOC_VERSION_NAME"
+  case "$ASSET_RECORDS" in
+    ''|*[!0-9]*) die "update metadata assets are malformed: $DOC_VERSION_NAME" ;;
+  esac
+  EXPECTED_ASSET_COUNT=4
+  [ "$ASSET_RECORDS" -eq "$EXPECTED_ASSET_COUNT" ] \
+    || die "expected exactly $EXPECTED_ASSET_COUNT release assets in $DOC_VERSION_NAME, found $ASSET_RECORDS"
+
+  # The suite asset name is the canonical four-asset contract name; it is
+  # initialized even on the direct custom-URL bypass so late references are safe.
+  SUITE_ASSET_NAME="wrenyard-$DIR_VERSION-$TARGET-suite.zip"
+
+  # Validate the fixed canonical asset set. Each of the four records
+  # is read with the native parser, must carry one of the four distinct allowed
+  # names, a raw 64-hex digest and the canonical release URL, and each name is
+  # assigned straight to the URL/digest variable it feeds. Duplicates are
+  # rejected via the accumulating SEEN_NAMES case match, so exactly four valid
+  # records also means the complete set.
+  DESKTOP_ASSET_NAME="wrenyard-desktop-$DIR_VERSION-$TARGET.zip"
+  SEEN_NAMES="|"
+  index=0
+  while [ "$index" -lt "$EXPECTED_ASSET_COUNT" ]; do
+    NAME="$(/usr/bin/plutil -extract "assets.$index.name" raw -expect string -o - "$DOC")" \
+      || die "update metadata has a malformed asset name: $DOC_VERSION_NAME"
+    URL_ENTRY="$(/usr/bin/plutil -extract "assets.$index.url" raw -expect string -o - "$DOC")" \
+      || die "update metadata has a malformed asset URL: $DOC_VERSION_NAME"
+    SHA_ENTRY="$(/usr/bin/plutil -extract "assets.$index.sha256" raw -expect string -o - "$DOC")" \
+      || die "update metadata has a malformed asset digest: $DOC_VERSION_NAME"
+    printf '%s\n' "$SHA_ENTRY" | grep -Eq '^[0-9a-f]{64}$' \
+      || die "$DOC_VERSION_NAME has an invalid SHA-256 digest for $NAME"
+    case "$NAME" in
+      "$SUITE_ASSET_NAME"|"$DESKTOP_ASSET_NAME"| \
+      "wrenyard-$DIR_VERSION-win32-x64-suite.zip"|"wrenyard-desktop-$DIR_VERSION-win32-x64.zip") ;;
+      *) die "$DOC_VERSION_NAME has an unexpected asset name: $NAME" ;;
+    esac
+    case "$SEEN_NAMES" in
+      *"|$NAME|"*) die "$DOC_VERSION_NAME has duplicate asset records for $NAME" ;;
+    esac
+    SEEN_NAMES="$SEEN_NAMES$NAME|"
+    EXPECTED_URL="https://github.com/$REPO/releases/download/$TAG/$NAME"
+    [ "$URL_ENTRY" = "$EXPECTED_URL" ] \
+      || die "$DOC_VERSION_NAME asset $NAME URL is not canonical (expected $EXPECTED_URL)"
+    if [ "$NAME" = "$SUITE_ASSET_NAME" ]; then
+      DEFAULT_URL="$URL_ENTRY"
+      SUITE_SHA256="$SHA_ENTRY"
+    fi
+    if [ "$NAME" = "$DESKTOP_ASSET_NAME" ]; then
+      DESKTOP_URL="$URL_ENTRY"
+      DESKTOP_SHA256="$SHA_ENTRY"
+    fi
+    index=$((index + 1))
+  done
+
+  [ -n "${SUITE_SHA256:-}" ] || die "$DOC_VERSION_NAME has no asset named $SUITE_ASSET_NAME"
+  if [ "$SUITE_ONLY" -eq 0 ]; then
+    [ -n "${DESKTOP_SHA256:-}" ] || die "$DOC_VERSION_NAME has no asset named $DESKTOP_ASSET_NAME"
+  fi
+fi
+
+# A supplied URL overrides the metadata-derived default instead of being
+# replaced by it; a custom URL always needs its explicit checksum sidecar.
 URL="${URL:-$DEFAULT_URL}"
-ASSET_NAME="wrenyard-$DIR_VERSION-$TARGET-suite.zip"
 [ "$CUSTOM_URL" -eq 0 ] || [ -n "$CHECKSUM_URL" ] || die "--url requires --checksum-url"
 
 VERSIONS_DIR="$PREFIX/versions"
@@ -242,7 +327,6 @@ find_artifact() {
 # Download + checksum verification
 # ---------------------------------------------------------------------------
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wrenyard-install.XXXXXX")"
-trap 'rm -rf "$TMP_DIR" "$NETRC"' EXIT
 
 log "downloading suite: $URL"
 fetch "$TMP_DIR/suite.zip" "$URL"
@@ -252,8 +336,8 @@ if [ -n "$CHECKSUM_URL" ]; then
   EXPECTED="$(awk '{print $1}' "$TMP_DIR/suite.zip.sha256" | tr '[:upper:]' '[:lower:]')"
   printf '%s\n' "$EXPECTED" | grep -Eq '^[0-9a-f]{64}$' || die "checksum sidecar is invalid: $CHECKSUM_URL"
 else
-  log "resolving GitHub asset digest: $ASSET_NAME"
-  EXPECTED="$(resolve_release_asset_sha256 "$TAG" "$ASSET_NAME")"
+  log "using release metadata digest for $SUITE_ASSET_NAME"
+  EXPECTED="$SUITE_SHA256"
 fi
 ACTUAL="$(sha256_of "$TMP_DIR/suite.zip")"
 [ "$ACTUAL" = "$EXPECTED" ] || die "checksum mismatch for $URL (expected $EXPECTED, got $ACTUAL)"
@@ -355,14 +439,11 @@ switch_link "$(current_target "$INSTALLED_WRENYARD")" "$BIN_DIR/wrenyard"
 # helper to replace itself transactionally after exit.
 # ---------------------------------------------------------------------------
 if [ "$SUITE_ONLY" -eq 0 ]; then
-  DESKTOP_ASSET_NAME="wrenyard-desktop-$DIR_VERSION-$TARGET.zip"
-  DESKTOP_URL="https://github.com/$REPO/releases/download/$TAG/$DESKTOP_ASSET_NAME"
-  DESKTOP_EXPECTED="$(resolve_release_asset_sha256 "$TAG" "$DESKTOP_ASSET_NAME")"
   log "downloading Desktop: $DESKTOP_URL"
   fetch "$TMP_DIR/desktop.zip" "$DESKTOP_URL"
   DESKTOP_ACTUAL="$(sha256_of "$TMP_DIR/desktop.zip")"
-  [ "$DESKTOP_ACTUAL" = "$DESKTOP_EXPECTED" ] \
-    || die "checksum mismatch for $DESKTOP_URL (expected $DESKTOP_EXPECTED, got $DESKTOP_ACTUAL)"
+  [ "$DESKTOP_ACTUAL" = "$DESKTOP_SHA256" ] \
+    || die "checksum mismatch for $DESKTOP_URL (expected $DESKTOP_SHA256, got $DESKTOP_ACTUAL)"
 
   mkdir -p "$TMP_DIR/desktop-extract"
   if command -v unzip >/dev/null 2>&1; then

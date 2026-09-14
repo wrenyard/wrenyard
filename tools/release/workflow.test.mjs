@@ -197,3 +197,91 @@ test('release.yml does not write tag-scoped dependency caches', () => {
   assert.ok(!workflow.includes('cache: pnpm'));
   assert.ok(workflow.includes('cache: false'));
 });
+
+test('release.yml publishes the static update feed only after a successful release', () => {
+  // The feed is written to a dedicated metadata branch, never to the product
+  // branch, and only once the draft has been flipped to a published prerelease
+  // so a manifest never points at a draft or a partial upload.
+  assert.ok(workflow.includes('Publish static update feed on the updates branch'));
+  assert.ok(workflow.includes('tools/release/update-feed.mjs'));
+  assert.ok(workflow.includes('git push origin HEAD:updates'));
+  assert.ok(workflow.includes('git fetch --depth 1 origin updates'));
+  assert.ok(workflow.includes('git checkout -q --orphan updates'));
+  // Metadata only: no product source or binary assets on the feed branch.
+  assert.ok(workflow.includes('release-assets'));
+  // Ordering: feed publication follows the draft->published flip.
+  assert.ok(
+    workflow.indexOf('gh release edit "$TAG" --draft=false --prerelease') <
+      workflow.indexOf('Publish static update feed on the updates branch'),
+    'the update feed must be published after the release is published',
+  );
+});
+
+test('release.yml update feed publication is conflict-safe and credential-free', () => {
+  // Concurrent releases are serialized by normal pushes and a bounded
+  // fetch/reset/regenerate retry, never a force push and never a rebase of
+  // conflicting channel pointers. The temp publication repo inherits the
+  // checkout credentials via include.path rather than a token in a URL.
+  assert.ok(workflow.includes('for attempt in 1 2 3 4 5'));
+  assert.ok(workflow.includes('git reset --hard FETCH_HEAD'));
+  assert.ok(!workflow.includes('git rebase'));
+  assert.ok(!workflow.includes('git push --force'));
+  assert.ok(!workflow.includes('push --force'));
+  assert.ok(!workflow.includes('git push -f'));
+  assert.ok(workflow.includes('git config include.path "$GITHUB_WORKSPACE/.git/config"'));
+  assert.ok(!/\$\{\{\s*secrets\./.test(workflow.split('Publish static update feed on the updates branch')[1].split('Drop hop artifacts')[0].replace("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", '')));
+  assert.ok(!/https:\/\/[^"'\s]*\$\{\{\s*secrets\./.test(workflow));
+});
+
+test('release.yml distinguishes a missing updates branch from transport failures', () => {
+  // ls-remote --exit-code --heads returns 2 only when the branch is absent;
+  // every other failure is a transport/auth error and must fail closed rather
+  // than silently creating a second orphan branch.
+  assert.ok(workflow.includes('git ls-remote --exit-code --heads origin updates'));
+  assert.ok(workflow.includes('branch_status=$?'));
+  const feed = workflow.slice(
+    workflow.indexOf('Publish static update feed on the updates branch'),
+    workflow.indexOf('Drop hop artifacts'),
+  );
+  assert.ok(feed.includes('refusing to publish a feed'));
+});
+
+test('release.yml feed generation failure cannot become a nothing-to-publish success', () => {
+  // publish_feed ran inside an errexit-disabled if-condition, so a node or git
+  // failure was reported as "nothing to publish" and the step exited 0. The
+  // generation/stage/commit now runs at top level under errexit.
+  const feed = workflow.slice(
+    workflow.indexOf('Publish static update feed on the updates branch'),
+    workflow.indexOf('Drop hop artifacts'),
+  );
+  assert.ok(!workflow.includes('publish_feed'));
+  assert.ok(!feed.includes('nothing to publish for $VERSION'));
+  assert.ok(feed.includes('node "$GITHUB_WORKSPACE/tools/release/update-feed.mjs"'));
+  assert.ok(feed.includes('git commit -q -m "chore(updates): publish $VERSION feed"'));
+  assert.ok(feed.includes('update feed already current for $VERSION'));
+});
+
+test('release.yml pins the published-at timestamp and its release lookup', () => {
+  // The timestamp comes from the already-published release so retries stay
+  // deterministic, and the lookup names its repository explicitly.
+  const feed = workflow.slice(
+    workflow.indexOf('Publish static update feed on the updates branch'),
+    workflow.indexOf('Drop hop artifacts'),
+  );
+  assert.ok(feed.includes('gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json publishedAt'));
+  assert.ok(feed.includes('--published-at "$PUBLISHED_AT"'));
+});
+
+test('release.yml validates feed generation on workflow_dispatch without publishing', () => {
+  // The manual preflight exercises the real generator against the real staged
+  // archives into a temporary directory, but must never publish a feed.
+  assert.ok(workflow.includes('Validate static update feed generation (preflight only)'));
+  assert.ok(workflow.includes('updates-preflight'));
+  assert.ok(workflow.includes("github.event_name == 'push'"));
+  const preflight = workflow.slice(
+    workflow.indexOf('Validate static update feed generation (preflight only)'),
+    workflow.indexOf('Create draft prerelease and upload all public archives'),
+  );
+  assert.ok(preflight.includes('tools/release/update-feed.mjs'));
+  assert.ok(!preflight.includes('git push'));
+});
