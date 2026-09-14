@@ -1050,21 +1050,60 @@ test('omitted thinking selects the highest declared-and-mapped level', () => {
   });
 });
 
-test('an explicit supported low request is honored exactly', () => {
-  const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
+test('a requested level adapts to the smallest supported level at or above it', () => {
+  // Medium and high are usable: a low request resolves medium, and
+  // a request above the usable ceiling resolves the highest usable level.
+  const catalog = buildThinkingCatalog(['medium', 'high']);
   assert.deepEqual(catalog.resolveRun('c1', 'p', 'm', 'low'), {
     client: 'c1', provider: 'p', model: 'm', mode: 'gateway', protocol: 'openai_chat',
-    thinking: 'low', reasoningEffort: 'low',
+    thinking: 'medium', reasoningEffort: 'medium',
   });
+  // xhigh is a legal public level but is not usable here: it clamps to the
+  // highest usable level rather than rejecting the request.
+  const clamped = catalog.resolveRun('c1', 'p', 'm', 'xhigh');
+  assert.equal(clamped.thinking, 'high');
+  assert.equal(clamped.reasoningEffort, 'high');
 });
 
-test('an explicit unsupported level is rejected, while an unmapped runtime leaves thinking unset', () => {
-  // Declared but unmapped: an explicit request is rejected, not invented.
-  const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
-  assert.throws(() => catalog.resolveRun('c1', 'p', 'm', 'xhigh'), /does not support thinking level xhigh/);
+test('a request above the mapped maximum clamps to the highest usable level', () => {
+  // low/high/max are declared, but only low and high are mapped: max is unusable.
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high', 'max'] }],
+    thinkingMappings: {
+      m: { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
+    },
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  const max = catalog.resolveRun('c1', 'p', 'm', 'max');
+  assert.equal(max.thinking, 'high');
+  assert.equal(max.reasoningEffort, 'high');
+  // Omitting the request selects the same highest usable level.
+  assert.equal(catalog.resolveRun('c1', 'p', 'm').thinking, 'high');
+});
 
-  // Model with declared levels but no mappings at all: default leaves thinking
-  // unset (capability unknown); an explicit request is rejected.
+test('declaration order never decides the selected level', () => {
+  // The declared array is unordered relative to THINKING_ORDER; the selection
+  // must still pick by order (ceiling of a low request), not by declaration.
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['high', 'low', 'medium'] }],
+    thinkingMappings: {
+      m: { c1: { low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' } } },
+    },
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  assert.equal(catalog.resolveRun('c1', 'p', 'm', 'low').thinking, 'low');
+  assert.equal(catalog.resolveRun('c1', 'p', 'm', 'xhigh').thinking, 'high');
+});
+
+test('a runtime with no usable thinking level returns no thinking and no wire effort', () => {
+  // Model with declared levels but no mappings at all: capability is unknown,
+  // so no thinking and no transport is ever invented for any request.
   const unmapped = new Catalog();
   unmapped.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   unmapped.registerProvider({
@@ -1072,14 +1111,31 @@ test('an explicit unsupported level is rejected, while an unmapped runtime leave
     models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.equal(unmapped.resolveRun('c1', 'p', 'm').thinking, undefined);
-  assert.throws(() => unmapped.resolveRun('c1', 'p', 'm', 'low'), /no thinking mapping/);
+  const unmappedPlan = unmapped.resolveRun('c1', 'p', 'm', 'low');
+  assert.equal(unmappedPlan.thinking, undefined);
+  assert.equal(unmappedPlan.reasoningEffort, undefined);
 
-  // A model without any declared levels continues without thinking when no
-  // request is made, but an explicit request fails closed.
+  // A model without any declared levels never carries thinking, even when the
+  // client has a mapping for that model id.
   const plain = buildThinkingCatalog(undefined);
-  assert.equal(plain.resolveRun('c1', 'p', 'm').thinking, undefined);
-  assert.throws(() => plain.resolveRun('c1', 'p', 'm', 'low'), /does not support thinking level low/);
+  const plainPlan = plain.resolveRun('c1', 'p', 'm', 'low');
+  assert.equal(plainPlan.thinking, undefined);
+  assert.equal(plainPlan.reasoningEffort, undefined);
+});
+
+test('a client without an exact mapping for the model id gets no thinking', () => {
+  // The mapping exists for c1 only; c2 has no exact-client entry, so the level
+  // is unusable and no effort is invented.
+  const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
+  catalog.registerClient({ id: 'c2', gatewayProtocols: ['openai_chat'] });
+  const plan = catalog.resolveRun('c2', 'p', 'm', 'high');
+  assert.equal(plan.thinking, undefined);
+  assert.equal(plan.reasoningEffort, undefined);
+});
+
+test('an invalid public thinking enum value is still rejected', () => {
+  const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
+  assert.throws(() => catalog.resolveRun('c1', 'p', 'm', 'ultra' as never), /invalid thinking level/);
 });
 
 test('provider thinking mapping may substitute an upstream model and keeps the public model unchanged', () => {
@@ -1147,20 +1203,21 @@ test('registerProvider rejects invalid and duplicate thinking levels and bad map
   assert.doesNotThrow(() => register({ thinkingMappings: { m: { c1: { low: { effort: 'low' } } } } }, ['low']));
 });
 
-test('resolveConstrainedDispatch passes requirements.thinking and excludes unsupported candidates', () => {
+test('resolveConstrainedDispatch adapts requirements.thinking into the selected plan parameters', () => {
+  const pricing = (out: number) => ({ inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: out, source: 'spec', checkedAt: '2026-09-05' });
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true });
   catalog.registerClient({ id: 'c2', gatewayProtocols: ['openai_chat'], taskCapable: true });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
-      { id: 'thinking-model', displayName: 'Thinking', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] },
-      { id: 'plain-model', displayName: 'Plain', intelligence: 'mid', speed: speedFixture() },
+      { id: 'thinking-model', displayName: 'Thinking', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'], pricing: pricing(1) },
+      { id: 'plain-model', displayName: 'Plain', intelligence: 'mid', speed: speedFixture(), pricing: pricing(2) },
     ],
     thinkingMappings: {
       'thinking-model': {
         c1: { low: { effort: 'low' }, high: { effort: 'high' } },
-        // c2 explicitly only supports low; a high request must exclude it.
+        // c2 explicitly only supports low; a high request must adapt to low.
         c2: { low: { effort: 'low' } },
       },
     },
@@ -1171,6 +1228,7 @@ test('resolveConstrainedDispatch passes requirements.thinking and excludes unsup
   assert.equal(high.ok, true);
   assert.equal(high.selected.plan.model, 'thinking-model');
   assert.equal(high.selected.plan.client, 'c1');
+  // The selected runtime parameter reflects the adapted level and its mapping.
   assert.equal(high.selected.plan.thinking, 'high');
   assert.equal(high.selected.plan.reasoningEffort, 'high');
   assert.deepEqual(high.selected.plan, catalog.resolveRun('c1', 'p', 'thinking-model', 'high'));
@@ -1179,12 +1237,60 @@ test('resolveConstrainedDispatch passes requirements.thinking and excludes unsup
   // thinking model defaults to its highest mapped level.
   const auto = resolveConstrainedDispatch(catalog, candidates, {});
   assert.equal(auto.ok, true);
-  assert.equal(auto.selected.plan.thinking, undefined);
+  assert.equal(auto.selected.plan.thinking, 'high');
 
-  // An explicit unsupported model/level combination leaves no eligible candidate.
-  const none = resolveConstrainedDispatch(catalog, [{ profileId: 'plain', client: 'c1', provider: 'p', model: 'plain-model' }], { thinking: 'low' });
-  assert.equal(none.ok, false);
-  assert.equal(none.reason, 'no-eligible-candidate');
+  // A request against a model with no usable level at all is still eligible:
+  // the resolution is selected and simply carries no invented wire effort.
+  const plain = resolveConstrainedDispatch(catalog, [{ profileId: 'plain', client: 'c1', provider: 'p', model: 'plain-model' }], { thinking: 'low' });
+  assert.equal(plain.ok, true);
+  assert.equal(plain.selected.plan.model, 'plain-model');
+  assert.equal(plain.selected.plan.thinking, undefined);
+  assert.equal(plain.selected.plan.reasoningEffort, undefined);
+});
+
+test('thinking never changes candidate ranking or admission', () => {
+  // Two models differ only in how they map the requested level: mcheap clamps a
+  // low request to medium, mexpensive honors it exactly. Ranking is price-first,
+  // so the thinking request must not reorder them and the winner's downstream
+  // mapping must remain its own.
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true });
+  const pricing = (out: number) => ({ inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: out, source: 'spec', checkedAt: '2026-09-05' });
+  catalog.registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [
+      { id: 'mcheap', displayName: 'Cheap', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['medium', 'high'], pricing: pricing(1) },
+      { id: 'mexpensive', displayName: 'Expensive', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'], pricing: pricing(3) },
+    ],
+    thinkingMappings: {
+      mcheap: { c1: { medium: { effort: 'medium' }, high: { effort: 'high' } } },
+      mexpensive: { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
+    },
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  const candidates: DispatchCandidate[] = [
+    { profileId: 'cheap', client: 'c1', provider: 'p', model: 'mcheap' },
+    { profileId: 'expensive', client: 'c1', provider: 'p', model: 'mexpensive' },
+  ];
+
+  const withoutThinking = resolveConstrainedDispatch(catalog, candidates, {});
+  const withLow = resolveConstrainedDispatch(catalog, candidates, { thinking: 'low' });
+  const withHigh = resolveConstrainedDispatch(catalog, candidates, { thinking: 'high' });
+
+  assert.equal(withoutThinking.ok, true);
+  assert.equal(withLow.ok, true);
+  assert.equal(withHigh.ok, true);
+  // Eligibility and ranking are identical across thinking requests.
+  assert.equal(withLow.selected.plan.provider, withoutThinking.selected.plan.provider);
+  assert.equal(withLow.selected.plan.model, withoutThinking.selected.plan.model);
+  assert.equal(withHigh.selected.plan.model, withoutThinking.selected.plan.model);
+  assert.equal(withLow.selected.rank, withoutThinking.selected.rank);
+  // Only the selected plan's runtime parameters change, via its own mapping.
+  assert.equal(withoutThinking.selected.plan.thinking, 'high');
+  assert.equal(withLow.selected.plan.thinking, 'medium');
+  assert.equal(withLow.selected.plan.reasoningEffort, 'medium');
+  assert.equal(withHigh.selected.plan.thinking, 'high');
+  assert.equal(withHigh.selected.plan.reasoningEffort, 'high');
 });
 
 test('gateway model listing includes thinkingLevels', () => {

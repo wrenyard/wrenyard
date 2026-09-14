@@ -820,27 +820,31 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
     assert.equal(explicit.resolved.thinking, 'low')
   })
 
-  it('explicit rejects a requested unsupported level with no fallback', () => {
-    // glm-5.3 declares no thinking levels, so any request is terminal.
+  it('explicit adapts a requested thinking level instead of failing admission', () => {
+    // glm-5.3 declares no thinking levels, so the request cannot be materialized:
+    // the target stays selected and dispatchable and simply carries no invented
+    // effort instead of being disqualified.
     const explicit = resolver.resolveExplicit({
       taskName: 'explicit-thinking-unsupported',
       exactRuntime: GLM_CB,
       thinking: 'high',
     })
-    assert.equal(explicit.ok, false)
-    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
-    assert.match(explicit.error.reason, /does not support the required thinking level 'high'/)
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, GLM_CB)
+    assert.equal(explicit.resolved.thinking, undefined)
   })
 
-  it('explicit rejects a level declared by the family but outside the mapped set', () => {
-    // deepseek-v4.1-flash maps low/high/max only; `medium` is unmapped.
+  it('explicit adapts an unmapped-but-declared level to the nearest usable level', () => {
+    // deepseek-v4.1-flash maps low/high/max only; `medium` is unmapped, so the
+    // request clamps to the smallest mapped level at or above it (high).
     const explicit = resolver.resolveExplicit({
       taskName: 'explicit-thinking-unmapped',
       exactRuntime: DSF_CB,
       thinking: 'medium',
     })
-    assert.equal(explicit.ok, false)
-    assert.equal(explicit.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, DSF_CB)
+    assert.equal(explicit.resolved.thinking, 'high')
   })
 
   it('automatic without a thinking requirement selects the highest supported level', () => {
@@ -859,8 +863,9 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
     const resolution = resolver.resolve({
       taskName: 'auto-thinking-requested',
       requirements: {
+        excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'codebuddy'),
         minimumTps: 1,
-        excludeModelIds: ['glm-5.3', 'hy4-preview'],
+        excludeModelIds: createBuiltinCatalog().provider('codebuddy')!.models.map(m => m.id).filter(id => id !== 'deepseek-v4.1-flash'),
         thinking: 'low',
       } satisfies TaskDispatchRequirements,
     })
@@ -868,12 +873,58 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
     assert.equal(resolution.resolved.thinking, 'low')
   })
 
-  it('listExactRuntimes marks requested-thinking-incompatible targets unavailable', () => {
+  it('a requested thinking level cannot disqualify the highest-scoring model', () => {
+    // Pin a single candidate whose model has no usable thinking level: the
+    // requested level is a runtime parameter, so the target must remain
+    // dispatchable and carry no invented effort.
+    const supported = resolver.resolveExplicit({
+      taskName: 'thinking-cannot-disqualify',
+      exactRuntime: DSF_CB,
+      thinking: 'low',
+    })
+    assert.equal(supported.ok, true)
+    assert.equal(supported.resolved.thinking, 'low')
+
+    const unsupported = resolver.resolveExplicit({
+      taskName: 'thinking-cannot-disqualify',
+      exactRuntime: GLM_CB,
+      thinking: 'low',
+    })
+    assert.equal(unsupported.ok, true)
+    assert.equal(unsupported.exactAgentRuntime, GLM_CB)
+    assert.equal(unsupported.resolved.thinking, undefined)
+  })
+
+  it('thinking requests never reorder automatic selection across differently mapped models', () => {
+    const requirements = {
+      maxOutputUsdPerMillion: 2,
+      minimumTps: 40,
+      intelligenceMin: 'mid',
+      excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'],
+    } satisfies TaskDispatchRequirements
+
+    const baseline = resolver.resolve({ taskName: 'thinking-ranking', requirements })
+    const withThinking = resolver.resolve({
+      taskName: 'thinking-ranking',
+      requirements: { ...requirements, thinking: 'low' },
+    })
+
+    assert.equal(baseline.ok, true)
+    assert.equal(withThinking.ok, true)
+    // Same selected target and profile whether or not thinking was requested.
+    assert.equal(withThinking.exactAgentRuntime, baseline.exactAgentRuntime)
+    assert.equal(withThinking.resolved.profile, baseline.resolved.profile)
+    assert.equal(withThinking.resolved.model_id, baseline.resolved.model_id)
+  })
+
+  it('listExactRuntimes keeps targets available regardless of the requested thinking level', () => {
     const listed = resolver.listExactRuntimes({ taskName: 'list-thinking', thinking: 'high' })
     assert.equal(listed.ok, true)
     const glm = listed.items.find((item) => item.exactAgentRuntime === GLM_CB)
     assert.ok(glm !== undefined)
-    assert.equal(glm.available, false)
+    // A target without usable thinking stays available and dispatchable.
+    assert.equal(glm.available, true)
+    assert.equal(glm.resolved?.thinking, undefined)
     const dsf = listed.items.find((item) => item.exactAgentRuntime === DSF_CB)
     assert.ok(dsf !== undefined)
     assert.equal(dsf.available, true)

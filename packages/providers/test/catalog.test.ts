@@ -198,9 +198,9 @@ test('Codex GPT plans default to the highest mapped thinking level and never inv
   assert.equal(plans['chatgpt/gpt-5.5:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.4:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.4-mini:codex'].thinking, 'xhigh');
-  // An explicit request must be both declared and mapped; unmapped levels fail closed.
+  // Requests above the usable range are capped at its highest mapped level.
   assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.6-sol', 'low').reasoningEffort, 'low');
-  assert.throws(() => catalog.resolveRun('codex', 'chatgpt', 'gpt-5.4', 'max'), /does not support thinking level max/);
+  assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.4', 'max').reasoningEffort, 'xhigh');
   // An unmapped model family leaves thinking unset rather than inventing transport.
   assert.equal(plans['zhipu-coding/glm-5.3-flash:cc'].reasoningEffort, undefined);
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].thinking, 'max');
@@ -572,7 +572,8 @@ test('Cursor GPT-5.6 thinking maps all five levels into model substitution witho
   // Grok is only confirmed at high, mapping to the exact cursor-grok-4.6-high id.
   assert.deepEqual(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').thinking, 'high');
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').upstreamModel, 'cursor-grok-4.6-high');
-  assert.throws(() => catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'max'), /does not support thinking level max/);
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'max').thinking, 'high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'low').thinking, 'high');
   // The legacy saved-config id remains a provider input alias to the canonical id.
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'cursor-grok-4.6-high').model, 'grok-4.6');
 });
