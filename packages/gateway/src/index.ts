@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import type { Catalog, GatewayProtocol, ProviderDefinition, PublicGatewayModel } from '@wrenyard/catalog';
 import { upstreamAuthHeaders, type ProviderRuntime } from '@wrenyard/providers';
+import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 
 export interface GatewayRequestCompletedEvent {
   protocol: GatewayProtocol;
@@ -8,6 +9,12 @@ export interface GatewayRequestCompletedEvent {
   provider?: string;
   status: number;
   durationMs: number;
+  /** Scoped execution id attributed by the request path, when present. */
+  executionId?: string;
+  /** Response sampling contract used for this request, when sampled. */
+  tps_sampling_contract?: 'response_v1';
+  /** Attributable paired response samples for this request, when sampled. */
+  tps_samples?: ResponseTpsContract['tps_samples'];
 }
 
 export interface GatewayConnection {
@@ -18,6 +25,7 @@ export interface GatewayConnection {
 }
 
 export interface ModelGatewayOptions {
+  now?: () => number;
   catalog: Catalog;
   providers: ProviderRuntime;
   fetch?: typeof globalThis.fetch;
@@ -57,6 +65,24 @@ const RESPONSE_HEADER_ALLOWLIST = new Set([
   'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset',
 ]);
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Splits an optional `/execution/<safe id>` scope out of a gateway request
+ * path. Only a well-formed ASCII execution token (letters, digits, `_`, `-`,
+ * max 128 chars) is accepted; the remaining path is resolved against the exact
+ * known ROUTES set, so the execution segment is an attribution field and is
+ * never forwarded upstream. A malformed scope yields undefined and the request
+ * is not served, exactly as an unknown path.
+ */
+function parseScopedPath(pathname: string): { executionId?: string; routePath: string } | undefined {
+  const match = /^\/gateway\/([^/]+)\/execution\/([^/]+)(\/v1\/.*)$/u.exec(pathname);
+  if (!match) return { routePath: pathname };
+  const executionId = match[2]!;
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(executionId)) return undefined;
+  const routePath = `/gateway/${match[1]!}${match[3]!}`;
+  if (!ROUTES.has(routePath)) return undefined;
+  return { executionId, routePath };
+}
 
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -167,10 +193,12 @@ async function writeNormalizedResponse(
   response: ServerResponse,
   providers: ProviderRuntime,
   context: ResponseModelContext,
+  sampler?: ResponseSampler,
 ): Promise<void> {
   if (!upstream.body) return;
   const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
   if (contentType.includes('application/json')) {
+    sampler?.markNonStream();
     const text = await upstream.text();
     try {
       response.write(JSON.stringify(normalizeResponsePayload(JSON.parse(text), providers, context)));
@@ -180,6 +208,7 @@ async function writeNormalizedResponse(
     return;
   }
   if (!contentType.includes('text/event-stream')) {
+    sampler?.markNonStream();
     const reader = upstream.body.getReader();
     try {
       for (;;) {
@@ -200,7 +229,9 @@ async function writeNormalizedResponse(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      pending += decoder.decode(value, { stream: true });
+      const text = decoder.decode(value, { stream: true });
+      sampler?.feed(text);
+      pending += text;
       let newline = pending.indexOf('\n');
       while (newline >= 0) {
         response.write(`${normalizeSseLine(pending.slice(0, newline), providers, context)}\n`);
@@ -208,7 +239,10 @@ async function writeNormalizedResponse(
         newline = pending.indexOf('\n');
       }
     }
-    pending += decoder.decode();
+    const tail = decoder.decode();
+    sampler?.feed(tail);
+    sampler?.end();
+    pending += tail;
     if (pending) response.write(normalizeSseLine(pending, providers, context));
   } finally {
     reader.releaseLock();
@@ -235,8 +269,11 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   return {
     async handle(request, response) {
       const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-      const route = ROUTES.get(pathname);
+      const scoped = parseScopedPath(pathname);
+      if (!scoped) return false;
+      const route = ROUTES.get(scoped.routePath);
       if (!route) return false;
+      const executionId = scoped.executionId;
       const startedAt = Date.now();
       if (closed) {
         json(response, 503, { error: { type: 'gateway_unavailable', message: 'Model Gateway is stopping' } });
@@ -264,12 +301,12 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       try { body = await readJson(request); } catch (error) {
         const status = error instanceof Error && error.message === 'request_too_large' ? 413 : 400;
         json(response, status, { error: { type: 'invalid_request_error', message: status === 413 ? 'Request body too large' : 'Request body must be a JSON object' } });
-        await emit({ protocol: route.protocol, status, durationMs: Date.now() - startedAt });
+        await emit({ protocol: route.protocol, status, durationMs: Date.now() - startedAt, executionId });
         return true;
       }
       if (typeof body.model !== 'string') {
         json(response, 400, { error: { type: 'invalid_request_error', message: 'model must be a provider/model string' } });
-        await emit({ protocol: route.protocol, status: 400, durationMs: Date.now() - startedAt });
+        await emit({ protocol: route.protocol, status: 400, durationMs: Date.now() - startedAt, executionId });
         return true;
       }
 
@@ -277,14 +314,14 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       let resolved;
       try { resolved = options.catalog.resolveGatewayModel(route.protocol, publicModel); } catch (error) {
         json(response, 404, { error: { type: 'not_found_error', message: error instanceof Error ? error.message : 'Unknown model' } });
-        await emit({ protocol: route.protocol, publicModel, status: 404, durationMs: Date.now() - startedAt });
+        await emit({ protocol: route.protocol, publicModel, status: 404, durationMs: Date.now() - startedAt, executionId });
         return true;
       }
       publicModel = resolved.publicId;
       const credential = await options.providers.credential(resolved.provider);
       if (!credential) {
         json(response, 503, { error: { type: 'credential_unavailable', message: `Provider ${resolved.provider.id} is not configured` } });
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 503, durationMs: Date.now() - startedAt });
+        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 503, durationMs: Date.now() - startedAt, executionId });
         return true;
       }
 
@@ -309,6 +346,18 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         delete body.models;
         delete body.route;
       }
+
+      // OpenAI chat streaming requests must report final usage so a response
+      // sample can be paired with its upstream-reported completion tokens. The
+      // flag is added only for streamed chat requests; every other field is
+      // preserved exactly and no token values are invented.
+      if (route.protocol === 'openai_chat' && body.stream === true) {
+        const existing = body.stream_options;
+        body.stream_options = {
+          ...(existing && typeof existing === 'object' && !Array.isArray(existing) ? existing as Record<string, unknown> : {}),
+          include_usage: true,
+        };
+      }
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();
@@ -322,21 +371,36 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           if (RESPONSE_HEADER_ALLOWLIST.has(name)) responseHeaders[name] = value;
         });
         response.writeHead(upstream.status, responseHeaders);
+        // Raw SSE is observed before model normalization so the sampler sees
+        // the upstream wire bytes; the sample model is normalized to the
+        // requested canonical public model.
+        const sampler = new ResponseSampler({
+          now: options.now,
+          normalizeModel: (model) => options.providers.publicResponseModel(resolved.provider, model, upstreamModel, publicModel),
+        });
         await writeNormalizedResponse(upstream, response, options.providers, {
           protocol: route.protocol,
           provider: resolved.provider,
           upstreamModel,
           publicModel,
-        });
+        }, sampler);
         response.end();
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: upstream.status, durationMs: Date.now() - startedAt });
+        await emit({
+          protocol: route.protocol,
+          publicModel,
+          provider: resolved.provider.id,
+          status: upstream.status,
+          durationMs: Date.now() - startedAt,
+          ...(executionId ? { executionId } : {}),
+          ...(sampler.sample() ?? {}),
+        });
       } catch (error) {
         if (!response.headersSent) {
           json(response, controller.signal.aborted ? 499 : 502, { error: { type: 'upstream_error', message: controller.signal.aborted ? 'Request cancelled' : 'Provider request failed' } });
         } else {
           response.destroy();
         }
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: controller.signal.aborted ? 499 : 502, durationMs: Date.now() - startedAt });
+        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: controller.signal.aborted ? 499 : 502, durationMs: Date.now() - startedAt, executionId });
       } finally {
         request.off('aborted', abort);
         active.delete(controller);
