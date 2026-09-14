@@ -646,8 +646,12 @@ button, input, select { accent-color: var(--moss-deep); }
 .routing-test-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
 .routing-test-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .routing-test-head h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 18px; }
-.routing-test-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.routing-test-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .routing-test-toolbar select, .routing-test-toolbar .primary-button { min-height: 34px; }
+/* Chinese primary-button labels must stay on one line: block shrinking and give
+   the button its intrinsic text width so the toolbar wraps instead of clipping the
+   label, while the task dropdown still flexes. */
+.routing-test-toolbar .primary-button { flex: 0 0 auto; min-width: 0; white-space: nowrap; }
 .routing-test-toolbar select { min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 0 9px; color: var(--ink); background: #fffaf0; font: inherit; font-size: 12px; }
 .routing-test-form { display: grid; grid-template-columns: max-content minmax(120px, 1fr) max-content minmax(120px, 1fr); align-items: center; gap: 12px; margin-top: 14px; }
 .routing-test-form > label { color: var(--ink-soft); font-size: 11px; font-weight: 750; white-space: nowrap; }
@@ -881,7 +885,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .table-head span { color: var(--muted); font-family: inherit; font-size: 9px; font-weight: 750; letter-spacing: .05em; }
 #stats-profile-list .table-row { grid-template-columns: minmax(0, 1fr) 58px 78px 72px; }
 #stats-task-list .table-row { grid-template-columns: minmax(0, 1fr) 44px 48px 82px 44px; }
-#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(0, 1.3fr) minmax(0, 1.05fr) minmax(112px, .9fr) 88px minmax(96px, .72fr); gap: 12px; }
+#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(0, 1.2fr) minmax(0, 1fr) minmax(100px, .9fr) 84px minmax(84px, .7fr) minmax(96px, .85fr); gap: 12px; }
 #stats-task-runs-list .table-row > * { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
 #stats-task-runs-list .table-row > span { text-align: left; }
 #stats-task-runs-list .table-row > :nth-last-child(3), #stats-task-runs-list .table-row > :nth-last-child(2), #stats-task-runs-list .table-row > :last-child { text-align: right; }
