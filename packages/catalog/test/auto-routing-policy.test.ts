@@ -5,7 +5,7 @@
  * semantics, full-cycle/rolling aggregation, hard guards, marginal price and
  * verified quota-burn efficiency economic evidence, and the approved normalized
  * ranking score:
- *   score = .50*P + .20*S + .20*Q + .10*I
+ *   score = .40*P + .30*S + .20*Q + .10*I
  * where P is the continuous price-factor from fixed anchors, S = min(TPS/200,1),
  * Q is quota headroom quality, and I is the intelligence factor. Every factor is
  * bounded in [0, 1], so the score is always within [0, 1]. Ranking is one global
@@ -16,7 +16,7 @@
  * "glm-flash-like") purely to make canonical/snapshot ids readable. No real
  * provider pricing or quota is asserted anywhere.
  */
-import { test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SCORE_WEIGHTS,
@@ -27,6 +27,8 @@ import {
   assessRequiredQuota,
   evaluateCandidate,
   rankAutoRoutingCandidates,
+  validateScoreWeights,
+  type ScoreWeights,
   type CandidateInput,
   type CandidateAssessment,
   type QuotaEvidence,
@@ -134,17 +136,18 @@ function interpPrice(priceUsdPerM: number): number {
 
 function expScore(
   input: CandidateInput,
-  assessment: CandidateAssessment
+  assessment: CandidateAssessment,
+  weights: ScoreWeights = SCORE_WEIGHTS
 ): number {
   const P = interpPrice(assessment.routingPriceUsdPerM);
   const S = clamp01(input.effectiveTps / 200);
   const Q = assessment.quotaQuality;
   const I = assessment.intelligenceFactor;
   return (
-    SCORE_WEIGHTS.P * P +
-    SCORE_WEIGHTS.S * S +
-    SCORE_WEIGHTS.Q * Q +
-    SCORE_WEIGHTS.I * I
+    weights.P * P +
+    weights.S * S +
+    weights.Q * Q +
+    weights.I * I
   );
 }
 
@@ -152,14 +155,14 @@ function rankedIds(result: { ranked: { canonicalId: string }[] }): string[] {
   return result.ranked.map((r) => r.canonicalId);
 }
 
-function expectAccepted(c: CandidateInput) {
-  const ev = evaluateCandidate(c);
+function expectAccepted(c: CandidateInput, weights?: ScoreWeights) {
+  const ev = evaluateCandidate(c, weights);
   assert.equal(ev.kind, "accepted", `expected acceptance for ${c.canonicalId}`);
   return ev.kind === "accepted" ? ev.assessment : null;
 }
 
-function expectRejected(c: CandidateInput, reason: string) {
-  const ev = evaluateCandidate(c);
+function expectRejected(c: CandidateInput, reason: string, weights?: ScoreWeights) {
+  const ev = evaluateCandidate(c, weights);
   assert.equal(ev.kind, "rejected", `expected rejection for ${c.canonicalId}`);
   assert.equal(ev.kind === "rejected" ? ev.reason : "", reason);
   return ev.kind === "rejected" ? ev : null;
@@ -680,6 +683,135 @@ test("any exhausted (zero) constraint rejects the candidate even alongside a hea
 });
 
 // ---------------------------------------------------------------------------
+// Editable score weights: validated custom sets drive ranking
+// ---------------------------------------------------------------------------
+
+describe("editable score weights", () => {
+  const PRICE_ONLY: ScoreWeights = { P: 1, S: 0, Q: 0, I: 0 };
+  const SPEED_ONLY: ScoreWeights = { P: 0, S: 1, Q: 0, I: 0 };
+  // Equal quota/quality/intelligence; only P and S differ, and the cheap-but-
+  // slow candidate P-outranks the fast-but-expensive one while the fast one
+  // S-outranks the cheap one.
+  const cheapSlow = () => cand({
+    snapshotId: "rank",
+    canonicalId: "cheap-slow",
+    referenceUsdPerM: 0.5,
+    effectiveCapUsdPerM: 10,
+    effectiveTps: 10,
+    requiredQuota: [q("q", fullCycleEv(80, 1))],
+  });
+  const fastPricey = () => cand({
+    snapshotId: "rank",
+    canonicalId: "fast-pricey",
+    referenceUsdPerM: 30,
+    effectiveCapUsdPerM: 40,
+    effectiveTps: 200,
+    requiredQuota: [q("q", fullCycleEv(80, 1))],
+  });
+
+  test("custom weights reverse the chosen rank relative to the defaults", () => {
+    const inputs = [cheapSlow(), fastPricey()];
+    const [cs, fp] = inputs.map((input) => expectAccepted(input)!);
+    close(cs.priceFactor, 0.85, 1e-12, "cheap P(0.5)");
+    close(cs.speedFactor, 0.05, 1e-12, "cheap S");
+    close(fp.priceFactor, 0.05, 1e-12, "pricey P(30)");
+    close(fp.speedFactor, 1, 1e-12, "pricey S");
+
+    // Defaults (.4/.3/.2/.1) weight price more heavily than speed, so the
+    // cheap-but-slow candidate wins.
+    const byDefault = rankAutoRoutingCandidates(inputs);
+    assert.deepEqual(rankedIds(byDefault), ["cheap-slow", "fast-pricey"]);
+    assert.deepEqual(byDefault.ranked[0].weights, SCORE_WEIGHTS);
+
+    // A price-only weight set keeps the same winner.
+    assert.deepEqual(
+      rankedIds(rankAutoRoutingCandidates(inputs, PRICE_ONLY)),
+      ["cheap-slow", "fast-pricey"]
+    );
+    // A speed-only weight set reverses the order: the fast candidate leads.
+    assert.deepEqual(
+      rankedIds(rankAutoRoutingCandidates(inputs, SPEED_ONLY)),
+      ["fast-pricey", "cheap-slow"]
+    );
+    // Each ranked position carries the exact weight set used.
+    assert.deepEqual(rankAutoRoutingCandidates(inputs, SPEED_ONLY).ranked[0].weights, SPEED_ONLY);
+  });
+
+  test("custom weights score equals the weighted sum of the same factors", () => {
+    const input = cheapSlow();
+    const custom: ScoreWeights = { P: 0.25, S: 0.25, Q: 0.25, I: 0.25 };
+    const withCustom = expectAccepted(input, custom)!;
+    close(withCustom.score, expScore(input, withCustom, custom), 1e-12, "custom score");
+    assert.deepEqual(withCustom.weights, custom);
+  });
+
+  test("validateScoreWeights rejects missing and extra keys", () => {
+    assert.throws(() => validateScoreWeights({ P: 0.4, S: 0.3, Q: 0.2 }), /missing required key I/);
+    assert.throws(
+      () => validateScoreWeights({ P: 0.4, S: 0.3, Q: 0.2, I: 0.1, X: 0 }),
+      /unknown key X/
+    );
+    assert.throws(() => validateScoreWeights({ P: 0.4, S: 0.3, Q: 0.2, I: 0.1, price: 0 }), /unknown key price/);
+  });
+
+  test("validateScoreWeights rejects non-finite, negative, out-of-range, and non-1 sums", () => {
+    assert.throws(() => validateScoreWeights({ P: Number.NaN, S: 0.3, Q: 0.2, I: 0.1 }), /finite number/);
+    assert.throws(
+      () => validateScoreWeights({ P: Number.POSITIVE_INFINITY, S: 0.3, Q: 0.2, I: 0.1 }),
+      /finite number/
+    );
+    assert.throws(() => validateScoreWeights({ P: -0.1, S: 0.3, Q: 0.2, I: 0.6 }), /within \[0, 1\]/);
+    assert.throws(() => validateScoreWeights({ P: 1.5, S: 0.3, Q: 0.2, I: 0.1 }), /within \[0, 1\]/);
+    assert.throws(() => validateScoreWeights({ P: 0.5, S: 0.5, Q: 0.5, I: 0.5 }), /sum to 1/);
+    assert.throws(() => validateScoreWeights({ P: 0.4, S: 0.3, Q: 0.2, I: 0.2 }), /sum to 1/);
+    assert.throws(() => validateScoreWeights(null), /expected an object/);
+    assert.throws(() => validateScoreWeights([0.4, 0.3, 0.2, 0.1]), /expected an object/);
+  });
+
+  test("validateScoreWeights accepts a valid complete set and returns a fresh object", () => {
+    const raw = { P: 0.4, S: 0.3, Q: 0.2, I: 0.1 };
+    const validated = validateScoreWeights(raw);
+    assert.deepEqual(validated, raw);
+    assert.notEqual(validated, raw);
+    raw.P = 0.9;
+    assert.equal(validated.P, 0.4, "validated copy is isolated from later mutation");
+  });
+
+  test("snapshot weights are immutable: caller mutation cannot change a ranked result", () => {
+    const weights: ScoreWeights = { P: 0.4, S: 0.3, Q: 0.2, I: 0.1 };
+    const inputs = [cheapSlow(), fastPricey()];
+    const first = rankAutoRoutingCandidates(inputs, weights);
+    const firstJson = JSON.stringify(first);
+    const firstWeights = { ...first.ranked[0].weights };
+    weights.P = 1;
+    weights.S = 0;
+    weights.Q = 0;
+    weights.I = 0;
+    // The earlier result is a defensive snapshot of the validated weight set.
+    assert.equal(JSON.stringify(first), firstJson);
+    assert.deepEqual(first.ranked[0].weights, firstWeights);
+    // A fresh call re-snapshots the mutated weights and ranks accordingly.
+    const second = rankAutoRoutingCandidates(inputs, weights);
+    assert.deepEqual(rankedIds(second), ["cheap-slow", "fast-pricey"]);
+    assert.deepEqual(second.ranked[0].weights, { P: 1, S: 0, Q: 0, I: 0 });
+  });
+
+  test("invalid custom weights throw instead of silently falling back to defaults", () => {
+    const input = cheapSlow();
+    assert.throws(
+      () => evaluateCandidate(input, { P: 0.5, S: 0.5, Q: 0.5, I: 0.5 }),
+      /sum to 1/
+    );
+    assert.throws(() => evaluateCandidate(input, { P: 1, S: 0, Q: 0, I: Number.NaN }), /finite number/);
+    assert.throws(() => rankAutoRoutingCandidates([input], { P: 0.4, S: 0.3, Q: 0.2, I: 0.2 }), /sum to 1/);
+    assert.throws(
+      () => rankAutoRoutingCandidates([input], { P: 1.2, S: -0.2, Q: 0, I: 0 }),
+      /within \[0, 1\]/
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tier, gate, and incomplete-strained behavior on evaluateCandidate
 // ---------------------------------------------------------------------------
 
@@ -794,9 +926,9 @@ test(">= 10 unknown quota is no longer blocked by any reference price gate", () 
 // Approved normalized formula: weights, price anchors, speed, quota, intelligence
 // ---------------------------------------------------------------------------
 
-test("score weights sum to 1 with .50/.20/.20/.10", () => {
-  assert.equal(SCORE_WEIGHTS.P, 0.5);
-  assert.equal(SCORE_WEIGHTS.S, 0.2);
+test("score weights sum to 1 with .40/.30/.20/.10", () => {
+  assert.equal(SCORE_WEIGHTS.P, 0.4);
+  assert.equal(SCORE_WEIGHTS.S, 0.3);
   assert.equal(SCORE_WEIGHTS.Q, 0.2);
   assert.equal(SCORE_WEIGHTS.I, 0.1);
   close(SCORE_WEIGHTS.P + SCORE_WEIGHTS.S + SCORE_WEIGHTS.Q + SCORE_WEIGHTS.I, 1, 1e-12);
@@ -1001,7 +1133,7 @@ test("a marginal discount only feeds the normalized score; Q advantage can outwe
   const result = rankAutoRoutingCandidates([baseline, discounted]);
   // Baseline P(2)=0.6, Q=0.25; discounted P(2.9)=0.54375, Q=0.70. The Q
   // advantage (0.70 vs 0.25, weighted 0.2 => +0.09) outweighs the P premium
-  // (weighted 0.5 => -0.028), so the discounted candidate ranks first.
+  // (weighted 0.4 => -0.0225), so the discounted candidate ranks first.
   assert.deepEqual(rankedIds(result), ["marg-3", "cheap-2"]);
 });
 
@@ -1177,7 +1309,7 @@ test("verified efficiency lifts Q only; its score contribution can outweigh an e
   const h = expectAccepted(highEff);
   close(h!.quotaQuality, 0.85 * 0.7 + 0.15 * 0.9, 1e-12, "boosted Q");
   // The Q boost (0.73 vs 0.25, weighted 0.2 => +0.096) outweighs the P gap
-  // (P(4)=0.475 vs P(2)=0.6, weighted 0.5 => -0.0625), so the higher-efficiency
+  // (P(4)=0.475 vs P(2)=0.6, weighted 0.4 => -0.05), so the higher-efficiency
   // candidate leads on the normalized score.
   const result = rankAutoRoutingCandidates([baseline, highEff]);
   assert.deepEqual(rankedIds(result), ["eff-strong", "cheap-eff"]);
@@ -1232,23 +1364,23 @@ test("global ranking is one deterministic descending score order", () => {
   const c1 = cand({ canonicalId: "c1", referenceUsdPerM: 6, requiredQuota: [q("q", hQ(0.5))] });
   const c2 = cand({ canonicalId: "c2", referenceUsdPerM: 1, requiredQuota: [q("q", hQ(0.8))] });
   const c3 = cand({ canonicalId: "c3", referenceUsdPerM: 30, requiredQuota: [q("q", hQ(0.95))] });
-  // c1: P(6)=0.35, Q0.5  -> 0.175 + 0.025 + 0.1 + 0.1 = 0.40
-  // c2: P(1)=0.75, Q0.8  -> 0.375 + 0.025 + 0.16 + 0.1 = 0.66
-  // c3: P(30)=0.05, Q0.95 -> 0.025 + 0.025 + 0.19 + 0.1 = 0.34
+  // c1: P(6)=0.35, Q0.5  -> 0.14 + 0.0375 + 0.1 + 0.1 = 0.3775
+  // c2: P(1)=0.75, Q0.8  -> 0.30 + 0.0375 + 0.16 + 0.1 = 0.5975
+  // c3: P(30)=0.05, Q0.95 -> 0.02 + 0.0375 + 0.19 + 0.1 = 0.3475
   const forward = rankAutoRoutingCandidates([c1, c2, c3]);
   const reversed = rankAutoRoutingCandidates([c3, c2, c1]);
   assert.deepEqual(rankedIds(forward), ["c2", "c1", "c3"]);
   assert.deepEqual(rankedIds(reversed), ["c2", "c1", "c3"]);
 });
 
-test("DS prices 1.2 vs 0.6 produce a score delta of 0.055 with other inputs equal", () => {
+test("DS prices 1.2 vs 0.6 produce a score delta of 0.044 with other inputs equal", () => {
   const a = cand({ canonicalId: "ds-1.2", referenceUsdPerM: 1.2 });
   const b = cand({ canonicalId: "ds-0.6", referenceUsdPerM: 0.6 });
   const [ea, eb] = [a, b].map((x) => expectAccepted(x)!);
-  // P(1.2)=0.72, P(0.6)=0.83 -> delta P 0.11, weighted by P=0.5 -> 0.055
+  // P(1.2)=0.72, P(0.6)=0.83 -> delta P 0.11, weighted by P=0.4 -> 0.044
   close(ea.priceFactor, interpPrice(1.2), 1e-12, "P(1.2)");
   close(eb.priceFactor, interpPrice(0.6), 1e-12, "P(0.6)");
-  close(eb.score - ea.score, 0.055, 1e-9, "delta 0.055");
+  close(eb.score - ea.score, 0.044, 1e-9, "delta 0.044");
 });
 
 test("quota tiers can cross by score while blocked remains rejected", () => {
@@ -1442,7 +1574,6 @@ test("all factors and the score stay within [0,1]", () => {
     assert.ok(factor >= 0 && factor <= 1, `worst factor ${factor} within [0,1]`);
   }
   close(worst.score, 0.2 * worst.quotaQuality, 1e-12, "worst score = 0.2*Q");
-
   // Best case: free price, max speed, healthy quota, top intelligence.
   const best = expectAccepted(
     cand({
