@@ -6,10 +6,10 @@
 // Build mode (WRENYARD_E2E_RELEASE_DIR unset) builds the local release
 // (desktop skipped) into a temp dir, installs the actual CLI tarball into a
 // throwaway consumer project, runs the standalone executable directly, then
-// serves the suite zip + checksum sidecar over local HTTP and runs
-// scripts/install.sh into a temp prefix. A fake `go` is placed early on PATH
-// for every consumer install/run step and the test fails if it is ever
-// invoked.
+// serves the real suite zip plus static update metadata over a fake network
+// layer and runs scripts/install.sh into a temp prefix. A fake `go` is placed
+// early on PATH for every consumer install/run step and the test fails if it is
+// ever invoked.
 //
 // Prebuilt mode (WRENYARD_E2E_RELEASE_DIR set) resolves the variable against
 // the repository root and consumes that existing release directory as-is: the
@@ -358,19 +358,25 @@ test('installers have no standalone Pet artifact contract', () => {
   assertInstallersHaveNoStandalonePet(ROOT);
 });
 
-test('installers use GitHub asset digests and bootstrap suite plus Desktop', () => {
+test('installers use static update metadata and bootstrap suite plus Desktop', () => {
   const sh = fs.readFileSync(path.join(ROOT, 'scripts', 'install.sh'), 'utf8');
   const ps1 = fs.readFileSync(path.join(ROOT, 'scripts', 'install.ps1'), 'utf8');
 
-  assert.match(sh, /resolve_release_asset_sha256/);
   assert.match(sh, /--suite-only/);
   assert.match(sh, /wrenyard-desktop-\$DIR_VERSION-\$TARGET\.zip/);
   assert.doesNotMatch(sh, /CHECKSUM_URL="\$\{CHECKSUM_URL:-\$URL\.sha256\}"/);
 
   assert.match(ps1, /\[switch\]\$SuiteOnly/);
-  assert.match(ps1, /\.digest/);
   assert.match(ps1, /wrenyard-desktop-\$DirVersion-win32-x64\.zip/);
   assert.doesNotMatch(ps1, /\$ChecksumUrl = "\$Url\.sha256"/);
+
+  // Release discovery is a static metadata document, not the Release API.
+  assert.match(sh, /WRENYARD_UPDATE_BASE_URL/);
+  assert.match(sh, /versions\/\$DIR_VERSION\.json/);
+  assert.match(ps1, /WRENYARD_UPDATE_BASE_URL/);
+  assert.match(ps1, /Assert-ExactVersionDocument/);
+  assert.doesNotMatch(sh, /api\.github\.com/);
+  assert.doesNotMatch(ps1, /api\.github\.com/);
 });
 
 function readVersion(manifest, zipPath) {
@@ -764,8 +770,10 @@ test('packed-install E2E: no consumer-side Go compilation', {
     run(sea, ['version'], { env: consumerEnv });
     run(sea, ['help'], { env: consumerEnv });
 
-    // 5. Serve the suite zip + sidecar over local HTTP and run the installer
-    //    into a temp prefix, then run the installed binary through the launcher.
+    // 5. Serve the real suite zip over local HTTP and run the installer into a
+    //    temp prefix with an explicit custom URL, then run the installed binary
+    //    through the launcher. Static update metadata answers the exact-version
+    //    document request through the fake curl on PATH.
     const server = http.createServer((req, res) => {
       const name = path.basename(req.url ?? '/');
       const file = name.endsWith('.sha256') ? shaPath : zipPath;
@@ -870,11 +878,12 @@ test('packed-install E2E: no consumer-side Go compilation', {
     }
 
     // 5b. POSIX --update path: a fake `curl` placed on a restricted PATH serves
-    // the releases-list JSON (with stable, prerelease and draft entries), the
-    // built zip and its checksum sidecar. install.sh --update must select the
-    // newest non-draft release (a v1.0.0-dev.* prerelease here), never the
-    // draft, and must use the private-release token through a mode-0600 netrc
-    // file without ever echoing it.
+    // the static complete version manifest (a single dev.json manifest document
+    // plus the exact-version document) and the real suite zip.
+    // install.sh --update must select the version published in the manifest,
+    // never call api.github.com, and must use the
+    // private-release token through a mode-0600 netrc file without ever
+    // echoing it.
     if (process.platform !== 'win32') {
       assert.equal(TRIPLET, 'darwin-arm64', `unsupported POSIX release host: ${TRIPLET}`);
       const fakeCurlDir = path.join(tmp, 'fake-curl');
@@ -896,59 +905,63 @@ for a in "$@"; do
   esac
 done
 printf '%s\\n' "$url" >> "$FAKE_CURL_LOG"
+case "$url" in
+  *api.github.com*) printf 'API_REQUEST\\n' >> "$FAKE_CURL_LOG" ;;
+esac
 if [ -n "$netrc" ] && [ -n "$FAKE_CURL_TOKEN" ]; then
   if grep -q "$FAKE_CURL_TOKEN" "$netrc"; then printf 'AUTH_OK\\n' >> "$FAKE_CURL_LOG"; else printf 'AUTH_MISSING\\n' >> "$FAKE_CURL_LOG"; fi
 fi
 case "$url" in
-  *releases?per_page=*|*releases\\?per_page=*)
-    if [ -n "$out" ]; then cat "$FAKE_CURL_RELEASES" > "$out"; else cat "$FAKE_CURL_RELEASES"; fi ;;
-  *releases/tags/*)
-    if [ -n "$out" ]; then cat "$FAKE_CURL_RELEASE_DETAIL" > "$out"; else cat "$FAKE_CURL_RELEASE_DETAIL"; fi ;;
   *.sha256)
     if [ -n "$out" ]; then cat "$FAKE_CURL_SHA" > "$out"; else cat "$FAKE_CURL_SHA"; fi ;;
+  */dev.json)
+    if [ -n "$out" ]; then cat "$FAKE_CURL_DEV" > "$out"; else cat "$FAKE_CURL_DEV"; fi ;;
+  */versions/*.json)
+    if [ -n "$out" ]; then cat "$FAKE_CURL_VERSION" > "$out"; else cat "$FAKE_CURL_VERSION"; fi ;;
   *)
     if [ -n "$out" ]; then cat "$FAKE_CURL_ZIP" > "$out"; else cat "$FAKE_CURL_ZIP"; fi ;;
 esac
 `, 'utf8');
       fs.chmodSync(fakeCurl, 0o755);
 
-      const releaseDetailPath = path.join(tmp, 'release-detail.json');
-      fs.writeFileSync(releaseDetailPath, `{
-  "tag_name": "v9.9.9-rc.9",
-  "assets": [
-    {
-      "name": "wrenyard-9.9.9-rc.9-${TRIPLET}-suite.zip",
-      "digest": "sha256:${sha256File(zipPath)}"
-    }
-  ]
-}
-`, 'utf8');
+      // Static dev.json: one complete version manifest document with the
+      // production schema, the selected version, and all four canonical assets
+      // carrying the raw 64-hex digest of the real prebuilt archive they point
+      // at (the same digest is used for every fixture asset).
+      const suiteSha = sha256File(zipPath);
+      const devPath = path.join(tmp, 'dev.json');
+      const canonicalAsset = (name) => ({
+        name,
+        url: `https://github.com/wrenyard/wrenyard/releases/download/v9.9.9-rc.9/${name}`,
+        sha256: suiteSha,
+      });
+      fs.writeFileSync(devPath, `${JSON.stringify({
+        schema_version: 'wrenyard.update.v1',
+        version: '9.9.9-rc.9',
+        published_at: '2026-08-14T09:00:00Z',
+        assets: [
+          canonicalAsset('wrenyard-9.9.9-rc.9-darwin-arm64-suite.zip'),
+          canonicalAsset('wrenyard-desktop-9.9.9-rc.9-darwin-arm64.zip'),
+          canonicalAsset('wrenyard-9.9.9-rc.9-win32-x64-suite.zip'),
+          canonicalAsset('wrenyard-desktop-9.9.9-rc.9-win32-x64.zip'),
+        ],
+      }, null, 2)}\n`, 'utf8');
 
-      const releasesPath = path.join(tmp, 'releases.json');
-      fs.writeFileSync(releasesPath, `[
-  {
-    "url": "https://api.github.com/repos/wrenyard/wrenyard/releases/3",
-    "tag_name": "v9.9.9-draft",
-    "draft": true,
-    "prerelease": false,
-    "published_at": "2026-08-15T00:00:00Z"
-  },
-  {
-    "url": "https://api.github.com/repos/wrenyard/wrenyard/releases/2",
-    "tag_name": "v9.9.9-rc.9",
-    "draft": false,
-    "prerelease": true,
-    "published_at": "2026-08-14T09:00:00Z"
-  },
-  {
-    "url": "https://api.github.com/repos/wrenyard/wrenyard/releases/1",
-    "tag_name": "v9.9.8",
-    "draft": false,
-    "prerelease": false,
-    "published_at": "2026-08-01T00:00:00Z"
-  }
-]
-`, 'utf8');
+      // Exact-version document for the selected version: the same complete
+      // manifest schema with its four canonical assets.
+      const versionDocName = 'versions/9.9.9-rc.9.json';
+      const versionDocPath = path.join(tmp, 'version-9.9.9-rc.9.json');
+      fs.writeFileSync(versionDocPath, `${JSON.stringify({
+        schema_version: 'wrenyard.update.v1',
+        version: '9.9.9-rc.9',
+        published_at: '2026-08-14T09:00:00Z',
+        assets: [
+          canonicalAsset('wrenyard-9.9.9-rc.9-darwin-arm64-suite.zip'),
+          canonicalAsset('wrenyard-desktop-9.9.9-rc.9-darwin-arm64.zip'),
+          canonicalAsset('wrenyard-9.9.9-rc.9-win32-x64-suite.zip'),
+          canonicalAsset('wrenyard-desktop-9.9.9-rc.9-win32-x64.zip'),
+        ],
+      }, null, 2)}\n`, 'utf8');
 
       // Restricted PATH: fake curl plus /usr/bin:/bin only. No Node, Go, pnpm
       // or any toolchain is available to the installer or the installed CLI.
@@ -957,14 +970,18 @@ esac
         ...consumerEnv,
         PATH: `${fakeCurlDir}${path.delimiter}/usr/bin:/bin`,
         FAKE_CURL_LOG: curlLog,
-        FAKE_CURL_RELEASES: releasesPath,
-        FAKE_CURL_RELEASE_DETAIL: releaseDetailPath,
+        FAKE_CURL_DEV: devPath,
+        FAKE_CURL_VERSION: versionDocPath,
         FAKE_CURL_ZIP: zipPath,
         FAKE_CURL_SHA: shaPath,
       };
 
-      // Step A: explicit --version install of the built release. The fake curl
-      // serves the real suite zip for any asset URL derived from the version.
+      // Step A: explicit --version install of the built release. A custom
+      // --url with an explicit --checksum-url (and --suite-only) intentionally
+      // bypasses all static metadata: no dev.json and no exact-version document
+      // is fetched, and the artifact comes solely from the explicit URL plus
+      // its checksum sidecar.
+      fs.writeFileSync(curlLog, '');
       await runAsync('bash', [
         path.join(ROOT, 'scripts', 'install.sh'),
         '--version', version,
@@ -974,6 +991,17 @@ esac
         '--prefix', updatePrefix,
         '--bin-dir', path.join(updatePrefix, 'bin'),
       ], { env: updateEnv });
+      const metadataBase = (updateEnv.WRENYARD_UPDATE_BASE_URL || 'https://raw.githubusercontent.com/wrenyard/wrenyard/updates').replace(/\/+$/, '');
+      const token = `ghp_${'x'.repeat(36)}`;
+      const versionDocRequests = fs.readFileSync(curlLog, 'utf8').trim().split('\n');
+      assert.ok(
+        !versionDocRequests.some((line) => line.endsWith('.json')),
+        `explicit --url install must bypass metadata documents entirely: ${versionDocRequests.join(', ')}`,
+      );
+      assert.ok(
+        !versionDocRequests.some((line) => line.includes('api.github.com')),
+        `install.sh must never request the GitHub Release API: ${versionDocRequests.join(', ')}`,
+      );
 
       // The installed SEA is the authority for its own suite root. Stale
       // variables inherited from a previous release must not pin the daemon
@@ -1027,11 +1055,11 @@ esac
         });
       }
 
-      // Step B: --update with a private-release token. The releases-list must
-      // select the newest non-draft entry (v9.9.9-rc.9), skipping the draft
-      // that was published later, and the token must authenticate via the
-      // mode-0600 netrc file without appearing anywhere in the output.
-      const token = `ghp_${'x'.repeat(36)}`;
+      // Step B: --update with a private-release token. The complete version
+      // manifest must select its published version (v9.9.9-rc.9), the
+      // token must authenticate via the mode-0600 netrc file without appearing
+      // anywhere in the output, and no request may reach api.github.com. The
+      // canonical suite asset is downloaded for real from the metadata URL.
       const updateAuthEnv = { ...updateEnv, GH_TOKEN: token, FAKE_CURL_TOKEN: token };
       fs.writeFileSync(curlLog, '');
       const updateResult = await runAsync('bash', [
@@ -1044,19 +1072,31 @@ esac
 
       const requested = fs.readFileSync(curlLog, 'utf8').trim().split('\n');
       assert.ok(
-        requested.some((line) => line.includes('releases?per_page=')),
-        'install.sh --update must query the releases list (not /releases/latest)',
+        requested.includes(`${metadataBase}/dev.json`),
+        `install.sh --update must read the complete version manifest: ${requested.join(', ')}`,
+      );
+      assert.ok(
+        !requested.includes(`${metadataBase}/versions/9.9.9-rc.9.json`),
+        `install.sh --update must reuse the complete manifest without a second versions fetch: ${requested.join(', ')}`,
+      );
+      assert.ok(
+        requested.includes(
+          `https://github.com/wrenyard/wrenyard/releases/download/v9.9.9-rc.9/wrenyard-9.9.9-rc.9-${TRIPLET}-suite.zip`,
+        ),
+        `install.sh --update must download the canonical suite asset URL from the metadata: ${requested.join(', ')}`,
+      );
+      assert.ok(
+        !requested.some((line) => line.includes('api.github.com')),
+        `install.sh must never request the GitHub Release API: ${requested.join(', ')}`,
       );
       assert.ok(requested.includes('AUTH_OK'), 'private-release token was not sent via the netrc file');
-      const asset = requested.find((line) => line.includes('-suite.zip'));
-      assert.ok(asset, 'fake curl recorded no suite zip request during --update');
       assert.ok(
-        asset.includes(`-9.9.9-rc.9-${TRIPLET}-suite.zip`),
-        `--update must select the newest non-draft dev release and the ${TRIPLET} asset: ${asset}`,
+        requested.some((line) => line.includes(`wrenyard-9.9.9-rc.9-${TRIPLET}-suite.zip`)),
+        `--update must select the manifest version and the ${TRIPLET} suite asset: ${requested.join(', ')}`,
       );
       assert.ok(
-        !asset.includes('9.9.9-draft'),
-        `--update must never select a draft release: ${asset}`,
+        !requested.some((line) => line.includes('9.9.9-bad')),
+        '--update must never select a version missing from the complete manifest',
       );
       assert.ok(!requested.some((line) => line.includes('wrenyard-pet-')));
       const combinedOutput = `${updateResult.stdout}\n${updateResult.stderr}`;
@@ -1109,6 +1149,7 @@ esac
 
     // 5c. A suite checksum mismatch must reject the install atomically:
     // nothing is written into the prefix and no launcher is wired.
+    // 5c-1: mismatching explicit --checksum-url sidecar.
     if (process.platform !== 'win32') {
       const badShaPath = path.join(tmp, 'bad-sha.txt');
       fs.writeFileSync(badShaPath, `${'0'.repeat(64)}  suite.zip\n`);
@@ -1147,6 +1188,86 @@ esac
       } finally {
         await new Promise((resolve) => badServer.close(resolve));
       }
+    }
+
+    // 5c-2: the default (metadata) install path must reject a suite archive
+    // whose digest does not match the digest published in the static
+    // exact-version document, and must leave the prefix untouched.
+    if (process.platform !== 'win32') {
+      const badDocPath = path.join(tmp, 'version-9.9.9-bad.json');
+      const badAsset = (name) => ({
+        name,
+        url: `https://github.com/wrenyard/wrenyard/releases/download/v9.9.9-bad/${name}`,
+        sha256: '0'.repeat(64),
+      });
+      fs.writeFileSync(badDocPath, `${JSON.stringify({
+        schema_version: 'wrenyard.update.v1',
+        version: '9.9.9-bad',
+        published_at: '2026-08-14T09:00:00Z',
+        assets: [
+          badAsset('wrenyard-9.9.9-bad-darwin-arm64-suite.zip'),
+          badAsset('wrenyard-desktop-9.9.9-bad-darwin-arm64.zip'),
+          badAsset('wrenyard-9.9.9-bad-win32-x64-suite.zip'),
+          badAsset('wrenyard-desktop-9.9.9-bad-win32-x64.zip'),
+        ],
+      }, null, 2)}\n`, 'utf8');
+
+      const metadataEnv = {
+        ...consumerEnv,
+        PATH: `${path.join(tmp, 'fake-curl')}${path.delimiter}/usr/bin:/bin`,
+        FAKE_CURL_LOG: path.join(tmp, 'fake-curl', 'curl.log'),
+        FAKE_CURL_VERSION: badDocPath,
+        FAKE_CURL_ZIP: zipPath,
+      };
+      const badDocPrefix = path.join(tmp, 'bad-digest-prefix');
+      await assert.rejects(
+        runAsync('bash', [
+          path.join(ROOT, 'scripts', 'install.sh'),
+          '--version', '9.9.9-bad',
+          '--suite-only',
+          '--prefix', badDocPrefix,
+          '--bin-dir', path.join(badDocPrefix, 'bin'),
+        ], { env: metadataEnv }),
+        /checksum mismatch/,
+      );
+      assert.ok(
+        !fs.existsSync(path.join(badDocPrefix, 'current')),
+        'metadata-digest-rejected install must not create a current link',
+      );
+
+      // 5c-3: a malformed digest in the static metadata is refused before any
+      // archive is downloaded.
+      const malformedAsset = (name) => ({
+        name,
+        url: `https://github.com/wrenyard/wrenyard/releases/download/v9.9.9-malformed/${name}`,
+        sha256: `sha256:${sha256File(zipPath)}`,
+      });
+      fs.writeFileSync(path.join(tmp, 'version-9.9.9-malformed.json'), `${JSON.stringify({
+        schema_version: 'wrenyard.update.v1',
+        version: '9.9.9-malformed',
+        published_at: '2026-08-14T09:00:00Z',
+        assets: [
+          malformedAsset('wrenyard-9.9.9-malformed-darwin-arm64-suite.zip'),
+          malformedAsset('wrenyard-desktop-9.9.9-malformed-darwin-arm64.zip'),
+          malformedAsset('wrenyard-9.9.9-malformed-win32-x64-suite.zip'),
+          malformedAsset('wrenyard-desktop-9.9.9-malformed-win32-x64.zip'),
+        ],
+      }, null, 2)}\n`, 'utf8');
+      const malformedPrefix = path.join(tmp, 'malformed-digest-prefix');
+      await assert.rejects(
+        runAsync('bash', [
+          path.join(ROOT, 'scripts', 'install.sh'),
+          '--version', '9.9.9-malformed',
+          '--suite-only',
+          '--prefix', malformedPrefix,
+          '--bin-dir', path.join(malformedPrefix, 'bin'),
+        ], { env: { ...metadataEnv, FAKE_CURL_VERSION: path.join(tmp, 'version-9.9.9-malformed.json') } }),
+        /invalid SHA-256 digest/,
+      );
+      assert.ok(
+        !fs.existsSync(path.join(malformedPrefix, 'current')),
+        'malformed-digest install must not create a current link',
+      );
     }
 
     // 6. The fake `go` must never have been invoked during any consumer step.
