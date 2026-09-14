@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, SCORE_WEIGHTS, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
 import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/catalog'
 import {
   findProviderQuotaBinding,
@@ -43,6 +43,7 @@ import {
   type TaskDispatchRequirements as ConfigTaskDispatchRequirements,
   type TaskSettingsLayer as ConfigTaskSettingsLayer,
   type TaskSettingsSourceTag,
+  type TaskRoutingWeights,
   type TasksConfigSettingsInput,
 } from '../../config/task-settings.mts'
 import type {
@@ -440,7 +441,7 @@ function splitRuntimeIdentity(exactAgentRuntime: string): { provider: string; mo
  * Builds the final provider+model routing form rows from the baseline-available
  * pairs and the shared automatic-selection trace. Qualified pairs keep the
  * production rank and the actual weighted scorer contributions (each a
- * `SCORE_WEIGHTS` term that sums to `score`); rejected pairs carry null
+ * `ranked.weights` term that sums to `score`); rejected pairs carry null
  * rank/score and a short Chinese reason from the closed failure message set.
  */
 function buildRoutingFormRows(
@@ -483,10 +484,10 @@ function buildRoutingFormRows(
         model: pair.model,
         model_name: modelName,
         effective_tps: effectiveTps ?? null,
-        price_score: SCORE_WEIGHTS.P * ranked.priceFactor,
-        speed_score: SCORE_WEIGHTS.S * ranked.speedFactor,
-        quota_score: SCORE_WEIGHTS.Q * ranked.quotaQuality,
-        intelligence_score: SCORE_WEIGHTS.I * ranked.intelligenceFactor,
+        price_score: ranked.weights.P * ranked.priceFactor,
+        speed_score: ranked.weights.S * ranked.speedFactor,
+        quota_score: ranked.weights.Q * ranked.quotaQuality,
+        intelligence_score: ranked.weights.I * ranked.intelligenceFactor,
         score: ranked.score,
         rank: ranked.rank,
         reason: null,
@@ -534,6 +535,9 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   if (layer.timeoutMs !== undefined) raw.timeout_ms = layer.timeoutMs
   if (layer.maxAutoOutputUsdPerMillion !== undefined) {
     raw.max_auto_output_usd_per_million = layer.maxAutoOutputUsdPerMillion
+  }
+  if (layer.routingWeights !== undefined) {
+    raw.routing_weights = layer.routingWeights
   }
   if (layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0) {
     raw.dispatch = toSnakeDispatch(layer.dispatch)
@@ -795,6 +799,7 @@ export class TaskSettingsService {
       requirements: effective.dispatch,
       timeoutMs: effective.timeoutMs,
       maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
+      routingWeights: effective.routingWeights,
     })
     if (!selection.ok) throw selection.error
     return {
@@ -921,7 +926,11 @@ export class TaskSettingsService {
    * Read-only FORM-BASED routing diagnostic. The caller submits the automatic
    * dispatch form fields directly (`params.automatic`) plus an optional
    * timeout; the diagnostic NEVER enumerates task definitions and NEVER reads
-   * global/per-task saved settings. Only the submitted form is normalized
+   * global/per-task saved settings, with one weight-only exception: the
+   * current global routing weights are read once per request and passed
+   * identically to the baseline and form passes so scoring always matches the
+   * configured (or default) weights. All other saved global/per-task settings
+   * stay ignored here. Only the submitted form is normalized
    * (recommended intelligence expectation defaulting to `mid`, no hard minimum,
    * timeout defaulting to the system default).
    *
@@ -936,6 +945,9 @@ export class TaskSettingsService {
    * sampling.
    */
   async routingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
+    // Weight-only exception: read the current global routing weights once per
+    // request; both passes below use this identical weight set.
+    const routingWeights = readGlobalTaskSettings(tasksSectionOf(this.readConfigRecord().record))?.routingWeights
     const requirements = routingFormRequirements(params.automatic)
     const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
       ? params.timeout_ms
@@ -954,7 +966,7 @@ export class TaskSettingsService {
     const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
     // Bind availability for the unconstrained pool before applying the form.
     // Both passes share quota/readiness snapshots and memoized non-billable probes.
-    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, maxAutoOutputUsdPerMillion: undefined }, previewMemo)
+    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, maxAutoOutputUsdPerMillion: undefined, routingWeights }, previewMemo)
     const bound = await previewMemo.quota
     const native = await previewMemo.nativeProviderReadiness
     const clientSample = await this.clientReadinessSample(previewMemo)
@@ -990,6 +1002,7 @@ export class TaskSettingsService {
       requirements,
       timeoutMs,
       maxAutoOutputUsdPerMillion: undefined,
+      routingWeights,
     }, previewMemo, trace)
 
     return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver) }
@@ -1075,6 +1088,11 @@ export class TaskSettingsService {
     if (params.patch.max_auto_output_usd_per_million !== undefined) {
       throw new TaskSettingsInvalidSettingsError(
         'max_auto_output_usd_per_million is global-only and cannot be applied at task scope',
+      )
+    }
+    if (params.patch.routing_weights !== undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        'routing_weights is global-only and cannot be applied at task scope',
       )
     }
     const taskName = summary.name
@@ -1297,6 +1315,7 @@ export class TaskSettingsService {
           requirements: effective.dispatch,
           timeoutMs: effective.timeoutMs,
           maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
+          routingWeights: effective.routingWeights,
         }, previewMemo)
         if (selection.ok) {
           // Attach the paired authoritative Catalog display labels to the
@@ -1362,6 +1381,14 @@ export class TaskSettingsService {
           value: effective.maxAutoOutputUsdPerMillion ?? null,
           source: toSourceLayer(effective.sources.maxAutoOutputUsdPerMillion),
         },
+        ...(effective.routingWeights !== undefined
+          ? {
+              routing_weights: {
+                value: effective.routingWeights,
+                source: toSourceLayer(effective.sources.routingWeights),
+              },
+            }
+          : {}),
         automatic,
       },
       ...(explicitRow !== undefined ? { explicit: explicitRow } : {}),
@@ -1740,7 +1767,18 @@ export class TaskSettingsService {
     }
     if (trace !== undefined) trace.scored = inputs.length
 
-    const ranked = rankAutoRoutingCandidates(inputs)
+    const configuredWeights = params.routingWeights
+    const ranked = rankAutoRoutingCandidates(
+      inputs,
+      configuredWeights === undefined
+        ? undefined
+        : {
+            P: configuredWeights.price,
+            S: configuredWeights.speed,
+            Q: configuredWeights.quota,
+            I: configuredWeights.intelligence,
+          },
+    )
     if (trace !== undefined) {
       trace.ranked = ranked.ranked
       trace.catalogExcluded = ranked.excluded.map((entry) => ({
@@ -1848,6 +1886,14 @@ export class TaskSettingsService {
       }
     }
 
+    if (patch.routing_weights !== undefined) {
+      if (patch.routing_weights === null) {
+        delete raw.routing_weights
+      } else {
+        raw.routing_weights = patch.routing_weights
+      }
+    }
+
     if (patch.automatic !== undefined) {
       if (patch.automatic === null) {
         delete raw.dispatch
@@ -1897,6 +1943,9 @@ export class TaskSettingsService {
       ...(layer.maxAutoOutputUsdPerMillion !== undefined
         ? { max_auto_output_usd_per_million: layer.maxAutoOutputUsdPerMillion }
         : {}),
+      ...(layer.routingWeights !== undefined
+        ? { routing_weights: layer.routingWeights }
+        : {}),
     }
   }
 
@@ -1939,6 +1988,8 @@ interface AutomaticSelectionParams {
   requirements: ConfigTaskDispatchRequirements
   timeoutMs: number
   maxAutoOutputUsdPerMillion: number | undefined
+  /** Global routing weights; undefined uses the scorer defaults. */
+  routingWeights?: TaskRoutingWeights | undefined
 }
 
 /** Request-scoped optional trace collector instrumenting the exact automatic
