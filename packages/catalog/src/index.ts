@@ -219,8 +219,11 @@ export interface TaskDispatchRequirements {
    * This is enforced as a hard gate and fails closed for gateway and unknown
    * combinations; it is not surfaced in any search settings UI. */
   requiresWebSearch?: boolean;
-  /** Explicit thinking level requirement. When set, candidates whose resolved
-   * plan cannot materialize the level are excluded from admission. */
+  /** Optional thinking level. Thinking is a resolved runtime PARAMETER, never an
+   * eligibility or ranking constraint: a requested level adapts to the nearest
+   * usable level (only levels declared by the model AND explicitly mapped for
+   * the exact runtime are usable; otherwise the request withholds thinking and
+   * no transport is invented). An invalid public enum value is rejected. */
   thinking?: ThinkingLevel;
 }
 
@@ -619,6 +622,12 @@ export class Catalog {
     modelID = provider.modelAliases?.[modelID] ?? modelID;
     const modelDef = provider.models.find((model) => model.id === modelID);
     if (!modelDef) throw new Error(`unknown model: ${providerID}/${modelID}`);
+    // Runtime invalid *public enum* validation. A legal level is never rejected
+    // here for being unsupported by a model/runtime; it is adapted into the
+    // plan's runtime parameters by resolveThinking.
+    if (thinking !== undefined && !THINKING_LEVEL_SET.has(thinking)) {
+      throw new Error(`invalid thinking level: ${JSON.stringify(thinking)}`);
+    }
     const thinkingFields = this.resolveThinking(provider, modelDef, clientID, thinking);
     if (provider.nativeClients?.includes(clientID)) {
       // Native web search is admitted ONLY for an explicitly supported native
@@ -640,15 +649,17 @@ export class Catalog {
     return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...thinkingFields };
   }
 
-  // Resolves the thinking portion of a plan deterministically:
-  // - A model with no declared levels never carries thinking. An explicit
-  //   request against it is rejected rather than silently ignored.
-  // - With an explicit request, the model must declare the level AND the runtime
-  //   must have an explicit mapping for it, otherwise the request is rejected.
-  // - Omitting the request selects the highest level that is both declared by the
-  //   model and explicitly mapped for this runtime. If the model has levels but
-  //   the runtime has no usable mapping, capability is unknown: the plan leaves
-  //   thinking unset and no transport is invented.
+  // Resolves the thinking portion of a plan by parameter adaptation. Only a
+  // *public* invalid enum value is a hard error; an unsupported-but-legal level
+  // is never a rejection. A level is usable only when the model declares it AND
+  // this exact client has an explicit mapping for it — the intersection is the
+  // sole candidate set:
+  // - No usable level at all (no declared levels, no exact-client mappings, or
+  //   an empty intersection): the plan carries no thinking and no transport is
+  //   invented.
+  // - Omitted request: the highest usable level.
+  // - Requested level: the smallest usable level >= the request, else the
+  //   highest usable level.
   // Only an explicit mapping may set upstreamModel / mapped wire reasoningEffort.
   private resolveThinking(
     provider: ProviderDefinition,
@@ -656,42 +667,21 @@ export class Catalog {
     clientID: string,
     requested?: ThinkingLevel,
   ): Pick<DispatchPlan, 'thinking' | 'reasoningEffort' | 'upstreamModel'> {
-    const levels = modelDef.thinkingLevels;
-    if (levels === undefined) {
-      if (requested !== undefined) {
-        throw new Error(
-          `model ${provider.id}/${modelDef.id} does not support thinking level ${requested}`,
-        );
-      }
-      return {};
-    }
-    const declared = new Set<ThinkingLevel>(levels);
-    if (requested !== undefined && !declared.has(requested)) {
-      throw new Error(
-        `model ${provider.id}/${modelDef.id} does not support thinking level ${requested}`,
-      );
-    }
     const byLevel = provider.thinkingMappings?.[modelDef.id]?.[clientID];
-    if (requested !== undefined) {
-      const mapping = byLevel?.[requested];
-      if (mapping === undefined) {
-        throw new Error(
-          `client ${clientID} has no thinking mapping for ${provider.id}/${modelDef.id} level ${requested}`,
-        );
-      }
-      return {
-        thinking: requested,
-        ...(mapping.effort === undefined ? {} : { reasoningEffort: mapping.effort }),
-        ...(mapping.model === undefined ? {} : { upstreamModel: mapping.model }),
-      };
+    // Usable = declared by the model AND explicitly mapped for this exact client.
+    const usable = (modelDef.thinkingLevels ?? []).filter((level) => byLevel?.[level] !== undefined);
+    if (usable.length === 0) return {};
+    const ordered = [...usable].sort((a, b) => THINKING_ORDER[a] - THINKING_ORDER[b]);
+    let selected: ThinkingLevel;
+    if (requested === undefined) {
+      // Omitted request selects the highest usable level.
+      selected = ordered[ordered.length - 1]!;
+    } else {
+      // Requested level adapts to the smallest usable level at or above it,
+      // otherwise to the highest usable level.
+      const atOrAbove = ordered.find((level) => THINKING_ORDER[level] >= THINKING_ORDER[requested]);
+      selected = atOrAbove ?? ordered[ordered.length - 1]!;
     }
-    let selected: ThinkingLevel | undefined;
-    for (const level of levels) {
-      if (byLevel?.[level] !== undefined && (selected === undefined || THINKING_ORDER[level] > THINKING_ORDER[selected])) {
-        selected = level;
-      }
-    }
-    if (selected === undefined) return {};
     const mapping = byLevel![selected]!;
     return {
       thinking: selected,
@@ -730,7 +720,12 @@ export function resolveConstrainedDispatch(
 
     let plan: DispatchPlan;
     try {
-      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.thinking);
+      // Eligibility/scoring resolve the candidate WITHOUT the requested thinking
+      // level: thinking is a selected runtime parameter that adapts through the
+      // Catalog, so it must never change which candidates are eligible or how
+      // they rank. The requested level is applied only to the chosen resolution
+      // below.
+      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model);
     } catch {
       continue;
     }
@@ -832,7 +827,8 @@ export function resolveConstrainedDispatch(
     // Deterministic ordering across the collapsed model representatives:
     // expected-speed group first (meets expectedTps), then lower reference
     // output price first, then stable canonical provider/model identity. No
-    // concrete runtime selection is consulted in automatic mode.
+    // concrete runtime selection and no thinking level is consulted in
+    // automatic mode.
     const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
     const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
     if (aMeets !== bMeets) return aMeets ? -1 : 1;
@@ -847,7 +843,15 @@ export function resolveConstrainedDispatch(
   collapsed.forEach((entry, index) => {
     entry.rank = index + 1;
   });
-  return { ok: true, selected: collapsed[0], considered };
+
+  // Thinking is applied ONLY to the chosen resolution, after eligibility and
+  // ranking are already fixed: it adapts the selected target's runtime
+  // parameters and can never change which candidate wins.
+  const winner = collapsed[0];
+  if (requirements.thinking !== undefined) {
+    winner.plan = catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.thinking);
+  }
+  return { ok: true, selected: winner, considered };
 }
 
 // Public dynamic run-target syntax (provider/model:client). These helpers are the
