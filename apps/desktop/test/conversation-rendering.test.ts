@@ -238,3 +238,58 @@ test('renderer offers pre-session model selection for a ready draft', () => {
     'picker must not be disabled solely for a missing selected session',
   );
 });
+
+test('conversation model picker delegates to the shared searchable single-select', () => {
+  // The custom model dropdown (option list, popup, search box and keyboard
+  // duplication) is gone; the shared control owns search and keyboard handling.
+  for (const legacy of [
+    'conversation-model-option',
+    'conversation-model-popover',
+    'conversation-model-list',
+    'openModelPicker',
+    'closeModelPicker',
+    'onModelListKeyDown',
+    'onModelTriggerKeyDown',
+    'data-model-value',
+  ]) {
+    assert.equal(rendererSource.includes(legacy), false, `obsolete picker code must be removed: ${legacy}`);
+  }
+  assert.equal(rendererSource.includes('SearchableSingleSelect'), true, 'picker must use the shared control');
+  assert.equal(rendererSource.includes('setSearchLabel'), true, 'model search must be labelled');
+});
+
+test('conversation model options carry provider secondary text and quota titles', () => {
+  assert.equal(rendererSource.includes('secondary:'), true, 'options must carry provider secondary text');
+  assert.equal(rendererSource.includes("'图片：支持'"), true, 'title must keep the image capability');
+  assert.equal(rendererSource.includes('providerPresentation'), true, 'title must include provider quota');
+});
+
+test('conversation model selection keeps canonical values and advertises the disabled current model', () => {
+  // Canonical JSON [provider, model] encode/decode stays authoritative.
+  assert.equal(rendererSource.includes('conversationModelValue('), true);
+  assert.equal(rendererSource.includes('parseConversationModelValue('), true);
+  // An advertised option is selectable; a non-advertised current model stays
+  // visible but disabled.
+  assert.equal(rendererSource.includes('disabled: !entry.advertised'), true);
+  // Advertised options drive the enable gate, not the legacy per-button list.
+  assert.equal(rendererSource.includes('advertisedCount()'), true);
+});
+
+test('conversation provider status has no model traffic-light lamps', () => {
+  for (const lamp of [
+    'conversation-provider-signal',
+    'conversation-model-trigger-signal',
+    'renderProviderSignal',
+    'providerBindings',
+  ]) {
+    assert.equal(rendererSource.includes(lamp), false, `model lamp code must be removed: ${lamp}`);
+  }
+  // The separate daemon status indicator is untouched outside this renderer.
+  const css = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'app.css'),
+    'utf8',
+  );
+  assert.equal(css.includes('conversation-provider-signal'), false, 'lamp CSS must be removed');
+  assert.equal(css.includes('.conversation-model-popover'), false, 'custom popup CSS must be removed');
+  assert.equal(css.includes('.conversation-daemon-status'), true, 'daemon status CSS must remain');
+});
