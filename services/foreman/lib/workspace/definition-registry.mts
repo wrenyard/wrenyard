@@ -1016,9 +1016,15 @@ async function importDefinitionUnlocked<T>(filePath: string): Promise<T> {
     importPath = createImportCopy(filePath)
     const url = pathToFileURL(importPath)
     url.searchParams.set('v', `${Date.now()}-${Math.random()}`)
-    const module = await import(url.href) as { default?: T }
-    if (!module.default) throw new Error(`${filePath} must have a default export`)
-    return module.default
+    const module = await import(url.href) as { default?: T | { __esModule?: boolean; default?: T } }
+    let definition = module.default
+    // Node can expose transpiled CommonJS exports through an extra default
+    // namespace when a user directory has no ESM package boundary.
+    if (definition && typeof definition === 'object'
+      && '__esModule' in definition && definition.__esModule === true
+      && 'default' in definition) definition = definition.default
+    if (!definition) throw new Error(`${filePath} must have a default export`)
+    return definition as T
   } finally {
     if (importPath) rmSync(importPath, { force: true })
     restore()
