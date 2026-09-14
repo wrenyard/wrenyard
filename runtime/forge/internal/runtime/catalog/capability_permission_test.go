@@ -106,6 +106,44 @@ func TestRestrictedNativeEncodersDenyExecutablePowerShellExpressions(t *testing.
 	}
 }
 
+func TestBashGateRejectsAbbreviatedHooksAndTransportAfterSeparator(t *testing.T) {
+	unsafe := []string{
+		// A "--" only ends option parsing; a transport operand after it still
+		// reaches git-remote-<transport>.
+		"git ls-remote -- ext::sh -c id",
+		"git ls-remote -- fd::/dev/stdin",
+		// Abbreviated long options still resolve to the dangerous hook.
+		"git ls-remote --upload=helper origin",
+		"git ls-remote --receive=helper origin",
+		"git log --out=file",
+		"svn diff --diff-cm helper",
+		"svn log --config-o servers:global:http-timeout=1",
+	}
+	// Ordinary bounded queries and the guarded ls-remote form stay allowed.
+	safe := []string{
+		"git --no-optional-locks ls-remote origin",
+		"git --no-optional-locks ls-remote origin refs/heads/main",
+		"git ls-remote origin",
+		"git log --oneline HEAD",
+		"git --no-optional-locks log -5",
+		"git --no-optional-locks show --stat HEAD",
+		"git --no-optional-locks diff --stat",
+	}
+	for _, mode := range []PermissionMode{PermissionReadonly, PermissionEdit} {
+		policy := PolicyFor(mode)
+		for _, command := range unsafe {
+			if BashAllowed(policy, command) {
+				t.Errorf("%s allowed unsafe hook or transport command %q", mode, command)
+			}
+		}
+		for _, command := range safe {
+			if !BashAllowed(policy, command) {
+				t.Errorf("%s rejected bounded query %q", mode, command)
+			}
+		}
+	}
+}
+
 func TestCapabilityBashGrammarRejectsBroadOrParsedPatternsBeforeEncoding(t *testing.T) {
 	invalid := []string{
 		"*", "foo*", "foo * bar", "foo * *", "foo **",
@@ -164,82 +202,131 @@ func TestCapabilityBashGrammarSafeRulesAuthorizeOnlyTheirDeclaredScope(t *testin
 	}
 }
 
-func TestGitHistoryBashGateDeniedWithoutPackInReadonly(t *testing.T) {
+func TestReadonlyBashGateAllowsBoundedRepositoryInspection(t *testing.T) {
 	policy := PolicyFor(PermissionReadonly)
-	for _, command := range []string{
-		"git --no-optional-locks log --oneline HEAD",
-		"git --no-optional-locks log HEAD",
-		"git --no-optional-locks show --name-only HEAD",
-		"git --no-optional-locks show --stat HEAD",
-		"git --no-optional-locks show HEAD",
-	} {
-		if BashAllowed(policy, command) {
-			t.Errorf("readonly without git-history allowed git history command %q", command)
-		}
-	}
-}
-
-func TestGitHistoryBashGateAuthorizesOnlyDocumentedShapes(t *testing.T) {
-	policy := PolicyFor(PermissionReadonly)
-	policy.BashGate.Cap = []BashRule{
-		{Pattern: "git --no-optional-locks log --oneline *"},
-		{Pattern: "git --no-optional-locks show --name-only *"},
-		{Pattern: "git --no-optional-locks show --stat *"},
-	}
-
 	allowed := []string{
-		"git --no-optional-locks log --oneline -5",
-		"git --no-optional-locks log --oneline HEAD..HEAD~3",
-		"git --no-optional-locks log --oneline --all",
-		"git --no-optional-locks log --oneline --author=alice",
+		"git --no-optional-locks status",
+		"git --no-optional-locks log --oneline HEAD",
+		"git --no-optional-locks log -5",
+		"git log --oneline HEAD",
+		"git log HEAD..HEAD~3",
 		"git --no-optional-locks show --name-only HEAD",
-		"git --no-optional-locks show --name-only HEAD -- go.mod",
-		"git --no-optional-locks show --stat HEAD~1",
-		"git --no-optional-locks show --stat HEAD -- internal/forge/config.go",
+		"git show --stat HEAD",
+		"git --no-optional-locks show HEAD",
+		"git --no-optional-locks diff --stat",
+		"git --no-optional-locks diff HEAD HEAD~1",
+		"git --no-optional-locks diff HEAD -- go.mod",
+		"git ls-remote",
+		"git ls-remote origin",
+		"git ls-remote https://example.com/org/repo.git",
+		"git ls-remote git@example.com:org/repo.git",
+		"git ls-remote origin refs/heads/main",
+		"svn info",
+		"svn info trunk/src",
+		"svn status -q",
+		"svn list https://example.com/svn/repo/trunk",
+		"svn log -l 5",
+		"svn log -v -r 2:3",
+		"svn diff -r 2:3",
 	}
 	for _, command := range allowed {
 		if !BashAllowed(policy, command) {
-			t.Errorf("git-history readonly denied documented safe shape %q", command)
+			t.Errorf("readonly denied bounded repository inspection %q", command)
 		}
 	}
 
 	denied := []string{
-		// Generic log/show without the documented option shape.
-		"git --no-optional-locks log HEAD",
-		"git --no-optional-locks log -5",
-		"git --no-optional-locks log --oneline",
-		"git --no-optional-locks show HEAD",
-		"git --no-optional-locks show --patch HEAD",
-		"git --no-optional-locks show --name-only",
-		"git --no-optional-locks show --stat",
-		"git log --oneline HEAD",
-		"git show --name-only HEAD",
-		// Diff/patch content.
+		// Index-refreshing queries keep the --no-optional-locks guard.
+		"git status",
+		"git status -s",
 		"git diff",
-		"git --no-optional-locks diff --stat",
-		"git --no-optional-locks diff HEAD HEAD~1",
-		// Unsafe output and external-processing options.
-		"git --no-optional-locks log --oneline HEAD --output=history.txt",
-		"git --no-optional-locks log --oneline HEAD --output history.txt",
-		"git --no-optional-locks show --name-only HEAD --ext-diff",
-		"git --no-optional-locks show --name-only HEAD --textconv",
-		"git --no-optional-locks show --stat HEAD --show-signature",
-		"git --no-optional-locks show --stat HEAD --open-files-in-pager",
-		"git --no-optional-locks log --oneline HEAD --recurse-submodules",
-		// Repository mutation and arbitrary subcommands.
-		"git --no-optional-locks commit -m bump",
+		// Mutating subcommands stay denied.
+		"git commit -m bump",
 		"git --no-optional-locks push",
-		"git --no-optional-locks checkout HEAD -- internal/forge/config.go",
+		"git --no-optional-locks checkout HEAD -- go.mod",
 		"git --no-optional-locks reset --hard HEAD",
-		// Compound commands and redirection that mix in a denied segment.
+		"git rm -- go.mod",
+		// Config, exec-path, pager, and alternate repository globals.
+		"git -c core.pager=less log",
+		"git -cCORE.PAGER=less log",
+		"git --config-env=core.pager log",
+		"git --exec-path=/tmp/evil log",
+		"git --paginate log",
+		"git -C /tmp/other log",
+		// Output, external-command, signature, and transport hooks.
+		"git log --output=history.txt",
+		"git log --output history.txt",
+		"git show HEAD --ext-diff",
+		"git show HEAD --textconv",
+		"git log --show-signature",
+		"git log --open-files-in-pager",
+		"git ls-remote --upload-pack=/tmp/evil origin",
+		"git ls-remote --receive-pack=/tmp/evil origin",
+		"git ls-remote ext::sh -c id",
+		"git ls-remote fd::/dev/stdin",
+		// SVN config, credential, and external-tool hooks and mutations.
+		"svn log --config-dir /tmp/cfg",
+		"svn log --config-option servers:global:http-timeout=1",
+		"svn diff --diff-cmd /tmp/evil",
+		"svn diff --editor-cmd /tmp/evil",
+		"svn log --username alice",
+		"svn log --password secret",
+		"svn commit -m bump",
+		"svn mkdir trunk",
+		// Compound commands, redirection, and substitution escapes.
 		"git --no-optional-locks log --oneline HEAD && git --no-optional-locks push",
 		"git --no-optional-locks log --oneline HEAD ; rm -rf .",
-		"git --no-optional-locks log --oneline HEAD | git push",
-		"git --no-optional-locks show --name-only HEAD > list.txt",
+		"git --no-optional-locks show HEAD > list.txt",
+		"git log $(pwd)",
 	}
 	for _, command := range denied {
 		if BashAllowed(policy, command) {
-			t.Errorf("git-history readonly allowed unsafe command %q", command)
+			t.Errorf("readonly allowed unsafe command %q", command)
+		}
+	}
+}
+
+func TestCapabilityBashPackExtendsReadonlyRepositoryInspection(t *testing.T) {
+	policy := PolicyFor(PermissionReadonly)
+	if BashAllowed(policy, "git --no-optional-locks blame --show-stats go.mod") {
+		t.Fatal("readonly builtin surface already allowed git blame without a capability pack")
+	}
+	if BashAllowed(policy, "git --no-optional-locks shortlog --summary HEAD") {
+		t.Fatal("readonly builtin surface already allowed git shortlog without a capability pack")
+	}
+	policy.BashGate.Cap = []BashRule{
+		{Pattern: "git --no-optional-locks blame *"},
+		{Pattern: "git --no-optional-locks shortlog --summary *"},
+	}
+
+	allowed := []string{
+		"git --no-optional-locks blame --show-stats go.mod",
+		"git --no-optional-locks blame HEAD -- go.mod",
+		"git --no-optional-locks shortlog --summary HEAD",
+		"git --no-optional-locks shortlog --summary -5",
+	}
+	for _, command := range allowed {
+		if !BashAllowed(policy, command) {
+			t.Errorf("capability pack denied documented safe shape %q", command)
+		}
+	}
+
+	denied := []string{
+		// The pack authorizes only its declared shapes.
+		"git --no-optional-locks shortlog --summary",
+		"git --no-optional-locks shortlog -n --summary HEAD",
+		"git --no-optional-locks shortlog",
+		"git --no-optional-locks blame",
+		"git blame --show-stats go.mod",
+		// Packed shapes still reject output and external-processing hooks.
+		"git --no-optional-locks blame --output=authors.txt go.mod",
+		"git --no-optional-locks blame --output authors.txt go.mod",
+		"git --no-optional-locks shortlog --summary HEAD --output=count.txt",
+		"git --no-optional-locks shortlog --summary HEAD --ext-grep",
+	}
+	for _, command := range denied {
+		if BashAllowed(policy, command) {
+			t.Errorf("capability pack allowed unsafe command %q", command)
 		}
 	}
 }

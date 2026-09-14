@@ -415,6 +415,7 @@ func TestRestrictedBashRejectsExecutablePowerShellExpressions(t *testing.T) {
 
 func TestRestrictedBashRejectsUnsafeReadCommandOptions(t *testing.T) {
 	unsafe := []string{
+
 		"find . -delete",
 		`find . -exec echo {} \;`,
 		`find . -execdir echo {} \;`,
@@ -440,9 +441,6 @@ func TestRestrictedBashRejectsUnsafeReadCommandOptions(t *testing.T) {
 		"git --no-optional-locks grep -nOsh forge",
 		"git --no-optional-locks grep --ext-grep forge",
 		"git --no-optional-locks grep --recurse-submodules forge",
-		"git --no-optional-locks diff --stat",
-		"git --no-optional-locks log -n 3",
-		"git --no-optional-locks show HEAD",
 		"tree -o listing.txt",
 		"tree -ao listing.txt",
 		"tree -aolisting.txt",
@@ -453,6 +451,9 @@ func TestRestrictedBashRejectsUnsafeReadCommandOptions(t *testing.T) {
 		"file --magic-file=./magic go.mod",
 	}
 	safe := []string{
+		"git --no-optional-locks diff --stat",
+		"git --no-optional-locks log -n 3",
+		"git --no-optional-locks show HEAD",
 		"find . -name '*.go' -print",
 		"rg --no-pre forge internal",
 		"rg forge internal",
