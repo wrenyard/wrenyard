@@ -74,7 +74,7 @@ interface MainContext {
   componentVersions?: Record<string, string>;
 }
 
-const RUN_OPTIONS: SpawnSyncOptions = { shell: false, stdio: 'inherit' };
+const RUN_OPTIONS: SpawnSyncOptions = { shell: false, stdio: 'inherit', windowsHide: true };
 
 const HELP_TEXT = `Wrenyard - one CLI for the whole development suite
 

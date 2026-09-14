@@ -19,6 +19,7 @@ const launcherArgs = existsSync(bundle)
 const result = spawnSync(process.execPath, [...launcherArgs, ...process.argv.slice(2)], {
   stdio: 'inherit',
   shell: false,
+  windowsHide: true,
   env: process.env,
 });
 
