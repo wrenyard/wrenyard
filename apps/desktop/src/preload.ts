@@ -75,8 +75,8 @@ const api: WrenyardShellApi = {
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;
   },
-  saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.saveWorkspace, path) as Promise<WorkspaceConfigurationSnapshot>;
+  saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.saveWorkspace, path, create) as Promise<WorkspaceConfigurationSnapshot>;
   },
   getConversation(): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSnapshot) as Promise<ConversationSnapshot>;

@@ -492,12 +492,20 @@ export interface TaskSettingsSourcedValue<T> {
  * Writable settings fields of a user layer. Absent fields fall through to the
  * lower layer; a `null` value clears an override back to the lower layer.
  */
+export interface TaskSettingsRoutingWeights {
+  price: number;
+  speed: number;
+  quota: number;
+  intelligence: number;
+}
+
 export interface TaskSettingsLayer {
   mode?: TaskSettingsMode;
   explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
   /** Global-only auto-dispatch reference output cap (USD / million output tokens). 0 is valid; null clears; absent falls through. */
   max_auto_output_usd_per_million?: number | null;
+  routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
 
@@ -508,6 +516,7 @@ export interface TaskSettingsPatch {
   timeout_ms?: number | null;
   /** Global-only reference output cap; null deletes only this field at the selected layer. */
   max_auto_output_usd_per_million?: number | null;
+  routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }
 
@@ -528,6 +537,7 @@ export interface TaskSettingsEffectiveAutomatic {
 
 /** Effective settings of one task, each value tagged with its source layer. */
 export interface TaskSettingsEffective {
+  routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>;
   mode: TaskSettingsSourcedValue<TaskSettingsMode>;
   explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
   timeout_ms: TaskSettingsSourcedValue<number | null>;
@@ -778,7 +788,7 @@ export interface WrenyardShellApi {
   requestInstall(): Promise<UpdateSnapshot>;
   cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
-  saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
+  saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;

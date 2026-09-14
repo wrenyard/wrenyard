@@ -36,10 +36,12 @@ import {
   type QuitOrigin,
 } from './desktop-interaction-policy.js';
 import {
+  createProductWorkspace,
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
   saveProductWorkspace,
 } from './workspace.js';
+import { assertDaemonIdle, runPlannedDaemonRestart } from './workspace-activation.js';
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
@@ -318,7 +320,7 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     );
     shell.setPage('workbench', false);
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && document.getElementById('conversation-model-trigger') instanceof HTMLButtonElement && document.getElementById('conversation-model-list')?.getAttribute('role') === 'listbox'",
+      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && (() => { const host = document.getElementById('conversation-model-picker'); return host !== null && host.querySelector('button.multi-select-trigger') instanceof HTMLButtonElement && host.querySelector('[role=\"listbox\"]') !== null; })()",
     );
     if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !tasksOk || !routingOk || !newConversationOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
       throw new Error(
@@ -779,6 +781,13 @@ async function bootstrap(): Promise<void> {
     },
   });
   await quotaController.start();
+
+  /**
+   * Reactivate the daemon after a workspace change: gate on an idle daemon,
+   * run a planned CLI restart, and only then let the conversation controller
+   * bind the saved workspace. Any failure stays visible instead of claiming
+   * activation succeeded, and a busy daemon is never interrupted.
+   */
   const version = app.getVersion();
   const buildTime = resolveDesktopBuildTime();
   const getSettings = () => buildSettingsSnapshot({
@@ -834,8 +843,13 @@ async function bootstrap(): Promise<void> {
       quotaController?.notifyConfigurationChanged();
       return getSettings();
     },
-    saveWorkspace: async (path: string) => {
-      const saved = await saveProductWorkspace(path);
+    saveWorkspace: async (path: string, create = false) => {
+      const cli = resolveWrenyardCli();
+      if (!cli) throw new Error('未找到 Wrenyard CLI，无法应用工作区');
+      const idle = assertDaemonIdle(await requestForeman('daemon.status', {}));
+      if (!idle.idle) throw new Error(idle.reason);
+      const saved = create ? await createProductWorkspace(path) : await saveProductWorkspace(path);
+      await runPlannedDaemonRestart({ cli });
       await conversationController!.configure(saved);
       return saved;
     },

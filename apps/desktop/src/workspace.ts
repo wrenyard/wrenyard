@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rmdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+
+import { WORKSPACE_TEMPLATE_FILES } from './workspace-template.js';
 
 const STORAGE_VERSION = 2;
 const STORAGE_RELATIVE = join('storages', 'workspace.json');
@@ -172,6 +174,75 @@ export async function saveProductWorkspace(
     path: canonicalPath,
     readOnly: false,
   };
+}
+
+/**
+ * Create a new Wrenyard product workspace directory and register it.
+ *
+ * Only a new (or existing empty) directory may be created. A nonempty
+ * destination is refused so an existing workspace is selected instead of being
+ * overwritten. Template files are written exclusively (never overwriting), and
+ * on any failure only the exact files and empty directories created by this
+ * invocation are removed.
+ */
+export async function createProductWorkspace(
+  requestedPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<WorkspaceConfiguration> {
+  if (env.WRENYARD_DESKTOP_WORKSPACE?.trim()) {
+    throw new Error('当前工作区由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理，无法在 App 内修改');
+  }
+  if (!requestedPath.trim()) throw new Error('请输入 workspace 路径');
+
+  const target = resolve(requestedPath.trim());
+  const createdFiles: string[] = [];
+  const createdDirs: string[] = [];
+  let directoryExists = false;
+  try {
+    directoryExists = (await stat(target)).isDirectory();
+  } catch {
+    directoryExists = false;
+  }
+  if (directoryExists && (await readdir(target)).length > 0) {
+    throw new Error(`目录不是空的，请选择已有 workspace：${target}`);
+  }
+
+  try {
+    if (!directoryExists) {
+      await mkdir(target, { recursive: true });
+      createdDirs.push(target);
+    }
+    for (const [relative, contents] of Object.entries(WORKSPACE_TEMPLATE_FILES)) {
+      const filePath = join(target, relative);
+      const parent = dirname(filePath);
+      if (parent !== target && !existsSync(parent)) createdDirs.push(parent);
+      await mkdir(parent, { recursive: true });
+      await writeFile(filePath, contents, { encoding: 'utf8', flag: 'wx' });
+      createdFiles.push(filePath);
+    }
+    return await saveProductWorkspace(target, env);
+  } catch (error) {
+    for (const filePath of createdFiles.reverse()) {
+      await rm(filePath, { force: true });
+    }
+    for (const dir of createdDirs.reverse()) {
+      if (dir === target) continue;
+      try {
+        await rmdir(dir);
+      } catch {
+        // Leave non-empty directories in place.
+      }
+    }
+    if (createdDirs.includes(target)) {
+      try {
+        await rmdir(target);
+      } catch {
+        // Leave the directory when other content appeared meanwhile.
+      }
+    }
+    throw error;
+  }
+
 }
 
 async function assertDirectory(path: string, label: string): Promise<string> {
