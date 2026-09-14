@@ -35,6 +35,12 @@ function balanceIsEmpty(amount: string): boolean {
   return Number.isFinite(parsed) && parsed <= 0;
 }
 
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '未知';
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded}%`;
+}
+
 /** Thin, read-only projection of the existing Desktop quota snapshot for the model picker. */
 export function conversationProviderPresentation(
   providerId: string,
@@ -43,9 +49,6 @@ export function conversationProviderPresentation(
   const { catalog, quota } = quotaForProvider(snapshot, providerId);
   const label = catalog?.label || quota?.label || providerId;
   const details: string[] = [];
-
-  if (quota?.balances.length) details.push('余额 / 按量');
-  if (quota?.windows.length) details.push('额度计划');
 
   if (quota?.status === 'pending') details.push('额度状态读取中');
   if (quota?.status === 'error') details.push('额度状态异常');
@@ -62,10 +65,26 @@ export function conversationProviderPresentation(
   else if (low) details.push('剩余额度偏低');
   if (paceLow) details.push('消耗速度偏快');
 
+  // Actual per-window numbers from the snapshot, shown verbatim (no estimation).
+  for (const window of quota?.windows ?? []) {
+    details.push(`${window.name} 剩余 ${formatPercent(window.remainingPct)}`);
+  }
+  // Balance amounts in their own currency, exactly as the snapshot reports them.
+  for (const balance of quota?.balances ?? []) {
+    details.push(`余额 ${balance.display || `${balance.amount} ${balance.currency}`.trim()}`);
+  }
+
   const red = exhausted || quota?.status === 'error' || quota?.status === 'unavailable';
-  const yellow = low || paceLow || quota?.status === 'pending' || Boolean(quota?.stale);
-  const status: ConversationProviderStatus = red ? 'red' : yellow ? 'yellow' : 'green';
-  const statusLabel = status === 'red' ? '不可用' : status === 'yellow' ? '需要注意' : '状态正常';
+  const yellow = !red && (low || paceLow || quota?.status === 'pending' || Boolean(quota?.stale));
+  // Without concrete window/balance numbers the quota state is unknown;
+  // unknown must never read as healthy (green / 状态正常).
+  const hasNumbers = (quota?.windows.length ?? 0) > 0 || (quota?.balances.length ?? 0) > 0;
+  const unknown = !red && !yellow && !hasNumbers;
+  const status: ConversationProviderStatus = red ? 'red' : yellow || unknown ? 'yellow' : 'green';
+  let statusLabel = '状态正常';
+  if (red) statusLabel = '不可用';
+  else if (unknown) statusLabel = '额度未知';
+  else if (yellow) statusLabel = '需要注意';
   const message = quota?.message?.trim();
   if (message) details.push(message.slice(0, 160));
   return {
