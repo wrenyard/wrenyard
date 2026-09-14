@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import {
+  createProductWorkspace,
   ensureProductWorkspaceRegistered,
   inspectProductWorkspace,
   resolveProductWorkspace,
@@ -177,6 +179,76 @@ test('ensureProductWorkspaceRegistered creates a durable Host record', async () 
     assert.deepEqual(stored.global.workspaceIds, [first.id]);
     assert.equal(stored.tables.workspaces[first.id].path, canonical);
     assert.equal(stored.tables.workspaces[first.id].title, 'agent-workspace');
+  });
+});
+
+test('createProductWorkspace writes the template and preserves unrelated config', async () => {
+  await withTemp(async (dir) => {
+    const target = join(dir, 'new-workspace');
+    const xdg = join(dir, 'xdg');
+    await mkdir(join(xdg, 'wrenyard'), { recursive: true });
+    const configPath = join(xdg, 'wrenyard', 'config.json');
+    await writeFile(configPath, JSON.stringify({ pet: { enabled: true } }));
+
+    const created = await createProductWorkspace(target, { XDG_CONFIG_HOME: xdg });
+    assert.equal(created.status, 'configured');
+    assert.equal(created.source, 'user-config');
+    assert.equal(created.readOnly, false);
+    assert.equal(created.path, await realpath(target));
+
+    const runner = JSON.parse(await readFile(join(target, 'workspace.wrws'), 'utf8'));
+    assert.equal(runner.version, 1);
+    assert.match(await readFile(join(target, 'AGENTS.md'), 'utf8'), /wrenyard project list/);
+    assert.match(
+      await readFile(join(target, 'instructions', 'tasks.md'), 'utf8'),
+      /intelligenceExpected/,
+    );
+    assert.match(
+      await readFile(join(target, 'instructions', 'documents.md'), 'utf8'),
+      /spec \/ plan \/ report/,
+    );
+
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    assert.deepEqual(config.pet, { enabled: true });
+    assert.equal(config.workspace.root, await realpath(target));
+  });
+});
+
+test('createProductWorkspace rejects a nonempty destination without changing it', async () => {
+  await withTemp(async (dir) => {
+    const target = join(dir, 'occupied');
+    const xdg = join(dir, 'xdg');
+    await mkdir(target);
+    const keep = join(target, 'keep.txt');
+    await writeFile(keep, 'keep');
+
+    await assert.rejects(
+      () => createProductWorkspace(target, { XDG_CONFIG_HOME: xdg }),
+      /不是空的/,
+    );
+    assert.equal(await readFile(keep, 'utf8'), 'keep');
+    assert.equal(existsSync(join(target, 'workspace.wrws')), false);
+    assert.equal(existsSync(join(xdg, 'wrenyard', 'config.json')), false);
+  });
+});
+
+test('createProductWorkspace refuses environment overrides and blank paths without writing', async () => {
+  await withTemp(async (dir) => {
+    const override = join(dir, 'override-root');
+    const target = join(dir, 'new-workspace');
+    await mkdir(override);
+    const xdg = join(dir, 'xdg');
+
+    await assert.rejects(
+      () => createProductWorkspace(target, { WRENYARD_DESKTOP_WORKSPACE: override, XDG_CONFIG_HOME: xdg }),
+      /由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理/,
+    );
+    await assert.rejects(
+      () => createProductWorkspace('   ', { XDG_CONFIG_HOME: xdg }),
+      /请输入 workspace 路径/,
+    );
+    assert.equal(existsSync(target), false);
+    assert.equal(existsSync(join(xdg, 'wrenyard', 'config.json')), false);
   });
 });
 
