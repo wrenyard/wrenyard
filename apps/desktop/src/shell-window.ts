@@ -61,7 +61,7 @@ export interface ShellWindowOptions {
   requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
   cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
-  saveWorkspace(path: string): Promise<WorkspaceConfigurationSnapshot>;
+  saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
@@ -449,10 +449,11 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.savePetSettings(settings);
     });
-    ipcMain.handle(SHELL_CHANNELS.saveWorkspace, async (event, path: unknown) => {
+    ipcMain.handle(SHELL_CHANNELS.saveWorkspace, async (event, path: unknown, create: unknown) => {
       assertShellSender(event.sender);
       if (typeof path !== 'string' || path.length > 4_096) throw new Error('Workspace 路径无效');
-      return options.saveWorkspace(path);
+      if (create !== undefined && create !== null && typeof create !== 'boolean') throw new Error('Workspace 创建参数无效');
+      return options.saveWorkspace(path, create === true);
     });
     ipcMain.handle(SHELL_CHANNELS.conversationSnapshot, async (event) => {
       assertShellSender(event.sender);

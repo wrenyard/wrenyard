@@ -125,6 +125,9 @@ importers:
       '@deepseek-ai/dsh-workflow':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(be2dac4e15e11ce84de4558727259db8)
+      '@wrenyard/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@wrenyard/control-client':
         specifier: workspace:*
         version: link:../../packages/control-client
