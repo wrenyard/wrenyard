@@ -46,6 +46,26 @@ var readonlyBashRules = []BashRule{
 	{Pattern: "git --no-optional-locks grep *"},
 	{Pattern: "git --no-optional-locks ls-files"}, {Pattern: "git --no-optional-locks ls-files *"},
 	{Pattern: "git --no-optional-locks rev-parse *"}, {Pattern: "git --no-optional-locks branch --show-current"},
+	{Pattern: "git --no-optional-locks log"}, {Pattern: "git --no-optional-locks log *"},
+	{Pattern: "git --no-optional-locks show"}, {Pattern: "git --no-optional-locks show *"},
+	{Pattern: "git --no-optional-locks diff"}, {Pattern: "git --no-optional-locks diff *"},
+	// Plain log/show/ls-remote never refresh the index, so they are safe
+	// without --no-optional-locks; diff and status keep the lock guard.
+	// `git -C` stays unsupported because the trailing-wildcard rule grammar
+	// cannot bound both the directory operand and the following subcommand;
+	// run queries from the worktree or through a `cd dir &&` chain.
+	{Pattern: "git log"}, {Pattern: "git log *"},
+	{Pattern: "git show"}, {Pattern: "git show *"},
+	{Pattern: "git ls-remote"}, {Pattern: "git ls-remote *"},
+	// Shared shell guidance quotes `git --no-optional-locks ls-remote`, so the
+	// guarded form is encoded explicitly; the transport-operand gate that
+	// applies to plain ls-remote applies here too.
+	{Pattern: "git --no-optional-locks ls-remote"}, {Pattern: "git --no-optional-locks ls-remote *"},
+	{Pattern: "svn info"}, {Pattern: "svn info *"},
+	{Pattern: "svn status"}, {Pattern: "svn status *"},
+	{Pattern: "svn list"}, {Pattern: "svn list *"},
+	{Pattern: "svn log"}, {Pattern: "svn log *"},
+	{Pattern: "svn diff"}, {Pattern: "svn diff *"},
 }
 
 var editOnlyBashRules = []BashRule{
@@ -92,6 +112,12 @@ var BashDenyRules = []BashRule{
 	{Pattern: "git *--output *"},
 	{Pattern: "git *--output=*"},
 	{Pattern: "git *--output"},
+	// Native-only clients glob without the shared argv parser, so add the
+	// shortest ambiguous prefixes of the remote-command hooks; hooked adapters
+	// fall through to dangerousLongOption instead.
+	{Pattern: "git *--upload*"},
+	{Pattern: "git *--receive*"},
+	{Pattern: "git *--output-*"},
 	{Pattern: "git *--ext-diff*"},
 	{Pattern: "git *--textconv*"},
 	{Pattern: "git *--show-signature*"},
@@ -99,6 +125,22 @@ var BashDenyRules = []BashRule{
 	{Pattern: "git *--ext-grep*"},
 	{Pattern: "git *--recurse-submodules*"},
 	{Pattern: "git *grep *-O*"},
+	{Pattern: "git *--upload-pack*"},
+	{Pattern: "git *--receive-pack*"},
+	{Pattern: "git *--config-env*"},
+	{Pattern: "git *--exec-path*"},
+	{Pattern: "git *--paginate*"},
+	{Pattern: "git -c*"},
+	{Pattern: "svn *--config-dir*"},
+	{Pattern: "svn *--config-option*"},
+	{Pattern: "svn *--config-o*"},
+	{Pattern: "svn *--config-d*"},
+	{Pattern: "svn *--editor-cmd*"},
+	{Pattern: "svn *--editor*"},
+	{Pattern: "svn *--diff-cmd*"},
+	{Pattern: "svn *--diff-c*"},
+	{Pattern: "svn *--username*"},
+	{Pattern: "svn *--password*"},
 	{Pattern: "tree *-o*"},
 	{Pattern: "tree *--output*"},
 	{Pattern: "file *-C*"},
@@ -108,8 +150,8 @@ var BashDenyRules = []BashRule{
 func sharedGuardOwnsNativeDeny(rule BashRule) bool {
 	pattern := strings.TrimSpace(rule.Pattern)
 	return strings.HasPrefix(pattern, "find ") || strings.HasPrefix(pattern, "rg ") ||
-		strings.HasPrefix(pattern, "git ") || strings.HasPrefix(pattern, "tree ") ||
-		strings.HasPrefix(pattern, "file ")
+		strings.HasPrefix(pattern, "git ") || strings.HasPrefix(pattern, "svn ") ||
+		strings.HasPrefix(pattern, "tree ") || strings.HasPrefix(pattern, "file ")
 }
 
 // BashAllowed evaluates every command segment separated by &&, ||, semicolon,
@@ -431,6 +473,8 @@ func unsafeBashArguments(args []string, caseInsensitiveExecutable bool) bool {
 		return hasTreeUnsafeOption(args[1:])
 	case executableEqual(args[0], "file", caseInsensitiveExecutable):
 		return hasFileUnsafeOption(args[1:])
+	case executableEqual(args[0], "svn", caseInsensitiveExecutable):
+		return hasSvnUnsafeOption(args[1:])
 	default:
 		return false
 	}
@@ -555,6 +599,16 @@ func hasGitUnsafeOption(args []string) bool {
 		if strings.EqualFold(arg, "--no-optional-locks") {
 			continue
 		}
+		lower := strings.ToLower(arg)
+		// Global-option region only: config/env config, exec-path, alternate
+		// repository roots, and the paginate hook fail closed before any
+		// subcommand. Attached value forms share the -c/-C prefixes. The same
+		// tokens after the subcommand stay allowed (git grep -c, git log -C).
+		if strings.HasPrefix(arg, "-c") || strings.HasPrefix(arg, "-C") ||
+			dangerousLongOption(lower, "--config-env") || dangerousLongOption(lower, "--exec-path") ||
+			lower == "-p" || dangerousLongOption(lower, "--paginate") {
+			return true
+		}
 		if !strings.HasPrefix(arg, "-") {
 			subcommand = strings.ToLower(arg)
 			subcommandIndex = index
@@ -566,14 +620,65 @@ func hasGitUnsafeOption(args []string) bool {
 			break
 		}
 		lower := strings.ToLower(arg)
-		if longOption(lower, "--output") || lower == "--ext-diff" || lower == "--textconv" ||
-			lower == "--show-signature" || longOption(lower, "--open-files-in-pager") ||
-			lower == "--ext-grep" || lower == "--recurse-submodules" {
+		if dangerousLongOption(lower, "--output") || lower == "--ext-diff" || lower == "--textconv" ||
+			lower == "--show-signature" || dangerousLongOption(lower, "--open-files-in-pager") ||
+			lower == "--ext-grep" || lower == "--recurse-submodules" ||
+			dangerousLongOption(lower, "--upload-pack") || dangerousLongOption(lower, "--receive-pack") {
 			return true
 		}
 	}
 	if subcommand == "grep" && subcommandIndex >= 0 {
 		return hasGitGrepUnsafeShortOption(args[subcommandIndex+1:])
+	}
+	if subcommand == "ls-remote" && subcommandIndex >= 0 {
+		return hasGitTransportOperand(args[subcommandIndex+1:])
+	}
+	return false
+}
+
+// hasGitTransportOperand rejects <transport>::<address> remote operands: any
+// such operand makes git execute git-remote-<transport> locally, which
+// includes the ext:: shell escape. Operands after "--" stay operands for this
+// scan — the separator ends option parsing, not operand inspection — so the
+// loop continues past it instead of returning early.
+func hasGitTransportOperand(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(arg), "::") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSvnUnsafeOption rejects config, editor, external diff, and credential
+// options. Unknown short options fail closed through the shared cluster
+// grammar; mutating subcommands stay denied by having no allow rule.
+func hasSvnUnsafeOption(args []string) bool {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			continue
+		}
+		lower := strings.ToLower(arg)
+		if strings.HasPrefix(lower, "--") {
+			if dangerousLongOption(lower, "--config-dir") || dangerousLongOption(lower, "--config-option") ||
+				dangerousLongOption(lower, "--editor-cmd") || dangerousLongOption(lower, "--diff-cmd") ||
+				dangerousLongOption(lower, "--username") || dangerousLongOption(lower, "--password") {
+				return true
+			}
+			continue
+		}
+		_, consumed, ok := parseShortOptionCluster(args, index, svnShortOptionGrammar)
+		if !ok {
+			return true
+		}
+		index += consumed
 	}
 	return false
 }
@@ -723,6 +828,15 @@ var fileShortOptionGrammar = map[byte]shortOptionValueMode{
 	'z': shortOptionFlag, 'Z': shortOptionFlag, '0': shortOptionFlag,
 }
 
+// svnShortOptionGrammar covers the read-side short options of the restricted
+// svn info/status/list/log/diff surface; anything else fails closed.
+var svnShortOptionGrammar = map[byte]shortOptionValueMode{
+	'v': shortOptionFlag, 'q': shortOptionFlag, 'N': shortOptionFlag,
+	'R': shortOptionFlag, 'g': shortOptionFlag, 'u': shortOptionFlag,
+	'r': shortOptionRequiredValue, 'c': shortOptionRequiredValue,
+	'l': shortOptionRequiredValue, 'x': shortOptionRequiredValue,
+}
+
 var gitGrepShortOptionGrammar = map[byte]shortOptionValueMode{
 	'a': shortOptionFlag, 'I': shortOptionFlag, 'i': shortOptionFlag, 'w': shortOptionFlag,
 	'v': shortOptionFlag, 'h': shortOptionFlag, 'H': shortOptionFlag,
@@ -832,6 +946,38 @@ func filepathBase(value string) string {
 
 func longOption(arg, option string) bool {
 	return arg == option || strings.HasPrefix(arg, option+"=")
+}
+
+// dangerousLongOption matches an unsafe long option token against a blocked
+// option name. It splits any attached "=value" first, requires a real "--"
+// prefix and at least one name byte after it, and blocks an exact match, an
+// attached value, or any nonempty abbreviation of the blocked name (git and
+// svn both accept unambiguous prefixes such as --output=/tmp/x expressed as
+// --out). Negated forms such as --no-output cannot select the blocked option,
+// and benign flags such as --stat or --oneline share no prefix with a blocked
+// name, so both stay allowed.
+func dangerousLongOption(arg, blocked string) bool {
+	if !strings.HasPrefix(arg, "--") || len(arg) <= 2 {
+		return false
+	}
+	name := arg
+	if index := strings.IndexByte(name, '='); index >= 0 {
+		name = name[:index]
+	}
+	if len(name) <= 2 {
+		return false
+	}
+	if strings.HasPrefix(name, "--no-") {
+		return false
+	}
+	if !strings.HasPrefix(blocked, "--") || len(blocked) <= 2 {
+		return false
+	}
+	blockedName := blocked
+	if len(name) < len(blockedName) {
+		return strings.HasPrefix(blockedName, name)
+	}
+	return name == blockedName
 }
 
 func matchesAnyBashRule(segment string, rules []BashRule, caseInsensitiveExecutable bool) bool {
