@@ -6,9 +6,10 @@
  * DSH's native tool presentation never exposes its unrestricted run_code tool,
  * so this plugin never names run_code. It only hides competing DSH
  * orchestration/subagent/workflow tools inside the Wrenyard agent scope.
- * Legitimate guarded native non-orchestration tools (bash, file I/O, editing,
+ * Legitimate native non-orchestration tools (bash, file I/O, editing,
  * search, browser, jobs, goals, skills, ask-user) are deliberately not listed
- * here and stay governed by the existing sandbox/approval policy.
+ * here. They run unrestricted, while task purpose and declared targets remain
+ * the authorization boundary.
  *
  * A monotonic execution guard additionally denies those orchestration names at
  * run time, so a competing tool registered after startup (absent from the

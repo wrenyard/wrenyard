@@ -31,6 +31,7 @@ func dshPlanRequest(t *testing.T) PlanRequest {
 				Files: []PreparedFile{
 					{RelativePath: assets.PatchPath, Data: patch, Mode: 0o600},
 					{RelativePath: assets.Plugin.Filename, Data: []byte(assets.Plugin.Source), Mode: 0o600},
+					{RelativePath: assets.YoloPlugin.Filename, Data: []byte(assets.YoloPlugin.Source), Mode: 0o600},
 				},
 			},
 		},
@@ -68,7 +69,7 @@ func TestBuildPlanDSHHiddenAgentArgv(t *testing.T) {
 
 func TestBuildPlanDSHIsolatedHomeAndAssets(t *testing.T) {
 	req := dshRequestWithDialect(t)
-	plan, err := BuildPlan(req)
+	plan, err := BuildProductionPlan(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +86,11 @@ func TestBuildPlanDSHIsolatedHomeAndAssets(t *testing.T) {
 	if plan.Resources[0].OwnershipRoot != req.Spec.Runtime.HomeParent {
 		t.Fatalf("ownership root=%q want %q", plan.Resources[0].OwnershipRoot, req.Spec.Runtime.HomeParent)
 	}
-	for _, rel := range []string{"patch.yaml", dsh.DefaultRuntimePatchAssets().Plugin.Filename} {
+	for _, rel := range []string{
+		"patch.yaml",
+		dsh.DefaultRuntimePatchAssets().Plugin.Filename,
+		dsh.DefaultRuntimePatchAssets().YoloPlugin.Filename,
+	} {
 		if _, err := os.Stat(filepath.Join(home, rel)); err != nil {
 			t.Fatalf("asset %q missing from DSH_HOME: %v", rel, err)
 		}
@@ -94,13 +99,16 @@ func TestBuildPlanDSHIsolatedHomeAndAssets(t *testing.T) {
 
 func TestBuildPlanDSHPermissionEnv(t *testing.T) {
 	req := dshRequestWithDialect(t)
-	req.Permission = catalog.PermissionYolo
-	plan, err := BuildPlan(req)
+	req.Permission = catalog.PermissionReadonly
+	plan, err := BuildProductionPlan(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if plan.Env[catalog.EnvDSHPermissionMode] != catalog.DSHPermissionMode(catalog.PermissionYolo) {
 		t.Fatalf("DSH_PERMISSION_MODE=%q want %q", plan.Env[catalog.EnvDSHPermissionMode], catalog.DSHPermissionMode(catalog.PermissionYolo))
+	}
+	if plan.Permission != catalog.PermissionYolo {
+		t.Fatalf("plan permission=%q want yolo", plan.Permission)
 	}
 	for _, arg := range plan.Command {
 		if strings.HasPrefix(arg, "--permission") {
@@ -147,6 +155,13 @@ func TestBuildPlanDSHEnvironmentSafety(t *testing.T) {
 	}
 	if _, err := os.Stat(bridgePath); err != nil {
 		t.Fatalf("bridge plugin must exist at the inserted absolute path: %v", err)
+	}
+	yoloPath := filepath.Join(plan.Env["DSH_HOME"], dsh.DefaultRuntimePatchAssets().YoloPlugin.Filename)
+	if !strings.Contains(patchText, "- insert:\n    id: forge-dsh-yolo\n    name: "+strconv.Quote(yoloPath)) {
+		t.Fatalf("YOLO insert must name the exact absolute materialized plugin path %q:\n%s", yoloPath, patchText)
+	}
+	if _, err := os.Stat(yoloPath); err != nil {
+		t.Fatalf("YOLO session plugin must exist at the inserted absolute path: %v", err)
 	}
 }
 

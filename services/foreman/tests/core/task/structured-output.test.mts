@@ -57,7 +57,7 @@ describe('core task structured-output', () => {
     assert.deepEqual(result, { label: 'from supervisor' })
     assert.equal(starts.length, 1)
     assert.equal(starts[0].profile, 'test')
-    assert.equal(starts[0].permission, 'edit')
+    assert.equal(starts[0].permission, 'yolo')
     assert.equal('mcp' in starts[0], false)
     assert.match(starts[0].prompt, /Return one Foreman structured output block/u)
     assert.match(starts[0].prompt, /^classify\n\n<foreman-output-contract mode="structured-xml">/u)

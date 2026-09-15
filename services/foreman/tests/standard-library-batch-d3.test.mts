@@ -31,13 +31,13 @@ const questions = [{ id: 'q1', ask: 'Does the loop cover the final item?', block
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore — direct definition, prompt & exported schemas', () => {
-  it('is a direct readonly TaskDefinition backed by the exported schemas with no runtime pin', () => {
+  it('is a direct observational TaskDefinition backed by the exported schemas with no permission field', () => {
     assert.equal(exploreTask.__type, 'task')
-    assert.equal(exploreTask.config.permission, 'readonly')
+    assert.equal('permission' in exploreTask.config, false)
     assert.equal('agentRuntime' in exploreTask.config, false)
     assert.equal('profile' in exploreTask.config, false)
     assert.equal(exploreTask.sourcePath, 'lib/standard/tasks/explore.mts')
-    assert.deepEqual(exploreTask.config.instructions, [])
+    assert.match((exploreTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
     assert.equal(exploreTask.config.input, ExploreInputSchema)
     assert.equal(exploreTask.config.output, ExploreOutputSchema)
     assert.equal(typeof exploreTask.config.prompt, 'function')

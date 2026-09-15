@@ -111,7 +111,6 @@ const definition = {
     description:
       'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and returns structured findings and evidences. Read-only; never fabricates or mutates files.',
     dispatch: { ...GENERAL_DISPATCH_REQUIREMENTS, requiresWebSearch: true },
-    permission: 'readonly',
     instructions: [shellUsage],
     input: LibrarianInputSchema,
     output: LibrarianOutputSchema,

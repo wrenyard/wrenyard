@@ -5,8 +5,9 @@ const MAX_WRITE_TARGETS = 128
 
 /**
  * Resolve a task's deterministic write targets into bounded checkout-local
- * absolute paths. Missing/empty targets intentionally return undefined so the
- * supervisor keeps conservative repo-wide write protection.
+ * absolute paths. An omitted declaration returns undefined (observational);
+ * a declared empty result returns an empty list as the repo-wide write-lock
+ * marker.
  */
 export function resolveTaskWritePaths(
   config: TaskConfig,
@@ -14,12 +15,10 @@ export function resolveTaskWritePaths(
   workingDirectory: string,
 ): readonly string[] | undefined {
   if (!config.writeTargets) return undefined
-  if (config.permission !== 'edit') {
-    throw new Error('Task writeTargets requires permission edit')
-  }
 
   const raw = config.writeTargets(input)
-  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  if (!Array.isArray(raw)) throw new Error('Task writeTargets must return an array')
+  if (raw.length === 0) return []
   if (raw.length > MAX_WRITE_TARGETS) {
     throw new Error(`Task writeTargets exceeds ${MAX_WRITE_TARGETS} paths`)
   }

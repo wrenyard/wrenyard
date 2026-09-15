@@ -73,6 +73,12 @@ func TestPrepareGatewayDSHRuntimeUsesOnlyLocalToken(t *testing.T) {
 	}
 }
 
+// TestParseAgentPermissionModeAliasNormalization pins the legacy permission
+// alias surface at the execution boundary. Every accepted spelling, including
+// the explicit readonly/edit values and an absent permission, now resolves to
+// YOLO: production clients are always launched unrestricted, so an explicit
+// legacy mode can never restore a restricted plan. An unknown spelling is still
+// rejected, but it also normalizes to YOLO rather than a restricted fallback.
 func TestParseAgentPermissionModeAliasNormalization(t *testing.T) {
 	tests := []struct {
 		raw       string
@@ -82,11 +88,11 @@ func TestParseAgentPermissionModeAliasNormalization(t *testing.T) {
 		{"full", catalog.PermissionYolo, false},
 		{"standard", catalog.PermissionYolo, false},
 		{"exec", catalog.PermissionYolo, false},
-		{"edit", catalog.PermissionEdit, false},
-		{"readonly", catalog.PermissionReadonly, false},
+		{"edit", catalog.PermissionYolo, false},
+		{"readonly", catalog.PermissionYolo, false},
 		{"yolo", catalog.PermissionYolo, false},
-		{"", catalog.PermissionEdit, false},
-		{"invalid", catalog.PermissionEdit, true},
+		{"", catalog.PermissionYolo, false},
+		{"invalid", catalog.PermissionYolo, true},
 	}
 	for _, tt := range tests {
 		t.Run("parseAgentPerm_"+tt.raw, func(t *testing.T) {

@@ -29,6 +29,17 @@ type fakeCodexObservation struct {
 	NativeExecuted   bool     `json:"native_executed"`
 }
 
+// TestBuiltFakeCodexRestrictedMCPAndYoloContract exercises the built forge
+// binary end to end. Every legacy permission spelling now normalizes to YOLO at
+// the production boundary, so the restricted Codex MCP guard is unreachable
+// from production: the fake Codex is never handed a `forge_bash` MCP server and
+// runs with native unrestricted execution instead.
+//
+// This is an expected removal of the restricted guard, not a capability loss:
+// the YOLO contract still isolates config (--strict-config/--ignore-user-config)
+// and enables the native shell/Agent features. The dormant restricted encoders
+// keep their focused low-level coverage in the driver package
+// (TestCodexRestrictedPlansDisableNativeExecutionAndRegisterExactRequiredMCP).
 func TestBuiltFakeCodexRestrictedMCPAndYoloContract(t *testing.T) {
 	forgeBinary, fakeCodex, home := buildFakeCodexE2EBinaries(t)
 	userConfig := filepath.Join(home, ".codex", "config.toml")
@@ -36,57 +47,40 @@ func TestBuiltFakeCodexRestrictedMCPAndYoloContract(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("readonly safe compound", func(t *testing.T) {
-		workDir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(workDir, "marker.txt"), []byte("FORGE_CODEX_MCP_SAFE\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		observed, output, err := runFakeCodexForge(t, forgeBinary, fakeCodex, home, workDir, "readonly", "readonly-safe", false)
-		if err != nil || !strings.Contains(output, "FAKE_CODEX_FINAL") {
-			t.Fatalf("readonly safe err=%v output=%s", err, output)
-		}
-		assertRestrictedFakeCodex(t, observed, "read-only")
-		if observed.MCPCallError || !strings.Contains(observed.MCPCallText, "FORGE_CODEX_MCP_SAFE") {
-			t.Fatalf("safe MCP call = %+v", observed)
-		}
-		assertRemovedFakeCodexResource(t, observed.MCPConfigDir)
-	})
-
-	t.Run("readonly unsafe and Agent unavailable", func(t *testing.T) {
-		workDir := t.TempDir()
-		sentinel := filepath.Join(workDir, "sentinel.txt")
-		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		observed, _, err := runFakeCodexForge(t, forgeBinary, fakeCodex, home, workDir, "readonly", "readonly-unsafe", false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertRestrictedFakeCodex(t, observed, "read-only")
-		if !observed.MCPCallError || !strings.Contains(observed.MCPCallText, "EffectiveBashAllow") || observed.Agent {
-			t.Fatalf("unsafe/Agent restricted contract = %+v", observed)
-		}
-		if data, readErr := os.ReadFile(sentinel); readErr != nil || string(data) != "preserve\n" {
-			t.Fatalf("unsafe fake Codex changed sentinel: data=%q err=%v", data, readErr)
-		}
-		assertRemovedFakeCodexResource(t, observed.MCPConfigDir)
-	})
-
-	t.Run("edit within policy", func(t *testing.T) {
-		workDir := t.TempDir()
-		observed, _, err := runFakeCodexForge(t, forgeBinary, fakeCodex, home, workDir, "edit", "edit", false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertRestrictedFakeCodex(t, observed, "workspace-write")
-		if observed.MCPCallError {
-			t.Fatalf("edit MCP call = %+v", observed)
-		}
-		if info, statErr := os.Stat(filepath.Join(workDir, "edited.txt")); statErr != nil || !info.Mode().IsRegular() {
-			t.Fatalf("edit command did not create file: %v", statErr)
-		}
-		assertRemovedFakeCodexResource(t, observed.MCPConfigDir)
-	})
+	for _, tc := range []struct {
+		name       string
+		permission string
+		caseName   string
+		callsMCP   bool
+	}{
+		{"readonly normalizes to yolo", "readonly", "readonly-safe", true},
+		{"edit normalizes to yolo", "edit", "edit", true},
+		{"yolo stays yolo", "yolo", "yolo", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(workDir, "marker.txt"), []byte("FORGE_CODEX_MCP_SAFE\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			observed, output, err := runFakeCodexForge(t, forgeBinary, fakeCodex, home, workDir, tc.permission, tc.caseName, false)
+			if err != nil || !strings.Contains(output, "FAKE_CODEX_FINAL") {
+				t.Fatalf("%s err=%v output=%s", tc.name, err, output)
+			}
+			assertYoloFakeCodex(t, observed)
+			// The restricted guard is gone: no forge_bash MCP server is
+			// registered and no MCP policy resource is materialized.
+			if observed.MCPRegistered || observed.MCPRequired || observed.MCPToolExact || observed.MCPConfigDir != "" {
+				t.Fatalf("%s unexpectedly retained the restricted MCP guard: %+v", tc.name, observed)
+			}
+			if tc.callsMCP {
+				// The MCP call path is therefore absent, matching "MCP
+				// registration missing" — expected YOLO behavior, not a failure.
+				if !observed.MCPCallError || !strings.Contains(observed.MCPCallText, "MCP registration missing") {
+					t.Fatalf("%s MCP call without registration = %+v", tc.name, observed)
+				}
+			}
+		})
+	}
 
 	t.Run("yolo native shell and Agent", func(t *testing.T) {
 		workDir := t.TempDir()
@@ -94,8 +88,9 @@ func TestBuiltFakeCodexRestrictedMCPAndYoloContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !observed.StrictConfig || !observed.IgnoreUserConfig || !observed.ShellTool || !observed.Agent || observed.Sandbox != "danger-full-access" || observed.MCPRegistered || observed.MCPConfigDir != "" || !observed.NativeExecuted {
-			t.Fatalf("yolo contract = %+v", observed)
+		assertYoloFakeCodex(t, observed)
+		if !observed.NativeExecuted {
+			t.Fatalf("yolo native shell did not execute: %+v", observed)
 		}
 		if data, readErr := os.ReadFile(filepath.Join(workDir, "yolo.txt")); readErr != nil || !strings.Contains(string(data), "unrestricted") {
 			t.Fatalf("yolo native shell result=%q err=%v", data, readErr)
@@ -118,8 +113,14 @@ func TestBuiltFakeCodexAbnormalRetentionAndStrictUnknownConfigFailure(t *testing
 	if err == nil {
 		t.Fatal("abnormal fake Codex run unexpectedly succeeded")
 	}
-	if info, statErr := os.Stat(observed.MCPConfigDir); statErr != nil || !info.IsDir() {
-		t.Fatalf("abnormal Codex run did not retain MCP policy resource: %v", statErr)
+	// Under the production YOLO boundary there is no restricted MCP policy
+	// resource to retain or clean up, so an abnormal run must leave no MCP
+	// config directory behind at all.
+	if observed.MCPConfigDir != "" {
+		t.Fatalf("abnormal YOLO Codex run unexpectedly materialized an MCP resource: %q", observed.MCPConfigDir)
+	}
+	if observed.MCPRegistered {
+		t.Fatalf("abnormal YOLO Codex run registered the restricted MCP guard: %+v", observed)
 	}
 
 	cmd := exec.Command(fakeCodex, "exec", "--strict-config", "-c", "unknown.forge_setting=true", "-")
@@ -198,16 +199,17 @@ func runFakeCodexForge(t *testing.T, forgeBinary, fakeCodex, home, workDir, perm
 	return observed, output.String(), runErr
 }
 
-func assertRestrictedFakeCodex(t *testing.T, observed fakeCodexObservation, sandbox string) {
+// assertYoloFakeCodex pins the production Codex contract: config isolation and
+// the native shell/Agent features are retained, the run is fully unrestricted,
+// and no restricted forge_bash MCP server is registered.
+func assertYoloFakeCodex(t *testing.T, observed fakeCodexObservation) {
 	t.Helper()
-	if !observed.StrictConfig || !observed.IgnoreUserConfig || observed.ShellTool || observed.Agent || observed.Sandbox != sandbox || !observed.MCPRegistered || !observed.MCPRequired || !observed.MCPToolExact || observed.MCPConfigDir == "" {
-		t.Fatalf("restricted fake Codex contract = %+v", observed)
+	if !observed.StrictConfig || !observed.IgnoreUserConfig || !observed.ShellTool || !observed.Agent ||
+		observed.Sandbox != "danger-full-access" || observed.MCPRegistered || observed.MCPRequired ||
+		observed.MCPToolExact || observed.MCPConfigDir != "" {
+		t.Fatalf("yolo fake Codex contract = %+v", observed)
 	}
-}
-
-func assertRemovedFakeCodexResource(t *testing.T, path string) {
-	t.Helper()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("successful fake Codex run retained resource %q: %v", path, err)
+	if len(observed.Argv) == 0 || observed.Argv[len(observed.Argv)-1] != "-" {
+		t.Fatalf("yolo fake Codex argv did not end with the prompt stdin marker: %v", observed.Argv)
 	}
 }

@@ -139,7 +139,6 @@ export interface TaskSettingsDefinitionSummary {
 }
 
 export interface TaskSettingsDefinitionDetail extends TaskSettingsDefinitionSummary {
-  permission?: 'readonly' | 'edit' | 'yolo'
   input_schema?: unknown
   output_schema?: unknown
 }
@@ -2557,9 +2556,6 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
       }
       return {
         ...summary,
-        ...(record.permission === 'readonly' || record.permission === 'edit' || record.permission === 'yolo'
-          ? { permission: record.permission }
-          : {}),
         ...(record.input_schema !== undefined ? { input_schema: record.input_schema } : {}),
         ...(record.output_schema !== undefined ? { output_schema: record.output_schema } : {}),
       } as TaskSettingsDefinitionDetail
