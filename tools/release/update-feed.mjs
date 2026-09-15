@@ -38,7 +38,7 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 // The four canonical public archive names are derived from the requested
 // version, so a wrong-version asset (e.g. dev25 names staged for a dev26
 // release) or a missing/wrong Desktop prefix can never be published.
-function canonicalAssetNames(version) {
+export function canonicalAssetNames(version) {
   return [
     `wrenyard-${version}-darwin-arm64-suite.zip`,
     `wrenyard-desktop-${version}-darwin-arm64.zip`,
