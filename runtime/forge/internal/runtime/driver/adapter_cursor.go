@@ -31,17 +31,16 @@ func (a *CursorAdapter) ParseResult(logPath string) (string, error) {
 		return "", err
 	}
 	var result strings.Builder
+	// The installed CLI replays accumulated assistant text as aggregate
+	// summary flushes after the partial deltas. The same shared lookahead
+	// helper the streaming Tee uses observes every parsed record and owns all
+	// text reconstruction, so a --stream-partial-output transcript never
+	// doubles its text.
+	var deduper cursorAssistantTextDeduper
 	for _, event := range events {
-		// Aggregate assistant text, but only surface a bounded final result so
-		// native payload details never leak wholesale into the summary.
-		for _, normalized := range cursorNormalizerMap(event) {
-			if normalized.Type != "message" {
-				continue
-			}
-			if text, ok := normalized.Data["text"].(string); ok && text != "" {
-				result.WriteString(text)
-			}
-		}
+		result.WriteString(deduper.observe(event))
 	}
+	// Flush text still held pending for a truncated transcript.
+	result.WriteString(deduper.finish())
 	return strings.TrimSpace(result.String()), nil
 }

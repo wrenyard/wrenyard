@@ -106,6 +106,24 @@ function seedResponseUsage(executionId: string, taskId: string, samples: unknown
   })
 }
 
+/**
+ * Seeds one Cursor-style aggregate response_v1 sample: the exact terminal
+ * output_tokens paired with the ordered vector of serial model-generation
+ * windows observed on the stream.
+ */
+function seedCursorUsage(
+  executionId: string,
+  taskId: string,
+  o: { output: number; windows: Array<[number, number]>; model: string; responseId: string; seq?: number },
+): void {
+  seedResponseUsage(executionId, taskId, [{
+    response_id: o.responseId,
+    model: o.model,
+    output_tokens: o.output,
+    generation_windows: o.windows.map(([firstTokenAtMs, completedAtMs]) => ({ first_token_at_ms: firstTokenAtMs, completed_at_ms: completedAtMs })),
+  }], o.seq ?? 0)
+}
+
 /** Inserts a persisted daemon event envelope, matching ForemanEventStore.append. */
 function seedEnvelopeEvent(
   executionId: string | null,
@@ -715,6 +733,256 @@ describe('readTaskTps', () => {
     initTestDb()
     seedTask('task-none')
     assert.equal(readTaskTps('task-none'), undefined)
+    closeTestDb()
+  })
+})
+
+describe('response_v1 aggregate generation windows', () => {
+  it('attributes the Cursor grok wire alias and excludes the multi-second tool gaps', () => {
+    initTestDb()
+    seedTask('task-cursor')
+    seedExecution({ executionId: 'exec-cursor', taskId: 'task-cursor', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-cursor', 'task-cursor', 'cursor', 'grok-4.6', 'cursor')
+    // Three serial model generations separated by ~10s of tool time. Only the
+    // 3000ms of real generation is paired, never the contiguous 100000ms span.
+    seedCursorUsage('exec-cursor', 'task-cursor', {
+      output: 600,
+      model: 'cursor-grok-4.6-high',
+      responseId: 'cursor-turn:req-1',
+      windows: [
+        [BASE + 1, BASE + 1001],
+        [BASE + 11_001, BASE + 12_001],
+        [BASE + 22_001, BASE + 23_001],
+      ],
+    })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].provider, 'cursor')
+    assert.equal(samples[0].model, 'grok-4.6')
+    assert.equal(samples[0].modelId, 'cursor/grok-4.6')
+    // 600 tokens over the summed 3000ms of generation, not 100000ms of wall.
+    assert.equal(samples[0].outputTokens, 600)
+    assert.equal(samples[0].durationMs, 3000)
+    assert.equal(samples[0].tps, 200)
+    closeTestDb()
+  })
+
+  it('uses the same tokens-over-summed-generation-time formula as the scalar form', () => {
+    initTestDb()
+    seedTask('task-formula')
+    seedExecution({ executionId: 'exec-scalar', taskId: 'task-formula', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedExecution({ executionId: 'exec-windowed', taskId: 'task-formula', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-scalar', 'task-formula', 'anthropic', 'sonnet')
+    seedDispatch('exec-windowed', 'task-formula', 'anthropic', 'sonnet')
+    // A scalar pair spanning 6000ms.
+    seedResponseUsage('exec-scalar', 'task-formula', [{
+      response_id: 'scalar-1', model: 'sonnet', output_tokens: 1200,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 6001,
+    }])
+    // The identical token count split across two serial 3000ms generations
+    // with a gap in between must produce the identical duration and TPS.
+    seedCursorUsage('exec-windowed', 'task-formula', {
+      output: 1200, model: 'sonnet', responseId: 'windowed-1',
+      windows: [[BASE + 1, BASE + 3001], [BASE + 20_001, BASE + 23_001]],
+    })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 2)
+    for (const sample of samples) {
+      assert.equal(sample.outputTokens, 1200)
+      assert.equal(sample.durationMs, 6000)
+      assert.equal(sample.tps, 200)
+    }
+
+    const task = readTaskTps('task-formula')
+    assert.ok(task)
+    assert.equal(task.outputTokens, 2400)
+    assert.equal(task.durationMs, 12000)
+    assert.equal(task.tps, 200)
+    closeTestDb()
+  })
+
+  it('counts an aggregate sample exactly once across duplicate event rows', () => {
+    initTestDb()
+    seedTask('task-once')
+    seedExecution({ executionId: 'exec-once', taskId: 'task-once', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-once', 'task-once', 'cursor', 'grok-4.6', 'cursor')
+    const windows: Array<[number, number]> = [[BASE + 1, BASE + 2001], [BASE + 30_001, BASE + 32_001]]
+    seedCursorUsage('exec-once', 'task-once', { output: 800, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-dup', windows })
+    // The same aggregate sample repeated in a second event row must not double-count.
+    seedCursorUsage('exec-once', 'task-once', { output: 800, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-dup', windows, seq: 1 })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 800)
+    assert.equal(samples[0].durationMs, 4000)
+    assert.equal(samples[0].tps, 200)
+    closeTestDb()
+  })
+
+  it('rejects a malformed, empty, overlapping, or unsafe vector without retaining its tokens', () => {
+    initTestDb()
+    seedTask('task-malformed')
+    const cases: Array<[string, unknown]> = [
+      // An empty vector carries no generation time at all.
+      ['empty', []],
+      // A window whose completion does not advance past its own first token.
+      ['non-positive', [{ first_token_at_ms: BASE + 1, completed_at_ms: BASE + 1 }]],
+      // A reversed window.
+      ['reversed', [{ first_token_at_ms: BASE + 5000, completed_at_ms: BASE + 1000 }]],
+      // A non-finite boundary.
+      ['non-finite', [{ first_token_at_ms: BASE + 1, completed_at_ms: Number.POSITIVE_INFINITY }]],
+      // An overlapping second window that begins before the first completes.
+      ['overlapping', [
+        { first_token_at_ms: BASE + 1, completed_at_ms: BASE + 5001 },
+        { first_token_at_ms: BASE + 4001, completed_at_ms: BASE + 9001 },
+      ]],
+      // A structurally broken entry.
+      ['missing-completion', [{ first_token_at_ms: BASE + 1 }]],
+      ['wrong-type', [{ first_token_at_ms: BASE + 1, completed_at_ms: 'later' }]],
+      // An unsafe summed duration.
+      ['unsafe-sum', [
+        { first_token_at_ms: 1, completed_at_ms: Number.MAX_SAFE_INTEGER },
+        { first_token_at_ms: Number.MAX_SAFE_INTEGER, completed_at_ms: Number.MAX_SAFE_INTEGER },
+        { first_token_at_ms: Number.MAX_SAFE_INTEGER, completed_at_ms: Number.MAX_SAFE_INTEGER },
+        { first_token_at_ms: Number.MAX_SAFE_INTEGER, completed_at_ms: Number.MAX_SAFE_INTEGER },
+      ]],
+    ]
+    for (const [name, windows] of cases) {
+      const executionId = `exec-malformed-${name}`
+      seedExecution({ executionId, taskId: 'task-malformed', startedMs: BASE, endedMs: BASE + 900_000 })
+      seedDispatch(executionId, 'task-malformed', 'cursor', 'grok-4.6', 'cursor')
+      seedResponseUsage(executionId, 'task-malformed', [{
+        response_id: `${name}-r`, model: 'cursor-grok-4.6-high', output_tokens: 5000,
+        generation_windows: windows,
+      }])
+    }
+
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('rejects a sample mixing scalar and vector timing fields', () => {
+    initTestDb()
+    seedTask('task-mixed')
+    for (const [name, fields] of [
+      // Both shapes present: the token-to-time pairing is ambiguous.
+      ['both', { first_token_at_ms: BASE + 1, completed_at_ms: BASE + 3001, generation_windows: [{ first_token_at_ms: BASE + 1, completed_at_ms: BASE + 3001 }] }],
+      // A half-formed scalar cannot be completed by a vector.
+      ['partial-scalar', { first_token_at_ms: BASE + 1, generation_windows: [{ first_token_at_ms: BASE + 1, completed_at_ms: BASE + 3001 }] }],
+      ['partial-completion', { completed_at_ms: BASE + 3001, generation_windows: [{ first_token_at_ms: BASE + 1, completed_at_ms: BASE + 3001 }] }],
+    ] as const) {
+      const executionId = `exec-mixed-${name}`
+      seedExecution({ executionId, taskId: 'task-mixed', startedMs: BASE, endedMs: BASE + 900_000 })
+      seedDispatch(executionId, 'task-mixed', 'cursor', 'grok-4.6', 'cursor')
+      seedResponseUsage(executionId, 'task-mixed', [{
+        response_id: `${name}-r`, model: 'cursor-grok-4.6-high', output_tokens: 5000, ...fields,
+      }])
+    }
+
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('rejects conflicting duplicate vectors even when their total duration is equal', () => {
+    initTestDb()
+    seedTask('task-conflict-vector')
+    seedExecution({ executionId: 'exec-conflict-vector', taskId: 'task-conflict-vector', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-conflict-vector', 'task-conflict-vector', 'cursor', 'grok-4.6', 'cursor')
+    // Identical tokens and identical 6000ms total, but the serial generations
+    // are placed differently: the complete windows differ.
+    seedCursorUsage('exec-conflict-vector', 'task-conflict-vector', {
+      output: 1200, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-conflict',
+      windows: [[BASE + 1, BASE + 3001], [BASE + 10_001, BASE + 13_001]],
+    })
+    seedCursorUsage('exec-conflict-vector', 'task-conflict-vector', {
+      output: 1200, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-conflict',
+      windows: [[BASE + 1, BASE + 2001], [BASE + 10_001, BASE + 14_001]], seq: 1,
+    })
+
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('accepts an identical duplicate vector as one aggregate sample', () => {
+    initTestDb()
+    seedTask('task-identical-vector')
+    seedExecution({ executionId: 'exec-identical-vector', taskId: 'task-identical-vector', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-identical-vector', 'task-identical-vector', 'cursor', 'grok-4.6', 'cursor')
+    const windows: Array<[number, number]> = [[BASE + 1, BASE + 3001], [BASE + 10_001, BASE + 13_001]]
+    seedCursorUsage('exec-identical-vector', 'task-identical-vector', { output: 1200, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-same', windows })
+    seedCursorUsage('exec-identical-vector', 'task-identical-vector', { output: 1200, model: 'cursor-grok-4.6-high', responseId: 'cursor-turn:req-same', windows, seq: 1 })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 1200)
+    assert.equal(samples[0].durationMs, 6000)
+    assert.equal(samples[0].tps, 200)
+    closeTestDb()
+  })
+
+  it('attributes a gateway vector sample and keeps client scalar behavior unchanged', () => {
+    initTestDb()
+    seedTask('task-gwvector')
+    seedExecution({ executionId: 'exec-gwvector', taskId: 'task-gwvector', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-gwvector', 'task-gwvector', 'anthropic', 'sonnet')
+    seedGatewayEvent('exec-gwvector', 'task-gwvector', {
+      protocol: 'openai_chat', status: 200, executionId: 'exec-gwvector',
+      provider: 'anthropic', publicModel: 'anthropic/sonnet',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{
+        response_id: 'gw-vector', model: 'sonnet', output_tokens: 900,
+        generation_windows: [
+          { first_token_at_ms: BASE + 1, completed_at_ms: BASE + 1001 },
+          { first_token_at_ms: BASE + 30_001, completed_at_ms: BASE + 32_001 },
+        ],
+      }],
+    })
+
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 900)
+    assert.equal(samples[0].durationMs, 3000)
+    assert.equal(samples[0].tps, 300)
+
+    // The pre-existing scalar response behavior is preserved: one paired
+    // interval, exact tokens, no wall time.
+    seedTask('task-scalar-preserved')
+    seedExecution({ executionId: 'exec-scalar-preserved', taskId: 'task-scalar-preserved', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-scalar-preserved', 'task-scalar-preserved', 'anthropic', 'sonnet')
+    seedResponseUsage('exec-scalar-preserved', 'task-scalar-preserved', [{
+      response_id: 'scalar-preserved', model: 'sonnet', output_tokens: 500,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10_001,
+    }])
+    const scalar = readExecutionTpsSamples().find((sample) => sample.executionId === 'exec-scalar-preserved')
+    assert.ok(scalar)
+    assert.equal(scalar!.outputTokens, 500)
+    assert.equal(scalar!.durationMs, 10000)
+    assert.equal(scalar!.tps, 50)
+    closeTestDb()
+  })
+
+  it('publishes local speed for Cursor from the summed generation windows', () => {
+    initTestDb()
+    for (let i = 0; i < 3; i += 1) {
+      const executionId = `exec-local-cursor-${i}`
+      seedTask(`t-local-cursor-${i}`)
+      seedExecution({ executionId, taskId: `t-local-cursor-${i}`, startedMs: BASE + i * 1000, endedMs: BASE + i * 1000 + 900_000 })
+      seedDispatch(executionId, `t-local-cursor-${i}`, 'cursor', 'grok-4.6', 'cursor')
+      seedCursorUsage(executionId, `t-local-cursor-${i}`, {
+        output: 1000, model: 'cursor-grok-4.6-high', responseId: `cursor-turn:local-${i}`,
+        windows: [[BASE + i * 1000 + 1, BASE + i * 1000 + 5001], [BASE + i * 1000 + 60_001, BASE + i * 1000 + 65_001]],
+      })
+    }
+
+    const samples = readLocalSpeedSamples(new Date(BASE + 1_000_000))
+    const cursorSample = samples.find((sample) => sample.provider === 'cursor')
+    assert.ok(cursorSample)
+    assert.equal(cursorSample.model, 'grok-4.6')
+    // 1000 tokens over 10000ms of generation, matching the task path.
+    assert.equal(cursorSample.tps, 100)
+    assert.equal(cursorSample.sampleCount, 3)
     closeTestDb()
   })
 })
