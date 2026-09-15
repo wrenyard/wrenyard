@@ -59,7 +59,7 @@ func buildCursorPlan(req PlanRequest) (CommandPlan, error) {
 
 	command := append([]string(nil), binary...)
 	command = append(command, permissionArgs...)
-	command = append(command, "-p", "--output-format", "stream-json", "--trust", "--model", model)
+	command = append(command, "-p", "--output-format", "stream-json", "--stream-partial-output", "--trust", "--model", model)
 	if resumeID := strings.TrimSpace(req.ResumeSessionID); resumeID != "" {
 		command = append(command, spec.ClientDesc.ResumeFlag, resumeID)
 	}
