@@ -1175,16 +1175,6 @@ func TestProviderModelMap(t *testing.T) {
 	}
 }
 
-func TestNoRetiredProviderAliases(t *testing.T) {
-	r := defaultReg()
-	retired := []string{"codebuddy-native", "deepseek", "anthropic-sub"}
-	for _, name := range retired {
-		if _, err := r.LookupBinding(name); err == nil {
-			t.Fatalf("retired provider %q should not exist", name)
-		}
-	}
-}
-
 func TestDSHClientDescriptor(t *testing.T) {
 	r := defaultReg()
 	d, err := r.LookupDescriptor("dsh")

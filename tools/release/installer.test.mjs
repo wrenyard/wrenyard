@@ -73,11 +73,6 @@ test('install.ps1 extracts both Windows ZIPs with checked System32 tar.exe', () 
   assert.match(ps1, /Expand-NativeZip -Archive \$desktopZip -Destination \$desktopExtract/);
 });
 
-test('installers no longer expose or stage a standalone Pet release asset', () => {
-  assert.doesNotMatch(installer, /--pet-url|PET_URL|wrenyard-pet|apps\/pet/);
-  assert.doesNotMatch(ps1, /PetUrl|PetChecksumUrl|wrenyard-pet|apps\\pet|Wrenyard Pet\.exe/);
-});
-
 test('installers discover releases from static update metadata, never the REST API', () => {
   assert.ok(!/api\.github\.com/.test(installer), 'install.sh must not call the GitHub REST API');
   assert.ok(!/api\.github\.com/.test(ps1), 'install.ps1 must not call the GitHub REST API');

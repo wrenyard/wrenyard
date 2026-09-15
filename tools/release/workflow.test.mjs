@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +8,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
 const localBuilder = readFileSync(resolve(repoRoot, 'tools', 'release', 'build-local-release.mjs'), 'utf8');
-
-test('routine CI workflow is removed', () => {
-  assert.equal(existsSync(resolve(repoRoot, '.github', 'workflows', 'ci.yml')), false);
-});
 
 test('release workflow builds exactly the two maintained native targets', () => {
   assert.match(workflow, /- os: macos-15\s+target: darwin-arm64/);

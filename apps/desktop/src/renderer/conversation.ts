@@ -788,17 +788,6 @@ export class ConversationView {
   }
 
   private appendAssistantContent(body: HTMLElement, item: ConversationItemSnapshot): void {
-    if (item.reasoning) {
-      const thinking = document.createElement('details');
-      thinking.className = 'reasoning-block';
-      this.bindExpandedState(thinking, `${item.id}:reasoning`);
-      const label = document.createElement('summary');
-      label.textContent = item.running ? '正在思考' : '思考过程';
-      const content = document.createElement('div');
-      content.textContent = item.reasoning;
-      thinking.append(label, content);
-      body.append(thinking);
-    }
     if (!item.text && !item.running) return;
     const content = document.createElement('div');
     content.className = 'message-content message-content-segment';
