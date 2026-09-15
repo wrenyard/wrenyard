@@ -127,15 +127,18 @@ test('installs one monotonic guard denying every competing orchestration name, i
   const guard = tools.guardHandlers[0];
 
   for (const name of ORCHESTRATION_DENY) {
+    const decision = guard({ name, input: {} });
+    assert.ok(!(decision instanceof Promise), `${name}: guard must decide synchronously, not return a Promise`);
     assert.equal(
-      await guard({ name, input: {} }),
+      decision,
       'denied by the Wrenyard agent boundary',
       `${name} is denied by the guard with the fixed concise reason`,
     );
   }
 
   for (const legit of [...LEGITIMATE_NATIVE, ...WRENYARD_ALIASES, 'run_code']) {
-    const decision = await guard({ name: legit, input: {} });
+    const decision = guard({ name: legit, input: {} });
+    assert.ok(!(decision instanceof Promise), `${legit}: guard must decide synchronously, not return a Promise`);
     assert.equal(decision, undefined, `${legit} is not matched by the guard`);
   }
 });

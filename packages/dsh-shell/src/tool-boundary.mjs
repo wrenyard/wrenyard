@@ -72,7 +72,10 @@ export async function apply(ctx) {
   // denying execution of any ORCHESTRATION_DENY name, even one registered after
   // the schemas() snapshot above. Uses a fixed reason, never names run_code, and
   // returns no opinion for legitimate tools.
-  tools.guard(async (exec) => {
+  // DSH guards are synchronous: they return undefined|string directly, never a
+  // Promise. An async callback would hand DSH a Promise, which it reads as a
+  // denial for every tool and cannot serialize.
+  tools.guard((exec) => {
     if (exec && typeof exec.name === 'string' && ORCHESTRATION_DENY_SET.has(exec.name)) {
       return 'denied by the Wrenyard agent boundary';
     }
