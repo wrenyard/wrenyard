@@ -75,6 +75,7 @@ const CANONICAL_MODELS = {
   'gpt-5.6-terra': { id: 'gpt-5.6-terra', displayName: builtinModelDisplayName('gpt-5.6-terra') },
   'hunyuan-hy4-preview': { id: 'hunyuan-hy4-preview', displayName: builtinModelDisplayName('hunyuan-hy4-preview') },
   'kimi-k2.6': { id: 'kimi-k2.6', displayName: builtinModelDisplayName('kimi-k2.6') },
+  'kimi-k2.8': { id: 'kimi-k2.8', displayName: builtinModelDisplayName('kimi-k2.8') },
   'kimi-k3': { id: 'kimi-k3', displayName: builtinModelDisplayName('kimi-k3') },
   'minimax-m2.7': { id: 'minimax-m2.7', displayName: builtinModelDisplayName('minimax-m2.7') },
   'minimax-m2.7-highspeed': { id: 'minimax-m2.7-highspeed', displayName: builtinModelDisplayName('minimax-m2.7-highspeed') },
@@ -217,15 +218,29 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   {
     id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'forge-managed',
     defaultModel: 'k3', quotaProvider: 'kimi-coding',
-    models: [model('k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX)],
+    models: [
+      model('k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
+      // K2.8 Preview context is 1M; no official max-output or reference token
+      // price is published, so neither is registered. `kimi-for-coding` is the
+      // exact official wire id clients send for this canonical model.
+      model('kimi-k2.8', 1_048_576, undefined, CANONICAL_MODELS['kimi-k2.8'], THINKING_LOW_HIGH_MAX),
+    ],
+    modelAliases: { 'kimi-for-coding': 'kimi-k2.8' },
     protocols: [
       openAI('https://api.kimi.com/coding/v1/chat/completions'),
       anthropic('https://api.kimi.com/coding/v1/messages'),
     ],
     // Gateway clients may materialize K3 thinking once their native syntax
-    // supports it; the exact wire alias is the level itself.
+    // supports it; the exact wire alias is the level itself. K2.8 Preview
+    // exposes the same low/high/max ladder to the same clients.
     thinkingMappings: {
       k3: {
+        codex: effortLadder(THINKING_LOW_HIGH_MAX),
+        claude: effortLadder(THINKING_LOW_HIGH_MAX),
+        codebuddy: effortLadder(THINKING_LOW_HIGH_MAX),
+        grok: effortLadder(THINKING_LOW_HIGH_MAX),
+      },
+      'kimi-k2.8': {
         codex: effortLadder(THINKING_LOW_HIGH_MAX),
         claude: effortLadder(THINKING_LOW_HIGH_MAX),
         codebuddy: effortLadder(THINKING_LOW_HIGH_MAX),
@@ -340,7 +355,7 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     setupHint: '请在 Cursor Desktop 中完成登录，返回啾啾工坊后刷新状态。',
   },
   'kimi-coding': {
-    description: 'Moonshot Kimi K3 编程模型与订阅额度。',
+    description: 'Moonshot Kimi K3 与 Kimi K2.8 Preview 编程模型与订阅额度。',
     setupHint: '输入 Kimi Coding API Key；Key 仅写入本机 Wrenyard runtime。',
   },
   minimax: {
@@ -458,6 +473,7 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   k3: speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis Kimi K3 output speed; k3 is the exact registered Kimi Coding route id for that documented model.'),
   'kimi-k2.5': speedDefault(39.9, 'https://artificialanalysis.ai/models/kimi-k2-5/providers', 'Artificial Analysis minimum current provider output speed for Kimi K2.5; retained for the registered decommissioned model.'),
   'kimi-k2.6': speedDefault(56.3, 'https://artificialanalysis.ai/models/kimi-k2-6/', 'Artificial Analysis output-speed measurement for Kimi K2.6.'),
+  'kimi-k2.8': { tps: 40, source: 'local-benchmark:kimi-coding/2026-09-15', checkedAt: '2026-09-15', conservative: true, basis: 'Conservative rounded-down default from one Kimi Coding streaming probe at low thinking: 803 completion tokens / 19359ms = 41.48 TPS. Not a cross-workload benchmark; local valid execution samples supersede it.' },
   'kimi-k3': speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis output-speed measurement for Kimi K3.'),
   'minimax-m2.7': speedDefault(71.3, 'https://artificialanalysis.ai/models/minimax-m2-7/', 'Artificial Analysis output-speed measurement for MiniMax M2.7.'),
   'minimax-m3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis output-speed measurement for MiniMax M3.'),
@@ -534,6 +550,11 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.2, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
+  },
+  'kimi-k2.8': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
   },
   'kimi-k3': {
     thinkingLevels: THINKING_LOW_HIGH_MAX,

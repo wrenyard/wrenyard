@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { Catalog, DispatchPlan, ProviderDefinition } from '@wrenyard/catalog';
-import { deriveTaskDispatchPlans } from './catalog.ts';
+import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
 
 export interface ProviderCredential {
   value: string;
@@ -108,13 +108,40 @@ function codeBuddyUpstreamWireModel(model: string): string {
   return CODEBUDDY_IOA_UPSTREAM_MODELS[model] ?? model;
 }
 
-/** Reverse only the exact known CodeBuddy iOA wire ids observed at runtime. */
+/**
+ * Kimi Coding canonical-to-wire model ids. The official Kimi Coding route
+ * only recognizes the wire id `kimi-for-coding`, so the canonical identity
+ * `kimi-k2.8` must be translated before dispatch. Unlike CodeBuddy this is a
+ * static, credential-independent translation: the same wire id is correct for
+ * every Kimi credential, so no environment classification is involved.
+ */
+const KIMI_CODING_UPSTREAM_MODELS: Readonly<Record<string, string>> = {
+  'kimi-k2.8': 'kimi-for-coding',
+};
+
+function kimiCodingUpstreamWireModel(model: string): string {
+  return KIMI_CODING_UPSTREAM_MODELS[model] ?? model;
+}
+
+/** Reverse only explicit, unambiguous wire identities from the provider SSOT. */
 export function canonicalizeObservedProviderModelId(provider: string, model: string): string {
-  if (provider !== 'codebuddy') return model;
-  for (const [canonical, upstream] of Object.entries(CODEBUDDY_IOA_UPSTREAM_MODELS)) {
-    if (upstream === model) return canonical;
+  if (provider === 'codebuddy') {
+    for (const [canonical, upstream] of Object.entries(CODEBUDDY_IOA_UPSTREAM_MODELS)) {
+      if (upstream === model) return canonical;
+    }
+    return model;
   }
-  return model;
+  const definition = BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
+  if (!definition) return model;
+  const matches = new Set<string>();
+  const alias = definition.modelAliases?.[model];
+  if (alias) matches.add(alias);
+  for (const [canonical, clients] of Object.entries(definition.thinkingMappings ?? {})) {
+    for (const levels of Object.values(clients)) {
+      if (Object.values(levels).some((mapping) => mapping?.model === model)) matches.add(canonical);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : model;
 }
 
 /**
@@ -497,6 +524,10 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       return undefined;
     },
     resolveUpstreamModel(provider, model, credential) {
+      // Kimi Coding canonical ids translate to their official wire ids
+      // unconditionally: the mapping depends only on the model, never on which
+      // credential is active, so it must not be gated on a credential.
+      if (provider.id === 'kimi-coding') return kimiCodingUpstreamWireModel(model);
       if (provider.id !== 'codebuddy' || !credential) return model;
       return codeBuddyUpstreamResolve(codeBuddyEnvironments.get(credential), model);
     },
@@ -562,7 +593,7 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
 }
 
 // Compile Catalog-derived task dispatch plans into runtime plans. Preserves the
-// public canonical model id in plan.model and puts the private CodeBuddy iOA
+// public canonical model id in plan.model and puts the private provider wire
 // remap into plan.upstreamModel, respecting any upstreamModel already selected
 // by an explicit thinking mapping. Caches credentials per provider; user alias
 // loading is daemon composition and never happens here.
@@ -581,7 +612,6 @@ export async function resolveRuntimeTaskPlans(
     return pending;
   };
   return Object.fromEntries(await Promise.all(Object.entries(plans).map(async ([target, plan]) => {
-    if (plan.mode !== 'native') return [target, plan] as const;
     const provider = catalog.provider(plan.provider);
     if (!provider) return [target, plan] as const;
     const credential = await resolveCredential(provider);

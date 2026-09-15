@@ -129,6 +129,17 @@ test('kimi-coding k3 binds independent 5h rolling and 7d full-cycle pools', () =
   }
 });
 
+test('kimi-coding kimi-k2.8 shares the exact K3 5h rolling and 7d full-cycle pools', () => {
+  const k3 = expectBinding('kimi-coding', 'k3');
+  const k28 = expectBinding('kimi-coding', 'kimi-k2.8');
+  assert.deepEqual(bindingPoolIds(k28), ['kimi-coding/5h', 'kimi-coding/7d']);
+  assert.deepEqual(k28.pools.map((pool) => pool.windows[0]!.resetKind), ['rolling_partial', 'full_cycle']);
+  // Both models consume the same subscription, so the bindings must be identical.
+  assert.deepEqual(bindingPoolIds(k28), bindingPoolIds(k3));
+  assert.equal(k28.pools[0], k3.pools[0]);
+  assert.equal(k28.pools[1], k3.pools[1]);
+});
+
 test('zhipu-coding preserves the proven 5h rolling / 7d full-cycle resets', () => {
   for (const modelId of ['glm-5.3', 'glm-5.3-flash']) {
     const binding = expectBinding('zhipu-coding', modelId);

@@ -230,6 +230,63 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 	}
 }
 
+func TestKimiCodingProviderModule(t *testing.T) {
+	module, ok := providers.Lookup("kimi-coding")
+	if !ok {
+		t.Fatal("kimi-coding builtin module must be registered")
+	}
+	binding := module.Binding()
+	if binding.Name != "kimi-coding" || binding.Kind != "builtin" {
+		t.Fatalf("kimi-coding binding = %+v", binding)
+	}
+	if binding.DefaultModel != "k3" {
+		t.Fatalf("kimi-coding default model = %q, want k3", binding.DefaultModel)
+	}
+	if binding.QuotaProvider != "kimi-coding" {
+		t.Fatalf("kimi-coding quota provider = %q, want kimi-coding", binding.QuotaProvider)
+	}
+
+	// Register each model once; the wire alias stays an allowed input.
+	wantModels := []string{"k3", "kimi-k2.8"}
+	models := module.Models()
+	if len(models) != len(wantModels) {
+		t.Fatalf("kimi-coding model count = %d, want %d", len(models), len(wantModels))
+	}
+	for _, id := range wantModels {
+		model, ok := models[id]
+		if !ok {
+			t.Fatalf("kimi-coding models missing %q", id)
+		}
+		if model.ID != id {
+			t.Fatalf("kimi-coding model %q has ID %q", id, model.ID)
+		}
+		if model.ContextWindow != 1048576 {
+			t.Fatalf("kimi-coding model %q context = %d, want 1048576", id, model.ContextWindow)
+		}
+	}
+	if got := models["k3"].DisplayName; got != "Kimi K3" {
+		t.Fatalf("kimi-coding k3 display name = %q, want Kimi K3", got)
+	}
+	for _, id := range []string{"kimi-k2.8"} {
+		if got := models[id].DisplayName; got != "Kimi K2.8 Preview" {
+			t.Fatalf("kimi-coding %s display name = %q, want Kimi K2.8 Preview", id, got)
+		}
+	}
+
+	// Both the canonical id and the official wire id must validate, while K3
+	// stays allowed and the compatibility alias k3[1m] is preserved.
+	for _, id := range []string{"k3", "k3[1m]", "kimi-k2.8", "kimi-for-coding"} {
+		if err := binding.ValidateModel(id); err != nil {
+			t.Fatalf("kimi-coding must allow %q: %v", id, err)
+		}
+	}
+	for _, near := range []string{"kimi-for-coding-ioa", "kimi-k2.8-preview", "kimi-k3-ioa"} {
+		if err := binding.ValidateModel(near); err == nil {
+			t.Fatalf("kimi-coding must reject unknown model %q", near)
+		}
+	}
+}
+
 func TestCursorProviderModuleRuntimeAndQuota(t *testing.T) {
 	reg := catalog.DefaultRegistry()
 	module, ok := providers.Lookup("cursor")

@@ -95,6 +95,13 @@ test('derived task plans key representative native and gateway combinations cano
   assert.deepEqual(plans['kimi-coding/k3:cc'], {
     client: 'claude', provider: 'kimi-coding', model: 'k3', mode: 'gateway', protocol: 'anthropic_messages', thinking: 'max', reasoningEffort: 'max',
   });
+  // K2.8 Preview exposes the same low/high/max ladder and defaults to max.
+  assert.deepEqual(plans['kimi-coding/kimi-k2.8:cc'], {
+    client: 'claude', provider: 'kimi-coding', model: 'kimi-k2.8', mode: 'gateway', protocol: 'anthropic_messages', thinking: 'max', reasoningEffort: 'max',
+  });
+  assert.deepEqual(plans['kimi-coding/kimi-k2.8:cb'], {
+    client: 'codebuddy', provider: 'kimi-coding', model: 'kimi-k2.8', mode: 'gateway', protocol: 'openai_chat', thinking: 'max', reasoningEffort: 'max',
+  });
   assert.deepEqual(plans['zhipu-coding/glm-5.3-flash:cc'], {
     client: 'claude', provider: 'zhipu-coding', model: 'glm-5.3-flash', mode: 'gateway', protocol: 'anthropic_messages',
   });
@@ -255,6 +262,32 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k3Coding.pricing?.outputUsdPerMillion, 15);
   assert.equal(k3Coding.speed?.tps, 39.7);
 
+  // Kimi K2.8 Preview is registered only on kimi-coding with a 1M context,
+  // low/high/max thinking, high intelligence and image input. No max output or
+  // reference token price is published for the preview, so neither may be
+  // fabricated here, and its speed must be an explicitly conservative
+  // rounded-down single-probe default rather than an inherited K3 measurement.
+  const k28 = catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!;
+  assert.equal(k28.canonicalModel?.id, 'kimi-k2.8');
+  assert.equal(k28.displayName, 'Kimi K2.8 Preview');
+  assert.equal(k28.contextWindow, 1_048_576);
+  assert.deepEqual(k28.thinkingLevels, ['low', 'high', 'max']);
+  assert.equal(k28.intelligence, 'high');
+  assert.deepEqual(k28.capabilities, ['text', 'image']);
+  assert.equal(k28.maxTokens, undefined);
+  assert.equal(k28.pricing, undefined);
+  assert.equal(k28.speed?.tps, 40);
+  assert.equal(k28.speed?.source, 'local-benchmark:kimi-coding/2026-09-15');
+  assert.equal(k28.speed?.checkedAt, '2026-09-15');
+  assert.equal(k28.speed?.conservative, true);
+  assert.match(k28.speed!.basis!, /803 completion tokens \/ 19359ms/iu);
+  // Every non-K2.8 route is untouched: no other provider registers this id.
+  for (const provider of BUILTIN_PROVIDERS.filter((candidate) => candidate.id !== 'kimi-coding')) {
+    assert.equal(provider.models.find((entry) => entry.id === 'kimi-k2.8'), undefined, `${provider.id} must not register kimi-k2.8`);
+  }
+  assert.equal(catalog.provider('kimi-coding')!.defaultModel, 'k3');
+  assert.equal(catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!.intelligence, 'high');
+
   // Hy4 preview carries the Tencent reference price.
   const hy = codebuddy.models.find((entry) => entry.id === 'hy4-preview')!;
   assert.equal(hy.pricing?.outputUsdPerMillion, 2.501);
@@ -336,7 +369,7 @@ test('every registered built-in model has a valid authoritative speed default', 
     provider.models.map((model) => ({ provider: provider.id, model })),
   );
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
-  assert.equal(uniqueIds.size, 49, 'the complete exact registered model-id inventory is covered');
+  assert.equal(uniqueIds.size, 50, 'the complete exact registered model-id inventory is covered');
 
   for (const { provider, model } of entries) {
     assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);
@@ -378,6 +411,7 @@ test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', 
   const plans = deriveTaskDispatchPlans(catalog);
   assert.equal(plans['codebuddy/glm-5.3:cb'].model, 'glm-5.3');
   assert.equal(plans['kimi-coding/k3:cc'].model, 'k3');
+  assert.equal(plans['kimi-coding/kimi-k2.8:cc'].model, 'kimi-k2.8');
   assert.equal(plans['codebuddy/kimi-k3:cb'].model, 'kimi-k3');
   assert.equal(plans['chatgpt/gpt-5.6-sol:codex'].model, 'gpt-5.6-sol');
 });
@@ -396,6 +430,14 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   ] as const) {
     assert.deepEqual(route(provider, model).canonicalModel, { id: 'kimi-k3', displayName: builtinModelDisplayName('kimi-k3') });
   }
+
+  // K2.8 Preview keeps its own canonical identity: it must not be folded into
+  // the K3 row even though both are Kimi Coding models.
+  assert.deepEqual(route('kimi-coding', 'kimi-k2.8').canonicalModel, {
+    id: 'kimi-k2.8',
+    displayName: builtinModelDisplayName('kimi-k2.8'),
+  });
+  assert.equal(builtinModelDisplayName('kimi-k2.8'), 'Kimi K2.8 Preview');
 
   // MiniMax and Tencent's official model tables identify these exact versions
   // despite the provider-specific casing of their API ids.
@@ -468,6 +510,7 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
 
   for (const [alias, target] of [
     ['k3', 'kimi-k3'],
+    ['kimi-for-coding', 'kimi-k2.8'],
     ['MiniMax-M3', 'minimax-m3'],
     ['deepseek-flash', 'deepseek-v4.1-flash'],
     ['hy4-preview', 'hunyuan-hy4-preview'],
