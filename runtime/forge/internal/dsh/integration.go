@@ -103,9 +103,10 @@ func isSensitiveEnvName(name string) bool {
 func NormalizeBaseURL(raw string) string { return strings.TrimRight(raw, "/") }
 
 type RuntimePatchAssets struct {
-	Version   string
-	PatchPath string
-	Plugin    PluginAsset
+	Version    string
+	PatchPath  string
+	Plugin     PluginAsset
+	YoloPlugin PluginAsset
 }
 type PluginAsset struct {
 	Name     string
@@ -114,5 +115,10 @@ type PluginAsset struct {
 }
 
 func DefaultRuntimePatchAssets() RuntimePatchAssets {
-	return RuntimePatchAssets{Version: ProtocolVersion, PatchPath: "patch.yaml", Plugin: PluginAsset{Name: PluginName, Filename: PluginFilename, Source: PluginSource}}
+	return RuntimePatchAssets{
+		Version:    ProtocolVersion,
+		PatchPath:  "patch.yaml",
+		Plugin:     PluginAsset{Name: PluginName, Filename: PluginFilename, Source: PluginSource},
+		YoloPlugin: PluginAsset{Name: YoloPluginName, Filename: YoloPluginFilename, Source: YoloPluginSource},
+	}
 }

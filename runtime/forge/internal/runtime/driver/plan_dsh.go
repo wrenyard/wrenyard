@@ -71,10 +71,13 @@ func buildDSHPlan(req PlanRequest) (CommandPlan, error) {
 		return CommandPlan{}, fmt.Errorf("dsh: daemon-prepared Gateway patch is required")
 	}
 	bridgePluginPath := ""
+	yoloPluginPath := ""
 	if home != "" {
-		bridgePluginPath = filepath.Join(home, dsh.DefaultRuntimePatchAssets().Plugin.Filename)
+		assets := dsh.DefaultRuntimePatchAssets()
+		bridgePluginPath = filepath.Join(home, assets.Plugin.Filename)
+		yoloPluginPath = filepath.Join(home, assets.YoloPlugin.Filename)
 	}
-	rows, err := dsh.RenderInsertRows(bridgePluginPath, mcp)
+	rows, err := dsh.RenderRuntimeInsertRows(yoloPluginPath, bridgePluginPath, mcp)
 	if err != nil {
 		return CommandPlan{}, err
 	}
