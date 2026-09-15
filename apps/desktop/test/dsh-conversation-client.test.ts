@@ -1006,6 +1006,100 @@ test('host-created blank session stays hidden until first send reuses it', async
   assert.equal(client.snapshot().selectedSessionId, 'blank-1');
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+function liveClient(client: DshConversationClient) {
+  return client as unknown as {
+    refreshIndex(): Promise<void>;
+    loadHistory(id: string): Promise<void>;
+    handleMux(frame: Record<string, unknown>): void;
+  };
+}
+
+function userEntry(seq: number, text: string) {
+  return entry('user/message', seq, { source: { kind: 'user' }, content: [{ type: 'text', text }] });
+}
+
+test('first send survives an older index response triggered during creation', async () => {
+  const { client, state } = conversationClientHarness();
+  const live = liveClient(client);
+  const indexGate = deferred<void>();
+  const modelGate = deferred<void>();
+  let refreshing: Promise<void> | undefined;
+  state.rpc = async (method) => {
+    if (method === 'session.create') {
+      refreshing = live.refreshIndex();
+      return { sessionId: 'fresh' };
+    }
+    if (method === 'session.list') { await indexGate.promise; return { items: [] }; }
+    if (method === 'workspace.list') {
+      await indexGate.promise;
+      return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
+    }
+    if (method === 'session.models') { await modelGate.promise; return modelDirectory(); }
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+  const sending = client.send('first');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(refreshing, 'exercise the real index refresh');
+  indexGate.resolve();
+  await refreshing;
+  modelGate.resolve();
+  await sending;
+  assert.ok(state.workspaceSessionIds.has('fresh'));
+  live.handleMux({ type: 'session/event', sessionId: 'fresh', ...userEntry(1, 'first') });
+  assert.equal(client.snapshot().items[0]?.text, 'first');
+  client.stop();
+});
+
+test('a late history page merges live frames in sequence without duplicates', async () => {
+  const { client, state } = conversationClientHarness();
+  const live = liveClient(client);
+  state.selectedSessionId = 'a';
+  state.workspaceSessionIds.add('a');
+  const page = deferred<unknown>();
+  state.rpc = async () => page.promise;
+  const loading = live.loadHistory('a');
+  live.handleMux({ type: 'session/event', sessionId: 'a', ...userEntry(1, 'live first') });
+  live.handleMux({ type: 'session/event', sessionId: 'a', ...userEntry(3, 'live third') });
+  page.resolve({ events: [userEntry(1, 'saved first'), userEntry(2, 'saved second')], hasMore: true });
+  await loading;
+  assert.deepEqual(client.snapshot().items.map((item) => item.text), ['saved first', 'saved second', 'live third']);
+  assert.equal(client.snapshot().hasMore, true);
+  client.stop();
+});
+
+test('an obsolete history response cannot replace a reselected session', async () => {
+  const { client, state } = conversationClientHarness();
+  for (const id of ['a', 'b']) {
+    state.sessions.set(id, { sessionId: id, updatedAt: 1, running: false, blank: false });
+    state.workspaceSessionIds.add(id);
+  }
+  const stale = deferred<unknown>();
+  let historyCalls = 0;
+  state.rpc = async (method) => {
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.history') {
+      if (++historyCalls === 1) return stale.promise;
+      return { events: [userEntry(1, 'current')], hasMore: false };
+    }
+    throw new Error(`unexpected ${method}`);
+  };
+  const first = client.select('a');
+  await client.select('b');
+  await client.select('a');
+  stale.resolve({ events: [userEntry(1, 'obsolete')], hasMore: false });
+  await first;
+  assert.deepEqual(client.snapshot().items.map((item) => item.text), ['current']);
+  client.stop();
+});
+
 test('repeated New and empty send remain non-persistent before the first message', async () => {
   const { client, state } = conversationClientHarness();
   state.rpc = async (method) => {
