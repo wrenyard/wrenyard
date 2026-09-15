@@ -394,9 +394,6 @@ button, input, select { accent-color: var(--moss-deep); }
 .message-content-segment + .message-content-segment { margin-top: 10px; }
 .message-content :not(pre) > code { border: 1px solid rgba(212, 201, 168, .8); border-radius: 3px; padding: 1px 4px; color: #71442f; background: rgba(232, 220, 196, .7); font: .9em ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .message-content pre, .tool-card pre { overflow-x: auto; margin: 10px 0; border: 1px solid #403a31; border-radius: 5px; padding: 12px 14px; color: #e9e1cf; background: #2d2924; font: 11px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
-.reasoning-block { margin: 2px 0 10px; border-left: 2px solid var(--line); padding-left: 10px; color: var(--muted); font-size: 10px; }
-.reasoning-block summary { cursor: pointer; font-weight: 700; }
-.reasoning-block div { margin-top: 7px; max-height: 170px; overflow: auto; white-space: pre-wrap; }
 .streaming-cursor { display: inline-block; width: 6px; height: 13px; margin-left: 2px; vertical-align: -2px; background: var(--moss-deep); animation: cursor-blink .9s steps(1) infinite; }
 @keyframes cursor-blink { 50% { opacity: 0; } }
 .tool-card { width: min(calc(100% - 42px), 778px); margin: -17px auto 24px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: rgba(238, 227, 202, .55); font-size: 10px; }

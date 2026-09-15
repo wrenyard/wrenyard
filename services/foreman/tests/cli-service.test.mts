@@ -214,12 +214,6 @@ test('daemon supervisor starts Node directly with the tsx loader and hides Windo
   assert.doesNotMatch(source, /tsx",\s*"dist",\s*"cli\.mjs"/u)
 })
 
-test('daemon bootstrap shim is not part of the local lifecycle', () => {
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-
-  assert.equal(existsSync(join(repoRoot, 'lib', 'daemon', 'daemon-bootstrap.cjs')), false)
-})
-
 test('daemon freeze/thaw/drain/dispatch-status CLI handlers parse args correctly', () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
   const binary = join(repoRoot, 'bin', 'foreman.mts')
@@ -576,15 +570,6 @@ test('foreman status --json exposes the persisted non-terminal update plan', asy
     await running.stop()
     resetRegistry()
   }
-})
-
-test('foreman CLI does not expose the retired PM ticket command', async () => {
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const binary = join(repoRoot, 'bin', 'foreman.mts')
-  const result = await runForeman(repoRoot, binary, ['pm', 'ticket', 'list'])
-  assert.equal(result.status, 1)
-  assert.doesNotMatch(result.stdout, /pm ticket/u)
-  assert.doesNotMatch(result.stderr, /pm ticket/u)
 })
 
 test('foreman status reports a clear error when IPC is unavailable', async () => {

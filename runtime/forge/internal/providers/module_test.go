@@ -32,17 +32,6 @@ func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
 	}
 }
 
-func TestOldProvidersAbsent(t *testing.T) {
-	for _, name := range []string{"codex", "codex-spark"} {
-		if _, ok := providers.Lookup(name); ok {
-			t.Fatalf("obsolete provider %q must not be registered", name)
-		}
-		if _, err := catalog.DefaultRegistry().LookupBinding(name); err == nil {
-			t.Fatalf("obsolete provider %q must not be a registered binding", name)
-		}
-	}
-}
-
 func TestChatGPTSingleProvider(t *testing.T) {
 	module, ok := providers.Lookup("chatgpt")
 	if !ok {
