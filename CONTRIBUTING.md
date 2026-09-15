@@ -38,7 +38,8 @@ pnpm test:workspace
 
 ## Go (runtime/forge)
 
-Format, test, vet, and build before finishing:
+For Go changes, select the relevant checks below; running all of them across
+the repository is not a mandatory completion or release step:
 
 ```sh
 go -C runtime/forge fmt ./...
@@ -51,7 +52,8 @@ go -C runtime/forge build ./...
 
 - Keep changesets scoped: name them to the package(s) they affect and
   describe the user-visible change.
-- Any behavior change must include tests.
+- Use focused checks for changed behavior; add or update tests when needed.
 - Never commit secrets, internal endpoints, or personal machine paths.
-- Public-facing code and identifiers are gated: run `pnpm check:identifiers`
-  and `pnpm release:check` before finishing.
+- Use the workspace Tasks and repository instructions to select and record the
+  checks appropriate to a change. GitHub Actions intentionally does not run the
+  full check composition for main or pull requests.
