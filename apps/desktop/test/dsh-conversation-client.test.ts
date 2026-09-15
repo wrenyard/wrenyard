@@ -28,9 +28,9 @@ test('conversation projection keeps user and finalized assistant content without
     }),
   ]);
 
-  assert.deepEqual(items.map((item) => ({ kind: item.kind, text: item.text, reasoning: item.reasoning })), [
-    { kind: 'user', text: '请检查 workspace', reasoning: undefined },
-    { kind: 'assistant', text: '检查完成', reasoning: '先看配置' },
+  assert.deepEqual(items.map((item) => ({ kind: item.kind, text: item.text })), [
+    { kind: 'user', text: '请检查 workspace' },
+    { kind: 'assistant', text: '检查完成' },
   ]);
 });
 
@@ -135,8 +135,8 @@ test('assistant item id for one turn and step is stable from the streaming draft
   const finalizedAssistant = finalized.find((item) => item.kind === 'assistant');
   assert.ok(streamedAssistant);
   assert.ok(finalizedAssistant);
-  // Draft reasoning/text expansion is keyed by the item id, so the id must not
-  // change once the message is finalized.
+  // The draft/finalized assistant item id is the streaming identity, so the id
+  // must not change once the message is finalized.
   assert.ok(streamedAssistant.id);
   assert.equal(finalizedAssistant.id, streamedAssistant.id);
 });

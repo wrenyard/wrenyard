@@ -365,7 +365,6 @@ export interface ConversationItemSnapshot {
   /** Stable DSH turn identity used to render one assistant message per turn. */
   turnId?: string;
   running?: boolean;
-  reasoning?: string;
   toolName?: string;
   toolState?: 'running' | 'done' | 'failed';
   /** Bounded raw result text for the tool call, when CORE supplies one. */

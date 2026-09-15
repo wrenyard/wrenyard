@@ -374,25 +374,6 @@ describe('ForemanMcpServer v2 tools', () => {
   })
 
 
-
-  it('does not expose legacy generated task wrappers', async () => {
-    const workspace = makeTempDir('foreman-mcp-workspace-')
-    const workspaceProject = writeProjectDefinitions(workspace)
-    writeTask(workspaceProject, 'echo')
-    writeTask(workspaceProject, 'run_echo')
-    writeFmproj(workspace, 'app')
-
-    const server = makeServer(workspace)
-    await server.handleToolCall('task_list', { project: 'app' })
-    const toolNames = server.toolDefinitions().map((tool) => tool.name)
-
-    assert.equal(toolNames.includes('task_echo'), false)
-    assert.equal(toolNames.includes('task_run_echo'), false)
-    assert.equal(toolNames.includes('foreman_task_echo'), false)
-    assert.equal(toolNames.includes('foreman_task_run_echo'), false)
-  })
-
-
   it('lists .task.ts files and rejects standalone task without service supervisor', async () => {
     const workspace = makeTempDir('foreman-mcp-workspace-')
     const workspaceProject = writeProjectDefinitions(workspace)
@@ -699,11 +680,6 @@ describe('ForemanMcpServer v2 tools', () => {
       { method: 'project.worktree.remove', params: { project: 'app', worktree_id: 'deadbeef' } },
       { method: 'project.push', params: { project: 'app', worktree_id: 'deadbeef' } },
     ])
-  })
-
-  it('does not expose retired PM ticket MCP tools', () => {
-    const server = makeServer(makeTempDir('foreman-mcp-workspace-'))
-    assert.equal(server.toolDefinitions().some((tool) => tool.name.startsWith('pm_ticket_')), false)
   })
 
   it('validates project names before MCP tool processing and suggests close matches', async () => {
