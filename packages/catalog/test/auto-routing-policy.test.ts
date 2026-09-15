@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import {
   SCORE_WEIGHTS,
   PRICE_FACTOR_ANCHORS,
-  NEUTRAL_HEADROOM,
+  ZERO_QUOTA_HEADROOM,
   EFFICIENCY_HEADROOM_WEIGHT,
   EFFICIENCY_EVIDENCE_WEIGHT,
   assessRequiredQuota,
@@ -191,7 +191,7 @@ test("rolling_partial healthy/strained/unknown/blocked bands and H", () => {
   assert.equal(unknownMid.state, "unknown");
   assert.equal(unknownMid.headroomTrusted, false);
   assert.equal(unknownMid.constraints[0].headroom, null);
-  assert.equal(unknownMid.headroom, NEUTRAL_HEADROOM);
+  assert.equal(unknownMid.headroom, ZERO_QUOTA_HEADROOM);
 
   const blocked = assessRequiredQuota(NOW, [q("z", rollingEv(0))]);
   assert.equal(blocked.state, "blocked");
@@ -211,7 +211,7 @@ test("unknown replenishment kind and missing monthly keep coverage semantics", (
   const single = assessRequiredQuota(NOW, [q("u", unknownEv)]);
   assert.equal(single.state, "unknown");
   assert.equal(single.coverageComplete, true);
-  assert.equal(single.headroom, NEUTRAL_HEADROOM);
+  assert.equal(single.headroom, ZERO_QUOTA_HEADROOM);
 
   const withMissing = assessRequiredQuota(NOW, [
     q("u", unknownEv),
@@ -219,7 +219,7 @@ test("unknown replenishment kind and missing monthly keep coverage semantics", (
   ]);
   assert.equal(withMissing.state, "unknown");
   assert.equal(withMissing.coverageComplete, false);
-  assert.equal(withMissing.headroom, NEUTRAL_HEADROOM);
+  assert.equal(withMissing.headroom, ZERO_QUOTA_HEADROOM);
   assert.equal(withMissing.constraints[1].state, "missing");
 });
 
@@ -228,7 +228,7 @@ test("empty required quota is unknown with incomplete coverage", () => {
   assert.equal(empty.state, "unknown");
   assert.equal(empty.coverageComplete, false);
   assert.equal(empty.headroomTrusted, false);
-  assert.equal(empty.headroom, NEUTRAL_HEADROOM);
+  assert.equal(empty.headroom, ZERO_QUOTA_HEADROOM);
 });
 
 test("full_cycle legal reset/window math and headroom values", () => {
@@ -282,7 +282,7 @@ test("complete full-cycle weekly evidence at 28% remaining with ~84% expected re
     "weekly blended H"
   );
   assert.equal(weekly.constraints[0].state, "strained");
-  assert.notEqual(weekly.headroom, NEUTRAL_HEADROOM);
+  assert.notEqual(weekly.headroom, ZERO_QUOTA_HEADROOM);
 });
 
 test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is healthy", () => {
@@ -300,7 +300,7 @@ test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is hea
   );
 });
 
-test("unknown quota is neutral regardless of listed price and sub-price strained stays accepted", () => {
+test("unknown quota scores zero regardless of listed price and sub-price strained stays accepted", () => {
   // Complete low-remaining weekly evidence is strained but trustworthy: $9.99 accepted.
   const strained = expectAccepted(
     cand({
@@ -310,7 +310,7 @@ test("unknown quota is neutral regardless of listed price and sub-price strained
   );
   assert.equal(strained!.tier, "strained");
   assert.equal(strained!.coverageComplete, true);
-  // Unknown quota is neutral: no listed reference price can turn a genuinely
+  // Unknown quota stays eligible: no listed reference price can turn a genuinely
   // unknown/incomplete quota into a price rejection.
   const unknownHigh = expectAccepted(
     cand({
@@ -474,7 +474,7 @@ test("blocked + missing stays blocked", () => {
   assert.equal(result.coverageComplete, false);
 });
 
-test("strained + missing averages in the neutral unknown contribution", () => {
+test("strained + missing averages in the zero unknown contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("monthly", null),
@@ -482,10 +482,10 @@ test("strained + missing averages in the neutral unknown contribution", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, false);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "strained + missing mean H");
+  close(result.headroom!, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + missing mean H");
 });
 
-test("strained + unknown averages in the neutral unknown contribution", () => {
+test("strained + unknown averages in the zero unknown contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("unknown", rollingEv(50)),
@@ -493,7 +493,7 @@ test("strained + unknown averages in the neutral unknown contribution", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
+  close(result.headroom!, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
 });
 
 // ---------------------------------------------------------------------------
@@ -625,7 +625,7 @@ test("two healthy constraints average equally: 0.8 and 1.0 mean to 0.9", () => {
 });
 
 test("three constraints average equally regardless of order", () => {
-  const expected = (0.9 + 0.04 + NEUTRAL_HEADROOM) / 3;
+  const expected = (0.9 + 0.04 + ZERO_QUOTA_HEADROOM) / 3;
   const forward = assessRequiredQuota(NOW, [
     q("h", rollingEv(90)),
     q("s", rollingEv(4)),
@@ -642,7 +642,7 @@ test("three constraints average equally regardless of order", () => {
   close(reversed.headroom!, expected, 1e-12, "reversed 3-way mean");
 });
 
-test("unknown 0.5 contributes without discarding a healthy peer", () => {
+test("unknown 0 contributes nothing without discarding a healthy peer", () => {
   const result = assessRequiredQuota(NOW, [
     q("h", rollingEv(80)),
     q("u", rollingEv(50)),
@@ -650,11 +650,11 @@ test("unknown 0.5 contributes without discarding a healthy peer", () => {
   assert.equal(result.state, "unknown");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, false);
-  // strict equality also holds here: (0.8 + 0.5) / 2 === 0.65 exactly.
-  assert.equal(result.headroom, 0.65);
+  // Equal mixed pool: (0.8 + 0) / 2 === 0.4 exactly.
+  assert.equal(result.headroom, 0.4);
 });
 
-test("positive balance contributes neutral 0.5 alongside a healthy peer", () => {
+test("positive balance contributes zero 0 alongside a healthy peer", () => {
   const result = assessRequiredQuota(NOW, [
     q("q", rollingEv(80)),
     {
@@ -666,8 +666,8 @@ test("positive balance contributes neutral 0.5 alongside a healthy peer", () => 
   ]);
   assert.equal(result.state, "healthy");
   assert.equal(result.coverageComplete, true);
-  // strict equality also holds here: (0.8 + 0.5) / 2 === 0.65 exactly.
-  assert.equal(result.headroom, 0.65);
+  // Equal mixed pool: (0.8 + 0) / 2 === 0.4 exactly.
+  assert.equal(result.headroom, 0.4);
 });
 
 test("any exhausted (zero) constraint rejects the candidate even alongside a healthy peer", () => {
@@ -823,7 +823,7 @@ test("incomplete-strained reference is accepted at any listed price", () => {
   assert.equal(accepted!.tier, "strained");
   assert.equal(accepted!.coverageComplete, false);
   assert.equal(accepted!.headroomTrusted, false);
-  close(accepted!.headroom, (0.04 + NEUTRAL_HEADROOM) / 2, 1e-12, "incomplete-strained H");
+  close(accepted!.headroom, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "incomplete-strained H");
 
   // An unknown/incomplete quota is not price-gated: a high listed reference
   // price no longer rejects it.
@@ -866,7 +866,7 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
   close(a!.score, expScore(input, a!), 1e-12, "normalized score");
 });
 
-test("balance constraint: positive amount is available and neutral, zero blocks, unknown never fabricates zero", () => {
+test("balance constraint: positive amount is available with zero headroom, zero blocks, unknown never fabricates zero", () => {
   const at = NOW;
   const balance = (amount: string | null) => ({
     id: "deepseek-balance",
@@ -878,23 +878,24 @@ test("balance constraint: positive amount is available and neutral, zero blocks,
         : { amount, observedAtMs: at - 1_000, validForMs: HOUR_MS },
   });
 
-  // Positive valid amount: not exhausted, neutral quality (no subscription boost).
+  // Positive valid amount: not exhausted, but no quota headroom is granted.
   const positive = assessRequiredQuota(NOW, [balance("12.50")]);
   assert.equal(positive.state, "healthy");
   assert.equal(positive.coverageComplete, true);
-  assert.equal(positive.headroom, NEUTRAL_HEADROOM);
+  assert.equal(positive.headroom, ZERO_QUOTA_HEADROOM);
 
   // Exactly zero blocks.
   const zero = assessRequiredQuota(NOW, [balance("0")]);
   assert.equal(zero.state, "blocked");
   assert.deepEqual(zero.blockedConstraintIds, ["deepseek-balance"]);
 
-  // Missing / malformed / negative / stale / future are unknown, never zero.
+  // Missing / malformed / negative / stale / future are unknown, never zero-valued
+  // headroom: they stay unknown and never block.
   for (const unknown of [balance(null), balance(""), balance("not-a-number"), balance("-1"), balance("0x00"), balance("0e0")]) {
     const result = assessRequiredQuota(NOW, [unknown]);
     assert.notEqual(result.state, "blocked", "unknown balance must never block");
     assert.equal(result.state, "unknown");
-    assert.notEqual(result.headroom, 0);
+    assert.equal(result.headroom, ZERO_QUOTA_HEADROOM);
   }
   const stale: RequiredQuotaConstraint = {
     id: "deepseek-balance",
@@ -907,7 +908,7 @@ test("balance constraint: positive amount is available and neutral, zero blocks,
   // A positive balance keeps the candidate available; a zero balance blocks it.
   const available = expectAccepted(cand({ requiredQuota: [balance("1.00")] }));
   assert.equal(available!.tier, "healthy");
-  assert.equal(available!.headroom, NEUTRAL_HEADROOM);
+  assert.equal(available!.headroom, ZERO_QUOTA_HEADROOM);
   expectRejected(cand({ requiredQuota: [balance("0")] }), "quota_blocked");
 });
 
@@ -980,20 +981,20 @@ test("speed factor S is effective TPS saturated at 200", () => {
   close(a!.speedFactor, clamp01(25 / 200), 1e-12, "assessed S");
 });
 
-test("unknown tier uses neutral headroom 0.5 for Q; verified efficiency blends into Q only", () => {
+test("unknown tier uses zero headroom for Q; verified efficiency is ignored without trusted headroom", () => {
   const unknown = expectAccepted(cand({ requiredQuota: [q("u", rollingEv(50))] }));
   assert.equal(unknown!.tier, "unknown");
-  close(unknown!.headroom, NEUTRAL_HEADROOM, 1e-12, "neutral H");
-  close(unknown!.quotaQuality, NEUTRAL_HEADROOM, 1e-12, "Q=neutral");
-  // Efficiency blends into Q while H/tier stay neutral.
+  close(unknown!.headroom, ZERO_QUOTA_HEADROOM, 1e-12, "zero H");
+  close(unknown!.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "Q=zero");
+  // An aggregate unknown quota carries no trusted headroom, so efficiency can
+  // never lift Q: it is ignored outright.
   const blended = expectAccepted(
     cand({ requiredQuota: [q("u", rollingEv(50))], verifiedEfficiency: coveredEfficiency(0.9) })
   );
-  close(
-    blended!.quotaQuality,
-    EFFICIENCY_HEADROOM_WEIGHT * NEUTRAL_HEADROOM + EFFICIENCY_EVIDENCE_WEIGHT * 0.9,
-    1e-12,
-    "blended Q"
+  assert.equal(blended!.verifiedEfficiency, null);
+  close(blended!.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "Q stays zero");
+  assert.ok(
+    blended!.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
   );
   assert.equal(blended!.tier, "unknown");
 });
@@ -1394,19 +1395,65 @@ test("quota tiers can cross by score while blocked remains rejected", () => {
   const unknownHigh = cand({
     canonicalId: "unknown-high",
     referenceUsdPerM: 0.5, // P(0.5)=0.85
-    requiredQuota: [q("u", rollingEv(50))], // Q = neutral 0.5
+    requiredQuota: [q("u", rollingEv(50))], // Q = 0
   });
   const blocked = cand({
     canonicalId: "blocked-x",
     requiredQuota: [q("z", rollingEv(0))],
   });
   const result = rankAutoRoutingCandidates([healthyLow, unknownHigh, blocked]);
-  // unknown-high (P 0.85, Q 0.5 => 0.65) beats healthy-low (P 0.05, Q 0.9 => 0.33)
+  // The cheaper unknown candidate still wins by total score with Q = 0.
   assert.deepEqual(rankedIds(result), ["unknown-high", "healthy-low"]);
   assert.deepEqual(
     result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
     [["blocked-x", "quota_blocked"]]
   );
+});
+
+test("balance-only quota keeps zero headroom and stays efficiency-ineligible", () => {
+  // A pay-as-you-go balance is available (healthy, not blocked) but grants no
+  // quota headroom, so Q remains 0 and verified efficiency cannot add a bonus.
+  const input = cand({
+    canonicalId: "balance-only",
+    referenceUsdPerM: 2,
+    effectiveCapUsdPerM: 20,
+    requiredQuota: [
+      {
+        id: "deepseek-balance",
+        evidence: null,
+        kind: "balance",
+        balance: { amount: "12.50", observedAtMs: NOW - 1_000, validForMs: HOUR_MS },
+      },
+    ],
+    verifiedEfficiency: coveredEfficiency(0.9),
+  });
+  const assessment = expectAccepted(input)!;
+  assert.equal(assessment.tier, "healthy");
+  assert.equal(assessment.coverageComplete, true);
+  assert.equal(assessment.headroom, ZERO_QUOTA_HEADROOM);
+  close(assessment.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "balance-only Q is zero");
+  assert.equal(assessment.verifiedEfficiency, null);
+  assert.ok(
+    assessment.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
+  );
+  // The scored candidate loses exactly the Q term when the balance replaces the
+  // default healthy subscription constraint.
+  close(assessment.score, expScore(input, assessment), 1e-12, "balance-only score");
+});
+
+test("aggregate unknown quota stays eligible with zero headroom and no efficiency bonus", () => {
+  const assessment = expectAccepted(
+    cand({
+      canonicalId: "unknown-eff",
+      requiredQuota: [q("u", rollingEv(50))],
+      verifiedEfficiency: coveredEfficiency(0.9),
+    })
+  )!;
+  // Unknown headroom never rejects: the candidate remains eligible.
+  assert.equal(assessment.tier, "unknown");
+  assert.equal(assessment.headroom, ZERO_QUOTA_HEADROOM);
+  close(assessment.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "unknown Q stays zero");
+  assert.equal(assessment.verifiedEfficiency, null);
 });
 
 test("verified-free changes routing price/P only and has no priority bucket", () => {
