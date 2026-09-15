@@ -153,9 +153,16 @@ pnpm release:check      # manifest + legal verification (also part of pnpm check
 
 `pnpm check` covers workspace checks, identifier/secret scans, manifest and
 legal verification, and Go vet/test/build; it does not run packed-install E2E.
-The tag Release workflow also skips that E2E: it packs each target, verifies
-the full internal manifests and checksums, and publishes only the suite and
-Desktop archives required by users.
+These checks are run through the workspace Tasks and repository instructions,
+not by GitHub Actions. `pnpm release:local` is build-only: it performs the
+compilation, packaging, license-report generation, and payload scrubbing needed
+to produce a release without implicitly running `release:check` or tests.
+
+The tag Release workflow installs frozen dependencies, builds each native
+target, and publishes only the suite and Desktop archives required by users.
+A manual workflow dispatch is build-only and retains those public archives as
+downloadable workflow artifacts; it never creates a tag, release, or update
+feed.
 
 ## Signing (honest)
 

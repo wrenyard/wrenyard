@@ -809,7 +809,6 @@ async function main() {
   fs.rmSync(outputDir, { recursive: true, force: true });
   ensureDir(outputDir);
   try {
-    run('pnpm', ['release:check']);
     run('pnpm', ['--filter', '@wrenyard/cli', 'build']);
 
     const runtimeStage = path.join(tmp, 'runtime');
