@@ -366,10 +366,6 @@ function findNamedFiles(root: string, name: string, depth = 0): string[] {
   return matches;
 }
 
-function powerShellLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 function readBundleVersion(appPath: string): string | null {
   try {
     const plist = readFileSync(join(appPath, 'Contents', 'Info.plist'), 'utf8');
