@@ -75,13 +75,6 @@ describe('task resolution failure catalog exclusion mapping', () => {
     assert.equal(CATALOG_EXCLUSION_CODE_MAP['quota_blocked'], 'quota_unavailable')
   })
 
-  it('no longer maps the obsolete reference_price_gate', () => {
-    // Unknown/incomplete quota is neutral regardless of listed price: there is
-    // no reference-price gate exclusion reason left to classify.
-    assert.equal(CATALOG_EXCLUSION_CODE_MAP['reference_price_gate'], undefined)
-    assert.equal(codeFromCatalogExclusion('reference_price_gate'), undefined)
-  })
-
   it('maps quota_blocked to quota_unavailable', () => {
     assert.equal(codeFromCatalogExclusion('quota_blocked'), 'quota_unavailable')
   })

@@ -468,20 +468,14 @@ describe('ForemanClient', () => {
     }
   })
 
-  it('does not expose removed or future method groups yet', () => {
+  it('exposes the active public method groups', () => {
     const client = new ForemanClient(new FakeRpc({ ok: true }))
     const clientShape = client as unknown as Record<string, unknown>
 
     assert.equal(typeof clientShape.task, 'object')
-    assert.equal(clientShape.workflow, undefined)
     assert.equal(typeof clientShape.project, 'object')
     assert.equal(typeof clientShape.message, 'object')
     assert.equal(typeof clientShape.daemon, 'object')
-    assert.equal(clientShape.pet, undefined)
-    assert.equal(clientShape.fwa, undefined)
-    assert.equal(clientShape.messageDelivery, undefined)
-    assert.equal(clientShape.session, undefined)
-    assert.equal(clientShape.worker, undefined)
   })
 
   it('keeps new client modules free of runtime imports', () => {

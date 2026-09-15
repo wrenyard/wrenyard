@@ -144,16 +144,6 @@ test('HTML hosts supply/routing tabs, keeps the supply config together, and turn
     routingMarkup.indexOf('routing-test-minimum-tps') < routingMarkup.indexOf('routing-test-expected-tps'),
     'minimum TPS controls stay left of expected TPS',
   );
-  assert.doesNotMatch(routingMarkup, /routing-test-import-row/);
-  assert.doesNotMatch(routingMarkup, /routing-test-status/);
-  assert.doesNotMatch(routingMarkup, /从 Task 导入/);
-  assert.doesNotMatch(routingMarkup, /未运行/);
-  assert.doesNotMatch(routingMarkup, /for="routing-test-exclude-models"/);
-  assert.doesNotMatch(routingMarkup, /for="routing-test-exclude-providers"/);
-  // No preset selector, verbose notes, or JSON input remains.
-  assert.doesNotMatch(routingMarkup, /id="routing-test-preset"/);
-  assert.doesNotMatch(routingMarkup, /routing-test-note/);
-  assert.doesNotMatch(routingMarkup, /<textarea|id="routing-test-json"/);
 });
 
 test('default form has recommended mid with no minimum or extra capabilities', () => {

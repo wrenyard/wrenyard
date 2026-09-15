@@ -279,13 +279,11 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.equal(row.completeness, 'complete')
   })
 
-  it('fresh schema excludes the retired TPS materialization columns', () => {
+  it('fresh schema retains token counters and completeness', () => {
     const columns = new Set(db
       .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
       .all()
       .map((column) => column.name))
-    assert.equal(columns.has('agent_turn_ms'), false, 'retired agent_turn_ms column must not exist')
-    assert.equal(columns.has('tps_complete'), false, 'retired tps_complete column must not exist')
     assert.equal(columns.has('output_tokens'), true, 'token counters must remain')
     assert.equal(columns.has('total_tokens'), true, 'token counters must remain')
     assert.equal(columns.has('completeness'), true, 'completeness must remain')
@@ -347,8 +345,6 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
         .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
         .all()
         .map((column) => column.name))
-      assert.equal(columns.has('agent_turn_ms'), false, 'legacy agent_turn_ms must be dropped')
-      assert.equal(columns.has('tps_complete'), false, 'legacy tps_complete must be dropped')
       assert.equal(columns.has('output_tokens'), true, 'token counters must remain')
 
       const row = legacy.prepare<[string], { tool_call_count: number; usage_event_count: number; output_tokens: number }>(

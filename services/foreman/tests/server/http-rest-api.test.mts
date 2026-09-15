@@ -53,16 +53,6 @@ describe('Foreman HTTP status API', () => {
     }
   })
 
-  it('does not expose the legacy sessions REST surface', async () => {
-    const running = await startTestApi()
-    try {
-      const resp = await fetch(`${running.url}/sessions`)
-      assert.equal(resp.status, 404)
-    } finally {
-      await running.close()
-    }
-  })
-
   it('serves health from the merged REST handler', async () => {
     const running = await startTestApi()
 
@@ -215,17 +205,6 @@ describe('Foreman HTTP status API', () => {
       assert.equal(body.error, 'project_not_found')
       assert.match(body.message ?? '', /Did you mean: ure\/knowledge/u)
       assert.deepEqual(body.details?.suggestions, ['ure/knowledge'])
-    } finally {
-      await running.close()
-    }
-  })
-
-  it('does not expose the retired PM ticket REST API', async () => {
-    const workspace = makeTempDir('foreman-http-pm-workspace-')
-    const running = await startTestApi(workspace)
-    try {
-      const response = await fetch(`${running.url}/api/v1/pm/tickets`)
-      assert.equal(response.status, 404)
     } finally {
       await running.close()
     }

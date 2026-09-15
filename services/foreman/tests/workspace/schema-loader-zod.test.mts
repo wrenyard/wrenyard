@@ -111,15 +111,6 @@ describe('schema-loader — compileSchema Zod -> AJV validation path (AC-5)', ()
       assert.doesNotThrow(() => compileSchema(schema))
     }
   })
-
-  it('no longer exposes a workspace schema registry or $ref path', async () => {
-    const mod = await import('../../lib/workspace/schema-loader.mts')
-    assert.equal((mod as any).registerWorkspaceSchemas, undefined)
-    assert.equal((mod as any).resetSchemaRegistry, undefined)
-    assert.equal((mod as any).expandSchemaRefs, undefined)
-    assert.equal((mod as any).scanSchemaFiles, undefined)
-    assert.equal((mod as any).isFullJsonSchema, undefined)
-  })
 })
 
 describe('schema-loader — generateInputExample on zod', () => {

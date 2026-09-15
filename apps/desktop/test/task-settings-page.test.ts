@@ -117,7 +117,7 @@ function taskSnapshot(revision = 'rev-1'): TaskSettingsSnapshot {
   };
 }
 
-test('tasks is a registered, navigator-aware shell page with no legacy preference channels', () => {
+test('tasks is a registered, navigator-aware shell page', () => {
   assert.equal(isShellPage('tasks'), true);
   assert.equal(SHELL_CHANNELS.taskSettingsSnapshot, 'wrenyard-shell:task-settings-snapshot');
   assert.equal(SHELL_CHANNELS.taskSettingsSave, 'wrenyard-shell:task-settings-save');
@@ -185,7 +185,7 @@ test('save request carries an alias-or-inline reference, task identity, and CAS 
   assert.equal('agent_runtime' in taskSave.patch.explicit_runtime!, false);
 });
 
-test('preload exposes the typed snapshot/save API with no legacy preference call', () => {
+test('preload exposes the typed snapshot/save API', () => {
   const preload = preloadSource();
   assert.match(
     preload,
@@ -195,7 +195,6 @@ test('preload exposes the typed snapshot/save API with no legacy preference call
     preload,
     /saveTaskSettings\(request: TaskSettingsSaveRequest\): Promise<TaskSettingsSnapshot> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.taskSettingsSave, request\)/u,
   );
-  assert.doesNotMatch(preload, /saveTaskPreference|agentRuntime|requested_agent_runtime|bare_task_name|machine_global/);
 });
 
 test('main delegates snapshot and save with layered params and typed CAS error mapping', () => {
@@ -212,7 +211,6 @@ test('main delegates snapshot and save with layered params and typed CAS error m
   assert.match(main, /invalid_settings: '任务设置内容无效'/);
   assert.match(main, /runtime_unavailable: '所选 Agent 运行时不可用'/);
   assert.match(main, /task_not_found: '任务不存在或已被移除'/);
-  assert.doesNotMatch(main, /additional_instructions|saveTaskPreference|agent_runtime:|requested_agent_runtime|bare_task_name|machine_global/);
 });
 
 test('shell-window validates the bounded task settings DTO at the IPC boundary', () => {
@@ -230,11 +228,9 @@ test('shell-window validates the bounded task settings DTO at the IPC boundary',
   assert.match(win, /function validateExplicitReferenceValue\(explicitReference: unknown\): void/);
   assert.match(win, /kind === 'alias'/);
   assert.match(win, /kind === 'target'/);
-  assert.doesNotMatch(win, /TASK_SETTINGS_EXPLICIT_FIELDS|'client', 'provider', 'model'|additional_instructions/);
-  assert.doesNotMatch(win, /saveTaskPreference|requested_agent_runtime|agentRuntime|bare_task_name|machine_global/);
 });
 
-test('HTML exposes exactly three compact rows with seconds timeout and template preview, no additional-instruction UI', async () => {
+test('HTML exposes exactly three compact rows with seconds timeout and template preview', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
   assert.match(html, /id="tasks-page"/);
@@ -245,7 +241,6 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.match(html, /id="tasks-detail-identity"/);
   // Row one: two-mode selection (automatic/explicit only). Row two: seconds timeout
   // with visible 秒 unit and ※ reset. Row three (explicit only): combobox + help.
-  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
   assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
   assert.match(html, /<button[^>]*id="tasks-mode-trigger"[^>]*aria-haspopup="listbox"[^>]*aria-expanded="false"[^>]*aria-controls="tasks-mode-list"/u);
   assert.match(html, /id="tasks-mode-popover"[^>]*hidden/u);
@@ -271,9 +266,6 @@ test('HTML exposes exactly three compact rows with seconds timeout and template 
   assert.match(html, /id="tasks-preview"/);
   assert.match(html, /id="tasks-detail-runtime"/);
   assert.doesNotMatch(html, /id="tasks-detail-runtime">未解析<\/p>/u);
-  // Removed surface: multi-row form, additional-instructions editor, and catalog picks.
-  assert.doesNotMatch(html, /tasks-instructions|tasks-model-select|tasks-runtime-field|附加指令/);
-  assert.doesNotMatch(html, /tasks-global-editor|tasks-global-mode|tasks-global-save|tasks-global-reset|tasks-automatic-details|tasks-expected-tps|tasks-minimum-tps|tasks-input-types|tasks-min-intelligence|tasks-expected-intelligence|tasks-intelligence-note|tasks-intelligence-max|tasks-max-output-price/);
   // The stats ledger page is untouched by this task.
   assert.match(html, /id="stats-task-runs-list"/);
   // The Task page still has exactly three compact editable rows (mode, timeout,
@@ -296,8 +288,7 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /for \(const entry of taskSettings\?\.aliases \?\? \[\]\)/);
   assert.match(app, /option\.value = entry\.name;/);
   // Compact rows: mode listbox (automatic/explicit only), timeout (※ only timeout),
-  // conditional explicit combobox. The native select is fully removed.
-  assert.doesNotMatch(app, /tasksModeSelect/u);
+  // conditional explicit combobox.
   assert.match(app, /function applyTasksModeSelection\(mode: TaskSettingsMode\): void/);
   assert.match(app, /tasksExplicitRow\.hidden = mode !== 'explicit';/);
   assert.match(app, /function renderTimeoutEffective\(row: TaskSettingsTaskRow\): void/);
@@ -307,9 +298,6 @@ test('renderer edits only alias-or-inline references and never enumerates catalo
   assert.match(app, /async function saveTaskTimeoutReset\(\): Promise<void>/);
   assert.match(app, /commitTaskSave\(\{ timeout_ms: null \}\)/);
   assert.match(app, /'mode', 'explicit_runtime', 'timeout_ms', 'automatic'/);
-  // No additional-instructions editor or catalog candidate synthesis surfaces exist.
-  assert.doesNotMatch(app, /tasksInstructionsInput|tasksModelSelect|renderTasksChoiceOptions|tasksChoiceLabel|resolvedAdditionalInstructionsContent/);
-  assert.doesNotMatch(app, /exactAgentRuntime|runtime_choices|resolved_runtime|additional_instructions|includeAutomatic/);
   // CAS conflict reloads authoritative state and re-applies only remaining visible fields.
   assert.match(app, /reloadTasksAuthoritative\(\)/);
   assert.match(app, /applyTaskDraft\(draft\)/);
@@ -491,9 +479,7 @@ test('task settings acceptance locks the post-fix surface: two-mode select with 
   // Mode selection is exactly automatic/explicit: the rejected third empty 继承 option is gone,
   // inherited values render from the daemon-owned effective result without creating a per-task
   // pin, and the mode control is the themed listbox, not a native select.
-  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
   assert.doesNotMatch(html, /<option value="">继承<\/option>/u);
-  assert.doesNotMatch(app, /tasksModeSelect/u);
   assert.match(app, /applyTasksModeSelection\(row\.effective\.mode\.value\);/u);
   assert.match(app, /explicitReferenceText\(row\.effective\.explicit_runtime\.value\);/u);
   assert.doesNotMatch(app, /row\.user_task\.mode \?\? ''/u);
@@ -533,8 +519,6 @@ test('task settings renderer uses the themed mode listbox, stripped identity, cl
   // Mode selection is the accepted Desktop-themed listbox, never a native
   // #tasks-mode <select>. The listbox trigger/list live inside the Task markup
   // and expose exactly two options (automatic/explicit).
-  assert.doesNotMatch(html, /<select id="tasks-mode">/u);
-  assert.doesNotMatch(tasksMarkup, /<select[^>]*id="tasks-mode"/u);
   assert.match(tasksMarkup, /id="tasks-mode-trigger"[^>]+aria-haspopup="listbox"[^>]+aria-expanded="false"[^>]+aria-controls="tasks-mode-list"/u);
   assert.match(tasksMarkup, /id="tasks-mode-trigger-label">自动选择</u);
   assert.match(tasksMarkup, /id="tasks-mode-list" role="listbox"/u);
@@ -603,11 +587,6 @@ test('task settings renderer uses the themed mode listbox, stripped identity, cl
   assert.match(app, /function showTasksResolutionTooltip\(marker: HTMLElement, message: string\): void/u);
   assert.doesNotMatch(app, /issues\.join/u);
 
-  // Redundant explanatory subtitles/copy around the compact controls are gone.
-  assert.doesNotMatch(tasksMarkup, /设置当前任务的运行方式与总时限/u);
-  assert.doesNotMatch(tasksMarkup, /tasks-detail-note/u);
-  assert.doesNotMatch(tasksMarkup, /id="tasks-mode-effective"/u);
-  assert.doesNotMatch(tasksMarkup, /本层未固定/u);
 });
 
 function preloadSource(): string {

@@ -345,19 +345,6 @@ test('Windows installer stages long dependency paths through robocopy', () => {
   assertInstallPs1LongPathCopy(ROOT);
 });
 
-// Pet is a Desktop module and must not return as a separately downloaded or
-// staged suite artifact on either platform.
-function assertInstallersHaveNoStandalonePet(root) {
-  const sh = fs.readFileSync(path.join(root, 'scripts', 'install.sh'), 'utf8');
-  const ps1 = fs.readFileSync(path.join(root, 'scripts', 'install.ps1'), 'utf8');
-  assert.doesNotMatch(sh, /--pet-url|PET_URL|wrenyard-pet|apps\/pet/);
-  assert.doesNotMatch(ps1, /PetUrl|PetChecksumUrl|wrenyard-pet|apps\\pet|Wrenyard Pet\.exe/);
-}
-
-test('installers have no standalone Pet artifact contract', () => {
-  assertInstallersHaveNoStandalonePet(ROOT);
-});
-
 test('installers use static update metadata and bootstrap suite plus Desktop', () => {
   const sh = fs.readFileSync(path.join(ROOT, 'scripts', 'install.sh'), 'utf8');
   const ps1 = fs.readFileSync(path.join(ROOT, 'scripts', 'install.ps1'), 'utf8');

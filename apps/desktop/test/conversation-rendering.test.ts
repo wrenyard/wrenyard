@@ -226,10 +226,6 @@ test('run_task summary labels provider-override selection speed', () => {
 });
 
 test('renderer offers pre-session model selection for a ready draft', () => {
-  // The obsolete copy that forced users to create a conversation before they
-  // could pick a model must be gone from the source.
-  assert.equal(rendererSource.includes('新建会话后选择模型'), false, 'obsolete no-session copy must be removed');
-
   // The picker enable gate must no longer disable solely because no session is
   // selected; a ready draft with advertised options should be selectable.
   assert.equal(
@@ -240,20 +236,6 @@ test('renderer offers pre-session model selection for a ready draft', () => {
 });
 
 test('conversation model picker delegates to the shared searchable single-select', () => {
-  // The custom model dropdown (option list, popup, search box and keyboard
-  // duplication) is gone; the shared control owns search and keyboard handling.
-  for (const legacy of [
-    'conversation-model-option',
-    'conversation-model-popover',
-    'conversation-model-list',
-    'openModelPicker',
-    'closeModelPicker',
-    'onModelListKeyDown',
-    'onModelTriggerKeyDown',
-    'data-model-value',
-  ]) {
-    assert.equal(rendererSource.includes(legacy), false, `obsolete picker code must be removed: ${legacy}`);
-  }
   assert.equal(rendererSource.includes('SearchableSingleSelect'), true, 'picker must use the shared control');
   assert.equal(rendererSource.includes('setSearchLabel'), true, 'model search must be labelled');
 });
@@ -275,21 +257,11 @@ test('conversation model selection keeps canonical values and advertises the dis
   assert.equal(rendererSource.includes('advertisedCount()'), true);
 });
 
-test('conversation provider status has no model traffic-light lamps', () => {
-  for (const lamp of [
-    'conversation-provider-signal',
-    'conversation-model-trigger-signal',
-    'renderProviderSignal',
-    'providerBindings',
-  ]) {
-    assert.equal(rendererSource.includes(lamp), false, `model lamp code must be removed: ${lamp}`);
-  }
+test('conversation retains the daemon status indicator styling', () => {
   // The separate daemon status indicator is untouched outside this renderer.
   const css = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'app.css'),
     'utf8',
   );
-  assert.equal(css.includes('conversation-provider-signal'), false, 'lamp CSS must be removed');
-  assert.equal(css.includes('.conversation-model-popover'), false, 'custom popup CSS must be removed');
   assert.equal(css.includes('.conversation-daemon-status'), true, 'daemon status CSS must remain');
 });

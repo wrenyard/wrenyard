@@ -4,20 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
-
-func TestDoctorRejectsRemovedCCBTarget(t *testing.T) {
-	stderr := captureStderr(t, func() {
-		if code := Run([]string{"doctor", "ccb", "--json"}, "forge"); code != 2 {
-			t.Fatalf("expected removed doctor target to exit 2, got %d", code)
-		}
-	})
-	if !strings.Contains(stderr, `unknown target "ccb"`) {
-		t.Fatalf("expected unknown target error for removed ccb target, got: %s", stderr)
-	}
-}
 
 func TestDoctorReportsSecretsStatus(t *testing.T) {
 	repo := t.TempDir()

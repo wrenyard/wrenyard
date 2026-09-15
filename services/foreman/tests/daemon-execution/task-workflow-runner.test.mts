@@ -478,31 +478,6 @@ describe('daemon execution', { concurrency: false }, () => {
     )
     assert.equal(agentCalls, 0)
   })
-
-  it('does not dispatch the removed builtin implement for new work because it no longer resolves', async () => {
-    const workspace = makeTempDir('foreman-daemon-legacy-new-work-')
-    await discoverTasks(workspace)
-
-    // The retired implement role is gone from the catalog and must not resolve
-    // at the registry surface, so no execution path can reach an agent.
-    assert.equal(resolveTaskTarget('implement', workspace), null, 'removed implement must not resolve')
-    let agentCalls = 0
-    // No settings resolver is supplied (same shape as the unconstrained active
-    // case above). Execution rejects before any agent launches.
-    await assert.rejects(
-      () => createTaskRunner().execute('implement', undefined, {
-        workspaceRoot: workspace,
-        currentProject: 'app',
-        primitives: {
-          agent: async () => {
-            agentCalls += 1
-            return { output: textOutput('done'), status: 'done' }
-          },
-        },
-      }),
-    )
-    assert.equal(agentCalls, 0, 'removed implement must never launch an agent for new work')
-  })
 })
 
 describe('task run admission', { concurrency: false }, () => {

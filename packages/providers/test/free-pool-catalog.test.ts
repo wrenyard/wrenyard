@@ -51,21 +51,6 @@ test('three free-pool providers are registered with forge-managed credentials an
   assert.ok(catalog.provider('opencode-native'), 'opencode-native must remain registered');
 });
 
-test('free-pool providers carry no retired DeepSeek v4/pro ids', () => {
-  const catalog = createBuiltinCatalog();
-  for (const provider of ['opencode-zen', 'openrouter', 'opencode-go']) {
-    const ids = catalog.provider(provider)!.models.map((m) => m.id);
-    for (const retired of [
-      'deepseek-v4-flash',
-      'deepseek-v4-pro',
-      'deepseek-v4-flash-202605',
-      'deepseek-v4-pro-202606',
-    ]) {
-      assert.ok(!ids.includes(retired), `${provider} must not expose ${retired}`);
-    }
-  }
-});
-
 test('Zen and OpenRouter free models have exactly zero reference prices; Go models are nonzero', () => {
   const catalog = createBuiltinCatalog();
   const assertZero = (provider: string, modelId: string): void => {

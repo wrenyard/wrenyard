@@ -67,10 +67,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function contentText(content: unknown, type = 'text'): string {
+function contentText(content: unknown): string {
   if (!Array.isArray(content)) return '';
   return content
-    .filter((block) => isObject(block) && block.type === type && typeof block.text === 'string')
+    .filter((block) => isObject(block) && block.type === 'text' && typeof block.text === 'string')
     .map((block) => block.text as string)
     .join('\n\n')
     .trim();
@@ -370,7 +370,8 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const turn = asNumber(data.turn);
       const step = asNumber(data.step) ?? 0;
       const chunkType = asString(chunk.type);
-      if (chunkType !== 'text-delta' && chunkType !== 'reasoning-delta') continue;
+      // Reasoning deltas are not conversation projection; only visible text is.
+      if (chunkType !== 'text-delta') continue;
       const delta = asString(chunk.text) ?? '';
       if (!delta) continue;
       const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
@@ -381,14 +382,12 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         id: `assistant-${key}`,
         kind: 'assistant' as const,
         text: '',
-        reasoning: '',
         time,
         turnId,
         running: true,
         order,
       };
-      if (chunkType === 'reasoning-delta') draft.reasoning = `${draft.reasoning ?? ''}${delta}`;
-      else draft.text += delta;
+      draft.text += delta;
       drafts.set(key, draft);
       continue;
     }
@@ -402,15 +401,14 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       finalizedSteps.add(key);
       drafts.delete(key);
       const message = isObject(data.message) ? data.message : {};
+      // Only visible text is projected; reasoning blocks are intentionally dropped.
       const text = contentText(message.content);
-      const reasoning = contentText(message.content, 'reasoning');
-      if (text || reasoning) {
+      if (text) {
         items.push({
           id: `assistant-${key}`,
           kind: 'assistant',
           text,
           turnId,
-          ...(reasoning ? { reasoning } : {}),
           time,
           order,
         });
@@ -471,7 +469,7 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
   }
 
   for (const draft of drafts.values()) {
-    if (draft.text || draft.reasoning) items.push(draft);
+    if (draft.text) items.push(draft);
   }
   return items
     .sort((left, right) => left.order - right.order)
