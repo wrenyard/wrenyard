@@ -86,6 +86,8 @@ export type UpdateState =
   | 'check-failed'
   | 'install-failed';
 
+export type UpdateStage = 'download' | 'extract' | 'waiting' | 'daemon-upgrade';
+
 export interface UpdateSnapshot {
   channel: UpdateChannel;
   state: UpdateState;
@@ -93,6 +95,9 @@ export interface UpdateSnapshot {
   availableVersion?: string;
   checkedAt?: number;
   installSupported: boolean;
+  stage?: UpdateStage;
+  progress?: number;
+  activeTaskCount?: number;
   message?: string;
 }
 
