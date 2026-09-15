@@ -61,6 +61,18 @@ test('install.ps1 verifies SHA-256 without PowerShell Get-FileHash', () => {
   assert.ok(ps1.includes('finally {'));
 });
 
+test('install.ps1 extracts both Windows ZIPs with checked System32 tar.exe', () => {
+  assert.doesNotMatch(ps1, /Expand-Archive/);
+  assert.match(ps1, /function Expand-NativeZip/);
+  assert.match(ps1, /SystemRoot/);
+  assert.match(ps1, /System32\\tar\.exe/);
+  assert.match(ps1, /--no-same-owner --no-same-permissions/);
+  assert.match(ps1, /\$tarExitCode = \$LASTEXITCODE/);
+  assert.match(ps1, /if \(\$tarExitCode -ne 0\)/);
+  assert.match(ps1, /Expand-NativeZip -Archive \$zipPath -Destination \$extract/);
+  assert.match(ps1, /Expand-NativeZip -Archive \$desktopZip -Destination \$desktopExtract/);
+});
+
 test('installers no longer expose or stage a standalone Pet release asset', () => {
   assert.doesNotMatch(installer, /--pet-url|PET_URL|wrenyard-pet|apps\/pet/);
   assert.doesNotMatch(ps1, /PetUrl|PetChecksumUrl|wrenyard-pet|apps\\pet|Wrenyard Pet\.exe/);

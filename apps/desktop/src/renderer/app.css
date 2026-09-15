@@ -91,7 +91,14 @@ button, input, select { accent-color: var(--moss-deep); }
 .activity-item.is-selected { color: var(--paper); box-shadow: inset 2px 0 var(--lamp); }
 .activity-item.is-selected::before { background: rgba(247, 239, 216, .06); }
 .activity-item:focus-visible { outline: 2px solid var(--moss); outline-offset: -4px; }
+.activity-update { margin-top: auto; }
+.activity-update[hidden] { display: none; }
 .activity-settings { margin-top: auto; }
+.activity-update:not([hidden]) + .activity-settings { margin-top: 0; }
+.activity-update.is-update-available { color: var(--rail); }
+.activity-update.is-update-available::before { background: var(--lamp); }
+.activity-update.is-update-available:hover::before { background: #ffd66f; }
+.activity-update:disabled { cursor: default; }
 .activity-item svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .app-icon { width: 30px; height: 30px; border-radius: 7px; object-fit: cover; }
 
@@ -114,6 +121,24 @@ button, input, select { accent-color: var(--moss-deep); }
   transition: opacity 80ms ease 450ms;
 }
 .activity-item:hover .tooltip, .activity-item:focus-visible .tooltip { opacity: 1; }
+
+.update-popup {
+  position: fixed;
+  z-index: 12;
+  left: 58px;
+  bottom: 58px;
+  width: min(300px, calc(100vw - 72px));
+  border: 1px solid #403930;
+  border-radius: 7px;
+  padding: 13px 14px;
+  color: var(--paper);
+  background: var(--rail);
+  box-shadow: 0 12px 32px rgba(31, 28, 24, .24);
+}
+.update-popup-close { float: right; border: 0; padding: 0 2px; color: inherit; background: transparent; cursor: pointer; font-size: 17px; }
+.update-popup strong { display: block; margin-bottom: 9px; font-size: 13px; }
+.update-popup progress { width: 100%; height: 7px; display: block; accent-color: var(--lamp); }
+.update-popup p { margin: 9px 0 0; color: #d4cab6; font-size: 11px; line-height: 1.5; }
 
 .shell-content { position: fixed; inset: var(--window-titlebar-height) 0 0 48px; background: var(--paper); }
 .product-page { height: 100%; overflow: auto; padding: 34px 42px 68px; scroll-behavior: smooth; }
