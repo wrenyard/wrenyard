@@ -2226,7 +2226,7 @@ describe('daemon task-settings-service (no-model)', () => {
     const resolveAt = (atMs: number) => {
       const service = context!.makeService({
         resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_OPENCODE_PROFILE] }),
-        quotaSnapshots: zhipuQuotaSnapshotService(atMs, zhipuWindowsAt(atMs, 95)),
+        quotaSnapshots: zhipuQuotaSnapshotService(atMs, zhipuWindowsAt(atMs, 96)),
         runtimeAvailability: () => ({
           providerCredential: 'available',
           providerLive: 'unknown',
@@ -2242,7 +2242,7 @@ describe('daemon task-settings-service (no-model)', () => {
     }
 
     // Weekday peak window: production verified efficiency must reach real policy
-    // notes, and the 5%-remaining quota must stay non-healthy (not made healthy
+    // notes, and the 4%-remaining quota must stay non-healthy (not made healthy
     // by the efficiency evidence). Reference and marginal USD prices are untouched.
     const peak = await resolveAt(Date.parse('2026-09-14T14:30:00+08:00'))
     const peakDecision = peak.dispatch?.auto_routing
@@ -2287,7 +2287,8 @@ describe('daemon task-settings-service (no-model)', () => {
     }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 } })
     const unknownDecision = unknownQuota.dispatch?.auto_routing
     assert.ok(unknownDecision)
-    assert.ok(unknownDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
+    assert.ok(unknownDecision.reasons.includes('quota_burn_efficiency_evidence_without_trusted_headroom_ignored'))
+    assert.equal(unknownDecision.scoring?.quota, 0)
     assert.equal(unknownDecision.quota_coverage_complete, false)
     assert.notEqual(unknownDecision.quota_tier, 'healthy')
 
@@ -2887,16 +2888,17 @@ describe('daemon task-settings-service (no-model)', () => {
     })
   })
 
-  it('unknown quota with a high reference price is neutral and routes instead of a price_limit elimination', async () => {
+  it('unknown quota scores zero and routes instead of a price_limit elimination', async () => {
     writeConfig({})
     const service = context!.makeService({
       resolver: createResolverFixture({ profiles: [PROFILES[2]!] }),
     })
     const resolution = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
     // The claude-opus-4 candidate has no applicable quota binding (unknown,
-    // neutral), so a reference price above the old $10 gate no longer rejects.
+    // zero quota score), so a reference price above the old $10 gate no longer rejects.
     assert.equal(resolution.exactAgentRuntime, PROFILES[2]!.exactAgentRuntime)
     assert.equal(resolution.dispatch?.auto_routing?.quota_tier, 'unknown')
+    assert.equal(resolution.dispatch?.auto_routing?.scoring?.quota, 0)
   })
 
   it('mixed eliminations surface the cheapest routing-relevant gate deterministically regardless of pool order', async () => {
@@ -3165,11 +3167,12 @@ describe('daemon task-settings-service (no-model)', () => {
       quotaSnapshots: poolQuotaSnapshotService('deepseek', [], balances),
     }).resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
 
-    // Positive balance: available with neutral quota quality (never a boost).
+    // Positive balance: available with zero quota quality.
     const positive = await runWithBalance([{ currency: 'USD', amount: '12.50' }])
     assert.equal(positive.exactAgentRuntime, DEEPSEEK_BALANCE_PROFILE.exactAgentRuntime)
     assert.equal(positive.dispatch?.auto_routing?.quota_tier, 'healthy')
     assert.equal(positive.dispatch?.auto_routing?.quota_headroom_trusted, true)
+    assert.equal(positive.dispatch?.auto_routing?.scoring?.quota, 0)
 
     // Exactly zero blocks.
     await assert.rejects(
@@ -3182,6 +3185,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(unknown.exactAgentRuntime, DEEPSEEK_BALANCE_PROFILE.exactAgentRuntime)
     assert.equal(unknown.dispatch?.auto_routing?.quota_tier, 'unknown')
     assert.notEqual(unknown.dispatch?.auto_routing?.quota_headroom_trusted, true)
+    assert.equal(unknown.dispatch?.auto_routing?.scoring?.quota, 0)
   })
 
   it('API-account alternative currencies: any valid positive balance keeps it available; all zero blocks', async () => {
