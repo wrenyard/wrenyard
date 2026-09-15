@@ -107,8 +107,12 @@ export const PRICE_FACTOR_ANCHORS: ReadonlyArray<readonly [number, number]> = [
   [50, 0],
 ];
 
-/** Neutral headroom used whenever evidence is genuinely unknown. */
-export const NEUTRAL_HEADROOM = 0.5;
+/**
+ * Zero headroom contributed by every unknown/missing/rejected constraint and
+ * by every positive pay-as-you-go balance. Such evidence is an absence of
+ * trusted headroom, never a neutral (or positive) quota quality.
+ */
+export const ZERO_QUOTA_HEADROOM = 0;
 
 /** Full-cycle replenishment assessment constants. */
 export const FULL_CYCLE_MIN_REMAINING = 0.05;
@@ -156,7 +160,7 @@ export interface QuotaEvidence {
  *
  * Balance evidence comes from the existing Forge balances source (raw
  * `{ currency, amount }` decimal string). A fresh, valid amount strictly
- * greater than zero means not exhausted with neutral quota quality (it never
+ * greater than zero means not exhausted with zero quota quality (it never
  * boosts subscription pace); exactly zero blocks; malformed/negative/stale/
  * missing amounts are unknown and never fabricated as zero.
  */
@@ -467,10 +471,11 @@ function compareLex(a: string, b: string): number {
 /**
  * Assesses one mandatory monetary balance resource by the same constraint
  * path as quota windows. A fresh, valid amount strictly greater than zero
- * means not exhausted with neutral quota quality (headroom null -> NEUTRAL
- * HEADROOM; it never boosts subscription pace). Exactly zero blocks. Malformed,
- * negative, non-finite, stale, future or missing amounts are unknown
- * (uncovered): they are never fabricated as zero and never block.
+ * means not exhausted but carries no trusted headroom (headroom null ->
+ * ZERO_QUOTA_HEADROOM; a pay-as-you-go balance never boosts quota quality).
+ * Exactly zero blocks. Malformed, negative, non-finite, stale, future or
+ * missing amounts are unknown (uncovered): they are never fabricated as zero
+ * and never block.
  */
 function assessBalanceConstraint(
   nowMs: number,
@@ -505,7 +510,7 @@ function assessBalanceConstraint(
   if (!/[1-9]/.test(amount)) {
     return { id, state: "blocked", headroom: 0, rejectCode: null };
   }
-  // amount > 0: available, neutral quality, never a subscription-pace boost.
+  // amount > 0: available, no trusted headroom, never a subscription-pace boost.
   return { id, state: "healthy", headroom: null, rejectCode: null };
 }
 
@@ -613,7 +618,7 @@ function assessConstraint(
     if (remainingRatio > 0 && remainingRatio < STRAINED_ROLLING_REMAINING) {
       return { id, state: "strained", headroom: remainingRatio, rejectCode: null };
     }
-    // Middle band [0.05, 0.80): genuinely unknown headroom, neutral H = 0.5.
+    // Middle band [0.05, 0.80): genuinely unknown headroom contributes zero.
     return { id, state: "unknown", headroom: null, rejectCode: null };
   }
 
@@ -626,7 +631,7 @@ function assessConstraint(
  * any blocked constraint blocks eligibility; otherwise every applicable
  * constraint contributes its determinate headroom, and each missing/rejected/
  * unknown/positive-balance (headroom null) constraint contributes
- * NEUTRAL_HEADROOM (0.5). An empty list stays neutral unknown.
+ * ZERO_QUOTA_HEADROOM (0). An empty list stays unknown with zero headroom.
  */
 export function assessRequiredQuota(
   nowMs: number,
@@ -641,7 +646,7 @@ export function assessRequiredQuota(
   let hasMissingOrRejected = false;
   const blockedConstraintIds: string[] = [];
   // Every applicable constraint contributes exactly one headroom term to the
-  // arithmetic mean: its determinate headroom, or NEUTRAL_HEADROOM when it
+  // arithmetic mean: its determinate headroom, or ZERO_QUOTA_HEADROOM when it
   // carries none (unknown/missing/rejected/positive balance).
   const headroomPool: number[] = [];
 
@@ -656,22 +661,22 @@ export function assessRequiredQuota(
       case "strained":
         hasStrained = true;
         headroomPool.push(
-          assessment.headroom === null ? NEUTRAL_HEADROOM : assessment.headroom
+          assessment.headroom === null ? ZERO_QUOTA_HEADROOM : assessment.headroom
         );
         break;
       case "healthy":
         headroomPool.push(
-          assessment.headroom === null ? NEUTRAL_HEADROOM : assessment.headroom
+          assessment.headroom === null ? ZERO_QUOTA_HEADROOM : assessment.headroom
         );
         break;
       case "unknown":
         hasUnknown = true;
-        headroomPool.push(NEUTRAL_HEADROOM);
+        headroomPool.push(ZERO_QUOTA_HEADROOM);
         break;
       case "missing":
       case "rejected":
         hasMissingOrRejected = true;
-        headroomPool.push(NEUTRAL_HEADROOM);
+        headroomPool.push(ZERO_QUOTA_HEADROOM);
         break;
     }
   }
@@ -699,8 +704,8 @@ export function assessRequiredQuota(
   if (state === "blocked") {
     headroom = null;
   } else if (empty) {
-    // No applicable constraint is neutral unknown, not full quota.
-    headroom = NEUTRAL_HEADROOM;
+    // No applicable constraint carries no trusted headroom, not full quota.
+    headroom = ZERO_QUOTA_HEADROOM;
   } else {
     // Equal arithmetic mean over every applicable constraint.
     let sum = 0;
@@ -1050,8 +1055,10 @@ export function evaluateCandidate(
 
   // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,
   // or any eligibility gate. It is applied only while every field is valid and
-  // nonempty and the interval covers [now, now + timeout]; with no required
-  // quota constraint there is no quota to blend against, so Q stays neutral.
+  // nonempty, the interval covers [now, now + timeout], and the aggregate quota
+  // carries a trusted positive headroom; with no required quota constraint — or
+  // with an unknown/balance-only aggregate headroom — there is no trusted quota
+  // to blend against, so Q keeps the raw zero headroom and no bonus is granted.
   // A bare numeric credit is never accepted as evidence.
   let verifiedEfficiency: number | null = null;
   const efficiencyEvidence = candidate.verifiedEfficiency;
@@ -1087,13 +1094,18 @@ export function evaluateCandidate(
       notes.push("quota_burn_efficiency_evidence_stale_ignored");
     } else if (candidate.requiredQuota.length === 0) {
       notes.push("quota_burn_efficiency_evidence_without_required_quota_ignored");
+    } else if (!quota.headroomTrusted || quota.headroom === null || quota.headroom <= 0) {
+      // Efficiency may only modulate a trusted, positive headroom: an aggregate
+      // unknown quota or balance-only quota (headroom 0) must never receive
+      // an efficiency bonus.
+      notes.push("quota_burn_efficiency_evidence_without_trusted_headroom_ignored");
     } else {
       verifiedEfficiency = efficiencyScore;
       notes.push("quota_burn_efficiency_evidence_applied");
     }
   }
 
-  const headroom = quota.headroom === null ? NEUTRAL_HEADROOM : quota.headroom;
+  const headroom = quota.headroom === null ? ZERO_QUOTA_HEADROOM : quota.headroom;
   // Quota headroom factor Q in [0, 1]: raw trust headroom, or a blend with
   // verified quota-burn efficiency when present. Q never depends on price/speed.
   const quotaQuality =
