@@ -86,7 +86,7 @@ func TestCursorPlanUsesCanonicalExecutableAndFlags(t *testing.T) {
 	if len(plan.Command) == 0 || strings.TrimSuffix(filepath.Base(plan.Command[0]), ".exe") != "go" {
 		t.Fatalf("cursor plan must invoke the canonical cursor-agent binary, got %v", plan.Command)
 	}
-	if !containsOrderedArgs(plan.Command, "-p", "--output-format", "stream-json", "--trust", "--model", "composer-2.5") {
+	if !containsOrderedArgs(plan.Command, "-p", "--output-format", "stream-json", "--stream-partial-output", "--trust", "--model", "composer-2.5") {
 		t.Fatalf("cursor plan missing fixed flags: %v", plan.Command)
 	}
 	if containsArg(plan.Command, req.Prompt) {

@@ -11,6 +11,13 @@ import { migrateProviderId } from '../config/chatgpt-migration.mts'
  * milliseconds. It is independent of execution wall time and native event
  * `duration_ms`, so tool waits do not change the speed estimate.
  *
+ * A `response_v1` sample pairs its exact `output_tokens` with either one
+ * scalar generation interval or the exact ordered vector of serial
+ * model-generation windows behind those tokens (for example one aggregate
+ * Cursor turn). Both shapes normalize to the same interval vector and summed
+ * duration, so the persisted-execution, gateway, and task/local estimate paths
+ * all divide summed tokens by the summed generation time.
+ *
  * The persisted `turn_usage` events keep their billing/accounting provenance,
  * but those fields never influence speed.
  */
@@ -172,7 +179,7 @@ export function readExecutionTpsSamples(
       seen.set(sample.responseId, sample)
       const current = totalsByExecution.get(row.execution_id) ?? { outputTokens: 0, durationMs: 0 }
       current.outputTokens += sample.outputTokens
-      current.durationMs += sample.completedAtMs - sample.firstTokenAtMs
+      current.durationMs += sample.durationMs
       totalsByExecution.set(row.execution_id, current)
     }
     seenByExecution.set(row.execution_id, seen)
@@ -324,7 +331,7 @@ function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; 
     }
     seen.set(sample.responseId, sample)
     outputTokens += sample.outputTokens
-    durationMs += sample.completedAtMs - sample.firstTokenAtMs
+    durationMs += sample.durationMs
   }
   if (!isSafeInteger(outputTokens) || outputTokens <= 0) return undefined
   if (!Number.isFinite(durationMs) || durationMs <= 0) return undefined
@@ -472,44 +479,110 @@ function parseResponseSamples(
   return { samples: [...seen.values()], invalid }
 }
 
+/**
+ * One normalized response measurement. A sample carries either the scalar
+ * paired interval (`firstTokenAtMs`/`completedAtMs`) or the exact aggregate
+ * vector of serial model-generation windows (`windows`), never both. Both
+ * shapes describe the same thing — the paired generation intervals behind the
+ * sample's `outputTokens` — and are collapsed here into the interval vector
+ * plus its summed duration, so every downstream aggregation path shares one
+ * formula and no fake continuous interval is ever synthesized.
+ */
 interface ResponseSample {
   responseId: string
   model: string
   outputTokens: number
+  /** Ordered paired generation intervals; a scalar sample yields one interval. */
+  windows: ResponseWindow[]
+  /** Sum of every window duration, the shared TPS denominator. */
+  durationMs: number
+}
+
+interface ResponseWindow {
   firstTokenAtMs: number
   completedAtMs: number
 }
 
+/**
+ * Normalizes one response sample to the interval vector. A sample must carry
+ * exactly one recognized timing shape: the scalar `first_token_at_ms` /
+ * `completed_at_ms` pair, or the `generation_windows` vector. Mixed scalar and
+ * vector fields, a missing or empty vector, and any malformed, non-finite,
+ * non-positive, unordered, overlapping, or unsafe-summing window reject the
+ * entire sample — a valid subset is never retained alongside the whole
+ * `output_tokens`, so tokens are never attributed to unmeasured time.
+ */
 function parseResponseSample(value: unknown, dispatchModel: string | null, provider: string | null): (ResponseSample & { mismatchedModel?: false }) | { responseId: string; mismatchedModel: true } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
   const responseId = record.response_id
   const model = record.model
   const outputTokens = record.output_tokens
-  const firstTokenAtMs = record.first_token_at_ms
-  const completedAtMs = record.completed_at_ms
   if (typeof responseId !== 'string' || responseId.trim() === '') return undefined
   if (typeof model !== 'string' || model.trim() === '') return undefined
   if (typeof outputTokens !== 'number' || !Number.isSafeInteger(outputTokens) || outputTokens < 0) return undefined
-  if (typeof firstTokenAtMs !== 'number' || !Number.isFinite(firstTokenAtMs) || firstTokenAtMs <= 0) return undefined
-  if (typeof completedAtMs !== 'number' || !Number.isFinite(completedAtMs) || completedAtMs <= firstTokenAtMs) return undefined
+  const hasScalar = record.first_token_at_ms !== undefined || record.completed_at_ms !== undefined
+  const hasVector = record.generation_windows !== undefined
+  if (hasScalar === hasVector) return undefined
+  const windows = hasVector
+    ? parseGenerationWindows(record.generation_windows)
+    : parseScalarWindow(record.first_token_at_ms, record.completed_at_ms)
+  if (windows === undefined) return undefined
+  let durationMs = 0
+  for (const window of windows) durationMs += window.completedAtMs - window.firstTokenAtMs
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) return undefined
   const normalized = {
     responseId: responseId.trim(),
     model: normalizeSampleModel(provider, model),
     outputTokens,
-    firstTokenAtMs,
-    completedAtMs,
+    windows,
+    durationMs,
   }
   if (dispatchModel?.trim() !== normalized.model) return { responseId: normalized.responseId, mismatchedModel: true }
   return normalized
 }
 
+/** Normalizes the legacy scalar paired interval into a single window. */
+function parseScalarWindow(firstTokenAtMs: unknown, completedAtMs: unknown): ResponseWindow[] | undefined {
+  if (typeof firstTokenAtMs !== 'number' || !Number.isFinite(firstTokenAtMs) || firstTokenAtMs <= 0) return undefined
+  if (typeof completedAtMs !== 'number' || !Number.isFinite(completedAtMs) || completedAtMs <= firstTokenAtMs) return undefined
+  return [{ firstTokenAtMs, completedAtMs }]
+}
+
+/**
+ * Normalizes the exact aggregate generation-window vector. The array must be
+ * nonempty and every window must be a finite, positive, strictly forward,
+ * ordered interval that does not overlap or repeat its predecessor; a window
+ * must also never begin before its predecessor's completion, so the vector
+ * only ever describes genuinely separate serial generations.
+ */
+function parseGenerationWindows(value: unknown): ResponseWindow[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const windows: ResponseWindow[] = []
+  let previousCompletedAtMs: number | undefined
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return undefined
+    const record = entry as Record<string, unknown>
+    const firstTokenAtMs = record.first_token_at_ms
+    const completedAtMs = record.completed_at_ms
+    if (typeof firstTokenAtMs !== 'number' || !Number.isFinite(firstTokenAtMs) || firstTokenAtMs <= 0) return undefined
+    if (typeof completedAtMs !== 'number' || !Number.isFinite(completedAtMs) || completedAtMs <= firstTokenAtMs) return undefined
+    if (previousCompletedAtMs !== undefined && firstTokenAtMs < previousCompletedAtMs) return undefined
+    windows.push({ firstTokenAtMs, completedAtMs })
+    previousCompletedAtMs = completedAtMs
+  }
+  return windows
+}
+
 function sameResponseSample(a: ResponseSample, b: ResponseSample): boolean {
-  return a.responseId === b.responseId
-    && a.model === b.model
-    && a.outputTokens === b.outputTokens
-    && a.firstTokenAtMs === b.firstTokenAtMs
-    && a.completedAtMs === b.completedAtMs
+  if (a.responseId !== b.responseId || a.model !== b.model || a.outputTokens !== b.outputTokens) return false
+  if (a.windows.length !== b.windows.length) return false
+  for (let index = 0; index < a.windows.length; index += 1) {
+    const left = a.windows[index]
+    const right = b.windows[index]
+    if (left.firstTokenAtMs !== right.firstTokenAtMs || left.completedAtMs !== right.completedAtMs) return false
+  }
+  return true
 }
 
 /** Single rate validation helper: finite, positive tokens over finite positive ms. */
