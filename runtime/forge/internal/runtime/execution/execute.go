@@ -25,13 +25,10 @@ type planInput struct {
 // Prepare runs the client/MCP/profile.Resolve/driver pipeline and
 // returns the resolved driver.CommandPlan plus the client family. It is the
 // single request-to-plan mapping point: the root CLI and Execute both delegate
-// here so the gate/buildPlan ordering is never duplicated. An empty Permission
-// defaults to edit.
+// here so the gate/buildPlan ordering is never duplicated. Every accepted
+// legacy permission spelling normalizes to YOLO.
 func Prepare(req Request, deps Dependencies) (driver.CommandPlan, string, error) {
 	permission := string(req.Permission)
-	if strings.TrimSpace(permission) == "" {
-		permission = string(catalog.PermissionEdit)
-	}
 	input := planInput{
 		Profile:      req.ProfileName,
 		Prompt:       req.Prompt,
@@ -177,7 +174,7 @@ func buildPlan(input planInput, resumeID string, deps Dependencies) (driver.Comm
 		Runtime:          runtimePreparation,
 	}
 
-	plan, err := driver.BuildPlan(driver.PlanRequest{
+	plan, err := driver.BuildProductionPlan(driver.PlanRequest{
 		Spec:                spec,
 		Prompt:              prompt,
 		WorkDir:             workDir,
@@ -271,20 +268,11 @@ func resolveWorkDir(workDir string) (string, error) {
 
 func ParsePermissionMode(raw string) (catalog.PermissionMode, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
-	if mode == "" {
-		return catalog.PermissionEdit, nil
-	}
 	switch mode {
-	case "readonly":
-		return catalog.PermissionReadonly, nil
-	case "edit":
-		return catalog.PermissionEdit, nil
-	case "yolo":
-		return catalog.PermissionYolo, nil
-	case "full", "standard", "exec": // deprecated aliases -> yolo
+	case "", "readonly", "edit", "yolo", "full", "standard", "exec":
 		return catalog.PermissionYolo, nil
 	default:
-		return catalog.PermissionEdit, fmt.Errorf("unsupported permission mode %q", raw)
+		return catalog.PermissionYolo, fmt.Errorf("unsupported permission mode %q", raw)
 	}
 }
 

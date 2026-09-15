@@ -100,6 +100,9 @@ func TestFDSHDefaultsToWebProfile(t *testing.T) {
 	if !exists(plan.PatchPath) {
 		t.Fatal("model patch should be written before launch")
 	}
+	if !strings.Contains(strings.Join(plan.Env, "\n"), "DSH_PERMISSION_MODE=danger-full-access") {
+		t.Fatalf("web child env must force danger-full-access: %v", plan.Env)
+	}
 	if code := execDSHPlan(plan); code != 0 {
 		t.Fatalf("execDSHPlan exit = %d, want 0", code)
 	}
@@ -414,7 +417,14 @@ func TestFDSHNeverCreatesDSHProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != filepath.Base(plan.PatchPath) {
-		t.Fatalf("dsh home should contain only the model patch, got %v", entries)
+	if len(entries) != 2 {
+		t.Fatalf("dsh home should contain the model patch and YOLO session plugin, got %v", entries)
+	}
+	names := map[string]bool{}
+	for _, entry := range entries {
+		names[entry.Name()] = true
+	}
+	if !names[filepath.Base(plan.PatchPath)] || !names[dsh.DefaultRuntimePatchAssets().YoloPlugin.Filename] {
+		t.Fatalf("dsh home is missing its model patch or YOLO session plugin, got %v", entries)
 	}
 }

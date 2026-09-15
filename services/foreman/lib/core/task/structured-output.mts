@@ -77,6 +77,9 @@ export interface StructuredOutputOptions {
   taskName?: string
   taskId?: string
   permission?: AgentRuntimePermission
+  /** Repository coordination only. Explicit false keeps observational tasks
+   *  retryable even though production clients always launch in YOLO mode. */
+  repoWriteLock?: boolean
   onDelivery?: (delivery: { summary?: string; data: unknown }) => void
   beforeAttempt?: () => void | Promise<void>
   capabilities?: readonly string[]
@@ -98,6 +101,7 @@ export interface StructuredOutputAgentOptions {
   timeoutMs?: number
   resume?: string
   permission?: AgentRuntimePermission
+  repoWriteLock?: boolean
   taskId?: string
   capabilities?: readonly string[]
   writePaths?: readonly string[]
@@ -133,12 +137,15 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   const schema = compileSchema(opts.outputSchema)
   assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
   const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
-  // ── Permission-aware resume budget ──
-  // Only a capability-free readonly task may recover through structured-output
-  // resume. Capability packs can inject Bash or external tools whose mutation
-  // risk is not classified here, so any selected capability is conservatively
-  // one-shot alongside edit, yolo, and absent permissions.
-  const mutationCapable = opts.permission !== 'readonly' || (opts.capabilities?.length ?? 0) > 0
+  // ── Mutation-aware resume budget ──
+  // Task coordination metadata, not the universally-YOLO runtime mode, decides
+  // whether an attempt may have changed repository state. Direct legacy callers
+  // that omit the marker retain the old conservative permission fallback.
+  // Capability packs remain one-shot because their mutation risk is not
+  // classified here.
+  const mutationCapable =
+    (opts.repoWriteLock ?? (opts.permission !== 'readonly')) ||
+    (opts.capabilities?.length ?? 0) > 0
   const configuredResumeAttempts = opts.maxResumeAttempts ?? 3
   const maxResumeAttempts = mutationCapable ? 0 : configuredResumeAttempts
   let lastValidationErrors: string[] | undefined
@@ -187,6 +194,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           timeoutMs: attemptTimeoutMs,
           resume,
           permission: opts.permission,
+          repoWriteLock: opts.repoWriteLock,
           taskId: opts.taskId,
           capabilities: opts.capabilities,
           writePaths: opts.writePaths,

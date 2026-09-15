@@ -78,7 +78,6 @@ export interface TaskDefinitionDetail extends TaskDefinitionSummary {
     pre?: Array<{ id: string; description?: string }>
     post?: Array<{ id: string; description?: string }>
   }
-  permission: 'readonly' | 'edit' | 'yolo'
 }
 
 export interface TaskDefinitionListParams {
@@ -275,7 +274,7 @@ export const taskDefinitionSummarySchema = {
 
 export const taskDefinitionDetailSchema = {
   type: 'object',
-  required: ['name', 'source', 'path', 'permission'],
+  required: ['name', 'source', 'path'],
   properties: {
     name: { type: 'string', minLength: 1 },
     displayName: { type: 'string', minLength: 1 },
@@ -300,7 +299,6 @@ export const taskDefinitionDetailSchema = {
       },
       additionalProperties: true,
     },
-    permission: { enum: ['readonly', 'edit', 'yolo'] },
     timeoutMs: { type: 'number' },
     effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },

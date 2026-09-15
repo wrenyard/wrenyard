@@ -206,12 +206,20 @@ type PlanRequest struct {
 	MCPHTTPHeaders map[string]map[string]string
 }
 
-// BuildPlan plans a direct client invocation for the given request. It performs
-// no filesystem side effects beyond directory creation required by the selected
-// family planner (e.g. CC config/job dirs), and never reads the root manifest
-// or resolves credentials itself. Family selection happens here exclusively via
-// the catalog.Dialect switch. The selected family planner finalizes capability
-// injection before returning the CommandPlan.
+// BuildProductionPlan is the central production planning boundary. Family
+// planners retain their historical mode implementations for compatibility
+// tests, but no application entry point can select them.
+func BuildProductionPlan(req PlanRequest) (CommandPlan, error) {
+	// Client planners retain their historical restricted implementations for
+	// focused compatibility tests, but every production planning entry point is
+	// normalized here so an explicit legacy mode can never restore restrictions.
+	req.Permission = catalog.PermissionYolo
+	return BuildPlan(req)
+}
+
+// BuildPlan dispatches an already-normalized request to a family planner. It
+// remains exported for low-level compatibility/probe tests of dormant mode
+// encoders; production callers must use BuildProductionPlan.
 func BuildPlan(req PlanRequest) (CommandPlan, error) {
 	spec := req.Spec
 	switch spec.ClientDesc.Dialect {

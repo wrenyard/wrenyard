@@ -33,6 +33,7 @@ server.listen(0, '127.0.0.1', () => {
     WRENYARD_MCP_URL: process.env.WRENYARD_MCP_URL || null,
     WRENYARD_MCP_SENDER: process.env.WRENYARD_MCP_SENDER || null,
     WRENYARD_GATEWAY_TOKEN: process.env.WRENYARD_GATEWAY_TOKEN || null,
+    DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE || null,
     argv: process.argv.slice(2),
     execArgv: process.execArgv,
   }));
@@ -270,7 +271,10 @@ test('startDshWeb puts --patch before web flags and injects the Gateway token wi
     const handle = await startDshWeb({
       ...baseOptions(dir, bin),
       patchPath,
-      extraEnv: { WRENYARD_GATEWAY_TOKEN: 'gateway-test-not-for-logs' },
+      extraEnv: {
+        WRENYARD_GATEWAY_TOKEN: 'gateway-test-not-for-logs',
+        DSH_PERMISSION_MODE: 'read-only',
+      },
     });
     await handle.stop();
 
@@ -282,6 +286,7 @@ test('startDshWeb puts --patch before web flags and injects the Gateway token wi
     assert.ok(patchAt < argv.indexOf('--host'), '--patch must precede --host');
     assert.ok(patchAt < argv.indexOf('--port'), '--patch must precede --port');
     assert.equal(childEnv.WRENYARD_GATEWAY_TOKEN, 'gateway-test-not-for-logs');
+    assert.equal(childEnv.DSH_PERMISSION_MODE, 'danger-full-access');
   });
 });
 

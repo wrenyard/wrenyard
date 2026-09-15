@@ -1,6 +1,7 @@
 package dsh
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,7 +21,16 @@ func TestRenderPatchContainsOneSecretFreeGatewayProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(patch)
-	for _, expected := range []string{"wrenyard:\n", "apiKeyEnv: WRENYARD_GATEWAY_TOKEN\n", "id: codebuddy/hy4-preview\n", "name: \"HY4 Preview\"\n"} {
+	for _, expected := range []string{
+		"wrenyard:\n",
+		"apiKeyEnv: WRENYARD_GATEWAY_TOKEN\n",
+		"id: codebuddy/hy4-preview\n",
+		"name: \"HY4 Preview\"\n",
+		"- id: sandbox-policy\n  config:\n    mode: danger-full-access\n",
+		"- id: approval\n  config:\n    policy: never\n",
+		"- id: permission\n  disabled: true\n",
+		"- id: ui-permission\n  disabled: true\n",
+	} {
 		if !strings.Contains(raw, expected) {
 			t.Fatalf("patch missing %q:\n%s", expected, raw)
 		}
@@ -29,6 +39,20 @@ func TestRenderPatchContainsOneSecretFreeGatewayProvider(t *testing.T) {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("patch leaked %q", forbidden)
 		}
+	}
+}
+
+func TestRenderPatchMountsYoloSessionNormalizer(t *testing.T) {
+	pluginPath := "/tmp/dsh home/forge-dsh-yolo.mjs"
+	patch, err := RenderPatch(PatchInput{
+		Providers:      []Provider{testGatewayProvider()},
+		YoloPluginPath: pluginPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(patch), "- insert:\n    id: forge-dsh-yolo\n    name: "+fmt.Sprintf("%q", pluginPath)+"\n") {
+		t.Fatalf("patch does not mount the YOLO normalizer at the exact path:\n%s", patch)
 	}
 }
 

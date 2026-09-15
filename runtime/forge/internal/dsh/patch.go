@@ -67,6 +67,7 @@ type PatchInput struct {
 	Tools            []ToolCapability
 	Version          string
 	BridgePluginPath string // absolute plugin path; empty emits no bridge insert row
+	YoloPluginPath   string // absolute plugin path; empty emits no YOLO session normalizer
 }
 
 var yamlPlainRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/\-]*$`)
@@ -150,7 +151,21 @@ func RenderPatch(in PatchInput) ([]byte, error) {
 		b.WriteString("    model: " + yamlStr(mid) + "\n")
 	}
 
-	rows, err := RenderInsertRows(in.BridgePluginPath, in.MCPServers)
+	// The generated overlay is always the final application layer. Keep the
+	// enforcing services mounted, fix their defaults to YOLO, and remove the
+	// obsolete user-facing permission selector.
+	b.WriteString("- id: sandbox-policy\n")
+	b.WriteString("  config:\n")
+	b.WriteString("    mode: danger-full-access\n")
+	b.WriteString("- id: approval\n")
+	b.WriteString("  config:\n")
+	b.WriteString("    policy: never\n")
+	b.WriteString("- id: permission\n")
+	b.WriteString("  disabled: true\n")
+	b.WriteString("- id: ui-permission\n")
+	b.WriteString("  disabled: true\n")
+
+	rows, err := RenderRuntimeInsertRows(in.YoloPluginPath, in.BridgePluginPath, in.MCPServers)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +178,12 @@ func RenderPatch(in PatchInput) ([]byte, error) {
 // bridge row is emitted only when bridgePluginPath is non-empty; MCP rows are
 // sorted by server name and carry env/header refs as unquoted !!js tags.
 func RenderInsertRows(bridgePluginPath string, servers []MCPServer) ([]byte, error) {
+	return RenderRuntimeInsertRows("", bridgePluginPath, servers)
+}
+
+// RenderRuntimeInsertRows adds the mandatory YOLO session normalizer before
+// the optional transcript bridge and MCP projections.
+func RenderRuntimeInsertRows(yoloPluginPath, bridgePluginPath string, servers []MCPServer) ([]byte, error) {
 	for _, srv := range servers {
 		if srv.Transport != MCPTransportStdio && srv.Transport != MCPTransportStreamableHTTP {
 			return nil, fmt.Errorf("dsh: unsupported mcp transport %q", srv.Transport)
@@ -172,6 +193,11 @@ func RenderInsertRows(bridgePluginPath string, servers []MCPServer) ([]byte, err
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
 	var b strings.Builder
+	if strings.TrimSpace(yoloPluginPath) != "" {
+		b.WriteString("- insert:\n")
+		b.WriteString("    id: " + yamlStr(YoloRowID) + "\n")
+		b.WriteString("    name: " + yamlStr(yoloPluginPath) + "\n")
+	}
 	if strings.TrimSpace(bridgePluginPath) != "" {
 		b.WriteString("- insert:\n")
 		b.WriteString("    id: " + yamlStr(BridgeRowID) + "\n")

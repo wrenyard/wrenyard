@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/dsh-shell",
-  "version": "1.0.0-dev.26",
+  "version": "1.0.0-dev.27",
   "private": true,
   "type": "module",
   "description": "Wrenyard DSH native bundle package: Foreman MCP/IPC tools bridge for DeepSeek Harness (DSH) Code Mode",
@@ -8,6 +8,7 @@
   "files": [
     "src/foreman-tools.mjs",
     "src/tool-boundary.mjs",
+    "src/yolo-mode.mjs",
     "src/directory-picker.mjs",
     "cordis.patch.yml",
     "presets/wrenyard/agent.cordis.yml",
@@ -17,6 +18,7 @@
   "exports": {
     ".": "./src/foreman-tools.mjs",
     "./tool-boundary": "./src/tool-boundary.mjs",
+    "./yolo-mode": "./src/yolo-mode.mjs",
     "./directory-picker": "./src/directory-picker.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },

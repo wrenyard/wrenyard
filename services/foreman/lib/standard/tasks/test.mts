@@ -183,7 +183,9 @@ const definition = {
     description:
       'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via capability packs.',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
-    permission: 'yolo',
+    // A declared empty target set means this mutation-capable task requires a
+    // conservative repo-wide coordination lock.
+    writeTargets: () => [],
     capabilities: testCapabilityConfig,
     instructions: [shellUsage],
     input: TestInputSchema,

@@ -5,7 +5,6 @@ import { discoverProjects } from '../core/project/loader.mts'
 import { listAllManagedWorktreePaths } from '../core/project/manager.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import type {
-  PermissionMode,
   RegisteredTask,
   ResolvedTarget,
   TaskConfig,
@@ -114,7 +113,6 @@ export interface ListedDefinition {
     pre?: Array<{ id: string; description?: string }>
     post?: Array<{ id: string; description?: string }>
   }
-  permission?: PermissionMode
   timeoutMs?: number
   effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
@@ -136,7 +134,6 @@ export interface ListedDefinition {
 
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'out', 'build', 'coverage', '.nyc_output'])
 const EXCLUDED_FILE_PREFIXES = ['.foreman-load-']
-const VALID_PERMISSIONS = new Set(['readonly', 'edit', 'yolo'])
 const VALID_SCHEDULING = new Set(['active', 'legacy'])
 
 function extractGateMetadata(config: import('../types.mts').TaskConfig): ListedDefinition['gates'] {
@@ -181,6 +178,25 @@ function validateTaskRuntimePin(config: TaskConfig, sourcePath: string): void {
       `${sourcePath} task config profile is no longer supported in definitions; exact runtime recovery comes from persisted run/execution records, never a definition profile`,
     )
   }
+}
+
+/**
+ * Runtime compatibility for pre-YOLO source definitions. Permission is no
+ * longer task-authoring state and is never projected or sent to execution.
+ * Recognized legacy write modes are used once only to retain their conservative
+ * repo-wide coordination marker when no explicit writeTargets declaration was
+ * authored; every legacy value is then removed from the registered config.
+ */
+function normalizeLegacyTaskPermission(config: TaskConfig): TaskConfig {
+  const raw = config as TaskConfig & { permission?: unknown }
+  const { permission, ...current } = raw
+  if (
+    current.writeTargets === undefined &&
+    (permission === 'edit' || permission === 'yolo')
+  ) {
+    return { ...current, writeTargets: () => [] } as TaskConfig
+  }
+  return current as TaskConfig
 }
 
 /**
@@ -559,17 +575,9 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`Invalid timeoutMs in ${absolutePath}. ${message}.`)
   }
-  if (definition.config.permission === undefined) {
-    throw new Error(`Missing required permission in ${absolutePath}. Must be one of: readonly, edit, yolo`)
-  }
-  if (!VALID_PERMISSIONS.has(definition.config.permission)) {
-    throw new Error(`Invalid permission '${definition.config.permission}' in ${absolutePath}. Must be one of: readonly, edit, yolo`)
-  }
+  definition.config = normalizeLegacyTaskPermission(definition.config)
   if (definition.config.scheduling !== undefined && !VALID_SCHEDULING.has(definition.config.scheduling)) {
     throw new Error(`Invalid scheduling '${String(definition.config.scheduling)}' in ${absolutePath}. Must be one of: active, legacy`)
-  }
-  if (definition.config.writeTargets !== undefined && definition.config.permission !== 'edit') {
-    throw new Error(`writeTargets in ${absolutePath} requires permission 'edit'`)
   }
   validateTaskRuntimePin(definition.config, absolutePath)
   validateTaskDispatch(definition.config, absolutePath)
@@ -893,7 +901,6 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
     structured: true,
     ...(normalizedInput ? { input_example: generateInputExample(normalizedInput as any) } : {}),
     ...(extractGateMetadata(config) ? { gates: extractGateMetadata(config) } : {}),
-    permission: config.permission,
     ...timeoutMetadata(config),
     ...capabilitiesMetadata(config),
     ...(config.scheduling

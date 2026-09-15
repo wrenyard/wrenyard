@@ -107,6 +107,7 @@ interface RegistryEntry {
   taskId?: string
   cwd: string
   permission: AgentRuntimePermission
+  repoWriteLock: boolean
   writePaths?: readonly string[]
   /** Private admission-only binding retained in memory while queued. */
   codeBuddyExecution?: CodeBuddyExecutionBinding
@@ -184,15 +185,16 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     return new ExecutionEventStore(this.db)
   }
 
-  async startExecution(opts: StartExecutionOpts): Promise<ExecutionHandle> {
+  async startExecution(rawOpts: StartExecutionOpts): Promise<ExecutionHandle> {
     if (!this.acceptingNew) throw new Error('AgentExecutionSupervisor is not accepting new executions')
+    const opts = normalizeStartExecutionOpts(rawOpts)
     assertStartExecutionOpts(opts)
 
     const executionId = generateExecutionId()
     const createdAt = nowIso()
     const canRunNow = this.runningCount() < MAX_CONCURRENT_EXECUTIONS
     let hasRepoLock = false
-    const requiresLock = requiresRepoWriteLock(opts.permission)
+    const requiresLock = opts.repoWriteLock === true
     let entry: RegistryEntry | undefined
 
     const initialEventType = canRunNow ? 'dispatch' : 'queue-waiting'
@@ -275,8 +277,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           if (!attached) attachFailed = true
         }
 
-        if (requiresRepoWriteLock(opts.permission)) {
-          const lock = this.repoWriteLocks.tryAcquire(opts.cwd, executionId, opts.permission, opts.writePaths)
+        if (requiresLock) {
+          const lock = this.repoWriteLocks.tryAcquire(opts.cwd, executionId, repoWriteLockMode(opts.writePaths), opts.writePaths)
           hasRepoLock = lock.acquired
         }
 
@@ -556,6 +558,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       taskId: opts.taskId,
       cwd: opts.cwd,
       permission: opts.permission,
+      repoWriteLock: opts.repoWriteLock === true,
       writePaths: opts.writePaths ? [...opts.writePaths] : undefined,
       codeBuddyExecution: isCodeBuddyExecution(opts) && opts.codeBuddyExecution
         ? Object.freeze({ ...opts.codeBuddyExecution })
@@ -1343,13 +1346,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           if (!entry) continue
           if (entry.terminalGeneration > 0) continue
 
-          if (requiresRepoWriteLock(row.permission) && !entry.hasRepoLock) {
-            const lock = this.repoWriteLocks.tryAcquire(row.cwd, row.id, row.permission, entry.writePaths)
+          if (entry.repoWriteLock && !entry.hasRepoLock) {
+            const lock = this.repoWriteLocks.tryAcquire(row.cwd, row.id, repoWriteLockMode(entry.writePaths), entry.writePaths)
             if (!lock.acquired) continue
             entry.hasRepoLock = true
           }
 
-          const opts = optsFromRow(row)
+          const opts = optsFromRow(row, entry)
           entry.wasQueued = true
           await this.launchExecution(entry, opts, true)
           promoted = true
@@ -1890,9 +1893,6 @@ function assertStartExecutionOpts(opts: StartExecutionOpts): void {
   if (!opts.profile.trim()) throw new Error('startExecution profile is required')
   if (!opts.cwd.trim()) throw new Error('startExecution cwd is required')
   if (!opts.prompt.trim()) throw new Error('startExecution prompt is required')
-  if (!['readonly', 'edit', 'yolo'].includes(opts.permission)) {
-    throw new Error(`Invalid execution permission '${opts.permission}'`)
-  }
   if (opts.clientFamily !== undefined && !isClientFamily(opts.clientFamily)) {
     throw new Error(`Invalid client family '${opts.clientFamily}'`)
   }
@@ -1902,6 +1902,19 @@ function assertStartExecutionOpts(opts: StartExecutionOpts): void {
     throw new Error('CodeBuddy execution admission binding is unavailable')
   }
   assertValidTimeoutMs(opts.timeoutMs, 'startExecution timeoutMs')
+}
+
+function normalizeStartExecutionOpts(opts: StartExecutionOpts): StartExecutionOpts {
+  const legacyRequiresLock = requiresRepoWriteLock(opts.permission)
+  return {
+    ...opts,
+    permission: 'yolo',
+    repoWriteLock: opts.repoWriteLock ?? (opts.writePaths !== undefined || legacyRequiresLock),
+  }
+}
+
+function repoWriteLockMode(writePaths: readonly string[] | undefined): 'edit' | 'yolo' {
+  return writePaths && writePaths.length > 0 ? 'edit' : 'yolo'
 }
 
 function isCodeBuddyExecution(opts: StartExecutionOpts): boolean {
@@ -1928,11 +1941,13 @@ function validCodeBuddyExecutionBinding(
   return ['internal', 'ioa', 'cloudhosted', 'external', 'unknown'].includes(binding.expectedEnvironment)
 }
 
-function optsFromRow(row: ExecutionRecord): StartExecutionOpts {
+function optsFromRow(row: ExecutionRecord, entry: RegistryEntry): StartExecutionOpts {
   return {
     taskId: row.task_id ?? undefined,
     profile: row.profile,
-    permission: row.permission,
+    permission: 'yolo',
+    repoWriteLock: entry.repoWriteLock,
+    writePaths: entry.writePaths,
     cwd: row.cwd,
     prompt: row.prompt,
     resume: row.native_session_id ?? undefined,

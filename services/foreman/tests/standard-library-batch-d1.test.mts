@@ -97,13 +97,12 @@ const commitOutputSample = {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks explore — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto)', () => {
+  it('is an observational TaskDefinition with no permission field or runtime pin', () => {
     assert.equal(exploreTask.__type, 'task')
-    assert.equal(exploreTask.config.permission, 'readonly')
+    assert.equal(Object.hasOwn(exploreTask.config, 'permission'), false)
     assert.equal(Object.hasOwn(exploreTask.config, 'agentRuntime'), false)
     assert.equal(exploreTask.sourcePath, 'lib/standard/tasks/explore.mts')
-    // problem-driven builtin has no migrated external instructions
-    assert.deepEqual(exploreTask.config.instructions, [])
+    assert.match((exploreTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
   })
 
   it('input/output are Zod schemas', () => {
@@ -153,9 +152,9 @@ describe('standard/tasks explore — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks edit — definition shape & config', () => {
-  it('is a lean TaskDefinition with edit and shell guidance only, no runtime pin (defaults to auto)', () => {
+  it('is a lean mutation-scoped TaskDefinition with shell guidance and no permission field', () => {
     assert.equal(editTask.__type, 'task')
-    assert.equal(editTask.config.permission, 'edit')
+    assert.equal(Object.hasOwn(editTask.config, 'permission'), false)
     assert.equal(Object.hasOwn(editTask.config, 'agentRuntime'), false)
     assert.equal(editTask.sourcePath, 'lib/standard/tasks/edit.mts')
 
@@ -225,9 +224,10 @@ describe('standard/tasks edit — schema behavior ({changes: Change[]} -> FileEv
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks test — definition shape & config', () => {
-  it('is a TaskDefinition object literal with yolo and no runtime pin (defaults to auto), migrated shell usage', () => {
+  it('is a repo-wide mutation task with no permission field and migrated shell usage', () => {
     assert.equal(testTask.__type, 'task')
-    assert.equal(testTask.config.permission, 'yolo')
+    assert.equal(Object.hasOwn(testTask.config, 'permission'), false)
+    assert.deepEqual(testTask.config.writeTargets?.(), [])
     assert.equal(Object.hasOwn(testTask.config, 'agentRuntime'), false)
     assert.equal(testTask.sourcePath, 'lib/standard/tasks/test.mts')
 
@@ -298,9 +298,10 @@ describe('standard/tasks test — schema behavior ({ acceptance_criteria: Accept
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks commit — definition shape & config', () => {
-  it('is a TaskDefinition object literal with yolo and migrated commit instructions', () => {
+  it('is a repo-wide mutation task with no permission field and migrated commit instructions', () => {
     assert.equal(commitTask.__type, 'task')
-    assert.equal(commitTask.config.permission, 'yolo')
+    assert.equal(Object.hasOwn(commitTask.config, 'permission'), false)
+    assert.deepEqual(commitTask.config.writeTargets?.(), [])
     assert.equal(Object.hasOwn(commitTask.config, 'agentRuntime'), false)
     assert.equal(commitTask.sourcePath, 'lib/standard/tasks/commit.mts')
 

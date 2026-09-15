@@ -7,12 +7,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/bashgate"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
 )
 
-func TestOpenCodePerRunPermissionConfigIsObservedAndCleanedOnCompletion(t *testing.T) {
+func TestOpenCodeProductionYoloConfigIsObservedAndCleanedOnCompletion(t *testing.T) {
 	for _, success := range []bool{true, false} {
 		name := "failure"
 		if success {
@@ -36,18 +35,18 @@ func TestOpenCodePerRunPermissionConfigIsObservedAndCleanedOnCompletion(t *testi
 				if err := json.Unmarshal(base, &config); err != nil {
 					t.Fatalf("decode launched OpenCode config: %v", err)
 				}
-				if config.Permission["read"] != "allow" || config.Permission["edit"] != "allow" || config.Permission["task"] == "allow" || config.Permission["*"] != "deny" {
-					t.Fatalf("launched edit-mode permission config = %#v", config.Permission)
+				if config.Permission["read"] != "allow" || config.Permission["edit"] != "allow" || config.Permission["task"] != "allow" || config.Permission["write"] != "allow" || config.Permission["*"] != "deny" {
+					t.Fatalf("launched YOLO permission config = %#v", config.Permission)
 				}
 				if request.Plan.Env["XDG_CONFIG_HOME"] != observedHome || request.Plan.Env["OPENCODE_CONFIG_DIR"] != observedHome {
 					t.Fatalf("launched OpenCode config paths = %#v", request.Plan.Env)
 				}
 				bashPermission, ok := config.Permission["bash"].(map[string]interface{})
-				if !ok || len(bashPermission) != 1 || bashPermission["*"] != "deny" {
-					t.Fatalf("launched OpenCode bootstrap Bash permission = %#v", config.Permission["bash"])
+				if !ok || len(bashPermission) != 1 || bashPermission["*"] != "allow" {
+					t.Fatalf("launched OpenCode YOLO Bash permission = %#v", config.Permission["bash"])
 				}
-				if request.Plan.Env[bashgate.ModeEnv] != string(bashgate.ClientOpenCode) || request.Plan.Env[bashgate.OpenCodeBashPermissionEnv] == "" {
-					t.Fatalf("launched OpenCode BashGate env = %#v", request.Plan.Env)
+				if request.Plan.Permission != catalog.PermissionYolo {
+					t.Fatalf("launched OpenCode permission = %q", request.Plan.Permission)
 				}
 				if success {
 					return ChildResult{Status: "done", ExitCode: 0, Events: doneEvent("ok")}

@@ -77,7 +77,7 @@ func TestParseCommandRunArgsUnavailableExactProfile(t *testing.T) {
 	}
 }
 
-func TestParseCommandRunArgsPreservesPermission(t *testing.T) {
+func TestParseCommandRunArgsNormalizesLegacyPermissionToYolo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -86,8 +86,8 @@ func TestParseCommandRunArgsPreservesPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(req.Permission) != "edit" {
-		t.Fatalf("permission = %q, want edit", req.Permission)
+	if string(req.Permission) != "yolo" {
+		t.Fatalf("permission = %q, want yolo", req.Permission)
 	}
 }
 

@@ -188,9 +188,11 @@ func TestPrepare_OpenCodeDeterministic(t *testing.T) {
 	if plan.ProfileName != "oc" {
 		t.Fatalf("profile=%q want oc", plan.ProfileName)
 	}
-	// Restricted OpenCode must load its isolated BashGate plugin, so --pure is
-	// reserved for the yolo path that has no guard.
-	want := []string{"opencode", "run", "--foo", "-m", "sonnet", "--format", "json", "do it"}
+	if plan.Permission != catalog.PermissionYolo {
+		t.Fatalf("permission=%q want yolo", plan.Permission)
+	}
+	// Production preparation always selects OpenCode's established YOLO path.
+	want := []string{"opencode", "run", "--foo", "-m", "sonnet", "--format", "json", "--pure", "do it"}
 	if len(plan.Command) != len(want) {
 		t.Fatalf("command=%v want %v", plan.Command, want)
 	}

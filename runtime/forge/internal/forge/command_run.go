@@ -33,8 +33,8 @@ func commandRun(args []string) int {
 // parseCommandRunArgs converts raw CLI args into an execution.Request. It
 // preserves the exact public flag surface, default profile resolution,
 // format validation, removed -m/--mcp and -- separator errors, stdin detection
-// and prompt stitching. Permission is carried through as a catalog.PermissionMode
-// unvalidated (the execution boundary parses it).
+// and prompt stitching. The legacy permission flag remains parse-compatible,
+// but every value is discarded and the request is explicitly YOLO.
 func parseCommandRunArgs(args []string) (execution.Request, string, error) {
 	if hasRemovedMCPFlag(args) {
 		return execution.Request{}, "", fmt.Errorf("forge: -m/--mcp has been removed from direct runtime; use OpenCode plugins, Claude Code command-line dispatch, or direct client configuration instead")
@@ -103,7 +103,8 @@ func parseCommandRunArgs(args []string) (execution.Request, string, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return execution.Request{}, "", fmt.Errorf("forge: prompt is required via argv or stdin")
 	}
-	req.Permission = catalog.PermissionMode(strings.TrimSpace(perm))
+	_ = perm
+	req.Permission = catalog.PermissionYolo
 	req.Clean = true
 
 	return req, profileName, nil

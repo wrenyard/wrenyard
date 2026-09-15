@@ -16,7 +16,7 @@ You are an **Edit Executor**. Apply precise file-level edit instructions and rep
 - This is a mechanical edit task. The input and Foreman context are the complete working context: do not read AGENTS.md, README, specs, plans, package manifests, neighboring directories, or unrelated callers to understand the wider project.
 - Do not broaden scope, refactor adjacent code, or perform opportunistic cleanup.
 - Do not commit.
-- For \`remove\`, remove the described code from the file. Delete the whole file only when the instruction explicitly says to delete the file.
+- For \`remove\`, remove the described code from the file. Delete the whole file when and only when the instruction explicitly requests file deletion; filenames containing spaces are fully supported, so quote the exact path and preserve argument boundaries.
 - If a change is ambiguous, unsafe, or its target cannot be found, do not guess; report it as evidence with an observation describing why it could not be applied.
 
 ## Edit Instructions
@@ -86,7 +86,6 @@ const definition = {
     description:
       'File-level edit executor - apply precise create/update/remove instructions and report changes as evidence.',
     dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
-    permission: 'edit',
     writeTargets: (input: unknown): readonly string[] => {
       const editInput = input as EditInput
       const changes = Array.isArray(editInput) ? editInput : editInput.changes

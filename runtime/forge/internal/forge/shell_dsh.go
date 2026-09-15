@@ -172,6 +172,8 @@ func buildDSHPlan(args []string) (dshPlan, error) {
 
 	childEnv := dsh.LaunchEnv(gatewayProvider, credential, scrubInheritedFDSHEnv(os.Environ()))
 	childEnv = withEnv(childEnv, "DSH_HOME", home)
+	// Last-writer wins over inherited and legacy caller settings.
+	childEnv = withEnv(childEnv, "DSH_PERMISSION_MODE", "danger-full-access")
 	if !agent {
 		childEnv = withEnv(childEnv, dshModelPatchEnv, patchPath)
 	}
@@ -321,11 +323,19 @@ func dshAgentPatchPath(home string) (string, error) {
 // instead. It never writes a DSH Profile.
 func ensureDSHModelPatch(home string, projections []dsh.ProviderProjection) (string, error) {
 	patchPath := filepath.Join(home, dshModelPatchFilename)
+	assets := dsh.DefaultRuntimePatchAssets()
+	yoloPluginPath, err := filepath.Abs(filepath.Join(home, assets.YoloPlugin.Filename))
+	if err != nil {
+		return "", fmt.Errorf("fdsh: resolve yolo session plugin path: %w", err)
+	}
+	if err := writeFileAtomic(yoloPluginPath, assets.YoloPlugin.Source); err != nil {
+		return "", fmt.Errorf("fdsh: write yolo session plugin %s: %w", yoloPluginPath, err)
+	}
 	providers := make([]dsh.Provider, 0, len(projections))
 	for _, proj := range projections {
 		providers = append(providers, proj.Provider)
 	}
-	rendered, err := dsh.RenderPatch(dsh.PatchInput{Providers: providers})
+	rendered, err := dsh.RenderPatch(dsh.PatchInput{Providers: providers, YoloPluginPath: yoloPluginPath})
 	if err != nil {
 		return "", fmt.Errorf("fdsh: render model patch: %w", err)
 	}

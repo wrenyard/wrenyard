@@ -16,6 +16,7 @@ import {
   type Target,
   type TargetBase,
 } from '../../core/task/concepts.mts'
+import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are **Oracle**, a strategic technical advisor in the style of Oh My OpenAgent's Oracle agent.
@@ -130,8 +131,7 @@ const definition = {
     description:
       'Read-only strategic advisor for architecture decisions, self-review, hard debugging, and complex trade-offs. Returns findings, decisions, and any unresolved questions to escalate. Advises only; never executes or mutates.',
     dispatch: ULTRA_DISPATCH_REQUIREMENTS,
-    permission: 'readonly',
-    instructions: [],
+    instructions: [shellUsage],
     input: OracleInputSchema,
     output: OracleOutputSchema,
     prompt: withTaskPromptTemplates((input: unknown): string => {

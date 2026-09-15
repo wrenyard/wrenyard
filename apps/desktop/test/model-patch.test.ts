@@ -50,7 +50,12 @@ async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 
 test('renderModelPatch matches the public fdsh overlay contract', () => {
   const raw = renderModelPatch(connection);
-  assert.ok(raw.startsWith('# wrenyard dsh patch (generated; secret-free)\n- id: llm-pi-ai\n'));
+  assert.ok(raw.startsWith('# wrenyard dsh patch (generated; secret-free)\n- id: sandbox-policy\n'));
+  assert.match(raw, /- id: sandbox-policy\n  config:\n    mode: danger-full-access\n/);
+  assert.match(raw, /- id: approval\n  config:\n    policy: never\n/);
+  assert.match(raw, /- id: permission\n  disabled: true\n/);
+  assert.match(raw, /- id: ui-permission\n  disabled: true\n/);
+  assert.match(raw, /- id: llm-pi-ai\n/);
   assert.match(raw, new RegExp(`^      ${WRENYARD_DSH_PROVIDER_ID}:$`, 'm'));
   assert.ok(raw.includes('        api: openai-completions\n'));
   assert.ok(raw.includes(`        apiKeyEnv: ${WRENYARD_GATEWAY_TOKEN_ENV}\n`));

@@ -1,5 +1,5 @@
 import type { ZodType } from 'zod'
-import type { AgentResult, PermissionMode } from '../../types.mts'
+import type { AgentResult } from '../../types.mts'
 
 /**
  * Schema accepted for task input and output definitions.
@@ -71,10 +71,11 @@ export interface TaskConfigBase {
     pre?: TaskGate[]
     post?: TaskGate[]
   }
-  permission?: PermissionMode
-  /** Deterministic exact file targets used to scope an `edit` permission lock.
-   *  Omit for repo-wide write protection. The execution kernel resolves and
-   *  bounds every returned path inside the active checkout/worktree. */
+  /** Marks a task as mutation-capable and, when non-empty, provides
+   *  deterministic exact file targets for scoped write-lock admission. Return
+   *  an empty list for repo-wide write protection; omit this field entirely
+   *  for observational tasks. The execution kernel resolves and bounds every
+   *  returned path inside the active checkout/worktree. */
   writeTargets?: (input: unknown) => readonly string[]
   /** Total wall-clock milliseconds budgeted for this task's model execution:
    *  one shared deadline covering the initial native-agent execution and every

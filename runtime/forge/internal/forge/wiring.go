@@ -379,6 +379,7 @@ func prepareGatewayClientRuntime(def execution.ProfileDefinition, resolved profi
 		prep.Files = []driver.PreparedFile{
 			{RelativePath: assets.PatchPath, Data: patch, Mode: 0o600},
 			{RelativePath: assets.Plugin.Filename, Data: []byte(assets.Plugin.Source), Mode: 0o600},
+			{RelativePath: assets.YoloPlugin.Filename, Data: []byte(assets.YoloPlugin.Source), Mode: 0o600},
 		}
 		return prep, nil
 	}

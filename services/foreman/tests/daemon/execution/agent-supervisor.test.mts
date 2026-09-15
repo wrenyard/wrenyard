@@ -144,6 +144,42 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     assert.equal((await first.wait()).status, 'done')
   })
 
+  it('does not serialize observational executions merely because their runtime is YOLO', async () => {
+    const cwd = makeTempDir('foreman-agent-supervisor-yolo-observational-')
+    const firstStartedPath = join(cwd, 'first-started')
+    const releasePath = join(cwd, 'release-first')
+    const promptLogPath = join(cwd, 'prompt-log')
+    installBlockingFakeForge(cwd, firstStartedPath, releasePath, promptLogPath)
+
+    const supervisor = makeSupervisor()
+    const first = await supervisor.startExecution({
+      profile: 'test',
+      permission: 'yolo',
+      repoWriteLock: false,
+      cwd,
+      prompt: 'first writer',
+    })
+    await waitForFile(firstStartedPath)
+
+    const second = await supervisor.startExecution({
+      profile: 'test',
+      permission: 'readonly',
+      repoWriteLock: false,
+      cwd,
+      prompt: 'second writer',
+    })
+
+    assert.equal((await second.wait()).status, 'done')
+    assert.deepEqual(readFileSync(promptLogPath, 'utf-8').trim().split('\n'), ['first writer', 'second writer'])
+    const permissions = db.prepare<unknown[], { permission: string }>(
+      'SELECT permission FROM executions ORDER BY created_at, id',
+    ).all().map((row) => row.permission)
+    assert.deepEqual(permissions, ['yolo', 'yolo'], 'incoming legacy modes must persist only as YOLO')
+
+    writeFileSync(releasePath, 'release', 'utf-8')
+    assert.equal((await first.wait()).status, 'done')
+  })
+
   it('treats Forge Agent Stream v1 envelope events as the terminal result', async () => {
     const cwd = makeTempDir('foreman-agent-supervisor-')
     installFakeForgeLines(cwd, [

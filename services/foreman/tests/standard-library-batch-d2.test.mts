@@ -118,9 +118,9 @@ const codeReviewFailedSample = {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks librarian — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto), migrated shell usage', () => {
+  it('is an observational TaskDefinition with no permission field and migrated shell usage', () => {
     assert.equal(librarianTask.__type, 'task')
-    assert.equal(librarianTask.config.permission, 'readonly')
+    assert.equal(Object.hasOwn(librarianTask.config, 'permission'), false)
     assert.equal(Object.hasOwn(librarianTask.config, 'agentRuntime'), false)
     assert.equal(librarianTask.sourcePath, 'lib/standard/tasks/librarian.mts')
 
@@ -168,12 +168,12 @@ describe('standard/tasks librarian — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks oracle — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto)', () => {
+  it('is an observational TaskDefinition with no permission field or runtime pin', () => {
     assert.equal(oracleTask.__type, 'task')
-    assert.equal(oracleTask.config.permission, 'readonly')
+    assert.equal(Object.hasOwn(oracleTask.config, 'permission'), false)
     assert.equal(Object.hasOwn(oracleTask.config, 'agentRuntime'), false)
     assert.equal(oracleTask.sourcePath, 'lib/standard/tasks/oracle.mts')
-    assert.deepEqual(oracleTask.config.instructions, [])
+    assert.match((oracleTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
   })
 
   it('input/output are Zod schemas', () => {
@@ -233,9 +233,9 @@ describe('standard/tasks oracle — schema behavior', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard/tasks code-review — definition shape & config', () => {
-  it('is a TaskDefinition object literal with readonly and no runtime pin (defaults to auto), migrated shell usage', () => {
+  it('is an observational TaskDefinition with no permission field and migrated shell usage', () => {
     assert.equal(codeReviewTask.__type, 'task')
-    assert.equal(codeReviewTask.config.permission, 'readonly')
+    assert.equal(Object.hasOwn(codeReviewTask.config, 'permission'), false)
     assert.equal(Object.hasOwn(codeReviewTask.config, 'agentRuntime'), false)
     assert.equal(codeReviewTask.sourcePath, 'lib/standard/tasks/code-review.mts')
 

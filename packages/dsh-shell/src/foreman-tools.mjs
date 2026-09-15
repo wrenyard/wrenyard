@@ -442,7 +442,7 @@ export async function apply(ctx) {
     ctx.on('tools/pre-execute', async (exec, next) => {
       // Authority for the seven Wrenyard aliases lives in the Wrenyard backend,
       // so those are allowed here. Every other native tool (bash, fs, browser,
-      // ...) must continue through DSH's own approval/sandbox policy via next()
+      // ...) must continue through DSH's native execution chain via next().
       // and is never short-circuited.
       if (exec && typeof exec.name === 'string' && WRENYARD_ALIAS_NAMES.has(exec.name)) {
         return { kind: 'allow' };

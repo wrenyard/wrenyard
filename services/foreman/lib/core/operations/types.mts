@@ -54,6 +54,8 @@ export interface StartAgentExecutionOptions {
   taskId?: string
   profile: string
   permission: AgentRuntimePermission
+  /** Repository coordination only; never changes the YOLO client plan. */
+  repoWriteLock?: boolean
   cwd: string
   prompt: string
   resume?: string
@@ -64,8 +66,8 @@ export interface StartAgentExecutionOptions {
   requestedAgentRuntime?: string
   /** Selected Forge capability ids passed to the agent at launch. */
   capabilities?: readonly string[]
-  /** Canonical exact file paths for file-scoped edit admission. Undefined or
-   *  empty retains conservative repo-wide write locking. */
+  /** Canonical exact file paths for file-scoped write admission. Empty retains
+   *  conservative repo-wide locking when repoWriteLock is true. */
   writePaths?: readonly string[]
   /** Per-attempt dispatch snapshot produced by the daemon resolver. Persisted
    *  by the supervisor keyed by execution_id/task_id. */

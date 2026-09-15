@@ -17,6 +17,7 @@ import {
   type TargetBase,
 } from '../../core/task/concepts.mts'
 import type { TaskDefinition } from '../../core/task/types.mts'
+import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are `,
@@ -165,8 +166,7 @@ const definition: TaskDefinition = {
     description:
       'Read-only investigation of code, Git history, notes, logs, or other declared targets. Answer concrete questions with evidence; diagnose causes without editing or requiring a staged workflow.',
     dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
-    permission: 'readonly',
-    instructions: [],
+    instructions: [shellUsage],
     input: ExploreInputSchema,
     output: ExploreOutputSchema,
     prompt: withTaskPromptTemplates((input: unknown): string => {
