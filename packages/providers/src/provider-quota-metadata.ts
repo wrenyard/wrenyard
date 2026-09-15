@@ -164,6 +164,8 @@ const explicitBindings: ProviderQuotaBinding[] = [
   binding('cursor', 'claude-fable-5', [CURSOR_OTHER_POOL]),
   binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),
   binding('kimi-coding', 'k3', [KIMI_5H_POOL, KIMI_7D_POOL]),
+  // K2.8 Preview draws on the same Kimi Coding subscription as K3.
+  binding('kimi-coding', 'kimi-k2.8', [KIMI_5H_POOL, KIMI_7D_POOL]),
   // HY models draw jointly on the HY family allowance and the account monthly allowance.
   // No raw window evidence has been reviewed: both pools stay empty/unknown.
   binding('codebuddy', 'hy3', [quotaPool('codebuddy/hy-family', []), quotaPool('codebuddy/monthly', [])]),
