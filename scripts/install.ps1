@@ -323,6 +323,26 @@ function Get-Sha256 {
     }
 }
 
+function Expand-NativeZip {
+    param([string]$Archive, [string]$Destination)
+    $systemRoot = [System.Environment]::GetEnvironmentVariable('SystemRoot')
+    if (-not $systemRoot) { Die 'SystemRoot is unavailable; cannot locate Windows tar.exe' }
+    $tarPath = Join-Path $systemRoot 'System32\tar.exe'
+    if (-not [System.IO.File]::Exists($tarPath)) {
+        Die "Windows system tar.exe was not found at $tarPath"
+    }
+    [System.IO.Directory]::CreateDirectory($Destination) | Out-Null
+    try {
+        & $tarPath -x --no-same-owner --no-same-permissions -f $Archive -C $Destination
+    } catch {
+        Die "Windows system tar.exe could not extract $Archive"
+    }
+    $tarExitCode = $LASTEXITCODE
+    if ($tarExitCode -ne 0) {
+        Die "Windows system tar.exe failed to extract $Archive (exit $tarExitCode)"
+    }
+}
+
 # --- Download + checksum verification --------------------------------------
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wrenyard-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -345,7 +365,7 @@ try {
     Write-Log "checksum verified ($actual)"
 
     $extract = Join-Path $tmp 'extract'
-    Expand-Archive -Path $zipPath -DestinationPath $extract -Force
+    Expand-NativeZip -Archive $zipPath -Destination $extract
 
     $wrenyard = Find-Artifact -Root $extract -Name 'wrenyard'
     $manifest = Find-Artifact -Root $extract -Name 'release-manifest.json'
@@ -421,7 +441,7 @@ try {
         if ($desktopActual -ne $desktopExpected) {
             Die "checksum mismatch for $desktopUrl (expected $desktopExpected, got $desktopActual)"
         }
-        Expand-Archive -Path $desktopZip -DestinationPath $desktopExtract -Force
+        Expand-NativeZip -Archive $desktopZip -Destination $desktopExtract
         $desktopExecutable = Get-ChildItem -Path $desktopExtract -Recurse -File -Filter 'wrenyard-desktop.exe' |
             Select-Object -First 1
         if (-not $desktopExecutable -or $desktopExecutable.Length -le 0) {

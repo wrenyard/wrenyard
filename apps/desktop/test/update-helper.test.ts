@@ -84,7 +84,10 @@ test('helper restores the previous Desktop when suite update fails', async () =>
     assert.equal(ok, false);
     assert.equal(existsSync(config.destinationDesktop), true);
     assert.equal(readFileSync(join(config.destinationDesktop, 'version.txt'), 'utf8'), 'old');
-    assert.equal(JSON.parse(readFileSync(config.resultPath, 'utf8')).status, 'failed');
+    const result = JSON.parse(readFileSync(config.resultPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.version, config.version);
+    assert.equal(result.message, 'Daemon 套件升级失败（退出码 1）；已恢复原 Desktop');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

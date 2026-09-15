@@ -27,7 +27,7 @@ import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
-import { DesktopUpdateController, wrenyardIsBusy } from './update-controller.js';
+import { activeTaskCountFromDaemonStatus, DesktopUpdateController } from './update-controller.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import {
@@ -635,6 +635,11 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
+  const readUpdateActiveTaskCount = async (): Promise<number | null> => {
+    const conversationCount = conversationController?.snapshot().sessions.filter((item) => item.running).length ?? 0;
+    const raw = await requestForeman('daemon.status', {});
+    return activeTaskCountFromDaemonStatus(raw, conversationCount);
+  };
   const mapRuntimeAliasError = (error: unknown): never => {
     if (error instanceof WrenyardRpcError) {
       const code = (error.data as { code?: string } | undefined)?.code;
@@ -742,10 +747,7 @@ async function bootstrap(): Promise<void> {
     desktopPath: installedDesktopPath(),
     userDataPath: app.getPath('userData'),
     onInstall: () => setImmediate(() => app.quit()),
-    isBusy: async () => {
-      const conversationBusy = conversationController?.snapshot().sessions.some((item) => item.running) === true;
-      return conversationBusy || await wrenyardIsBusy(wrenyardCli);
-    },
+    activeTaskCount: readUpdateActiveTaskCount,
     onChanged: () => shellWindow?.notifyUpdateChanged(),
   });
   petController = new DesktopPetController({

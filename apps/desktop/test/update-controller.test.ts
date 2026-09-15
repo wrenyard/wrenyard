@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  activeTaskCountFromDaemonStatus,
   DesktopUpdateController,
   compareSemver,
   parseAssetDigest,
   parseUpdateManifest,
   releaseTarget,
+  resolveWindowsSystemTarPath,
   selectUpdateCandidate,
   type PreparedUpdate,
   type UpdateCandidate,
@@ -362,6 +366,161 @@ test('atomic installation is available on the two maintained platforms only', ()
   assert.equal(new DesktopUpdateController({ ...base, platform: 'linux', arch: 'x64' }).snapshot().installSupported, false);
 });
 
+test('daemon status projects the real active task count and fails closed on other active work', () => {
+  const status = {
+    ok: true,
+    mode: 'accepting',
+    frozen: false,
+    recovery_required: false,
+    activeTaskCount: 2,
+    activeWorkflowCount: 1,
+    activeExecutionCount: 3,
+  };
+  assert.equal(activeTaskCountFromDaemonStatus(status, 2), 4);
+  assert.equal(activeTaskCountFromDaemonStatus({
+    ...status,
+    activeTaskCount: 0,
+    activeWorkflowCount: 0,
+    activeExecutionCount: 1,
+  }, 0), null);
+  assert.equal(activeTaskCountFromDaemonStatus({ ...status, activeExecutionCount: -1 }, 0), null);
+  assert.equal(activeTaskCountFromDaemonStatus({ ...status, mode: 'planned_restart' }, 0), null);
+});
+
+test('startup surfaces a precise sanitized helper failure and rejects unsafe result text', () => {
+  const root = fakeUpdateRoot();
+  const userDataPath = join(root, 'data');
+  mkdirSync(userDataPath, { recursive: true });
+  try {
+    writeFileSync(join(userDataPath, 'update-result.json'), JSON.stringify({
+      status: 'failed',
+      version: '1.0.0-dev.26',
+      message: 'Daemon 套件升级失败（退出码 7）；已恢复原 Desktop',
+    }));
+    const precise = new DesktopUpdateController(baseOptions({ userDataPath })).snapshot();
+    assert.equal(precise.state, 'install-failed');
+    assert.equal(precise.message, 'Daemon 套件升级失败（退出码 7）；已恢复原 Desktop');
+
+    writeFileSync(join(userDataPath, 'update-result.json'), JSON.stringify({
+      status: 'failed',
+      version: '1.0.0-dev.26',
+      message: 'token=secret C:\\Users\\private',
+    }));
+    const sanitized = new DesktopUpdateController(baseOptions({ userDataPath })).snapshot();
+    assert.equal(sanitized.message, '更新未完成，已恢复到当前版本，你的工作环境未受影响。');
+    assert.equal(JSON.stringify(sanitized).includes('secret'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Windows Desktop extraction invokes SystemRoot System32 tar with safe libarchive flags and propagates failure', async () => {
+  const root = fakeUpdateRoot();
+  const archiveBytes = Buffer.from('not a zip');
+  const digest = createHash('sha256').update(archiveBytes).digest('hex');
+  const document = manifestDocument('1.0.0-dev.26') as { assets: Array<Record<string, unknown>> };
+  const desktopAsset = document.assets.find((entry) => entry.name === 'wrenyard-desktop-1.0.0-dev.26-win32-x64.zip')!;
+  desktopAsset.sha256 = digest;
+  const invocations: Array<{ command: string; args: string[] }> = [];
+  try {
+    const controller = new DesktopUpdateController(baseOptions({
+      userDataPath: join(root, 'data'),
+      platform: 'win32',
+      arch: 'x64',
+      cliPath: join(root, 'wrenyard.exe'),
+      helperPath: join(root, 'update-helper.cjs'),
+      helperRuntimePath: join(root, 'node.exe'),
+      windowsTarPath: resolveWindowsSystemTarPath('D:\\Windows'),
+      desktopPath: join(root, 'Programs', 'Wrenyard Desktop'),
+      fetcher: async (input: string | URL | Request) => String(input).endsWith('.json')
+        ? metadataResponse(document)
+        : new Response(archiveBytes, { headers: { 'content-length': String(archiveBytes.length) } }),
+      commandRunner: async (command, args) => {
+        invocations.push({ command, args });
+        return { status: 9, stdout: '', stderr: 'token=secret malformed archive' };
+      },
+    }));
+    await controller.check(true);
+    const failed = await controller.requestInstall();
+    assert.equal(invocations.length, 1);
+    assert.equal(invocations[0]!.command, 'D:\\Windows\\System32\\tar.exe');
+    assert.deepEqual(invocations[0]!.args.slice(0, 4), ['-x', '--no-same-owner', '--no-same-permissions', '-f']);
+    assert.ok(invocations[0]!.args.includes('-C'));
+    assert.equal(failed.state, 'install-failed');
+    assert.match(failed.message ?? '', /tar\.exe.*exit 9/u);
+    assert.equal((failed.message ?? '').includes('secret'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const hostLibarchive = process.platform === 'win32'
+  ? resolveWindowsSystemTarPath(process.env.SystemRoot)
+  : '/usr/bin/tar';
+const hostTarVersion = existsSync(hostLibarchive)
+  ? spawnSync(hostLibarchive, ['--version'], { encoding: 'utf8' })
+  : null;
+const hasHostLibarchive = hostTarVersion?.status === 0
+  && /bsdtar|libarchive/iu.test(`${hostTarVersion.stdout}${hostTarVersion.stderr}`);
+
+test('native libarchive really extracts a ZIP into a >277-character unicode/space path', {
+  skip: hasHostLibarchive ? false : 'native libarchive tar is unavailable on this host',
+}, async () => {
+  const root = fakeUpdateRoot();
+  try {
+    const source = join(root, 'archive source', '桌面 包');
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, 'wrenyard-desktop.exe'), 'desktop executable');
+    writeFileSync(join(source, '说明 文档.txt'), 'unicode and spaces');
+    const archive = join(root, 'desktop fixture.zip');
+    const created = spawnSync(hostLibarchive, ['-a', '-c', '-f', archive, '-C', join(root, 'archive source'), '.'], {
+      encoding: 'utf8',
+    });
+    assert.equal(created.status, 0, created.stderr);
+    const archiveBytes = readFileSync(archive);
+    const digest = createHash('sha256').update(archiveBytes).digest('hex');
+    const document = manifestDocument('1.0.0-dev.26') as { assets: Array<Record<string, unknown>> };
+    const desktopAsset = document.assets.find((entry) => entry.name === 'wrenyard-desktop-1.0.0-dev.26-win32-x64.zip')!;
+    desktopAsset.sha256 = digest;
+    const longParent = join(root,
+      'long path segment 00000000000000000000000000000000000000000000000000',
+      'long path segment 11111111111111111111111111111111111111111111111111',
+      'long path segment 22222222222222222222222222222222222222222222222222',
+      'long path segment 33333333333333333333333333333333333333333333333333');
+    const userDataPath = join(longParent, '用户 数据');
+    assert.ok(join(userDataPath, '.wrenyard-update-fixture', 'extract').length > 277);
+    let extractionDestination = '';
+    const controller = new DesktopUpdateController(baseOptions({
+      userDataPath,
+      platform: 'win32',
+      arch: 'x64',
+      cliPath: join(root, 'wrenyard.exe'),
+      helperPath: join(root, 'update-helper.cjs'),
+      helperRuntimePath: join(root, 'node.exe'),
+      windowsTarPath: hostLibarchive,
+      desktopPath: join(longParent, 'Programs', 'Wrenyard Desktop'),
+      activeTaskCount: async () => 1,
+      fetcher: async (input: string | URL | Request) => String(input).endsWith('.json')
+        ? metadataResponse(document)
+        : new Response(archiveBytes, { headers: { 'content-length': String(archiveBytes.length) } }),
+      commandRunner: async (command, args) => {
+        extractionDestination = args[args.indexOf('-C') + 1]!;
+        const result = spawnSync(command, args, { encoding: 'utf8' });
+        return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+      },
+      scheduler: isolatedScheduler(),
+    }));
+    await controller.check(true);
+    const waiting = await controller.requestInstall();
+    assert.equal(waiting.state, 'waiting');
+    assert.equal(waiting.activeTaskCount, 1);
+    assert.ok(extractionDestination.length > 277, extractionDestination);
+    assert.equal(readFileSync(join(extractionDestination, '桌面 包', '说明 文档.txt'), 'utf8'), 'unicode and spaces');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('startup check is scheduled at 5s and rechecks every hour via the injected scheduler', async () => {
   type ScheduledEntry =
     | { kind: 'timeout'; handle: number; callback: () => void; delay: number }
@@ -443,7 +602,7 @@ function fakeUpdateRoot(): string {
 }
 
 test('explicit request prepares once while busy, waits without launching, then installs when idle', async () => {
-  let busy = true;
+  let activeTaskCount = 3;
   let preparedCount = 0;
   let launched = 0;
   const root = fakeUpdateRoot();
@@ -454,7 +613,7 @@ test('explicit request prepares once while busy, waits without launching, then i
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
-    isBusy: async () => busy,
+    activeTaskCount: async () => activeTaskCount,
     prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => {
       preparedCount += 1;
       return { candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root] };
@@ -466,6 +625,8 @@ test('explicit request prepares once while busy, waits without launching, then i
 
   const waiting = await controller.requestInstall();
   assert.equal(waiting.state, 'waiting');
+  assert.equal(waiting.activeTaskCount, 3);
+  assert.equal(waiting.message, '正在等待 3 个活跃任务完成。');
   assert.equal(preparedCount, 1, 'prepared exactly once even while busy');
   assert.equal(launched, 0, 'must not launch while busy');
 
@@ -473,7 +634,7 @@ test('explicit request prepares once while busy, waits without launching, then i
   await controller.requestInstall();
   assert.equal(preparedCount, 1, 'preparation is never repeated');
 
-  busy = false;
+  activeTaskCount = 0;
   controller.wake();
   await new Promise((resolve) => setImmediate(resolve));
   const installed = controller.snapshot();

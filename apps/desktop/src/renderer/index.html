@@ -35,6 +35,10 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 11h6M9 15h6M9 7h3" /><rect x="4" y="4" width="13" height="16" rx="1.5" /><path d="M17.5 8.5 20 11l-2.5 3" /></svg>
         <span class="tooltip" role="tooltip">任务</span>
       </button>
+      <button class="activity-item activity-update" id="update-nav" type="button" hidden aria-label="软件更新" aria-describedby="update-popup-description">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg>
+        <span class="tooltip tooltip-top" role="tooltip">软件更新</span>
+      </button>
       <button class="activity-item activity-settings" id="settings-nav" type="button" aria-label="啾啾工坊设置" data-page="settings">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z" />
@@ -43,6 +47,13 @@
         <span class="tooltip tooltip-top" role="tooltip">啾啾工坊设置</span>
       </button>
     </nav>
+
+    <aside class="update-popup" id="update-popup" role="status" aria-live="polite" hidden>
+      <button class="update-popup-close" id="update-popup-close" type="button" aria-label="关闭更新状态">×</button>
+      <strong id="update-popup-title">软件更新</strong>
+      <progress id="update-popup-progress" max="100" value="0">0%</progress>
+      <p id="update-popup-description">正在准备更新。</p>
+    </aside>
 
     <main class="shell-content">
       <section class="conversation-page" id="workbench-page" aria-label="会话">

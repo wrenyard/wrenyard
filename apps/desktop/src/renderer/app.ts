@@ -56,6 +56,9 @@ const statsNav = requireElement<HTMLButtonElement>('stats-nav');
 const quotaNav = requireElement<HTMLButtonElement>('quota-nav');
 const clientsNav = requireElement<HTMLButtonElement>('clients-nav');
 const settingsNav = requireElement<HTMLButtonElement>('settings-nav');
+const updateNav = requireElement<HTMLButtonElement>('update-nav');
+const updatePopup = requireElement<HTMLElement>('update-popup');
+const updatePopupProgress = requireElement<HTMLProgressElement>('update-popup-progress');
 const workbenchPage = requireElement<HTMLElement>('workbench-page');
 const statsPage = requireElement<HTMLElement>('stats-page');
 const quotaPage = requireElement<HTMLElement>('quota-page');
@@ -216,6 +219,7 @@ let selectedPeriod: StatsPeriod = '24h';
 let providerOrderSaving = false;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
+let updatePopupOpen = false;
 let pendingClientPlan: ClientConfigurationPlanDto | null = null;
 let selectedClientTab: ClientSurfaceId | null = null;
 let currentClientSnapshot: ClientConfigurationSnapshotDto | null = null;
@@ -332,6 +336,7 @@ function formatUpdateCheckTime(checkedAt: number | undefined): string {
 }
 
 function renderUpdate(snapshot: UpdateSnapshot): void {
+  if (snapshot.state === 'install-failed' && currentUpdate?.state !== 'install-failed') updatePopupOpen = true;
   currentUpdate = snapshot;
   setText('update-current-version', `v${snapshot.currentVersion}`);
   setText('update-checked-at', formatUpdateCheckTime(snapshot.checkedAt));
@@ -420,10 +425,73 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
   updateActionButton.textContent = action;
   updateActionButton.className = primary ? 'primary-button' : 'secondary-button';
   updateActionButton.disabled = disabled;
+  renderUpdatePopup(snapshot);
+}
+
+function renderUpdatePopup(snapshot: UpdateSnapshot): void {
+  const updateAvailable = snapshot.state === 'available';
+  updateNav.hidden = !['available', 'preparing', 'waiting', 'installing', 'install-blocked', 'install-failed'].includes(snapshot.state);
+  updateNav.classList.toggle('is-update-available', updateAvailable);
+  updateNav.disabled = !snapshot.installSupported;
+  updateNav.setAttribute('aria-label', updateAvailable
+    ? `安装更新 v${snapshot.availableVersion ?? ''}`
+    : '软件更新');
+
+
+  const visibleState = snapshot.state === 'preparing'
+    || snapshot.state === 'waiting'
+    || snapshot.state === 'installing'
+    || snapshot.state === 'install-blocked'
+    || snapshot.state === 'install-failed';
+  updatePopup.hidden = !updatePopupOpen || !visibleState;
+  if (updatePopup.hidden) return;
+
+  const title = snapshot.state === 'install-failed'
+    ? '更新失败'
+    : snapshot.stage === 'extract'
+      ? '解压更新'
+      : snapshot.stage === 'waiting'
+        ? '等待任务'
+        : snapshot.stage === 'daemon-upgrade'
+          ? '升级 Daemon'
+          : '下载更新';
+  setText('update-popup-title', title);
+  setText('update-popup-description', snapshot.message ?? '正在准备更新。');
+  const progress = Math.max(0, Math.min(100, snapshot.progress ?? 0));
+  updatePopupProgress.value = progress;
+  updatePopupProgress.textContent = `${progress}%`;
+}
+
+async function runUpdateFromNav(): Promise<void> {
+  if (!currentUpdate || !currentUpdate.installSupported) return;
+  updatePopupOpen = true;
+  renderUpdate(currentUpdate);
+  if (updateActionBusy || !['available', 'install-blocked', 'install-failed'].includes(currentUpdate.state)) return;
+  updateActionBusy = true;
+  renderUpdate(currentUpdate);
+  let requestFailed = false;
+  try {
+    renderUpdate(await window.wrenyardShell.requestInstall());
+  } catch {
+    requestFailed = true;
+    updatePopup.hidden = false;
+    setText('update-popup-title', '更新失败');
+    setText('update-popup-description', '暂时无法启动更新，请重试。');
+    updatePopupProgress.value = 0;
+    updatePopupProgress.textContent = '0%';
+  } finally {
+    updateActionBusy = false;
+    if (!requestFailed && currentUpdate) renderUpdate(currentUpdate);
+    else updateNav.disabled = false;
+  }
 }
 
 async function runUpdateAction(): Promise<void> {
   if (!currentUpdate || updateActionBusy) return;
+  if (['available', 'install-blocked', 'install-failed'].includes(currentUpdate.state)) {
+    await runUpdateFromNav();
+    return;
+  }
   updateActionBusy = true;
   renderUpdate(currentUpdate);
   try {
@@ -431,10 +499,6 @@ async function runUpdateAction(): Promise<void> {
     // can be authorized prepares (staged even while busy) and auto-installs when idle.
     if (currentUpdate.state === 'waiting') {
       renderUpdate(await window.wrenyardShell.cancelPendingInstall());
-      return;
-    }
-    if (currentUpdate.state === 'available' || currentUpdate.state === 'install-blocked' || currentUpdate.state === 'install-failed') {
-      renderUpdate(await window.wrenyardShell.requestInstall());
       return;
     }
     renderUpdate(await window.wrenyardShell.checkUpdate());
@@ -2466,6 +2530,11 @@ clientPlanConfirm.addEventListener('click', () => {
   }).finally(() => { clientPlanCancel.disabled = false; });
 });
 updateActionButton.addEventListener('click', () => void runUpdateAction());
+updateNav.addEventListener('click', () => void runUpdateFromNav());
+requireElement('update-popup-close').addEventListener('click', () => {
+  updatePopupOpen = false;
+  updatePopup.hidden = true;
+});
 updateChannelSwitcher.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) return;

@@ -15,8 +15,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
+import { basename, dirname, join, win32 } from 'node:path';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { UpdateChannel, UpdateSnapshot } from './shell-contract.js';
 import type { UpdateHelperConfig } from './update-helper.js';
@@ -89,6 +89,7 @@ export interface PreparedUpdate {
 interface UpdateResultDocument {
   status?: unknown;
   version?: unknown;
+  message?: unknown;
 }
 
 export interface UpdateScheduler {
@@ -104,6 +105,7 @@ export interface DesktopUpdateControllerOptions {
   cliPath?: string;
   helperPath?: string;
   helperRuntimePath?: string;
+  windowsTarPath?: string;
   desktopPath?: string;
   userDataPath: string;
   repository?: string;
@@ -112,6 +114,7 @@ export interface DesktopUpdateControllerOptions {
   arch?: string;
   fetcher?: typeof fetch;
   commandRunner?: CommandRunner;
+  activeTaskCount?: () => Promise<number | null>;
   isBusy?: () => Promise<boolean>;
   onChanged?: (snapshot: UpdateSnapshot) => void;
   onInstall?: () => void;
@@ -388,6 +391,7 @@ export class DesktopUpdateController {
   private readonly cliPath?: string;
   private readonly helperPath?: string;
   private readonly helperRuntimePath?: string;
+  private readonly windowsTarPath: string;
   private readonly desktopPath: string;
   private readonly userDataPath: string;
   private readonly repository: string;
@@ -396,7 +400,7 @@ export class DesktopUpdateController {
   private readonly arch: string;
   private readonly fetcher: typeof fetch;
   private readonly commandRunner: CommandRunner;
-  private readonly isBusy: () => Promise<boolean>;
+  private readonly activeTaskCount: () => Promise<number | null>;
   private readonly onChanged: (snapshot: UpdateSnapshot) => void;
   private readonly now: () => number;
   private readonly homePath: string;
@@ -424,6 +428,7 @@ export class DesktopUpdateController {
     this.cliPath = options.cliPath;
     this.helperPath = options.helperPath;
     this.helperRuntimePath = options.helperRuntimePath;
+    this.windowsTarPath = options.windowsTarPath ?? resolveWindowsSystemTarPath(process.env.SystemRoot);
     this.userDataPath = options.userDataPath;
     this.repository = options.repository ?? DEFAULT_REPOSITORY;
     this.updateBaseUrl = (
@@ -433,7 +438,8 @@ export class DesktopUpdateController {
     this.arch = options.arch ?? process.arch;
     this.fetcher = options.fetcher ?? fetch;
     this.commandRunner = options.commandRunner ?? defaultCommandRunner;
-    this.isBusy = options.isBusy ?? (async () => false);
+    this.activeTaskCount = options.activeTaskCount
+      ?? (options.isBusy ? async () => await options.isBusy!() ? 1 : 0 : async () => 0);
     this.onChanged = options.onChanged ?? (() => undefined);
     this.now = options.now ?? Date.now;
     this.homePath = options.homePath ?? homedir();
@@ -635,27 +641,36 @@ export class DesktopUpdateController {
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'preparing',
+        stage: 'download',
+        progress: 10,
+        activeTaskCount: undefined,
         message: '正在下载并校验更新…',
       });
       try {
         this.prepared = await this.prepareCandidate(this.candidate);
-      } catch {
+      } catch (error) {
         this.installIntent = false;
         this.cleanupPrepared();
         this.setSnapshot({
           ...this.snapshotValue,
           state: 'install-failed',
-          message: '更新下载或校验未完成，当前版本未受影响。',
+          message: preparationFailureMessage(error),
         });
         return this.snapshot();
       }
     }
-    if (await this.isBusy()) {
+    const activeTaskCount = await this.readActiveTaskCount();
+    if (activeTaskCount === null || activeTaskCount > 0) {
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'waiting',
+        stage: 'waiting',
+        progress: 85,
+        ...(activeTaskCount === null ? { activeTaskCount: undefined } : { activeTaskCount }),
         availableVersion: this.prepared.candidate.version,
-        message: '更新已准备，将在你空闲后自动安装。',
+        message: activeTaskCount === null
+          ? '暂时无法确认活跃任务数，将在状态可确认后自动安装。'
+          : `正在等待 ${activeTaskCount} 个活跃任务完成。`,
       });
       this.scheduleIdleCheck();
       return this.snapshot();
@@ -670,21 +685,32 @@ export class DesktopUpdateController {
         this.setSnapshot({
           ...this.snapshotValue,
           state: 'installing',
+          stage: 'daemon-upgrade',
+          progress: 90,
+          activeTaskCount: 0,
           availableVersion: this.prepared.candidate.version,
-          message: '正在安装更新，完成后会自动重启。',
+          message: '正在替换 Desktop 并升级 Daemon，完成后会自动重启。',
         });
         this.clearPendingTimer();
         onInstall();
-      } else if (await this.isBusy()) {
+      } else {
+        const retryCount = await this.readActiveTaskCount();
+        if (retryCount === 0) {
+          this.installIntent = false;
+          return this.snapshot();
+        }
         this.setSnapshot({
           ...this.snapshotValue,
           state: 'waiting',
+          stage: 'waiting',
+          progress: 85,
+          ...(retryCount === null ? { activeTaskCount: undefined } : { activeTaskCount: retryCount }),
           availableVersion: this.prepared.candidate.version,
-          message: '更新已准备，将在你空闲后自动安装。',
+          message: retryCount === null
+            ? '暂时无法确认活跃任务数，将在状态可确认后自动安装。'
+            : `正在等待 ${retryCount} 个活跃任务完成。`,
         });
         this.scheduleIdleCheck();
-      } else {
-        this.installIntent = false;
       }
     } finally {
       this.installing = false;
@@ -731,11 +757,17 @@ export class DesktopUpdateController {
 
   async launchPreparedUpdate(): Promise<boolean> {
     if (!this.prepared || !this.helperPath || !this.helperRuntimePath || !this.cliPath) return false;
-    if (await this.isBusy()) {
+    const activeTaskCount = await this.readActiveTaskCount();
+    if (activeTaskCount === null || activeTaskCount > 0) {
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'install-blocked',
-        message: '当前仍有任务运行，请完成或停止后再重启安装。',
+        stage: 'waiting',
+        progress: 85,
+        ...(activeTaskCount === null ? { activeTaskCount: undefined } : { activeTaskCount }),
+        message: activeTaskCount === null
+          ? '无法确认活跃任务数，已安全暂停安装。'
+          : `正在等待 ${activeTaskCount} 个活跃任务完成。`,
       });
       return false;
     }
@@ -786,18 +818,43 @@ export class DesktopUpdateController {
         headers: { 'User-Agent': 'wrenyard-desktop-updater' },
       });
       if (!response.ok || !response.body) throw new Error('desktop download failed');
-      await pipeline(Readable.fromWeb(response.body as never), createWriteStream(archive, { mode: 0o600 }));
+      const expectedBytes = Number(response.headers.get('content-length'));
+      let downloadedBytes = 0;
+      let reportedProgress = 10;
+      const progress = new Transform({
+        transform: (chunk: Buffer, _encoding, callback) => {
+          downloadedBytes += chunk.length;
+          if (Number.isFinite(expectedBytes) && expectedBytes > 0) {
+            const next = Math.min(55, 10 + Math.floor((downloadedBytes / expectedBytes) * 45));
+            if (next > reportedProgress) {
+              reportedProgress = next;
+              this.setSnapshot({ ...this.snapshotValue, stage: 'download', progress: next });
+            }
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(Readable.fromWeb(response.body as never), progress, createWriteStream(archive, { mode: 0o600 }));
+      this.setSnapshot({ ...this.snapshotValue, stage: 'download', progress: 58, message: '正在校验更新包…' });
       if (await sha256(archive) !== candidate.desktopSha256) throw new Error('desktop checksum mismatch');
+      this.setSnapshot({ ...this.snapshotValue, stage: 'extract', progress: 62, message: '正在解压更新包…' });
       mkdirSync(extractRoot, { recursive: true });
       const extracted = this.platform === 'win32'
-        ? await this.commandRunner('powershell.exe', [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `Expand-Archive -LiteralPath ${powerShellLiteral(archive)} -DestinationPath ${powerShellLiteral(extractRoot)} -Force`,
+        ? await this.commandRunner(this.windowsTarPath, [
+          '-x',
+          '--no-same-owner',
+          '--no-same-permissions',
+          '-f', archive,
+          '-C', extractRoot,
         ], { windowsHide: true })
         : await this.commandRunner('/usr/bin/ditto', ['-x', '-k', archive, extractRoot]);
-      if (extracted.status !== 0) throw new Error('desktop extraction failed');
+      if (extracted.status !== 0) {
+        const detail = sanitizeNativeCommandDetail(extracted.stderr || extracted.stdout);
+        throw new Error(
+          `Windows system tar extraction failed (exit ${extracted.status ?? 'unknown'})${detail ? `: ${detail}` : ''}`,
+        );
+      }
+      this.setSnapshot({ ...this.snapshotValue, stage: 'extract', progress: 78, message: '正在验证解压内容…' });
       if (this.platform === 'win32') {
         const executables = findNamedFiles(extractRoot, WINDOWS_EXE_NAME);
         if (executables.length !== 1) throw new Error('desktop archive must contain one executable');
@@ -839,10 +896,11 @@ export class DesktopUpdateController {
           message: `已更新到 v${parsed.version}。`,
         };
       } else if (parsed.status === 'failed') {
+        const helperMessage = sanitizeHelperResultMessage(parsed.message);
         this.snapshotValue = {
           ...this.snapshotValue,
           state: 'install-failed',
-          message: '更新未完成，已恢复到当前版本，你的工作环境未受影响。',
+          message: helperMessage ?? '更新未完成，已恢复到当前版本，你的工作环境未受影响。',
         };
       }
     } catch {
@@ -858,23 +916,64 @@ export class DesktopUpdateController {
     this.prepared = undefined;
   }
 
+  private async readActiveTaskCount(): Promise<number | null> {
+    try {
+      const count = await this.activeTaskCount();
+      return count !== null && Number.isInteger(count) && count >= 0 ? count : null;
+    } catch {
+      return null;
+    }
+  }
+
   private setSnapshot(snapshot: UpdateSnapshot): void {
     this.snapshotValue = { ...snapshot };
     this.onChanged(this.snapshot());
   }
 }
 
-export async function wrenyardIsBusy(cliPath: string | undefined): Promise<boolean> {
-  if (!cliPath || !existsSync(cliPath)) return false;
-  const result = await defaultCommandRunner(cliPath, ['status', '--json']);
-  if (result.status !== 0) return true;
-  try {
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    for (const key of ['active_task_count', 'active_workflow_count', 'active_execution_count']) {
-      if (typeof payload[key] === 'number' && payload[key] > 0) return true;
-    }
-    return false;
-  } catch {
-    return true;
+export function resolveWindowsSystemTarPath(systemRoot: string | undefined): string {
+  const root = systemRoot && win32.isAbsolute(systemRoot) ? systemRoot : 'C:\\Windows';
+  return win32.join(root, 'System32', 'tar.exe');
+}
+
+export function activeTaskCountFromDaemonStatus(status: unknown, additionalCount = 0): number | null {
+  if (!Number.isSafeInteger(additionalCount) || additionalCount < 0
+    || !status || typeof status !== 'object' || Array.isArray(status)) return null;
+  const value = status as Record<string, unknown>;
+  const counts = [value.activeTaskCount, value.activeWorkflowCount, value.activeExecutionCount];
+  if (value.ok !== true || value.mode !== 'accepting' || value.frozen !== false
+    || value.recovery_required !== false
+    || counts.some((count) => !Number.isSafeInteger(count) || (count as number) < 0)) {
+    return null;
   }
+  const activeTaskCount = additionalCount + (value.activeTaskCount as number);
+  if (activeTaskCount > 0) return activeTaskCount;
+  return value.activeWorkflowCount === 0 && value.activeExecutionCount === 0 ? 0 : null;
+}
+
+function sanitizeNativeCommandDetail(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\b(?:authorization|password|secret|token)\s*[:=]\s*\S+/giu, '[redacted]')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+function preparationFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  const prefix = 'Windows system tar extraction failed';
+  if (message.startsWith(prefix)) {
+    const detail = sanitizeNativeCommandDetail(message.slice(prefix.length));
+    return `系统 tar.exe 解压更新包失败${detail}。当前版本未受影响。`;
+  }
+  return '更新下载或校验未完成，当前版本未受影响。';
+}
+
+function sanitizeHelperResultMessage(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 240) return undefined;
+  if (/[\u0000-\u001f\u007f<>]|https?:|[\\/]|\b(?:authorization|password|secret|token)\b/iu.test(value)) {
+    return undefined;
+  }
+  return value;
 }

@@ -76,10 +76,15 @@ function assertConfig(config: UpdateHelperConfig, homePath = homedir()): void {
   }
 }
 
-function writeResult(path: string, status: 'success' | 'failed', version: string): void {
+function writeResult(path: string, status: 'success' | 'failed', version: string, message?: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ status, version, completedAt: Date.now() })}\n`, {
+  writeFileSync(temporary, `${JSON.stringify({
+    status,
+    version,
+    completedAt: Date.now(),
+    ...(message ? { message } : {}),
+  })}\n`, {
     encoding: 'utf8',
     mode: 0o600,
   });
@@ -95,7 +100,9 @@ export async function applyPreparedUpdate(
     await dependencies.wait(200);
   }
   if (dependencies.processAlive(config.parentPid)) {
-    try { writeResult(config.resultPath, 'failed', config.version); } catch { /* parent remains active */ }
+    try {
+      writeResult(config.resultPath, 'failed', config.version, '等待 Desktop 退出超时');
+    } catch { /* parent remains active */ }
     for (const root of config.cleanupRoots) rmSync(root, { recursive: true, force: true });
     return false;
   }
@@ -104,20 +111,35 @@ export async function applyPreparedUpdate(
   const hadPrevious = existsSync(config.destinationDesktop);
   let replacementActive = false;
   let suiteUpdated = false;
+  let failureMessage = '准备 Desktop 更新失败';
   try {
+    failureMessage = '清理旧 Desktop 备份失败';
     rmSync(backupApp, { recursive: true, force: true });
-    if (hadPrevious) renameSync(config.destinationDesktop, backupApp);
+    if (hadPrevious) {
+      failureMessage = '备份当前 Desktop 失败';
+      renameSync(config.destinationDesktop, backupApp);
+    }
+    failureMessage = '启用新版 Desktop 失败';
     renameSync(config.stagedDesktop, config.destinationDesktop);
     replacementActive = true;
     if (config.platform === 'darwin') {
-      if (dependencies.run('/usr/bin/codesign', ['--verify', '--deep', '--strict', config.destinationDesktop]) !== 0) {
+      failureMessage = '新版 Desktop 签名验证失败';
+      const signatureStatus = dependencies.run('/usr/bin/codesign', ['--verify', '--deep', '--strict', config.destinationDesktop]);
+      if (signatureStatus !== 0) {
+        failureMessage = `新版 Desktop 签名验证失败（退出码 ${signatureStatus ?? 'unknown'}）`;
         throw new Error('installed desktop signature invalid');
       }
     } else {
       const executable = join(config.destinationDesktop, 'wrenyard-desktop.exe');
-      if (!existsSync(executable) || statSync(executable).size <= 0) throw new Error('installed desktop executable invalid');
+      if (!existsSync(executable) || statSync(executable).size <= 0) {
+        failureMessage = '新版 Desktop 可执行文件验证失败';
+        throw new Error('installed desktop executable invalid');
+      }
     }
-    if (dependencies.run(config.cliPath, ['update', '--version', config.version, '--suite-only', '--json']) !== 0) {
+    failureMessage = 'Daemon 套件升级失败';
+    const suiteStatus = dependencies.run(config.cliPath, ['update', '--version', config.version, '--suite-only', '--json']);
+    if (suiteStatus !== 0) {
+      failureMessage = `Daemon 套件升级失败（退出码 ${suiteStatus ?? 'unknown'}）`;
       throw new Error('suite update failed');
     }
     suiteUpdated = true;
@@ -125,10 +147,22 @@ export async function applyPreparedUpdate(
     try { writeResult(config.resultPath, 'success', config.version); } catch { /* next automatic check reconciles state */ }
     return true;
   } catch {
+    let recoveryMessage = '';
     if (!suiteUpdated) {
-      if (replacementActive) rmSync(config.destinationDesktop, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      if (hadPrevious && existsSync(backupApp)) renameSync(backupApp, config.destinationDesktop);
-      try { writeResult(config.resultPath, 'failed', config.version); } catch { /* relaunch still wins */ }
+      try {
+        if (replacementActive) rmSync(config.destinationDesktop, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        if (hadPrevious && existsSync(backupApp)) {
+          renameSync(backupApp, config.destinationDesktop);
+          recoveryMessage = '；已恢复原 Desktop';
+        } else if (replacementActive) {
+          recoveryMessage = '；已移除未完成的 Desktop';
+        }
+      } catch {
+        recoveryMessage = '；恢复原 Desktop 失败';
+      }
+      try {
+        writeResult(config.resultPath, 'failed', config.version, `${failureMessage}${recoveryMessage}`);
+      } catch { /* relaunch still wins */ }
     }
     return false;
   } finally {

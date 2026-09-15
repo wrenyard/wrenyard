@@ -83,6 +83,12 @@ echoed or embedded in the installed suite. Windows uses the matching
 `scripts/install.ps1 -Update` entry point and installs 啾啾工坊 under the
 current user's local Programs directory.
 
+On Windows, the old dev27 Desktop updater launches its own bundled installer.
+If that updater fails while unpacking the release, run the official one-click
+PowerShell installer above once to bootstrap dev28. The dev28 Desktop helper
+and later `wrenyard update` runs use the corrected Windows system `tar.exe`
+extraction path thereafter.
+
 Binaries come from the newest non-draft **prerelease** of `wrenyard/wrenyard`.
 The installer downloads the platform-qualified suite and Desktop ZIPs,
 verifies the SHA-256 digests GitHub records for those release assets, and
