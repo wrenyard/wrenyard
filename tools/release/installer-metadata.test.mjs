@@ -31,7 +31,9 @@ const NATIVE_METADATA_HOST =
   (process.platform === 'darwin' && process.arch === 'arm64') ||
   (process.platform === 'win32' && process.arch === 'x64');
 const SKIP_REASON = `native metadata parser tests support darwin-arm64 and win32-x64, not ${process.platform}-${process.arch}`;
-const CASE_TIMEOUT_MS = 10_000;
+// Native PowerShell cold startup on hosted Windows runners can exceed 10 seconds.
+const PROCESS_TIMEOUT_MS = 30_000;
+const CASE_TIMEOUT_MS = PROCESS_TIMEOUT_MS + 5_000;
 
 // Canonical fixture identity: one release version whose four assets are the two
 // canonical suite/Desktop artifacts for each supported host triplet.
@@ -229,7 +231,7 @@ function runPosixCase(testCase, tmp) {
     '--bin-dir', path.join(prefix, 'bin'),
   ], {
     encoding: 'utf8',
-    timeout: CASE_TIMEOUT_MS,
+    timeout: PROCESS_TIMEOUT_MS,
     env: {
       ...process.env,
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
@@ -296,7 +298,7 @@ function runWindowsCase(testCase, tmp) {
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
     '-Command', inner,
-  ], { encoding: 'utf8', timeout: CASE_TIMEOUT_MS, env: { ...process.env } });
+  ], { encoding: 'utf8', timeout: PROCESS_TIMEOUT_MS, env: { ...process.env } });
 
   return { res, requests: readRequests(logPath), prefix };
 }
@@ -333,6 +335,8 @@ for (const testCase of CASES) {
   }, (t) => {
     const tmp = makeTmpDir(t);
     const { res, requests } = runPosixCase(testCase, tmp);
+    assert.ifError(res.error);
+    assert.equal(res.signal, null, `installer terminated by ${res.signal}`);
     assertRequestsMatch(testCase, requests);
     if (!testCase.expectArchiveRequest) {
       assert.notEqual(res.status, 0, `rejected metadata must fail the install: ${requests.join(', ')}`);
@@ -345,6 +349,8 @@ for (const testCase of CASES) {
   }, (t) => {
     const tmp = makeTmpDir(t);
     const { res, requests } = runWindowsCase(testCase, tmp);
+    assert.ifError(res.error);
+    assert.equal(res.signal, null, `installer terminated by ${res.signal}`);
     assertRequestsMatch(testCase, requests);
     if (!testCase.expectArchiveRequest) {
       assert.notEqual(res.status, 0, `rejected metadata must fail the install: ${requests.join(', ')}`);
