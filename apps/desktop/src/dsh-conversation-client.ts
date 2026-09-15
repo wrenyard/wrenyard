@@ -569,6 +569,7 @@ export class DshConversationClient {
   async select(sessionId: string): Promise<ConversationSnapshot> {
     if (!this.workspaceSessionIds.has(sessionId)) throw new Error('会话不属于当前 workspace');
     this.selectedSessionId = sessionId;
+    this.history = { events: [], hasMore: false };
     this.models = { status: 'loading', groups: [] };
     this.notify();
     await this.loadHistory(sessionId);
@@ -710,6 +711,9 @@ export class DshConversationClient {
       if (!target) {
         const created = await this.rpc('session.create', { workspaceId: this.workspaceId });
         if (!isObject(created) || typeof created.sessionId !== 'string') throw new Error('DSH 未返回新会话 id');
+        // A host refresh started during creation may still contain the old index.
+        // Let it settle before adding the successfully created session locally.
+        if (this.refreshPromise) await this.refreshPromise.catch(() => undefined);
         target = {
           sessionId: created.sessionId,
           updatedAt: Date.now(),
@@ -819,13 +823,30 @@ export class DshConversationClient {
   }
 
   private async loadHistory(sessionId: string): Promise<void> {
+    const history = this.history;
+    const existing = new Set(history.events);
     const value = await this.rpc('session.history', { sessionId, maxMessages: 80 });
     if (!isObject(value) || !Array.isArray(value.events)) throw new Error('DSH 会话历史格式无效');
-    if (this.selectedSessionId !== sessionId) return;
-    this.history = {
-      events: value.events.filter((entry): entry is HistoryEntry => isObject(entry) && isObject(entry.event)),
-      hasMore: value.hasMore === true,
-    };
+    // A selection change or another completed load makes this response obsolete.
+    if (this.selectedSessionId !== sessionId || this.history !== history) return;
+    const page = value.events.filter((entry): entry is HistoryEntry => isObject(entry) && isObject(entry.event));
+    // Preserve frames received while fetching, even if the bounded buffer trimmed
+    // older entries. The returned page owns duplicate seqs and pagination metadata.
+    const live = history.events.filter((entry) => !existing.has(entry));
+    const seen = new Set<number>();
+    const events = [...page, ...live].filter((entry) => {
+      const seq = asNumber(entry.event.seq);
+      if (seq === undefined) return true;
+      if (seen.has(seq)) return false;
+      seen.add(seq);
+      return true;
+    });
+    events.sort((a, b) => {
+      const left = asNumber(a.event.seq);
+      const right = asNumber(b.event.seq);
+      return left !== undefined && right !== undefined ? left - right : 0;
+    });
+    this.history = { events, hasMore: value.hasMore === true };
   }
 
   /**
