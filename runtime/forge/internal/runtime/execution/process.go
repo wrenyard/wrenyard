@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 )
 
@@ -47,6 +48,12 @@ func runProcess(ctx context.Context, plan driver.CommandPlan, clientFamily strin
 		family = clientFamily
 	}
 	transcript := driver.NewTranscriptTeeWithEventHandler(family, logFile, sink.handleNormalizedEvent)
+	// Cursor TPS sampling needs the explicitly selected launched wire model.
+	// It is read from the plan env (never a display name and never a
+	// credential) so no sample can be attributed to a guessed model.
+	if family == "cursor" {
+		transcript.SetCursorSamplingModel(plan.Env[catalog.EnvCursorModel])
+	}
 	cmd.Stdout = transcript
 	cmd.Stderr = stderr
 	hideCommandWindow(cmd)

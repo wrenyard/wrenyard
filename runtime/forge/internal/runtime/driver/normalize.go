@@ -147,6 +147,19 @@ type TranscriptTee struct {
 	// full-message accounting and is enabled only for Claude-family clients.
 	responseTPSampler *responseTPSSampler
 
+	// cursorTPSampler observes raw Cursor stream-json lines before they enter
+	// normalization. It is enabled only when an explicit launched wire model
+	// has been configured via SetCursorSamplingModel; no sample is ever taken
+	// from an unconfigured or guessed model.
+	cursorTPSampler *cursorTPSSampler
+	// cursorSamplingModel is the explicit launched wire model. It is the
+	// sample model verbatim and the enablement flag for cursorTPSampler.
+	cursorSamplingModel string
+	// cursorTextDeduper is the shared stateful deduplication helper that
+	// suppresses the aggregate assistant summary flushes Cursor emits
+	// alongside partial deltas.
+	cursorTextDeduper cursorAssistantTextDeduper
+
 	// now is the monotonic-capable clock used to measure native Codex agent
 	// turn intervals. It is injectable so tests can drive deterministic time.
 	now func() time.Time
@@ -308,6 +321,24 @@ func NewTranscriptTeeWithEventHandler(clientFamily string, log io.Writer, eventH
 	return tee
 }
 
+// SetCursorSamplingModel configures the explicit launched Cursor wire model.
+// The activated sampler is enabled only when the model is nonempty and not the
+// "auto" sentinel; it never maps a display name onto a guessed wire model. The
+// provided value is the launched model verbatim.
+func (t *TranscriptTee) SetCursorSamplingModel(wireModel string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	model := strings.TrimSpace(wireModel)
+	if t.clientFamily != "cursor" || model == "" || strings.EqualFold(model, "auto") {
+		return
+	}
+	t.cursorSamplingModel = model
+	if t.cursorTPSampler == nil {
+		sampler := newCursorTPSSampler()
+		t.cursorTPSampler = &sampler
+	}
+}
+
 func (t *TranscriptTee) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -378,6 +409,19 @@ func (t *TranscriptTee) processLine(line []byte) {
 		}
 		t.responseTPSampler.observe(line)
 	}
+	cursorText := ""
+	if t.clientFamily == "cursor" {
+		// Every raw line is fed to the sampler and the shared deduper before
+		// normalization so a malformed or unsupported record still poisons the
+		// sample, and so text reconstruction sees every record type.
+		if t.cursorTPSampler != nil {
+			t.cursorTPSampler.observe(line)
+		}
+		cursorText = t.cursorTextDeduper.observeLine(line)
+		if cursorText != "" {
+			t.cursorMessage.WriteString(cursorText)
+		}
+	}
 	grokType := ""
 	if t.clientFamily == "grok" {
 		before := t.grokStream.records
@@ -432,9 +476,9 @@ func (t *TranscriptTee) processLine(line []byte) {
 		if t.clientFamily == "cursor" {
 			switch event.Type {
 			case "message":
-				if text, ok := event.Data["text"].(string); ok {
-					t.cursorMessage.WriteString(text)
-				}
+				// The shared deduper already owns every record's text, so the
+				// normalized message event contributes nothing here; forwarding
+				// it would double the transcript.
 				continue
 			case "turn_usage":
 				// Buffer usage at the Tee layer: exactly one canonical record is
@@ -838,6 +882,9 @@ func (t *TranscriptTee) FinalizeCursorStream() {
 	}
 	t.buf = nil
 	t.cursorFinalized = true
+	// Any text still held by the deduper is flushed exactly once so a
+	// truncated log never silently drops real content.
+	t.cursorMessage.WriteString(t.cursorTextDeduper.finish())
 	t.flushCursorMessage()
 	t.emitCanonicalCursorUsage()
 	for _, event := range t.cursorRunFinished {
@@ -933,6 +980,16 @@ func (t *TranscriptTee) emitCanonicalCursorUsage() {
 		clearTrustedAgentTurnContract(data)
 	}
 	ensureDurationMs(data)
+	// The aggregate response_v1 sample is attached only when the entire
+	// Cursor stream passed both the structural stream validity and the
+	// sampling checks. The output token count is the exact terminal aggregate
+	// carried by the canonical usage; no per-response allocation is invented.
+	if completeTokens && t.cursorTPSampler != nil && t.cursorTrack.result().IsValid() {
+		if sample, ok := t.cursorTPSampler.finalize(data); ok {
+			sample.Model = t.cursorSamplingModel
+			attachCursorTPSSample(data, sample)
+		}
+	}
 	t.eventHandler(protocol.Event{Type: "turn_usage", Data: data})
 }
 
