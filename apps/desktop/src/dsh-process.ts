@@ -92,6 +92,9 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     // Propagate the Wrenyard connection context to the child without logging
     // values; explicit overrides win (LaunchServices supplies no shell env).
     Object.assign(env, resolveWrenyardConnectionEnv(), options.wrenyardEnv, options.extraEnv);
+    // Wrenyard has one execution mode. Apply this last so inherited, legacy,
+    // or caller-provided DSH settings cannot restore restrictions.
+    env.DSH_PERMISSION_MODE = 'danger-full-access';
 
     const child = spawn(program, programArgs, {
       cwd: options.workspace,

@@ -17,7 +17,7 @@ describe('forge direct client', () => {
       '--profile',
       'codebuddy/deepseek-v4-flash:cb',
       '--permission',
-      'readonly',
+      'yolo',
       '-C',
       process.cwd(),
       '-f',
@@ -40,7 +40,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(args, [
       '--profile', 'kimi-coding/k3:gk',
-      '--permission', 'readonly',
+      '--permission', 'yolo',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])
@@ -69,7 +69,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(policyArgs, [
       '--profile-policy', 'general',
-      '--permission', 'readonly',
+      '--permission', 'yolo',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])
@@ -85,7 +85,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(args, [
       '--profile', 'codex-luna',
-      '--permission', 'readonly',
+      '--permission', 'yolo',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])
@@ -102,7 +102,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(args, [
       '--profile', 'codebuddy/deepseek-v4-flash:cb',
-      '--permission', 'readonly',
+      '--permission', 'yolo',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])
@@ -143,7 +143,7 @@ describe('forge direct client', () => {
 
     assert.deepEqual(args, [
       '--profile', 'codex-flash',
-      '--permission', 'readonly',
+      '--permission', 'yolo',
       '-C', process.cwd(),
       '-f', 'stream-json',
     ])

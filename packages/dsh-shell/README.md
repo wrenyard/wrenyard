@@ -22,12 +22,13 @@ authority inside the harness.
   in this harness.
 - **Native presentation**: Desktop and the Wrenyard agent preset present DSH's
   native tools (`mode: native`), so the unrestricted `run_code` tool is never
-  model-visible. Guarded native non-orchestration tools (bash, file read/write/
-  edit, search, browser, jobs, goals, skills, ask-user) remain governed by the
-  existing sandbox/approval policy. The tools bridge's `tools/pre-execute`
+  model-visible. Native non-orchestration tools (bash, file read/write/edit,
+  search, browser, jobs, goals, skills, ask-user) run in the fixed YOLO mode;
+  their availability does not expand task purpose or declared targets. The
+  tools bridge's `tools/pre-execute`
   listener only short-circuits the waterfall for its seven Wrenyard aliases
   (whose authority lives in the Wrenyard backend); native bash/fs/browser calls
-  always continue through DSH's normal downstream approval/sandbox policy.
+  always continue through DSH's normal downstream execution chain.
 - **Agent-scoped boundary**: the preset loads
   `@wrenyard/dsh-shell/tool-boundary`, which reads the live tool catalog and
   calls `tools.restrict({ deny })` once for any present competing DSH

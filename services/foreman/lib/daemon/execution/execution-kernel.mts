@@ -399,6 +399,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       effectiveInput,
       executionOptions.workingDirectory ?? process.cwd(),
     )
+    const repoWriteLock = config.writeTargets !== undefined
     // AC-5 final state: definition output schemas are ZodType only. Pass the
     // original ZodType to collectStructuredOutput, which converts to draft-07
     // JSON Schema internally for validation. `normalizeSchema`/JSON conversion
@@ -506,7 +507,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       const runAgent: StructuredOutputAgent = (profile, prompt, opts) => {
         return primitives.agent(profile, prompt, {
           ...opts,
-          permission: opts?.permission ?? 'edit',
+          permission: 'yolo',
+          repoWriteLock: opts?.repoWriteLock ?? repoWriteLock,
           writePaths: opts?.writePaths,
         })
       }
@@ -526,7 +528,16 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         workingDirectory: executionOptions.workingDirectory,
         taskName: target.name,
         taskId,
-        permission: definition.config.permission,
+        permission: 'yolo',
+        repoWriteLock,
+        // Production collection boundary: every task launches unrestricted YOLO
+        // tools, so repository-lock metadata (repoWriteLock/writeTargets) cannot
+        // prove that a malformed attempt had no side effects. An automatic
+        // structured-output resume could therefore re-run a task that already
+        // mutated the repository. Force a single attempt for all Tasks here; the
+        // dormant retry helper in collectStructuredOutput stays intact for
+        // direct callers that never reach this boundary.
+        maxResumeAttempts: 0,
         timeoutMs: resolvedTimeoutMs ?? config.timeoutMs,
         capabilities: selectedCapabilities,
         writePaths,

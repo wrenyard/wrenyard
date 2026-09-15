@@ -196,6 +196,13 @@ func TestGrokGatewayNeverUsesSelectedOrGlobalProviderCredential(t *testing.T) {
 	}
 }
 
+// TestGrokCompletePlanEncodesEmbeddedNotesmdCapability pins the production Grok
+// boundary: execution.Prepare normalizes explicit readonly/edit to YOLO, so the
+// plan runs in bypass mode with unrestricted Bash and no native --allow rule for
+// the embedded notesmd Bash capability. The capability is still consumed (it is
+// resolved and its Bash risk is covered by unrestricted Bash); the dormant
+// restricted encoding is covered by
+// TestGrokRestrictedPlanEncodesEmbeddedNotesmdCapability below.
 func TestGrokCompletePlanEncodesEmbeddedNotesmdCapability(t *testing.T) {
 	_, _ = isolateGrokRuntimeTest(t)
 	setFakeClientsOnPath(t, "grok")
@@ -211,8 +218,59 @@ func TestGrokCompletePlanEncodesEmbeddedNotesmdCapability(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if family != "grok" || !containsGrokOrderedArgs(plan.Command, "--allow", "Bash(notesmd-cli *)") {
-				t.Fatalf("Grok embedded notesmd plan = family %q command %v", family, plan.Command)
+			if family != "grok" {
+				t.Fatalf("family = %q", family)
+			}
+			if !containsGrokOrderedArgs(plan.Command, "--permission-mode", "bypassPermissions") ||
+				!containsGrokOrderedArgs(plan.Command, "--always-approve") ||
+				!containsGrokOrderedArgs(plan.Command, "--sandbox", "off") {
+				t.Fatalf("notesmd %s plan is not YOLO: %v", mode, plan.Command)
+			}
+			if containsGrokOrderedArgs(plan.Command, "--allow", "Bash(notesmd-cli *)") {
+				t.Fatalf("notesmd %s plan encoded a native Bash allow rule under YOLO: %v", mode, plan.Command)
+			}
+			if containsGrokOrderedArgs(plan.Command, "--deny") {
+				t.Fatalf("notesmd %s plan retained restricted --deny rules under YOLO: %v", mode, plan.Command)
+			}
+		})
+	}
+}
+
+// TestGrokRestrictedPlanEncodesEmbeddedNotesmdCapability keeps the dormant
+// restricted Grok encoding alive through the low-level driver builder. Explicit
+// non-YOLO modes are unreachable from production, but the encoder, capability
+// Bash allowlist, and denial composition remain covered.
+func TestGrokRestrictedPlanEncodesEmbeddedNotesmdCapability(t *testing.T) {
+	_, _ = isolateGrokRuntimeTest(t)
+	setFakeClientsOnPath(t, "grok")
+	for _, mode := range []catalog.PermissionMode{catalog.PermissionReadonly, catalog.PermissionEdit} {
+		t.Run(string(mode), func(t *testing.T) {
+			root := t.TempDir()
+			plan, err := driver.BuildPlan(driver.PlanRequest{
+				Spec: driver.ProfileSpec{
+					Name: "grok-dormant-notesmd", Client: "grok",
+					ClientDesc: catalog.Client{
+						Name: "grok", Dialect: catalog.DialectGrok, PermissionAdapter: catalog.PermissionAdapterGrok,
+						Binary: catalog.BinarySpec{Name: "grok"},
+					},
+					Env:          map[string]string{"GROK_MODEL": "forge-zhipu-coding--glm-5-3"},
+					ForgeDataDir: root,
+					Runtime: driver.RuntimePreparation{
+						HomeParent: filepath.Join(root, "grok", "agent-grok"),
+						HomeEnvVar: "GROK_HOME",
+					},
+				},
+				Prompt: "inspect notes", WorkDir: root, Permission: mode,
+				Capabilities: []string{"notesmd"}, ResolveCapabilities: resolveCapabilityPacks,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsGrokOrderedArgs(plan.Command, "--allow", "Bash(notesmd-cli *)") {
+				t.Fatalf("dormant Grok embedded notesmd plan missing Bash allow: %v", plan.Command)
+			}
+			if containsGrokOrderedArgs(plan.Command, "--permission-mode", "bypassPermissions") {
+				t.Fatalf("dormant restricted Grok plan unexpectedly runs YOLO: %v", plan.Command)
 			}
 		})
 	}
@@ -308,16 +366,20 @@ func TestGrokHTTPMCPCapabilityEndToEndPrepare(t *testing.T) {
 		t.Fatalf("config.toml missing ure headers:\n%s", configStr)
 	}
 
-	// Assert headless MCP permission allowlist: exactly one --allow MCPTool(ure__*)
-	// pair and no broad approval or bypass flags.
+	// Assert the MCP server is still registered and its MCPTool allowlist is
+	// encoded. The production boundary normalizes the request to YOLO, so the
+	// broad bypass flags are expected; the restricted-only --deny rules are not.
 	if !containsGrokOrderedArgs(plan.Command, "--allow", "MCPTool(ure__*)") {
-		t.Fatalf("MCP headless argv missing --allow MCPTool(ure__*): %v", plan.Command)
+		t.Fatalf("MCP argv missing --allow MCPTool(ure__*): %v", plan.Command)
 	}
 	if !containsGrokOrderedArgs(plan.Command, "--allow", "MCPTool(ure-materials__*)") {
-		t.Fatalf("MCP headless argv missing --allow MCPTool(ure-materials__*): %v", plan.Command)
+		t.Fatalf("MCP argv missing --allow MCPTool(ure-materials__*): %v", plan.Command)
 	}
-	if containsGrokOrderedArgs(plan.Command, "--always-approve") {
-		t.Fatalf("readonly MCP plan must not contain --always-approve: %v", plan.Command)
+	if !containsGrokOrderedArgs(plan.Command, "--permission-mode", "bypassPermissions") || !containsGrokOrderedArgs(plan.Command, "--always-approve") {
+		t.Fatalf("MCP plan is not the expected YOLO contract: %v", plan.Command)
+	}
+	if containsGrokOrderedArgs(plan.Command, "--deny") {
+		t.Fatalf("YOLO MCP plan retained restricted --deny rules: %v", plan.Command)
 	}
 
 	// Assert argv and plan.Env do not contain the fake identity or env var.
@@ -406,9 +468,13 @@ func TestGrokHTTPMCPCapabilityDeduplicatesPermissionAllow(t *testing.T) {
 		}
 	}
 
-	// Confirm no broad permission flag appears.
-	if containsGrokOrderedArgs(plan.Command, "--always-approve") || containsGrokOrderedArgs(plan.Command, "--permission-mode", "bypassPermissions") {
-		t.Fatalf("MCP dedup plan must not use always-approve or bypass: %v", plan.Command)
+	// The production boundary normalizes to YOLO, so the broad bypass flags are
+	// expected while the restricted-only --deny rules must not appear.
+	if !containsGrokOrderedArgs(plan.Command, "--permission-mode", "bypassPermissions") || !containsGrokOrderedArgs(plan.Command, "--always-approve") {
+		t.Fatalf("MCP dedup plan is not the expected YOLO contract: %v", plan.Command)
+	}
+	if containsGrokOrderedArgs(plan.Command, "--deny") {
+		t.Fatalf("YOLO MCP dedup plan retained restricted --deny rules: %v", plan.Command)
 	}
 }
 

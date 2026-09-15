@@ -625,10 +625,10 @@ describe('task run admission', { concurrency: false }, () => {
 
 })
 
-// ── Permission mode tests ──────────────────────────────────────────────
+// ── YOLO execution and legacy task-definition compatibility ───────────
 
-describe('daemon execution permission', { concurrency: false }, () => {
-  it('passes permission to agent opts when set in config', async () => {
+describe('daemon YOLO execution', { concurrency: false }, () => {
+  it('ignores a legacy task permission and passes YOLO to agent opts', async () => {
     const workspace = makeTempDir('foreman-daemon-execution-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -658,7 +658,7 @@ describe('daemon execution permission', { concurrency: false }, () => {
 
     assert.equal(result.status, 'done')
     assert.equal(capturedPermission, 'yolo',
-      'agent opts should include permission=yolo when config sets it',
+      'agent opts should always include permission=yolo',
     )
   })
 
@@ -739,7 +739,7 @@ describe('daemon execution permission', { concurrency: false }, () => {
     assert.equal(agentStarted, false)
   })
 
-  it('rejects missing permission at task load time', async () => {
+  it('loads a task definition that omits the retired permission field', async () => {
     const workspace = makeTempDir('foreman-daemon-execution-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -756,11 +756,13 @@ describe('daemon execution permission', { concurrency: false }, () => {
     await discoverTasks(workspace)
     const { getLoadErrors } = await import('../../lib/workspace/task-loader.mts')
     const errors = getLoadErrors(workspace)
-    assert.ok(errors.length > 0, 'should have load errors for missing permission')
-    assert.match(errors[0].load_error, /Missing required permission/u)
+    assert.deepEqual(errors, [])
+    const target = resolveTaskTarget('perm-none', workspace, 'app')
+    assert.ok(target)
+    assert.equal('permission' in target.definition.config, false)
   })
 
-  it('rejects invalid permission value at task load time', async () => {
+  it('accepts and strips an unknown legacy permission value', async () => {
     const workspace = makeTempDir('foreman-daemon-execution-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -779,15 +781,14 @@ describe('daemon execution permission', { concurrency: false }, () => {
     await discoverTasks(workspace)
     const { getLoadErrors } = await import('../../lib/workspace/task-loader.mts')
     const errors = getLoadErrors(workspace)
-    assert.ok(errors.length > 0, 'should have load errors for invalid permission')
-    assert.match(
-      errors[0].load_error,
-      /Invalid permission/iu,
-      'load error should mention invalid permission',
-    )
+    assert.deepEqual(errors, [])
+    const target = resolveTaskTarget('bad-perm', workspace, 'app')
+    assert.ok(target)
+    assert.equal('permission' in target.definition.config, false)
+    assert.equal(target.definition.config.writeTargets, undefined)
   })
 
-  it('rejects deprecated Forge permission aliases at task load time', async () => {
+  it('accepts and strips a deprecated Forge permission alias', async () => {
     const workspace = makeTempDir('foreman-daemon-execution-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -806,12 +807,10 @@ describe('daemon execution permission', { concurrency: false }, () => {
     await discoverTasks(workspace)
     const { getLoadErrors } = await import('../../lib/workspace/task-loader.mts')
     const errors = getLoadErrors(workspace)
-    assert.ok(errors.length > 0, 'should have load errors for deprecated permission aliases')
-    assert.match(
-      errors[0].load_error,
-      /Invalid permission.*readonly, edit, yolo/iu,
-      'load error should point to the direct-runtime permission set',
-    )
+    assert.deepEqual(errors, [])
+    const target = resolveTaskTarget('old-perm', workspace, 'app')
+    assert.ok(target)
+    assert.equal('permission' in target.definition.config, false)
   })
 })
 
@@ -1285,7 +1284,7 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
       codeBuddyExecution,
       'the private execution binding must reach the first agent attempt unchanged',
     )
-    assert.equal(capturedOpts?.permission, 'readonly', 'permission must remain the TaskConfig permission')
+    assert.equal(capturedOpts?.permission, 'yolo', 'legacy TaskConfig permission must normalize to YOLO')
     assert.ok(capturedPrompt?.includes('base dynamic prompt'), 'builtin dynamic prompt must still be present')
     // Invocation settings are never persisted: the task row input stays clean.
     const row = dbGet<{ input: string | null }>('SELECT input FROM tasks ORDER BY created_at LIMIT 1')
@@ -1319,10 +1318,10 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
   })
 })
 
-// ── Structured-output recovery permission boundary (real kernel) ──────────
+// ── Structured-output recovery mutation boundary (real kernel) ────────────
 
-describe('structured-output recovery permission boundary', { concurrency: false }, () => {
-  it('runs an edit task one-shot and persists unverified structured failure evidence', async () => {
+describe('structured-output recovery mutation boundary', { concurrency: false }, () => {
+  it('keeps a legacy edit task one-shot and persists unverified structured failure evidence', async () => {
     const workspace = makeTempDir('foreman-edit-unverified-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -1361,7 +1360,7 @@ describe('structured-output recovery permission boundary', { concurrency: false 
       /output-schema/u,
     )
 
-    assert.equal(agentCalls, 1, 'edit permission must invoke the agent exactly once')
+    assert.equal(agentCalls, 1, 'mutation metadata must invoke the agent exactly once')
     assert.equal(mutationCounter, 1, 'mutation-capable side effects must not be repeated')
 
     const row = readTaskRowByTemplate('edit-unverified')
@@ -1382,7 +1381,7 @@ describe('structured-output recovery permission boundary', { concurrency: false 
     assert.equal(errMsg.evidence?.side_effects_may_have_occurred, true, 'side effects may have occurred')
   })
 
-  it('passes readonly permission through and resumes successfully on the kernel', async () => {
+  it('keeps a legacy readonly task one-shot under YOLO', async () => {
     const workspace = makeTempDir('foreman-readonly-resume-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -1416,16 +1415,16 @@ describe('structured-output recovery permission boundary', { concurrency: false 
       }
     }
 
-    const result = await executeTask('readonly-resume', undefined, {
-      workspaceRoot: workspace,
-      primitives: { agent },
-    })
+    await assert.rejects(
+      () => executeTask('readonly-resume', undefined, { workspaceRoot: workspace, primitives: { agent } }),
+      /output-schema/u,
+    )
 
-    assert.equal(result.status, 'done', 'readonly must recover through the structured retry')
-    assert.equal(agentCalls, 2, 'readonly must resume after the first invalid delivery')
+    assert.equal(agentCalls, 1, 'legacy readonly work must not be resumed under YOLO')
     const row = readTaskRowByTemplate('readonly-resume')
     assert.ok(row, 'a persisted task row must exist')
-    assert.equal(row?.status, 'done')
-    assert.equal(row?.failure_category, null)
+    assert.equal(row?.status, 'failed')
+    assert.equal(row?.output, '')
+    assert.equal(row?.failure_category, 'gate_failed')
   })
 })

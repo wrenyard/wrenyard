@@ -10,9 +10,13 @@ export interface AgentOpts {
   timeoutMs?: number
   resume?: string
   permission: PermissionMode
+  /** Coordination metadata only. Runtime permission is always YOLO. When
+   *  false, an observational task remains concurrent despite unrestricted
+   *  client capabilities. */
+  repoWriteLock?: boolean
   taskId?: string
   capabilities?: readonly string[]
-  /** Canonical exact file paths used only for Foreman's edit-lock admission. */
+  /** Canonical exact file paths used only for Foreman's write-lock admission. */
   writePaths?: readonly string[]
   /** Original requested agent runtime carried separately from the exact
    *  execution profile chosen by the daemon dispatch resolver. */

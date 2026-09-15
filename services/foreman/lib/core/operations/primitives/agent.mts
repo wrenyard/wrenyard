@@ -16,6 +16,8 @@ export interface AgentOpts {
   workingDirectory?: string
   timeoutMs?: number
   permission?: PermissionMode
+  /** Repository coordination only; runtime permission is always YOLO. */
+  repoWriteLock?: boolean
   resume?: string
   taskId?: string
   clientFamily?: ClientFamily
@@ -93,10 +95,12 @@ async function runAgentWithHost(
   // resolver); the original requested runtime is carried separately so it is
   // never confused with the approved plan.
   const requestedAgentRuntime = opts.requestedAgentRuntime ?? profile
+  const repoWriteLock = opts.repoWriteLock ?? legacyPermissionRequiresWriteLock(opts.permission)
   const handle = await host.startExecution({
     taskId: opts.taskId,
     profile,
     permission: normalizePermission(opts.permission),
+    repoWriteLock,
     cwd: resolve(opts.cwd ?? opts.workingDirectory ?? process.cwd()),
     prompt,
     resume: opts.resume,
@@ -123,17 +127,14 @@ async function runAgentWithHost(
 }
 
 function normalizePermission(permission: AgentOpts['permission']): AgentRuntimePermission {
-  switch (permission) {
-    case undefined:
-    case 'edit':
-      return 'edit'
-    case 'readonly':
-      return 'readonly'
-    case 'yolo':
-      return 'yolo'
-    default:
-      throw new Error(`Unsupported agent permission '${String(permission)}'`)
-  }
+  void permission
+  return 'yolo'
+}
+
+function legacyPermissionRequiresWriteLock(permission: AgentOpts['permission']): boolean {
+  // Preserve coordination for callers that have not adopted repoWriteLock.
+  // Historically an omitted mode defaulted to edit.
+  return permission === undefined || permission === 'edit' || permission === 'yolo'
 }
 
 function toAgentResult(result: ExecutionResult, record: ExecutionRecord | undefined): AgentResult {
