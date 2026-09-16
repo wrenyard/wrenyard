@@ -1287,17 +1287,10 @@ export class ConversationView {
     const icon = document.createElement('span');
     icon.className = 'turn-tool-icon';
     icon.setAttribute('aria-hidden', 'true');
-    const state = item.taskRun?.status ?? item.toolState;
-    const task = !!item.taskRun;
-    const active = task && ['queued', 'running', 'waiting'].includes(state ?? 'running');
-    icon.classList.toggle('is-spinning', active);
-    const path = task
-      ? active ? '<path d="M20 12a8 8 0 1 1-8-8"/>'
-        : state === 'done' ? '<path d="m5 12 4 4 10-10"/>'
-          : '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>'
-      : this.toolCategory(item) === 'tasks' ? '<path d="m8 5 11 7-11 7z"/>'
-        : this.toolCategory(item) === 'docs-search' ? '<path d="M12 5v15M12 5C8 2 3 4 3 4v15s5-2 9 1c4-3 9-1 9-1V4s-5-2-9 1z"/>'
-          : '<path d="M4 7h16M4 12h16M4 17h10"/>';
+    const path = this.toolCategory(item) === 'tasks'
+      ? '<path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/>'
+      : this.toolCategory(item) === 'docs-search' ? '<path d="M12 5v15M12 5C8 2 3 4 3 4v15s5-2 9 1c4-3 9-1 9-1V4s-5-2-9 1z"/>'
+        : '<path d="M4 7h16M4 12h16M4 17h10"/>';
     icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">${path}</svg>`;
     return icon;
   }
@@ -1311,8 +1304,13 @@ export class ConversationView {
     viewport.className = 'turn-tool-viewport';
     const rail = document.createElement('div');
     rail.className = 'turn-tool-rail';
-    rail.style.setProperty('--collapsed-width', `${32 + Math.min(items.length - 1, 2) * 7}px`);
-    rail.style.setProperty('--expanded-width', `${items.length * 33}px`);
+    const taskGroup = this.toolCategory(items[0]!) === 'tasks';
+    stack.classList.toggle('is-task-group', taskGroup);
+    const widths = items.map((item) => taskGroup
+      ? Math.min(260, Math.max(108, Array.from(this.taskLabel(item)).reduce((width, char) => width + (/[^\x00-\x7f]/.test(char) ? 12 : 7), 42)))
+      : 28);
+    rail.style.setProperty('--collapsed-width', `${taskGroup ? widths[0] : 32 + Math.min(items.length - 1, 2) * 7}px`);
+    rail.style.setProperty('--expanded-width', `${widths.reduce((total, width) => total + width + 5, 0)}px`);
     const selected = document.createElement('div');
     selected.className = 'turn-tool-detail';
     const buttons: HTMLButtonElement[] = [];
@@ -1340,16 +1338,23 @@ export class ConversationView {
       const button = document.createElement('button');
       button.type = 'button';
       button.style.setProperty('--collapsed-x', `${Math.min(index, 2) * 7}px`);
-      button.style.setProperty('--expanded-x', `${index * 33}px`);
-      button.style.setProperty('--collapsed-opacity', index < 3 ? '1' : '0');
+      button.style.setProperty('--expanded-x', `${widths.slice(0, index).reduce((total, width) => total + width + 5, 0)}px`);
+      button.style.setProperty('--button-width', `${widths[index]}px`);
+      button.style.setProperty('--collapsed-opacity', index < (taskGroup ? 1 : 3) ? '1' : '0');
       const taskRunId = item.taskRun?.taskRunId;
-      const taskName = item.taskRun?.taskName ?? item.taskRun?.taskId;
+      const taskName = taskGroup ? this.taskLabel(item) : undefined;
       const state = item.taskRun?.status ?? item.toolState;
       button.className = 'turn-tool-icon-button is-' + (state === 'done' ? 'done' : ['queued', 'running', 'waiting'].includes(state ?? 'running') ? 'running' : 'failed');
       button.title = [taskName ?? item.toolSummary ?? item.toolName ?? '工具', this.toolStateLabel(item), taskRunId ? '点击查看任务对话' : undefined].filter(Boolean).join(' · ');
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-expanded', 'false');
       button.append(this.toolIcon(item));
+      if (taskGroup) {
+        const label = document.createElement('span');
+        label.className = 'turn-tool-label';
+        label.textContent = taskName!;
+        button.append(label);
+      }
       button.addEventListener('click', async () => {
         if (!taskRunId) { select(item, button); return; }
         button.disabled = true;
@@ -1363,7 +1368,7 @@ export class ConversationView {
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'turn-tool-stack-toggle';
-    toggle.title = `${items.length} 次工具调用`;
+    toggle.title = taskGroup ? items.map((item) => this.taskLabel(item)).join('、') : `${items.length} 次工具调用`;
     toggle.setAttribute('aria-label', toggle.title);
     const setExpanded = (open: boolean): void => {
       stack.classList.toggle('is-expanded', open);
@@ -1388,6 +1393,12 @@ export class ConversationView {
     setExpanded(open);
     if (open && restoredItem >= 0) select(items[restoredItem]!, buttons[restoredItem]!, true);
     return stack;
+  }
+
+  private taskLabel(item: ConversationItemSnapshot): string {
+    return item.taskRun?.taskName?.trim()
+      || item.toolSummary?.replace(/^运行任务\s*/, '').trim()
+      || item.taskRun?.taskId || '任务';
   }
 
   private toolStateLabel(item: ConversationItemSnapshot): string {

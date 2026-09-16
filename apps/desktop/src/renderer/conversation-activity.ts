@@ -25,10 +25,12 @@ export class ConversationActivityView {
   }
 
   enrich(snapshot: ConversationSnapshot): ConversationSnapshot {
-    this.known = new Set(snapshot.items.flatMap((item) => item.taskRun ? [item.taskRun.taskRunId] : []));
+    this.known = new Set(snapshot.items.flatMap((item) =>
+      item.kind === 'tool' && item.turnId && ['run_task', 'task_run'].includes(item.toolName ?? '') && item.taskRun
+        ? [item.taskRun.taskRunId] : []));
     for (const id of this.items.keys()) if (!this.known.has(id)) this.items.delete(id);
     return { ...snapshot, items: snapshot.items.map((item) => {
-      if (!item.taskRun) return item;
+      if (!item.taskRun || !this.known.has(item.taskRun.taskRunId)) return item;
       const live = this.items.get(item.taskRun.taskRunId);
       if (!live) return item;
       // A stale poll must not regress a completed tool result back to running.
