@@ -12,6 +12,7 @@ import type {
   StatsWindowSnapshot,
   TaskRunSnapshot,
   UpdateChannel,
+  UpdateInstallReason,
   UpdateSnapshot,
   RuntimeAliasEntry,
   RuntimeAliasSnapshot,
@@ -335,6 +336,25 @@ function formatUpdateCheckTime(checkedAt: number | undefined): string {
   return `上次检查 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(checkedAt)}`;
 }
 
+/**
+ * Why in-app installation is unavailable, phrased for the user. The reason
+ * code comes from the updater's own re-probe so every surface agrees.
+ */
+function updateInstallReasonText(reason: UpdateInstallReason | undefined): string {
+  switch (reason) {
+    case 'missing-cli':
+      return '未找到 Wrenyard CLI：请先安装或修复啾啾工坊套件，然后点“重新检测”。';
+    case 'missing-runtime':
+      return '未找到与当前 CLI 配套的 Node 运行时：请修复套件安装，然后点“重新检测”。';
+    case 'missing-helper':
+      return '未找到更新助手组件：请重新安装 Desktop，然后点“重新检测”。';
+    case 'unsupported-platform':
+      return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
+    default:
+      return '当前无法应用内安装，请检查本机安装后点“重新检测”。';
+  }
+}
+
 function renderUpdate(snapshot: UpdateSnapshot): void {
   if (snapshot.state === 'install-failed' && currentUpdate?.state !== 'install-failed') updatePopupOpen = true;
   currentUpdate = snapshot;
@@ -379,9 +399,16 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
     statusLabel = '有新版本';
     statusClass = 'is-preview';
     description = `发现新版本 v${snapshot.availableVersion ?? '—'}（当前 v${snapshot.currentVersion}），将一次升级整个啾啾工坊套件。`;
-    action = snapshot.installSupported ? `安装更新 v${snapshot.availableVersion ?? ''}` : '暂不支持应用内安装';
-    primary = snapshot.installSupported;
-    disabled ||= !snapshot.installSupported;
+    if (snapshot.installSupported) {
+      action = `安装更新 v${snapshot.availableVersion ?? ''}`;
+      primary = true;
+    } else {
+      // The settings entry stays actionable: explain the exact dependency and
+      // offer a re-probe instead of a dead, disabled button.
+      action = '重新检测';
+      statusClass = 'is-unavailable';
+      description = updateInstallReasonText(snapshot.installReason);
+    }
   } else if (snapshot.state === 'preparing') {
     statusLabel = '准备中';
     description = snapshot.message ?? '正在下载并校验更新…';
@@ -432,13 +459,18 @@ function renderUpdatePopup(snapshot: UpdateSnapshot): void {
   const updateAvailable = snapshot.state === 'available';
   updateNav.hidden = !['available', 'preparing', 'waiting', 'installing', 'install-blocked', 'install-failed'].includes(snapshot.state);
   updateNav.classList.toggle('is-update-available', updateAvailable);
-  updateNav.disabled = !snapshot.installSupported;
+  // The nav stays clickable even when the install path is unavailable: it opens
+  // the state explanation and a re-probe instead of being a dead control.
+  updateNav.disabled = false;
   updateNav.setAttribute('aria-label', updateAvailable
-    ? `安装更新 v${snapshot.availableVersion ?? ''}`
+    ? snapshot.installSupported
+      ? `安装更新 v${snapshot.availableVersion ?? ''}`
+      : '软件更新：当前无法应用内安装，点击查看原因'
     : '软件更新');
 
 
-  const visibleState = snapshot.state === 'preparing'
+  const installUnavailable = snapshot.state === 'available' && !snapshot.installSupported;
+  const visibleState = installUnavailable || snapshot.state === 'preparing'
     || snapshot.state === 'waiting'
     || snapshot.state === 'installing'
     || snapshot.state === 'install-blocked'
@@ -446,7 +478,7 @@ function renderUpdatePopup(snapshot: UpdateSnapshot): void {
   updatePopup.hidden = !updatePopupOpen || !visibleState;
   if (updatePopup.hidden) return;
 
-  const title = snapshot.state === 'install-failed'
+  const title = installUnavailable ? '暂时无法安装更新' : snapshot.state === 'install-failed'
     ? '更新失败'
     : snapshot.stage === 'extract'
       ? '解压更新'
@@ -456,16 +488,34 @@ function renderUpdatePopup(snapshot: UpdateSnapshot): void {
           ? '升级 Daemon'
           : '下载更新';
   setText('update-popup-title', title);
-  setText('update-popup-description', snapshot.message ?? '正在准备更新。');
+  setText('update-popup-description', installUnavailable
+    ? `${updateInstallReasonText(snapshot.installReason)} 再次点击更新图标可重新检测。`
+    : snapshot.message ?? '正在准备更新。');
+  updatePopupProgress.hidden = installUnavailable;
   const progress = Math.max(0, Math.min(100, snapshot.progress ?? 0));
   updatePopupProgress.value = progress;
   updatePopupProgress.textContent = `${progress}%`;
 }
 
 async function runUpdateFromNav(): Promise<void> {
-  if (!currentUpdate || !currentUpdate.installSupported) return;
+  if (!currentUpdate) return;
   updatePopupOpen = true;
   renderUpdate(currentUpdate);
+  // An unavailable install path must never silently do nothing: re-probe the
+  // installation so a just-repaired suite is picked up, and leave the reason
+  // visible. Only a genuinely installable state authorizes an install.
+  if (!currentUpdate.installSupported) {
+    if (updateActionBusy || ['checking', 'preparing', 'waiting', 'installing'].includes(currentUpdate.state)) return;
+    updateActionBusy = true;
+    renderUpdate(currentUpdate);
+    try {
+      renderUpdate(await window.wrenyardShell.checkUpdate());
+    } finally {
+      updateActionBusy = false;
+      if (currentUpdate) renderUpdate(currentUpdate);
+    }
+    return;
+  }
   if (updateActionBusy || !['available', 'install-blocked', 'install-failed'].includes(currentUpdate.state)) return;
   updateActionBusy = true;
   renderUpdate(currentUpdate);
@@ -482,7 +532,6 @@ async function runUpdateFromNav(): Promise<void> {
   } finally {
     updateActionBusy = false;
     if (!requestFailed && currentUpdate) renderUpdate(currentUpdate);
-    else updateNav.disabled = false;
   }
 }
 

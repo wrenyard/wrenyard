@@ -14,6 +14,9 @@ func main() {
 	if code, handled := forge.RunCodexMCPIfNeeded(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if code, handled := forge.RunCodexAppServerIfNeeded(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	if code, handled := forge.RunFDSHIfNeeded(); handled {
 		os.Exit(code)
 	}
