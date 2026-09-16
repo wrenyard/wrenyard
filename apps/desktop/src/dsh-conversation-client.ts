@@ -1031,7 +1031,9 @@ export class DshConversationClient {
    * Cache the history projection against its retained-events identity so a
    * snapshot burst (mux frames arrive per chunk) reuses one projection. Live
    * frames are pushed in place, so the array identity alone is not enough: the
-   * observed length is part of the key. Any reassignment of `this.history` —
+   * observed length is part of the key. In-place appends explicitly invalidate
+   * the cache because trimming a full buffer leaves its length unchanged.
+   * Any reassignment of `this.history` —
    * select, create, reload — also invalidates the cache.
    */
   private conversationProjection(): ConversationProjection {
@@ -1425,6 +1427,7 @@ export class DshConversationClient {
       const latest = this.history.events.at(-1)?.event;
       const latestSeq = latest ? asNumber(latest.seq) : undefined;
       if (sessionId === this.selectedSessionId && (seq === undefined || latestSeq === undefined || seq > latestSeq)) {
+        this.projection = undefined;
         this.history.events.push({ event, ...(frame.view !== undefined ? { view: frame.view } : {}) });
         if (this.history.events.length > 8_000) this.history.events.splice(0, this.history.events.length - 8_000);
       }
