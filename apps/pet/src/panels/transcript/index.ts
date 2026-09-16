@@ -52,6 +52,12 @@ function getQueryParam(name: string): string | null {
   return params.get(name);
 }
 
+function requestClose(api: TranscriptWindowApi): void {
+  void api.close().catch((error: unknown) => {
+    console.error('[transcript] close failed:', error);
+  });
+}
+
 // ── Event rendering — SafeTranscriptEventData only ──────────────────
 
 const GENERIC_SUMMARIES = new Set([
@@ -295,6 +301,8 @@ async function init(): Promise<void> {
     const taskRunId = getQueryParam('task_run_id');
     const nodeIdParam = getQueryParam('node_id');
     const taskLabelParam = getQueryParam('task_label');
+    const platform = getQueryParam('platform');
+    if (platform) document.documentElement.dataset.platform = platform;
 
     if (!taskRunId) {
       showError('Missing task_run_id');
@@ -329,12 +337,13 @@ async function init(): Promise<void> {
     const closeBtn = document.getElementById('close-btn');
     if (closeBtn) {
       closeBtn.addEventListener('click', () => {
-        api.close();
+        requestClose(api);
       });
     }
     document.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        api.close();
+      if (e.key === 'Escape' || (e.key.toLowerCase() === 'w' && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        requestClose(api);
       }
     });
 

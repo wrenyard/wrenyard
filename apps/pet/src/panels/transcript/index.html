@@ -9,7 +9,7 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: transparent;
+      background: #f7efd8;
       border: 0;
       border-radius: 0;
       outline: 0;
@@ -31,6 +31,7 @@
       gap: 8px;
       min-height: 36px;
       -webkit-app-region: drag;
+      box-shadow: 0 1px 0 rgba(46, 32, 24, 0.12);
     }
     #header .node-name {
       font-weight: 600;
@@ -52,21 +53,31 @@
       color: #666;
     }
     #close-btn {
-      border: 0;
+      display: none;
+      border: 1px solid transparent;
       padding: 0;
-      background: transparent;
+      background: #ff5f57;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 10px;
       line-height: 1;
-      color: #8B7D6B;
-      width: 16px;
-      height: 16px;
-      display: flex;
+      color: transparent;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex: 0 0 12px;
       align-items: center;
       justify-content: center;
       -webkit-app-region: no-drag;
     }
-    #close-btn:hover { color: #2E2018; }
+    html[data-platform="darwin"] #close-btn { display: flex; }
+    html[data-platform="darwin"] #close-btn:hover,
+    html[data-platform="darwin"] #close-btn:focus-visible {
+      color: #7d211b;
+    }
+    #close-btn:focus-visible {
+      outline: 2px solid #2E2018;
+      outline-offset: 2px;
+    }
     #stream {
       position: absolute;
       top: 36px;
@@ -75,7 +86,7 @@
       bottom: 0;
       overflow-y: auto;
       padding: 10px 10px 16px;
-      background: rgba(247, 239, 216, 0.96);
+      background: #f7efd8;
     }
     .event {
       margin: 0 0 9px;
@@ -92,7 +103,7 @@
     .event-message {
       width: min(92%, 350px);
       padding: 8px 10px 9px;
-      background: rgba(255, 252, 239, 0.92);
+      background: #fffcef;
       border: 1px solid rgba(139, 125, 107, 0.28);
       border-radius: 3px 10px 10px 10px;
       white-space: pre-wrap;
@@ -202,9 +213,9 @@
 </head>
 <body>
   <div id="header">
+    <button id="close-btn" type="button" aria-label="关闭任务对话" title="关闭">×</button>
     <span id="node-name" class="node-name">任务对话</span>
     <span id="run-id" class="run-id"></span>
-    <button id="close-btn">×</button>
   </div>
   <div id="loading-indicator">正在读取对话…</div>
   <div id="error-indicator">

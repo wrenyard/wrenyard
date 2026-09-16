@@ -21,9 +21,7 @@ const transcriptApi = {
 
   retry: (taskRunId: string): Promise<void> => ipcRenderer.invoke('transcript:retry', taskRunId),
 
-  close: (): void => {
-    ipcRenderer.send('panel:close');
-  },
+  close: (): Promise<void> => ipcRenderer.invoke('transcript:close'),
 };
 
 contextBridge.exposeInMainWorld('transcriptApi', transcriptApi);

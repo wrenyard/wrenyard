@@ -113,6 +113,8 @@ const electronMocks = vi.hoisted(() => {
       focus: vi.fn(),
       loadFile: vi.fn().mockResolvedValue(undefined),
       showInactive: vi.fn(),
+      show: vi.fn(),
+      setWindowButtonVisibility: vi.fn(),
       hide: vi.fn(),
       setBounds: vi.fn((next: Partial<typeof bounds>) => { bounds = { ...bounds, ...next }; }),
       getBounds: vi.fn(() => ({ ...bounds })),
