@@ -333,6 +333,17 @@ export class TaskGraphWindowOwner {
       if (typeof taskRunId !== 'string' || !this.isTranscriptSender(event, taskRunId)) return;
       await this.loadTranscriptPage(taskRunId);
     });
+
+    ipcMain.handle('transcript:close', async (event) => {
+      const sender = BrowserWindow.fromWebContents(event.sender);
+      if (!sender || sender.isDestroyed()) return;
+      for (const win of this.transcriptWindows.values()) {
+        if (win === sender) {
+          sender.close();
+          return;
+        }
+      }
+    });
   }
 
   /**
@@ -1098,7 +1109,10 @@ export class TaskGraphWindowOwner {
       const existing = this.transcriptWindows.get(taskRunId);
       if (existing && !existing.isDestroyed()) {
         if (isLive) this.liveTranscriptRuns.add(taskRunId);
-        if (!this.stayHidden) existing.focus();
+        if (!this.stayHidden) {
+          existing.show();
+          existing.focus();
+        }
         return;
       }
       this.transcriptWindows.delete(taskRunId);
@@ -1123,14 +1137,20 @@ export class TaskGraphWindowOwner {
       height: TRANSCRIPT_HEIGHT,
       minWidth: TRANSCRIPT_MIN_WIDTH,
       minHeight: TRANSCRIPT_MIN_HEIGHT,
-      transparent: true,
-      frame: false,
+      transparent: false,
+      frame: true,
       thickFrame: false,
-      hasShadow: false,
-      backgroundColor: '#00000000',
-      skipTaskbar: overlaySkipsTaskbar(),
-      alwaysOnTop: true,
+      hasShadow: true,
+      backgroundColor: '#F7EFD8',
+      skipTaskbar: false,
+      alwaysOnTop: false,
       focusable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      closable: true,
+      title: taskLabel,
+      ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
       show: false,
       ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
       acceptFirstMouse: true,
@@ -1143,8 +1163,9 @@ export class TaskGraphWindowOwner {
     });
 
     win.setMenuBarVisibility(false);
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
+    if (process.platform === 'darwin') {
+      win.setWindowButtonVisibility(false);
+    }
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('did-create-window', (childWin) => {
       if (!childWin.isDestroyed()) childWin.destroy();
@@ -1169,12 +1190,15 @@ export class TaskGraphWindowOwner {
     });
 
     win.loadFile(path.join(this.htmlDir, 'transcript.html'), {
-      query: { task_run_id: taskRunId, node_id: nodeId, task_label: taskLabel },
+      query: { task_run_id: taskRunId, node_id: nodeId, task_label: taskLabel, platform: process.platform },
     }).catch(() => handleLoadFailure());
 
     win.once('ready-to-show', () => {
       if (!win.isDestroyed() && !loadFailed) {
-        if (!this.stayHidden) win.showInactive();
+        if (!this.stayHidden) {
+          win.show();
+          win.focus();
+        }
       }
     });
 
@@ -1276,6 +1300,7 @@ export class TaskGraphWindowOwner {
     ipcMain.removeHandler('slip:report-content-size');
     ipcMain.removeHandler('slip:close');
     ipcMain.removeHandler('transcript:retry');
+    ipcMain.removeHandler('transcript:close');
     ipcMain.removeListener('entity:drag-start', this.handleEntityDragStart);
     ipcMain.removeListener('entity:drag-move', this.handleEntityDragMove);
     ipcMain.removeListener('entity:drag-end', this.handleEntityDragEnd);
