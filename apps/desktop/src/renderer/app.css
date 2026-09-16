@@ -405,19 +405,22 @@ button, input, select { accent-color: var(--moss-deep); }
 /* Progressive disclosure inside one assistant turn. The collapsed summary
    carries the working-process state; the final body always stays outside it. */
 .turn-activity { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 12px; background: rgba(238, 227, 202, .45); }
-.turn-activity > summary { display: flex; align-items: center; gap: 8px; padding: 8px 11px; color: var(--muted); cursor: pointer; font-size: 10px; }
+.turn-activity > summary { display: flex; align-items: center; gap: 7px; padding: 9px 0; color: var(--muted); cursor: pointer; font-size: 13px; }
 .turn-activity > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: -2px; border-radius: 5px; }
 .turn-activity > summary::-webkit-details-marker { display: none; }
-.turn-activity-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
-.turn-activity.is-running .turn-activity-dot { background: var(--moss-deep); animation: task-card-pulse 1.15s ease-in-out infinite; }
-.turn-activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.turn-activity-icon { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
+.turn-activity-icon svg { width: 100%; height: 100%; }
+.turn-activity.is-running .turn-activity-icon { animation: task-card-pulse 1.5s ease-in-out infinite; }
+.turn-activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 /* The elapsed clock is reserved room so ticking digits never reflow the row. */
 .turn-activity-text.turn-activity-clock { font-variant-numeric: tabular-nums; }
 .turn-activity-text.turn-activity-clock.is-plain { font-weight: 600; }
-.turn-activity-chevron { width: 6px; height: 6px; flex: 0 0 auto; margin-left: auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 120ms ease; }
-.turn-activity[open] > summary .turn-activity-chevron { transform: translateY(1px) rotate(225deg); }
+.turn-activity-chevron { flex: 0 0 auto; color: inherit; font-size: 12px; line-height: 1; }
+.turn-activity-chevron::before { content: '▷'; }
+.turn-activity[open] > summary .turn-activity-chevron::before { content: '▽'; }
+
 .message-assistant .message-body > .turn-activity { border-color: transparent; background: transparent; margin-bottom: 6px; }
-.turn-activity-steps { display: grid; gap: 2px; border-top: 1px solid var(--line); padding: 6px 10px 8px; }
+.turn-activity-steps { display: grid; gap: 6px; border-top: 1px solid var(--line); padding: 10px 0 8px; }
 .turn-step { display: flex; align-items: baseline; gap: 8px; min-height: 20px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .turn-step-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: rgba(139, 125, 107, .6); }
 .turn-step-text { min-width: 0; overflow-wrap: anywhere; }
@@ -437,7 +440,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-stats { display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 4px 14px; color: var(--muted); font-size: 9px; }
 .turn-stat { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .turn-stat small { color: var(--muted); font-size: 9px; }
-.turn-stat b { color: var(--ink-soft); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 650; }
+.turn-stat b { color: inherit; font-family: inherit; font-size: 10px; font-weight: 400; }
 .turn-step-progress .thinking-dots { padding-top: 0; margin-left: 2px; }
 .turn-step-progress .thinking-dots i { width: 4px; height: 4px; }
 .tool-card { width: min(calc(100% - 42px), 778px); margin: -17px auto 24px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: rgba(238, 227, 202, .55); font-size: 10px; }
@@ -1035,7 +1038,6 @@ button, input, select { accent-color: var(--moss-deep); }
 .routing-weights-status { flex-basis: 100%; }
 
 .conversation-system-activity { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
-.conversation-system-activity > small { width:100%; color:var(--ink-muted); }
 .conversation-task-card { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--paper); color:inherit; cursor:pointer; font:inherit; font-size:12px; }
  .conversation-task-state { display:inline-flex; width:14px; height:14px; flex:0 0 14px; }
 .conversation-task-state svg { width:100%; height:100%; }
@@ -1046,3 +1048,15 @@ button, input, select { accent-color: var(--moss-deep); }
 .conversation-task-card:disabled { cursor:default; }
 @keyframes tool-pulse { 50% { opacity:.35; } }
 @media (prefers-reduced-motion:reduce) { .conversation-task-card.is-running .conversation-task-state { animation:none; } }
+
+/* Keep secondary message metadata quiet without shifting the answer on hover. */
+.message-assistant .message-footer { opacity: 0; pointer-events: none; color: var(--muted); transition: opacity 120ms ease; }
+.message-assistant .message-body:hover > .message-footer,
+.message-assistant .message-body:focus-within > .message-footer { opacity: .72; pointer-events: auto; }
+.message-assistant .turn-stats { font-size: 10px; }
+.message-assistant .turn-stat small { color: inherit; font-size: 10px; font-weight: 400; }
+@media (hover: none) { .message-assistant .message-footer { opacity: .72; pointer-events: auto; } }
+@media (prefers-reduced-motion: reduce) {
+  .message-assistant .message-footer { transition: none; }
+  .turn-activity.is-running .turn-activity-icon { animation: none; }
+}
