@@ -29,6 +29,7 @@ import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { activeTaskCountFromDaemonStatus, DesktopUpdateController } from './update-controller.js';
+import { resolveInstallation } from './installation-discovery.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import {
@@ -96,36 +97,13 @@ function resolveShellSource(): string {
 }
 
 /**
- * Locate the installed Wrenyard CLI: an explicit WRENYARD_CLI env var, the
- * current working directory, or ~/.local/bin. LaunchServices provides no shell
+ * Locate the installed Wrenyard suite: an explicit WRENYARD_CLI, the current
+ * working directory, or the default prefix. LaunchServices provides no shell
  * profile, so the CLI is located explicitly instead of relying on an inherited
  * PATH.
  */
 function resolveWrenyardCli(): string | undefined {
-  const candidates = [
-    process.env.WRENYARD_CLI,
-    join(process.cwd(), process.platform === 'win32' ? 'wrenyard.exe' : 'wrenyard'),
-    ...(process.platform === 'win32'
-      ? [
-        join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'current', 'wrenyard.exe'),
-        join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'bin', 'wrenyard.cmd'),
-      ]
-      : [join(homedir(), '.local', 'bin', 'wrenyard')]),
-  ];
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
-
-function resolveWrenyardNode(): string | undefined {
-  const candidates = [
-    process.env.WRENYARD_NODE_BIN,
-    process.platform === 'win32'
-      ? join(process.env.LOCALAPPDATA ?? '', 'wrenyard', 'current', 'runtime', 'node.exe')
-      : join(homedir(), '.local', 'share', 'wrenyard', 'current', 'runtime', 'node'),
-  ];
-  return candidates.find((candidate) => Boolean(candidate && existsSync(candidate)));
+  return resolveInstallation().cliPath;
 }
 
 function installedDesktopPath(): string {
@@ -738,13 +716,17 @@ async function bootstrap(): Promise<void> {
     path: join(app.getPath('userData'), 'settings.json'),
   });
   const wrenyardCli = resolveWrenyardCli();
-  const wrenyardNode = resolveWrenyardNode();
+  const wrenyardNode = resolveInstallation().runtimePath;
   updateController = new DesktopUpdateController({
     currentVersion: app.getVersion(),
     settings: petSettings,
     cliPath: wrenyardCli,
     helperPath: join(app.getAppPath(), 'dist', 'update-helper.cjs'),
     helperRuntimePath: wrenyardNode,
+    // Re-probe on every check/retry/install so a suite repaired after startup
+    // becomes installable without restarting Desktop, and a custom CLI never
+    // pairs with a stale default runtime.
+    probeInstallation: () => resolveInstallation(),
     desktopPath: installedDesktopPath(),
     userDataPath: app.getPath('userData'),
     onInstall: () => setImmediate(() => app.quit()),

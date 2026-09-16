@@ -1706,3 +1706,114 @@ func TestClaudeOutputTextBlockNormalized(t *testing.T) {
 		t.Fatalf("text=%v want compatible text", events[0].Data["text"])
 	}
 }
+
+// TestCodexTurnCompletedCarriesBridgeResponseVPSSamples verifies the bridge's
+// response_v1 paired samples survive Codex turn.completed normalization on the
+// existing schema, and that the whole-turn duration is never substituted for
+// the per-response samples.
+func TestCodexTurnCompletedCarriesBridgeResponseVPSSamples(t *testing.T) {
+	samples := []any{
+		map[string]any{
+			"response_id": "resp_1", "model": "gpt-5.6-sol", "output_tokens": float64(120),
+			"first_token_at_ms": float64(1000), "completed_at_ms": float64(1400),
+		},
+	}
+	line := []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250,` +
+		`"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
+		`"output_tokens":120,"first_token_at_ms":1000,"completed_at_ms":1400}]}`)
+
+	events := codexNormalizer(line)
+	if len(events) != 1 || events[0].Type != "turn_usage" {
+		t.Fatalf("expected one turn_usage: %#v", events)
+	}
+	data := events[0].Data
+	if data["tps_sampling_contract"] != responseTPSSamplingContract {
+		t.Fatalf("contract=%v want %s", data["tps_sampling_contract"], responseTPSSamplingContract)
+	}
+	if !reflect.DeepEqual(data["tps_samples"], samples) {
+		t.Fatalf("samples=%#v want %#v", data["tps_samples"], samples)
+	}
+	// The whole-turn duration is retained as accounting metadata only; it must
+	// never replace the paired per-response sample timings.
+	if data["duration_ms"] != 9000 {
+		t.Fatalf("duration_ms=%v want the client-reported 9000", data["duration_ms"])
+	}
+	if !reflect.DeepEqual(data["tps_samples"], samples) {
+		t.Fatalf("whole-turn duration must not substitute the samples: %#v", data["tps_samples"])
+	}
+}
+
+// TestCodexTurnCompletedOmitsAbsentOrEmptyResponseVSamples verifies an
+// unclaimed contract and an empty sample set never emit partial response_v1
+// fields.
+func TestCodexTurnCompletedOmitsAbsentOrEmptyResponseVSamples(t *testing.T) {
+	for name, line := range map[string][]byte{
+		"absent": []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250}`),
+		"empty":  []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250,"tps_sampling_contract":"response_v1","tps_samples":[]}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := codexNormalizer(line)
+			if len(events) != 1 {
+				t.Fatalf("expected one turn_usage: %#v", events)
+			}
+			if _, ok := events[0].Data["tps_sampling_contract"]; ok {
+				t.Fatalf("%s must not emit a contract: %#v", name, events[0].Data)
+			}
+			if _, ok := events[0].Data["tps_samples"]; ok {
+				t.Fatalf("%s must not emit samples: %#v", name, events[0].Data)
+			}
+		})
+	}
+}
+
+// TestCodexTurnCompletedResponseVSamplesSurviveTranscriptTee proves the
+// bridge's response_v1 samples reach the transcript consumer unchanged through
+// the Codex Tee, where the native turn duration is measured but must never be
+// used to rebuild or replace the paired per-response samples.
+func TestCodexTurnCompletedResponseVSamplesSurviveTranscriptTee(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+	var events []protocol.Event
+	tee := NewTranscriptTeeWithEventHandler("codex", io.Discard, func(event protocol.Event) {
+		events = append(events, event)
+	})
+	tee.now = clock.Now
+
+	if _, err := tee.Write([]byte(`{"type":"turn.started"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(1200 * time.Millisecond)
+	if _, err := tee.Write([]byte(`{"type":"turn.completed","duration_ms":9000,"usage":{"input_tokens":100,"output_tokens":250},` +
+		`"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
+		`"output_tokens":120,"first_token_at_ms":1000,"completed_at_ms":1400}]}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	var usage map[string]any
+	for _, event := range events {
+		if event.Type == "turn_usage" {
+			usage = event.Data
+		}
+	}
+	if usage == nil {
+		t.Fatalf("no turn_usage emitted: %#v", events)
+	}
+	if usage["tps_sampling_contract"] != responseTPSSamplingContract {
+		t.Fatalf("contract=%v want %s", usage["tps_sampling_contract"], responseTPSSamplingContract)
+	}
+	samples, ok := usage["tps_samples"].([]any)
+	if !ok || len(samples) != 1 {
+		t.Fatalf("samples=%#v want exactly one paired sample", usage["tps_samples"])
+	}
+	sample, _ := samples[0].(map[string]any)
+	if sample["response_id"] != "resp_1" || sample["first_token_at_ms"] != float64(1000) || sample["completed_at_ms"] != float64(1400) {
+		t.Fatalf("paired sample mutated: %#v", sample)
+	}
+	if sample["output_tokens"] != float64(120) {
+		t.Fatalf("sample output_tokens=%v want the response's own 120", sample["output_tokens"])
+	}
+	// The measured turn interval is a whole-turn denominator; it must never be
+	// pushed into the samples as a per-response completion time.
+	if sample["completed_at_ms"] == float64(1200) {
+		t.Fatalf("whole-turn interval substituted into the samples: %#v", sample)
+	}
+}
