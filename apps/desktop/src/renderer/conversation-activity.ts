@@ -33,7 +33,8 @@ export class ConversationActivityView {
       const items: ConversationActivityItem[] = snapshot.items.flatMap((item) => {
         if (item.turnId !== turnId || !item.taskRun) return [];
         return [{ id: item.taskRun.taskRunId, taskRunId: item.taskRun.taskRunId,
-          label: item.toolSummary ?? '任务', status: item.toolState === 'failed' ? 'failed' : 'done',
+          label: item.taskRun.taskName ?? item.toolSummary?.replace(/^运行任务\s*/, '') ?? item.taskRun.taskId,
+          status: item.taskRun.status ?? (item.toolState === 'failed' ? 'failed' : item.toolState === 'running' ? 'running' : 'done'),
           runtime: item.taskRun.resolvedProfile }];
       });
       if (index === articles.length - 1) {
@@ -64,14 +65,28 @@ export class ConversationActivityView {
     const active = ['running', 'waiting', 'queued'].includes(item.status);
     card.classList.toggle('is-running', active);
     const state = labels[item.status] ?? item.status;
-    card.textContent = `${item.label} · ${state}`;
+    const icon = document.createElement('span');
+    icon.className = 'conversation-task-state';
+    icon.setAttribute('aria-hidden', 'true');
+    const success = item.status === 'done';
+    card.classList.toggle('is-done', success);
+    card.classList.toggle('is-error', !active && !success);
+    const path = active
+      ? '<path d="M20 12a8 8 0 1 1-8-8"/>'
+      : success ? '<path d="m5 12 4 4 10-10"/>'
+        : '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>';
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+    const name = document.createElement('span');
+    name.textContent = item.label;
+    card.append(icon, name);
+    card.setAttribute('aria-label', `${item.label} · ${state}`);
     card.title = [item.label, state, item.project, item.runtime, item.taskRunId ? '点击查看任务对话' : undefined].filter(Boolean).join('\n');
     card.disabled = !item.taskRunId;
     card.addEventListener('click', async () => {
       if (!item.taskRunId) return;
       card.disabled = true;
       try { await this.api.openTaskTranscript(item.taskRunId); }
-      catch (error) { card.textContent = `${item.label} · 无法打开：${error instanceof Error ? error.message : String(error)}`; }
+      catch (error) { card.title = `${item.label} · 无法打开：${error instanceof Error ? error.message : String(error)}`; }
       finally { card.disabled = false; }
     });
     return card;
