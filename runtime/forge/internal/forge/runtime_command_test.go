@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,8 +115,15 @@ func TestDirectRunCodexSparkKeepsCodexCommandAndProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Command[0] != "codex" {
-		t.Fatalf("codex-spark command[0] = %q, want codex; command=%#v", plan.Command[0], plan.Command)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve current executable: %v", err)
+	}
+	if plan.Command[0] != executable {
+		t.Fatalf("codex-spark command[0] = %q, want the current Forge executable %q; command=%#v", plan.Command[0], executable, plan.Command)
+	}
+	if len(plan.Command) < 2 || plan.Command[1] != "__codex-app-server" {
+		t.Fatalf("codex-spark must run on the Codex app-server bridge: %#v", plan.Command)
 	}
 	if !contains(plan.Command, "gpt-5.3-codex-spark") {
 		t.Fatalf("codex-spark must preserve CODEX_MODEL value: %#v", plan.Command)

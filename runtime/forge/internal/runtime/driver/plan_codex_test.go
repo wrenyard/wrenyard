@@ -28,21 +28,38 @@ func TestCodexRestrictedPlansDisableNativeExecutionAndRegisterExactRequiredMCP(t
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !containsFlag(plan.Command, "--strict-config") || !containsFlag(plan.Command, "--ignore-user-config") || !containsFlag(plan.Command, "--search") {
-					t.Fatalf("restricted config isolation/search flags = %v", plan.Command)
+				// Every Codex run and resume drives the hidden app-server
+				// bridge, so command[1] is the bridge subcommand and the
+				// Forge executable owns command[0].
+				if len(plan.Command) < 2 || plan.Command[1] != CodexAppServerSubcommand {
+					t.Fatalf("command[1] = %v, want the app-server bridge subcommand", plan.Command)
+				}
+				if plan.Command[0] != codexBridgeExecutable(t) {
+					t.Fatalf("command[0] = %q, want the current Forge executable", plan.Command[0])
+				}
+				// Strict config and search stay on the bridge surface. The
+				// legacy --ignore-user-config switch is gone: isolation is the
+				// bridge's own responsibility, not a plan-level flag.
+				if !containsFlag(plan.Command, "--strict-config") || !containsFlag(plan.Command, "--search") {
+					t.Fatalf("restricted strict-config/search flags = %v", plan.Command)
+				}
+				if containsFlag(plan.Command, "--ignore-user-config") {
+					t.Fatalf("bridge isolation must not rely on a plan-level --ignore-user-config: %v", plan.Command)
 				}
 				for _, config := range []string{"features.shell_tool=false", "features.multi_agent=false"} {
 					if !containsFlagPair(plan.Command, "-c", config) {
 						t.Fatalf("restricted feature %q missing: %v", config, plan.Command)
 					}
 				}
-				if resume {
-					if !containsFlagPair(plan.Command, "-c", `sandbox_mode="`+catalog.PolicyFor(mode).CodexSandbox+`"`) {
-						t.Fatalf("resume sandbox missing: %v", plan.Command)
-					}
-				} else if !containsFlagPair(plan.Command, "--sandbox", catalog.PolicyFor(mode).CodexSandbox) {
-					t.Fatalf("run sandbox missing: %v", plan.Command)
+				// Both run and resume express the permission as the bridge's
+				// --sandbox flag; no approval switch is ever passed through.
+				if !containsFlagPair(plan.Command, "--sandbox", catalog.PolicyFor(mode).CodexSandbox) {
+					t.Fatalf("sandbox missing for resume=%v: %v", resume, plan.Command)
 				}
+				if containsFlag(plan.Command, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Fatalf("restricted plan must not bypass approvals: %v", plan.Command)
+				}
+				assertCodexApprovalPolicy(t, plan.Command, mode)
 				assertExactCodexMCPRegistration(t, plan)
 			})
 		}
@@ -59,21 +76,24 @@ func TestCodexYoloPreservesNativeUnrestrictedShellAndAgentWithoutForgeMCP(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(plan.Command) < 2 || plan.Command[1] != CodexAppServerSubcommand {
+			t.Fatalf("yolo command[1] = %v, want the app-server bridge subcommand", plan.Command)
+		}
 		for _, config := range []string{"features.shell_tool=true", "features.multi_agent=true"} {
 			if !containsFlagPair(plan.Command, "-c", config) {
 				t.Fatalf("yolo feature %q missing: %v", config, plan.Command)
 			}
 		}
-		if !containsFlag(plan.Command, "--dangerously-bypass-approvals-and-sandbox") {
-			t.Fatalf("yolo bypass missing: %v", plan.Command)
+		// The bridge has no approval-request surface, so yolo expresses its
+		// access as the danger-full-access sandbox instead of the legacy
+		// --dangerously-bypass-approvals-and-sandbox switch.
+		if containsFlag(plan.Command, "--dangerously-bypass-approvals-and-sandbox") {
+			t.Fatalf("yolo must not pass an unsupported approval switch through: %v", plan.Command)
 		}
-		if resume {
-			if !containsFlagPair(plan.Command, "-c", `sandbox_mode="danger-full-access"`) {
-				t.Fatalf("yolo resume sandbox missing: %v", plan.Command)
-			}
-		} else if !containsFlagPair(plan.Command, "--sandbox", "danger-full-access") {
-			t.Fatalf("yolo run sandbox missing: %v", plan.Command)
+		if !containsFlagPair(plan.Command, "--sandbox", "danger-full-access") {
+			t.Fatalf("yolo sandbox missing for resume=%v: %v", resume, plan.Command)
 		}
+		assertCodexApprovalPolicy(t, plan.Command, catalog.PermissionYolo)
 		if countConfigPrefix(plan.Command, "mcp_servers."+CodexMCPServerName+".") != 0 || len(plan.Resources) != 0 || plan.ConfigDir != "" {
 			t.Fatalf("yolo retained restricted MCP state: command=%v resources=%+v config=%q", plan.Command, plan.Resources, plan.ConfigDir)
 		}
@@ -144,9 +164,41 @@ func TestCodexPlanCLIConfigDoesNotMutateUserOrProjectConfig(t *testing.T) {
 			t.Fatalf("config %s changed: got=%q want=%q err=%v", path, got, want, err)
 		}
 	}
-	if !containsFlag(plan.Command, "--ignore-user-config") || countConfigPrefix(plan.Command, "mcp_servers."+CodexMCPServerName+".") != 6 {
+	if containsFlag(plan.Command, "--ignore-user-config") || countConfigPrefix(plan.Command, "mcp_servers."+CodexMCPServerName+".") != 6 {
 		t.Fatalf("isolated CLI config = %v", plan.Command)
 	}
+	if len(plan.Command) < 2 || plan.Command[1] != CodexAppServerSubcommand {
+		t.Fatalf("config isolation must run on the app-server bridge: %v", plan.Command)
+	}
+}
+
+// assertCodexApprovalPolicy pins the bridge's approval contract: only a policy
+// that differs from the bridge's built-in unattended "never" is passed through
+// as a `-c approval_policy=` override.
+func assertCodexApprovalPolicy(t *testing.T, command []string, mode catalog.PermissionMode) {
+	t.Helper()
+	want := catalog.CodexApprovalPolicy(mode)
+	got := containsFlagPair(command, "-c", `approval_policy="`+want+`"`)
+	if want == "never" {
+		if got {
+			t.Fatalf("mode %q already defaults to never; the override must not be sent: %v", mode, command)
+		}
+		return
+	}
+	if !got {
+		t.Fatalf("approval policy %q missing for mode %q: %v", want, mode, command)
+	}
+}
+
+// codexBridgeExecutable resolves the Forge executable the bridge is launched
+// through, matching adapter_codex.go's os.Executable() preference.
+func codexBridgeExecutable(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve current executable: %v", err)
+	}
+	return executable
 }
 
 func codexPlanRequest(t *testing.T, mode catalog.PermissionMode) PlanRequest {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/bashgate"
@@ -33,6 +34,20 @@ func RunCodexMCPIfNeeded(args []string) (int, bool) {
 		return 2, true
 	}
 	return execution.RunCodexMCPServer(context.Background(), os.Stdin, os.Stdout, os.Stderr, args[2]), true
+}
+
+// RunCodexAppServerIfNeeded owns the hidden, per-run Codex app-server bridge.
+// Every Codex run and resume is driven through it; the bridge owns the
+// app-server JSON-RPC transport so no legacy `codex exec` path is reachable
+// from here. It is intercepted before public CLI parsing and stable-launcher
+// dispatch so it cannot become another runtime orchestration surface.
+func RunCodexAppServerIfNeeded(args []string) (int, bool) {
+	if len(args) == 0 || args[0] != driver.CodexAppServerSubcommand {
+		return 0, false
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), codexAppServerSignals()...)
+	defer stop()
+	return driver.RunCodexAppServer(ctx, os.Stdin, os.Stdout, os.Stderr, args[1:]), true
 }
 
 func Run(args []string, prog string) int {

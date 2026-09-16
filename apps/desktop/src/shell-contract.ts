@@ -91,6 +91,16 @@ export type UpdateState =
 
 export type UpdateStage = 'download' | 'extract' | 'waiting' | 'daemon-upgrade';
 
+/**
+ * Why in-app installation is unavailable for the current installation. Kept in
+ * sync with the updater's discovery so every surface explains the same cause.
+ */
+export type UpdateInstallReason =
+  | 'unsupported-platform'
+  | 'missing-cli'
+  | 'missing-runtime'
+  | 'missing-helper';
+
 export interface UpdateSnapshot {
   channel: UpdateChannel;
   state: UpdateState;
@@ -98,6 +108,8 @@ export interface UpdateSnapshot {
   availableVersion?: string;
   checkedAt?: number;
   installSupported: boolean;
+  /** Present only while `installSupported` is false. */
+  installReason?: UpdateInstallReason;
   stage?: UpdateStage;
   progress?: number;
   activeTaskCount?: number;

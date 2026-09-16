@@ -2248,6 +2248,17 @@ func codexNormalizer(line []byte) []protocol.Event {
 		if cachedInput, ok := nonnegativeInt(usage["cached_input_tokens"]); ok {
 			data["cached_input_tokens"] = cachedInput
 		}
+		// The bridge may carry a response_v1 TPS sample set produced by
+		// pairing each provider response's first token with its own raw
+		// completion. Those paired samples are the exact evidence for the
+		// response_v1 contract and are forwarded unchanged on the existing
+		// schema; they are never reconstructed from the whole-turn timing.
+		if contract, ok := getString(event, "tps_sampling_contract"); ok && strings.TrimSpace(contract) != "" {
+			if samples, ok := event["tps_samples"].([]any); ok && len(samples) > 0 {
+				data["tps_sampling_contract"] = contract
+				data["tps_samples"] = samples
+			}
+		}
 		// Codex's turn.completed duration is the client-reported end-to-end
 		// agent turn/session wall duration and may include tool and waiting
 		// time. It is NOT provider generation time. The trusted agent_turn_v1

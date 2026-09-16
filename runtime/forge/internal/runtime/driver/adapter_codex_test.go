@@ -2,6 +2,7 @@ package driver
 
 import (
 	"io"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
@@ -14,17 +15,18 @@ func TestCodexAdapterBuildRunCommand(t *testing.T) {
 	cmd := adapter.BuildRunCommand("unused-profile", "help me", "/tmp/codex", CommandOptions{})
 
 	want := []string{
-		"codex", "--search", "exec", "--strict-config",
-		"-c", `approval_policy="never"`,
+		cmd.Path, "__codex-app-server", "--sandbox", "read-only",
 		"--model", "default-model",
-		"--json", "--sandbox", "read-only", "--skip-git-repo-check",
-		"--ignore-user-config",
+		"--strict-config", "--search",
 		"-c", "features.shell_tool=false",
 		"-c", "features.multi_agent=false",
 		"-",
 	}
 	if cmd.Dir != "/tmp/codex" {
 		t.Fatalf("Dir = %q, want /tmp/codex", cmd.Dir)
+	}
+	if !filepath.IsAbs(cmd.Path) {
+		t.Fatalf("Path = %q, want the current Forge executable", cmd.Path)
 	}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("args mismatch\nwant: %#v\n got: %#v", want, cmd.Args)
@@ -39,12 +41,10 @@ func TestCodexAdapterBuildResumeCommand(t *testing.T) {
 	cmd := adapter.BuildResumeCommand("unused-profile", "thread-abc", "continue", "/tmp/codex", CommandOptions{})
 
 	want := []string{
-		"codex", "--search", "exec", "resume", "thread-abc",
-		"--strict-config",
-		"-c", `approval_policy="never"`,
-		"-c", `sandbox_mode="read-only"`,
-		"--model", "default-model", "--json", "--skip-git-repo-check",
-		"--ignore-user-config",
+		cmd.Path, "__codex-app-server", "--sandbox", "read-only",
+		"--model", "default-model",
+		"--resume", "thread-abc",
+		"--strict-config", "--search",
 		"-c", "features.shell_tool=false",
 		"-c", "features.multi_agent=false",
 		"-",
@@ -60,17 +60,42 @@ func TestCodexAdapterBuildResumeCommand(t *testing.T) {
 	}
 }
 
+// TestCodexAdapterBridgeArgvStaysWithinBridgeSurface pins the exact argv
+// surface the hidden bridge accepts. The legacy `codex exec` flags are gone
+// and no permission CLI switch survives, because the bridge has no request
+// surface for them: unsupported modes are expressed as sandbox/config only.
+func TestCodexAdapterBridgeArgvStaysWithinBridgeSurface(t *testing.T) {
+	adapter := &CodexAdapter{Model: "gpt-5.6-sol", ReasoningEffort: "high", Sandbox: "read-only"}
+	args := adapter.BuildRunCommand("unused", "prompt", "/tmp/codex", CommandOptions{Permission: catalog.PermissionYolo}).Args
+
+	for _, removed := range []string{"--json", "--skip-git-repo-check", "--ignore-user-config", "exec"} {
+		if containsFlag(args, removed) {
+			t.Fatalf("removed legacy flag %q must not survive: %v", removed, args)
+		}
+	}
+	// The bridge has no approval-request surface, so no approval switch may
+	// be passed through even for yolo.
+	if containsFlag(args, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("yolo must not pass an unsupported approval switch through: %v", args)
+	}
+	if !containsFlagPair(args, "--sandbox", "danger-full-access") {
+		t.Fatalf("yolo must express its sandbox on the bridge: %v", args)
+	}
+	if !containsFlagPair(args, "-c", "model_reasoning_effort="+tomlString("high")) {
+		t.Fatalf("effort override missing: %v", args)
+	}
+}
+
 func TestCodexAdapterPermissionModesUseNativePolicy(t *testing.T) {
 	adapter := &CodexAdapter{Model: "default-model", Sandbox: "adapter-fallback"}
 	tests := []struct {
 		name    string
 		mode    catalog.PermissionMode
 		sandbox string
-		bypass  bool
 	}{
 		{name: "readonly", mode: catalog.PermissionReadonly, sandbox: "read-only"},
 		{name: "edit", mode: catalog.PermissionEdit, sandbox: "workspace-write"},
-		{name: "yolo", mode: catalog.PermissionYolo, sandbox: "danger-full-access", bypass: true},
+		{name: "yolo", mode: catalog.PermissionYolo, sandbox: "danger-full-access"},
 	}
 
 	for _, tt := range tests {
@@ -81,18 +106,13 @@ func TestCodexAdapterPermissionModesUseNativePolicy(t *testing.T) {
 				"resume": adapter.BuildResumeCommand("unused", "thread-abc", "prompt", "/tmp/codex", opts).Args,
 			}
 			for name, args := range commands {
-				if name == "run" && !containsFlagPair(args, "--sandbox", tt.sandbox) {
+				// The bridge reads the sandbox from the flag on both run and
+				// resume, so both must carry the mode's native sandbox.
+				if !containsFlagPair(args, "--sandbox", tt.sandbox) {
 					t.Fatalf("%s sandbox = %#v, want %q: %v", name, args, tt.sandbox, args)
 				}
-				if name == "resume" && !containsFlagPair(args, "-c", `sandbox_mode="`+tt.sandbox+`"`) {
-					t.Fatalf("resume sandbox config missing: %v", args)
-				}
-				if !containsFlagPair(args, "-c", `approval_policy="never"`) ||
-					!containsFlagPair(args, "-c", "approval_policy=never") {
-					t.Fatalf("%s must preserve both native approval policy entries: %v", name, args)
-				}
-				if got := containsFlag(args, "--dangerously-bypass-approvals-and-sandbox"); got != tt.bypass {
-					t.Fatalf("%s bypass = %v, want %v: %v", name, got, tt.bypass, args)
+				if containsFlag(args, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Fatalf("%s must not pass an unsupported approval switch through: %v", name, args)
 				}
 				if containsFlag(args, "--allowedTools") || containsFlagPrefix(args, "--allowedTools=") {
 					t.Fatalf("%s must never emit allowedTools: %v", name, args)

@@ -350,6 +350,7 @@ test('default update base url derives from the repository option', async () => {
 });
 
 test('atomic installation is available on the two maintained platforms only', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-update-platform-'));
   const base = {
     currentVersion: '1.0.0-dev.20',
     settings: {
@@ -357,13 +358,142 @@ test('atomic installation is available on the two maintained platforms only', ()
       saveUpdateChannel: () => undefined,
     },
     cliPath: '/suite/wrenyard',
-    helperPath: '/app/update-helper.cjs',
+    helperPath: writeDummyHelper(root),
     helperRuntimePath: '/suite/node',
     userDataPath: '/user/data',
   };
   assert.equal(new DesktopUpdateController({ ...base, platform: 'darwin', arch: 'arm64' }).snapshot().installSupported, true);
   assert.equal(new DesktopUpdateController({ ...base, platform: 'win32', arch: 'x64' }).snapshot().installSupported, true);
-  assert.equal(new DesktopUpdateController({ ...base, platform: 'linux', arch: 'x64' }).snapshot().installSupported, false);
+
+  // An unsupported platform reports the platform reason, never a missing path.
+  const linux = new DesktopUpdateController({ ...base, platform: 'linux', arch: 'x64' }).snapshot();
+  assert.equal(linux.installSupported, false);
+  assert.equal(linux.installReason, 'unsupported-platform');
+
+  const noRuntime = new DesktopUpdateController({
+    ...base,
+    helperRuntimePath: undefined,
+    platform: 'darwin',
+    arch: 'arm64',
+  }).snapshot();
+  assert.equal(noRuntime.installSupported, false);
+  assert.equal(noRuntime.installReason, 'missing-runtime');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('installation capability is re-probed on every check instead of frozen at startup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-update-reprobe-'));
+  const helper = join(root, 'update-helper.cjs');
+  let discovery: { cliPath?: string; runtimePath?: string; reason?: 'missing-cli' | 'missing-runtime' } = {
+    reason: 'missing-cli',
+  };
+  // The helper is present from the start: only the CLI is missing at startup.
+  writeDummyHelper(root);
+  const controller = new DesktopUpdateController(baseOptions({
+    userDataPath: join(root, 'data'),
+    helperPath: helper,
+    probeInstallation: () => discovery,
+    fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+  }));
+
+  // Startup: the suite is missing, so installs are refused with the reason.
+  assert.equal(controller.snapshot().installSupported, false);
+  assert.equal(controller.snapshot().installReason, 'missing-cli');
+
+  // The installation is repaired on disk after startup.
+  discovery = { cliPath: '/suite/wrenyard', runtimePath: '/suite/node' };
+  writeDummyHelper(root);
+
+  // A manual check must notice and enable installation without a restart.
+  const checked = await controller.check(true);
+  assert.equal(checked.installSupported, true);
+  assert.equal(checked.installReason, undefined);
+  assert.equal(checked.state, 'available');
+
+  // Removing the helper is detected by the next check, with the precise reason.
+  rmSync(helper, { force: true });
+  const removed = await controller.check(true);
+  assert.equal(removed.installSupported, false);
+  assert.equal(removed.installReason, 'missing-helper');
+
+  // Restoring it is detected on the following check, without a restart.
+  writeDummyHelper(root);
+  const restored = await controller.check(true);
+  assert.equal(restored.installSupported, true);
+  assert.equal(restored.installReason, undefined);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('an installation repaired after startup installs instead of failing on the stale verdict', async () => {
+  let launched = 0;
+  let preparedCount = 0;
+  let discovery: { cliPath?: string; runtimePath?: string; reason?: 'missing-cli' | 'missing-runtime' } = {
+    reason: 'missing-runtime',
+  };
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController(baseOptions({
+    userDataPath: join(root, 'data'),
+    helperPath: ensureHelper(root),
+    probeInstallation: () => discovery,
+    fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+    activeTaskCount: async () => 0,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => {
+      preparedCount += 1;
+      return { candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root] };
+    },
+    spawnDetached: () => { launched += 1; },
+    scheduler: isolatedScheduler(),
+  }));
+
+  // Startup verdict: no runtime, so an authorized install fails closed.
+  await controller.check(true);
+  const refused = await controller.requestInstall();
+  assert.equal(refused.state, 'install-failed');
+  assert.match(refused.message ?? '', /Node 运行时/u);
+  assert.equal(preparedCount, 0);
+  assert.equal(launched, 0);
+
+  // The runtime is restored, then a fresh authorization must succeed.
+  discovery = { cliPath: join(root, 'wrenyard'), runtimePath: join(root, 'node') };
+  await controller.requestInstall();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(preparedCount, 1, 'the repaired installation prepares the update');
+  assert.equal(launched, 1, 'the repaired installation launches the helper');
+  assert.equal(controller.snapshot().state, 'installing');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('a capability lost after startup blocks the launch and never installs', async () => {
+  let launched = 0;
+  let discovery: { cliPath?: string; runtimePath?: string; reason?: 'missing-cli' | 'missing-runtime' } = {
+    cliPath: '/suite/wrenyard',
+    runtimePath: '/suite/node',
+  };
+  const root = fakeUpdateRoot();
+  const controller = new DesktopUpdateController(baseOptions({
+    userDataPath: join(root, 'data'),
+    helperPath: ensureHelper(root),
+    probeInstallation: () => discovery,
+    fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+    activeTaskCount: async () => 0,
+    prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => ({
+      candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root],
+    }),
+    spawnDetached: () => { launched += 1; },
+    scheduler: isolatedScheduler(),
+  }));
+
+  // The suite disappears between authorization and the launch.
+  discovery = { cliPath: '/suite/wrenyard', reason: 'missing-runtime' };
+  const installed = await controller.requestInstall();
+  assert.equal(launched, 0, 'no launch without a resolvable CLI/runtime pair');
+  assert.equal(installed.state, 'install-failed');
+  assert.match(installed.message ?? '', /Node 运行时/u);
+
+  rmSync(root, { recursive: true, force: true });
 });
 
 test('daemon status projects the real active task count and fails closed on other active work', () => {
@@ -428,7 +558,7 @@ test('Windows Desktop extraction invokes SystemRoot System32 tar with safe libar
       platform: 'win32',
       arch: 'x64',
       cliPath: join(root, 'wrenyard.exe'),
-      helperPath: join(root, 'update-helper.cjs'),
+      helperPath: ensureHelper(root),
       helperRuntimePath: join(root, 'node.exe'),
       windowsTarPath: resolveWindowsSystemTarPath('D:\\Windows'),
       desktopPath: join(root, 'Programs', 'Wrenyard Desktop'),
@@ -495,7 +625,7 @@ test('native libarchive really extracts a ZIP into a >277-character unicode/spac
       platform: 'win32',
       arch: 'x64',
       cliPath: join(root, 'wrenyard.exe'),
-      helperPath: join(root, 'update-helper.cjs'),
+      helperPath: ensureHelper(root),
       helperRuntimePath: join(root, 'node.exe'),
       windowsTarPath: hostLibarchive,
       desktopPath: join(longParent, 'Programs', 'Wrenyard Desktop'),
@@ -595,9 +725,22 @@ function isolatedScheduler(): UpdateScheduler & { scheduled: Array<{ id: number;
   };
 }
 
+/** A real, empty helper file: the updater only installs from an on-disk helper. */
+function writeDummyHelper(root: string, name = 'update-helper.cjs'): string {
+  const helper = join(root, name);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(helper, '');
+  return helper;
+}
+
+/** Fixture helper path: real and present, so the install capability holds. */
+function ensureHelper(root: string): string {
+  return writeDummyHelper(root);
+}
+
 function fakeUpdateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'wrenyard-update-test-'));
-  writeFileSync(join(root, 'update-helper.cjs'), '');
+  writeDummyHelper(root);
   return root;
 }
 
@@ -609,7 +752,7 @@ test('explicit request prepares once while busy, waits without launching, then i
   const controller = new DesktopUpdateController(baseOptions({
     userDataPath: join(root, 'data'),
     cliPath: '/suite/wrenyard',
-    helperPath: join(root, 'update-helper.cjs'),
+    helperPath: ensureHelper(root),
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
@@ -651,7 +794,7 @@ test('cancelPendingInstall clears intent and prevents a later launch without rep
   const controller = new DesktopUpdateController(baseOptions({
     userDataPath: join(root, 'data'),
     cliPath: '/suite/wrenyard',
-    helperPath: join(root, 'update-helper.cjs'),
+    helperPath: ensureHelper(root),
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
@@ -704,7 +847,7 @@ test('preparation failure preserves the current version and reports a friendly e
   const controller = new DesktopUpdateController(baseOptions({
     userDataPath: join(root, 'data'),
     cliPath: '/suite/wrenyard',
-    helperPath: join(root, 'update-helper.cjs'),
+    helperPath: ensureHelper(root),
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
@@ -728,7 +871,7 @@ test('direct launchPreparedUpdate cannot bypass the busy safety gate', async () 
   const controller = new DesktopUpdateController(baseOptions({
     userDataPath: join(root, 'data'),
     cliPath: '/suite/wrenyard',
-    helperPath: join(root, 'update-helper.cjs'),
+    helperPath: ensureHelper(root),
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
@@ -756,7 +899,7 @@ test('stop clears the pending idle timer and install intent', async () => {
   const controller = new DesktopUpdateController(baseOptions({
     userDataPath: join(root, 'data'),
     cliPath: '/suite/wrenyard',
-    helperPath: join(root, 'update-helper.cjs'),
+    helperPath: ensureHelper(root),
     helperRuntimePath: '/suite/node',
     desktopPath: join(root, 'app'),
     fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),

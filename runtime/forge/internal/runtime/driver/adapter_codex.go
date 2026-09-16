@@ -3,6 +3,7 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -18,6 +19,47 @@ const (
 	CodexMCPToolName   = "bash"
 )
 
+// CodexAppServerSubcommand is Forge's hidden per-run Codex app-server bridge.
+// Every Codex run and resume is driven through it: the bridge owns the Codex
+// app-server JSON-RPC transport and `codex exec` is never an alternative path.
+const CodexAppServerSubcommand = "__codex-app-server"
+
+// codexBridgeArgs renders the bridge argv accepted by the hidden
+// CodexAppServerSubcommand entrypoint. Bridge flags are limited to --model,
+// --sandbox, --resume, --output-last-message, --strict-config, --search,
+// `-c key=value` overrides, and a trailing `-` marking a stdin prompt.
+func codexBridgeArgs(a *CodexAdapter, resumeID, outputLastMessage string, opts CommandOptions) []string {
+	// sandbox is deliberately placed first: plan_codex.go injects capability
+	// and gateway `-c` overrides directly before the bridge invocation, so
+	// putting the bridge first keeps every override ahead of the bridge flags.
+	args := []string{CodexAppServerSubcommand, "--sandbox", a.sandboxForPermission(opts)}
+	if strings.TrimSpace(a.Model) != "" {
+		args = append(args, "--model", a.Model)
+	}
+	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
+	}
+	// The bridge speaks only sandbox/approval config: an approval mode with no
+	// request surface is already satisfied by the bridge's unattended
+	// "never" policy and must never be passed through as a CLI switch.
+	if catalog.CodexApprovalPolicy(opts.Permission) != "never" {
+		args = append(args, "-c", "approval_policy="+tomlString(catalog.CodexApprovalPolicy(opts.Permission)))
+	}
+	if resumeID != "" {
+		args = append(args, "--resume", resumeID)
+	}
+	if outputLastMessage != "" {
+		args = append(args, "--output-last-message", outputLastMessage)
+	}
+	// Always strict-config: user config must not interfere with automated runs.
+	args = append(args, "--strict-config", "--search")
+	args = append(args, codexToolFeatureArgs(opts.Permission)...)
+	if windowsSandboxArgs := buildCodexWindowsSandboxArgs(opts, runtime.GOOS); len(windowsSandboxArgs) > 0 {
+		args = append(args, windowsSandboxArgs...)
+	}
+	return append(args, "-")
+}
+
 type CodexAdapter struct {
 	Model           string
 	ReasoningEffort string
@@ -29,66 +71,22 @@ func (a *CodexAdapter) BuildRunCommand(profile string, prompt string, workDir st
 }
 
 func (a *CodexAdapter) BuildRunCommandWithLastMessage(profile string, prompt string, workDir string, outputLastMessage string, opts CommandOptions) *exec.Cmd {
-	sandbox := a.sandboxForPermission(opts)
-	args := []string{
-		"--search",
-		"exec",
-		"--strict-config",
-		"-c", "approval_policy=\"" + catalog.CodexApprovalPolicy(opts.Permission) + "\"",
-		"--model", a.Model,
-		"--json",
-		"--sandbox", sandbox,
-		"--skip-git-repo-check",
-	}
-	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
-		args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
-	}
-	// Always ignore user config to prevent workspace-level skills from interfering with automated task execution.
-	args = append(args, "--ignore-user-config")
-	args = append(args, codexToolFeatureArgs(opts.Permission)...)
-	if windowsSandboxArgs := buildCodexWindowsSandboxArgs(opts, runtime.GOOS); len(windowsSandboxArgs) > 0 {
-		args = append(args, windowsSandboxArgs...)
-	}
-	if permissionArgs := catalog.CodexPermissionArgs(opts.Permission); len(permissionArgs) > 0 {
-		args = append(args, permissionArgs...)
-	}
-	if outputLastMessage != "" {
-		args = append(args, "--output-last-message", outputLastMessage)
-	}
-	args = append(args, "-")
-
-	cmd := exec.Command("codex", args...)
-	cmd.Dir = workDir
-	cmd.Stdin = strings.NewReader(prompt)
-	return cmd
+	return newCodexBridgeCommand(codexBridgeArgs(a, "", outputLastMessage, opts), prompt, workDir)
 }
 
 func (a *CodexAdapter) BuildResumeCommand(profile string, nativeSessionID string, prompt string, workDir string, opts CommandOptions) *exec.Cmd {
-	sandbox := a.sandboxForPermission(opts)
-	args := []string{
-		"--search",
-		"exec", "resume", nativeSessionID,
-		"--strict-config",
-		"-c", "approval_policy=\"" + catalog.CodexApprovalPolicy(opts.Permission) + "\"",
-		"-c", fmt.Sprintf("sandbox_mode=\"%s\"", sandbox),
-		"--model", a.Model,
-		"--json",
-		"--skip-git-repo-check",
+	return newCodexBridgeCommand(codexBridgeArgs(a, nativeSessionID, "", opts), prompt, workDir)
+}
+
+// newCodexBridgeCommand launches the bridge through the current Forge
+// executable, exactly as the MCP bridge is launched. The prompt travels on
+// stdin and the working directory is preserved on the child process.
+func newCodexBridgeCommand(args []string, prompt string, workDir string) *exec.Cmd {
+	executable, err := os.Executable()
+	if err != nil {
+		executable = "forge"
 	}
-	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
-		args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
-	}
-	// Always ignore user config to prevent workspace-level skills from interfering with automated task execution.
-	args = append(args, "--ignore-user-config")
-	args = append(args, codexToolFeatureArgs(opts.Permission)...)
-	if windowsSandboxArgs := buildCodexWindowsSandboxArgs(opts, runtime.GOOS); len(windowsSandboxArgs) > 0 {
-		args = append(args, windowsSandboxArgs...)
-	}
-	if permissionArgs := catalog.CodexPermissionArgs(opts.Permission); len(permissionArgs) > 0 {
-		args = append(args, permissionArgs...)
-	}
-	args = append(args, "-")
-	cmd := exec.Command("codex", args...)
+	cmd := exec.Command(executable, args...)
 	cmd.Dir = workDir
 	cmd.Stdin = strings.NewReader(prompt)
 	return cmd

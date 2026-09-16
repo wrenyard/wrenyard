@@ -18,8 +18,9 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, win32 } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import type { UpdateChannel, UpdateSnapshot } from './shell-contract.js';
+import type { UpdateChannel, UpdateInstallReason, UpdateSnapshot } from './shell-contract.js';
 import type { UpdateHelperConfig } from './update-helper.js';
+import type { InstallationDiscovery, InstallCapabilityReason } from './installation-discovery.js';
 
 const DEFAULT_REPOSITORY = 'wrenyard/wrenyard';
 const CHECK_DELAY_MS = 5_000;
@@ -105,6 +106,12 @@ export interface DesktopUpdateControllerOptions {
   cliPath?: string;
   helperPath?: string;
   helperRuntimePath?: string;
+  /**
+   * Re-probe the installation whenever an installation-sensitive operation
+   * runs. The updater never caches a negative startup verdict: a repaired
+   * installation becomes installable without restarting Desktop.
+   */
+  probeInstallation?: () => InstallationDiscovery;
   windowsTarPath?: string;
   desktopPath?: string;
   userDataPath: string;
@@ -376,6 +383,18 @@ function readBundleVersion(appPath: string): string | null {
   }
 }
 
+/**
+ * A resolved path is not the same as an installed component: the updater only
+ * treats the helper as present when a regular file is actually there.
+ */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function defaultSpawnDetached(command: string, args: string[], options: SpawnOptions): void {
   const child = spawn(command, args, { ...options, detached: true, stdio: 'ignore' });
   child.unref();
@@ -384,9 +403,10 @@ function defaultSpawnDetached(command: string, args: string[], options: SpawnOpt
 export class DesktopUpdateController {
   private readonly currentVersion: string;
   private readonly settings: UpdateSettingsStore;
-  private readonly cliPath?: string;
+  private cliPath?: string;
+  private helperRuntimePath?: string;
   private readonly helperPath?: string;
-  private readonly helperRuntimePath?: string;
+  private readonly probeInstallation?: () => InstallationDiscovery;
   private readonly windowsTarPath: string;
   private readonly desktopPath: string;
   private readonly userDataPath: string;
@@ -422,6 +442,7 @@ export class DesktopUpdateController {
     this.currentVersion = options.currentVersion;
     this.settings = options.settings;
     this.cliPath = options.cliPath;
+    this.probeInstallation = options.probeInstallation;
     this.helperPath = options.helperPath;
     this.helperRuntimePath = options.helperRuntimePath;
     this.windowsTarPath = options.windowsTarPath ?? resolveWindowsSystemTarPath(process.env.SystemRoot);
@@ -450,15 +471,62 @@ export class DesktopUpdateController {
       : join(this.homePath, 'Applications', MAC_APP_NAME));
     this.resultPath = join(this.userDataPath, 'update-result.json');
     const fallback: UpdateChannel = parseSemver(this.currentVersion)?.prerelease.length ? 'dev' : 'stable';
+    const capability = this.installationCapability();
     this.snapshotValue = {
       channel: this.settings.loadUpdateChannel(fallback),
       state: 'idle',
       currentVersion: this.currentVersion,
-      installSupported: (this.platform === 'darwin' || this.platform === 'win32')
-        && this.target !== null
-        && Boolean(this.cliPath && this.helperPath && this.helperRuntimePath),
+      installSupported: capability.installSupported,
+      ...(capability.reason !== undefined ? { installReason: capability.reason } : {}),
     };
     this.consumeHelperResult();
+  }
+
+  /**
+   * Re-resolve the CLI/runtime pair and return the current install capability.
+   * Called on every check, retry and install so a repaired installation is
+   * usable without restarting Desktop, and a broken one is never assumed
+   * installable. A `platform`-level reason always wins over a missing path.
+   */
+  private installationCapability(): { installSupported: boolean; reason?: UpdateInstallReason } {
+    if (this.platform !== 'darwin' && this.platform !== 'win32') {
+      return { installSupported: false, reason: 'unsupported-platform' };
+    }
+    if (this.target === null) return { installSupported: false, reason: 'unsupported-platform' };
+    if (!this.helperPath || !isRegularFile(this.helperPath)) {
+      return { installSupported: false, reason: 'missing-helper' };
+    }
+
+    if (this.probeInstallation) {
+      const probe = this.probeInstallation();
+      this.cliPath = probe.cliPath;
+      this.helperRuntimePath = probe.runtimePath;
+      const reason: InstallCapabilityReason | undefined = probe.reason
+        ?? (probe.cliPath === undefined
+          ? 'missing-cli'
+          : probe.runtimePath === undefined ? 'missing-runtime' : undefined);
+      if (reason === 'unsupported-platform') return { installSupported: false, reason: 'unsupported-platform' };
+      if (reason !== undefined) return { installSupported: false, reason };
+      return { installSupported: true };
+    }
+
+    if (!this.cliPath) return { installSupported: false, reason: 'missing-cli' };
+    if (!this.helperRuntimePath) return { installSupported: false, reason: 'missing-runtime' };
+    return { installSupported: true };
+  }
+
+  /** Re-probe the installation and publish the refreshed capability. */
+  private refreshInstallability(): void {
+    const capability = this.installationCapability();
+    if (capability.installSupported === this.snapshotValue.installSupported
+      && capability.reason === this.snapshotValue.installReason) {
+      return;
+    }
+    this.setSnapshot({
+      ...this.snapshotValue,
+      installSupported: capability.installSupported,
+      installReason: capability.reason,
+    });
   }
 
   snapshot(): UpdateSnapshot {
@@ -495,11 +563,13 @@ export class DesktopUpdateController {
     this.launched = false;
     this.clearPendingTimer();
     this.cleanupPrepared();
+    const capability = this.installationCapability();
     this.setSnapshot({
       channel,
       state: 'idle',
       currentVersion: this.currentVersion,
-      installSupported: this.snapshotValue.installSupported,
+      installSupported: capability.installSupported,
+      ...(capability.reason !== undefined ? { installReason: capability.reason } : {}),
     });
     return this.check(true);
   }
@@ -520,7 +590,14 @@ export class DesktopUpdateController {
       return this.snapshot();
     }
     const previous = this.snapshot();
-    this.setSnapshot({ ...previous, state: 'checking', message: undefined });
+    // Re-probe on every check: a repaired installation becomes installable
+    // here without a Desktop restart.
+    const capability = this.installationCapability();
+    const support = {
+      installSupported: capability.installSupported,
+      ...(capability.reason !== undefined ? { installReason: capability.reason } : {}),
+    };
+    this.setSnapshot({ ...previous, state: 'checking', message: undefined, ...support });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
     timeout.unref?.();
@@ -542,7 +619,7 @@ export class DesktopUpdateController {
           currentVersion: this.currentVersion,
           availableVersion: selection.candidate.version,
           checkedAt,
-          installSupported: this.snapshotValue.installSupported,
+          ...support,
         });
       } else {
         this.setSnapshot({
@@ -552,7 +629,7 @@ export class DesktopUpdateController {
             : 'up-to-date',
           currentVersion: this.currentVersion,
           checkedAt,
-          installSupported: this.snapshotValue.installSupported,
+          ...support,
         });
       }
     } catch {
@@ -562,9 +639,10 @@ export class DesktopUpdateController {
           state: 'check-failed',
           checkedAt: this.now(),
           message: '暂时无法检查更新，请检查网络连接后重试。',
+          ...support,
         });
       } else {
-        this.setSnapshot(previous);
+        this.setSnapshot({ ...previous, ...support });
       }
     } finally {
       clearTimeout(timeout);
@@ -618,13 +696,17 @@ export class DesktopUpdateController {
    */
   private async advanceInstall(onInstall: () => void): Promise<UpdateSnapshot> {
     if (!this.installIntent || this.launched) return this.snapshot();
+    // Re-probe before authorizing an install: an installation repaired after
+    // startup installs here, and a broken one fails closed with a precise
+    // reason instead of the earlier startup verdict.
+    this.refreshInstallability();
     if (!this.snapshotValue.installSupported) {
       this.installIntent = false;
       this.cleanupPrepared();
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'install-failed',
-        message: '当前平台暂不支持应用内安装，请从发布页下载安装包。',
+        message: installUnavailableMessage(this.snapshotValue.installReason),
       });
       return this.snapshot();
     }
@@ -752,6 +834,9 @@ export class DesktopUpdateController {
   }
 
   async launchPreparedUpdate(): Promise<boolean> {
+    // A direct launch re-probes as well: the safety property is that no launch
+    // ever happens without a currently-resolvable CLI/runtime pair.
+    this.refreshInstallability();
     if (!this.prepared || !this.helperPath || !this.helperRuntimePath || !this.cliPath) return false;
     const activeTaskCount = await this.readActiveTaskCount();
     if (activeTaskCount === null || activeTaskCount > 0) {
@@ -954,6 +1039,22 @@ function sanitizeNativeCommandDetail(value: string): string {
     .replace(/\s+/gu, ' ')
     .trim()
     .slice(0, 160);
+}
+
+/** Human-readable explanation keyed to the same reason code every surface shows. */
+export function installUnavailableMessage(reason: UpdateInstallReason | undefined): string {
+  switch (reason) {
+    case 'missing-cli':
+      return '未找到 Wrenyard CLI，无法应用内安装。请先安装或修复啾啾工坊套件，然后重试。';
+    case 'missing-runtime':
+      return '未找到与当前 CLI 配套的 Node 运行时，无法应用内安装。请修复套件安装后重试。';
+    case 'missing-helper':
+      return '未找到更新助手组件，无法应用内安装。请重新安装 Desktop 后重试。';
+    case 'unsupported-platform':
+      return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
+    default:
+      return '当前无法应用内安装，请检查本机安装后重试。';
+  }
 }
 
 function preparationFailureMessage(error: unknown): string {

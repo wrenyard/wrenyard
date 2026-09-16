@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/gateway",
-  "version": "1.0.0-dev.29",
+  "version": "1.0.0-dev.30",
   "private": true,
   "license": "MIT",
   "type": "module",
