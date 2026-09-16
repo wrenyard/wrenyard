@@ -85,6 +85,9 @@ const api: WrenyardShellApi = {
   getConversationActivity(): Promise<ConversationActivityItem[]> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationActivity);
   },
+  copyText(text: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.copyText, text);
+  },
   openTaskTranscript(taskRunId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
   },

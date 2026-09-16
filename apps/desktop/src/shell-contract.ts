@@ -20,6 +20,7 @@ export const SHELL_CHANNELS = {
   conversationSnapshot: 'wrenyard-shell:conversation-snapshot',
   conversationActivity: 'wrenyard-shell:conversation-activity',
   taskTranscript: 'wrenyard-shell:task-transcript',
+  copyText: 'wrenyard-shell:copy-text',
   conversationSelect: 'wrenyard-shell:conversation-select',
   conversationCreate: 'wrenyard-shell:conversation-create',
   conversationSelectModel: 'wrenyard-shell:conversation-select-model',
@@ -836,6 +837,7 @@ export interface WrenyardShellApi {
   getConversation(): Promise<ConversationSnapshot>;
   getConversationActivity(): Promise<ConversationActivityItem[]>;
   openTaskTranscript(taskRunId: string): Promise<void>;
+  copyText(text: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;

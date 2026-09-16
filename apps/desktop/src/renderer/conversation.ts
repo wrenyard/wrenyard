@@ -1360,7 +1360,7 @@ export class ConversationView {
 
   private async copyMessage(text: string, button: HTMLButtonElement): Promise<void> {
     try {
-      await navigator.clipboard.writeText(text);
+      await this.api.copyText(text);
       this.setCopyButtonState(button, '已复制');
     } catch {
       this.setCopyButtonState(button, '复制失败');
