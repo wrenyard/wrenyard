@@ -379,6 +379,8 @@ function conversationItemSignature(item: ConversationItemSnapshot): string {
     item.text,
     item.toolResultText ?? '',
     item.taskRun?.taskRunId ?? '',
+    item.taskRun?.status ?? '',
+    item.taskRun?.taskName ?? '',
     item.documentLinks?.map((link) => `${link.title}\u0004${link.path}`).join('\u0005') ?? '',
   ].join('\u0001');
 }
@@ -737,7 +739,7 @@ export class ConversationView {
 
   constructor(api: WrenyardShellApi, openSettings: () => void) {
     this.api = api;
-    this.activity = new ConversationActivityView(api, this.feed);
+    this.activity = new ConversationActivityView(api, () => { if (this.snapshot) this.render(this.snapshot); });
     this.openSettings = openSettings;
     this.modelSelect = new SearchableSingleSelect(this.modelPickerHost, {
       label: '会话模型',
@@ -810,8 +812,7 @@ export class ConversationView {
 
     this.renderModels(snapshot);
     this.renderSessions(snapshot);
-    this.renderItems(snapshot);
-    this.activity.update(snapshot);
+    this.renderItems(this.activity.enrich(snapshot));
     this.gate.hidden = snapshot.status !== 'workspace-required';
     if (!this.gate.hidden) {
       if (gateWasHidden || workspaceChanged) this.gateInput.value = snapshot.workspace.path ?? '';
@@ -1151,7 +1152,7 @@ export class ConversationView {
 
     const backlog = document.createElement('div');
     backlog.className = 'turn-activity-steps';
-    const processItems = group.items.filter((item) => !finalItem || item.id !== finalItem.id);
+    const processItems = group.items.filter((item) => !finalItem || item.id !== finalItem.id).sort((a, b) => a.time - b.time);
     for (let index = 0; index < processItems.length;) {
       const item = processItems[index];
       if (item?.kind === 'assistant') {
@@ -1164,7 +1165,14 @@ export class ConversationView {
       }
       if (item?.kind === 'tool') {
         const tools: ConversationItemSnapshot[] = [];
-        while (processItems[index]?.kind === 'tool') tools.push(processItems[index++] as ConversationItemSnapshot);
+        const category = this.toolCategory(item);
+        while (processItems[index]?.kind === 'tool') {
+          const candidate = processItems[index] as ConversationItemSnapshot;
+          const candidateCategory = this.toolCategory(candidate);
+          if (candidateCategory !== category) break;
+          tools.push(candidate);
+          index += 1;
+        }
         backlog.append(this.renderToolStack(tools));
         continue;
       }
@@ -1196,6 +1204,22 @@ export class ConversationView {
     body.append(details);
     // The answer body lives outside the process block and only exists once the
     // turn is completed with a known finalItemId.
+    const taskItems = processItems.filter((item) => item.kind === 'tool' && item.taskRun?.taskRunId);
+    const summaryRails = document.createElement('div');
+    summaryRails.className = 'turn-task-summary-rails';
+    summaryRails.hidden = details.open || taskItems.length === 0;
+    const grouped = new Map<string, ConversationItemSnapshot[]>();
+    const seenRuns = new Set<string>();
+    for (const item of taskItems) {
+      if (seenRuns.has(item.taskRun!.taskRunId)) continue;
+      seenRuns.add(item.taskRun!.taskRunId);
+      const key = item.taskRun!.taskId;
+      const bucket = grouped.get(key) ?? [];
+      bucket.push(item);
+      grouped.set(key, bucket);
+    }
+    for (const taskGroup of grouped.values()) summaryRails.append(this.renderToolStack(taskGroup, 'summary:'));
+    body.append(summaryRails);
     if (finalItem) body.append(this.renderFinalContent(finalItem, group, preferences));
     const footer = document.createElement('div');
     footer.className = 'message-footer';
@@ -1253,27 +1277,42 @@ export class ConversationView {
     return undefined;
   }
 
+  private toolCategory(item: ConversationItemSnapshot): string {
+    if (item.taskRun || item.toolName === 'run_task' || item.toolName === 'task_run') return 'tasks';
+    if (/search|doc|read/.test(item.toolName ?? '')) return 'docs-search';
+    return 'other';
+  }
+
   private toolIcon(item: ConversationItemSnapshot): HTMLSpanElement {
     const icon = document.createElement('span');
     icon.className = 'turn-tool-icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML = item.toolName === 'run_task'
-      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 5 11 7-11 7z"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
+    const state = item.taskRun?.status ?? item.toolState;
+    const task = !!item.taskRun;
+    const active = task && ['queued', 'running', 'waiting'].includes(state ?? 'running');
+    icon.classList.toggle('is-spinning', active);
+    const path = task
+      ? active ? '<path d="M20 12a8 8 0 1 1-8-8"/>'
+        : state === 'done' ? '<path d="m5 12 4 4 10-10"/>'
+          : '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>'
+      : this.toolCategory(item) === 'tasks' ? '<path d="m8 5 11 7-11 7z"/>'
+        : this.toolCategory(item) === 'docs-search' ? '<path d="M12 5v15M12 5C8 2 3 4 3 4v15s5-2 9 1c4-3 9-1 9-1V4s-5-2-9 1z"/>'
+          : '<path d="M4 7h16M4 12h16M4 17h10"/>';
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">${path}</svg>`;
     return icon;
   }
 
-  private renderToolStack(items: ConversationItemSnapshot[]): HTMLElement {
+  private renderToolStack(items: ConversationItemSnapshot[], stackPrefix = 'stack:'): HTMLElement {
     const stack = document.createElement('div');
     stack.className = 'turn-tool-stack';
-    const id = 'stack:' + items[0]!.id;
+    const id = stackPrefix + items[0]!.id;
     stack.dataset.expandId = id;
     const viewport = document.createElement('div');
     viewport.className = 'turn-tool-viewport';
     const rail = document.createElement('div');
     rail.className = 'turn-tool-rail';
     rail.style.setProperty('--collapsed-width', `${32 + Math.min(items.length - 1, 2) * 7}px`);
-    rail.style.setProperty('--expanded-width', `${items.length * 33 + 28}px`);
+    rail.style.setProperty('--expanded-width', `${items.length * 33}px`);
     const selected = document.createElement('div');
     selected.className = 'turn-tool-detail';
     const buttons: HTMLButtonElement[] = [];
@@ -1300,15 +1339,24 @@ export class ConversationView {
     items.forEach((item, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'turn-tool-icon-button is-' + (item.toolState ?? 'running');
       button.style.setProperty('--collapsed-x', `${Math.min(index, 2) * 7}px`);
       button.style.setProperty('--expanded-x', `${index * 33}px`);
       button.style.setProperty('--collapsed-opacity', index < 3 ? '1' : '0');
-      button.title = item.toolSummary ?? item.toolName ?? '工具';
+      const taskRunId = item.taskRun?.taskRunId;
+      const taskName = item.taskRun?.taskName ?? item.taskRun?.taskId;
+      const state = item.taskRun?.status ?? item.toolState;
+      button.className = 'turn-tool-icon-button is-' + (state === 'done' ? 'done' : ['queued', 'running', 'waiting'].includes(state ?? 'running') ? 'running' : 'failed');
+      button.title = [taskName ?? item.toolSummary ?? item.toolName ?? '工具', this.toolStateLabel(item), taskRunId ? '点击查看任务对话' : undefined].filter(Boolean).join(' · ');
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-expanded', 'false');
       button.append(this.toolIcon(item));
-      button.addEventListener('click', () => select(item, button));
+      button.addEventListener('click', async () => {
+        if (!taskRunId) { select(item, button); return; }
+        button.disabled = true;
+        try { await this.api.openTaskTranscript(taskRunId); }
+        catch (error) { button.title = `无法打开任务：${errorMessage(error)}`; }
+        finally { button.disabled = false; }
+      });
       buttons.push(button);
       rail.append(button);
     });
@@ -1317,25 +1365,12 @@ export class ConversationView {
     toggle.className = 'turn-tool-stack-toggle';
     toggle.title = `${items.length} 次工具调用`;
     toggle.setAttribute('aria-label', toggle.title);
-    const count = document.createElement('span');
-    count.className = 'turn-tool-count';
-    count.textContent = String(items.length);
-    toggle.append(count);
-    const collapse = document.createElement('button');
-    collapse.type = 'button';
-    collapse.className = 'turn-tool-stack-collapse';
-    collapse.style.setProperty('--collapse-x', `${items.length * 33}px`);
-    collapse.title = '收起工具';
-    collapse.setAttribute('aria-label', collapse.title);
-    collapse.textContent = '‹';
     const setExpanded = (open: boolean): void => {
       stack.classList.toggle('is-expanded', open);
       stack.dataset.expanded = String(open);
       toggle.setAttribute('aria-expanded', String(open));
       toggle.tabIndex = open ? -1 : 0;
       toggle.setAttribute('aria-hidden', String(open));
-      collapse.tabIndex = open ? 0 : -1;
-      collapse.setAttribute('aria-hidden', String(!open));
       buttons.forEach((button) => {
         button.tabIndex = open ? 0 : -1;
         button.setAttribute('aria-hidden', String(!open));
@@ -1344,9 +1379,8 @@ export class ConversationView {
       else { clearDetail(); this.expandedItemIds.delete(id); }
     };
     toggle.addEventListener('click', () => { setExpanded(true); buttons[0]?.focus({ preventScroll: true }); });
-    collapse.addEventListener('click', () => { setExpanded(false); toggle.focus({ preventScroll: true }); });
     stack.addEventListener('reset-tool-stack', () => setExpanded(false));
-    rail.append(toggle, collapse);
+    rail.append(toggle);
     viewport.append(rail);
     stack.append(viewport, selected);
     const restoredItem = items.findIndex((item) => this.expandedItemIds.has(item.id));
@@ -1357,7 +1391,8 @@ export class ConversationView {
   }
 
   private toolStateLabel(item: ConversationItemSnapshot): string {
-    return item.toolState === 'failed' ? '失败' : item.toolState === 'done' ? '完成' : '运行中';
+    const labels: Record<string, string> = { queued: '排队中', running: '运行中', waiting: '等待中', paused: '已暂停', done: '完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
+    return labels[item.taskRun?.status ?? item.toolState ?? 'running'] ?? '未知';
   }
 
   /** Final answer content, separate from the footer actions and metrics. */
@@ -1768,13 +1803,17 @@ export class ConversationView {
     details.dataset.expandId = id;
     details.addEventListener('toggle', () => {
       if (!details.isConnected) return;
+      const taskSummary = details.parentElement?.querySelector<HTMLElement>('.turn-task-summary-rails');
+      if (taskSummary) this.closeDescendants(taskSummary);
       if (details.open) {
         this.expandedItemIds.add(id);
         preferences.manualExpanded = true;
+        details.parentElement?.querySelector<HTMLElement>('.turn-task-summary-rails')?.toggleAttribute('hidden', true);
         return;
       }
       this.closeDescendants(details);
       this.expandedItemIds.delete(id);
+      if (taskSummary) taskSummary.hidden = taskSummary.childElementCount === 0;
       // Only an explicit collapse clears the manual expansion; a rebuild
       // replacing the node must not look like a reader collapse.
       preferences.manualExpanded = false;
