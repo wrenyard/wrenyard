@@ -376,9 +376,10 @@ button, input, select { accent-color: var(--moss-deep); }
 .message-user .message-body { width: min(82%, 650px); display: flex; flex-direction: column; align-items: flex-end; padding: 12px 15px; border: 1px solid #d2c3a0; border-radius: 8px 2px 8px 8px; background: #eee1c5; }
 .message-user .message-content { width: 100%; }
 .message-time { align-self: flex-end; margin-top: 6px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
-.message-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
-.message-footer .message-time { align-self: auto; margin-top: 0; }
-.message-copy { flex: 0 0 auto; margin-left: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; color: var(--muted); background: rgba(255, 250, 240, .7); font-size: 9px; font-weight: 700; cursor: pointer; }
+.message-footer { display: flex; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 12px; margin-top: 8px; overflow-x: auto; }
+.message-footer .message-time { flex: 0 0 auto; align-self: auto; margin: 0 0 0 auto; }
+.message-copy { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; border: 0; border-radius: 4px; padding: 4px; color: var(--muted); background: transparent; cursor: pointer; }
+.message-copy svg { width: 16px; height: 16px; }
 .message-copy:hover { color: var(--ink); background: #fffaf0; }
 .message-copy:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
 .message-content { color: var(--ink); font-size: 13px; line-height: 1.72; overflow-wrap: anywhere; }
@@ -433,7 +434,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-document-label:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
 .turn-document[open] { flex-basis: 100%; }
 .turn-document-body { max-height: 220px; margin: 0; overflow: auto; border-top: 1px solid var(--line); padding: 8px 10px; color: var(--ink-soft); font: 10px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
-.turn-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 9px; }
+.turn-stats { display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 4px 14px; color: var(--muted); font-size: 9px; }
 .turn-stat { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .turn-stat small { color: var(--muted); font-size: 9px; }
 .turn-stat b { color: var(--ink-soft); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 650; }
