@@ -323,7 +323,7 @@ export interface ProviderAuthStatus {
   setupHint?: string;
   configured: boolean;
   authMode: ProviderAuthMode;
-  models?: Array<{ id: string; displayName: string }>;
+  models?: Array<{ id: string; displayName: string; effectiveTps?: number | null; quotaAbundant?: boolean }>;
 }
 
 export interface ProviderCatalogSnapshot {
@@ -334,7 +334,7 @@ export interface ProviderCatalogSnapshot {
   authMode: ProviderAuthMode;
   setupHint: string;
   quota?: QuotaProviderSnapshot;
-  models?: Array<{ id: string; displayName: string }>;
+  models?: Array<{ id: string; displayName: string; effectiveTps?: number | null; quotaAbundant?: boolean }>;
 }
 
 export interface ProviderOrderSnapshot {

@@ -88,7 +88,7 @@ export async function prepareProfile(
 
   const manifest = {
     name: '@wrenyard/dsh-profile',
-    version: '1.0.0-dev.28',
+    version: '1.0.0-dev.29',
     private: true,
     type: 'module',
     dsh: {

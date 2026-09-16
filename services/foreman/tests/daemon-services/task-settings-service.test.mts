@@ -810,6 +810,26 @@ describe('daemon task-settings-service (no-model)', () => {
     }
   })
 
+  it('model status uses the exact bound pool and shared speed', async () => {
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CURSOR_GROK_QUOTA_PROFILE, CURSOR_OTHER_QUOTA_PROFILE] }),
+      quotaSnapshots: poolQuotaSnapshotService('cursor', [{ name: 'Cursor', pct: 100 }, { name: 'Other', pct: 10 }]),
+      now: () => QUOTA_T0,
+    })
+    const status = await service.modelStatus()
+    assert.equal(status.get('cursor/kimi-k3')?.effectiveTps, 90)
+    assert.equal(status.get('cursor/kimi-k3')?.quotaAbundant, true)
+    assert.equal(status.get('cursor/grok-4.6')?.quotaAbundant, false)
+  })
+
+  it('model status does not advertise missing quota as abundant', async () => {
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CURSOR_OTHER_QUOTA_PROFILE] }),
+      now: () => QUOTA_T0,
+    })
+    assert.equal((await service.modelStatus()).get('cursor/kimi-k3')?.quotaAbundant, false)
+  })
+
   const writeConfig = (data: unknown): void => {
     writeFileSync(context!.configPath, `${JSON.stringify(data, null, 2)}\n`, 'utf-8')
   }
