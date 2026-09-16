@@ -1181,6 +1181,7 @@ export class ConversationView {
     if (finalItem) body.append(this.renderFinalContent(finalItem, group, preferences));
     const footer = document.createElement('div');
     footer.className = 'message-footer';
+    if (finalItem && !running) footer.append(this.createCopyButton(finalItem.text));
     const stamp = document.createElement('time');
     stamp.className = 'message-time';
     const endedAt = group.turn?.endedAt;
@@ -1315,7 +1316,7 @@ export class ConversationView {
     return item.toolState === 'failed' ? '失败' : item.toolState === 'done' ? '完成' : '运行中';
   }
 
-  /** The final body plus the copy affordance; observed document links stay outside. */
+  /** Final answer content, separate from the footer actions and metrics. */
   private renderFinalContent(
     item: ConversationItemSnapshot,
     group: ConversationRenderGroup,
@@ -1334,7 +1335,6 @@ export class ConversationView {
     if (item.documentLinks && item.documentLinks.length > 0) {
       content.append(this.renderDocumentLinks(item.documentLinks, item.toolResultText));
     }
-    if (!item.running) content.append(this.createCopyButton(item.text));
     return content;
   }
 
@@ -1342,20 +1342,31 @@ export class ConversationView {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'message-copy';
-    button.textContent = '复制';
+    this.setCopyButtonState(button, '复制');
     button.addEventListener('click', () => { void this.copyMessage(text, button); });
     return button;
+  }
+
+  private setCopyButtonState(button: HTMLButtonElement, label: string): void {
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    const path = label === '已复制'
+      ? '<path d="m5 12 4 4 10-10"/>'
+      : label === '复制失败'
+        ? '<path d="m7 7 10 10M17 7 7 17"/>'
+        : '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"/>';
+    button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
   }
 
   private async copyMessage(text: string, button: HTMLButtonElement): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = '已复制';
+      this.setCopyButtonState(button, '已复制');
     } catch {
-      button.textContent = '复制失败';
+      this.setCopyButtonState(button, '复制失败');
     }
     window.setTimeout(() => {
-      if (button.isConnected) button.textContent = '复制';
+      if (button.isConnected) this.setCopyButtonState(button, '复制');
     }, 1_400);
   }
 
@@ -1385,7 +1396,7 @@ export class ConversationView {
       stats.append(cell);
     }
     preferences.stats = stats;
-    preferences.footer.prepend(stats);
+    preferences.footer.insertBefore(stats, preferences.footer.querySelector('.message-time'));
   }
 
   /** Usage/timing lines are rendered once per observed timing signature. */
