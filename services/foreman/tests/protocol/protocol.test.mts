@@ -54,6 +54,7 @@ const expectedMethods = [
   'task.settings.save',
   'task.settings.routingTest',
   'task.settings.routingTestTasks',
+  'task.settings.runtimes',
   'task.run.create',
   'task.run.list',
   'task.run.status',

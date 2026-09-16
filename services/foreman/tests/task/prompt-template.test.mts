@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   renderTaskPromptTemplate,
+  renderTaskPromptBindings,
+  runWithTaskPromptCapture,
   withTaskPromptTemplates,
   getTaskPromptTemplates,
   type TaskPromptTemplate,
@@ -111,3 +113,138 @@ test('settings preview never invokes an input-dependent callback and retains fal
   assert.deepEqual(preview.map((segment) => segment.kind), ['text', 'placeholder', 'text'])
   assert.ok(preview.some((segment) => segment.kind === 'placeholder' && segment.label === '目标输入'))
 })
+
+// ─── Scoped execution rendering ───────────────────────────────────
+
+test('buildTaskPrompt emits a stable prefix for the same builtin across different input and ctx', async () => {
+  const { buildTaskPrompt } = await import('../../lib/core/task/prompt.mts')
+  const definition = await loadBuiltin('edit')
+  const first = await buildTaskPrompt(
+    definition,
+    { changes: [{ id: 'change-1', target: { kind: 'file', value: 'alpha.mts' }, action: 'update', instruction: 'A' }] },
+    { note: 'first' },
+  )
+  const second = await buildTaskPrompt(
+    definition,
+    { changes: [{ id: 'change-2', target: { kind: 'file', value: 'omega.mts' }, action: 'remove', instruction: 'B' }] },
+    { note: 'second', extra: true },
+  )
+
+  const stablePrefix = (prompt: string): string => prompt.slice(0, prompt.indexOf('<task-input-bindings>'))
+  assert.equal(stablePrefix(first), stablePrefix(second))
+  // The static instruction document is part of the prefix; the input-dependent
+  // task body keeps its placeholder after the captured values.
+  assert.ok(stablePrefix(first).includes('# Shell Usage'))
+  assert.ok(stablePrefix(first).includes('You are an **Edit Executor**'))
+  assert.ok(first.slice(first.indexOf('<task-input-bindings>')).includes('[[task-prompt:changes:0]] =\n'))
+  assert.ok(first.includes('## Edit Instructions\n[[task-prompt:changes:0]]'))
+})
+
+test('buildTaskPrompt preserves original values once, at the parameter tail, without cross-task leakage', async () => {
+  const { buildTaskPrompt } = await import('../../lib/core/task/prompt.mts')
+  const definition = await loadBuiltin('edit')
+  const first = await buildTaskPrompt(
+    definition,
+    { changes: [{ id: 'change-1', target: { kind: 'file', value: 'alpha.mts' }, action: 'update', instruction: 'A' }] },
+  )
+  const second = await buildTaskPrompt(
+    definition,
+    { changes: [{ id: 'change-2', target: { kind: 'file', value: 'omega.mts' }, action: 'remove', instruction: 'B' }] },
+  )
+
+  const bindings = first.slice(first.indexOf('<task-input-bindings>'))
+  assert.ok(bindings.includes('[[task-prompt:changes:0]] ='))
+  assert.ok(bindings.includes('alpha.mts'))
+  assert.equal(first.split('alpha.mts').length - 1, 1)
+  assert.equal(first.includes('omega.mts'), false)
+  assert.equal(second.includes('alpha.mts'), false)
+  assert.ok(second.includes('omega.mts'))
+})
+
+test('buildTaskPrompt keeps the task context after the static template and parameter tail', async () => {
+  const { buildTaskPrompt } = await import('../../lib/core/task/prompt.mts')
+  const definition = await loadBuiltin('edit')
+  const prompt = await buildTaskPrompt(definition, { changes: [] }, { note: 'ctx-value' })
+
+  const bindingsAt = prompt.indexOf('<task-input-bindings>')
+  const contextAt = prompt.indexOf('<foreman-task-context>')
+  const bodyAt = prompt.indexOf('You are an **Edit Executor**')
+  assert.ok(bodyAt >= 0 && bindingsAt > bodyAt && contextAt > bindingsAt)
+  assert.ok(prompt.includes('ctx-value'))
+})
+
+test('buildTaskPrompt keeps a custom prompt byte-exact and moves ctx after the body', async () => {
+  const { buildTaskPrompt } = await import('../../lib/core/task/prompt.mts')
+  const body = 'Custom body with [[task-prompt:looks-like-a-placeholder:0]] left untouched.'
+  const definition = {
+    __type: 'task' as const,
+    config: {
+      prompt: withTaskPromptTemplates(async () => body, [{ strings: ['x', 'y'], label: 'custom' }]),
+      instructions: ['static instruction'],
+    },
+    sourcePath: 'lib/standard/tasks/custom.mts',
+  }
+  const prompt = await buildTaskPrompt(definition as never, {}, { note: 'ctx-value' })
+
+  assert.equal(prompt.includes(body), true)
+  assert.ok(prompt.indexOf(body) < prompt.indexOf('<foreman-task-context>'))
+  assert.ok(prompt.indexOf('static instruction') < prompt.indexOf(body))
+  assert.equal(prompt.includes('<task-input-bindings>'), false)
+})
+
+test('buildTaskPrompt isolates concurrent template captures per build', async () => {
+  const { buildTaskPrompt } = await import('../../lib/core/task/prompt.mts')
+  const slowTemplate = { strings: ['SLOW[', ']'], labels: ['slow'] }
+  const fastTemplate = { strings: ['FAST[', ']'], labels: ['fast'] }
+  const makeDefinition = (name: string, template: TaskPromptTemplate, delay: number) => ({
+    __type: 'task' as const,
+    config: {
+      prompt: withTaskPromptTemplates(async () => {
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        return renderTaskPromptTemplate(template, [`${name}-value`])
+      }, [template]),
+    },
+    sourcePath: 'lib/standard/tasks/concurrent.mts',
+  })
+
+  const [slow, fast] = await Promise.all([
+    buildTaskPrompt(makeDefinition('slow', slowTemplate, 25) as never, {}),
+    buildTaskPrompt(makeDefinition('fast', fastTemplate, 1) as never, {}),
+  ])
+
+  assert.ok(slow.includes('SLOW[[[task-prompt:slow:0]]]'))
+  assert.ok(slow.includes('slow-value'))
+  assert.equal(slow.includes('fast-value'), false)
+  assert.ok(fast.includes('FAST[[[task-prompt:fast:0]]]'))
+  assert.ok(fast.includes('fast-value'))
+  assert.equal(fast.includes('slow-value'), false)
+})
+
+test('runWithTaskPromptCapture falls back to dynamic rendering outside the scope', () => {
+  const template: TaskPromptTemplate = { strings: ['v=', ''], labels: ['value'] }
+  assert.equal(renderTaskPromptTemplate(template, ['direct']), 'v=direct')
+
+  const { capture, result } = runWithTaskPromptCapture(() => renderTaskPromptTemplate(template, ['scoped']))
+  assert.equal(result, 'v=[[task-prompt:value:0]]')
+  assert.deepEqual(capture.values, ['scoped'])
+  assert.equal(renderTaskPromptBindings(capture).includes('scoped'), true)
+  assert.equal(renderTaskPromptTemplate(template, ['direct-after']), 'v=direct-after')
+})
+
+test('renderTaskPromptBindings escapes a closing wrapper tag without dropping content', () => {
+  const template: TaskPromptTemplate = { strings: ['', ''], label: 'payload' }
+  const { capture, result } = runWithTaskPromptCapture(() =>
+    renderTaskPromptTemplate(template, ['before </task-input-bindings> after']))
+  assert.equal(result, '[[task-prompt:payload:0]]')
+  const bindings = renderTaskPromptBindings(capture)
+  assert.ok(bindings.includes('<\\/task-input-bindings>'))
+  assert.equal(bindings.split('before').length - 1, 1)
+  assert.ok(bindings.includes('after'))
+})
+
+async function loadBuiltin(name: 'edit' | 'explore'): Promise<never> {
+  const module = name === 'edit'
+    ? await import('../../lib/standard/tasks/edit.mts')
+    : await import('../../lib/standard/tasks/explore.mts')
+  return module.default as never
+}

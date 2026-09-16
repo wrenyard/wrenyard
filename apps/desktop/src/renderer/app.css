@@ -368,15 +368,19 @@ button, input, select { accent-color: var(--moss-deep); }
 .conversation-welcome img { width: 68px; height: 68px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 30px rgba(63, 49, 35, .09); }
 .conversation-welcome h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 25px; }
 .conversation-welcome > p:last-child { max-width: 520px; margin: 12px 0 0; font-size: 12px; line-height: 1.7; }
-.message { width: min(100%, 820px); display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; margin: 0 auto 30px; }
-.message-user { grid-template-columns: minmax(0, 1fr) 30px; }
-.message-user .message-avatar { grid-column: 2; grid-row: 1; color: #fffaf0; background: var(--slate); }
-.message-user .message-body { grid-column: 1; grid-row: 1; justify-self: end; width: min(82%, 650px); padding: 12px 15px; border: 1px solid #d2c3a0; border-radius: 8px 2px 8px 8px; background: #eee1c5; }
-.message-avatar { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--lamp); font-family: Georgia, "Songti SC", serif; font-size: 11px; font-weight: 800; }
+.message { width: min(100%, 820px); display: grid; margin: 0 auto 30px; }
 .message-body { min-width: 0; }
-.message-meta { height: 22px; display: flex; align-items: baseline; gap: 8px; }
-.message-meta strong { color: var(--ink-soft); font-size: 10px; }
-.message-meta time { color: var(--muted); font-size: 8px; }
+/* User messages carry no avatar: the bubble is right-aligned and its clock sits
+   at the lower right, away from the assistant turn footer. */
+.message-user { display: flex; justify-content: flex-end; }
+.message-user .message-body { width: min(82%, 650px); display: flex; flex-direction: column; align-items: flex-end; padding: 12px 15px; border: 1px solid #d2c3a0; border-radius: 8px 2px 8px 8px; background: #eee1c5; }
+.message-user .message-content { width: 100%; }
+.message-time { align-self: flex-end; margin-top: 6px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.message-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
+.message-footer .message-time { align-self: auto; margin-top: 0; }
+.message-copy { flex: 0 0 auto; margin-left: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; color: var(--muted); background: rgba(255, 250, 240, .7); font-size: 9px; font-weight: 700; cursor: pointer; }
+.message-copy:hover { color: var(--ink); background: #fffaf0; }
+.message-copy:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
 .message-content { color: var(--ink); font-size: 13px; line-height: 1.72; overflow-wrap: anywhere; }
 .message-content p { margin: 0 0 10px; }
 .message-content p:last-child { margin-bottom: 0; }
@@ -396,12 +400,59 @@ button, input, select { accent-color: var(--moss-deep); }
 .message-content pre, .tool-card pre { overflow-x: auto; margin: 10px 0; border: 1px solid #403a31; border-radius: 5px; padding: 12px 14px; color: #e9e1cf; background: #2d2924; font: 11px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
 .streaming-cursor { display: inline-block; width: 6px; height: 13px; margin-left: 2px; vertical-align: -2px; background: var(--moss-deep); animation: cursor-blink .9s steps(1) infinite; }
 @keyframes cursor-blink { 50% { opacity: 0; } }
+
+/* Progressive disclosure inside one assistant turn. The collapsed summary
+   carries the working-process state; the final body always stays outside it. */
+.turn-activity { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 12px; background: rgba(238, 227, 202, .45); }
+.turn-activity > summary { display: flex; align-items: center; gap: 8px; padding: 8px 11px; color: var(--muted); cursor: pointer; font-size: 10px; }
+.turn-activity > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: -2px; border-radius: 5px; }
+.turn-activity > summary::-webkit-details-marker { display: none; }
+.turn-activity-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+.turn-activity.is-running .turn-activity-dot { background: var(--moss-deep); animation: task-card-pulse 1.15s ease-in-out infinite; }
+.turn-activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+/* The elapsed clock is reserved room so ticking digits never reflow the row. */
+.turn-activity-text.turn-activity-clock { font-variant-numeric: tabular-nums; }
+.turn-activity-text.turn-activity-clock.is-plain { font-weight: 600; }
+.turn-activity-chevron { width: 6px; height: 6px; flex: 0 0 auto; margin-left: auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 120ms ease; }
+.turn-activity[open] > summary .turn-activity-chevron { transform: translateY(1px) rotate(225deg); }
+.message-assistant .message-body > .turn-activity { border-color: transparent; background: transparent; margin-bottom: 6px; }
+.turn-activity-steps { display: grid; gap: 2px; border-top: 1px solid var(--line); padding: 6px 10px 8px; }
+.turn-step { display: flex; align-items: baseline; gap: 8px; min-height: 20px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.turn-step-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: rgba(139, 125, 107, .6); }
+.turn-step-text { min-width: 0; overflow-wrap: anywhere; }
+.turn-step-progress .turn-step-text { color: var(--ink-soft); font-weight: 650; transition: opacity 220ms ease; }
+.turn-tool { display: block; }
+.turn-tool > summary { display: flex; align-items: baseline; gap: 8px; min-height: 20px; padding: 2px 0; color: var(--muted); font-size: 10px; cursor: pointer; }
+.turn-tool > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; border-radius: 3px; }
+.turn-tool.is-done > summary { color: var(--moss-deep); }
+.turn-tool.is-failed > summary { color: var(--terracotta); }
+.turn-step-number { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.turn-documents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.turn-document { border: 1px solid var(--line); border-radius: 4px; background: rgba(232, 220, 196, .6); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+.turn-document-label { padding: 2px 8px; color: var(--ink-soft); cursor: pointer; }
+.turn-document-label:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
+.turn-document[open] { flex-basis: 100%; }
+.turn-document-body { max-height: 220px; margin: 0; overflow: auto; border-top: 1px solid var(--line); padding: 8px 10px; color: var(--ink-soft); font: 10px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
+.turn-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 9px; }
+.turn-stat { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.turn-stat small { color: var(--muted); font-size: 9px; }
+.turn-stat b { color: var(--ink-soft); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 650; }
+.turn-step-progress .thinking-dots { padding-top: 0; margin-left: 2px; }
+.turn-step-progress .thinking-dots i { width: 4px; height: 4px; }
 .tool-card { width: min(calc(100% - 42px), 778px); margin: -17px auto 24px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: rgba(238, 227, 202, .55); font-size: 10px; }
 .message-body > .tool-card { width: 100%; margin: 12px 0; }
 .tool-card summary { padding: 9px 12px; cursor: pointer; }
 .tool-card.is-done summary { color: var(--moss-deep); }
 .tool-card.is-failed summary { color: var(--terracotta); }
 .tool-card pre { max-height: 220px; margin: 0; border-width: 1px 0 0; border-radius: 0 0 5px 5px; }
+/* Lazy step body: a tool step is collapsed by default and materializes its
+   arguments/result only on first expand. */
+.turn-tool-body { display: block; }
+.turn-tool-body:empty { display: none; }
+.turn-tool-body > pre { max-height: 220px; margin: 0; border-width: 1px 0 0; border-radius: 0; }
+.turn-step-full > summary { padding: 2px 0; color: var(--moss-deep); cursor: pointer; font-size: 9px; }
+.turn-step-full > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; border-radius: 3px; }
+.turn-step-full-text { margin: 4px 0 2px; border-left: 2px solid var(--line); padding: 2px 0 2px 9px; color: var(--ink-soft); font-size: 10px; line-height: 1.65; white-space: pre-wrap; }
 .task-run-summary { display: grid; gap: 2px; padding: 9px 12px; border-top: 1px solid var(--line); }
 .task-run-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 18px; }
 .task-run-label { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
@@ -416,6 +467,17 @@ button, input, select { accent-color: var(--moss-deep); }
 .thinking-dots i:nth-child(2) { animation-delay: .15s; }
 .thinking-dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes thinking { 50% { opacity: .28; transform: translateY(-2px); } }
+
+/* run_task renders as a compact card: a leading marker that animates while the
+   dispatch is still running, plus the human task label and terminal metadata. */
+.tool-card-task > summary::before { content: ""; width: 6px; height: 6px; flex: 0 0 auto; margin-right: 7px; border-radius: 50%; background: currentColor; }
+.tool-card-task > summary { display: flex; align-items: center; }
+.tool-card-task.is-running > summary::before { animation: task-card-pulse 1.15s ease-in-out infinite; }
+@keyframes task-card-pulse { 50% { opacity: .35; transform: scale(.72); } }
+
+/* Subtle fade when a running turn's latest progress or tool summary changes. */
+.turn-step-progress .turn-step-latest { animation: turn-progress-in 220ms ease both; }
+@keyframes turn-progress-in { from { opacity: .35; } to { opacity: 1; } }
 
 .conversation-error { margin: 0 max(28px, calc((100% - 820px) / 2)) 10px; border: 1px solid rgba(196, 78, 58, .35); border-radius: 4px; padding: 9px 11px; color: var(--terracotta); background: rgba(196, 78, 58, .07); font-size: 10px; }
 .composer-wrap { padding: 6px max(28px, calc((100% - 820px) / 2)) 17px; }
@@ -932,6 +994,7 @@ button, input, select { accent-color: var(--moss-deep); }
   .conversation-feed { padding-inline: 20px; }
   .composer-wrap { padding-inline: 20px; }
   .conversation-error { margin-inline: 20px; }
+  .message-user .message-body { width: min(92%, 650px); }
   .page-hero, .ledger-hero, .quota-hero, .clients-hero { align-items: flex-start; flex-direction: column; }
   .ledger-actions { width: 100%; justify-content: space-between; }
   .settings-layout { grid-template-columns: 1fr; gap: 20px; }
@@ -959,9 +1022,21 @@ button, input, select { accent-color: var(--moss-deep); }
 
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
+  /* Conversation activity keeps its state readable without any motion. */
+  .thinking-dots i, .tool-card-task > summary::before, .streaming-cursor,
+  .turn-step-progress .turn-step-latest { animation: none !important; }
+  .tool-card-task.is-running > summary::before { opacity: .55; }
 }
 
 .routing-weights-form { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; padding: 20px; }
 .routing-weights-field { display: grid; gap: 8px; flex: 1 1 110px; }
 .routing-weights-input { width: 100%; min-width: 0; }
 .routing-weights-status { flex-basis: 100%; }
+
+.conversation-system-activity { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.conversation-system-activity > small { width:100%; color:var(--ink-muted); }
+.conversation-task-card { border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:var(--paper); color:inherit; cursor:pointer; font:inherit; font-size:12px; }
+.conversation-task-card.is-running::before { content:'●'; color:var(--moss); margin-right:7px; animation:tool-pulse 1.5s ease-in-out infinite; }
+.conversation-task-card:disabled { cursor:default; }
+@keyframes tool-pulse { 50% { opacity:.35; } }
+@media (prefers-reduced-motion:reduce) { .conversation-task-card.is-running::before { animation:none; } }
