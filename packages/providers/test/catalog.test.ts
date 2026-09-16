@@ -355,7 +355,7 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('anthropic-api', 'claude-sonnet-5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.4-mini'), 'low');
-  assert.equal(tier('cursor', 'composer-2.5'), 'high');
+  assert.equal(tier('cursor', 'composer-2.5'), 'low');
   assert.equal(tier('minimax', 'MiniMax-M2.7-highspeed'), 'low');
   assert.equal(tier('qwen', 'qwen3.7-flash'), 'low');
   assert.equal(tier('qwen-coding', 'qwen3.5-plus'), 'low');
@@ -562,7 +562,7 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['claude-fable-5-1']!.intelligence, 'premium');
   assert.equal(byId['muse-spark-1.3']!.intelligence, 'mid');
   assert.equal(byId['gemini-3.8-flash']!.intelligence, 'mid');
-  assert.equal(byId['composer-2.5']!.intelligence, 'high');
+  assert.equal(byId['composer-2.5']!.intelligence, 'low');
   assert.equal(byId['grok-4.6']!.intelligence, 'high');
   assert.deepEqual(byId['grok-4.6']!.thinkingLevels, ['high']);
   assert.deepEqual(byId['gpt-5.6-sol']!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);

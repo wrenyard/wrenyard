@@ -251,6 +251,8 @@ export interface WrenyardProviderStatus {
     contextWindow?: number;
     maxTokens?: number;
     taskOnly?: boolean;
+    effectiveTps?: number | null;
+    quotaAbundant?: boolean;
   }>;
 }
 
