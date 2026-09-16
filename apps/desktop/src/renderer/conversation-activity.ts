@@ -52,9 +52,8 @@ export class ConversationActivityView {
         process?.after(box);
       }
       box.dataset.signature = signature;
-      const title = document.createElement('small');
-      title.textContent = '系统活动';
-      box.replaceChildren(title, ...items.map((item) => this.card(item)));
+      box.setAttribute('aria-label', '任务');
+      box.replaceChildren(...items.map((item) => this.card(item)));
     }
   }
 

@@ -1127,7 +1127,9 @@ export class ConversationView {
     const summary = document.createElement('summary');
     summary.className = 'turn-activity-summary';
     const summaryDot = document.createElement('span');
-    summaryDot.className = 'turn-activity-dot';
+    summaryDot.className = 'turn-activity-icon';
+    summaryDot.setAttribute('aria-hidden', 'true');
+    summaryDot.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6-3 3-2-2-8 8-3-3 8-8-2-2z"/><path d="m4 20 2-2"/></svg>';
     const summaryText = document.createElement('span');
     summaryText.className = 'turn-activity-text';
     summaryText.textContent = running
@@ -1144,6 +1146,7 @@ export class ConversationView {
     }
     const summaryChevron = document.createElement('span');
     summaryChevron.className = 'turn-activity-chevron';
+    summaryChevron.setAttribute('aria-hidden', 'true');
     summary.append(summaryDot, summaryText, summaryChevron);
 
     const backlog = document.createElement('div');
