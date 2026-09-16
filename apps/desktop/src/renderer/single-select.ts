@@ -9,6 +9,7 @@ export interface SingleSelectOption {
   disabled?: boolean;
   /** Optional override for the trigger summary while this option is selected. */
   triggerLabel?: string;
+  badges?: Array<{ kind: 'fast' | 'very-fast' | 'quota'; label: string }>;
 }
 
 export interface SearchableSingleSelectConfig {
@@ -36,6 +37,7 @@ function uniqueOptions(options: readonly SingleSelectOption[]): SingleSelectOpti
       ...(option.title !== undefined ? { title: option.title } : {}),
       ...(option.disabled ? { disabled: true } : {}),
       ...(option.triggerLabel !== undefined ? { triggerLabel: option.triggerLabel } : {}),
+      ...(option.badges !== undefined ? { badges: option.badges.map((badge) => ({ ...badge })) } : {}),
     });
   }
   return out;
@@ -240,8 +242,12 @@ export class SearchableSingleSelect {
   }
 
   private updateTrigger(): void {
-    this.summary.textContent =
-      this.selected.length === 0 ? this.placeholder : this.labelFor(this.selected);
+    this.summary.replaceChildren();
+    const option = this.options.find((candidate) => candidate.value === this.selected);
+    const label = document.createElement('span');
+    label.textContent = this.selected.length === 0 ? this.placeholder : this.labelFor(this.selected);
+    this.summary.append(label);
+    if (option?.badges) this.appendBadges(this.summary, option.badges);
     this.trigger.setAttribute('aria-expanded', this.open ? 'true' : 'false');
   }
 
@@ -263,6 +269,7 @@ export class SearchableSingleSelect {
       const label = document.createElement('span');
       label.className = 'single-select-option-label';
       label.textContent = option.label;
+      if (option.badges) this.appendBadges(label, option.badges);
       row.append(label);
       if (option.secondary !== undefined) {
         const secondary = document.createElement('small');
@@ -276,6 +283,25 @@ export class SearchableSingleSelect {
     }
     this.emptyMessage.hidden = filtered.length > 0;
     if (searchFocused) this.searchInput.focus();
+  }
+
+  private appendBadges(target: HTMLElement, badges: readonly { kind: 'fast' | 'very-fast' | 'quota'; label: string }[]): void {
+    for (const badge of badges) {
+      const item = document.createElement('span');
+      item.className = `single-select-badge ${badge.kind}`;
+      item.title = badge.label;
+      item.setAttribute('aria-label', badge.label);
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 24 24');
+      icon.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', badge.kind === 'quota'
+        ? 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M8 12l3 3 5-6'
+        : 'M13 2 4 14h7l-1 8 10-13h-7z');
+      icon.append(path);
+      item.append(icon);
+      target.append(item);
+    }
   }
 
   /** Enabled rows currently rendered, in DOM order. */

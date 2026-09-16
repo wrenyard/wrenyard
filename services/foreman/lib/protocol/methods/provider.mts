@@ -6,6 +6,8 @@ export interface ProviderListModel {
   displayName: string
   contextWindow?: number
   maxTokens?: number
+  effectiveTps?: number | null
+  quotaAbundant?: boolean
   taskOnly?: boolean
 }
 export interface ProviderListResult {
@@ -46,6 +48,8 @@ export const providerListResultSchema = {
             contextWindow: { type: 'integer', minimum: 1 },
             maxTokens: { type: 'integer', minimum: 1 },
             taskOnly: { type: 'boolean' },
+            effectiveTps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
+            quotaAbundant: { type: 'boolean' },
           }, additionalProperties: false,
         } },
       }, additionalProperties: false,

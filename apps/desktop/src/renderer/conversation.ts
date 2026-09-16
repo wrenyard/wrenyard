@@ -1771,6 +1771,20 @@ export class ConversationView {
         : '当前会话模型',
       title: this.optionTitle(entry),
       disabled: !entry.advertised,
+      badges: entry.advertised ? (() => {
+        // DSH gateway entries already carry canonical provider/model public IDs.
+        const prefix = `${entry.catalogProvider}/`;
+        const modelId = entry.provider === 'wrenyard' && entry.model.startsWith(prefix)
+          ? entry.model.slice(prefix.length) : entry.model;
+        const model = this.quotaSnapshot?.catalog.find((provider) => provider.id === entry.catalogProvider)?.models?.find((candidate) => candidate.id === modelId);
+        const badges: Array<{ kind: 'fast' | 'very-fast' | 'quota'; label: string }> = [];
+        if (model?.effectiveTps !== undefined && model.effectiveTps !== null) {
+          if (model.effectiveTps > 200) badges.push({ kind: 'very-fast', label: `极速 · ${model.effectiveTps} TPS` });
+          else if (model.effectiveTps > 100) badges.push({ kind: 'fast', label: `快速 · ${model.effectiveTps} TPS` });
+        }
+        if (model?.quotaAbundant) badges.push({ kind: 'quota', label: '额度充足' });
+        return badges;
+      })() : undefined,
     })));
     this.modelSelect.value = current?.value ?? '';
     this.modelSelect.setSearchLabel('搜索模型');
