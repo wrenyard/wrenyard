@@ -585,8 +585,10 @@ async function startForemanDaemonWithRuntime(
       ...await gateway.connection(gatewayOrigin(config.service.host, boundPort)),
       token: gatewayToken,
     }),
-    providerList: async () => ({
-      providers: await Promise.all(catalog.providers().map(async (provider) => ({
+    providerList: async () => {
+      let modelStatus = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
+      try { modelStatus = await taskSettingsService.modelStatus() } catch { /* fail closed */ }
+      return { providers: await Promise.all(catalog.providers().map(async (provider) => ({
         id: provider.id,
         displayName: provider.displayName,
         description: provider.description ?? '',
@@ -601,9 +603,10 @@ async function startForemanDaemonWithRuntime(
           ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
           ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
           ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
+          ...(modelStatus.has(`${provider.id}/${model.id}`) ? modelStatus.get(`${provider.id}/${model.id}`) : {}),
         })),
-      }))),
-    }),
+      })) ) }
+    },
     providerConfigure: async ({ providerId, key }) => {
       const provider = catalog.provider(providerId)
       if (!provider) throw new Error(`unknown provider: ${providerId}`)

@@ -67,8 +67,6 @@ const settingsPage = requireElement<HTMLElement>('settings-page');
 const routingWeightsSettings = new RoutingWeightsSettings(requireElement('routing-weights-settings'), window.wrenyardShell);
 const refreshButton = requireElement<HTMLButtonElement>('refresh-button');
 const refreshLabel = requireElement<HTMLElement>('refresh-label');
-const statsRefreshButton = requireElement<HTMLButtonElement>('stats-refresh-button');
-const statsRefreshLabel = requireElement<HTMLElement>('stats-refresh-label');
 const quotaRefreshButton = requireElement<HTMLButtonElement>('quota-refresh-button');
 const quotaRefreshLabel = requireElement<HTMLElement>('quota-refresh-label');
 const clientsRefreshButton = requireElement<HTMLButtonElement>('clients-refresh-button');
@@ -207,6 +205,8 @@ let petDirty = false;
 let dialogProvider: ProviderCatalogSnapshot | null = null;
 let currentPage: ShellPage = 'workbench';
 let currentStats: StatsSnapshot | null = null;
+let statsRefreshInFlight: Promise<void> | null = null;
+let taskSettingsLoadedAt = 0;
 /** Read-only authoritative TaskSettings display names keyed by stable identity. */
 let taskDisplayNames: ReadonlyMap<string, string> = new Map();
 let taskInvestmentNames: ReadonlyMap<string, string> = new Map();
@@ -624,21 +624,21 @@ function renderQuota(snapshot: QuotaSnapshot): void {
   conversationView.setQuotaSnapshot(snapshot);
   syncRoutingExclusionOptions(snapshot);
   const available = snapshot.status === 'available';
-  const status = requireElement('quota-status');
-  status.textContent = available ? '模型供应已同步' : '暂不可用';
-  status.className = `status-pill ${available ? 'is-connected' : 'is-unavailable'}`;
-  const updated = snapshot.refreshedAt === undefined
-    ? '尚未完成刷新'
-    : `更新于 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(snapshot.refreshedAt)}`;
-  setText('quota-updated-at', snapshot.message ? `${updated} · ${snapshot.message}` : updated);
-
+  setText('quota-error', !available ? snapshot.message ?? '供应数据暂不可用' : '');
   const list = requireElement('quota-provider-grid');
+  const unconfigured = requireElement('quota-unconfigured-grid');
+  const details = unconfigured.closest('details');
   const catalog = snapshot.catalog ?? [];
   if (catalog.length === 0) {
     list.replaceChildren(emptyQuotaCard(available ? '未发现受支持的 Provider。' : 'Provider 数据暂时不可用，请稍后刷新。'));
+    unconfigured.replaceChildren();
+    if (details) details.hidden = true;
     return;
   }
-  list.replaceChildren(...catalog.map((entry, index) => quotaProviderRow(entry, index, catalog)));
+  list.replaceChildren(...catalog.filter((entry) => entry.configured).map((entry) => quotaProviderRow(entry, catalog.indexOf(entry), catalog)));
+  const unconfiguredEntries = catalog.filter((entry) => !entry.configured);
+  unconfigured.replaceChildren(...unconfiguredEntries.map((entry) => quotaProviderRow(entry, catalog.indexOf(entry), catalog)));
+  if (details) details.hidden = unconfiguredEntries.length === 0;
 }
 
 function syncRoutingExclusionOptions(snapshot: QuotaSnapshot): void {
@@ -739,7 +739,7 @@ async function saveQuotaProviderMove(
     providerOrderSaving = false;
     if (currentQuota) renderQuota(currentQuota);
   }
-  if (failure) setText('quota-updated-at', `顺序保存失败 · ${failure}`);
+  if (failure) setText('quota-error', `顺序保存失败：${failure}`);
 }
 
 function appendQuotaContent(container: HTMLElement, entry: ProviderCatalogSnapshot): void {
@@ -1082,12 +1082,10 @@ function renderAutoCapEffective(): void {
 }
 
 /**
- * Load the authoritative task.settings snapshot for the Model Supply auto cap.
- * Fresh loads reset the input to the persisted value; preserveDraft keeps the
- * user's unsaved text (used by the quota refresh button).
+ * Load the authoritative task.settings snapshot for the Settings auto cap.
+ * Fresh loads reset the input to the persisted value; preserveDraft keeps the user's unsaved text.
  */
 async function loadAutoCapState(preserveDraft = false): Promise<void> {
-  if (currentQuotaTab() === 'routing') return;
   autoCapSaveButton.disabled = true;
   const draft = autoCapInput.value;
   autoCapStatus.classList.remove('is-error');
@@ -1110,7 +1108,7 @@ async function loadAutoCapState(preserveDraft = false): Promise<void> {
   autoCapSaveButton.disabled = false;
 }
 
-/** Save the Model Supply auto cap at global scope; empty clears with null, zero is preserved. */
+/** Save the Settings auto cap at global scope; empty clears with null, zero is preserved. */
 async function saveAutoCapState(): Promise<void> {
   if (autoCapBusy) return;
   const raw = autoCapInput.value.trim();
@@ -1582,40 +1580,46 @@ function renderPage(page: ShellPage): void {
 }
 
 async function navigate(page: ShellPage): Promise<void> {
+  if (page === currentPage) return;
   renderPage(page);
   await window.wrenyardShell.navigate(page);
   if (page === 'stats') await refreshStats();
-  if (page === 'quota') {
-    await refreshQuota(false);
-    await loadRuntimeAliases();
-    await loadAutoCapState();
-  }
+  if (page === 'quota') await refreshQuota(false);
   if (page === 'clients') await refreshClients();
   if (page === 'tasks') await loadTasks();
   if (page === 'settings') {
     renderSnapshot(await window.wrenyardShell.getSettings());
     await routingWeightsSettings.load();
+    await loadRuntimeAliases();
+    await loadAutoCapState();
   }
 }
 
-async function refreshStats(): Promise<void> {
-  statsRefreshButton.disabled = true;
-  statsRefreshLabel.textContent = '刷新中…';
-  try {
+function refreshStats(): Promise<void> {
+  if (statsRefreshInFlight) return statsRefreshInFlight;
+  statsRefreshInFlight = (async () => {
     // Fetch and render stats first; getTaskSettings must not run concurrently
     // or stats.summary can blow past its 5s request timeout and regress to
     // today-only compatibility data while task definitions cold-resolve.
     const snapshot = await window.wrenyardShell.getStats();
     renderStats(snapshot);
-    const settings = await window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null);
-    buildTaskDisplayNames(settings);
-    // Refresh both task tables after authoritative display names arrive.
-    renderTasks(selectedWindow(snapshot));
-    renderTaskRuns(snapshot);
-  } finally {
-    statsRefreshButton.disabled = false;
-    statsRefreshLabel.textContent = '刷新';
-  }
+    if (Date.now() - taskSettingsLoadedAt >= 60_000) {
+      const settings = await window.wrenyardShell.getTaskSettings().catch(() => null as TaskSettingsSnapshot | null);
+      buildTaskDisplayNames(settings);
+      taskSettingsLoadedAt = Date.now();
+      // Refresh both task tables after authoritative display names arrive.
+      renderTasks(selectedWindow(snapshot));
+      renderTaskRuns(snapshot);
+    }
+  })().catch((error: unknown) => {
+    const status = requireElement('stats-status');
+    status.textContent = '不可用';
+    status.className = 'status-pill is-unavailable';
+    console.error('Stats refresh failed', error);
+  }).finally(() => {
+    statsRefreshInFlight = null;
+  });
+  return statsRefreshInFlight;
 }
 
 /** Rebuilds the read-only authoritative display-name map from TaskSettings rows. */
@@ -2419,12 +2423,9 @@ refreshButton.addEventListener('click', () => {
     refreshLabel.textContent = '刷新状态';
   });
 });
-statsRefreshButton.addEventListener('click', () => void refreshStats());
 quotaRefreshButton.addEventListener('click', () => {
   routingTest.onFormChanged();
   void refreshQuota(true);
-  void loadRuntimeAliases();
-  void loadAutoCapState(true);
 });
 quotaTabs.addEventListener('click', (event) => {
   const target = event.target;
@@ -2734,18 +2735,22 @@ window.wrenyardShell.onViewChanged(async (page) => {
   renderPage(page);
   if (!changed) return;
   if (page === 'stats') void refreshStats();
-  if (page === 'quota') {
-    void refreshQuota(false);
-    void loadRuntimeAliases();
-    void loadAutoCapState();
-  }
+  if (page === 'quota') void refreshQuota(false);
   if (page === 'clients') void refreshClients();
   if (page === 'tasks') void loadTasks();
   if (page === 'settings') {
     void window.wrenyardShell.getSettings().then(renderSnapshot);
     void routingWeightsSettings.load();
+    void loadRuntimeAliases();
+    void loadAutoCapState();
   }
 });
+const refreshVisibleStats = (): void => {
+  if (currentPage === 'stats' && document.visibilityState !== 'hidden') void refreshStats();
+};
+window.setInterval(refreshVisibleStats, 5000);
+document.addEventListener('visibilitychange', refreshVisibleStats);
+window.addEventListener('focus', refreshVisibleStats);
 window.wrenyardShell.onQuotaChanged(() => {
   void window.wrenyardShell.getQuota(false).then((snapshot) => {
     if (currentPage === 'quota') renderQuota(snapshot);
@@ -2769,6 +2774,8 @@ daemonStatus.addEventListener('focus', refreshDaemonStatus);
 void window.wrenyardShell.getSettings()
   .then(renderSnapshot)
   .catch(() => renderDaemonStatus({ status: 'unavailable' }));
+void loadRuntimeAliases();
+void loadAutoCapState();
 conversationView.start();
 void window.wrenyardShell.getQuota(false).then((snapshot) => {
   currentQuota = snapshot;

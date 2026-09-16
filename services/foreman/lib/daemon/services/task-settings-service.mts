@@ -1,3 +1,4 @@
+import { assessRequiredQuota } from '@wrenyard/catalog'
 import { createHash } from 'node:crypto'
 import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
 import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/catalog'
@@ -627,6 +628,43 @@ export class TaskSettingsService {
   /** The authoritative config path this daemon-owned service reads and writes. */
   get authoritativeConfigPath(): string {
     return this.configPath
+  }
+
+  /** Live provider/model metadata for selector surfaces. */
+  async modelStatus(): Promise<Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>> {
+    const status = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
+    try {
+      const baseline = this.resolver.diagnose({ taskName: 'model-status', requirements: {} })
+      if (baseline.ok) {
+        for (const pair of collapseRoutingFormPairs(baseline.choices.filter((choice) => choice.available)).values()) {
+          status.set(`${pair.provider}/${pair.model}`, { effectiveTps: pair.effectiveTps, quotaAbundant: false })
+        }
+      }
+      // Bind the shared snapshot once per request; quota evidence remains fail-closed
+      // when the snapshot cannot establish a fresh, complete constraint set.
+      const bound = await this.quotaSnapshots?.routingSnapshot()
+      const snapshot = bound?.snapshot
+      const now = this.now()
+      if (snapshot && now <= snapshot.validUntilMs) {
+        for (const [key, value] of status) {
+          const slash = key.indexOf('/')
+          const provider = key.slice(0, slash)
+          const model = key.slice(slash + 1)
+          const entry = snapshot.entries.find((entry) => entry.providerId === provider && entry.modelId === model)
+            ?? snapshot.entries.find((entry) => entry.providerId === provider && entry.modelId === '*')
+          const constraints = entry?.requiredQuota ?? []
+          const assessment = assessRequiredQuota(now, constraints)
+          value.quotaAbundant = constraints.length > 0 && assessment.coverageComplete
+            && constraints.every(({ kind, evidence }) => kind !== 'balance' && evidence !== null
+              && evidence.replenishmentKind === 'full_cycle'
+              && typeof evidence.resetAtMs === 'number' && typeof evidence.windowMs === 'number'
+              && evidence.remainingPercent > (evidence.resetAtMs - now) / evidence.windowMs * 100)
+        }
+      }
+    } catch {
+      return new Map()
+    }
+    return status
   }
 
   /** Live alias entries `[{name,target}]` for the snapshot surface. Mirrors the

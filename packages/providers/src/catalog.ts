@@ -599,7 +599,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text'],
   },
   'composer-2.5': {
-    intelligence: 'high',
+    intelligence: 'low',
     capabilities: ['text', 'image'],
   },
   'grok-4.6': {

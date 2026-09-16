@@ -33,7 +33,7 @@ export interface ClientDiscoveryOptions {
 
 function runCommand(executable: string, args: readonly string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
-    execFile(executable, [...args], { timeout: 5_000 }, (error, stdout, stderr) => {
+    execFile(executable, [...args], { timeout: 5_000, windowsHide: true }, (error, stdout, stderr) => {
       resolve({
         stdout: String(stdout),
         stderr: String(stderr),

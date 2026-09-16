@@ -32,7 +32,7 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'grok-4.5': 'Grok 4.5',
   'grok-4.6': 'Grok 4.6',
   'hunyuan-hy3': 'HY3',
-  'hunyuan-hy4-preview': 'Hunyuan HY4 Preview',
+  'hunyuan-hy4-preview': 'HY4 Preview',
   'kimi-k2.5': 'Kimi K2.5',
   'kimi-k2.6': 'Kimi K2.6',
   'kimi-k2.8': 'Kimi K2.8 Preview',

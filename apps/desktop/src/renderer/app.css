@@ -627,9 +627,6 @@ button, input, select { accent-color: var(--moss-deep); }
 
 /* Desktop-owned provider directory (模型供应) */
 .quota-hero { align-items: center; }
-.quota-meta { min-height: 49px; display: flex; align-items: center; gap: 11px; color: var(--muted); font-size: 11px; }
-.quota-pace-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.quota-pace-legend i { width: 2px; height: 12px; display: inline-block; border-radius: 1px; background: var(--terracotta); }
 .quota-provider-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .provider-directory-row { min-width: 0; display: grid; grid-template-columns: minmax(200px, .9fr) minmax(0, 1.6fr) 176px; align-items: center; gap: 20px; border: 1px solid var(--line); border-radius: 7px; padding: 15px 18px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
 .provider-directory-header { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
@@ -671,7 +668,6 @@ button, input, select { accent-color: var(--moss-deep); }
 .quota-empty { grid-column: 1 / -1; min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); background: rgba(245, 235, 212, .4); }
 .quota-empty span { color: var(--moss-deep); font-size: 34px; }
 .quota-empty p { margin: 0; font-size: 12px; }
-.quota-footnote { margin-top: 18px !important; color: var(--muted); font-size: 10px; line-height: 1.55; }
 
 /* Global automatic-dispatch reference output cap (模型供应) */
 .auto-cap-panel { margin-top: 26px; border: 1px solid var(--line); border-radius: 7px; padding: 16px 18px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
@@ -1066,3 +1062,12 @@ button, input, select { accent-color: var(--moss-deep); }
   .message-assistant .message-footer { transition: none; }
   .turn-activity.is-running .turn-activity-icon { animation: none; }
 }
+
+.quota-unconfigured-details { margin-top: 18px; }
+.quota-unconfigured-details > summary { cursor: pointer; color: var(--muted); padding: 12px 0; }
+.single-select-badge { display: inline-flex; margin-left: 5px; font-size: 13px; font-weight: 700; line-height: 1; }
+.single-select-badge.fast { color: #c99a22; }
+.single-select-badge.very-fast { color: #3976c7; }
+.single-select-badge.quota { color: #568b62; }
+
+.single-select-badge svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
