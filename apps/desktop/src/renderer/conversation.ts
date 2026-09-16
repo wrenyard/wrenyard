@@ -1253,38 +1253,6 @@ export class ConversationView {
     return undefined;
   }
 
-  private renderToolStep(item: ConversationItemSnapshot): HTMLElement {
-    const details = document.createElement('details');
-    details.className = 'turn-step turn-tool is-' + (item.toolState ?? 'running');
-    this.bindExpandedState(details, item.id);
-    const summary = document.createElement('summary');
-    summary.className = 'turn-tool-summary';
-    summary.append(this.toolIcon(item));
-    summary.title = item.toolSummary ?? item.toolName ?? '工具';
-    summary.setAttribute('aria-label', summary.title);
-    const header = document.createElement('span');
-    header.className = 'turn-tool-header';
-    header.textContent = (item.toolSummary ?? item.toolName ?? '工具') + ' · ' + this.toolStateLabel(item);
-    header.hidden = true;
-    summary.append(header);
-    details.append(summary, this.createLazyToolBody());
-    const materialize = (): void => {
-      const body = details.querySelector<HTMLElement>('.turn-tool-body');
-      if (body && body.childElementCount === 0) body.append(this.renderToolBody(item));
-    };
-    details.addEventListener('toggle', () => {
-      if (details.open) {
-        header.hidden = false;
-        materialize();
-      } else header.hidden = true;
-    });
-    if (details.open) {
-      header.hidden = false;
-      materialize();
-    }
-    return details;
-  }
-
   private toolIcon(item: ConversationItemSnapshot): HTMLSpanElement {
     const icon = document.createElement('span');
     icon.className = 'turn-tool-icon';
@@ -1296,35 +1264,96 @@ export class ConversationView {
   }
 
   private renderToolStack(items: ConversationItemSnapshot[]): HTMLElement {
-    const stack = document.createElement('details');
+    const stack = document.createElement('div');
     stack.className = 'turn-tool-stack';
-    const summary = document.createElement('summary');
-    summary.setAttribute('aria-label', `${items.length} 次工具调用`);
-    const icons = document.createElement('span');
-    icons.className = 'turn-tool-stack-icons';
-    items.slice(0, 3).forEach((item) => icons.append(this.toolIcon(item)));
+    const id = 'stack:' + items[0]!.id;
+    stack.dataset.expandId = id;
+    const viewport = document.createElement('div');
+    viewport.className = 'turn-tool-viewport';
+    const rail = document.createElement('div');
+    rail.className = 'turn-tool-rail';
+    rail.style.setProperty('--collapsed-width', `${32 + Math.min(items.length - 1, 2) * 7}px`);
+    rail.style.setProperty('--expanded-width', `${items.length * 33 + 28}px`);
+    const selected = document.createElement('div');
+    selected.className = 'turn-tool-detail';
+    const buttons: HTMLButtonElement[] = [];
+    const clearDetail = (): void => {
+      this.closeDescendants(selected);
+      for (const item of items) this.expandedItemIds.delete(item.id);
+      selected.replaceChildren();
+      buttons.forEach((button) => button.setAttribute('aria-expanded', 'false'));
+    };
+    const select = (item: ConversationItemSnapshot, button: HTMLButtonElement, restoring = false): void => {
+      const wasSelected = button.getAttribute('aria-expanded') === 'true';
+      if (!restoring) clearDetail();
+      if (wasSelected) return;
+      button.setAttribute('aria-expanded', 'true');
+      this.expandedItemIds.add(item.id);
+      const title = document.createElement('div');
+      title.className = 'turn-tool-header';
+      title.textContent = (item.toolSummary ?? item.toolName ?? '工具') + ' · ' + this.toolStateLabel(item);
+      const body = document.createElement('div');
+      body.className = 'turn-tool-body';
+      body.append(this.renderToolBody(item));
+      selected.append(title, body);
+    };
+    items.forEach((item, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'turn-tool-icon-button is-' + (item.toolState ?? 'running');
+      button.style.setProperty('--collapsed-x', `${Math.min(index, 2) * 7}px`);
+      button.style.setProperty('--expanded-x', `${index * 33}px`);
+      button.style.setProperty('--collapsed-opacity', index < 3 ? '1' : '0');
+      button.title = item.toolSummary ?? item.toolName ?? '工具';
+      button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-expanded', 'false');
+      button.append(this.toolIcon(item));
+      button.addEventListener('click', () => select(item, button));
+      buttons.push(button);
+      rail.append(button);
+    });
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'turn-tool-stack-toggle';
+    toggle.title = `${items.length} 次工具调用`;
+    toggle.setAttribute('aria-label', toggle.title);
     const count = document.createElement('span');
     count.className = 'turn-tool-count';
     count.textContent = String(items.length);
-    summary.append(icons, count);
-    const body = document.createElement('div');
-    body.className = 'turn-tool-stack-body';
-    items.forEach((item) => body.append(this.renderToolStep(item)));
-    stack.append(summary, body);
-    this.bindExpandedState(stack, 'stack:' + items[0]!.id);
+    toggle.append(count);
+    const collapse = document.createElement('button');
+    collapse.type = 'button';
+    collapse.className = 'turn-tool-stack-collapse';
+    collapse.style.setProperty('--collapse-x', `${items.length * 33}px`);
+    collapse.title = '收起工具';
+    collapse.setAttribute('aria-label', collapse.title);
+    collapse.textContent = '‹';
+    const setExpanded = (open: boolean): void => {
+      stack.classList.toggle('is-expanded', open);
+      stack.dataset.expanded = String(open);
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.tabIndex = open ? -1 : 0;
+      toggle.setAttribute('aria-hidden', String(open));
+      collapse.tabIndex = open ? 0 : -1;
+      collapse.setAttribute('aria-hidden', String(!open));
+      buttons.forEach((button) => {
+        button.tabIndex = open ? 0 : -1;
+        button.setAttribute('aria-hidden', String(!open));
+      });
+      if (open) this.expandedItemIds.add(id);
+      else { clearDetail(); this.expandedItemIds.delete(id); }
+    };
+    toggle.addEventListener('click', () => { setExpanded(true); buttons[0]?.focus({ preventScroll: true }); });
+    collapse.addEventListener('click', () => { setExpanded(false); toggle.focus({ preventScroll: true }); });
+    stack.addEventListener('reset-tool-stack', () => setExpanded(false));
+    rail.append(toggle, collapse);
+    viewport.append(rail);
+    stack.append(viewport, selected);
+    const restoredItem = items.findIndex((item) => this.expandedItemIds.has(item.id));
+    const open = this.expandedItemIds.has(id);
+    setExpanded(open);
+    if (open && restoredItem >= 0) select(items[restoredItem]!, buttons[restoredItem]!, true);
     return stack;
-  }
-
-  /**
-   * Arguments and the tool result are materialized on first expand, so a long
-   * collapsed history never parses or mounts any tool payload.
-   */
-  private createLazyToolBody(): DocumentFragment {
-    const fragment = document.createDocumentFragment();
-    const body = document.createElement('div');
-    body.className = 'turn-tool-body';
-    fragment.append(body);
-    return fragment;
   }
 
   private toolStateLabel(item: ConversationItemSnapshot): string {
@@ -1753,15 +1782,16 @@ export class ConversationView {
   }
 
   private hasClosedAncestor(details: HTMLDetailsElement): boolean {
-    let ancestor = details.parentElement?.closest('details');
+    let ancestor = details.parentElement?.closest('details, .turn-tool-stack');
     while (ancestor) {
-      if (!ancestor.open) return true;
-      ancestor = ancestor.parentElement?.closest('details');
+      if (ancestor instanceof HTMLDetailsElement ? !ancestor.open : ancestor.getAttribute('data-expanded') !== 'true') return true;
+      ancestor = ancestor.parentElement?.closest('details, .turn-tool-stack');
     }
     return false;
   }
 
-  private closeDescendants(parent: HTMLDetailsElement): void {
+  private closeDescendants(parent: HTMLElement): void {
+    parent.querySelectorAll<HTMLElement>('.turn-tool-stack').forEach((stack) => stack.dispatchEvent(new Event('reset-tool-stack')));
     for (const child of Array.from(parent.querySelectorAll<HTMLDetailsElement>('details'))) {
       child.open = false;
       const id = child.dataset.expandId;
