@@ -1,5 +1,6 @@
 import {
   BrowserWindow,
+  clipboard,
   ipcMain,
   type BrowserWindowConstructorOptions,
   type Input,
@@ -465,6 +466,11 @@ export class ShellWindowController {
     ipcMain.handle(SHELL_CHANNELS.conversationActivity, async (event) => {
       assertShellSender(event.sender);
       return options.getConversationActivity();
+    });
+    ipcMain.handle(SHELL_CHANNELS.copyText, (event, text: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof text !== 'string' || text.length > 4_000_000) throw new Error('复制文本无效');
+      clipboard.writeText(text);
     });
     ipcMain.handle(SHELL_CHANNELS.taskTranscript, async (event, taskRunId: unknown) => {
       assertShellSender(event.sender);
