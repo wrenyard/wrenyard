@@ -1151,9 +1151,24 @@ export class ConversationView {
 
     const backlog = document.createElement('div');
     backlog.className = 'turn-activity-steps';
-    for (const item of group.items) {
-      if (finalItem && item.id === finalItem.id) continue;
-      backlog.append(this.renderStep(item));
+    const processItems = group.items.filter((item) => !finalItem || item.id !== finalItem.id);
+    for (let index = 0; index < processItems.length;) {
+      const item = processItems[index];
+      if (item?.kind === 'assistant') {
+        const prose = document.createElement('div');
+        prose.className = 'message-content turn-assistant-prose';
+        prose.append(renderRichText(item.text));
+        backlog.append(prose);
+        index += 1;
+        continue;
+      }
+      if (item?.kind === 'tool') {
+        const tools: ConversationItemSnapshot[] = [];
+        while (processItems[index]?.kind === 'tool') tools.push(processItems[index++] as ConversationItemSnapshot);
+        backlog.append(this.renderToolStack(tools));
+        continue;
+      }
+      index += 1;
     }
 
     if (running) {
@@ -1238,80 +1253,77 @@ export class ConversationView {
     return undefined;
   }
 
-  private renderStep(item: ConversationItemSnapshot): HTMLElement {
-    if (item.kind === 'tool') return this.renderToolStep(item);
-    const row = document.createElement('div');
-    row.className = 'turn-step';
-    const dot = document.createElement('span');
-    dot.className = 'turn-step-dot';
-    const text = document.createElement('span');
-    text.className = 'turn-step-text';
-    text.textContent = conversationSummaryText(item.text, 220) || '…';
-    row.append(dot, text);
-    // Long history text is bounded in the collapsed step; the full plain text
-    // (never a second Markdown parse) is materialized on first expand.
-    const full = item.text.trim();
-    if (full.length > 220) {
-      const details = document.createElement('details');
-      details.className = 'turn-step-full';
-      this.bindExpandedState(details, item.id + ':step-text');
-      const summary = document.createElement('summary');
-      summary.textContent = '展开完整内容';
-      const body = document.createElement('div');
-      body.className = 'turn-step-full-text';
-      body.textContent = full;
-      details.append(summary);
-      details.addEventListener('toggle', () => {
-        if (!details.open || details.querySelector('.turn-step-full-text')) return;
-        details.append(body);
-      });
-      row.append(details);
-    }
-    return row;
-  }
-
   private renderToolStep(item: ConversationItemSnapshot): HTMLElement {
     const details = document.createElement('details');
     details.className = 'turn-step turn-tool is-' + (item.toolState ?? 'running');
     this.bindExpandedState(details, item.id);
     const summary = document.createElement('summary');
     summary.className = 'turn-tool-summary';
-    const step = document.createElement('span');
-    step.className = 'turn-step-number';
-    step.textContent = item.step !== undefined ? '第 ' + item.step + ' 步' : '步骤';
-    const text = document.createElement('span');
-    text.className = 'turn-step-text';
-    // Only observed Chinese summaries / names are shown; raw tool arguments
-    // never leak into a collapsed process summary.
-    text.textContent = item.toolSummary
-      ? item.toolSummary + ' · ' + this.toolStateLabel(item)
-      : (item.toolName ?? '工具') + ' · ' + this.toolStateLabel(item);
-    summary.append(step, text);
-    details.append(summary, this.createLazyToolBody(item));
+    summary.append(this.toolIcon(item));
+    summary.title = item.toolSummary ?? item.toolName ?? '工具';
+    summary.setAttribute('aria-label', summary.title);
+    const header = document.createElement('span');
+    header.className = 'turn-tool-header';
+    header.textContent = (item.toolSummary ?? item.toolName ?? '工具') + ' · ' + this.toolStateLabel(item);
+    header.hidden = true;
+    summary.append(header);
+    details.append(summary, this.createLazyToolBody());
+    const materialize = (): void => {
+      const body = details.querySelector<HTMLElement>('.turn-tool-body');
+      if (body && body.childElementCount === 0) body.append(this.renderToolBody(item));
+    };
+    details.addEventListener('toggle', () => {
+      if (details.open) {
+        header.hidden = false;
+        materialize();
+      } else header.hidden = true;
+    });
+    if (details.open) {
+      header.hidden = false;
+      materialize();
+    }
     return details;
+  }
+
+  private toolIcon(item: ConversationItemSnapshot): HTMLSpanElement {
+    const icon = document.createElement('span');
+    icon.className = 'turn-tool-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = item.toolName === 'run_task'
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 5 11 7-11 7z"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
+    return icon;
+  }
+
+  private renderToolStack(items: ConversationItemSnapshot[]): HTMLElement {
+    const stack = document.createElement('details');
+    stack.className = 'turn-tool-stack';
+    const summary = document.createElement('summary');
+    summary.setAttribute('aria-label', `${items.length} 次工具调用`);
+    const icons = document.createElement('span');
+    icons.className = 'turn-tool-stack-icons';
+    items.slice(0, 3).forEach((item) => icons.append(this.toolIcon(item)));
+    const count = document.createElement('span');
+    count.className = 'turn-tool-count';
+    count.textContent = String(items.length);
+    summary.append(icons, count);
+    const body = document.createElement('div');
+    body.className = 'turn-tool-stack-body';
+    items.forEach((item) => body.append(this.renderToolStep(item)));
+    stack.append(summary, body);
+    this.bindExpandedState(stack, 'stack:' + items[0]!.id);
+    return stack;
   }
 
   /**
    * Arguments and the tool result are materialized on first expand, so a long
    * collapsed history never parses or mounts any tool payload.
    */
-  private createLazyToolBody(item: ConversationItemSnapshot): DocumentFragment {
+  private createLazyToolBody(): DocumentFragment {
     const fragment = document.createDocumentFragment();
     const body = document.createElement('div');
     body.className = 'turn-tool-body';
-    let materialized = false;
-    const materialize = (): void => {
-      if (materialized) return;
-      materialized = true;
-      body.append(this.renderToolBody(item));
-    };
     fragment.append(body);
-    // Materialize only once the reader actually opens the step: a toggle event
-    // on an unattached node never fires, so this cannot eagerly populate.
-    body.addEventListener('toggle', () => {
-      const owner = body.parentElement;
-      if (owner instanceof HTMLDetailsElement && owner.open) materialize();
-    }, true);
     return fragment;
   }
 
@@ -1709,8 +1721,13 @@ export class ConversationView {
     details.dataset.expandId = id;
     details.open = this.expandedItemIds.has(id);
     details.addEventListener('toggle', () => {
-      if (details.open) this.expandedItemIds.add(id);
-      else this.expandedItemIds.delete(id);
+      if (!details.isConnected) return;
+      if (details.open && !this.hasClosedAncestor(details)) this.expandedItemIds.add(id);
+      else {
+        details.open = false;
+        this.closeDescendants(details);
+        this.expandedItemIds.delete(id);
+      }
     });
   }
 
@@ -1721,11 +1738,13 @@ export class ConversationView {
   ): void {
     details.dataset.expandId = id;
     details.addEventListener('toggle', () => {
+      if (!details.isConnected) return;
       if (details.open) {
         this.expandedItemIds.add(id);
         preferences.manualExpanded = true;
         return;
       }
+      this.closeDescendants(details);
       this.expandedItemIds.delete(id);
       // Only an explicit collapse clears the manual expansion; a rebuild
       // replacing the node must not look like a reader collapse.
@@ -1733,12 +1752,33 @@ export class ConversationView {
     });
   }
 
+  private hasClosedAncestor(details: HTMLDetailsElement): boolean {
+    let ancestor = details.parentElement?.closest('details');
+    while (ancestor) {
+      if (!ancestor.open) return true;
+      ancestor = ancestor.parentElement?.closest('details');
+    }
+    return false;
+  }
+
+  private closeDescendants(parent: HTMLDetailsElement): void {
+    for (const child of Array.from(parent.querySelectorAll<HTMLDetailsElement>('details'))) {
+      child.open = false;
+      const id = child.dataset.expandId;
+      if (id) this.expandedItemIds.delete(id);
+    }
+  }
+
   private captureExpandedItems(): void {
     for (const details of Array.from(this.feed.querySelectorAll<HTMLDetailsElement>('details[data-expand-id]'))) {
       const id = details.dataset.expandId;
       if (!id) continue;
-      if (details.open) this.expandedItemIds.add(id);
-      else this.expandedItemIds.delete(id);
+      if (details.open && !this.hasClosedAncestor(details)) this.expandedItemIds.add(id);
+      else {
+        details.open = false;
+        this.closeDescendants(details);
+        this.expandedItemIds.delete(id);
+      }
     }
   }
 

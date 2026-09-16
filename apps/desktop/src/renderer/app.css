@@ -420,17 +420,30 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-activity[open] > summary .turn-activity-chevron::before { content: '▽'; }
 
 .message-assistant .message-body > .turn-activity { border-color: transparent; background: transparent; margin-bottom: 6px; }
-.turn-activity-steps { display: grid; gap: 6px; border-top: 1px solid var(--line); padding: 10px 0 8px; }
+.turn-activity-steps { display: grid; gap: 9px; border-top: 1px solid var(--line); padding: 10px 0 8px; }
 .turn-step { display: flex; align-items: baseline; gap: 8px; min-height: 20px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .turn-step-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: rgba(139, 125, 107, .6); }
 .turn-step-text { min-width: 0; overflow-wrap: anywhere; }
 .turn-step-progress .turn-step-text { color: var(--ink-soft); font-weight: 650; transition: opacity 220ms ease; }
 .turn-tool { display: block; }
-.turn-tool > summary { display: flex; align-items: baseline; gap: 8px; min-height: 20px; padding: 2px 0; color: var(--muted); font-size: 10px; cursor: pointer; }
+.turn-tool > summary { display: flex; align-items: center; gap: 7px; min-height: 24px; padding: 2px 4px; color: var(--muted); cursor: pointer; }
 .turn-tool > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; border-radius: 3px; }
 .turn-tool.is-done > summary { color: var(--moss-deep); }
 .turn-tool.is-failed > summary { color: var(--terracotta); }
-.turn-step-number { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.turn-tool-icon { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; }
+.turn-tool-icon svg { width: 100%; height: 100%; }
+.turn-tool-header { color: var(--muted); opacity: .75; font-size: 12px; }
+.turn-tool-stack { display: inline-block; vertical-align: middle; }
+.turn-tool-stack > summary { position: relative; display: inline-flex; align-items: center; min-height: 32px; margin: 3px 7px 0 0; padding: 4px 6px; border-radius: 5px; color: var(--ink-soft); cursor: pointer; }
+.turn-tool-stack > summary:hover { background: rgba(139, 125, 107, .12); }
+.turn-tool-stack > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
+.turn-tool-stack > summary::-webkit-details-marker { display: none; }
+.turn-tool-stack-icons { display: inline-flex; align-items: center; min-width: 18px; min-height: 22px; }
+.turn-tool-stack-icons .turn-tool-icon { width: 20px; height: 20px; margin-left: -9px; background: var(--paper); border-radius: 3px; }
+.turn-tool-stack-icons .turn-tool-icon:first-child { margin-left: 0; }
+.turn-tool-count { position: absolute; top: -3px; right: -6px; min-width: 16px; height: 16px; box-sizing: border-box; border-radius: 9px; padding: 0 4px; color: var(--paper); background: var(--ink-soft); font: 10px/16px ui-monospace, monospace; text-align: center; pointer-events: none; }
+.turn-tool-stack-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 5px; margin: 3px 0; }
+.turn-tool-stack-body > .turn-tool[open] { flex-basis: 100%; min-width: 0; }
 .turn-documents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .turn-document { border: 1px solid var(--line); border-radius: 4px; background: rgba(232, 220, 196, .6); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; }
 .turn-document-label { padding: 2px 8px; color: var(--ink-soft); cursor: pointer; }
@@ -454,9 +467,8 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-tool-body { display: block; }
 .turn-tool-body:empty { display: none; }
 .turn-tool-body > pre { max-height: 220px; margin: 0; border-width: 1px 0 0; border-radius: 0; }
-.turn-step-full > summary { padding: 2px 0; color: var(--moss-deep); cursor: pointer; font-size: 9px; }
-.turn-step-full > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; border-radius: 3px; }
-.turn-step-full-text { margin: 4px 0 2px; border-left: 2px solid var(--line); padding: 2px 0 2px 9px; color: var(--ink-soft); font-size: 10px; line-height: 1.65; white-space: pre-wrap; }
+.turn-tool-body { min-width: 0; max-width: 100%; }
+.turn-tool-body > pre { max-width: 100%; overflow: auto; }
 .task-run-summary { display: grid; gap: 2px; padding: 9px 12px; border-top: 1px solid var(--line); }
 .task-run-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 18px; }
 .task-run-label { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
