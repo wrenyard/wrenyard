@@ -8,6 +8,7 @@ import type {
   ConversationModelSelectionSnapshot,
   ConversationSessionSnapshot,
   ConversationSnapshot,
+  ConversationTurnSnapshot,
   WorkspaceConfigurationSnapshot,
 } from './shell-contract.js';
 
@@ -100,7 +101,7 @@ function extractToolResultText(content: unknown): string {
     }
   }
   const joined = parts.join('\n\n').trim();
-  return joined.length > MAX_TOOL_RESULT_TEXT ? joined.slice(0, MAX_TOOL_RESULT_TEXT) : joined;
+  return joined;
 }
 
 /** Parse a JSON string into a plain object, or undefined when it is not one. */
@@ -111,6 +112,202 @@ function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
     return isObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Parse a JSON string into an array of plain objects, or undefined when it is not one. */
+function parseJsonArray(value: unknown): Record<string, unknown>[] | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter(isObject);
+  } catch {
+    return undefined;
+  }
+}
+
+/** First nonblank string value found on the object for any of the candidate keys. */
+function firstString(object: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = asString(object[key]);
+    if (value && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** Task identity candidates carried by run_task / task_run tool arguments. */
+function taskIdentityFromArguments(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  const direct = firstString(args, ['task_id', 'taskId', 'name', 'task_name', 'taskName']);
+  if (direct) return direct;
+  const nested = args.task;
+  return isObject(nested) ? firstString(nested, ['task_id', 'taskId', 'name', 'task_name', 'taskName']) : undefined;
+}
+
+const MAX_TOOL_SUMMARY = 120;
+const MAX_DOCUMENT_LINKS = 8;
+const MAX_DOCUMENT_TITLE = 120;
+const MAX_DOCUMENT_PATH = 400;
+/** Titles at most this long and free of newlines are trusted as document headings. */
+const MAX_HEADING_TITLE = 160;
+
+function clampSummary(text: string): string {
+  return text.length > MAX_TOOL_SUMMARY ? text.slice(0, MAX_TOOL_SUMMARY) : text;
+}
+
+/** Nearest MCP tool name inside a bounded window of surrounding text. */
+function nearestMcpToolName(text: string, index: number): string | undefined {
+  const window = text.slice(Math.max(0, index - 200), index + 200);
+  return /\bmcp__([a-z0-9_]+?)__([a-z0-9_]+)\b/i.exec(window)?.slice(1, 3).join(' ');
+}
+
+/**
+ * The exact Wrenyard tool aliases exposed to the model by the DSH shell bridge
+ * (`packages/dsh-shell/src/foreman-tools.mjs`). Projection never invents a name
+ * outside this set.
+ */
+const TASK_LIST_TOOLS = new Set(['list_task', 'task_list']);
+const TASK_DESCRIBE_TOOLS = new Set(['describe_task', 'task_describe']);
+const TASK_RUN_TOOLS = new Set(['run_task', 'task_run']);
+
+/**
+ * Workspace-document aliases and their canonical IPC methods. Each alias owns a
+ * distinct operation, so the summary name is resolved by alias rather than by a
+ * shared prefix rule.
+ */
+const WORKSPACE_DOC_ALIASES = new Map<string, string>([
+  ['list_workspace_docs', '列出'],
+  ['read_workspace_doc', '读文档'],
+  ['create_workspace_doc', '新建文档'],
+  ['update_workspace_doc', '更新文档'],
+]);
+
+const DISCOVERY_ALIASES = new Map<string, string>([
+  ['list_projects', '列出项目'],
+  ['list_runtimes', '列出运行时'],
+]);
+
+/** A document read/list call targets either a directory or a document path. */
+function documentTarget(args: Record<string, unknown> | undefined): string | undefined {
+  const path = args ? firstString(args, ['path']) : undefined;
+  if (path) return path;
+  return args ? firstString(args, ['directory']) : undefined;
+}
+
+/**
+ * Concise Chinese one-line summary for a tool call, derived only from the
+ * observed call name and arguments. Task display names are resolved separately
+ * from observed list/describe results; this stays a deterministic fallback.
+ */
+function summarizeToolCall(name: string, args: Record<string, unknown> | undefined, text: string): string | undefined {
+  const path = args ? firstString(args, ['path', 'file', 'file_path', 'filePath', 'document', 'document_path', 'uri', 'url']) : undefined;
+  if (name === 'Read') return path ? clampSummary(`读取文件 ${path}`) : '读取文件';
+  const documentLabel = WORKSPACE_DOC_ALIASES.get(name);
+  if (documentLabel) {
+    const target = documentTarget(args);
+    return clampSummary(target ? `${documentLabel} ${target}` : documentLabel);
+  }
+  const discoveryLabel = DISCOVERY_ALIASES.get(name);
+  if (discoveryLabel) {
+    const scope = args ? firstString(args, ['project', 'task_id']) : undefined;
+    return clampSummary(scope ? `${discoveryLabel} ${scope}` : discoveryLabel);
+  }
+  if (TASK_DESCRIBE_TOOLS.has(name)) {
+    const identity = taskIdentityFromArguments(args);
+    return clampSummary(identity ? `查看任务定义 ${identity}` : '查看任务定义');
+  }
+  if (TASK_LIST_TOOLS.has(name)) {
+    const project = args ? firstString(args, ['project']) : undefined;
+    return clampSummary(project ? `列出任务 ${project}` : '列出任务');
+  }
+  const identity = taskIdentityFromArguments(args);
+  if (TASK_RUN_TOOLS.has(name)) {
+    return clampSummary(identity ? `运行任务 ${identity}` : '运行任务');
+  }
+  const mcp = nearestMcpToolName(text, text.indexOf(name));
+  return mcp ? clampSummary(`调用 ${mcp}`) : undefined;
+}
+
+/** Bounded same-line position of an absolute or workspace-relative document path. */
+function documentPathAt(text: string, index: number): string | undefined {
+  const line = /[^\s`"'()<>\[\]]+/.exec(text.slice(index, index + MAX_DOCUMENT_PATH));
+  const path = line?.[0]?.replace(/[.,;:]+$/, '');
+  if (!path || (!path.includes('/') && !path.includes('\\'))) return undefined;
+  return path;
+}
+
+/**
+ * Bounded document references parsed from a `read_workspace_doc`/
+ * `list_workspace_docs` tool result. The first visible heading, when it is a
+ * plausible title, becomes the shared title; otherwise each reference falls back
+ * to its own path. Raw HTML is never trusted as a title, and every reference
+ * must be path-shaped, so arbitrary markup is discarded.
+ */
+function documentLinksFromText(text: string): ConversationItemSnapshot['documentLinks'] {
+  const links: Array<{ title: string; path: string }> = [];
+  const seen = new Set<string>();
+  const heading = /^#{1,6}[ \t]+(.+)$/m.exec(text)?.[1]?.trim();
+  const headingTitle = heading && heading.length <= MAX_HEADING_TITLE && !heading.includes('<')
+    ? heading
+    : undefined;
+
+  const push = (rawPath: string): void => {
+    const path = rawPath.replace(/[.,;:]+$/, '');
+    if (!path || path.length > MAX_DOCUMENT_PATH || seen.has(path)) return;
+    if (path.includes('<') || path.includes('>')) return;
+    seen.add(path);
+    links.push({ title: (headingTitle ?? path).slice(0, MAX_DOCUMENT_TITLE), path });
+  };
+
+  // A workspace doc result may report the document path as a field rather than
+  // inline prose, so an explicit `path` is a reference in its own right.
+  const declaredPath = firstString(parseJsonObject(text) ?? {}, ['path']);
+  if (declaredPath) push(declaredPath);
+  // A heading names the document, so the path on its own line is its reference.
+  const headingLine = /^#{1,6}[ \t]+.*$/m.exec(text);
+  if (headingLine) {
+    const path = documentPathAt(text, headingLine.index + headingLine[0].length);
+    if (path) push(path);
+  }
+  for (const match of text.matchAll(/[A-Za-z0-9_./\\-]*\/[A-Za-z0-9_./\\-]+\.(?:md|mdx|txt|markdown|rst)\b/gi)) {
+    push(match[0]);
+  }
+  return links.length > 0 ? links.slice(0, MAX_DOCUMENT_LINKS) : undefined;
+}
+
+/**
+ * Task display names observed from `list_task`/`describe_task` results, keyed by
+ * the exact task identity that appears in `task_id`/`name`/`identity`. Only
+ * identities that resolve to a usable display name are stored.
+ */
+function collectTaskDisplayNames(
+  rawText: string,
+  into: Map<string, string>,
+): void {
+  const roots: Record<string, unknown>[] = [];
+  const object = parseJsonObject(rawText);
+  if (object) roots.push(object);
+  const array = parseJsonArray(rawText);
+  if (array) roots.push(...array);
+  if (roots.length === 0) return;
+
+  for (const root of roots) {
+    const queue: Record<string, unknown>[] = [root];
+    let visited = 0;
+    while (queue.length > 0 && visited < 200) {
+      const current = queue.shift() as Record<string, unknown>;
+      visited += 1;
+      // `display_name` is the authoritative label; a definition only carries
+      // `name` (the task_id), so `task_name`/`taskName` are not titles here.
+      const display = firstString(current, ['display_name', 'displayName']);
+      const identity = firstString(current, ['identity', 'task_id', 'taskId', 'name']);
+      if (display && identity) into.set(identity, display);
+      for (const value of Object.values(current)) {
+        if (isObject(value)) queue.push(value);
+        else if (Array.isArray(value)) queue.push(...value.filter(isObject));
+      }
+    }
   }
 }
 
@@ -341,27 +538,146 @@ export function projectHostModels(
   };
 }
 
-/** Fold DSH's durable history protocol into the bounded product-owned renderer model. */
-export function projectConversationHistory(entries: HistoryEntry[]): ConversationItemSnapshot[] {
-  const items: Array<ConversationItemSnapshot & { order: number }> = [];
-  const drafts = new Map<string, ConversationItemSnapshot & { order: number }>();
+interface ConversationProjection {
+  items: ConversationItemSnapshot[];
+  turns: ConversationTurnSnapshot[];
+  /** Retained history array the projection was derived from; part of the cache key. */
+  source: HistoryEntry[];
+  /** Length of `source` when projected; stream frames mutate it in place. */
+  sourceLength: number;
+  revision: number;
+}
+
+/**
+ * One assistant response (one `turn`+`step` pair). Its generation clock starts
+ * at the first delta that actually carries content, so an empty delta or a tool
+ * wait never opens or extends a measurement window.
+ */
+interface ObservedResponse {
+  /** Timestamp of the first nonempty text/arguments/reasoning delta. */
+  generationStartedAt?: number;
+  /** Timestamp of the observed `finish` chunk for this exact step. */
+  finishedAt?: number;
+  /** Per-step usage, counted once even when DSH repeats the observation. */
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+interface ObservedTurn {
+  id: string;
+  order: number;
+  startedAt: number;
+  endedAt?: number;
+  /** Exact observed `turn/end` reason kind; the only source of `completed`. */
+  endReason?: string;
+  completed: boolean;
+  /** Per-step responses of this turn, keyed by the exact step number. */
+  responses: Map<number, ObservedResponse>;
+  finalItemId?: string;
+  /** Number of `run_task`/`task_run` dispatches observed in this turn. */
+  dispatchCount: number;
+}
+
+/** True when a delta chunk actually carries content worth timing. */
+function deltaHasContent(chunkType: string | undefined, chunk: Record<string, unknown>): boolean {
+  if (chunkType === 'reasoning-delta' || chunkType === 'text-delta') {
+    return (asString(chunk.text) ?? '').length > 0;
+  }
+  if (chunkType === 'tool-call-delta') return (asString(chunk.arguments) ?? '').length > 0;
+  return false;
+}
+
+/**
+ * Project the durable DSH event history into the bounded product-owned renderer
+ * model. Retained `turn/start`/`turn/end` events provide the exact turn
+ * boundaries, and per-step `assistant/chunk` observations provide the response
+ * generation clock and token counts. Only a `turn/end` may end the turn:
+ * throughput comes from complete response samples with a paired generation
+ * duration, so turn completion and tool waiting never inflate it. Reasoning
+ * deltas advance the generation clock for throughput only and are never
+ * projected as content.
+ */
+export function projectConversation(
+  entries: HistoryEntry[],
+): { items: ConversationItemSnapshot[]; turns: ConversationTurnSnapshot[] } {
+  const items: Array<ConversationItemSnapshot & { order: number; seq: number }> = [];
+  const drafts = new Map<string, ConversationItemSnapshot & { order: number; seq: number }>();
   const finalizedSteps = new Set<string>();
-  const tools = new Map<string, ConversationItemSnapshot & { order: number }>();
+  const tools = new Map<string, ConversationItemSnapshot & { order: number; seq: number }>();
   const toolArguments = new Map<string, Record<string, unknown> | undefined>();
+  const turnOrder: string[] = [];
+  const observedTurns = new Map<string, ObservedTurn>();
+  const turnsById = observedTurns;
+  const taskDisplayNames = new Map<string, string>();
   let activeTurnId: string | undefined;
 
-  for (const [order, entry] of entries.entries()) {
+  const observeTurn = (turnId: string, time: number, order: number): ObservedTurn => {
+    const existing = turnsById.get(turnId);
+    if (existing) return existing;
+    const observed: ObservedTurn = {
+      id: turnId,
+      order: asNumber(entries[order]?.event.seq) ?? order,
+      startedAt: time,
+      completed: false,
+      responses: new Map<number, ObservedResponse>(),
+      dispatchCount: 0,
+    };
+    turnsById.set(turnId, observed);
+    turnOrder.push(turnId);
+    return observed;
+  };
+
+  const observeResponse = (turnId: string, step: number, time: number, order: number): ObservedResponse => {
+    const turn = observeTurn(turnId, time, order);
+    const existing = turn.responses.get(step);
+    if (existing) return existing;
+    const response: ObservedResponse = {};
+    turn.responses.set(step, response);
+    return response;
+  };
+
+  // The retained buffer is merged by seq, so the fold is ordered by seq and
+  // every distinct event is folded exactly once. Recovery can replay an event
+  // the buffer already holds, so identical seqs are folded once and a seq that
+  // reuses an earlier number for a *different* event is still applied.
+  const folded = new Set<string>();
+  const orderedEntries = entries
+    .map((entry, order) => ({ entry, order, seq: asNumber(entry.event.seq) ?? order }))
+    .sort((left, right) => left.seq - right.seq || left.order - right.order);
+
+  for (const { entry, order, seq } of orderedEntries) {
     const event = entry.event;
     const type = asString(event.type);
     const data = isObject(event.data) ? event.data : {};
-    const seq = asNumber(event.seq) ?? order;
     const time = eventTime(event);
+    const identity = `${seq}:${type ?? ''}`;
+    if (folded.has(identity)) continue;
+    folded.add(identity);
+
+    if (type === 'turn/start') {
+      const turn = asNumber(data.turn);
+      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
+      observeTurn(turnId, time, order).startedAt = time;
+      activeTurnId = turnId;
+      continue;
+    }
+
+    if (type === 'turn/end') {
+      const turn = asNumber(data.turn);
+      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
+      const observed = observeTurn(turnId, time, order);
+      observed.endedAt = time;
+      const reason = isObject(data.reason) ? data.reason : undefined;
+      observed.endReason = asString(reason?.kind);
+      observed.completed = observed.endReason === 'completed';
+      activeTurnId = turnId;
+      continue;
+    }
 
     if (type === 'user/message') {
       if (isObject(data.source) && data.source.kind !== 'user') continue;
       activeTurnId = undefined;
       const text = contentText(data.content);
-      if (text) items.push({ id: `user-${seq}`, kind: 'user', text, time, order });
+      if (text) items.push({ id: `user-${seq}`, kind: 'user', text, time, order, seq });
       continue;
     }
 
@@ -370,13 +686,35 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const turn = asNumber(data.turn);
       const step = asNumber(data.step) ?? 0;
       const chunkType = asString(chunk.type);
+      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
+      activeTurnId = turnId;
+      if (chunkType === 'usage') {
+        // DSH repeats the same per-step usage observation across chunks; each
+        // step contributes at most once so token totals are never double counted.
+        const response = observeResponse(turnId, step, time, order);
+        if (!response.usage) {
+          const usage = isObject(chunk.usage) ? chunk.usage : undefined;
+          const inputTokens = usage ? asNumber(usage.inputTokens) : undefined;
+          const outputTokens = usage ? asNumber(usage.outputTokens) : undefined;
+          if (inputTokens !== undefined || outputTokens !== undefined) response.usage = { inputTokens, outputTokens };
+        }
+        continue;
+      }
+      if (deltaHasContent(chunkType, chunk)) {
+        const response = observeResponse(turnId, step, time, order);
+        response.generationStartedAt ??= time;
+      }
+      if (chunkType === 'finish') {
+        // A finish completes this response only; the turn stays running until
+        // its own `turn/end` arrives.
+        observeResponse(turnId, step, time, order).finishedAt = time;
+        continue;
+      }
       // Reasoning deltas are not conversation projection; only visible text is.
       if (chunkType !== 'text-delta') continue;
       const delta = asString(chunk.text) ?? '';
       if (!delta) continue;
-      const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
       const key = `${turnId}:${step}`;
-      activeTurnId = turnId;
       if (finalizedSteps.has(key)) continue;
       const draft = drafts.get(key) ?? {
         id: `assistant-${key}`,
@@ -384,8 +722,10 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         text: '',
         time,
         turnId,
+        step,
         running: true,
         order,
+        seq,
       };
       draft.text += delta;
       drafts.set(key, draft);
@@ -398,20 +738,26 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const turnId = turn === undefined ? activeTurnId ?? `assistant-${seq}` : `turn-${turn}`;
       const key = `${turnId}:${step}`;
       activeTurnId = turnId;
+      observeTurn(turnId, time, order);
       finalizedSteps.add(key);
       drafts.delete(key);
       const message = isObject(data.message) ? data.message : {};
       // Only visible text is projected; reasoning blocks are intentionally dropped.
       const text = contentText(message.content);
       if (text) {
-        items.push({
+        const item: ConversationItemSnapshot & { order: number; seq: number } = {
           id: `assistant-${key}`,
           kind: 'assistant',
           text,
           turnId,
+          step,
           time,
           order,
-        });
+          seq,
+        };
+        items.push(item);
+        const observed = turnsById.get(turnId);
+        if (observed) observed.finalItemId = item.id;
       }
       continue;
     }
@@ -422,8 +768,10 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       const args = asString(data.arguments)?.trim();
       const turn = asNumber(data.turn);
       const turnId = turn === undefined ? activeTurnId : `turn-${turn}`;
-      if (turn !== undefined) activeTurnId = turnId;
-      const item: ConversationItemSnapshot & { order: number } = {
+      if (turnId && turn !== undefined) activeTurnId = turnId;
+      const parsedArgs = parseToolCallArguments(args);
+      const step = asNumber(data.step);
+      const item: ConversationItemSnapshot & { order: number; seq: number } = {
         id: `tool-${callId}`,
         kind: 'tool',
         toolName: name,
@@ -431,11 +779,20 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
         text: args ? args.slice(0, 4_000) : '',
         time,
         ...(turnId ? { turnId } : {}),
+        ...(step !== undefined ? { step } : {}),
+        ...(() => {
+          const summary = summarizeToolCall(name, parsedArgs, args ?? '');
+          return summary ? { toolSummary: summary } : {};
+        })(),
         order,
+        seq,
       };
       tools.set(callId, item);
-      toolArguments.set(callId, parseToolCallArguments(args));
+      toolArguments.set(callId, parsedArgs);
       items.push(item);
+      // The dispatch count counts task executions, so only `run_task` counts,
+      // including a repeated dispatch of the same task.
+      if (turnId && TASK_RUN_TOOLS.has(name)) observeTurn(turnId, time, order).dispatchCount += 1;
       continue;
     }
 
@@ -448,10 +805,11 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
       if (tool) {
         const blocks = Array.isArray(message.content) ? message.content : [];
         const failed = blocks.some((block) => isObject(block) && block.isError === true) || isObject(data.error);
-        tool.toolState = failed ? 'failed' : 'done';
         const rawText = extractToolResultText(blocks);
-        if (rawText) tool.toolResultText = rawText;
-        if (tool.toolName === 'run_task') {
+        const toolName = tool.toolName ?? '';
+        const isTaskRead = TASK_DESCRIBE_TOOLS.has(toolName) || TASK_LIST_TOOLS.has(toolName);
+        let taskRunFailed = false;
+        if (toolName === 'run_task' || toolName === 'task_run') {
           const resultObject = parseJsonObject(rawText);
           if (resultObject) {
             let candidate: Record<string, unknown> = resultObject;
@@ -460,9 +818,25 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
               const fallbackTaskId = argTaskId ? asString(argTaskId.task_id) : undefined;
               if (fallbackTaskId) candidate = { ...candidate, task_id: fallbackTaskId };
             }
+            const displayName = firstString(candidate, ['task_name', 'taskName', 'display_name', 'displayName']);
+            const resultTaskId = firstString(candidate, ['task_id', 'taskId']);
+            if (displayName && resultTaskId) taskDisplayNames.set(resultTaskId, displayName);
             const taskRun = parseTaskRunSnapshot(candidate);
-            if (taskRun) tool.taskRun = taskRun;
+            if (taskRun) {
+              tool.taskRun = taskRun;
+              // A run that reports a failed/cancelled terminal status failed for
+              // the caller even when the transport marked the call successful.
+              taskRunFailed = taskRun.status === 'failed' || taskRun.status === 'cancelled';
+            }
           }
+        }
+        tool.toolState = failed || taskRunFailed ? 'failed' : 'done';
+        if (rawText) tool.toolResultText = rawText.slice(0, MAX_TOOL_RESULT_TEXT);
+        if (!failed && rawText && isTaskRead) collectTaskDisplayNames(rawText, taskDisplayNames);
+        const isDocumentRead = WORKSPACE_DOC_ALIASES.has(toolName) || toolName === 'Read' || toolName === 'read_document';
+        if (!failed && !taskRunFailed && rawText && isDocumentRead) {
+          const links = documentLinksFromText(rawText);
+          if (links) tool.documentLinks = links;
         }
       }
     }
@@ -471,10 +845,95 @@ export function projectConversationHistory(entries: HistoryEntry[]): Conversatio
   for (const draft of drafts.values()) {
     if (draft.text) items.push(draft);
   }
-  return items
-    .sort((left, right) => left.order - right.order)
-    .slice(-240)
-    .map(({ order: _order, ...item }) => item);
+
+  // Resolve observed task identities to their display names; identities that were
+  // never observed in a list/describe result keep the deterministic fallback.
+  for (const item of items) {
+    if (item.kind !== 'tool' || item.toolSummary === undefined) continue;
+    const identity = taskIdentityFromArguments(toolArguments.get(item.id.slice('tool-'.length)));
+    const displayName = identity ? taskDisplayNames.get(identity) : undefined;
+    if (!identity || !displayName) continue;
+    item.toolSummary = clampSummary(item.toolSummary.replace(identity, displayName));
+  }
+
+  const orderedItems = items.sort((left, right) => left.order - right.order);
+  // A merged history page can place a live frame before a recovered page entry
+  // (dedupe keeps array order), so the transcript is ordered by the observed
+  // event seq rather than by arrival position.
+  const sortedItems = [...orderedItems].sort((left, right) => left.seq - right.seq);
+  const visibleItemIds = new Set(orderedItems.map((item) => item.id));
+  const turns: ConversationTurnSnapshot[] = [];
+  const sortedTurnIds = [...turnOrder].sort((left, right) => {
+    const a = observedTurns.get(left);
+    const b = observedTurns.get(right);
+    return (a?.order ?? 0) - (b?.order ?? 0);
+  });
+  for (const turnId of sortedTurnIds) {
+    const observed = turnsById.get(turnId);
+    if (!observed) continue;
+    const endedAt = observed.endedAt;
+    // Token totals count each step exactly once; a turn without usage keeps the
+    // observation absent rather than asserting zero.
+    const usages = [...observed.responses.values()].flatMap((response) => response.usage ? [response.usage] : []);
+    const inputTokens = usages.reduce<number | undefined>(
+      (sum, usage) => usage.inputTokens === undefined ? sum : (sum ?? 0) + usage.inputTokens,
+      undefined,
+    );
+    const outputTokens = usages.reduce<number | undefined>(
+      (sum, usage) => usage.outputTokens === undefined ? sum : (sum ?? 0) + usage.outputTokens,
+      undefined,
+    );
+    // Throughput is paired per response: only a response that reported usage and
+    // a positive generation window contributes, so a turn end or a tool wait
+    // never participates in the measurement.
+    let measuredOutputTokens = 0;
+    let measuredGenerationMs = 0;
+    let responseCount = 0;
+    for (const response of observed.responses.values()) {
+      if (response.generationStartedAt === undefined || response.finishedAt === undefined) continue;
+      const generationMs = response.finishedAt - response.generationStartedAt;
+      if (generationMs <= 0) continue;
+      if (response.usage?.outputTokens === undefined) continue;
+      measuredOutputTokens += response.usage.outputTokens;
+      measuredGenerationMs += generationMs;
+      responseCount += 1;
+    }
+    const outputTps = responseCount > 0 && measuredGenerationMs > 0
+      ? measuredOutputTokens / (measuredGenerationMs / 1_000)
+      : undefined;
+    turns.push({
+      id: observed.id,
+      startedAt: observed.startedAt,
+      ...(endedAt !== undefined ? { endedAt } : {}),
+      running: endedAt === undefined,
+      ...(observed.completed && observed.finalItemId && visibleItemIds.has(observed.finalItemId)
+        ? { finalItemId: observed.finalItemId }
+        : {}),
+      dispatchCount: observed.dispatchCount,
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(outputTps !== undefined ? { outputTps } : {}),
+    });
+  }
+
+  return {
+    items: sortedItems.slice(-240).map(({ order: _order, seq: _seq, ...item }) => item),
+    turns,
+  };
+}
+
+/** Fold DSH's durable history protocol into the bounded product-owned renderer model. */
+export function projectConversationHistory(entries: HistoryEntry[]): ConversationItemSnapshot[] {
+  return projectConversation(entries).items;
+}
+
+/**
+ * Project the observed turn boundaries, token usage, and dispatch counts for the
+ * retained history. Turns are ordered by first observation, so the projection is
+ * a pure function of the retained events.
+ */
+export function projectConversationTurns(entries: HistoryEntry[]): ConversationTurnSnapshot[] {
+  return projectConversation(entries).turns;
 }
 
 export class DshConversationClient {
@@ -497,6 +956,8 @@ export class DshConversationClient {
   private reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
   private notifyTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshPromise: Promise<void> | undefined;
+  private projection: ConversationProjection | undefined;
+  private projectionRevision = 0;
 
   constructor(options: DshConversationClientOptions) {
     this.baseUrl = new URL(options.baseUrl);
@@ -549,6 +1010,7 @@ export class DshConversationClient {
         ...(session.agentPreset ? { agentPreset: session.agentPreset } : {}),
       }));
     const selected = this.selectedSessionId ? this.sessions.get(this.selectedSessionId) : undefined;
+    const projection = this.conversationProjection();
     return {
       status: 'ready',
       workspace: this.workspace,
@@ -560,8 +1022,32 @@ export class DshConversationClient {
       selectedRunning: selected?.running ?? false,
       models: this.models,
       hasMore: this.history.hasMore,
-      items: projectConversationHistory(this.history.events),
+      items: projection.items,
+      ...(projection.turns.length > 0 ? { turns: projection.turns } : {}),
     };
+  }
+
+  /**
+   * Cache the history projection against its retained-events identity so a
+   * snapshot burst (mux frames arrive per chunk) reuses one projection. Live
+   * frames are pushed in place, so the array identity alone is not enough: the
+   * observed length is part of the key. Any reassignment of `this.history` —
+   * select, create, reload — also invalidates the cache.
+   */
+  private conversationProjection(): ConversationProjection {
+    const events = this.history.events;
+    const cached = this.projection;
+    if (cached && cached.source === events && cached.sourceLength === events.length) return cached;
+    const projected = projectConversation(events);
+    const next: ConversationProjection = {
+      items: projected.items,
+      turns: projected.turns,
+      source: events,
+      sourceLength: events.length,
+      revision: ++this.projectionRevision,
+    };
+    this.projection = next;
+    return next;
   }
 
   async select(sessionId: string): Promise<ConversationSnapshot> {
@@ -949,7 +1435,13 @@ export class DshConversationClient {
           summary.running = true;
           summary.blank = false;
         }
-        if (event.type === 'turn/end') summary.running = false;
+        if (event.type === 'turn/end') {
+          summary.running = false;
+          // A terminal turn boundary is delivered immediately rather than waiting
+          // out the burst window, so completion/usage never arrives late.
+          this.flushNotify();
+          return;
+        }
         if (event.type === 'session/title' && isObject(event.data) && typeof event.data.title === 'string') {
           summary.projections = { values: { ...(summary.projections?.values ?? {}), title: event.data.title } };
         }
@@ -986,12 +1478,27 @@ export class DshConversationClient {
     }
   }
 
+  /**
+   * Coalesce burst notifications (one per streamed chunk) onto a short timer.
+   * The delay never delays delivery: a snapshot always follows the burst that
+   * requested it, and `flushNotify` delivers a terminal boundary on its own
+   * clock so completion/usage never waits out the window.
+   */
   private notify(): void {
     if (this.notifyTimer) return;
     this.notifyTimer = setTimeout(() => {
       this.notifyTimer = undefined;
       this.onChanged();
-    }, 40);
+    }, 100);
+  }
+
+  /** Deliver a notification now, collapsing any burst still inside the window. */
+  private flushNotify(): void {
+    if (this.notifyTimer) {
+      clearTimeout(this.notifyTimer);
+      this.notifyTimer = undefined;
+    }
+    this.onChanged();
   }
 }
 

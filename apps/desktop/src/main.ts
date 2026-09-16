@@ -22,6 +22,7 @@ import { DesktopPetController } from './pet-controller.js';
 import { DesktopPetSettingsStore } from './pet-settings-store.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { ProviderService } from './provider-service.js';
+import { readConversationActivity } from './conversation-activity.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
@@ -856,6 +857,8 @@ async function bootstrap(): Promise<void> {
       return saved;
     },
     getConversation: async () => conversationController!.snapshot(),
+    getConversationActivity: () => readConversationActivity(ipcPath),
+    openTaskTranscript: (taskRunId) => petController!.openTaskTranscript(taskRunId),
     selectConversation: (sessionId: string) => conversationController!.select(sessionId),
     createConversation: () => conversationController!.create(),
     selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),

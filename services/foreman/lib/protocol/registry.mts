@@ -194,6 +194,8 @@ import {
   taskRoutingTestResultSchema,
   taskRoutingTestTasksParamsSchema,
   taskRoutingTestTasksResultSchema,
+  taskSettingsRuntimesParamsSchema,
+  taskSettingsRuntimesResultSchema,
   taskSettingsSaveParamsSchema,
   taskSettingsSaveResultSchema,
   taskSettingsSnapshotParamsSchema,
@@ -202,6 +204,8 @@ import {
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksParams,
   type TaskRoutingTestTasksResult,
+  type TaskSettingsRuntimesParams,
+  type TaskSettingsRuntimesResult,
   type TaskSettingsSaveParams,
   type TaskSettingsSaveResult,
   type TaskSettingsSnapshotParams,
@@ -379,6 +383,8 @@ export type {
   TaskRoutingTestResult,
   TaskRoutingTestTasksParams,
   TaskRoutingTestTasksResult,
+  TaskSettingsRuntimesParams,
+  TaskSettingsRuntimesResult,
   TaskSettingsSaveParams,
   TaskSettingsSaveResult,
   TaskSettingsSnapshotParams,
@@ -439,6 +445,7 @@ export interface ForemanMethodParams {
   'task.settings.save': TaskSettingsSaveParams
   'task.settings.routingTest': TaskRoutingTestParams
   'task.settings.routingTestTasks': TaskRoutingTestTasksParams
+  'task.settings.runtimes': TaskSettingsRuntimesParams
   'task.run.create': TaskRunCreateParams
   'task.run.list': TaskRunListParams
   'task.run.status': TaskRunStatusParams
@@ -501,6 +508,7 @@ export interface ForemanMethodResults {
   'task.settings.save': TaskSettingsSaveResult
   'task.settings.routingTest': TaskRoutingTestResult
   'task.settings.routingTestTasks': TaskRoutingTestTasksResult
+  'task.settings.runtimes': TaskSettingsRuntimesResult
   'task.run.create': TaskRunCreateResult
   'task.run.list': TaskRunListResult
   'task.run.status': TaskRunStatusResult
@@ -640,6 +648,10 @@ export const methodRegistry: {
   'task.settings.routingTestTasks': {
     params: taskRoutingTestTasksParamsSchema,
     result: taskRoutingTestTasksResultSchema,
+  },
+  'task.settings.runtimes': {
+    params: taskSettingsRuntimesParamsSchema,
+    result: taskSettingsRuntimesResultSchema,
   },
   'task.run.create': {
     params: taskRunCreateParamsSchema,
