@@ -434,6 +434,47 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       throw error
     }
   })
+  // Bounded read-only runtime discovery for one task: canonical
+  // `provider/model:client` targets with truthful client/provider readiness.
+  // Never selects, saves, reserves, or calls a model. This is the ONE
+  // task.settings.* method exposed over MCP (see the `task_runtimes` agent
+  // tool) so agents can discover valid dispatch targets instead of inventing
+  // them; it reads no user settings and mutates nothing, so the IPC-only guard
+  // used by snapshot/save/routingTest does not apply. Every mutating
+  // task.settings.* method stays IPC-only.
+  const requireTaskSettingsDiscovery = (
+    context: unknown,
+    method: string,
+  ): TaskSettingsService => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc' && rpcContext.transport !== 'mcp') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC or MCP` },
+        { code: 'task_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.taskSettings) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'task_settings_unavailable' },
+      )
+    }
+    return options.taskSettings
+  }
+  router.register('task.settings.runtimes', async (params, _message, context) => {
+    const service = requireTaskSettingsDiscovery(context, 'task.settings.runtimes')
+    try {
+      return await service.runtimes(params)
+    } catch (error) {
+      if (
+        error instanceof TaskSettingsTaskNotFoundError
+        || error instanceof TaskSettingsInvalidSettingsError
+      ) {
+        throw protocolErrorFromTaskSettingsError(error)
+      }
+      throw error
+    }
+  })
   // runtime.alias.snapshot/put/remove delegate to the injected daemon-owned
   // RuntimeAliasService; the RPC surface never recreates store or resolution
   // logic. IPC-only. When the dependency is absent the methods fail loud with a

@@ -17,7 +17,7 @@ import { discoverTasks, ensureDiscovered } from '../../workspace/task-loader.mts
 import { startHotReload, type HotReloadHandle } from '../../workspace/hot-reload.mts'
 
 const PROTOCOL_VERSION = '2024-11-05'
-const PROJECT_PARAMETER_DESCRIPTION = "Project qualified name. Resolves to the project's real checkout directory on disk, and identifies its relative path within the workspace. Examples: 'workspace', 'forge', 'foreman', 'ure/service', 'gol/project'"
+const PROJECT_PARAMETER_DESCRIPTION = "Project qualified name. Resolves to the project's real checkout directory on disk, and identifies its relative path within the workspace. Call project_list to discover the valid project names instead of guessing."
 
 type JsonRecord = Record<string, unknown>
 
