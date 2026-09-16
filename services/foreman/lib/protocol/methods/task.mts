@@ -933,8 +933,8 @@ export interface TaskSettingsRuntimesItem {
   provider: string
   model: string
   client: string
-  /** Route mode of the target: a native client login or a gateway route. */
-  mode: 'native' | 'gateway'
+  /** Resolved route mode, omitted when resolution is unavailable. */
+  mode?: 'native' | 'gateway'
   available: boolean
   /** Concrete cause when unavailable; absent when available. */
   reason?: string
@@ -1587,7 +1587,7 @@ export const taskRoutingTestTasksResultSchema = {
 
 const taskSettingsRuntimesItemSchema = {
   type: 'object',
-  required: ['target', 'provider', 'model', 'client', 'mode', 'available'],
+  required: ['target', 'provider', 'model', 'client', 'available'],
   properties: {
     target: { type: 'string', minLength: 1 },
     provider: { type: 'string', minLength: 1 },

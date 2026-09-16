@@ -820,6 +820,21 @@ describe('daemon task-settings-service (no-model)', () => {
 
   const tempResidue = (): string[] => readdirSync(context!.dir).filter((entry) => entry.includes('.tmp'))
 
+  it('preserves the canonical client and rejection reason for unresolved runtimes', async () => {
+    const target = PROFILES[0].exactAgentRuntime
+    const service = context!.makeService({
+      resolver: createResolverFixture({ unavailable: { commit: target } }),
+    })
+    const result = await service.runtimes({ task_id: 'commit' })
+    const blocked = result.items.find((item) => item.target === target)
+    assert.ok(blocked)
+    assert.equal(blocked.client, 'codex')
+    assert.equal(blocked.available, false)
+    assert.equal(blocked.reason, 'fixture-blocked')
+    assert.equal(blocked.mode, undefined)
+    assert.ok(result.items.every((item) => item.client.length > 0))
+  })
+
   it('reports the authoritative path, revision and layered effective settings with per-field sources', async () => {
     writeConfig({
       tasks: {

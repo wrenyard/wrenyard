@@ -1100,15 +1100,15 @@ export class TaskSettingsService {
       const parsed = splitRuntimeIdentity(entry.exactAgentRuntime)
       if (parsed === undefined) continue
       const resolved = entry.resolved
-      // Without a truthful resolved plan the target's client/mode cannot be
-      // reported, so it carries the resolver's own concrete reason verbatim.
+      // The canonical target identifies the client even when resolution fails;
+      // omit the route mode unless the resolver actually supplied one.
       if (entry.available !== true || resolved === undefined) {
         items.push({
           target: entry.exactAgentRuntime,
           provider: resolved?.provider ?? parsed.provider,
           model: resolved?.model ?? parsed.model,
-          client: resolved?.client ?? '',
-          mode: resolved?.mode ?? 'gateway',
+          client: resolved?.client ?? entry.exactAgentRuntime.slice(entry.exactAgentRuntime.lastIndexOf(':') + 1),
+          ...(resolved ? { mode: resolved.mode } : {}),
           available: false,
           reason: entry.unavailableReason ?? 'target is not currently resolvable',
         })
