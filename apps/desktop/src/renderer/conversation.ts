@@ -1164,16 +1164,22 @@ export class ConversationView {
         continue;
       }
       if (item?.kind === 'tool') {
-        const tools: ConversationItemSnapshot[] = [];
-        const category = this.toolCategory(item);
+        const row = document.createElement('div');
+        row.className = 'turn-tool-row';
+        const icons = document.createElement('div');
+        icons.className = 'turn-tool-row-icons';
+        const preview = document.createElement('div');
+        preview.className = 'turn-tool-row-preview';
         while (processItems[index]?.kind === 'tool') {
-          const candidate = processItems[index] as ConversationItemSnapshot;
-          const candidateCategory = this.toolCategory(candidate);
-          if (candidateCategory !== category) break;
-          tools.push(candidate);
-          index += 1;
+          const tools: ConversationItemSnapshot[] = [];
+          const category = this.toolCategory(processItems[index]!);
+          while (processItems[index]?.kind === 'tool' && this.toolCategory(processItems[index]!) === category) {
+            tools.push(processItems[index++]!);
+          }
+          icons.append(this.renderToolStack(tools, 'stack:', preview));
         }
-        backlog.append(this.renderToolStack(tools));
+        row.append(icons, preview);
+        backlog.append(row);
         continue;
       }
       index += 1;
@@ -1295,7 +1301,7 @@ export class ConversationView {
     return icon;
   }
 
-  private renderToolStack(items: ConversationItemSnapshot[], stackPrefix = 'stack:'): HTMLElement {
+  private renderToolStack(items: ConversationItemSnapshot[], stackPrefix = 'stack:', previewHost?: HTMLElement): HTMLElement {
     const stack = document.createElement('div');
     stack.className = 'turn-tool-stack';
     const id = stackPrefix + items[0]!.id;
@@ -1309,7 +1315,7 @@ export class ConversationView {
     const widths = items.map((item) => taskGroup
       ? Math.min(260, Math.max(108, Array.from(this.taskLabel(item)).reduce((width, char) => width + (/[^\x00-\x7f]/.test(char) ? 12 : 7), 42)))
       : 28);
-    rail.style.setProperty('--collapsed-width', `${taskGroup ? widths[0] : 32 + Math.min(items.length - 1, 2) * 7}px`);
+    rail.style.setProperty('--collapsed-width', `${taskGroup ? widths[0] : 32}px`);
     rail.style.setProperty('--expanded-width', `${widths.reduce((total, width) => total + width + 5, 0)}px`);
     const selected = document.createElement('div');
     selected.className = 'turn-tool-detail';
@@ -1320,27 +1326,28 @@ export class ConversationView {
       selected.replaceChildren();
       buttons.forEach((button) => button.setAttribute('aria-expanded', 'false'));
     };
+    selected.addEventListener('clear-tool-preview', clearDetail);
     const select = (item: ConversationItemSnapshot, button: HTMLButtonElement, restoring = false): void => {
       const wasSelected = button.getAttribute('aria-expanded') === 'true';
       if (!restoring) clearDetail();
       if (wasSelected) return;
+      for (const sibling of Array.from(previewHost?.children ?? [])) {
+        if (sibling !== selected) sibling.dispatchEvent(new Event('clear-tool-preview'));
+      }
       button.setAttribute('aria-expanded', 'true');
       this.expandedItemIds.add(item.id);
-      const title = document.createElement('div');
-      title.className = 'turn-tool-header';
-      title.textContent = (item.toolSummary ?? item.toolName ?? '工具') + ' · ' + this.toolStateLabel(item);
       const body = document.createElement('div');
       body.className = 'turn-tool-body';
       body.append(this.renderToolBody(item));
-      selected.append(title, body);
+      selected.append(body);
     };
     items.forEach((item, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.style.setProperty('--collapsed-x', `${Math.min(index, 2) * 7}px`);
+      button.style.setProperty('--collapsed-x', '0px');
       button.style.setProperty('--expanded-x', `${widths.slice(0, index).reduce((total, width) => total + width + 5, 0)}px`);
       button.style.setProperty('--button-width', `${widths[index]}px`);
-      button.style.setProperty('--collapsed-opacity', index < (taskGroup ? 1 : 3) ? '1' : '0');
+      button.style.setProperty('--collapsed-opacity', index === 0 ? '1' : '0');
       const taskRunId = item.taskRun?.taskRunId;
       const taskName = taskGroup ? this.taskLabel(item) : undefined;
       const state = item.taskRun?.status ?? item.toolState;
@@ -1370,6 +1377,13 @@ export class ConversationView {
     toggle.className = 'turn-tool-stack-toggle';
     toggle.title = taskGroup ? items.map((item) => this.taskLabel(item)).join('、') : `${items.length} 次工具调用`;
     toggle.setAttribute('aria-label', toggle.title);
+    if (items.length > 1) {
+      const count = document.createElement('span');
+      count.className = 'turn-tool-count';
+      count.textContent = String(items.length);
+      count.setAttribute('aria-hidden', 'true');
+      toggle.append(count);
+    }
     const setExpanded = (open: boolean): void => {
       stack.classList.toggle('is-expanded', open);
       stack.dataset.expanded = String(open);
@@ -1384,12 +1398,16 @@ export class ConversationView {
       else { clearDetail(); this.expandedItemIds.delete(id); }
     };
     toggle.addEventListener('click', () => { setExpanded(true); buttons[0]?.focus({ preventScroll: true }); });
-    stack.addEventListener('reset-tool-stack', () => setExpanded(false));
+    stack.addEventListener('reset-tool-stack', () => {
+      clearDetail();
+      setExpanded(items.length === 1);
+    });
     rail.append(toggle);
     viewport.append(rail);
-    stack.append(viewport, selected);
+    stack.append(viewport);
+    (previewHost ?? stack).append(selected);
     const restoredItem = items.findIndex((item) => this.expandedItemIds.has(item.id));
-    const open = this.expandedItemIds.has(id);
+    const open = items.length === 1 || this.expandedItemIds.has(id);
     setExpanded(open);
     if (open && restoredItem >= 0) select(items[restoredItem]!, buttons[restoredItem]!, true);
     return stack;
@@ -1575,10 +1593,16 @@ export class ConversationView {
     return tool;
   }
 
+  private formatToolJson(value: string): string {
+    try { return JSON.stringify(JSON.parse(value), null, 2); }
+    catch { return value; }
+  }
+
   private renderToolBody(item: ConversationItemSnapshot): DocumentFragment {
     const fragment = document.createDocumentFragment();
     const code = document.createElement('pre');
-    code.textContent = item.text || '无参数';
+    code.setAttribute('aria-label', '调用参数');
+    code.textContent = this.formatToolJson(item.text || '{}');
     fragment.append(code);
 
     // run_task items carry terminal metadata once resolved, or a pending hint
@@ -1608,22 +1632,11 @@ export class ConversationView {
       }
     }
 
-    // Bounded raw result, rendered as escaped text in its own expandable body.
-    // The body is materialized on first open so collapsed history never parses it.
     if (item.toolResultText) {
-      const result = document.createElement('details');
-      result.className = 'tool-result';
-      this.bindExpandedState(result, item.id + ':tool-result');
-      const resultSummary = document.createElement('summary');
-      resultSummary.textContent = '原始结果';
-      result.append(resultSummary);
-      result.addEventListener('toggle', () => {
-        if (!result.open || result.querySelector('.tool-result-body')) return;
-        const resultBody = document.createElement('div');
-        resultBody.className = 'tool-result-body';
-        resultBody.textContent = item.toolResultText ?? '';
-        result.append(resultBody);
-      });
+      const result = document.createElement('pre');
+      result.className = 'tool-result-body';
+      result.setAttribute('aria-label', '调用结果');
+      result.textContent = this.formatToolJson(item.toolResultText);
       fragment.append(result);
     }
 
