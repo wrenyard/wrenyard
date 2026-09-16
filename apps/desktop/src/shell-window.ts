@@ -11,6 +11,7 @@ import {
   acceleratorPage,
   isShellPage,
   type ConversationSnapshot,
+  type ConversationActivityItem,
   type StatsSnapshot,
   type QuotaSnapshot,
   type SettingsSnapshot,
@@ -63,6 +64,8 @@ export interface ShellWindowOptions {
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
+  getConversationActivity(): Promise<ConversationActivityItem[]>;
+  openTaskTranscript(taskRunId: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
@@ -459,6 +462,17 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.getConversation();
     });
+    ipcMain.handle(SHELL_CHANNELS.conversationActivity, async (event) => {
+      assertShellSender(event.sender);
+      return options.getConversationActivity();
+    });
+    ipcMain.handle(SHELL_CHANNELS.taskTranscript, async (event, taskRunId: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof taskRunId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,128}$/.test(taskRunId)) {
+        throw new Error('任务运行 id 无效');
+      }
+      return options.openTaskTranscript(taskRunId);
+    });
     ipcMain.handle(SHELL_CHANNELS.conversationSelect, async (event, sessionId: unknown) => {
       assertShellSender(event.sender);
       if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) throw new Error('会话 id 无效');
@@ -542,6 +556,8 @@ export class ShellWindowController {
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
       SHELL_CHANNELS.conversationSnapshot,
+      SHELL_CHANNELS.conversationActivity,
+      SHELL_CHANNELS.taskTranscript,
       SHELL_CHANNELS.conversationSelect,
       SHELL_CHANNELS.conversationCreate,
       SHELL_CHANNELS.conversationSelectModel,

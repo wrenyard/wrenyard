@@ -74,6 +74,9 @@ import type {
   TaskSettingsPatch,
   TaskSettingsRuntimeReadiness,
   TaskSettingsRuntimeTriple,
+  TaskSettingsRuntimesItem,
+  TaskSettingsRuntimesParams,
+  TaskSettingsRuntimesResult,
   TaskSettingsSaveParams,
   TaskSettingsSnapshotParams,
   TaskSettingsSnapshotResult,
@@ -1034,6 +1037,146 @@ export class TaskSettingsService {
       }
     })
     return { tasks }
+  }
+
+  /** Bounded read-only runtime discovery for ONE task: enumerates the exact
+   *  canonical `provider/model:client` targets the task can be dispatched to,
+   *  with truthful availability.
+   *
+   *  Enumeration goes through the shared `resolver.listExactRuntimes` using the
+   *  task's DEFINITION dispatch requirements (not the effective user settings):
+   *  this is explicit-selection discovery, so automatic-only preferences —
+   *  price ceilings, speed and intelligence recommendations, exclusion lists,
+   *  ranking — are deliberately NOT imposed. A target is reported available
+   *  only when the same authoritative gates `resolveForRun` applies also admit
+   *  it: the target resolves to a task-capable plan, its client is
+   *  enabled/installed per the Forge client-readiness sample, and its provider
+   *  credential/route is live. No inference, save, reservation, or model call
+   *  happens here, and no fallback is ever substituted for an unavailable
+   *  target. An unknown task or project errors rather than returning an empty
+   *  list. */
+  async runtimes(params: TaskSettingsRuntimesParams): Promise<TaskSettingsRuntimesResult> {
+    const taskId = params.task_id?.trim() ?? ''
+    const summaries = await this.definitions.list(params.project)
+    const summary = summaries.find((entry) => {
+      if (entry.name === taskId) return true
+      const kind: 'builtin' | 'project' = entry.kind
+        ?? (entry.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
+      return taskSettingsIdentity({
+        kind,
+        name: entry.name,
+        ...(kind === 'project' ? { project: entry.project ?? params.project } : {}),
+      }) === taskId
+    })
+    if (!summary) {
+      throw new TaskSettingsTaskNotFoundError(taskId || (params.task_id ?? ''))
+    }
+    // A project filter must actually own the resolved task; otherwise the
+    // caller's project is unknown (or the task is not in it).
+    if (params.project !== undefined && summary.project !== params.project && summary.kind !== 'builtin') {
+      throw new TaskSettingsTaskNotFoundError(taskId || (params.task_id ?? ''))
+    }
+
+    const detail = await this.definitionDetailOrUndefined(summary, params.project)
+    const requirements = rawDefinitionDispatch(summary.dispatch ?? detail?.dispatch)
+    const requiredCapabilities = requirements.requiredCapabilities
+
+    const listing = this.resolver.listExactRuntimes({
+      taskName: summary.name,
+      ...(requiredCapabilities !== undefined && requiredCapabilities.length > 0 ? { requiredCapabilities } : {}),
+      ...(requirements.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
+      ...(requirements.intelligenceMin !== undefined ? { intelligenceMin: requirements.intelligenceMin } : {}),
+      ...(requirements.thinking !== undefined ? { thinking: requirements.thinking } : {}),
+    })
+
+    // One request-bound readiness sample + memo shared by every enumerated
+    // target, exactly like the snapshot preview path: the client gate and the
+    // provider probe are the same authoritative checks, never re-derived.
+    const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
+    const clientSample = await this.clientReadinessSample(previewMemo)
+
+    const items: TaskSettingsRuntimesItem[] = []
+    for (const entry of listing.items) {
+      const parsed = splitRuntimeIdentity(entry.exactAgentRuntime)
+      if (parsed === undefined) continue
+      const resolved = entry.resolved
+      // Without a truthful resolved plan the target's client/mode cannot be
+      // reported, so it carries the resolver's own concrete reason verbatim.
+      if (entry.available !== true || resolved === undefined) {
+        items.push({
+          target: entry.exactAgentRuntime,
+          provider: resolved?.provider ?? parsed.provider,
+          model: resolved?.model ?? parsed.model,
+          client: resolved?.client ?? '',
+          mode: resolved?.mode ?? 'gateway',
+          available: false,
+          reason: entry.unavailableReason ?? 'target is not currently resolvable',
+        })
+        continue
+      }
+
+      const triple = TaskSettingsService.tripleOf(resolved)
+      if (!this.clientAdmitted(triple.client, clientSample)) {
+        items.push({
+          target: entry.exactAgentRuntime,
+          provider: triple.provider,
+          model: triple.model,
+          client: triple.client,
+          mode: triple.mode,
+          available: false,
+          reason: this.clientRejectionReason(triple.client, clientSample)
+            ?? `client '${triple.client}' is not currently available`,
+        })
+        continue
+      }
+
+      const availability = await this.previewRuntimeAvailability(triple, previewMemo)
+      items.push({
+        target: entry.exactAgentRuntime,
+        provider: triple.provider,
+        model: triple.model,
+        client: triple.client,
+        mode: triple.mode,
+        available: availability?.available !== false,
+        ...(availability?.available === false
+          ? { reason: `provider '${triple.provider}' is not currently available` }
+          : {}),
+      })
+    }
+    return { items }
+  }
+
+  /** Precise client-gate rejection message for one client from the shared
+   *  readiness sample; undefined when the client is admitted. Mirrors the
+   *  disabled/not-installed/unknown wording `assertLiveRuntimeAvailability`
+   *  throws, so discovery and run admission never disagree. */
+  private clientRejectionReason(
+    client: string,
+    sample: ForgeClientReadinessSnapshot | null,
+  ): string | undefined {
+    if (this.clientReadiness === undefined) return undefined
+    if (sample === null) return `client '${client}' readiness could not be determined`
+    const state = sample.clientsById[client]
+    if (state === undefined) return `client '${client}' is unknown to Forge`
+    if (!state.enabled) return `client '${client}' is disabled in config`
+    if (!state.installed) return `client '${client}' is not installed`
+    return undefined
+  }
+
+  private async definitionDetailOrUndefined(
+    summary: TaskSettingsDefinitionSummary,
+    project: string | undefined,
+  ): Promise<TaskSettingsDefinitionDetail | undefined> {
+    const kind: 'builtin' | 'project' = summary.kind
+      ?? (summary.project !== undefined || project !== undefined ? 'project' : 'builtin')
+    try {
+      return await this.definitions.describe(
+        summary.name,
+        kind === 'project' ? summary.project ?? project : project,
+      )
+    } catch {
+      return undefined
+    }
   }
 
   async save(params: TaskSettingsSaveParams): Promise<TaskSettingsSnapshotResult> {

@@ -30,7 +30,7 @@ export const mcpProtocolTools: ProtocolToolSpec[] = [
   {
     name: 'task_run',
     method: 'task.run.create',
-    description: 'Run a Foreman task by definition name. Optional invocation_settings applies one-shot Task settings (automatic/explicit/timeout/additional) to this run only and is never persisted. MCP returns id/task_run_id plus a concise hint for status/output lookup. If no input is provided, returns an input_required error with the expected schema.',
+    description: 'Run a Foreman task by definition name (task_id) in a project. By default the run uses automatic runtime routing: do NOT invent or pass runtime selection fields. To pin an exact runtime, pass invocation_settings with mode "explicit" and explicit_runtime {kind:"target",target:"provider/model:client"} (or {kind:"alias",name:"<alias>"}); an unknown or unavailable target fails the run instead of falling back. invocation_settings may also set automatic dispatch fields or timeout_ms, applies to this run only, and is never persisted. Never mix automatic selection fields with an explicit target in one call. MCP returns id/task_run_id plus a concise hint for status/output lookup. If no input is provided, returns an input_required error with the expected task input schema.',
   },
   {
     name: 'task_cancel',
@@ -47,6 +47,16 @@ export const mcpProtocolTools: ProtocolToolSpec[] = [
     name: 'task_describe',
     method: 'task.definition.describe',
     description: 'Get detailed schema and contract for a Foreman task.',
+  },
+  {
+    name: 'project_list',
+    method: 'project.list',
+    description: 'List the configured Foreman projects. Call this first to discover valid project qualified names before passing a project to other tools; never invent a project name.',
+  },
+  {
+    name: 'task_runtimes',
+    method: 'task.settings.runtimes',
+    description: 'Discover the exact runtime targets a task may be dispatched to, for a given task_id (and optional project). Returns canonical provider/model:client targets with their client, provider, model, route mode, and whether each is currently available (with a reason when not). Call this instead of inventing a runtime target, then pass a chosen available target to task_run as invocation_settings.explicit_runtime. Read-only: it never runs a task.',
   },
   {
     name: 'status',

@@ -18,6 +18,8 @@ export const SHELL_CHANNELS = {
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
   conversationSnapshot: 'wrenyard-shell:conversation-snapshot',
+  conversationActivity: 'wrenyard-shell:conversation-activity',
+  taskTranscript: 'wrenyard-shell:task-transcript',
   conversationSelect: 'wrenyard-shell:conversation-select',
   conversationCreate: 'wrenyard-shell:conversation-create',
   conversationSelectModel: 'wrenyard-shell:conversation-select-model',
@@ -348,6 +350,15 @@ export interface QuotaSnapshot {
   message?: string;
 }
 
+export interface ConversationActivityItem {
+  id: string;
+  label: string;
+  status: string;
+  taskRunId?: string;
+  project?: string;
+  runtime?: string;
+}
+
 export interface ConversationSessionSnapshot {
   id: string;
   title: string;
@@ -355,6 +366,27 @@ export interface ConversationSessionSnapshot {
   running: boolean;
   blank: boolean;
   agentPreset?: string;
+}
+
+/**
+ * Stable per-turn timing/usage metadata projected from the retained DSH event
+ * stream. Every optional number is observation-only: when DSH never supplied the
+ * datum it stays absent rather than being filled with a substitute.
+ */
+export interface ConversationTurnSnapshot {
+  id: string;
+  /** Exact `turn/start` event time, or the earliest observed event for the turn. */
+  startedAt: number;
+  /** Exact `turn/end` event time; absent while the turn is still running. */
+  endedAt?: number;
+  running: boolean;
+  /** Last assistant message body projected for a completed turn. */
+  finalItemId?: string;
+  /** Count of `run_task`/`task_run` tool calls observed inside this turn. */
+  dispatchCount: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  outputTps?: number;
 }
 
 export interface ConversationItemSnapshot {
@@ -371,6 +403,12 @@ export interface ConversationItemSnapshot {
   toolResultText?: string;
   /** Terminal run_task metadata, present only after the task run resolves. */
   taskRun?: TaskRunSnapshot;
+  /** Exact DSH step number that produced this item, when the event carried one. */
+  step?: number;
+  /** Concise Chinese summary of the tool call derived from its observed arguments. */
+  toolSummary?: string;
+  /** Bounded document references observed for a workspace doc tool result. */
+  documentLinks?: Array<{ title: string; path: string }>;
 }
 
 export interface ConversationModelSelectionSnapshot {
@@ -428,6 +466,8 @@ export interface ConversationSnapshot {
   models: ConversationModelsSnapshot;
   hasMore: boolean;
   items: ConversationItemSnapshot[];
+  /** Observed turn boundaries/usage for the retained history; absent when none exist. */
+  turns?: ConversationTurnSnapshot[];
   message?: string;
 }
 
@@ -794,6 +834,8 @@ export interface WrenyardShellApi {
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
+  getConversationActivity(): Promise<ConversationActivityItem[]>;
+  openTaskTranscript(taskRunId: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;

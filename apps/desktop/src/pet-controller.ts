@@ -18,6 +18,8 @@ export interface DesktopPetRuntimeHandle {
   start(): Promise<void>;
   stop(): Promise<void>;
   setQuotaProviders(providers: QuotaProviderState[]): void;
+  /** Optional task-run transcript preview; older test doubles may omit it. */
+  openTaskTranscript?(taskRunId: string): Promise<void>;
 }
 
 export interface DesktopPetControllerOptions {
@@ -135,6 +137,31 @@ export class DesktopPetController {
   setQuotaProviders(providers: QuotaProviderState[]): void {
     this.quotaProviders = providers.map((provider) => ({ ...provider }));
     this.runtime?.setQuotaProviders(this.quotaProviders);
+  }
+
+  /**
+   * Request a task-run transcript preview without changing Pet settings. The
+   * runtime is created lazily if absent but is never started, so Pet stays
+   * disabled and the preview does not enable entities/pollers. A later
+   * start/stop reuses this same runtime or cleans it up under the existing
+   * lifecycle policy, serialized through the shared transition ownership so
+   * preview and lifecycle operations can never interleave.
+   */
+  async openTaskTranscript(taskRunId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const runtime = this.ensureRuntime();
+      if (!runtime.openTaskTranscript) {
+        throw new Error('Desktop Pet: task transcript preview is unavailable');
+      }
+      await runtime.openTaskTranscript(taskRunId);
+    });
+  }
+
+  private ensureRuntime(): DesktopPetRuntimeHandle {
+    if (this.runtime) return this.runtime;
+    const runtime = this.createRuntime(this.getConfig(), (updated) => this.save(updated));
+    this.runtime = runtime;
+    return runtime;
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {

@@ -335,6 +335,70 @@ export class TaskGraphWindowOwner {
     });
   }
 
+  /**
+   * Trusted-host entry point: render the shared read-only transcript preview
+   * for a task run, independently of any open Graph Slip / Wren entity. The
+   * run id is validated against the daemon (task.run.status is authoritative
+   * for existence/terminal state; task.run.events is authoritative for
+   * existence plus the derived label), so a nonexistent run is rejected and
+   * the label/status come from real run data rather than caller input. The
+   * preview reuses the single transcript window implementation — there is no
+   * duplicated transcript UI or content pipeline. A graph association is
+   * recorded only when the current activity snapshot genuinely knows which
+   * graph and node the run belongs to; standalone runs keep the canonical
+   * standalone node id and are never attached to an arbitrary graph.
+   */
+  async openTaskTranscript(taskRunId: string): Promise<void> {
+    if (this.destroyed) throw new Error('TaskGraph: window owner is destroyed');
+    if (typeof taskRunId !== 'string' || taskRunId.length === 0) {
+      throw new Error('TaskGraph: invalid task run id');
+    }
+
+    // Existence + terminal state from the authoritative run status. Both the
+    // status and the events request must succeed and agree on the run id, so
+    // a stale/foreign run id can never reach the transcript window.
+    const isTerminal = await this.reader.taskRunIsTerminal(taskRunId);
+    await this.reader.loadTaskEvents(taskRunId, undefined, 1);
+
+    const association = this.findRunAssociation(taskRunId);
+    const taskLabel = association?.taskLabel ?? '任务对话';
+    const nodeId = association?.nodeId ?? standaloneTranscriptNodeId(taskRunId);
+
+    this.openTranscriptWindow(nodeId, taskRunId, !isTerminal, association?.graphId, taskLabel);
+  }
+
+  /**
+   * Map a task run to its graph/node only when the current activity snapshot
+   * genuinely carries the association. Taskgraph node presence is the
+   * canonical source; a standalone task (direct run) has no graph and is
+   * therefore never guessed onto one.
+   */
+  private findRunAssociation(
+    taskRunId: string,
+  ): { graphId: string; nodeId: string; taskLabel: string } | undefined {
+    const presence = this.lastPresence;
+    if (!presence) return undefined;
+
+    for (const graph of presence.taskgraphs) {
+      const node = graph.nodes.find((n) => n.taskRunId === taskRunId);
+      if (!node) continue;
+      const projectedNode = this.graphSlips.get(graph.taskgraphId)?.lastProjectedDto?.nodes[node.nodeId];
+      const taskLabel = projectedNode?.task_title
+        ?? projectedNode?.display_label
+        ?? node.taskCategoryLabel
+        ?? node.displayLabel
+        ?? '任务对话';
+      return { graphId: graph.taskgraphId, nodeId: node.nodeId, taskLabel };
+    }
+
+    const task = presence.tasks.find((t) => t.taskRunId === taskRunId);
+    if (task?.taskgraphId && task.nodeId) {
+      return { graphId: task.taskgraphId, nodeId: task.nodeId, taskLabel: task.taskLabel ?? '任务对话' };
+    }
+
+    return undefined;
+  }
+
   private findEntityIdByWindow(win: BrowserWindow): string | undefined {
     for (const [id, entity] of this.entities) {
       if (entity.window === win) return id;
@@ -1245,6 +1309,15 @@ export class TaskGraphWindowOwner {
     this.structureLoads.clear();
     this.onCleanup?.();
   }
+}
+
+/**
+ * Canonical standalone transcript node id for a direct (non-TaskGraph) task
+ * run. A standalone run has no graph/node, so the run id itself is the stable
+ * node identity — callers never synthesize an arbitrary graph node id.
+ */
+export function standaloneTranscriptNodeId(taskRunId: string): string {
+  return taskRunId;
 }
 
 /**

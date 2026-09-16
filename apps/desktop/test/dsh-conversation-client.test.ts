@@ -3,13 +3,29 @@ import { test } from 'node:test';
 import {
   DshConversationClient,
   persistedModelSelectionRepair,
+  projectConversation,
   projectConversationHistory,
   projectConversationModels,
+  projectConversationTurns,
   projectHostModels,
 } from '../src/dsh-conversation-client.js';
 
 function entry(type: string, seq: number, data: Record<string, unknown>) {
   return { event: { type, seq, time: 1_700_000_000_000 + seq, data } };
+}
+
+function toolResult(callId: string, text: string, isError = false) {
+  return entry('tool/result', 0, {
+    message: {
+      source: { kind: 'tool', callId },
+      content: [{ type: 'tool-result', toolCallId: callId, content: [{ type: 'text', text }], isError }],
+    },
+  });
+}
+
+/** Re-seq a helper-built event so a composed history keeps a monotonic seq. */
+function at(seq: number, built: ReturnType<typeof entry>) {
+  return { event: { ...built.event, seq, time: 1_700_000_000_000 + seq } };
 }
 
 test('conversation projection keeps user and finalized assistant content without duplicate chunks', () => {
@@ -1124,4 +1140,342 @@ test('repeated New and empty send remain non-persistent before the first message
   assert.deepEqual(calls, [], 'New and empty send create no durable session or persistence RPC');
   assert.equal(snapshot.selectedSessionId, undefined);
   assert.equal(snapshot.models.status, 'ready', 'the catalog is retained through New');
+});
+
+test('turn projection reports exact boundaries, deduplicated usage, and paired throughput', () => {
+  const entries = [
+    entry('turn/start', 1, { turn: 1 }),
+    entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '思考中' } }),
+    entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 1966, outputTokens: 47 } } }),
+    // DSH repeats the same per-step observation; it must count exactly once.
+    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 1966, outputTokens: 47 } } }),
+    entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '完成' } }),
+    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('assistant/message', 7, {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'reasoning', text: '思考中' }, { type: 'text', text: '完成' }] },
+    }),
+    entry('turn/end', 8, { turn: 1, reason: { kind: 'completed' } }),
+  ];
+
+  const items = projectConversationHistory(entries);
+  const turns = projectConversationTurns(entries);
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].id, 'turn-1');
+  // Exact turn/start and turn/end event times, not arrival or mutation times.
+  assert.equal(turns[0].startedAt, 1_700_000_000_001);
+  assert.equal(turns[0].endedAt, 1_700_000_000_008);
+  assert.equal(turns[0].running, false);
+  assert.equal(turns[0].inputTokens, 1966, 'a repeated per-step usage observation is counted once');
+  assert.equal(turns[0].outputTokens, 47);
+  // Generation is measured from the first nonempty delta of the response to its
+  // own finish chunk — never to the turn end, and never across a tool wait.
+  assert.equal(turns[0].outputTps, 47 / ((1_700_000_000_006 - 1_700_000_000_002) / 1_000));
+  assert.equal(turns[0].finalItemId, items.at(-1)?.id, 'the final assistant body of the completed turn');
+  assert.equal(items.at(-1)?.kind, 'assistant');
+  assert.equal(items.at(-1)?.text, '完成', 'reasoning is never projected as content');
+});
+
+test('turn timing sums per-step responses and never counts a huge tool wait as generation', () => {
+  const entries = [
+    entry('turn/start', 1, { turn: 1 }),
+    // Step 1: 2s of generation, then a 100s tool wait that must not be measured.
+    entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '先查' } }),
+    entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 100, outputTokens: 20 } } }),
+    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('tool/call', 5, { turn: 1, step: 1, callId: 'c-slow', name: 'run_task', arguments: '{"task_id":"slow-task"}' }),
+    entry('tool/result', 6, {
+      message: {
+        source: { kind: 'tool', callId: 'c-slow' },
+        content: [{ type: 'tool-result', toolCallId: 'c-slow', content: [{ type: 'text', text: '{"task_run_id":"r-1"}' }], isError: false }],
+      },
+    }),
+    // Step 2: a duplicated usage observation must still count once per step.
+    entry('assistant/chunk', 7, { turn: 1, step: 2, chunk: { type: 'text-delta', text: '再写' } }),
+    entry('assistant/chunk', 8, { turn: 1, step: 2, chunk: { type: 'usage', usage: { inputTokens: 300, outputTokens: 30 } } }),
+    entry('assistant/chunk', 9, { turn: 1, step: 2, chunk: { type: 'usage', usage: { inputTokens: 300, outputTokens: 30 } } }),
+    entry('assistant/chunk', 10, { turn: 1, step: 2, chunk: { type: 'finish' } }),
+    entry('turn/end', 11, { turn: 1, reason: { kind: 'completed' } }),
+  ];
+
+  const elapsed = [0, 0, 1000, 2000, 2001, 102001, 103000, 104000, 104000, 105000, 205000];
+  entries.forEach((item, index) => { item.event.time = 1_700_000_000_000 + elapsed[index]; });
+  const turns = projectConversationTurns(entries);
+
+  assert.equal(turns.length, 1);
+  // Usage is summed once per step across the two responses.
+  assert.equal(turns[0].inputTokens, 400);
+  assert.equal(turns[0].outputTokens, 50);
+  // 4s of measured generation across two responses; the 100s turn tail after the
+  // last finish is excluded, so the rate never collapses toward zero.
+  assert.equal(turns[0].outputTps, 50 / 4);
+  assert.equal(turns[0].endedAt, 1_700_000_205_000);
+  assert.equal(turns[0].running, false);
+});
+
+test('a response finish never ends its turn and never marks a running turn complete', () => {
+  const entries = [
+    entry('turn/start', 1, { turn: 1 }),
+    entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '完成' } }),
+    entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+  ];
+
+  const turns = projectConversationTurns(entries);
+
+  assert.equal(turns[0].running, true, 'only turn/end ends a turn');
+  assert.equal(turns[0].endedAt, undefined);
+  assert.equal(turns[0].finalItemId, undefined, 'a finish never supplies a final item');
+});
+
+test('an empty delta does not start the generation clock', () => {
+  const entries = [
+    entry('turn/start', 1, { turn: 1 }),
+    entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '' } }),
+    entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '' } }),
+    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'tool-call-delta', arguments: '' } }),
+    // The first delta that genuinely carries content owns the clock.
+    entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '有内容' } }),
+    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 4 } } }),
+    entry('assistant/chunk', 7, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('turn/end', 8, { turn: 1, reason: { kind: 'completed' } }),
+  ];
+
+  const turns = projectConversationTurns(entries);
+
+  assert.equal(turns[0].outputTokens, 4);
+  assert.equal(turns[0].outputTps, 4 / ((1_700_000_000_007 - 1_700_000_000_005) / 1_000));
+});
+
+test('out-of-order and replayed events fold by seq, with duplicates counted once', () => {
+  const turnStart = entry('turn/start', 1, { turn: 1 });
+  const reasoning = entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '思考' } });
+  const usage = entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 50, outputTokens: 9 } } });
+  const text = entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '回答' } });
+  const finish = entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'finish' } });
+  const message = entry('assistant/message', 6, {
+    turn: 1,
+    step: 1,
+    message: { content: [{ type: 'text', text: '回答' }] },
+  });
+  const turnEnd = entry('turn/end', 7, { turn: 1, reason: { kind: 'completed' } });
+
+  // A recovered page merged ahead of live frames, plus an exact duplicate of the
+  // opening frame: seq order must win and the duplicate must be folded once.
+  const turns = projectConversationTurns([turnEnd, usage, turnStart, reasoning, usage, text, finish, message]);
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].startedAt, 1_700_000_000_001);
+  assert.equal(turns[0].endedAt, 1_700_000_000_007);
+  assert.equal(turns[0].inputTokens, 50, 'a replayed usage frame is not double counted');
+  assert.equal(turns[0].outputTokens, 9);
+  assert.equal(turns[0].outputTps, 9 / 0.003, '3ms from the first delta (seq 2) to finish (seq 5)');
+  assert.equal(turns[0].dispatchCount, 0);
+  assert.equal(turns[0].finalItemId, 'assistant-turn-1:1');
+});
+
+test('a task result reporting a failed status marks the card failed even without isError', () => {
+  const payload = {
+    task_run_id: 'run-failed',
+    task_id: 'task-x',
+    status: 'failed',
+    started_at: '2026-01-01T00:00:00Z',
+    finished_at: '2026-01-01T00:01:00Z',
+    usage: { attempt_count: 1, usage_event_count: 2, output_tokens: 10 },
+  };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-failed', name: 'run_task', arguments: '{"task_id":"task-x"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-failed' },
+        content: [{ type: 'tool-result', toolCallId: 'call-failed', content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolState, 'failed');
+  assert.equal(items[0].taskRun?.status, 'failed');
+});
+
+test('a cancelled task result marks the card failed too', () => {
+  const payload = {
+    task_run_id: 'run-cancelled',
+    task_id: 'task-y',
+    status: 'cancelled',
+    usage: { attempt_count: 1, usage_event_count: 1 },
+  };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-cancelled', name: 'run_task', arguments: '{"task_id":"task-y"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-cancelled' },
+        content: [{ type: 'tool-result', toolCallId: 'call-cancelled', content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolState, 'failed');
+});
+
+test('a task result reporting a done status stays successful', () => {
+  const payload = {
+    task_run_id: 'run-done',
+    task_id: 'task-z',
+    status: 'done',
+    usage: { attempt_count: 1, usage_event_count: 3, output_tokens: 5 },
+  };
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { callId: 'call-done', name: 'run_task', arguments: '{"task_id":"task-z"}' }),
+    entry('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-done' },
+        content: [{ type: 'tool-result', toolCallId: 'call-done', content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }],
+      },
+    }),
+  ]);
+
+  assert.equal(items[0].toolState, 'done');
+});
+
+test('turn projection keeps missing telemetry absent instead of fabricating zeros', () => {
+  const turns = projectConversationTurns([
+    entry('turn/start', 1, { turn: 4 }),
+    entry('assistant/message', 2, { turn: 4, step: 1, message: { content: [{ type: 'text', text: '无遥测' }] } }),
+  ]);
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].id, 'turn-4');
+  assert.equal(turns[0].running, true, 'no turn/end means the turn is still running');
+  assert.equal(turns[0].endedAt, undefined);
+  assert.equal(turns[0].inputTokens, undefined);
+  assert.equal(turns[0].outputTokens, undefined);
+  assert.equal(turns[0].outputTps, undefined, 'throughput needs a paired generation duration');
+  // Only a completed turn carries a final item.
+  assert.equal(turns[0].finalItemId, undefined);
+  assert.equal(turns[0].dispatchCount, 0);
+});
+
+test('a cancelled turn keeps its boundaries without claiming a final item', () => {
+  const turns = projectConversationTurns([
+    entry('turn/start', 1, { turn: 3 }),
+    entry('assistant/message', 2, { turn: 3, step: 1, message: { content: [{ type: 'text', text: '被打断' }] } }),
+    entry('turn/end', 3, { turn: 3, reason: { kind: 'cancelled' } }),
+  ]);
+
+  assert.equal(turns[0].endedAt, 1_700_000_000_003);
+  assert.equal(turns[0].running, false);
+  assert.equal(turns[0].finalItemId, undefined, 'only a completed turn exposes the final assistant body');
+});
+
+test('turn dispatch count counts task executions, not every run_task-alias tool call', () => {
+  const turns = projectConversationTurns([
+    entry('turn/start', 1, { turn: 1 }),
+    entry('tool/call', 2, { turn: 1, callId: 'c1', name: 'Read', arguments: '{"path":"README.md"}' }),
+    entry('tool/call', 3, { turn: 1, callId: 'c2', name: 'run_task', arguments: '{"task_id":"task-a"}' }),
+    entry('tool/call', 4, { turn: 1, callId: 'c3', name: 'task_run', arguments: '{"task_id":"task-b"}' }),
+    // The same task dispatched twice in one turn is two dispatches.
+    entry('tool/call', 5, { turn: 1, callId: 'c4', name: 'run_task', arguments: '{"task_id":"task-a"}' }),
+    entry('turn/end', 6, { turn: 1, reason: { kind: 'completed' } }),
+  ]);
+
+  assert.equal(turns[0].dispatchCount, 3);
+});
+
+test('projected items expose the observed step number', () => {
+  const items = projectConversationHistory([
+    entry('assistant/message', 1, { turn: 2, step: 3, message: { content: [{ type: 'text', text: '第三步' }] } }),
+    entry('tool/call', 2, { turn: 2, step: 4, callId: 'c-9', name: 'Read', arguments: '{"path":"a/b.md"}' }),
+  ]);
+
+  assert.equal(items[0].step, 3);
+  assert.equal(items[1].step, 4);
+});
+
+test('tool summaries describe the real DSH workspace-doc, task, and discovery aliases', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-read', name: 'Read', arguments: '{"path":"docs/plan.md"}' }),
+    entry('tool/call', 2, { turn: 1, callId: 'c-docs', name: 'list_workspace_docs', arguments: '{"directory":"docs"}' }),
+    entry('tool/call', 3, { turn: 1, callId: 'c-doc-read', name: 'read_workspace_doc', arguments: '{"path":"docs/plan.md"}' }),
+    entry('tool/call', 4, { turn: 1, callId: 'c-describe', name: 'describe_task', arguments: '{"task_id":"commit"}' }),
+    entry('tool/call', 5, { turn: 1, callId: 'c-list', name: 'list_task', arguments: '{}' }),
+    entry('tool/call', 6, { turn: 1, callId: 'c-projects', name: 'list_projects', arguments: '{}' }),
+    entry('tool/call', 7, { turn: 1, callId: 'c-runtimes', name: 'list_runtimes', arguments: '{"task_id":"commit"}' }),
+    entry('tool/call', 8, { turn: 1, callId: 'c-run', name: 'run_task', arguments: '{"task_id":"task-abc"}' }),
+  ]);
+
+  assert.equal(items[0].toolSummary, '读取文件 docs/plan.md');
+  assert.equal(items[1].toolSummary, '列出 docs');
+  assert.equal(items[2].toolSummary, '读文档 docs/plan.md');
+  assert.equal(items[3].toolSummary, '查看任务定义 commit');
+  assert.equal(items[4].toolSummary, '列出任务');
+  assert.equal(items[5].toolSummary, '列出项目');
+  assert.equal(items[6].toolSummary, '列出运行时 commit');
+  assert.equal(items[7].toolSummary, '运行任务 task-abc', 'deterministic fallback before any display name is observed');
+});
+
+test('a run_task summary uses the task display name observed from a prior list result', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-list', name: 'list_task', arguments: '{}' }),
+    at(2, toolResult('c-list', JSON.stringify({ tasks: [{ name: 'task-abc', display_name: '夜间构建' }] }))),
+    entry('tool/call', 3, { turn: 1, callId: 'c-run', name: 'run_task', arguments: '{"task_id":"task-abc"}' }),
+  ]);
+
+  const list = items.find((item) => item.id === 'tool-c-list');
+  const run = items.find((item) => item.id === 'tool-c-run');
+  // The list summary itself is unchanged: at that point no display name was known.
+  assert.equal(list?.toolSummary, '列出任务');
+  assert.equal(run?.toolSummary, '运行任务 夜间构建');
+});
+
+test('document links carry a heading title and bounded path metadata without raw HTML', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-docs', name: 'read_workspace_doc', arguments: '{"path":"docs/plan.md"}' }),
+    at(2, toolResult('c-docs', '# 发布计划\n\ndocs/plan.md\ndocs/other.md')),
+  ]);
+
+  assert.deepEqual(items[0].documentLinks, [
+    { title: '发布计划', path: 'docs/plan.md' },
+    { title: '发布计划', path: 'docs/other.md' },
+  ]);
+});
+
+test('a workspace doc result reporting an explicit path keeps it as a reference', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-doc', name: 'read_workspace_doc', arguments: '{"path":"docs/plan.md"}' }),
+    at(2, toolResult('c-doc', JSON.stringify({ path: 'docs/plan.md', content: '正文' }))),
+  ]);
+
+  assert.deepEqual(items[0].documentLinks, [{ title: 'docs/plan.md', path: 'docs/plan.md' }]);
+});
+
+test('a document result without a visible heading falls back to the exact path', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-docs', name: 'list_workspace_docs', arguments: '{"directory":"docs"}' }),
+    at(2, toolResult('c-docs', '见 docs/guide.md 与 <html><body>markup</body></html>')),
+  ]);
+
+  assert.deepEqual(items[0].documentLinks, [{ title: 'docs/guide.md', path: 'docs/guide.md' }]);
+});
+
+test('a failed document read exposes no document links', () => {
+  const items = projectConversationHistory([
+    entry('tool/call', 1, { turn: 1, callId: 'c-docs', name: 'read_workspace_doc', arguments: '{}' }),
+    at(2, toolResult('c-docs', '# 标题\ndocs/plan.md', true)),
+  ]);
+
+  assert.equal(items[0].toolState, 'failed');
+  assert.equal(items[0].documentLinks, undefined);
+});
+
+test('projectConversation returns matching items and turns from one pass', () => {
+  const entries = [
+    entry('turn/start', 1, { turn: 1 }),
+    entry('assistant/message', 2, { turn: 1, step: 1, message: { content: [{ type: 'text', text: '一段回复' }] } }),
+    entry('turn/end', 3, { turn: 1, reason: { kind: 'completed' } }),
+  ];
+
+  const projection = projectConversation(entries);
+  assert.deepEqual(projection.items, projectConversationHistory(entries));
+  assert.deepEqual(projection.turns, projectConversationTurns(entries));
 });

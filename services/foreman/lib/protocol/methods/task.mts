@@ -913,6 +913,37 @@ export interface TaskRoutingTestTasksResult {
   tasks: TaskRoutingTestTask[]
 }
 
+// ─── task.settings.runtimes ─────────────────────────────────────────────────
+
+/** Bounded runtime-discovery input for one task. Identifies the task whose
+ *  declared runtime requirements gate the enumeration. An unknown task or
+ *  project is an error, never an empty list. */
+export interface TaskSettingsRuntimesParams {
+  project?: string
+  task_id: string
+}
+
+/** One discoverable exact runtime target of a task, reported with its actual
+ *  client/provider/model/mode and truthful readiness. `target` is the canonical
+ *  `provider/model:client` dispatch target an explicit selection may name.
+ *  Credentials, endpoints, and internal upstream details are never exposed. */
+export interface TaskSettingsRuntimesItem {
+  /** Canonical dispatch target `provider/model:client`. */
+  target: string
+  provider: string
+  model: string
+  client: string
+  /** Route mode of the target: a native client login or a gateway route. */
+  mode: 'native' | 'gateway'
+  available: boolean
+  /** Concrete cause when unavailable; absent when available. */
+  reason?: string
+}
+
+export interface TaskSettingsRuntimesResult {
+  items: TaskSettingsRuntimesItem[]
+}
+
 // ─── task.settings schemas ───────────────────────────────────────────────────
 
 const taskSettingsModeSchema = {
@@ -1554,6 +1585,40 @@ export const taskRoutingTestTasksResultSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskSettingsRuntimesItemSchema = {
+  type: 'object',
+  required: ['target', 'provider', 'model', 'client', 'mode', 'available'],
+  properties: {
+    target: { type: 'string', minLength: 1 },
+    provider: { type: 'string', minLength: 1 },
+    model: { type: 'string', minLength: 1 },
+    client: { type: 'string', minLength: 1 },
+    mode: { enum: ['native', 'gateway'] },
+    available: { type: 'boolean' },
+    reason: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskSettingsRuntimesParamsSchema = {
+  type: 'object',
+  required: ['task_id'],
+  properties: {
+    project: { type: 'string', minLength: 1 },
+    task_id: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskSettingsRuntimesResultSchema = {
+  type: 'object',
+  required: ['items'],
+  properties: {
+    items: { type: 'array', items: taskSettingsRuntimesItemSchema },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 export const taskRunCreateParamsSchema = {
   type: 'object',
   required: ['task_id', 'project'],
@@ -1564,6 +1629,14 @@ export const taskRunCreateParamsSchema = {
     input: {},
     ctx: recordSchema,
     invocation_settings: taskSettingsLayerInputSchema,
+    // Runtime selection is expressed ONLY through these two mutually exclusive
+    // forms: `invocation_settings.mode`/'automatic' for automatic routing, and
+    // `invocation_settings.explicit_runtime` for an explicit target/alias.
+    // Unknown top-level selection keys are rejected instead of silently
+    // ignored, so an invented selection field can never look accepted.
+    mode: taskSettingsModeSchema,
+    automatic: taskSettingsNullableAutomaticSchema,
+    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
   },
-  additionalProperties: true,
+  additionalProperties: false,
 } as const satisfies JsonSchema

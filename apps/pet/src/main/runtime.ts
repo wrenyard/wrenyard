@@ -66,7 +66,8 @@ export class DesktopPetRuntime {
   }
 
   async stop(): Promise<void> {
-    if (this.statusValue === 'stopped' || this.statusValue === 'stopping') return;
+    if (this.statusValue === 'stopping') return;
+    if (this.statusValue === 'stopped' && !this.taskGraphWindowOwner) return;
     this.statusValue = 'stopping';
     this.teardown();
     this.statusValue = 'stopped';
@@ -114,21 +115,7 @@ export class DesktopPetRuntime {
     this.applyProvidersToHouseTips(this.quotaProviders);
 
     const ipcPath = this.options.ipcPath ?? this.foremanEventPoller.getIpcPath();
-    if (ipcPath) {
-      this.taskGraphWindowOwner = new TaskGraphWindowOwner({
-        foremanIpcClient: new ForemanIpcClient({ path: ipcPath }),
-        htmlDir: this.options.rendererDir,
-        preloadDir: this.options.preloadDir,
-        getHouseWindow: () => this.entityManager?.getHouseWindow() ?? null,
-        graphSlipGeometry: this.config.windows.graphSlip,
-        entitiesVisible: this.config.entities.taskgraphs,
-        onGraphSlipGeometryChange: (geometry) => {
-          this.config.windows.graphSlip = geometry;
-          this.options.onConfigChange(this.config);
-        },
-        logger: console,
-      });
-    }
+    if (ipcPath) this.ensureTaskGraphWindowOwner(ipcPath);
 
     this.activityPoller = new ActivitySnapshotPoller({
       ...(this.options.ipcPath ? { ipcPath: this.options.ipcPath } : {}),
@@ -144,6 +131,39 @@ export class DesktopPetRuntime {
     this.registerIpcHandlers();
     this.modelTickTimer = setInterval(() => this.model?.tick(), 1_000);
     this.animationTickTimer = setInterval(() => this.entityManager?.tick(), 33);
+  }
+
+  /**
+   * Shared preview entry point: render a task-run transcript without touching
+   * Pet user settings. The window owner is created lazily when Pet is not
+   * running, so the preview works while Pet entities are disabled and without
+   * starting the bird/house entities, model tick, event/stat pollers or any
+   * config change. A later normal start reuses the same owner, so IPC handlers
+   * are registered exactly once per owner instead of being duplicated.
+   */
+  async openTaskTranscript(taskRunId: string): Promise<void> {
+    const ipcPath = this.options.ipcPath ?? this.foremanEventPoller?.getIpcPath();
+    if (!ipcPath) throw new Error('Pet runtime: Foreman IPC path is unavailable');
+    await this.ensureTaskGraphWindowOwner(ipcPath).openTaskTranscript(taskRunId);
+  }
+
+  private ensureTaskGraphWindowOwner(ipcPath: string): TaskGraphWindowOwner {
+    if (this.taskGraphWindowOwner) return this.taskGraphWindowOwner;
+    const owner = new TaskGraphWindowOwner({
+      foremanIpcClient: new ForemanIpcClient({ path: ipcPath }),
+      htmlDir: this.options.rendererDir,
+      preloadDir: this.options.preloadDir,
+      getHouseWindow: () => this.entityManager?.getHouseWindow() ?? null,
+      graphSlipGeometry: this.config.windows.graphSlip,
+      entitiesVisible: this.config.entities.taskgraphs,
+      onGraphSlipGeometryChange: (geometry) => {
+        this.config.windows.graphSlip = geometry;
+        this.options.onConfigChange(this.config);
+      },
+      logger: console,
+    });
+    this.taskGraphWindowOwner = owner;
+    return owner;
   }
 
   private teardown(): void {

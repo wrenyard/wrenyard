@@ -6,6 +6,7 @@ import {
   type QuotaSnapshot,
   type SettingsSnapshot,
   type ConversationSnapshot,
+  type ConversationActivityItem,
   type WorkspaceConfigurationSnapshot,
   type UpdateChannel,
   type UpdateSnapshot,
@@ -80,6 +81,12 @@ const api: WrenyardShellApi = {
   },
   getConversation(): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSnapshot) as Promise<ConversationSnapshot>;
+  },
+  getConversationActivity(): Promise<ConversationActivityItem[]> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.conversationActivity);
+  },
+  openTaskTranscript(taskRunId: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
   },
   selectConversation(sessionId: string): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelect, sessionId) as Promise<ConversationSnapshot>;
