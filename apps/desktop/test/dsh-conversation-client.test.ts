@@ -1479,3 +1479,28 @@ test('projectConversation returns matching items and turns from one pass', () =>
   assert.deepEqual(projection.items, projectConversationHistory(entries));
   assert.deepEqual(projection.turns, projectConversationTurns(entries));
 });
+
+
+test('a full retained history continues projecting new assistant output and completion', () => {
+  const { client, state } = conversationClientHarness();
+  state.selectedSessionId = 'a';
+  state.workspaceSessionIds.add('a');
+  state.sessions.set('a', { sessionId: 'a', updatedAt: 0, running: false, blank: false });
+  state.history.events = Array.from({ length: 8000 }, (_, i) => entry('step/end', i + 1, { turn: 1, step: i }));
+  client.snapshot();
+  const live = liveClient(client);
+  const push = (event: ReturnType<typeof entry>) => live.handleMux({ type: 'session/event', sessionId: 'a', ...event });
+  try {
+    push(entry('turn/start', 8001, { turn: 2 }));
+    assert.equal(client.snapshot().turns?.at(-1)?.running, true);
+    push(entry('assistant/chunk', 8002, { turn: 2, step: 1, chunk: { type: 'text-delta', text: 'Visible live reply' } }));
+    assert.equal(client.snapshot().items.at(-1)?.text, 'Visible live reply');
+    push(entry('assistant/message', 8003, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'Completed reply' }] } }));
+    push(entry('turn/end', 8004, { turn: 2, reason: { kind: 'completed' } }));
+    const snapshot = client.snapshot();
+    assert.equal(snapshot.items.at(-1)?.text, 'Completed reply');
+    assert.equal(snapshot.turns?.at(-1)?.running, false);
+    assert.equal(snapshot.selectedRunning, false);
+    assert.equal(state.history.events.length, 8000);
+  } finally { client.stop(); }
+});
