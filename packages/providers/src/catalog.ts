@@ -177,7 +177,6 @@ const builtinProviders: readonly RawProviderDefinition[] = [
       model('gpt-6-astra', 1_050_000, 128_000, undefined, THINKING_FULL),
       { ...model('gpt-5.5', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
       { ...model('gpt-5.4', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
-      { ...model('gpt-5.4-mini', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
     ],
     modelAliases: { 'codex-astra': 'gpt-6-astra' },
     // Native Codex wire identity effort: each declared level is sent as the exact
@@ -189,7 +188,6 @@ const builtinProviders: readonly RawProviderDefinition[] = [
       'gpt-6-astra': { codex: effortLadder(THINKING_FULL) },
       'gpt-5.5': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
       'gpt-5.4': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
-      'gpt-5.4-mini': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
     },
   },
   {
@@ -466,7 +464,6 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'glm-5.3': speedDefault(63.7, 'https://artificialanalysis.ai/models/glm-5-3/', 'Artificial Analysis output-speed measurement for GLM-5.3.'),
   'glm-5.3-flash': speedDefault(73.1, SRC_AA_GLMF, 'Artificial Analysis output-speed measurement for GLM-5.3 Flash.'),
   'gpt-5.4': speedDefault(139.6, 'https://artificialanalysis.ai/models/gpt-5-4/', 'Artificial Analysis output-speed measurement for GPT-5.4.'),
-  'gpt-5.4-mini': speedDefault(218.5, 'https://artificialanalysis.ai/models/gpt-5-4-mini/', 'Artificial Analysis output-speed measurement for GPT-5.4 Mini.'),
   'gpt-5.5': speedDefault(88.9, 'https://artificialanalysis.ai/models/gpt-5-5/', 'Artificial Analysis output-speed measurement for GPT-5.5.'),
   'gpt-5.6-luna': speedDefault(107, SRC_AA_LUNA, 'Artificial Analysis output-speed measurement for GPT-5.6 Luna xhigh, matching the registered effort.'),
   'gpt-5.6-sol': speedDefault(63.2, SRC_AA_SOL, 'Artificial Analysis output-speed measurement for GPT-5.6 Sol xhigh, matching the registered effort.'),
@@ -684,11 +681,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'mid',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 0.25, outputUsdPerMillion: 15, source: 'https://developers.openai.com/api/docs/pricing', checkedAt: '2026-09-17' },
-  },
-  'gpt-5.4-mini': {
-    intelligence: 'low',
-    capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 4.5, source: 'https://developers.openai.com/api/docs/pricing', checkedAt: '2026-09-17' },
   },
   'gpt-5.5': {
     intelligence: 'high',
