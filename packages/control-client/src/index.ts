@@ -253,6 +253,20 @@ export interface WrenyardProviderStatus {
     taskOnly?: boolean;
     effectiveTps?: number | null;
     quotaAbundant?: boolean;
+    /** Provider-independent canonical model id; falls back to the model id. */
+    canonicalId?: string;
+    /** Catalog intelligence tier for the model. */
+    intelligence?: 'low' | 'mid' | 'high' | 'premium';
+    /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
+    pricing?: {
+      inputUsdPerMillion?: number;
+      outputUsdPerMillion?: number;
+      cachedInputUsdPerMillion?: number;
+    };
+    /** Which evidence tier produced `effectiveTps`. */
+    speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
+    /** True when a credential is configured AND the resolver admits provider/model. */
+    available?: boolean;
   }>;
 }
 
