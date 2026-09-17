@@ -32,6 +32,8 @@ const GLMF_CB = 'codebuddy/glm-5.3-flash:cb'
 const LUNA_CODEX = 'chatgpt/gpt-5.6-luna:codex'
 const LUNA_OPENAI_CB = 'openai/gpt-5.6-luna:cb'
 const K3_GK = 'kimi-coding/k3:gk'
+const K3_CB = 'kimi-coding/k3:cb'
+const K3_CUR = 'kimi-coding/k3:cur'
 const POLICY_RUNTIMES = ['forge/fast', 'forge/general', 'forge/ultra']
 
 function localSamples(): LocalSpeedSample[] {
@@ -717,6 +719,124 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
     assert.equal(error.code, 'NO_ELIGIBLE_PROFILE')
     assert.equal(error.resolutionFailureCode, 'intelligence_requirement')
     assert.match(error.message, /no eligible dispatch plan/u)
+  })
+
+  it('diagnose reports a closed image-capability detail for a target that cannot take image input', () => {
+    // GLM_CB carries no `image` capability: the same image request that
+    // resolveExplicit rejects must surface as the closed detail on the
+    // diagnostic choice instead of the generic code-only rejection.
+    const result = resolver.diagnose({
+      taskName: 'code-image-unsupported',
+      requirements: { requiredCapabilities: ['image'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, true)
+    const glm = result.choices.find((choice) => choice.exactAgentRuntime === GLM_CB)
+    assert.ok(glm, `expected ${GLM_CB} in diagnostic choices`)
+    assert.equal(glm.available, true)
+    assert.equal(glm.admitted, undefined)
+    assert.equal(glm.rejectionCode, 'no_available_provider')
+    assert.equal(glm.rejectionDetail, 'image_input_unsupported')
+  })
+
+  it('diagnose reports a closed web-search detail for a search-incapable target', () => {
+    // Gateway projections (kimi-coding/...:gk) cannot serve native web search.
+    const result = resolver.diagnose({
+      taskName: 'code-search-unsupported',
+      requirements: { requiresWebSearch: true } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, true)
+    const k3 = result.choices.find((choice) => choice.exactAgentRuntime === K3_GK)
+    assert.ok(k3, `expected ${K3_GK} in diagnostic choices`)
+    assert.equal(k3.available, true)
+    assert.equal(k3.rejectionCode, 'no_available_provider')
+    assert.equal(k3.rejectionDetail, 'web_search_unsupported')
+    const luna = result.choices.find((choice) => choice.exactAgentRuntime === LUNA_CODEX)
+    assert.ok(luna, `expected ${LUNA_CODEX} in diagnostic choices`)
+    assert.equal(luna.admitted !== undefined, true)
+    assert.equal(luna.rejectionDetail, undefined)
+  })
+
+  it('diagnose reports closed exclusion details that name the exact excluded dimension', () => {
+    const byModel = resolver.diagnose({
+      taskName: 'code-excluded-model',
+      requirements: { excludeModelIds: ['glm-5.3'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(byModel.ok, true)
+    assert.equal(
+      byModel.choices.find((choice) => choice.exactAgentRuntime === GLM_CB)?.rejectionDetail,
+      'model_excluded',
+    )
+    // A different model of the same provider is not caught by the model exclusion.
+    assert.equal(
+      byModel.choices.find((choice) => choice.exactAgentRuntime === HY3_CB)?.rejectionDetail,
+      undefined,
+    )
+
+    const byProfile = resolver.diagnose({
+      taskName: 'code-excluded-profile',
+      requirements: { excludeProfileIds: [GLM_CB] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(byProfile.ok, true)
+    assert.equal(
+      byProfile.choices.find((choice) => choice.exactAgentRuntime === GLM_CB)?.rejectionDetail,
+      'profile_excluded',
+    )
+    assert.equal(
+      byProfile.choices.find((choice) => choice.exactAgentRuntime === K3_GK)?.rejectionDetail,
+      undefined,
+    )
+  })
+
+  it('diagnose keeps the numeric gates code-only with no invented detail', () => {
+    const result = resolver.diagnose({
+      taskName: 'code-numeric-gates',
+      requirements: { minimumTps: 1_000_000 } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, true)
+    assert.ok(result.choices.length > 0)
+    for (const choice of result.choices) {
+      assert.equal(choice.rejectionCode, 'speed_requirement')
+      assert.equal(choice.rejectionDetail, undefined)
+    }
+  })
+
+  it('an explicit client exclusion is confined to that client and never rejects the whole pair', () => {
+    // Excluding the `cursor` client must reject ONLY the :cur sibling; the
+    // kimi-coding/k3 pair survives through its admitted :cb sibling, so a
+    // pair is never lost because one ready client was excluded.
+    const result = resolver.diagnose({
+      taskName: 'code-exclusion-sibling',
+      requirements: { excludeClientIds: ['cursor'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, true)
+
+    const cur = result.choices.find((choice) => choice.exactAgentRuntime === K3_CUR)
+    assert.ok(cur, `expected ${K3_CUR} in diagnostic choices`)
+    assert.equal(cur.rejectionCode, 'no_available_provider')
+    assert.equal(cur.rejectionDetail, 'client_excluded')
+
+    const cb = result.choices.find((choice) => choice.exactAgentRuntime === K3_CB)
+    assert.ok(cb, `expected ${K3_CB} in diagnostic choices`)
+    assert.equal(cb.admitted !== undefined, true)
+    assert.equal(cb.rejectionDetail, undefined)
+  })
+
+  it('an explicit provider exclusion reports provider_excluded for every client of that provider', () => {
+    const result = resolver.diagnose({
+      taskName: 'code-exclusion-provider',
+      requirements: { excludeProviderIds: ['codebuddy'] } satisfies TaskDispatchRequirements,
+    })
+    assert.equal(result.ok, true)
+    const codebuddyChoices = result.choices.filter((choice) => choice.exactAgentRuntime.startsWith('codebuddy/'))
+    assert.ok(codebuddyChoices.length > 0)
+    for (const choice of codebuddyChoices) {
+      assert.equal(choice.rejectionCode, 'no_available_provider')
+      assert.equal(choice.rejectionDetail, 'provider_excluded')
+    }
+    // An unrelated provider is untouched by that exclusion.
+    const unrelated = result.choices.find((choice) => choice.exactAgentRuntime === LUNA_CODEX)
+    assert.ok(unrelated, `expected ${LUNA_CODEX} in diagnostic choices`)
+    assert.equal(unrelated.rejectionDetail, undefined)
   })
 })
 

@@ -44,7 +44,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
-import { createBuiltinCatalog, createBuiltinProviderRuntime, deriveTaskDispatchPlans } from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, deriveTaskDispatchPlans, builtinModelDisplayId, resolveModelSpeed } from '@wrenyard/providers'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
@@ -588,24 +588,49 @@ async function startForemanDaemonWithRuntime(
     providerList: async () => {
       let modelStatus = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
       try { modelStatus = await taskSettingsService.modelStatus() } catch { /* fail closed */ }
-      return { providers: await Promise.all(catalog.providers().map(async (provider) => ({
-        id: provider.id,
-        displayName: provider.displayName,
-        description: provider.description ?? '',
-        setupHint: provider.setupHint ?? '',
-        configured: (await providerRuntime.credential(provider)) !== undefined,
-        authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
-          : provider.credentialResolver ? 'native' as const : 'none' as const,
-        protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
-        models: provider.models.map((model) => ({
-          id: model.id,
-          displayName: model.displayName,
-          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
-          ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
-          ...(modelStatus.has(`${provider.id}/${model.id}`) ? modelStatus.get(`${provider.id}/${model.id}`) : {}),
-        })),
-      })) ) }
+      // One trailing-31-day local sample read per request, shared by every model
+      // so the resolver never re-reads the event store per provider/model.
+      const localSpeed = readLocalSpeedSamples()
+      return { providers: await Promise.all(catalog.providers().map(async (provider) => {
+        const credential = await providerRuntime.credential(provider)
+        return {
+          id: provider.id,
+          displayName: provider.displayName,
+          description: provider.description ?? '',
+          setupHint: provider.setupHint ?? '',
+          configured: credential !== undefined,
+          authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
+            : provider.credentialResolver ? 'native' as const : 'none' as const,
+          protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
+          models: provider.models.map((model) => {
+            const key = `${provider.id}/${model.id}`
+            const status = modelStatus.get(key)
+            // The shared resolver owns effectiveTps for every model, active or not.
+            const speed = resolveModelSpeed(provider, model, localSpeed)
+            const pricing = model.pricing === undefined ? undefined : {
+              ...(model.pricing.inputUsdPerMillion === undefined ? {} : { inputUsdPerMillion: model.pricing.inputUsdPerMillion }),
+              ...(model.pricing.outputUsdPerMillion === undefined ? {} : { outputUsdPerMillion: model.pricing.outputUsdPerMillion }),
+              ...(model.pricing.cachedInputUsdPerMillion === undefined ? {} : { cachedInputUsdPerMillion: model.pricing.cachedInputUsdPerMillion }),
+            }
+            return {
+              id: model.id,
+              displayName: model.displayName,
+              ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+              ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+              ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
+              ...(status === undefined ? {} : status),
+              effectiveTps: speed.tps,
+              speedSource: speed.source,
+              canonicalId: model.canonicalModel?.id ?? builtinModelDisplayId(model.id),
+              intelligence: model.intelligence,
+              ...(pricing === undefined ? {} : { pricing }),
+              // Availability is a fact about the current credential AND the
+              // resolver's admitted provider/model set; no model is hardcoded.
+              available: credential !== undefined && modelStatus.has(key),
+            }
+          }),
+        }
+      })) }
     },
     providerConfigure: async ({ providerId, key }) => {
       const provider = catalog.provider(providerId)

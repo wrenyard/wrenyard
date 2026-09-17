@@ -218,10 +218,19 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
           }
         }
         if (!profilePassesForm(profile, req)) {
-          const rejectionCode = (req.excludeProviderIds ?? []).includes(profile.provider)
-            || (req.excludeModelIds ?? []).includes(profile.model)
-            || (req.excludeProfileIds ?? []).includes(profile.profile)
-            || (req.excludeClientIds ?? []).includes(profile.client)
+          // Mirrors the production closed diagnostic detail: a qualitative
+          // exclusion gate names the exact excluded dimension, and the numeric
+          // gates stay code-only.
+          const excluded = (req.excludeModelIds ?? []).includes(profile.model)
+            ? 'model_excluded' as const
+            : (req.excludeProviderIds ?? []).includes(profile.provider)
+              ? 'provider_excluded' as const
+              : (req.excludeProfileIds ?? []).includes(profile.profile)
+                ? 'profile_excluded' as const
+                : (req.excludeClientIds ?? []).includes(profile.client)
+                  ? 'client_excluded' as const
+                  : undefined
+          const rejectionCode = excluded !== undefined
             ? 'no_available_provider' as const
             : req.maxOutputUsdPerMillion !== undefined && profile.outputUsd > req.maxOutputUsdPerMillion
               ? 'price_limit' as const
@@ -233,6 +242,7 @@ function createResolverFixture(options: ResolverFixtureOptions = {}): TaskDispat
             available: true,
             baseline: resolvedChoice(profile),
             rejectionCode,
+            ...(excluded !== undefined ? { rejectionDetail: excluded } : {}),
           }
         }
         return {
@@ -828,6 +838,30 @@ describe('daemon task-settings-service (no-model)', () => {
       now: () => QUOTA_T0,
     })
     assert.equal((await service.modelStatus()).get('cursor/kimi-k3')?.quotaAbundant, false)
+  })
+
+  it('model status omits a known unavailable native model/client and keeps the ready sibling pair', async () => {
+    // The cursor model is admin-denied in the live native snapshot; its pair must
+    // never be advertised as active, while the unrelated ready sibling pair
+    // (served by a healthy client) stays available.
+    const service = context!.makeService({
+      resolver: createResolverFixture({ profiles: [CURSOR_GROK_QUOTA_PROFILE, A_MID_P] }),
+      quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
+      nativeProviderReadiness: async () => ({
+        sampledAtMs: QUOTA_T0,
+        authByProvider: Object.freeze({ cursor: true }),
+        cursorModelAvailability: Object.freeze({
+          [CURSOR_GROK_QUOTA_PROFILE.model]: { status: 'blocked', reason: 'admin_blocked' },
+        }),
+      }),
+      runtimeAvailability: (runtime, bound) => runtime.provider === 'cursor'
+        ? availabilityFromNativeSnapshot(runtime, bound)
+        : { providerCredential: 'available', providerLive: 'available', quota: 'unknown', available: true },
+      now: () => QUOTA_T0,
+    })
+    const status = await service.modelStatus()
+    assert.equal(status.has(`${CURSOR_GROK_QUOTA_PROFILE.provider}/${CURSOR_GROK_QUOTA_PROFILE.model}`), false)
+    assert.equal(status.has(`${A_MID_P.provider}/${A_MID_P.model}`), true)
   })
 
   const writeConfig = (data: unknown): void => {
@@ -3471,6 +3505,56 @@ describe('daemon task-settings-service (no-model)', () => {
       assert.equal(row.intelligence_score, null)
       assert.equal(Boolean(row.reason && /[\u4e00-\u9fff]/u.test(row.reason)), true)
     }
+  })
+
+  it('routingTest rows carry a short Chinese reason for a rejected pair and never a null-valued detail', async () => {
+    writeConfig({})
+    const service = context!.makeService({ resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }) })
+    // Require premium intelligence: the lower-intelligence providers are
+    // baseline-available but rejected, so they must still appear as rows.
+    const result = await service.routingTest({ automatic: { intelligence_min: 'premium' } })
+
+    // The claude premium profile qualifies; the mid/high pairs are retained as
+    // rejected rows with a short Chinese reason and null rank/score.
+    assert.equal(Boolean(result.rows.some((row) => row.rank !== null)), true, JSON.stringify(result.rows))
+    const rejected = result.rows.filter((row) => row.rank === null)
+    assert.equal(Boolean(rejected.length >= 1), true)
+    for (const row of rejected) {
+      assert.equal(row.score, null)
+      assert.equal(row.price_score, null)
+      assert.equal(row.speed_score, null)
+      assert.equal(row.quota_score, null)
+      assert.equal(row.intelligence_score, null)
+      assert.equal(Boolean(row.reason && /[\u4e00-\u9fff]/u.test(row.reason)), true)
+      // The deterministic numeric gate owns the reason: 智能级别过低, never a
+      // generic fallback or a leaked internal identifier.
+      assert.equal(row.reason, '智能级别过低')
+    }
+  })
+
+  it('routingTest surfaces the closed specific exclusion reason for an explicitly excluded pair', async () => {
+    writeConfig({})
+    const service = context!.makeService({ resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P] }) })
+    // Exclude ONLY the high pair's model: it is baseline-available but must be
+    // reported with the closed specific cause, not the generic 不满足任务要求.
+    const result = await service.routingTest({
+      automatic: { exclude_model_ids: [A_HIGH_P.model] },
+    })
+
+    const rejected = result.rows.find((row) => row.model === A_HIGH_P.model)
+    assert.ok(rejected, `expected a rejected row for ${A_HIGH_P.model}`)
+    assert.equal(rejected.rank, null)
+    assert.equal(rejected.reason, '模型已排除')
+
+    // The unexcluded sibling pair is untouched and still qualified.
+    const kept = result.rows.find((row) => row.model === A_MID_P.model)
+    assert.ok(kept, `expected a row for ${A_MID_P.model}`)
+    assert.equal(kept.reason, null)
+    assert.equal(Boolean(kept.rank !== null), true)
+    // No internal identity, token, or raw exception text leaks through.
+    const serialized = JSON.stringify(result)
+    assert.equal(serialized.includes('exact_runtime'), false)
+    assert.equal(serialized.includes('"client"'), false)
   })
 
   it('routingTest omits pairs that are not baseline provider-ready', async () => {

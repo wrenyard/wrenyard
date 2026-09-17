@@ -33,6 +33,40 @@ export const TASK_RESOLUTION_FAILURE_CODES = [
 
 export type TaskResolutionFailureCode = (typeof TASK_RESOLUTION_FAILURE_CODES)[number]
 
+/**
+ * Closed diagnostic detail set — the specific, truthful cause behind a
+ * `no_available_provider` elimination. The public `TaskResolutionFailureCode`
+ * union is unchanged; this is an ADDITIVE optional refinement so a routing
+ * diagnostic can name the exact real gate instead of collapsing every
+ * non-numeric rejection into one generic message.
+ *
+ * Every member is a closed, static identifier: no raw exception text, model or
+ * provider id, credential, score, price, or canonical target is ever encoded.
+ */
+export const TASK_RESOLUTION_FAILURE_DETAILS = [
+  'model_excluded',
+  'provider_excluded',
+  'profile_excluded',
+  'client_excluded',
+  'runtime_unresolved',
+  'web_search_unsupported',
+  'image_input_unsupported',
+  'text_input_unsupported',
+] as const
+
+export type TaskResolutionFailureDetail = (typeof TASK_RESOLUTION_FAILURE_DETAILS)[number]
+
+export const TASK_RESOLUTION_FAILURE_DETAIL_MESSAGES: Readonly<Record<TaskResolutionFailureDetail, string>> = {
+  model_excluded: '模型已排除',
+  provider_excluded: '供应商已排除',
+  profile_excluded: '配置已排除',
+  client_excluded: '客户端已排除',
+  runtime_unresolved: '运行时不可用',
+  web_search_unsupported: '不支持联网搜索',
+  image_input_unsupported: '不支持图片输入',
+  text_input_unsupported: '不支持文本输入',
+}
+
 /** Fixed stable tie-break order; also the schema/union order on the wire. */
 export const TASK_RESOLUTION_FAILURE_CODE_ORDER: readonly TaskResolutionFailureCode[] =
   TASK_RESOLUTION_FAILURE_CODES
@@ -71,6 +105,15 @@ export interface TaskResolutionElimination {
   /** Bounded internal routing comparator (reference output price per million).
    *  Lower = higher deterministic routing relevance. Never serialized. */
   priceUsdPerMillion?: number
+  /** Closed, specific diagnostic cause of this elimination. Optional and
+   *  additive: absent means the generic per-code message applies. Only a
+   *  static closed identifier is ever recorded — never raw exception text. */
+  detail?: TaskResolutionFailureDetail
+}
+
+/** Maps one closed diagnostic detail to its safe static Chinese message. */
+export function taskResolutionFailureDetailMessage(detail: TaskResolutionFailureDetail): string {
+  return TASK_RESOLUTION_FAILURE_DETAIL_MESSAGES[detail]
 }
 
 /**

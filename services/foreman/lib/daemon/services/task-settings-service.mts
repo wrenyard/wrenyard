@@ -20,8 +20,10 @@ import {
   codeFromCatalogExclusion,
   selectTaskResolutionFailure,
   taskResolutionFailure,
+  taskResolutionFailureDetailMessage,
   type TaskResolutionElimination,
   type TaskResolutionFailureCode,
+  type TaskResolutionFailureDetail,
 } from '../../core/task/task-resolution-failure.mts'
 import { TaskService } from '../../core/task/service.mts'
 import { getTaskPromptTemplates } from '../../core/task/prompt-template.mts'
@@ -384,6 +386,9 @@ interface RoutingFormPair {
   admitted: boolean
   /** Closed code of the first submitted gate that rejected every ready client. */
   rejectionCode?: TaskResolutionFailureCode
+  /** Closed specific cause behind `rejectionCode` when it is a qualitative gate
+   *  (exclusion, unresolvable runtime, unsupported search/input capability). */
+  rejectionDetail?: TaskResolutionFailureDetail
 }
 
 /** Collapses baseline diagnostic choices at provider+model, preferring native,
@@ -426,6 +431,7 @@ function collapseRoutingFormPairs(
       exactAgentRuntime: chosen.exactAgentRuntime,
       admitted,
       ...(rejectionEntry?.rejectionCode !== undefined ? { rejectionCode: rejectionEntry.rejectionCode } : {}),
+      ...(rejectionEntry?.rejectionDetail !== undefined ? { rejectionDetail: rejectionEntry.rejectionDetail } : {}),
     })
   }
   return pairs
@@ -500,7 +506,10 @@ function buildRoutingFormRows(
 
     // Rejected: closed Chinese reason, never raw resolver/quota detail. The
     // submitted-gate rejection code (baseline availability already confirmed)
-    // takes priority, then the live quota/unscorable/catalog gates.
+    // takes priority, then the live quota/unscorable/catalog gates. The
+    // submitted gate's closed specific detail, when present, is the truthful
+    // reason (e.g. 不支持图片输入 / 不支持联网搜索 / 模型已排除); otherwise the
+    // generic per-code message applies.
     const code: TaskResolutionFailureCode = quotaBlocked.has(runtime)
       ? 'quota_unavailable'
       : pair.rejectionCode
@@ -508,6 +517,13 @@ function buildRoutingFormRows(
         ?? (catalogExcluded.has(runtime)
           ? codeFromCatalogExclusion(catalogExcluded.get(runtime)!) ?? 'no_available_provider'
           : 'no_available_provider')
+    // The closed specific detail is used only when the reason itself came from
+    // the submitted gate (a quota/unscorable/catalog reason has no detail).
+    const detail: TaskResolutionFailureDetail | undefined =
+      quotaBlocked.has(runtime) ? undefined : pair.rejectionDetail
+    const reason = detail !== undefined
+      ? taskResolutionFailureDetailMessage(detail)
+      : ({ intelligence_requirement: '智能级别过低', speed_requirement: '速度过低', price_limit: '单价超出上限', quota_unavailable: '额度不足', no_available_provider: '不满足任务要求' } as Record<TaskResolutionFailureCode, string>)[code]
     rows.push({
       provider: pair.provider,
       provider_name: providerName,
@@ -520,7 +536,7 @@ function buildRoutingFormRows(
       intelligence_score: null,
       score: null,
       rank: null,
-      reason: ({ intelligence_requirement: '智能级别过低', speed_requirement: '速度过低', price_limit: '单价超出上限', quota_unavailable: '额度不足', no_available_provider: '不满足任务要求' } as Record<TaskResolutionFailureCode, string>)[code],
+      reason,
     })
   }
   rows.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
@@ -630,19 +646,50 @@ export class TaskSettingsService {
     return this.configPath
   }
 
-  /** Live provider/model metadata for selector surfaces. */
+  /** Live provider/model metadata for selector surfaces. A pair is advertised
+   *  as active only when it is dispatchable right now: the same authoritative
+   *  non-billable admission the routingTest baseline applies (Forge client gate
+   *  plus the live runtimeAvailability probe binding the request's single quota
+   *  and native-provider samples) is consulted before collapsing. Any ready
+   *  supporting client admits the pair and an admin-denied native model/client
+   *  is omitted; no scoring or extra price/TPS/task gate is imposed here. */
   async modelStatus(): Promise<Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>> {
     const status = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
     try {
       const baseline = this.resolver.diagnose({ taskName: 'model-status', requirements: {} })
-      if (baseline.ok) {
-        for (const pair of collapseRoutingFormPairs(baseline.choices.filter((choice) => choice.available)).values()) {
-          status.set(`${pair.provider}/${pair.model}`, { effectiveTps: pair.effectiveTps, quotaAbundant: false })
-        }
+      const baselineChoices: TaskDispatchDiagnosticChoice[] = baseline.ok
+        ? baseline.choices.filter((choice) => choice.available)
+        : []
+      const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
+      previewMemo.quota = this.quotaSnapshots?.routingSnapshot() ?? Promise.resolve(null)
+      const needsNative = needsNativeProviderReadiness(baselineChoices.flatMap((choice) =>
+        choice.baseline ? [{ ...choice.baseline, exactAgentRuntime: choice.exactAgentRuntime }] : []))
+      previewMemo.nativeProviderReadiness = needsNative && this.nativeProviderReadiness
+        ? Promise.resolve().then(() => this.nativeProviderReadiness!()).catch(() => null)
+        : Promise.resolve(null)
+      const [bound, native, clientSample] = await Promise.all([
+        previewMemo.quota, previewMemo.nativeProviderReadiness, this.clientReadinessSample(previewMemo),
+      ])
+      const admittedChoices: TaskDispatchDiagnosticChoice[] = []
+      for (const choice of baselineChoices) {
+        const dispatch = choice.baseline ?? choice.admitted
+        if (!dispatch) continue
+        // A client that is disabled/not-installed is omitted before collapsing so
+        // it can never advertise a pair as active; a ready sibling still admits
+        // the same provider+model pair.
+        if (!this.clientAdmitted(dispatch.client, clientSample)) continue
+        const availability = await this.previewRuntimeAvailability(
+          TaskSettingsService.tripleOf(dispatch),
+          previewMemo,
+          { codeBuddySnapshot: bound?.codeBuddySnapshot, nativeProviderReadiness: native ?? null },
+        )
+        if (availability?.available !== false) admittedChoices.push(choice)
       }
-      // Bind the shared snapshot once per request; quota evidence remains fail-closed
-      // when the snapshot cannot establish a fresh, complete constraint set.
-      const bound = await this.quotaSnapshots?.routingSnapshot()
+      for (const pair of collapseRoutingFormPairs(admittedChoices).values()) {
+        status.set(`${pair.provider}/${pair.model}`, { effectiveTps: pair.effectiveTps, quotaAbundant: false })
+      }
+      // The shared snapshot is reused (never re-read); quota evidence remains
+      // fail-closed when it cannot establish a fresh, complete constraint set.
       const snapshot = bound?.snapshot
       const now = this.now()
       if (snapshot && now <= snapshot.validUntilMs) {

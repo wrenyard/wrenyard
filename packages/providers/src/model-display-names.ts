@@ -103,3 +103,8 @@ const BUILTIN_MODEL_DISPLAY_NAME_BY_ID: Readonly<Record<BuiltinModelId, string>>
 export function builtinModelDisplayName(id: BuiltinModelId): string {
   return BUILTIN_MODEL_DISPLAY_NAME_BY_ID[id];
 }
+
+/** Current display identity only; never used to regroup historical usage or dispatch. */
+export function builtinModelDisplayId(modelId: string): string {
+  return (BUILTIN_MODEL_NAME_ALIASES as Readonly<Record<string, string>>)[modelId] ?? modelId;
+}

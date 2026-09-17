@@ -718,6 +718,27 @@ button, input, select { accent-color: var(--moss-deep); }
 .quota-tabpanel { margin-top: 8px; }
 .quota-tabpanel[hidden] { display: none; }
 
+/* Model Supply → 模型列表: one uniform table, prices in USD per million tokens. */
+.model-list { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; overflow: auto; background: rgba(255, 250, 240, .55); }
+.model-list-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 850px; }
+.model-list-table th, .model-list-table td { padding: 7px 12px; text-align: left; vertical-align: middle; }
+.model-list-table th { border-bottom: 1px solid var(--line); color: var(--ink-soft); background: var(--paper-dim); font-size: 13px; font-weight: 750; white-space: nowrap; }
+.model-list-table td { border-bottom: 1px solid rgba(212, 201, 168, .5); color: var(--ink); font-size: 13px; }
+.model-list-table tbody tr:last-child td { border-bottom: 0; }
+.model-list-table th:nth-child(2), .model-list-table td:nth-child(2),
+.model-list-table th:nth-child(3), .model-list-table td:nth-child(3),
+.model-list-table th:nth-child(4), .model-list-table td:nth-child(4),
+.model-list-table th:nth-child(5), .model-list-table td:nth-child(5) { width: 115px; }
+.model-list-model { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.model-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-list-price, .model-list-tps { color: var(--slate); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
+.model-list-providers { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }
+.model-list-provider { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
+.model-list-icon { display: inline-flex; align-items: center; color: currentColor; }
+.model-list-icon img, .model-list-icon .model-brand-icon { width: 18px; height: 18px; }
+.model-list .is-muted { color: var(--muted); }
+.model-list-empty { color: var(--muted); text-align: center; }
+
 /* Form-first routing test (模型供应 → 路由测试) */
 .routing-test-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
 .routing-test-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

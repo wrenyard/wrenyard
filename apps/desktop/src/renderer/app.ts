@@ -39,6 +39,7 @@ import { daemonStatusPresentation } from '../daemon-status.js';
 import { reorderProviders, swapProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
+import { renderModelList } from './model-list.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, formatTaskCompletionTimeTooltip, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 import { renderInstructionTemplatePreview } from './prompt-template-preview.js';
@@ -135,6 +136,8 @@ const autoCapStatus = requireElement<HTMLElement>('auto-cap-status');
 const quotaTabs = requireElement<HTMLElement>('quota-tabs');
 const quotaPanelSupply = requireElement<HTMLElement>('quota-panel-supply');
 const quotaPanelRouting = requireElement<HTMLElement>('quota-panel-routing');
+const quotaPanelModels = requireElement<HTMLElement>('quota-panel-models');
+const modelListHost = requireElement<HTMLElement>('model-list');
 const routingTestRun = requireElement<HTMLButtonElement>('routing-test-run');
 const routingTestImportHost = requireElement<HTMLElement>('routing-test-import-select');
 const routingTestResult = requireElement<HTMLElement>('routing-test-result');
@@ -678,6 +681,7 @@ function renderQuota(snapshot: QuotaSnapshot): void {
   const unconfigured = requireElement('quota-unconfigured-grid');
   const details = unconfigured.closest('details');
   const catalog = snapshot.catalog ?? [];
+  renderModelList(modelListHost, snapshot);
   if (catalog.length === 0) {
     list.replaceChildren(emptyQuotaCard(available ? '未发现受支持的 Provider。' : 'Provider 数据暂时不可用，请稍后刷新。'));
     unconfigured.replaceChildren();
@@ -1568,19 +1572,21 @@ function emptyRow(label: string): HTMLElement {
 }
 
 /** Currently selected Model Supply view tab; the supply configuration stays the default. */
-function currentQuotaTab(): 'supply' | 'routing' {
-  return quotaPanelRouting.hidden ? 'supply' : 'routing';
+function currentQuotaTab(): 'supply' | 'routing' | 'models' {
+  if (!quotaPanelRouting.hidden) return 'routing';
+  if (!quotaPanelModels.hidden) return 'models';
+  return 'supply';
 }
 
 /**
- * Switches the Model Supply view between the supply configuration and routing
- * test panels. Selecting the routing tab only shows the panel — it never runs a
+ * Switches the Model Supply view between the supply configuration, routing test,
+ * and model list panels. Selecting a tab only shows its panel — it never runs a
  * test, so an existing result can never appear to have been re-run.
  */
-function selectQuotaTab(tab: 'supply' | 'routing', focus = false): void {
-  const routing = tab === 'routing';
-  quotaPanelSupply.hidden = routing;
-  quotaPanelRouting.hidden = !routing;
+function selectQuotaTab(tab: 'supply' | 'routing' | 'models', focus = false): void {
+  quotaPanelSupply.hidden = tab !== 'supply';
+  quotaPanelRouting.hidden = tab !== 'routing';
+  quotaPanelModels.hidden = tab !== 'models';
   for (const button of Array.from(quotaTabs.querySelectorAll<HTMLButtonElement>('button[data-quota-tab]'))) {
     const selected = button.dataset.quotaTab === tab;
     button.classList.toggle('is-selected', selected);
@@ -2480,12 +2486,12 @@ quotaTabs.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) return;
   const tab = target.dataset.quotaTab;
-  if (tab !== 'supply' && tab !== 'routing') return;
+  if (tab !== 'supply' && tab !== 'routing' && tab !== 'models') return;
   selectQuotaTab(tab);
 });
 quotaTabs.addEventListener('keydown', (event) => {
   if (!(event instanceof KeyboardEvent) || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
-  const tabs: Array<'supply' | 'routing'> = ['supply', 'routing'];
+  const tabs: Array<'supply' | 'routing' | 'models'> = ['supply', 'routing', 'models'];
   const current = currentQuotaTab();
   const delta = event.key === 'ArrowRight' ? 1 : -1;
   const next = tabs[(tabs.indexOf(current) + delta + tabs.length) % tabs.length];
