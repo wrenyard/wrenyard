@@ -354,10 +354,14 @@ button, input, select { accent-color: var(--moss-deep); }
 .conversation-header-actions { min-width: 0; flex: 0 1 auto; display: flex; align-items: center; gap: 10px; }
 .conversation-model-picker { position: relative; min-width: 0; display: flex; align-items: center; }
 .conversation-daemon-status { position: relative; width: 18px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--muted); cursor: help; outline: 0; }
-.conversation-daemon-status > i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 14%, transparent); }
+.conversation-daemon-status > svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 0 color-mix(in srgb, currentColor 20%, transparent)); }
+.conversation-daemon-status > svg circle { fill: color-mix(in srgb, currentColor 12%, transparent); }
+.conversation-daemon-status-check { opacity: 0; }
 .conversation-daemon-status.is-connected { color: var(--moss-deep); }
 .conversation-daemon-status.is-unavailable { color: var(--terracotta); }
-.conversation-daemon-status:focus-visible > i { box-shadow: 0 0 0 3px rgba(94, 124, 70, .2); }
+.conversation-daemon-status.is-connected > svg { stroke-width: 1.6; }
+.conversation-daemon-status.is-connected .conversation-daemon-status-check { opacity: 1; }
+.conversation-daemon-status:focus-visible > svg { filter: drop-shadow(0 0 0 color-mix(in srgb, currentColor 45%, transparent)); }
 .conversation-daemon-tooltip { position: absolute; right: 0; top: calc(100% + 4px); z-index: 12; width: max-content; min-width: 174px; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid #403930; border-radius: 4px; color: var(--paper); background: var(--rail); font-size: 10px; line-height: 1.35; opacity: 0; pointer-events: none; transform: translateY(-2px); transition: opacity 80ms ease 250ms, transform 80ms ease 250ms; }
 .conversation-daemon-tooltip strong { font-size: 10px; font-weight: 750; }
 .conversation-daemon-tooltip small { color: #c9beaa; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 8px; }
@@ -743,7 +747,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .routing-test-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
 .routing-test-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .routing-test-head h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 18px; }
-.routing-test-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.routing-test-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: nowrap; }
 .routing-test-toolbar select, .routing-test-toolbar .primary-button { min-height: 34px; }
 /* Chinese primary-button labels must stay on one line: block shrinking and give
    the button its intrinsic text width so the toolbar wraps instead of clipping the
@@ -877,6 +881,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .conversation-model-picker .multi-select-popup { right: 0; left: auto; width: min(334px, 72vw); max-height: min(390px, calc(100vh - 120px)); }
 .conversation-model-picker .single-select-option { min-height: 34px; }
 .conversation-model-picker .single-select-option-secondary { font-size: 8px; }
+.conversation-reasoning-select { max-width: 76px; min-height: 30px; margin-left: 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
 
 @media (max-width: 820px) {
   .conversation-model-picker .multi-select-trigger { width: min(170px, 28vw); }
@@ -1003,14 +1008,6 @@ button, input, select { accent-color: var(--moss-deep); }
 #stats-task-runs-list .table-row > span { text-align: left; }
 #stats-task-runs-list .table-row > :nth-last-child(3), #stats-task-runs-list .table-row > :nth-last-child(2), #stats-task-runs-list .table-row > :last-child { text-align: right; }
 .task-run-row > :first-child { justify-self: center; }
-.task-run-status { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font-size: 11px; line-height: 1; font-weight: 800; }
-.task-run-status.is-done { color: var(--moss-deep); background: rgba(123, 160, 91, .16); }
-.task-run-status.is-failed { color: var(--terracotta); background: rgba(196, 78, 58, .12); }
-.task-run-status.is-cancelled { color: var(--muted); background: var(--paper-deep); }
-.task-run-status.is-interrupted { color: #a06d1f; background: rgba(232, 163, 61, .2); }
-.task-run-status.is-running { color: var(--moss-deep); background: rgba(123, 160, 91, .16); animation: task-run-pulse 1.15s ease-in-out infinite; }
-.task-run-status.is-queued { color: var(--slate); background: rgba(90, 107, 122, .13); }
-.task-run-status.is-unknown { color: var(--muted); background: var(--paper-dim); }
 @keyframes task-run-pulse { 50% { opacity: .42; } }
 .source-builtin > :nth-child(2) { color: var(--moss-deep); }
 .source-project > :nth-child(2) { color: var(--slate); }
@@ -1092,3 +1089,14 @@ button, input, select { accent-color: var(--moss-deep); }
 .single-select-badge.quota { color: #568b62; }
 
 .single-select-badge svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.single-select-option-label, .single-select-trigger > span { display: inline-flex; align-items: center; gap: 6px; }
+.single-select-option-label img, .single-select-trigger img { width: 18px; height: 18px; flex: 0 0 auto; }
+.agent-task-status-icon { width: 20px; height: 20px; display: inline-grid; place-items: center; color: var(--muted); }
+.agent-task-status-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.agent-task-status-icon.is-done { color: var(--moss-deep); }
+.agent-task-status-icon.is-error { color: var(--terracotta); }
+.agent-task-status-icon.is-running { color: var(--moss-deep); animation: task-run-pulse 1.15s ease-in-out infinite; }
+@media (max-width: 820px) { .routing-test-toolbar { flex-wrap: wrap; justify-content: flex-start; } }
+
+.agent-task-status-icon.is-cancelled { color: var(--muted); }
+.agent-task-status-icon.is-interrupted { color: var(--lamp-deep); }

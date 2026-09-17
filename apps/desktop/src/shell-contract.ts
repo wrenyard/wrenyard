@@ -471,6 +471,7 @@ export interface ConversationModelOptionSnapshot {
   label: string;
   description?: string;
   defaultReasoningEffort?: string;
+  reasoningEfforts?: string[];
   /**
    * Exact built-in Catalog input capabilities (`text`/`image`) projected for
    * this option. Derived from the authoritative Catalog model, never from DSH
@@ -877,7 +878,7 @@ export interface WrenyardShellApi {
   copyText(text: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
-  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
+  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
   onConversationChanged(listener: () => void): () => void;

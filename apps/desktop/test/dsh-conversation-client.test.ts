@@ -229,6 +229,27 @@ test('model projection preserves the single Gateway provider and public model id
   assert.deepEqual(models.groups[0]?.models.map((model) => model.label), ['GLM 5.3', 'GLM 5.3 Flash']);
 });
 
+test('model projection preserves the supported DSH reasoning efforts', () => {
+  const models = projectConversationModels({
+    current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [{
+        id: 'codebuddy/hy4-preview',
+        name: 'HY4 Preview',
+        reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+      }],
+    }],
+    failures: [],
+  });
+
+  assert.deepEqual(models.groups[0]?.models[0]?.reasoningEfforts, ['low', 'medium', 'high']);
+  assert.equal(models.groups[0]?.models[0]?.defaultReasoningEffort, 'medium');
+  assert.equal(models.current?.reasoningEffort, 'medium');
+});
+
 test('model projection keeps catalog-provided labels without a Desktop model mirror', () => {
   const models = projectConversationModels({
     current: { provider: 'wrenyard', model: 'kimi-coding/k3' },
@@ -751,7 +772,11 @@ function modelDirectory(current = 'codebuddy/deepseek-v4.1-flash') {
       name: 'Wrenyard',
       models: [
         { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
-        { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
+        {
+          id: 'codebuddy/hy4-preview',
+          name: 'HY4 Preview',
+          reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+        },
       ],
     }],
     failures: [],
@@ -767,7 +792,11 @@ function hostModelDirectory() {
       name: 'Wrenyard',
       models: [
         { id: 'codebuddy/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
-        { id: 'codebuddy/hy4-preview', name: 'HY4 Preview', reasoning: { defaultEffort: 'medium' } },
+        {
+          id: 'codebuddy/hy4-preview',
+          name: 'HY4 Preview',
+          reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+        },
       ],
     }],
     failures: [],
@@ -955,6 +984,66 @@ test('draft model selection updates only the in-memory selection without persist
   assert.equal(snapshot.models.current?.model, 'codebuddy/hy4-preview', 'the draft current selection is reflected');
 });
 
+test('same-model reasoning selection persists through session.selectModel', async () => {
+  const { client, state } = conversationClientHarness();
+  state.selectedSessionId = 'existing';
+  state.workspaceSessionIds.add('existing');
+  state.sessions.set('existing', { sessionId: 'existing', updatedAt: 1, running: false, blank: false });
+  state.models = projectConversationModels({
+    current: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'low' },
+    routable: true,
+    groups: [{
+      id: 'wrenyard',
+      name: 'Wrenyard',
+      models: [{
+        id: 'codebuddy/hy4-preview',
+        name: 'HY4 Preview',
+        reasoning: { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+      }],
+    }],
+    failures: [],
+  }, ['wrenyard']);
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  state.rpc = async (method, payload) => {
+    calls.push({ method, payload });
+    if (method === 'session.selectModel') {
+      return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'high' } };
+    }
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.selectModel('wrenyard', 'codebuddy/hy4-preview', 'high');
+
+  assert.deepEqual(calls, [{
+    method: 'session.selectModel',
+    payload: {
+      sessionId: 'existing',
+      provider: 'wrenyard',
+      model: 'codebuddy/hy4-preview',
+      reasoningEffort: 'high',
+    },
+  }]);
+});
+
+test('unsupported reasoning effort rejects without an RPC', async () => {
+  const { client, state } = conversationClientHarness();
+  state.selectedSessionId = 'existing';
+  state.workspaceSessionIds.add('existing');
+  state.sessions.set('existing', { sessionId: 'existing', updatedAt: 1, running: false, blank: false });
+  state.models = projectConversationModels(modelDirectory(), ['wrenyard']);
+  const calls: string[] = [];
+  state.rpc = async (method) => {
+    calls.push(method);
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await assert.rejects(
+    client.selectModel('wrenyard', 'codebuddy/deepseek-v4.1-flash', 'high'),
+    /所选思考强度不在当前模型支持范围内/,
+  );
+  assert.deepEqual(calls, []);
+});
+
 test('first send materializes exactly one session with the draft selection then prompts', async () => {
   const { client, state } = conversationClientHarness();
   state.rpc = async (method) => {
@@ -964,14 +1053,14 @@ test('first send materializes exactly one session with the draft selection then 
     throw new Error(`unexpected ${method}`);
   };
   await client.start();
-  await client.selectModel('wrenyard', 'codebuddy/hy4-preview');
+  await client.selectModel('wrenyard', 'codebuddy/hy4-preview', 'high');
 
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
   state.rpc = async (method, payload) => {
     calls.push({ method, payload });
     if (method === 'session.create') return { sessionId: 'new-draft' };
     if (method === 'session.models') return modelDirectory();
-    if (method === 'session.selectModel') return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' } };
+    if (method === 'session.selectModel') return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'high' } };
     if (method === 'session.prompt') return {};
     if (method === 'session.history') return { events: [], hasMore: false };
     throw new Error(`unexpected ${method}`);
@@ -985,6 +1074,7 @@ test('first send materializes exactly one session with the draft selection then 
     ['session.create', 'session.models', 'session.selectModel', 'session.prompt'],
   );
   assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview', 'the exact draft choice is applied before prompting');
+  assert.equal(calls[2].payload.reasoningEffort, 'high', 'the draft reasoning choice is applied before prompting');
   const snapshot = client.snapshot();
   assert.equal(snapshot.selectedSessionId, 'new-draft');
   assert.equal(snapshot.models.current?.model, 'codebuddy/hy4-preview');

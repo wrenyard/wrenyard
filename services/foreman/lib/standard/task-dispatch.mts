@@ -16,41 +16,13 @@ import type { IntelligenceTier, TaskDispatchRequirements } from '@wrenyard/catal
  *   - ULTRA     — ultra tasks
  */
 
-/** Models/profiles excluded across aliases for the strict frequent class. */
-const FREQUENT_MODEL_EXCLUSIONS = [
-  'glm-5.3',
-  'kimi-k3',
-  'k3',
-  'gpt-5.6-sol',
-  'gpt-6-astra',
-] as const
-
-const FREQUENT_PROFILE_EXCLUSIONS = [
-  'cb-glm',
-  'cc-glm',
-  'gk-glm',
-  'cb-kimi',
-  'cc-kimi',
-  'gk-kimi',
-  'cur-kimi',
-  'codex-sol',
-  'codex-astra',
-] as const
-
-/**
- * Frequent / mechanical / fast / explore tasks: strict throughput and a hard
- * cost ceiling, a low intelligence minimum (so the free HY3 runtime stays
- * eligible), with explicit model + profile exclusions for GLM-5.3, Kimi K3
- * (k3), GPT-5.6 Sol, and GPT-6 Astra across aliases.
- */
+/** Frequent tasks use speed, intelligence, and price requirements. */
 export const FREQUENT_DISPATCH_REQUIREMENTS = {
   expectedTps: 80,
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 6,
-  excludeModelIds: [...FREQUENT_MODEL_EXCLUSIONS],
-  excludeProfileIds: [...FREQUENT_PROFILE_EXCLUSIONS],
 } satisfies TaskDispatchRequirements
 
 /**

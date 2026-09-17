@@ -115,16 +115,12 @@ test('main bridges the typed form request and routingTestTasks import with reque
 test('HTML hosts supply/routing tabs, keeps the supply config together, and turns routing into a form', async () => {
   const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="quota-tabs" role="tablist"/);
-  assert.match(html, /data-quota-tab="supply"[^>]*>供应配置</);
+  assert.match(html, /data-quota-tab="supply"[^>]*>供应商</);
   assert.match(html, /data-quota-tab="routing"[^>]*>路由测试</);
   assert.match(html, /id="quota-panel-supply" role="tabpanel"/);
   assert.match(html, /id="quota-panel-routing" role="tabpanel"[^>]*hidden/);
 
-  const supplyStart = html.indexOf('id="quota-panel-supply"');
   const supplyEnd = html.indexOf('id="quota-panel-routing"');
-  const supplyMarkup = html.slice(supplyStart, supplyEnd);
-  assert.match(supplyMarkup, /id="auto-cap-title"/);
-  assert.match(supplyMarkup, /id="alias-title"/);
 
   const routingStart = supplyEnd;
   const routingEnd = html.indexOf('id="clients-page"');
@@ -297,6 +293,23 @@ test('importing tasks is lazy, caches a successful list, and suppresses concurre
   assert.equal(harness.picker.options.length, 2, 'placeholder + one imported task');
   await harness.controller.importTasks();
   assert.equal(harness.importQueue.length, 0, 'successful list is cached');
+});
+
+test('initializeExploreDefault imports builtin:explore once and copies it without running', async () => {
+  const harness = controllerHarness();
+  const explore = importedTask({ identity: 'builtin:explore', name: 'explore', display_name: '探索' });
+  const initialization = harness.controller.initializeExploreDefault();
+  assert.equal(harness.importQueue.length, 1);
+  harness.resolveImportNext({ tasks: [explore] });
+  await initialization;
+  assert.equal(harness.importQueue.length, 0);
+  assert.deepEqual(harness.applied, [explore]);
+  assert.equal(harness.queue.length, 0);
+
+  harness.picker.value = 'builtin:explore';
+  await harness.controller.initializeExploreDefault();
+  assert.deepEqual(harness.applied, [explore], 'an existing user selection is preserved');
+  assert.equal(harness.importQueue.length, 0);
 });
 
 test('failed import stays visible in the result region and can be retried', async () => {

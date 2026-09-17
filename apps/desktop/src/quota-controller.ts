@@ -257,13 +257,18 @@ function projectCatalog(
     };
     return {
       ...base,
-      label: discoveredStatus?.displayName ?? id,
+      label: discoveredStatus?.displayName ?? quota?.label ?? id,
       description: discoveredStatus?.description ?? '由 Wrenyard Catalog 提供的模型服务。',
       authMode,
       setupHint: discoveredStatus?.setupHint ?? (authMode === 'native'
         ? '请在对应的原生客户端完成登录，返回啾啾工坊后刷新状态。'
         : '该来源没有独立 API Key 配置入口。'),
-      models: (discoveredStatus?.models ?? []).map((model) => ({ ...model })),
+      models: (discoveredStatus?.models ?? []).map((model) => ({
+        id: model.id, displayName: model.displayName,
+        ...Object.fromEntries(['contextWindow', 'maxTokens', 'taskOnly', 'effectiveTps', 'quotaAbundant', 'canonicalId', 'intelligence', 'pricing', 'speedSource', 'available']
+          .filter((key) => model[key as keyof typeof model] !== undefined)
+          .map((key) => [key, model[key as keyof typeof model]])),
+      })),
     };
   });
   return sortProvidersByAvailability(catalog, configuredOrder);

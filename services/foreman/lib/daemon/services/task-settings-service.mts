@@ -457,6 +457,7 @@ function buildRoutingFormRows(
   baselineChoices: readonly TaskDispatchDiagnosticChoice[],
   trace: AutomaticSelectionTrace,
   resolver: TaskDispatchResolver,
+  requirements: ConfigTaskDispatchRequirements,
 ): TaskRoutingTestRow[] {
   const pairs = collapseRoutingFormPairs(baselineChoices)
   const rankedByRuntime = new Map(trace.ranked.map((entry) => [entry.canonicalId, entry]))
@@ -522,8 +523,26 @@ function buildRoutingFormRows(
     const detail: TaskResolutionFailureDetail | undefined =
       quotaBlocked.has(runtime) ? undefined : pair.rejectionDetail
     const reason = detail !== undefined
-      ? taskResolutionFailureDetailMessage(detail)
-      : ({ intelligence_requirement: '智能级别过低', speed_requirement: '速度过低', price_limit: '单价超出上限', quota_unavailable: '额度不足', no_available_provider: '不满足任务要求' } as Record<TaskResolutionFailureCode, string>)[code]
+      ? detail === 'model_excluded'
+        ? `排除模型：${modelName}`
+        : detail === 'provider_excluded'
+          ? `排除供应商：${providerName}`
+          : detail === 'profile_excluded'
+            ? '排除运行配置'
+            : detail === 'client_excluded'
+              ? '排除客户端'
+              : taskResolutionFailureDetailMessage(detail)
+      : code === 'intelligence_requirement'
+        ? `最低智能：${requirements.intelligenceMin ?? requirements.intelligenceExpected ?? 'mid'}`
+        : code === 'speed_requirement'
+          ? `最低速度：${requirements.minimumTps ?? requirements.expectedTps ?? 0} TPS`
+          : code === 'price_limit'
+            ? `输出单价上限：$${requirements.maxOutputUsdPerMillion ?? 0}/Mtok`
+            : ({
+              quota_unavailable: '额度不足',
+              quota_insufficient: '额度不足',
+              no_available_provider: '不满足任务要求',
+            } as Record<'quota_unavailable' | 'quota_insufficient' | 'no_available_provider', string>)[code]
     rows.push({
       provider: pair.provider,
       provider_name: providerName,
@@ -1092,7 +1111,7 @@ export class TaskSettingsService {
       routingWeights,
     }, previewMemo, trace)
 
-    return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver) }
+    return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver, requirements) }
   }
 
   /** Lists the raw definition configuration of ALL valid builtin and project

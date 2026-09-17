@@ -593,12 +593,16 @@ async function startForemanDaemonWithRuntime(
       const localSpeed = readLocalSpeedSamples()
       return { providers: await Promise.all(catalog.providers().map(async (provider) => {
         const credential = await providerRuntime.credential(provider)
+        const nativeConfigured = provider.credentialResolver !== 'forge-managed'
+          && provider.credentialResolver !== 'codebuddy'
+          && provider.models.some((model) => modelStatus.has(`${provider.id}/${model.id}`))
+        const configured = credential !== undefined || nativeConfigured
         return {
           id: provider.id,
           displayName: provider.displayName,
           description: provider.description ?? '',
           setupHint: provider.setupHint ?? '',
-          configured: credential !== undefined,
+          configured,
           authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
             : provider.credentialResolver ? 'native' as const : 'none' as const,
           protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
@@ -626,7 +630,7 @@ async function startForemanDaemonWithRuntime(
               ...(pricing === undefined ? {} : { pricing }),
               // Availability is a fact about the current credential AND the
               // resolver's admitted provider/model set; no model is hardcoded.
-              available: credential !== undefined && modelStatus.has(key),
+              available: configured && modelStatus.has(key),
             }
           }),
         }

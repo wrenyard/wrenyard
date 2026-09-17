@@ -334,6 +334,15 @@ export class RoutingTestController {
     this.onFormChanged();
   }
 
+  async initializeExploreDefault(): Promise<void> {
+    await this.importTasks();
+    if (this.options.taskPicker.value) return;
+    const explore = this.importedTasks?.find((task) => task.identity === 'builtin:explore');
+    if (!explore) return;
+    this.options.taskPicker.value = explore.identity;
+    this.selectImportedTask();
+  }
+
   async run(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
