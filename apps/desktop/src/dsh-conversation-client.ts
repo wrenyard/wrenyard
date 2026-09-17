@@ -469,6 +469,9 @@ function projectModelGroups(
           ...(typeof rawModel.description === 'string' && rawModel.description
             ? { description: rawModel.description.slice(0, 500) }
             : {}),
+          ...(reasoning && Array.isArray(reasoning.efforts)
+            ? { reasoningEfforts: reasoning.efforts.filter((effort): effort is string => typeof effort === 'string' && effort.length > 0) }
+            : {}),
           ...(reasoning && typeof reasoning.defaultEffort === 'string' && reasoning.defaultEffort
             ? { defaultReasoningEffort: reasoning.defaultEffort }
             : {}),
@@ -948,7 +951,7 @@ export class DshConversationClient {
   private history: HistoryPage = { events: [], hasMore: false };
   private models: ConversationModelsSnapshot = { status: 'idle', groups: [] };
   private modelGeneration = 0;
-  private pendingDraftModel: Pick<ConversationModelSelectionSnapshot, 'provider' | 'model'> | undefined;
+  private pendingDraftModel: Pick<ConversationModelSelectionSnapshot, 'provider' | 'model' | 'reasoningEffort'> | undefined;
   private materializeDraftPromise: Promise<string> | undefined;
   private initialSendPromise: Promise<ConversationSnapshot> | undefined;
   private stopped = false;
@@ -1068,7 +1071,7 @@ export class DshConversationClient {
     const current = this.models.current;
     if (this.selectedSessionId) {
       this.pendingDraftModel = current?.advertised && current.configured
-        ? { provider: current.provider, model: current.model }
+        ? { provider: current.provider, model: current.model, ...(current.reasoningEffort ? { reasoningEffort: current.reasoningEffort } : {}) }
         : undefined;
     }
     this.modelGeneration += 1;
@@ -1078,16 +1081,25 @@ export class DshConversationClient {
     return this.snapshot();
   }
 
-  async selectModel(provider: string, model: string): Promise<ConversationSnapshot> {
+  async selectModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot> {
     const option = this.models.groups
       .find((group) => group.provider === provider)
       ?.models.find((candidate) => candidate.model === model);
     if (!option) throw new Error('所选模型不在当前 DSH 模型目录中');
+    if (reasoningEffort !== undefined && !option.reasoningEfforts?.includes(reasoningEffort)) {
+      throw new Error('所选思考强度不在当前模型支持范围内');
+    }
+    const selectedEffort = reasoningEffort ?? (
+      this.models.current?.provider === provider && this.models.current.model === model
+        ? this.models.current.reasoningEffort ?? option.defaultReasoningEffort
+        : option.defaultReasoningEffort
+    );
 
     // Existing-session path: persist the choice through session.selectModel.
     const sessionId = this.selectedSessionId;
     if (sessionId) {
-      if (this.models.current?.provider === provider && this.models.current.model === model) return this.snapshot();
+      if (this.models.current?.provider === provider && this.models.current.model === model
+        && this.models.current.reasoningEffort === selectedEffort) return this.snapshot();
 
       const generation = ++this.modelGeneration;
       this.models = { ...this.models, status: 'loading', message: undefined };
@@ -1097,7 +1109,7 @@ export class DshConversationClient {
           sessionId,
           provider,
           model,
-          ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+          ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}),
         });
         if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
         if (generation !== this.modelGeneration || sessionId !== this.selectedSessionId) return this.snapshot();
@@ -1127,11 +1139,11 @@ export class DshConversationClient {
     // reflect it in the snapshot current selection. Never call session.selectModel
     // or session.create here; the first send materializes exactly one session.
     const selected = modelSelectionSnapshot(
-      { provider, model, ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}) },
+      { provider, model, ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}) },
       this.models.groups,
       this.configuredProviderIds,
     );
-    this.pendingDraftModel = { provider, model };
+    this.pendingDraftModel = { provider, model, ...(selectedEffort ? { reasoningEffort: selectedEffort } : {}) };
     this.models = {
       ...this.models,
       status: 'ready',
@@ -1220,12 +1232,14 @@ export class DshConversationClient {
         if (!option) {
           throw new Error(`新会话无法使用原选择模型 ${pendingModel.provider}/${pendingModel.model}`);
         }
-        if (nextModels.current?.provider !== pendingModel.provider || nextModels.current.model !== pendingModel.model) {
+        if (nextModels.current?.provider !== pendingModel.provider
+          || nextModels.current.model !== pendingModel.model
+          || nextModels.current.reasoningEffort !== pendingModel.reasoningEffort) {
           const value = await this.rpc('session.selectModel', {
             sessionId: target.sessionId,
             provider: pendingModel.provider,
             model: pendingModel.model,
-            ...(option.defaultReasoningEffort ? { reasoningEffort: option.defaultReasoningEffort } : {}),
+            ...(pendingModel.reasoningEffort ? { reasoningEffort: pendingModel.reasoningEffort } : {}),
           });
           if (!isObject(value) || !isObject(value.selected)) throw new Error('DSH 未返回已选择模型');
           nextModels = {

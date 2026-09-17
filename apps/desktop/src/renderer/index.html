@@ -81,7 +81,10 @@
             <div class="conversation-header-actions">
               <div class="conversation-model-picker" id="conversation-model-picker"></div>
               <span class="conversation-daemon-status is-pending" id="conversation-daemon-status" tabindex="0" role="status" aria-label="Daemon 状态：正在检查" aria-describedby="conversation-daemon-tooltip">
-                <i aria-hidden="true"></i>
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  <circle cx="8" cy="8" r="5.5" />
+                  <path class="conversation-daemon-status-check" d="m5.2 8.1 1.8 1.8 3.8-4" />
+                </svg>
                 <span class="conversation-daemon-tooltip" id="conversation-daemon-tooltip" role="tooltip">
                   <strong id="conversation-daemon-label">正在检查 Daemon</strong>
                   <small id="conversation-daemon-started-at">启动时间暂不可用</small>
@@ -192,9 +195,9 @@
         </header>
 
         <div class="quota-tabs" id="quota-tabs" role="tablist" aria-label="模型供应视图">
-          <button class="quota-tab is-selected" id="quota-tab-supply" type="button" role="tab" aria-selected="true" aria-controls="quota-panel-supply" data-quota-tab="supply">供应配置</button>
+          <button class="quota-tab is-selected" id="quota-tab-models" type="button" role="tab" aria-selected="true" aria-controls="quota-panel-models" data-quota-tab="models">模型列表</button>
+          <button class="quota-tab" id="quota-tab-supply" type="button" role="tab" aria-selected="false" aria-controls="quota-panel-supply" data-quota-tab="supply" tabindex="-1">供应商</button>
           <button class="quota-tab" id="quota-tab-routing" type="button" role="tab" aria-selected="false" aria-controls="quota-panel-routing" data-quota-tab="routing" tabindex="-1">路由测试</button>
-          <button class="quota-tab" id="quota-tab-models" type="button" role="tab" aria-selected="false" aria-controls="quota-panel-models" data-quota-tab="models" tabindex="-1">模型列表</button>
         </div>
 
         <div class="quota-tabpanel" id="quota-panel-supply" role="tabpanel" aria-labelledby="quota-tab-supply">
@@ -245,7 +248,7 @@
           </section>
         </div>
 
-        <div class="quota-tabpanel" id="quota-panel-models" role="tabpanel" aria-labelledby="quota-tab-models" hidden>
+        <div class="quota-tabpanel" id="quota-panel-models" role="tabpanel" aria-labelledby="quota-tab-models">
           <div class="model-list" id="model-list" aria-live="polite"></div>
         </div>
       </section>

@@ -429,7 +429,7 @@ async function createConversationSession(
     snapshot: () => client.snapshot(),
     select: (sessionId) => client.select(sessionId),
     create: () => client.create(),
-    selectModel: (provider, model) => client.selectModel(provider, model),
+    selectModel: (provider, model, reasoningEffort) => client.selectModel(provider, model, reasoningEffort),
     send: (text, clientTimeZone) => client.send(text, clientTimeZone),
     cancel: () => client.cancel(),
     stop: async () => {
@@ -843,7 +843,7 @@ async function bootstrap(): Promise<void> {
     openTaskTranscript: (taskRunId) => petController!.openTaskTranscript(taskRunId),
     selectConversation: (sessionId: string) => conversationController!.select(sessionId),
     createConversation: () => conversationController!.create(),
-    selectConversationModel: (provider: string, model: string) => conversationController!.selectModel(provider, model),
+    selectConversationModel: (provider: string, model: string, reasoningEffort?: string) => conversationController!.selectModel(provider, model, reasoningEffort),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
     cancelConversation: () => conversationController!.cancel(),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),

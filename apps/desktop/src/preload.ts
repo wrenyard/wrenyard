@@ -97,8 +97,8 @@ const api: WrenyardShellApi = {
   createConversation(): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationCreate) as Promise<ConversationSnapshot>;
   },
-  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelectModel, provider, model) as Promise<ConversationSnapshot>;
+  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelectModel, provider, model, reasoningEffort) as Promise<ConversationSnapshot>;
   },
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSend, text, clientTimeZone) as Promise<ConversationSnapshot>;

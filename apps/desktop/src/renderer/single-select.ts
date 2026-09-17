@@ -9,6 +9,8 @@ export interface SingleSelectOption {
   disabled?: boolean;
   /** Optional override for the trigger summary while this option is selected. */
   triggerLabel?: string;
+  /** Optional trusted DOM factory for a provider/model brand icon. */
+  icon?: () => HTMLElement;
   badges?: Array<{ kind: 'fast' | 'very-fast' | 'quota'; label: string }>;
 }
 
@@ -37,6 +39,7 @@ function uniqueOptions(options: readonly SingleSelectOption[]): SingleSelectOpti
       ...(option.title !== undefined ? { title: option.title } : {}),
       ...(option.disabled ? { disabled: true } : {}),
       ...(option.triggerLabel !== undefined ? { triggerLabel: option.triggerLabel } : {}),
+      ...(option.icon !== undefined ? { icon: option.icon } : {}),
       ...(option.badges !== undefined ? { badges: option.badges.map((badge) => ({ ...badge })) } : {}),
     });
   }
@@ -244,6 +247,7 @@ export class SearchableSingleSelect {
   private updateTrigger(): void {
     this.summary.replaceChildren();
     const option = this.options.find((candidate) => candidate.value === this.selected);
+    if (option?.icon) this.summary.append(option.icon());
     const label = document.createElement('span');
     label.textContent = this.selected.length === 0 ? this.placeholder : this.labelFor(this.selected);
     this.summary.append(label);
@@ -268,6 +272,7 @@ export class SearchableSingleSelect {
       }
       const label = document.createElement('span');
       label.className = 'single-select-option-label';
+      if (option.icon) row.append(option.icon());
       label.textContent = option.label;
       if (option.badges) this.appendBadges(label, option.badges);
       row.append(label);
