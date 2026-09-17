@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-dev.32
+
+Development preview release.
+
+- Run conversation turns independently, cancel each turn separately, and retain
+  conversation history, work details and completed usage across restarts.
+- Generate a separate final summary using a configurable model, with DeepSeek
+  V4.1 Flash as the default and an available provider selected automatically.
+- Simplify the work header and composer, show a rolling preview of the latest
+  step, and keep tool details inside the expandable work history.
+- Remove GPT 5.4 Mini from the model catalog and ChatGPT provider.
+
 ## 1.0.0-dev.21
 
 Development preview release.
