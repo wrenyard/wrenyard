@@ -460,7 +460,7 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-tool-icon-button:focus-visible, .turn-tool-stack-toggle:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
 .turn-tool-detail { min-width: 0; margin-top: 6px; }
 .turn-tool-detail:empty { display: none; }
-.turn-task-summary-rails { display: grid; gap: 2px; margin: 6px 0 8px; }
+.turn-task-summary-rails { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 6px 0 8px; }
 .turn-task-summary-rails[hidden] { display: none; }
 /* Owned task labels below the summary: one status icon (running pulses,
    terminal keeps its state color) plus the task name; the whole row opens the
