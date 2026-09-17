@@ -768,6 +768,7 @@ test('cancel during summary aborts the callback and suppresses its late result',
     emitTurn(harness.fake, session, 1, '总结前的工作', 1);
     const summarizing = await waitFor(() => summarizeCalls === 1);
     assert.equal(summarizing, true, 'the summary callback starts once the DSH turn ends');
+    assert.equal(harness.client.snapshot().sessions[0]?.running, true, 'the whole conversation stays active during summary generation');
 
     // Cancel targets the actual (owner-scoped) turn id from the snapshot, not
     // a hardcoded legacy id.
@@ -775,6 +776,7 @@ test('cancel during summary aborts the callback and suppresses its late result',
     await harness.client.cancel(turnId);
     await settle();
     assert.equal(sawAbort, true, 'cancel aborts the in-flight summary callback');
+    assert.equal(harness.client.snapshot().sessions[0]?.running, false);
 
     // Releasing the callback afterwards must not publish its result.
     gate.resolve();

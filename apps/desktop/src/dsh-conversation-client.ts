@@ -1253,6 +1253,14 @@ export class DshConversationClient {
   }
 
   snapshot(): ConversationSnapshot {
+    const activity = new Map<string, { running: boolean; updatedAt: number }>();
+    for (const turn of this.turns) {
+      const previous = activity.get(turn.conversationId);
+      activity.set(turn.conversationId, {
+        running: previous?.running === true || turn.status === 'running',
+        updatedAt: Math.max(previous?.updatedAt ?? 0, turn.endedAt ?? turn.startedAt),
+      });
+    }
     const sessions = [...this.sessions.values()]
       .filter((session) => this.workspaceSessionIds.has(session.sessionId))
       // Internal fork sessions are execution detail, not conversations: they
@@ -1261,24 +1269,23 @@ export class DshConversationClient {
       // A blank session is implementation state until it anchors a
       // conversation; every conversation root stays listed, selected or not.
       .filter((session) => !session.blank || [...this.conversationRoots.values()].includes(session.sessionId))
-      .sort((left, right) => right.updatedAt - left.updatedAt)
       .map((session): ConversationSessionSnapshot => ({
         id: session.sessionId,
         title: titleFromSummary(session),
-        updatedAt: session.updatedAt,
-        running: session.running,
+        updatedAt: Math.max(session.updatedAt, activity.get(session.sessionId)?.updatedAt ?? 0),
+        running: session.running || activity.get(session.sessionId)?.running === true,
         blank: session.blank,
         ...(session.agentPreset ? { agentPreset: session.agentPreset } : {}),
-      }));
+      }))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
     const selectedId = this.conversationRootId;
     const selected = selectedId ? this.sessions.get(selectedId) : undefined;
     const projection = this.conversationProjection();
     // A turn of the selected conversation may still run on a branch whose own
     // session summary is not the selected one, so the conversation counts as
     // running while any of its own turns does.
-    const running = selected?.running === true || this.turns.some(
-      (turn) => turn.conversationId === this.activeConversationId && turn.status === 'running',
-    );
+    const running = selected?.running === true
+      || activity.get(this.activeConversationId ?? '')?.running === true;
     return {
       status: 'ready',
       workspace: this.workspace,
