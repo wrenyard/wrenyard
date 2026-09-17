@@ -29,14 +29,6 @@ export const FAMILY_ORDER = [
 
 export type ModelFamily = (typeof FAMILY_ORDER)[number] | 'Other';
 
-/** Intelligence tiers ordered strongest-first for the within-family sort. */
-const INTELLIGENCE_ORDER: Record<string, number> = {
-  premium: 0,
-  high: 1,
-  mid: 2,
-  low: 3,
-};
-
 /** Deterministic prefix classification: a family is a leading id token, never a label guess. */
 const FAMILY_PREFIXES: ReadonlyArray<[string, ModelFamily]> = [
   ['gpt', 'GPT'],
@@ -189,16 +181,39 @@ function familyRank(family: ModelFamily): number {
   return index === -1 ? FAMILY_ORDER.length : index;
 }
 
-function intelligenceRank(tier: string | undefined): number {
-  return tier === undefined ? Number.POSITIVE_INFINITY : INTELLIGENCE_ORDER[tier] ?? Number.POSITIVE_INFINITY;
+function modelVersion(name: string): number[] {
+  const match = name.match(/\d+(?:\.\d+)*/);
+  return match ? match[0].split('.').map(Number) : [];
+}
+
+function modelSeriesRank(family: ModelFamily, name: string): number {
+  if (family !== 'Claude') return 0;
+  const series = name.match(/\b(Fable|Opus|Sonnet|Haiku)\b/i)?.[1]?.toLowerCase();
+  return { fable: 0, opus: 1, sonnet: 2, haiku: 3 }[series ?? ''] ?? 4;
+}
+
+function compareModelVariants(left: string, right: string): number {
+  const leftVariant = left.replace(/\d+(?:\.\d+)*/g, '').toLowerCase();
+  const rightVariant = right.replace(/\d+(?:\.\d+)*/g, '').toLowerCase();
+  return leftVariant.localeCompare(rightVariant);
+}
+
+function compareModelVersions(left: string, right: string): number {
+  const a = modelVersion(left);
+  const b = modelVersion(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const delta = (b[index] ?? 0) - (a[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
 }
 
 /**
  * Flattens `QuotaSnapshot.catalog` into one row per exact unified model, grouping
  * by `canonicalId ?? id`. Model labels are never treated as equivalence proof:
  * only the canonical identity unifies rows. Rows sort active families first (in
- * `FAMILY_ORDER`), then by descending intelligence with a stable name tie break,
- * and every supported catalog model is kept even when no provider is available.
+ * `FAMILY_ORDER`), then by series and descending numeric version, and every
+ * supported catalog model is kept even when no provider is available.
  */
 export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): ModelListRow[] {
   const catalog: ProviderCatalogSnapshot[] = snapshot?.catalog ?? [];
@@ -275,10 +290,13 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
     const leftFamily = familyRank(left.family);
     const rightFamily = familyRank(right.family);
     if (leftFamily !== rightFamily) return leftFamily - rightFamily;
-    const leftTier = intelligenceRank(left.intelligence);
-    const rightTier = intelligenceRank(right.intelligence);
-    if (leftTier !== rightTier) return leftTier - rightTier;
-    return left.name.localeCompare(right.name);
+    const leftSeries = modelSeriesRank(left.family, left.name);
+    const rightSeries = modelSeriesRank(right.family, right.name);
+    if (leftSeries !== rightSeries) return leftSeries - rightSeries;
+    const version = compareModelVersions(left.name, right.name);
+    if (version !== 0) return version;
+    const variant = compareModelVariants(left.name, right.name);
+    return variant !== 0 ? variant : left.name.localeCompare(right.name);
   });
   return rows;
 }
@@ -288,7 +306,7 @@ const COLUMNS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'cache', label: '缓存' },
   { id: 'input', label: '输入' },
   { id: 'output', label: '输出' },
-  { id: 'tps', label: 'TPS' },
+  { id: 'tps', label: '速度' },
   { id: 'providers', label: '供应商' },
 ];
 
@@ -322,7 +340,7 @@ export function renderModelList(container: HTMLElement, snapshot: QuotaSnapshot 
     const cell = document.createElement('th');
     cell.scope = 'col';
     cell.textContent = column.id === 'cache' || column.id === 'input' || column.id === 'output'
-      ? `${column.label}（USD/1M）`
+      ? `${column.label}（$/Mtok）`
       : column.label;
     headRow.append(cell);
   }

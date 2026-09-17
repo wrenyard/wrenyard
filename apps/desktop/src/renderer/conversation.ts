@@ -14,6 +14,9 @@ import {
 } from './conversation-provider-status.js';
 import { formatCompactTokenCount } from './format.js';
 import { SearchableSingleSelect } from './single-select.js';
+import { brandIcon } from './brand-icons.js';
+import { providerBrand, classifyFamily, familyBrand } from './model-list.js';
+import { createAgentTaskStatusIcon } from './agent-task-icon.js';
 
 /** Shared token formatter re-exported for conversation stats; never a second copy. */
 export { formatCompactTokenCount };
@@ -702,6 +705,7 @@ export class ConversationView {
   private readonly stopButton = element<HTMLButtonElement>('conversation-stop');
   private readonly modelPickerHost = element<HTMLElement>('conversation-model-picker');
   private readonly modelSelect: SearchableSingleSelect;
+  private readonly reasoningSelect: HTMLSelectElement;
   private readonly error = element<HTMLElement>('conversation-error');
   private readonly gate = element<HTMLElement>('workspace-gate');
   private readonly gateMode = element<HTMLSelectElement>('workspace-gate-mode');
@@ -746,6 +750,12 @@ export class ConversationView {
       placeholder: '读取模型…',
       onChange: (value) => void this.selectModel(value),
     });
+    this.reasoningSelect = document.createElement('select');
+    this.reasoningSelect.className = 'conversation-reasoning-select';
+    this.reasoningSelect.setAttribute('aria-label', '思考强度');
+    this.reasoningSelect.hidden = true;
+    this.reasoningSelect.addEventListener('change', () => void this.selectReasoningEffort(this.reasoningSelect.value));
+    this.modelPickerHost.append(this.reasoningSelect);
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
     this.stopButton.addEventListener('click', () => void this.cancel());
@@ -1355,7 +1365,8 @@ export class ConversationView {
       button.title = [taskName ?? item.toolSummary ?? item.toolName ?? '工具', this.toolStateLabel(item), taskRunId ? '点击查看任务对话' : undefined].filter(Boolean).join(' · ');
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-expanded', 'false');
-      button.append(this.toolIcon(item));
+      if (taskGroup) button.append(createAgentTaskStatusIcon(state));
+      else button.append(this.toolIcon(item));
       if (taskGroup) {
         const label = document.createElement('span');
         label.className = 'turn-tool-label';
@@ -1732,6 +1743,21 @@ export class ConversationView {
           this.providerPresentation(current.catalogProvider).tooltip]
         .filter(Boolean).join(' · ')
       : directory.message ?? placeholder);
+    const selectedEntry = this.modelEntries.find((entry) => entry.current);
+    const efforts = selectedEntry?.reasoningEfforts ?? [];
+    this.reasoningSelect.replaceChildren(...efforts.map((effort) => {
+      const option = document.createElement('option');
+      option.value = effort;
+      option.textContent = effort;
+      return option;
+    }));
+    this.reasoningSelect.hidden = efforts.length === 0;
+    this.reasoningSelect.disabled = this.busy || transientLoading;
+    if (current?.reasoningEffort && efforts.includes(current.reasoningEffort)) {
+      this.reasoningSelect.value = current.reasoningEffort;
+    } else if (selectedEntry?.defaultReasoningEffort && efforts.includes(selectedEntry.defaultReasoningEffort)) {
+      this.reasoningSelect.value = selectedEntry.defaultReasoningEffort;
+    }
   }
 
   private advertisedCount(): number {
@@ -1766,6 +1792,7 @@ export class ConversationView {
     this.modelSelect.setOptions(options.map((entry) => ({
       value: entry.value,
       label: entry.label,
+      icon: () => brandIcon(familyBrand(classifyFamily(entry.label))) ?? brandIcon(providerBrand(entry.catalogProvider)) ?? document.createElement('span'),
       secondary: entry.advertised
         ? this.providerPresentation(entry.catalogProvider).label
         : '当前会话模型',
@@ -1950,6 +1977,21 @@ export class ConversationView {
       if (!this.modelSelectTriggerDisabled()) {
         requestAnimationFrame(() => this.modelPickerHost.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }));
       }
+    }
+  }
+
+  private async selectReasoningEffort(reasoningEffort: string): Promise<void> {
+    const current = this.snapshot?.models.current;
+    if (!current || !reasoningEffort || this.busy) return;
+    this.busy = true;
+    try {
+      this.render(await this.api.selectConversationModel(current.provider, current.model, reasoningEffort));
+    } catch (error) {
+      this.showError(errorMessage(error));
+      if (this.snapshot) this.renderModels(this.snapshot);
+    } finally {
+      this.busy = false;
+      if (this.snapshot) this.render(this.snapshot);
     }
   }
 

@@ -3526,9 +3526,9 @@ describe('daemon task-settings-service (no-model)', () => {
       assert.equal(row.quota_score, null)
       assert.equal(row.intelligence_score, null)
       assert.equal(Boolean(row.reason && /[\u4e00-\u9fff]/u.test(row.reason)), true)
-      // The deterministic numeric gate owns the reason: 智能级别过低, never a
+      // The deterministic numeric gate names the submitted requirement, never a
       // generic fallback or a leaked internal identifier.
-      assert.equal(row.reason, '智能级别过低')
+      assert.equal(row.reason, '最低智能：premium')
     }
   })
 
@@ -3544,7 +3544,7 @@ describe('daemon task-settings-service (no-model)', () => {
     const rejected = result.rows.find((row) => row.model === A_HIGH_P.model)
     assert.ok(rejected, `expected a rejected row for ${A_HIGH_P.model}`)
     assert.equal(rejected.rank, null)
-    assert.equal(rejected.reason, '模型已排除')
+    assert.equal(rejected.reason, `排除模型：${rejected.model_name}`)
 
     // The unexcluded sibling pair is untouched and still qualified.
     const kept = result.rows.find((row) => row.model === A_MID_P.model)
@@ -3587,7 +3587,7 @@ describe('daemon task-settings-service (no-model)', () => {
     })
     const result = await service.routingTest({ automatic: { minimum_tps: 10000 } })
     assert.deepEqual(result.rows.map(row => row.model), [A_HIGH_P.model])
-    assert.equal(result.rows[0]!.reason, '速度过低')
+    assert.equal(result.rows[0]!.reason, '最低速度：10000 TPS')
     assert.equal(result.rows[0]!.rank, null)
     assert.equal(result.rows[0]!.effective_tps, A_HIGH_P.tps)
     assert.deepEqual(seen.sort(), profiles.map(profile => profile.model).sort())
