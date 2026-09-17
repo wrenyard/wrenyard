@@ -74,9 +74,9 @@ const GROK_PROVIDER_ID = 'super-grok';
 const LEGACY_GROK_ID = 'grok';
 const CURSOR_PROVIDER_ID = 'cursor';
 const DEEPSEEK_PROVIDER_ID = 'deepseek';
-/** Single unified ChatGPT provider; legacy codex/codex-spark ids normalize here. */
+/** Single unified ChatGPT provider; legacy codex ids normalize here. */
 const CHATGPT_PROVIDER_ID = 'chatgpt';
-const LEGACY_CHATGPT_PROVIDER_IDS = ['codex', 'codex-spark'];
+const LEGACY_CHATGPT_PROVIDER_IDS = ['codex'];
 
 const DEFAULT_PROVIDER_IDS = [
   CHATGPT_PROVIDER_ID,
@@ -267,8 +267,8 @@ function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderE
 
 /**
  * Migrate legacy `quota.pools` string ids to canonical provider ids.
- * Maps the exact legacy `grok` id to `super-grok` and the legacy ChatGPT ids
- * (`codex`, `codex-spark`) to the single `chatgpt` id, preserves ordering, and
+ * Maps the exact legacy `grok` id to `super-grok` and the legacy ChatGPT id
+ * (`codex`) to the single `chatgpt` id, preserves ordering, and
  * deduplicates when both the legacy and canonical ids coexist.
  */
 function migrateQuotaPoolIds(ids: string[]): string[] {
@@ -290,7 +290,7 @@ function migrateQuotaPoolIds(ids: string[]): string[] {
 /**
  * Migrate legacy `quota.providers` entries to canonical ids.
  * Maps the exact legacy `grok` id to `super-grok` and the legacy ChatGPT
- * provider ids (`codex`, `codex-spark`) to the single `chatgpt` id, preserves
+ * provider id (`codex`) to the single `chatgpt` id, preserves
  * entry ordering and enabled state, and deduplicates when both ids coexist:
  * the explicit canonical entry's enabled value wins, while the merged entry
  * retains the stable position of its first occurrence.

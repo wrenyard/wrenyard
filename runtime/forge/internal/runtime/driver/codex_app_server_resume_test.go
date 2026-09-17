@@ -119,7 +119,8 @@ func TestCodexResumeExcludesBaselineOldTurn(t *testing.T) {
 
 // TestCodexResumeDeltaMatchesLast verifies a valid active-turn notification
 // accounts the increment (620-304=316 output) rather than the cumulative total,
-// and pairs a response_v1 sample with the exact last output tokens.
+// and pairs a tokenizer_v1 sample with the cl100k count of the observed
+// generation over its first-to-last delta window.
 func TestCodexResumeDeltaMatchesLast(t *testing.T) {
 	clock := time.UnixMilli(2_000_000)
 	bridge := newResumeTestBridge(t, &clock)
@@ -131,9 +132,12 @@ func TestCodexResumeDeltaMatchesLast(t *testing.T) {
 		resumeUsageBreakdown(13211, 12032, 182, 13393)))
 	bridge.turnID = resumeTestTurn
 
-	// A delta opens the response window, then the notification arrives.
+	// Two observed deltas open and close the response window; the
+	// notification then arrives to reconcile the billing delta.
 	clock = clock.Add(120 * time.Millisecond)
-	bridge.handleNotification(resumeAgentDelta(t, "A monotonic clock"))
+	bridge.handleNotification(resumeAgentDelta(t, "A monotonic clock "))
+	clock = clock.Add(140 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "keeps the observed window honest"))
 	clock = clock.Add(80 * time.Millisecond)
 	// Current total output 620, last output 316: delta matches last exactly.
 	bridge.handleNotification(resumeTokenUsage(t, resumeTestThread, resumeTestTurn,
@@ -151,20 +155,20 @@ func TestCodexResumeDeltaMatchesLast(t *testing.T) {
 		t.Fatalf("want one paired sample, got %#v", bridge.sampler.samples)
 	}
 	sample := bridge.sampler.samples[0]
-	if sample.OutputTokens != 316 {
-		t.Fatalf("sample output tokens = %d, want 316", sample.OutputTokens)
+	if sample.OutputTokens != 9 {
+		t.Fatalf("sample output tokens = %d, want the cl100k count 9 of the observed deltas (not the official 316)", sample.OutputTokens)
 	}
 	if sample.Model != resumeTestModel {
 		t.Fatalf("sample model = %q, want %q", sample.Model, resumeTestModel)
 	}
-	if sample.FirstTokenAtMS != 2_000_120 || sample.CompletedAtMS != 2_000_200 {
-		t.Fatalf("sample timing = %d..%d, want 2000120..2000200", sample.FirstTokenAtMS, sample.CompletedAtMS)
+	if sample.FirstTokenAtMS != 2_000_120 || sample.CompletedAtMS != 2_000_260 {
+		t.Fatalf("sample timing = %d..%d, want first-to-last delta 2000120..2000260", sample.FirstTokenAtMS, sample.CompletedAtMS)
 	}
 	if sample.ResponseID != resumeTestThread+"/"+resumeTestTurn+"/1" {
 		t.Fatalf("sample response id = %q, want the stable synthetic id", sample.ResponseID)
 	}
 
-	// The usage reaches the turn.completed record with the same response_v1
+	// The usage reaches the turn.completed record with the same tokenizer_v1
 	// contract the fresh path uses.
 	bridge.handleNotification(resumeTurnCompleted(t, "completed"))
 	record := lastOutputRecord(t, bridge)
@@ -186,8 +190,8 @@ func TestCodexResumeDeltaMatchesLast(t *testing.T) {
 }
 
 // TestCodexResumeTwoResponsesWithToolGap verifies a tool-only response adds its
-// usage but no speed sample, and the following text response is measured from
-// its own first delta.
+// usage but no speed sample, and each text response's tokenizer_v1 sample is
+// measured over its own first-to-last delta window.
 func TestCodexResumeTwoResponsesWithToolGap(t *testing.T) {
 	clock := time.UnixMilli(3_000_000)
 	bridge := newResumeTestBridge(t, &clock)
@@ -198,10 +202,12 @@ func TestCodexResumeTwoResponsesWithToolGap(t *testing.T) {
 		resumeUsageBreakdown(1000, 500, 100, 1100)))
 	bridge.turnID = resumeTestTurn
 
-	// First response: text delta then usage.
+	// First response: two observed deltas then usage.
 	clock = clock.Add(50 * time.Millisecond)
-	bridge.handleNotification(resumeAgentDelta(t, "first"))
-	clock = clock.Add(50 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "the first observed "))
+	clock = clock.Add(120 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "generation of the turn"))
+	clock = clock.Add(30 * time.Millisecond)
 	bridge.handleNotification(resumeTokenUsage(t, resumeTestThread, resumeTestTurn,
 		resumeUsageBreakdown(1100, 520, 140, 1240),
 		resumeUsageBreakdown(100, 20, 40, 140)))
@@ -217,10 +223,12 @@ func TestCodexResumeTwoResponsesWithToolGap(t *testing.T) {
 		resumeUsageBreakdown(1200, 560, 200, 1400),
 		resumeUsageBreakdown(100, 40, 60, 160)))
 
-	// Second text response: its own delta opens a fresh window.
+	// Second text response: its own deltas open a fresh window.
 	clock = clock.Add(50 * time.Millisecond)
-	bridge.handleNotification(resumeAgentDelta(t, "second"))
-	clock = clock.Add(70 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "the second observed "))
+	clock = clock.Add(130 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "generation of the turn"))
+	clock = clock.Add(20 * time.Millisecond)
 	bridge.handleNotification(resumeTokenUsage(t, resumeTestThread, resumeTestTurn,
 		resumeUsageBreakdown(1250, 570, 230, 1480),
 		resumeUsageBreakdown(50, 10, 30, 80)))
@@ -237,15 +245,19 @@ func TestCodexResumeTwoResponsesWithToolGap(t *testing.T) {
 	if len(bridge.sampler.samples) != 2 {
 		t.Fatalf("the tool-only response must produce no sample: got %d", len(bridge.sampler.samples))
 	}
-	if bridge.sampler.samples[0].OutputTokens != 40 || bridge.sampler.samples[1].OutputTokens != 30 {
-		t.Fatalf("sample output tokens = %d/%d, want 40/30",
+	if bridge.sampler.samples[0].OutputTokens != 7 || bridge.sampler.samples[1].OutputTokens != 7 {
+		t.Fatalf("sample output tokens = %d/%d, want the cl100k counts 7/7 (not the official 40/30)",
 			bridge.sampler.samples[0].OutputTokens, bridge.sampler.samples[1].OutputTokens)
 	}
 	if bridge.sampler.samples[1].ResponseID != resumeTestThread+"/"+resumeTestTurn+"/3" {
 		t.Fatalf("second sample id = %q, want sequence 3", bridge.sampler.samples[1].ResponseID)
 	}
-	if bridge.sampler.samples[1].FirstTokenAtMS != 3_000_450 || bridge.sampler.samples[1].CompletedAtMS != 3_000_520 {
-		t.Fatalf("second sample timing = %d..%d, want 3000450..3000520",
+	if bridge.sampler.samples[0].FirstTokenAtMS != 3_000_050 || bridge.sampler.samples[0].CompletedAtMS != 3_000_170 {
+		t.Fatalf("first sample timing = %d..%d, want first-to-last delta 3000050..3000170",
+			bridge.sampler.samples[0].FirstTokenAtMS, bridge.sampler.samples[0].CompletedAtMS)
+	}
+	if bridge.sampler.samples[1].FirstTokenAtMS != 3_000_550 || bridge.sampler.samples[1].CompletedAtMS != 3_000_680 {
+		t.Fatalf("second sample timing = %d..%d, want first-to-last delta 3000550..3000680",
 			bridge.sampler.samples[1].FirstTokenAtMS, bridge.sampler.samples[1].CompletedAtMS)
 	}
 }
@@ -262,9 +274,12 @@ func TestCodexResumeDuplicateNotificationCountedOnce(t *testing.T) {
 		resumeUsageBreakdown(1000, 500, 100, 1100)))
 	bridge.turnID = resumeTestTurn
 
+	// Two observed deltas 120ms apart keep the sample claimable; the
+	// notification's own arrival time is never part of the window.
 	clock = clock.Add(50 * time.Millisecond)
-	bridge.handleNotification(resumeAgentDelta(t, "once"))
-	clock = clock.Add(50 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "counted once "))
+	clock = clock.Add(120 * time.Millisecond)
+	bridge.handleNotification(resumeAgentDelta(t, "and never twice"))
 
 	duplicated := resumeTokenUsage(t, resumeTestThread, resumeTestTurn,
 		resumeUsageBreakdown(1100, 520, 140, 1240),
@@ -280,6 +295,10 @@ func TestCodexResumeDuplicateNotificationCountedOnce(t *testing.T) {
 	}
 	if len(bridge.sampler.samples) != 1 {
 		t.Fatalf("a duplicate must not add a sample: got %d", len(bridge.sampler.samples))
+	}
+	if sample := bridge.sampler.samples[0]; sample.OutputTokens != 6 ||
+		sample.FirstTokenAtMS != 4_000_050 || sample.CompletedAtMS != 4_000_170 {
+		t.Fatalf("sample = %#v, want 6 cl100k tokens over 4000050..4000170", sample)
 	}
 }
 
@@ -468,7 +487,7 @@ func TestCodexResumeRejectsUnidentifiedUsage(t *testing.T) {
 		bridge.handleNotification(resumeTokenUsage(t, resumeTestThread, turn,
 			resumeUsageBreakdown(1000, 500, 100, 1100), resumeUsageBreakdown(1000, 500, 100, 1100)))
 	}
-	if bridge.resumeUsage.haveBaseline || !bridge.firstDeltaSeen {
+	if bridge.resumeUsage.haveBaseline || bridge.responseWindow.gen.blocks == nil {
 		t.Fatal("foreign/missing turn identity changed the active window")
 	}
 }

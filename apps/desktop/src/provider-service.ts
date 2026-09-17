@@ -34,7 +34,24 @@ export class ProviderService {
         setupHint: provider.setupHint,
         configured: provider.configured,
         authMode: provider.authMode,
-        models: provider.models.map((model) => ({ ...model })),
+        models: provider.models.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
+          ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
+          ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+          ...(model.canonicalId === undefined ? {} : { canonicalId: model.canonicalId }),
+          ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
+          ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),
+          ...(model.available === undefined ? {} : { available: model.available }),
+          pricing: {
+            inputUsdPerMillion: model.pricing.inputUsdPerMillion,
+            outputUsdPerMillion: model.pricing.outputUsdPerMillion,
+            cachedInputUsdPerMillion: model.pricing.cachedInputUsdPerMillion,
+          },
+        })),
       }));
     } finally {
       client.close();

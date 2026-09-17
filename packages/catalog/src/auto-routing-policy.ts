@@ -132,7 +132,6 @@ export const EFFICIENCY_EVIDENCE_WEIGHT = 0.15;
 // Types
 // ---------------------------------------------------------------------------
 
-export type ReferenceKind = "listed" | "verified_free";
 export type ReplenishmentKind = "full_cycle" | "rolling_partial" | "unknown";
 export type QuotaTier = "healthy" | "unknown" | "strained";
 export type QuotaState = QuotaTier | "blocked";
@@ -244,9 +243,8 @@ export interface CandidateInput {
   snapshotId: string;
   canonicalId: string;
   nowMs: number;
-  /** Listed (or verified_free) reference output price, USD per M tokens. */
+  /** Listed reference output price, USD per M tokens. */
   referenceUsdPerM: number;
-  referenceKind: ReferenceKind;
   /** Effective reference cap in the same USD/M units. */
   effectiveCapUsdPerM: number;
   /** Routing horizon that the marginal interval must fully cover. */
@@ -318,9 +316,7 @@ export type ExcludedReason =
   | "invalid_candidate"
   | "invalid_now"
   | "invalid_timeout"
-  | "invalid_reference_kind"
   | "invalid_reference_price"
-  | "listed_reference_zero"
   | "invalid_cap"
   | "reference_above_cap"
   | "invalid_speed"
@@ -819,7 +815,6 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     canonicalId: input.canonicalId,
     nowMs: input.nowMs,
     referenceUsdPerM: input.referenceUsdPerM,
-    referenceKind: input.referenceKind,
     effectiveCapUsdPerM: input.effectiveCapUsdPerM,
     timeoutMs: input.timeoutMs,
     minimumTps: input.minimumTps,
@@ -885,20 +880,11 @@ export function evaluateCandidate(
   if (!isFiniteNumber(candidate.timeoutMs) || candidate.timeoutMs <= 0) {
     return rejected(snapshotId, canonicalId, "invalid_timeout", "timeoutMs must be a finite positive duration");
   }
-  if (candidate.referenceKind !== "listed" && candidate.referenceKind !== "verified_free") {
-    return rejected(snapshotId, canonicalId, "invalid_reference_kind", "referenceKind must be listed or verified_free");
-  }
   if (!isFiniteNumber(candidate.referenceUsdPerM) || candidate.referenceUsdPerM < 0) {
     return rejected(snapshotId, canonicalId, "invalid_reference_price", "reference price must be finite and non-negative");
   }
-  if (candidate.referenceKind === "listed" && candidate.referenceUsdPerM === 0) {
-    return rejected(snapshotId, canonicalId, "listed_reference_zero", "zero reference price is only allowed when verified_free");
-  }
   if (!isFiniteNumber(candidate.effectiveCapUsdPerM) || candidate.effectiveCapUsdPerM < 0) {
     return rejected(snapshotId, canonicalId, "invalid_cap", "effective cap must be finite and non-negative");
-  }
-  if (candidate.referenceUsdPerM > candidate.effectiveCapUsdPerM) {
-    return rejected(snapshotId, canonicalId, "reference_above_cap", "reference price exceeds the effective reference cap");
   }
 
   if (
@@ -1051,6 +1037,10 @@ export function evaluateCandidate(
       marginalApplied = true;
       notes.push("marginal_price_applied");
     }
+  }
+
+  if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM > candidate.effectiveCapUsdPerM) {
+    return rejected(snapshotId, canonicalId, "reference_above_cap", "effective routing price exceeds the effective cap");
   }
 
   // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,

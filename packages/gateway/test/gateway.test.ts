@@ -18,6 +18,7 @@ function fixture(
       displayName: 'Public',
       intelligence: 'mid',
       speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
+      pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
     }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://upstream.test/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -128,7 +129,8 @@ test('scoped openai chat stream forwards the same endpoint, sets include_usage, 
   let seenUrl: string | undefined;
   let seenBody: Record<string, unknown> = {};
   const events: GatewayRequestCompletedEvent[] = [];
-  const stream = 'data: {"id":"r1","model":"private","choices":[{"delta":{"content":"hi"}}]}\n\n'
+  const stream = 'data: {"id":"r1","model":"private","choices":[{"delta":{"content":"he"}}]}\n\n'
+    + 'data: {"id":"r1","model":"private","choices":[{"delta":{"content":"llo"}}]}\n\n'
     + 'data: {"id":"r1","model":"private","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
     + 'data: {"id":"r1","model":"private","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":7,"total_tokens":8}}\n\n'
     + 'data: [DONE]\n\n';
@@ -158,11 +160,41 @@ test('scoped openai chat stream forwards the same endpoint, sets include_usage, 
   const completed = events.filter((event) => event.status === 200 && event.tps_samples !== undefined);
   assert.equal(completed.length, 1);
   assert.equal(completed[0]!.executionId, 'exec_abc');
-  assert.equal(completed[0]!.tps_sampling_contract, 'response_v1');
-  assert.deepEqual(completed[0]!.tps_samples![0]!.model, 'vendor/public');
-  assert.equal(completed[0]!.tps_samples![0]!.response_id, 'r1');
-  assert.equal(completed[0]!.tps_samples![0]!.output_tokens, 7);
+  assert.equal(completed[0]!.tps_sampling_contract, 'tokenizer_v1');
+  assert.deepEqual(completed[0]!.tps_samples, [{
+    response_id: 'r1',
+    model: 'vendor/public',
+    // cl100k_base over the observed 'he' + 'llo' channel, not the reported 7.
+    output_tokens: 1,
+    first_token_at_ms: 2000,
+    completed_at_ms: 3000,
+  }]);
   assert.ok(!('requestBody' in completed[0]!) && !('prompt' in completed[0]!));
+  server.close();
+  await once(server, 'close');
+});
+
+test('a truncated stream emits no speed sample', async (t) => {
+  const events: GatewayRequestCompletedEvent[] = [];
+  // Truncated upstream body: two observed generation deltas, no finish_reason
+  // and no [DONE]. It cannot claim a successfully completed sample.
+  const stream = 'data: {"id":"r9","model":"private","choices":[{"delta":{"content":"he"}}]}\n\n'
+    + 'data: {"id":"r9","model":"private","choices":[{"delta":{"content":"llo"}}]}\n\n';
+  let sampleTime = 5000;
+  const gateway = fixture(async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }), (event) => { events.push(event); }, () => (sampleTime += 1000));
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const response = await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/execution/exec_cut/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [], stream: true }),
+  });
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.ok(events.every(event => event.tps_samples === undefined));
   server.close();
   await once(server, 'close');
 });
@@ -278,6 +310,7 @@ function headerFixture(fetchImpl: typeof fetch) {
         displayName: model,
         intelligence: 'mid',
         speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
+        pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
     });

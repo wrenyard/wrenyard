@@ -361,19 +361,17 @@ describe('parseQuotaJson — monetary balances', () => {
 });
 
 describe('parseQuotaJson — unified ChatGPT provider', () => {
-  it('parses one ChatGPT row carrying both standard and Spark windows under a single provider id', () => {
+  it('parses one ChatGPT row carrying standard windows under a single provider id', () => {
     const raw = JSON.stringify([
       {
         provider: 'chatgpt',
         label: 'ChatGPT',
         status: 'ok',
-        display_line: 'ChatGPT 5h 20% · 7d 40% · Spark 5h 30% · Spark 7d 60%',
+        display_line: 'ChatGPT 5h 20% · 7d 40%',
         remaining_pct: 40,
         windows: [
           { name: '5h', pct: 20, remaining_pct: 80 },
           { name: '7d', pct: 40, remaining_pct: 60 },
-          { name: 'spark-5h', pct: 30, remaining_pct: 70 },
-          { name: 'spark-7d', pct: 60, remaining_pct: 40 },
         ],
       },
     ]);
@@ -382,8 +380,8 @@ describe('parseQuotaJson — unified ChatGPT provider', () => {
     expect(providers).toHaveLength(1);
     const chatgpt = providers[0];
     expect(chatgpt.id).toBe('chatgpt');
-    expect(chatgpt.bars?.windows.map((window) => window.name)).toEqual(['5h', '7d', 'spark-5h', 'spark-7d']);
-    expect(chatgpt.bars?.windows.map((window) => window.remainingPct)).toEqual([80, 60, 70, 40]);
+    expect(chatgpt.bars?.windows.map((window) => window.name)).toEqual(['5h', '7d']);
+    expect(chatgpt.bars?.windows.map((window) => window.remainingPct)).toEqual([80, 60]);
   });
 
   it('skips a malformed row with no provider id instead of fabricating one', () => {

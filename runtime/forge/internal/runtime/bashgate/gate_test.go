@@ -592,21 +592,53 @@ func TestGrokEditGuardAllowsWorkspaceEditAndBlocksCredentialMutation(t *testing.
 		t.Fatalf("ordinary edit did not succeed: bytes=%q err=%v", data, err)
 	}
 
+	created := filepath.Join(workDir, "created.txt")
+	code, output = runGate(ClientGrok, policy, bytes.NewReader(grokToolPayloadWithCWD("write", map[string]any{"file_path": created, "content": "written"}, false, workDir)))
+	if code == 0 {
+		applyGuardedWrite(t, created, "written")
+	}
+	if code != 0 || strings.Contains(output, sentinel) {
+		t.Fatalf("ordinary write decision code=%d output=%s", code, output)
+	}
+	if data, err := os.ReadFile(created); err != nil || string(data) != "written" {
+		t.Fatalf("ordinary write did not create file: bytes=%q err=%v", data, err)
+	}
+
+	empty := filepath.Join(workDir, "empty.txt")
+	code, output = runGate(ClientGrok, policy, bytes.NewReader(grokToolPayloadWithCWD("write", map[string]any{"file_path": empty, "content": ""}, false, workDir)))
+	if code == 0 {
+		applyGuardedWrite(t, empty, "")
+	}
+	if code != 0 || strings.Contains(output, sentinel) {
+		t.Fatalf("empty write decision code=%d output=%s", code, output)
+	}
+	if data, err := os.ReadFile(empty); err != nil || string(data) != "" {
+		t.Fatalf("empty write did not create file: bytes=%q err=%v", data, err)
+	}
+
 	for _, tc := range []struct {
-		name string
-		tool string
-		path string
+		name  string
+		tool  string
+		path  string
+		write bool
 	}{
 		{name: "canonical source", tool: "search_replace", path: source},
 		{name: "source dot alias", tool: "Edit", path: filepath.Join(sourceHome, ".grok", ".", "sub", "..", "auth.json")},
-		{name: "copied home alias", tool: "Write", path: "$GROK_HOME/auth.json"},
+		{name: "native write copied home alias", tool: "write", path: "$GROK_HOME/auth.json", write: true},
 		{name: "copied absolute", tool: "MultiEdit", path: destination},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := map[string]any{"file_path": tc.path, "old_string": sentinel, "new_string": "mutated", "replace_all": false}
+			if tc.write {
+				input = map[string]any{"file_path": tc.path, "content": "mutated"}
+			}
 			code, output := runGate(ClientGrok, policy, bytes.NewReader(grokToolPayloadWithCWD(tc.tool, input, false, workDir)))
 			if code == 0 {
-				applyGuardedReplacement(t, tc.path, sentinel, "mutated")
+				if tc.write {
+					applyGuardedWrite(t, tc.path, "mutated")
+				} else {
+					applyGuardedReplacement(t, tc.path, sentinel, "mutated")
+				}
 			}
 			if code != 2 || strings.Contains(output, sentinel) || strings.Contains(output, source) || strings.Contains(output, destination) {
 				t.Fatalf("credential edit decision code=%d output=%s", code, output)
@@ -623,6 +655,8 @@ func TestGrokEditGuardAllowsWorkspaceEditAndBlocksCredentialMutation(t *testing.
 		grokToolPayloadWithCWD("search_replace", map[string]any{"file_path": ordinary, "new_string": "after"}, false, workDir),
 		grokToolPayloadWithCWD("search_replace", map[string]any{"file_path": ordinary, "old_string": "after", "new_string": "again"}, true, workDir),
 		grokToolPayloadWithCWD("search_replace", map[string]any{"unknown_path": ordinary, "old_string": "after", "new_string": "again"}, false, workDir),
+		grokToolPayloadWithCWD("write", map[string]any{"file_path": ordinary, "content": "again", "old_string": "after"}, false, workDir),
+		grokToolPayloadWithCWD("write", map[string]any{"file_path": ordinary, "content": 7}, false, workDir),
 	} {
 		if code, output := runGate(ClientGrok, policy, bytes.NewReader(payload)); code != 2 || strings.Contains(output, sentinel) {
 			t.Fatalf("malformed edit decision code=%d output=%s", code, output)
@@ -646,6 +680,14 @@ func applyGuardedReplacement(t *testing.T, path, oldValue, newValue string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, bytes.Replace(data, []byte(oldValue), []byte(newValue), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func applyGuardedWrite(t *testing.T, path, content string) {
+	t.Helper()
+	path, _ = expandChildHomePath(path)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

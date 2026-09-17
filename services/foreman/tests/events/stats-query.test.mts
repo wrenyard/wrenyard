@@ -293,7 +293,7 @@ function seedUsageWithDuration(
   if (tokenScope !== null) data.token_scope = tokenScope
   if (tpsContract !== null) {
     data.tps_sampling_contract = tpsContract
-    if (tpsContract === 'response_v1') {
+    if (tpsContract === 'tokenizer_v1') {
       const sample: Record<string, unknown> = {
         response_id: `${executionId ?? 'unbound'}-response-${seq}`,
         model,
@@ -1207,7 +1207,7 @@ describe('stats-query readStatsSummary', () => {
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
       // Paired generation time is explicit and independent of execution wall time.
       const generationMs = spec.output === 2000 ? 20000 : 10000
-      seedUsageWithDuration(today, 30, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1')
+      seedUsageWithDuration(today, 30, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'tokenizer_v1')
     }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
@@ -1235,7 +1235,7 @@ describe('stats-query readStatsSummary', () => {
         endedAt: spec.endedAt,
       })
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
-      seedUsageWithDuration(today, 30, spec.output, 10000, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1')
+      seedUsageWithDuration(today, 30, spec.output, 10000, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'tokenizer_v1')
     }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
@@ -2045,7 +2045,7 @@ describe('stats-query readStatsSummary', () => {
       })
       seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'm', 'codebuddy/m')
       const generationMs = (1000 * spec.output) / spec.tps
-      seedUsageWithDuration(today, 10, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'response_v1', 'm')
+      seedUsageWithDuration(today, 10, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'tokenizer_v1', 'm')
     }
     // A failed execution with usage must never contribute a sample.
     seedTask('task-failed', 'tps', today, 'done')
@@ -2054,7 +2054,7 @@ describe('stats-query readStatsSummary', () => {
       endedAt: '2026-07-19T03:00:10.000Z',
     })
     seedAttemptDispatch('exec-failed', 'task-failed', 'codebuddy', 'm', 'codebuddy/m')
-    seedUsageWithDuration(today, 10, 999999, 1, 'agent_turn', 'exec-failed', 'task-failed', 'agent_turn', 'response_v1', 'm')
+    seedUsageWithDuration(today, 10, 999999, 1, 'agent_turn', 'exec-failed', 'task-failed', 'agent_turn', 'tokenizer_v1', 'm')
     dbRun(`UPDATE executions SET status = 'failed' WHERE id = 'exec-failed'`)
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)

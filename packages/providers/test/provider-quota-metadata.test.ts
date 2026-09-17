@@ -49,34 +49,17 @@ test('a discovered model falls back to its own provider-default binding', () => 
   assert.equal(findProviderQuotaBinding('not-a-provider', 'anything'), undefined);
 });
 
-test('ChatGPT standard and Spark models bind distinct, non-overlapping pools', () => {
+test('ChatGPT models bind the standard 5h/7d pools', () => {
   const standard = expectBinding('chatgpt', 'gpt-5.6-sol');
   assert.deepEqual(bindingWindowIds(standard), ['5h', '7d']);
   assert.deepEqual(bindingPoolIds(standard), ['chatgpt/5h', 'chatgpt/7d']);
-
-  const spark = expectBinding('chatgpt', 'gpt-5.3-codex-spark');
-  assert.deepEqual(bindingWindowIds(spark), ['spark-5h', 'spark-7d']);
-  assert.deepEqual(bindingPoolIds(spark), ['chatgpt/spark-5h', 'chatgpt/spark-7d']);
-  // Spark never consumes the standard ChatGPT pools.
-  for (const poolId of bindingPoolIds(spark)) {
-    assert.ok(!bindingPoolIds(standard).includes(poolId));
-  }
-  // The standard 5h/7d windows never appear on the Spark binding.
-  assert.ok(!bindingWindowIds(spark).includes('5h'));
-  assert.ok(!bindingWindowIds(spark).includes('7d'));
 });
 
-test('there is exactly one ChatGPT provider and no codex-spark provider remains', () => {
+test('there is exactly one ChatGPT provider', () => {
   const chatgpt = BUILTIN_PROVIDERS.filter((provider) => provider.id === 'chatgpt');
   assert.equal(chatgpt.length, 1);
   assert.equal(chatgpt[0]!.displayName, 'ChatGPT');
   assert.ok(!BUILTIN_PROVIDERS.some((provider) => provider.id === 'codex'));
-  assert.ok(!BUILTIN_PROVIDERS.some((provider) => provider.id === 'codex-spark'));
-  // The Spark model exists exactly once, under chatgpt.
-  const sparkOwners = BUILTIN_PROVIDERS.filter((provider) =>
-    provider.models.some((modelDefinition) => modelDefinition.id === 'gpt-5.3-codex-spark'),
-  );
-  assert.deepEqual(sparkOwners.map((provider) => provider.id), ['chatgpt']);
 });
 
 test('Cursor binds Grok and Composer to the Cursor pool and third-party models to Other', () => {

@@ -47,7 +47,7 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
       )
     }
 
-    // Migrate persisted ChatGPT identity references (legacy codex/codex-spark
+    // Migrate persisted ChatGPT identity references (legacy codex
     // target refs and exclusion ids) to their canonical chatgpt form. The
     // migration only touches known identity fields; unrelated data is left
     // unchanged. When something changed it is persisted exactly once through

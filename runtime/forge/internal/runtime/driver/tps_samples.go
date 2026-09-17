@@ -3,13 +3,20 @@ package driver
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/protocol"
 )
 
-const responseTPSSamplingContract = "response_v1"
+// responseTPSSamplingContract labels every NEW speed sample with the unified
+// approximate contract: a fixed cl100k_base tokenizer over only the generation
+// content that was actually observed streaming, divided by exactly its own
+// first-to-last delta window. Official usage and billing are never replaced by
+// these counts, and samples already persisted under an older contract are
+// never relabeled.
+const responseTPSSamplingContract = tokenizerTPSSamplingContract
 
 type responseTPSSample struct {
 	ResponseID     string
@@ -20,14 +27,10 @@ type responseTPSSample struct {
 }
 
 type responseTPSResponse struct {
-	id             string
-	model          string
-	firstTokenAtMS int64
-	started        bool
-	usageSeen      bool
-	usageValid     bool
-	outputTokens   int64
-	overlapped     bool
+	id         string
+	model      string
+	gen        tokenizerGeneration
+	overlapped bool
 }
 
 // responseTPSSampler consumes only the partial stream protocol. Full-message
@@ -113,8 +116,6 @@ func (s *responseTPSSampler) observe(line []byte) {
 		s.observeMessageStart(record, event)
 	case "content_block_delta":
 		s.observeContentDelta(record, event)
-	case "message_delta":
-		s.observeMessageDelta(record, event)
 	case "message_stop":
 		s.observeMessageStop(record, event)
 	case "error", "message_error", "failed", "cancelled", "canceled", "retry", "retried":
@@ -164,6 +165,24 @@ func (s *responseTPSSampler) responseMatches(record, event map[string]any) bool 
 	return true
 }
 
+// responseTPSBlockKey names one streamed content block: the delta type plus
+// the block index (the tool_use position for streamed tool arguments). The
+// streams of one block concatenate before encoding, so the count never
+// depends on how a provider splits its deltas.
+func responseTPSBlockKey(record, event map[string]any, deltaType string) string {
+	for _, source := range []map[string]any{event, record} {
+		if index, ok := source["index"].(float64); ok {
+			return deltaType + "/" + strconv.FormatInt(int64(index), 10)
+		}
+	}
+	return deltaType
+}
+
+// observeContentDelta accumulates one NON-EMPTY streamed delta of the active
+// response into its content block, stamped with the sampler's monotonic anchor
+// at arrival. Text, visible thinking, and streamed tool arguments are observed
+// generation; tool output, summaries, and records that carry no text never
+// pass through here.
 func (s *responseTPSSampler) observeContentDelta(record, event map[string]any) {
 	if !s.responseMatches(record, event) || s.active.overlapped {
 		return
@@ -185,35 +204,15 @@ func (s *responseTPSSampler) observeContentDelta(record, event map[string]any) {
 	if value == "" {
 		return
 	}
-	if !s.active.started {
-		s.active.started = true
-		s.active.firstTokenAtMS = s.timestamp(s.now())
-	}
+	s.active.gen.observe(responseTPSBlockKey(record, event, deltaType), value, s.timestamp(s.now()))
 }
 
-func (s *responseTPSSampler) observeMessageDelta(record, event map[string]any) {
-	if !s.responseMatches(record, event) || s.active.overlapped {
-		return
-	}
-	usage, _ := event["usage"].(map[string]any)
-	if usage == nil {
-		usage, _ = record["usage"].(map[string]any)
-	}
-	if usage == nil {
-		return
-	}
-	raw, present := usage["output_tokens"]
-	if !present {
-		return
-	}
-	s.active.usageSeen = true
-	tokens, ok := safeResponseOutputTokens(raw)
-	s.active.usageValid = ok
-	if ok {
-		s.active.outputTokens = tokens
-	}
-}
-
+// observeMessageStop closes the active response's observed generation into one
+// tokenizer_v1 sample. The window runs from the response's first to its last
+// non-empty delta and the token count comes from the fixed tokenizer, so
+// neither the completion's own latency nor any usage figure is part of the
+// measurement. A window that never spanned the minimum observable interval (a
+// buffered or collapsed stream) is skipped without poisoning the sampler.
 func (s *responseTPSSampler) observeMessageStop(record, event map[string]any) {
 	if !s.responseMatches(record, event) {
 		return
@@ -221,16 +220,16 @@ func (s *responseTPSSampler) observeMessageStop(record, event map[string]any) {
 	active := s.active
 	s.active = nil
 	s.seen[active.id] = true
-	if active.overlapped || !active.started || !active.usageSeen || !active.usageValid {
+	if active.overlapped {
 		return
 	}
-	completedAtMS := s.timestamp(s.now())
-	if completedAtMS <= active.firstTokenAtMS {
+	tokens, first, last, ok := active.gen.measure()
+	if !ok {
 		return
 	}
 	s.samples = append(s.samples, responseTPSSample{
-		ResponseID: active.id, Model: active.model, OutputTokens: active.outputTokens,
-		FirstTokenAtMS: active.firstTokenAtMS, CompletedAtMS: completedAtMS,
+		ResponseID: active.id, Model: active.model, OutputTokens: tokens,
+		FirstTokenAtMS: first, CompletedAtMS: last,
 	})
 }
 

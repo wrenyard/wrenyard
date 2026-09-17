@@ -418,7 +418,7 @@ function insertCompletedExecution(db: ForemanDatabase, execution: {
       token_scope: 'agent_turn',
       duration_scope: 'agent_turn',
       tps_contract: 'agent_turn_v1',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{ response_id: execution.id + ':r1', model: 'sonnet', output_tokens: execution.outputTokens, first_token_at_ms: execution.startedMs, completed_at_ms: execution.endedMs }],
       input_tokens: 10,
       output_tokens: execution.outputTokens,

@@ -828,10 +828,10 @@ describe('HouseStatsCard — hover tip background alpha', () => {
         },
         {
           text: fittingError,
-          errorRow: { label: 'codex-spark', message: 'Sign-in is in progress. Approve the request if prompted.' },
+          errorRow: { label: 'kimi-coding', message: 'Sign-in is in progress. Approve the request if prompted.' },
           bars: [{
             provider: { remainingPct: null, expectedRemainingPct: null, windows: [] },
-            label: 'codex-spark',
+            label: 'kimi-coding',
             error: 'Sign-in is in progress. Approve the request if prompted.',
             status: 'pending',
             stale: false,
@@ -889,18 +889,18 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     // OpenAI message node contains no hard separators (normalized by fitLineToWidth)
     expect(openaiMsgNodeText).not.toMatch(/[\r\n\u2028\u2029]/);
 
-    // codex-spark pending row uses explicit errorRow label and message.
+    // kimi-coding pending row uses explicit errorRow label and message.
     // Both the diagnostics line and the rendered provider label fit the provider
     // id into the PROVIDER_LABEL_WIDTH column, sharing the same fixed-width
-    // fit contract, so both render the fitted label 'codex-…'.
-    const fittedPendingLabel = 'codex-\u2026 ';
+    // fit contract, so both render the fitted label 'kimi-c…'.
+    const fittedPendingLabel = 'kimi-c\u2026 ';
     const pendingLine = result!.lines.find((line) => line.startsWith(fittedPendingLabel));
     expect(pendingLine).toBeDefined();
     expect(pendingLine).not.toContain(':');
     // Rendered provider node shares the same fixed-width fit contract as the
-    // diagnostics line, so it renders the fitted 'codex-…' label as well.
+    // diagnostics line, so it renders the fitted 'kimi-c…' label as well.
     const pendingProviderText = (node.providerNodes[2].setText as any).mock.calls.slice(-1)[0][0];
-    expect(pendingProviderText).toBe('codex-\u2026');
+    expect(pendingProviderText).toBe('kimi-c\u2026');
     // Rendered message node equals the fitted diagnostics suffix
     const pendingMsgNodeText = (node.windowNodes[2].setText as any).mock.calls.slice(-1)[0][0];
     const pendingLineAfterLabel = pendingLine!.slice(fittedPendingLabel.length);

@@ -80,7 +80,7 @@ function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
   const data: Record<string, unknown> = {
     token_scope: o.tokenScope === undefined ? 'agent_turn' : o.tokenScope,
     duration_scope: o.durationScope === undefined ? 'agent_turn' : o.durationScope,
-    tps_sampling_contract: o.tpsContract === undefined ? 'response_v1' : o.tpsContract,
+    tps_sampling_contract: o.tpsContract === undefined ? 'tokenizer_v1' : o.tpsContract,
     input_tokens: 10,
     output_tokens: o.output,
   }
@@ -101,13 +101,13 @@ function seedUsage(executionId: string, taskId: string, o: UsageOptions): void {
 
 function seedResponseUsage(executionId: string, taskId: string, samples: unknown[], seq = 0): void {
   seedEnvelopeEvent(executionId, taskId, seq, 'turn_usage', {
-    tps_sampling_contract: 'response_v1',
+    tps_sampling_contract: 'tokenizer_v1',
     tps_samples: samples,
   })
 }
 
 /**
- * Seeds one Cursor-style aggregate response_v1 sample: the exact terminal
+ * Seeds one Cursor-style aggregate tokenizer_v1 sample: the exact terminal
  * output_tokens paired with the ordered vector of serial model-generation
  * windows observed on the stream.
  */
@@ -246,16 +246,16 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('maps legacy codex/codex-spark provider ids to chatgpt without merging models', () => {
+  it('maps the legacy codex provider id to chatgpt without merging models', () => {
     initTestDb()
     seedSample({ taskId: 't-codex', executionId: 'e-codex', provider: 'codex', model: 'gpt-5', startedMs: BASE, endedMs: BASE + 10000, outputs: [500] })
-    seedSample({ taskId: 't-spark', executionId: 'e-spark', provider: 'codex-spark', model: 'gpt-5', startedMs: BASE, endedMs: BASE + 10000, outputs: [500] })
+    seedSample({ taskId: 't-codex-mini', executionId: 'e-codex-mini', provider: 'codex', model: 'gpt-5-mini', startedMs: BASE, endedMs: BASE + 10000, outputs: [500] })
 
     const samples = readExecutionTpsSamples()
     assert.equal(samples.length, 2)
     for (const sample of samples) assert.equal(sample.provider, 'chatgpt')
-    // Distinct model versions are never merged.
-    assert.deepEqual(samples.map((s) => s.model).sort(), ['gpt-5', 'gpt-5'])
+    // Distinct model versions are never merged by the rename.
+    assert.deepEqual(samples.map((s) => s.model).sort(), ['gpt-5', 'gpt-5-mini'])
     closeTestDb()
   })
 
@@ -293,6 +293,28 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedUsage('exec-scope', 'task-scope', { output: 500, tokenScope: 'model_output', seq: 1 })
     // Non-additive provenance invalidates the execution rather than under-counting.
     assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
+  it('never relabels historical response_v1 samples as speed', () => {
+    initTestDb()
+    seedTask('task-legacy-contract')
+    seedExecution({ executionId: 'exec-legacy-contract', taskId: 'task-legacy-contract', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-legacy-contract', 'task-legacy-contract', 'anthropic', 'sonnet')
+    seedUsage('exec-legacy-contract', 'task-legacy-contract', { output: 500, tpsContract: 'response_v1', durationMs: 10_000, seq: 0 })
+    seedEnvelopeEvent('exec-legacy-contract', 'task-legacy-contract', 1, 'turn_usage', {
+      token_scope: 'agent_turn',
+      tps_sampling_contract: 'response_v1',
+      tps_samples: [{ response_id: 'old-sample', model: 'sonnet', output_tokens: 999, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001 }],
+    })
+    // The same execution observed under the new contract still publishes.
+    seedTask('task-new-contract')
+    seedExecution({ executionId: 'exec-new-contract', taskId: 'task-new-contract', startedMs: BASE, endedMs: BASE + 90000 })
+    seedDispatch('exec-new-contract', 'task-new-contract', 'anthropic', 'sonnet')
+    seedUsage('exec-new-contract', 'task-new-contract', { output: 500, durationMs: 10_000, seq: 0 })
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].executionId, 'exec-new-contract')
     closeTestDb()
   })
 
@@ -385,7 +407,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedGatewayEvent('exec-gw', 'task-gw', {
       protocol: 'openai_chat', publicModel: 'anthropic/sonnet', provider: 'anthropic',
       status: 200, durationMs: 5000, executionId: 'exec-gw',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-1', model: 'sonnet', output_tokens: 1000,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -408,7 +430,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedGatewayEvent('exec-gwprefix', 'task-gwprefix', {
       status: 200, executionId: 'exec-gwprefix',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-prefix', model: 'anthropic/sonnet', output_tokens: 500,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -420,42 +442,57 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('excludes an execution whose successful gateway request lacks a sample', () => {
+  it('falls back to client samples when a successful gateway response is unobservable', () => {
     initTestDb()
     seedTask('task-gwsample-less')
     seedExecution({ executionId: 'exec-gwnosample', taskId: 'task-gwsample-less', startedMs: BASE, endedMs: BASE + 90000 })
     seedDispatch('exec-gwnosample', 'task-gwsample-less', 'anthropic', 'sonnet')
+    // A 200 response carrying no measurable sample is legal: the buffered
+    // window is skipped instead of poisoning the execution.
     seedGatewayEvent('exec-gwnosample', 'task-gwsample-less', {
       status: 200, executionId: 'exec-gwnosample',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [],
     })
-    assert.equal(readExecutionTpsSamples().length, 0)
+    // The client-observed stream still yields the execution's speed sample.
+    seedResponseUsage('exec-gwnosample', 'task-gwsample-less', [{
+      response_id: 'client-observed', model: 'sonnet', output_tokens: 1000,
+      first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
+    }])
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 1000)
+    assert.equal(samples[0].durationMs, 10000)
     closeTestDb()
   })
 
-  it('excludes an execution even when another valid request sampled it but one request failed', () => {
+  it('uses the valid gateway sample when another attributed request failed', () => {
     initTestDb()
     seedTask('task-gwalsofail')
     seedExecution({ executionId: 'exec-gwalsofail', taskId: 'task-gwalsofail', startedMs: BASE, endedMs: BASE + 90000 })
     seedDispatch('exec-gwalsofail', 'task-gwalsofail', 'anthropic', 'sonnet')
-    // A valid sample exists...
+    // A valid measurable sample exists...
     seedGatewayEvent('exec-gwalsofail', 'task-gwalsofail', {
       status: 200, executionId: 'exec-gwalsofail',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-ok', model: 'sonnet', output_tokens: 1000,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
       }],
     }, 0)
-    // ...but a second attributed request failed, so the whole execution is unknown.
+    // ...and a second attributed request failed: it contributes no tokens or
+    // time but no longer hides the measurable sample.
     seedGatewayEvent('exec-gwalsofail', 'task-gwalsofail', {
       status: 502, executionId: 'exec-gwalsofail',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
     }, 1)
-    assert.equal(readExecutionTpsSamples().length, 0)
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].executionId, 'exec-gwalsofail')
+    assert.equal(samples[0].outputTokens, 1000)
+    assert.equal(samples[0].durationMs, 10000)
     closeTestDb()
   })
 
@@ -471,7 +508,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
       seedGatewayEvent(id, `${id}-task`, {
         status: 200, executionId: id,
         provider: payload.provider, publicModel: payload.publicModel,
-        tps_sampling_contract: 'response_v1',
+        tps_sampling_contract: 'tokenizer_v1',
         tps_samples: [{
           response_id: 'gw-mismatch', model: 'sonnet', output_tokens: 1000,
           first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -494,7 +531,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedGatewayEvent('exec-gwstale', 'task-gwstale', {
       status: 200, executionId: 'exec-gwstale',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-stale-ok', model: 'sonnet', output_tokens: 1000,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -507,13 +544,13 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('omits an execution whose attributed gateway inference failed or has no valid sample', () => {
+  it('uses measurable client samples when the attributed gateway inference failed or is unobservable', () => {
     initTestDb()
     seedTask('task-gwfail')
     seedExecution({ executionId: 'exec-gwfail', taskId: 'task-gwfail', startedMs: BASE, endedMs: BASE + 90000 })
     seedDispatch('exec-gwfail', 'task-gwfail', 'anthropic', 'sonnet')
-    // A valid client sample alone cannot rescue an execution with a failed
-    // attributed inference.
+    // A failed gateway inference carries no tokens or time; the client-observed
+    // stream still publishes the execution's sample.
     seedResponseUsage('exec-gwfail', 'task-gwfail', [{
       response_id: 'client', model: 'sonnet', output_tokens: 9999,
       first_token_at_ms: BASE + 1, completed_at_ms: BASE + 90001,
@@ -521,15 +558,20 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedGatewayEvent('exec-gwfail', 'task-gwfail', {
       protocol: 'anthropic_messages', status: 502, durationMs: 5000, executionId: 'exec-gwfail',
     })
-    assert.equal(readExecutionTpsSamples().length, 0)
+    const rescued = readExecutionTpsSamples()
+    assert.equal(rescued.length, 1)
+    assert.equal(rescued[0].executionId, 'exec-gwfail')
+    assert.equal(rescued[0].outputTokens, 9999)
 
     seedTask('task-gwnone')
     seedExecution({ executionId: 'exec-gwnone', taskId: 'task-gwnone', startedMs: BASE, endedMs: BASE + 90000 })
     seedDispatch('exec-gwnone', 'task-gwnone', 'anthropic', 'sonnet')
+    // A successful response without the tokenizer_v1 contract is unobservable:
+    // no sample is invented and nothing is poisoned.
     seedGatewayEvent('exec-gwnone', 'task-gwnone', {
       protocol: 'openai_chat', status: 200, durationMs: 5000, executionId: 'exec-gwnone',
     })
-    assert.equal(readExecutionTpsSamples().length, 0)
+    assert.equal(readExecutionTpsSamples().filter((sample) => sample.executionId === 'exec-gwnone').length, 0)
     closeTestDb()
   })
 
@@ -541,7 +583,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedGatewayEvent('exec-gwmodel', 'task-gwmodel', {
       status: 200, durationMs: 5000, executionId: 'exec-gwmodel',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-wrong', model: 'opus', output_tokens: 1000,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -555,7 +597,7 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     seedDispatch('exec-gwunknown', 'task-gwunknown', 'anthropic', 'sonnet')
     seedGatewayEvent('exec-gwunknown', 'task-gwunknown', {
       status: 200, durationMs: 5000, executionId: 'exec-other-unknown',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-x', model: 'sonnet', output_tokens: 1000,
         first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001,
@@ -706,7 +748,7 @@ describe('readTaskTps', () => {
     closeTestDb()
   })
 
-  it('returns undefined when any attempt is not done or lacks a complete sample', () => {
+  it('aggregates measurable done attempts instead of hiding them behind an unmeasurable one', () => {
     initTestDb()
     seedTask('task-partial')
     seedExecution({ executionId: 'e1', taskId: 'task-partial', startedMs: BASE, endedMs: BASE + 10000 })
@@ -716,16 +758,33 @@ describe('readTaskTps', () => {
     seedUsage('e1', 'task-partial', { output: 1000 })
     seedUsage('e2', 'task-partial', { output: 1000 })
 
-    assert.equal(readTaskTps('task-partial'), undefined)
+    // The failed attempt never contributes tokens or time, but it no longer
+    // hides the measurable done attempt.
+    const partial = readTaskTps('task-partial')
+    assert.ok(partial)
+    assert.equal(partial.outputTokens, 1000)
+    assert.equal(partial.durationMs, 10000)
+    assert.equal(partial.tps, 100)
 
-    // An attempt with no usage events also makes task TPS unknown.
+    // A done attempt without observable timing contributes nothing while the
+    // measurable attempt still publishes the aggregate.
     seedTask('task-missing-events')
     seedExecution({ executionId: 'e-only', taskId: 'task-missing-events', startedMs: BASE, endedMs: BASE + 10000 })
     seedExecution({ executionId: 'e-empty', taskId: 'task-missing-events', startedMs: BASE, endedMs: BASE + 10000 })
     seedDispatch('e-only', 'task-missing-events', 'anthropic', 'sonnet')
     seedDispatch('e-empty', 'task-missing-events', 'anthropic', 'sonnet')
     seedUsage('e-only', 'task-missing-events', { output: 1000 })
-    assert.equal(readTaskTps('task-missing-events'), undefined)
+    const missing = readTaskTps('task-missing-events')
+    assert.ok(missing)
+    assert.equal(missing.outputTokens, 1000)
+    assert.equal(missing.durationMs, 10000)
+
+    // With no measurable attempt at all there is still no task rate.
+    seedTask('task-all-unobservable')
+    seedExecution({ executionId: 'e-none', taskId: 'task-all-unobservable', startedMs: BASE, endedMs: BASE + 10000 })
+    seedDispatch('e-none', 'task-all-unobservable', 'anthropic', 'sonnet')
+    seedUsage('e-none', 'task-all-unobservable', { output: 1000, durationMs: null })
+    assert.equal(readTaskTps('task-all-unobservable'), undefined)
     closeTestDb()
   })
 
@@ -737,7 +796,7 @@ describe('readTaskTps', () => {
   })
 })
 
-describe('response_v1 aggregate generation windows', () => {
+describe('tokenizer_v1 aggregate generation windows', () => {
   it('attributes the Cursor grok wire alias and excludes the multi-second tool gaps', () => {
     initTestDb()
     seedTask('task-cursor')
@@ -885,6 +944,41 @@ describe('response_v1 aggregate generation windows', () => {
     closeTestDb()
   })
 
+  it('skips sub-100ms buffered windows without poisoning other complete valid windows', () => {
+    initTestDb()
+    seedTask('task-short-window')
+    seedExecution({ executionId: 'exec-short-window', taskId: 'task-short-window', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-short-window', 'task-short-window', 'anthropic', 'sonnet')
+    // A fully buffered 50ms window carries no trustworthy timing signal...
+    seedResponseUsage('exec-short-window', 'task-short-window', [
+      { response_id: 'buffered', model: 'sonnet', output_tokens: 400, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 51 },
+      // ...while the observable sibling sample still publishes exactly its own tokens.
+      { response_id: 'observable', model: 'sonnet', output_tokens: 600, first_token_at_ms: BASE + 2001, completed_at_ms: BASE + 8001 },
+    ])
+    const samples = readExecutionTpsSamples()
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0].outputTokens, 600)
+    assert.equal(samples[0].durationMs, 6000)
+    assert.equal(samples[0].tps, 100)
+    closeTestDb()
+  })
+
+  it('rejects an aggregate vector containing a sub-100ms window without retaining its tokens', () => {
+    initTestDb()
+    seedTask('task-short-vector')
+    seedExecution({ executionId: 'exec-short-vector', taskId: 'task-short-vector', startedMs: BASE, endedMs: BASE + 900_000 })
+    seedDispatch('exec-short-vector', 'task-short-vector', 'cursor', 'grok-4.6', 'cursor')
+    seedResponseUsage('exec-short-vector', 'task-short-vector', [{
+      response_id: 'short-vector', model: 'cursor-grok-4.6-high', output_tokens: 1200,
+      generation_windows: [
+        { first_token_at_ms: BASE + 1, completed_at_ms: BASE + 3001 },
+        { first_token_at_ms: BASE + 5001, completed_at_ms: BASE + 5051 },
+      ],
+    }])
+    assert.equal(readExecutionTpsSamples().length, 0)
+    closeTestDb()
+  })
+
   it('rejects conflicting duplicate vectors even when their total duration is equal', () => {
     initTestDb()
     seedTask('task-conflict-vector')
@@ -930,7 +1024,7 @@ describe('response_v1 aggregate generation windows', () => {
     seedGatewayEvent('exec-gwvector', 'task-gwvector', {
       protocol: 'openai_chat', status: 200, executionId: 'exec-gwvector',
       provider: 'anthropic', publicModel: 'anthropic/sonnet',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: 'gw-vector', model: 'sonnet', output_tokens: 900,
         generation_windows: [
