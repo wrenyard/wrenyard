@@ -69,7 +69,7 @@ export interface ShellWindowOptions {
   openTaskTranscript(taskRunId: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
-  selectConversationModel(provider: string, model: string): Promise<ConversationSnapshot>;
+  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
   cancelConversation(): Promise<ConversationSnapshot>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
@@ -488,11 +488,14 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.createConversation();
     });
-    ipcMain.handle(SHELL_CHANNELS.conversationSelectModel, async (event, provider: unknown, model: unknown) => {
+    ipcMain.handle(SHELL_CHANNELS.conversationSelectModel, async (event, provider: unknown, model: unknown, reasoningEffort: unknown) => {
       assertShellSender(event.sender);
       if (typeof provider !== 'string' || !provider || provider.length > 256) throw new Error('模型 provider 无效');
       if (typeof model !== 'string' || !model || model.length > 512) throw new Error('模型 id 无效');
-      return options.selectConversationModel(provider, model);
+      if (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || !reasoningEffort || reasoningEffort.length > 128)) {
+        throw new Error('思考强度无效');
+      }
+      return options.selectConversationModel(provider, model, reasoningEffort as string | undefined);
     });
     ipcMain.handle(SHELL_CHANNELS.conversationSend, async (event, text: unknown, clientTimeZone: unknown) => {
       assertShellSender(event.sender);

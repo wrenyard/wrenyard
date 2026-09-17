@@ -44,6 +44,9 @@ import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, for
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 import { renderInstructionTemplatePreview } from './prompt-template-preview.js';
 import { builtinModelDisplayName } from '@wrenyard/providers/model-display-names';
+import { createAgentTaskStatusIcon } from './agent-task-icon.js';
+import { brandIcon } from './brand-icons.js';
+import { providerBrand, classifyFamily, familyBrand } from './model-list.js';
 
 declare global {
   interface Window {
@@ -154,6 +157,7 @@ const routingTestExcludeProviders = requireElement<HTMLElement>('routing-test-ex
 /** Mutable form state backing the routing test controls. */
 let routingForm: RoutingTestFormState = defaultRoutingTestForm();
 let routingTest!: RoutingTestController;
+let routingDefaultInitialized = false;
 
 const routingExcludeModels = new SearchableMultiSelect(routingTestExcludeModels, {
   label: '排除模型',
@@ -1422,36 +1426,9 @@ function sourceLabel(source: StatsWindowSnapshot['byTask'][number]['source']): s
   return '未知';
 }
 
-function taskRunStatusLabel(status: TaskRunSnapshot['status'] | undefined): string {
-  if (status === 'done') return '完成';
-  if (status === 'failed') return '失败';
-  if (status === 'cancelled') return '取消';
-  if (status === 'interrupted') return '中断';
-  if (status === 'running') return '运行中';
-  if (status === 'queued') return '排队中';
-  return '未知';
-}
-
-function taskRunStatusGlyph(status: TaskRunSnapshot['status'] | undefined): string {
-  if (status === 'done') return '✓';
-  if (status === 'failed') return '✕';
-  if (status === 'cancelled') return '—';
-  if (status === 'interrupted') return '■';
-  if (status === 'running') return '●';
-  if (status === 'queued') return '○';
-  return '?';
-}
-
 /** One compact status icon; visual first column with tooltip and accessible name. */
 function taskRunStatusCell(run: TaskRunSnapshot): HTMLElement {
-  const cell = document.createElement('span');
-  cell.className = `task-run-status is-${run.status ?? 'unknown'}`;
-  cell.setAttribute('role', 'img');
-  const label = taskRunStatusLabel(run.status);
-  cell.setAttribute('aria-label', label);
-  cell.title = label;
-  cell.textContent = taskRunStatusGlyph(run.status);
-  return cell;
+  return createAgentTaskStatusIcon(run.status);
 }
 
 /** Stable identity from the authoritative TaskSettings rows, or null when unknowable. */
@@ -1478,6 +1455,16 @@ function taskRunCell(value: string): HTMLElement {
   return cell;
 }
 
+function formatRunDurationSeconds(durationMs: number): string {
+  if (durationMs < 1_000) return `${Math.round(durationMs)}ms`;
+  const seconds = Math.floor(durationMs / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainder}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+}
+
 /** Model cell: paired Catalog display-name labels only. A run missing either
  *  label (or an alias-only history row) renders the dash placeholder; raw
  *  resolved model id/model/profile/provider/client values are never shown. */
@@ -1492,7 +1479,13 @@ function taskRunModelLabel(run: TaskRunSnapshot): string | null {
 }
 
 function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
-  return taskRunCell(taskRunModelLabel(run) ?? '-');
+  const cell = taskRunCell(taskRunModelLabel(run) ?? '-');
+  const provider = run.resolvedProviderDisplayName;
+  if (provider) {
+    const icon = brandIcon(familyBrand(classifyFamily(run.resolvedModelDisplayName ?? ''))) ?? brandIcon(providerBrand(provider));
+    if (icon) cell.prepend(icon);
+  }
+  return cell;
 }
 
 /** Completion-time cell: only the canonical finishedAt of a terminal run is
@@ -1525,7 +1518,7 @@ function taskRunDurationCell(run: TaskRunSnapshot): HTMLElement {
   if (started === null || finished === null) return taskRunCell('-');
   const durationMs = finished - started;
   if (!Number.isFinite(durationMs) || durationMs < 0) return taskRunCell('-');
-  return taskRunCell(formatTaskDuration(durationMs));
+  return taskRunCell(formatRunDurationSeconds(durationMs));
 }
 
 function renderTaskRuns(snapshot: StatsSnapshot): void {
@@ -1571,11 +1564,12 @@ function emptyRow(label: string): HTMLElement {
   return row;
 }
 
-/** Currently selected Model Supply view tab; the supply configuration stays the default. */
+/** Currently selected Model Supply view tab; the model list stays the default. */
 function currentQuotaTab(): 'supply' | 'routing' | 'models' {
   if (!quotaPanelRouting.hidden) return 'routing';
+  if (!quotaPanelSupply.hidden) return 'supply';
   if (!quotaPanelModels.hidden) return 'models';
-  return 'supply';
+  return 'models';
 }
 
 /**
@@ -1584,6 +1578,10 @@ function currentQuotaTab(): 'supply' | 'routing' | 'models' {
  * test, so an existing result can never appear to have been re-run.
  */
 function selectQuotaTab(tab: 'supply' | 'routing' | 'models', focus = false): void {
+  if (tab === 'routing' && !routingDefaultInitialized) {
+    routingDefaultInitialized = true;
+    void routingTest.initializeExploreDefault();
+  }
   quotaPanelSupply.hidden = tab !== 'supply';
   quotaPanelRouting.hidden = tab !== 'routing';
   quotaPanelModels.hidden = tab !== 'models';
@@ -1612,9 +1610,9 @@ function renderPage(page: ShellPage): void {
   }
   currentPage = page;
   document.documentElement.dataset.page = page;
-  // Leaving Model Supply returns it to its default supply tab; a stale routing
+  // Leaving Model Supply returns it to its default model tab; a stale routing
   // result is never presented as freshly re-run after re-entry.
-  if (page !== 'quota') selectQuotaTab('supply');
+  if (page !== 'quota') selectQuotaTab('models');
   const pages: Array<[ShellPage, HTMLButtonElement, HTMLElement]> = [
     ['workbench', workbenchNav, workbenchPage],
     ['stats', statsNav, statsPage],

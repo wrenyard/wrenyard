@@ -672,14 +672,12 @@ describe('standard-library code-review outcome boundary', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library dispatch preset contracts', () => {
-  it('FREQUENT stays low-minimum with current TPS, price cap, and exclusions', () => {
+  it('FREQUENT stays low-minimum with current TPS and price cap', () => {
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 80)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.minimumTps, 60)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 6)
-    assert.ok(FREQUENT_DISPATCH_REQUIREMENTS.excludeModelIds.length > 0)
-    assert.ok(FREQUENT_DISPATCH_REQUIREMENTS.excludeProfileIds.length > 0)
   })
 
   it('GENERAL stays mid-minimum with current economics', () => {

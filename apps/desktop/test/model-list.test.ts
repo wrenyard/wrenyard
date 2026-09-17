@@ -150,15 +150,15 @@ test('provider ids map onto the supplying brand keys', () => {
   assert.equal(providerBrand('volcengine'), 'volcengine');
 });
 
-test('active families sort first in the confirmed frontier order, then by intelligence', () => {
+test('active families sort first, then by series and descending version', () => {
   const rows = buildModelListRows(snapshot([
     catalogEntry('inactive', 'Inactive', [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', available: false }]),
     catalogEntry('spacex-ai', 'SpaceX AI', [
       { id: 'grok-4.5', displayName: 'Grok 4.5', intelligence: 'premium', available: true },
     ]),
     catalogEntry('openai', 'OpenAI', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'premium', available: true },
-      { id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna', intelligence: 'mid', available: true },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'mid', available: true },
+      { id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna', intelligence: 'premium', available: true },
     ]),
     catalogEntry('anthropic', 'Anthropic', [
       { id: 'claude-opus-5', displayName: 'Claude Opus 5', intelligence: 'high', available: true },
@@ -168,15 +168,33 @@ test('active families sort first in the confirmed frontier order, then by intell
   // Active before inactive; GPT → Claude → Grok is the confirmed frontier order.
   assert.deepEqual(
     rows.map((row) => row.key),
-    ['gpt-5.6-sol', 'gpt-5.6-luna', 'claude-opus-5', 'grok-4.5'],
-  );
-  // Within GPT, premium outranks mid.
-  assert.deepEqual(
-    rows.filter((row) => row.family === 'GPT').map((row) => row.intelligence),
-    ['premium', 'mid'],
+    ['gpt-5.6-luna', 'gpt-5.6-sol', 'claude-opus-5', 'grok-4.5'],
   );
   assert.equal(rows.every((row) => row.active), true, 'the unavailable GPT row is active via openai');
   assert.equal(rows.some((row) => row.key === 'gpt-5.6-sol'), true, 'inactive models stay listed');
+});
+
+test('keeps Claude series contiguous and sorts versions before variants', () => {
+  const rows = buildModelListRows(snapshot([
+    catalogEntry('anthropic', 'Anthropic', [
+      { id: 'claude-opus-5', displayName: 'Claude Opus 5', available: true },
+      { id: 'claude-fable-5', displayName: 'Claude Fable 5', available: true },
+      { id: 'claude-fable-5.1', displayName: 'Claude Fable 5.1', available: true },
+    ]),
+    catalogEntry('google', 'Google', [
+      { id: 'gemini-3', displayName: 'Gemini 3', available: true },
+    ]),
+    catalogEntry('spacex-ai', 'SpaceX AI', [
+      { id: 'grok-4', displayName: 'Grok 4', available: true },
+    ]),
+  ]));
+  assert.deepEqual(rows.map((row) => row.key), [
+    'claude-fable-5.1',
+    'claude-fable-5',
+    'claude-opus-5',
+    'gemini-3',
+    'grok-4',
+  ]);
 });
 
 test('TPS averages providers equally even when measurements match and prefers measured sources over catalog defaults', () => {
@@ -238,7 +256,7 @@ test('rendering exposes the uniform columns, units, and muted unavailable names'
   ]));
 
   const text = collectText(host);
-  for (const header of ['模型', '缓存（USD/1M）', '输入（USD/1M）', '输出（USD/1M）', 'TPS', '供应商']) {
+  for (const header of ['模型', '缓存（$/Mtok）', '输入（$/Mtok）', '输出（$/Mtok）', '速度', '供应商']) {
     assert.ok(text.includes(header), `missing column heading: ${header}`);
   }
   assert.ok(text.includes('GPT-5.6 Sol'));

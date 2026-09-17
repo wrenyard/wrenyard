@@ -259,8 +259,8 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   },
   {
-    id: 'moonshot', displayName: 'Moonshot API', credentialResolver: 'forge-managed', defaultModel: 'kimi-k2.6',
-    models: [model('kimi-k2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('kimi-k2.5', 262_144, 32_768)],
+    id: 'moonshot', displayName: 'Moonshot API', credentialResolver: 'forge-managed', defaultModel: 'kimi-k3',
+    models: [model('kimi-k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'])],
     protocols: [openAI('https://api.moonshot.cn/v1/chat/completions')],
   },
   {
@@ -293,7 +293,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'tokenhub', displayName: 'Tencent Cloud TokenHub', credentialResolver: 'forge-managed', defaultModel: 'deepseek/deepseek-flash',
-    models: [model('hy4-preview', 262_144, 32_768, CANONICAL_MODELS['hunyuan-hy4-preview']), model('deepseek/deepseek-flash', 1_000_000, 384_000), model('glm-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']), model('kimi-k2.6', 262_144, 32_768, CANONICAL_MODELS['kimi-k2.6']), model('minimax-m2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('qwen3.5-plus', 1_048_576, 32_768, CANONICAL_MODELS['qwen3.5-plus'])],
+    models: [model('hy4-preview', 262_144, 32_768, CANONICAL_MODELS['hunyuan-hy4-preview']), model('deepseek/deepseek-flash', 1_000_000, 384_000), model('glm-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']), model('glm-5.3-flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']), model('minimax-m2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('qwen3.5-plus', 1_048_576, 32_768, CANONICAL_MODELS['qwen3.5-plus'])],
     protocols: [openAI('https://tokenhub.tencentmaas.com/v1/chat/completions'), anthropic('https://tokenhub.tencentmaas.com/v1/messages', 'x-api-key')],
   },
   {
@@ -302,8 +302,8 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://ark.cn-beijing.volces.com/api/v3/chat/completions')],
   },
   {
-    id: 'zhipu', displayName: 'Zhipu Open Platform', credentialResolver: 'forge-managed', defaultModel: 'glm-5.2',
-    models: [model('glm-5.2', 1_048_576, 131_072), model('glm-5-turbo', 202_752, 32_768), model('glm-4.7-flash', 202_752, 32_768)],
+    id: 'zhipu', displayName: 'Zhipu Open Platform', credentialResolver: 'forge-managed', defaultModel: 'glm-5-turbo',
+    models: [model('glm-5-turbo', 202_752, 32_768), model('glm-4.7-flash', 202_752, 32_768)],
     protocols: [openAI('https://open.bigmodel.cn/api/paas/v4/chat/completions')],
   },
   {
@@ -535,6 +535,9 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'gpt-5.3-codex-spark': {
     intelligence: 'mid',
     capabilities: ['text'],
+    // Internal user-defined fixed reference prices mirror DeepSeek V4.1 Flash off-peak;
+    // these are not official OpenAI API prices, and Spark has no peak/off-peak switching.
+    pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.003, outputUsdPerMillion: 0.6, source: 'wrenyard:reference-deepseek-v4.1-flash-off-peak', checkedAt: '2026-09-17' },
   },
   'gpt-5.6-sol': {
     intelligence: 'high',
@@ -649,6 +652,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'claude-haiku-4-5-20251001': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 0.1, outputUsdPerMillion: 5, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
   'glm-4.7-flash': {
     intelligence: 'low',
@@ -665,14 +669,17 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'gpt-5.4': {
     intelligence: 'mid',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 0.25, outputUsdPerMillion: 15, source: 'https://developers.openai.com/api/docs/pricing', checkedAt: '2026-09-17' },
   },
   'gpt-5.4-mini': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 4.5, source: 'https://developers.openai.com/api/docs/pricing', checkedAt: '2026-09-17' },
   },
   'gpt-5.5': {
     intelligence: 'high',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 30, source: 'https://developers.openai.com/api/docs/pricing', checkedAt: '2026-09-17' },
   },
   'kimi-k2.5': {
     intelligence: 'low',
@@ -693,14 +700,17 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'claude-fable-5': {
     intelligence: 'premium',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
   'claude-opus-5': {
     intelligence: 'premium',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 25, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
   'claude-sonnet-5': {
     intelligence: 'high',
     capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 10, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
   'doubao-seed-2-0-lite-260215': {
     intelligence: 'low',
