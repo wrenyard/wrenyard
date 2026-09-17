@@ -1,5 +1,6 @@
 import { app, dialog, Menu, screen, session, type MessageBoxOptions } from 'electron';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
@@ -16,6 +17,7 @@ import {
 import { sameGatewayIdentity } from './service-recovery.js';
 import { defaultMcpUrl, WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
+import { SummaryModelPreferenceStore, createConversationSummaryService } from './conversation-summary.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
@@ -24,9 +26,9 @@ import { DesktopQuotaController } from './quota-controller.js';
 import { ProviderService } from './provider-service.js';
 import { readConversationActivity } from './conversation-activity.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
-import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
+import { buildSettingsSnapshot, buildSummarySettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { activeTaskCountFromDaemonStatus, DesktopUpdateController } from './update-controller.js';
 import { resolveInstallation } from './installation-discovery.js';
@@ -371,6 +373,7 @@ async function createConversationSession(
   workspace: ConfiguredWorkspace,
   ipcPath: string,
   onUnexpectedExit: (message: string) => void,
+  summarize: (input: { previousSummaries: Array<{ user: string; summary: string }>; user: string; work: string; signal: AbortSignal }) => Promise<string>,
 ): Promise<DesktopConversationSession> {
   const shellSource = resolveShellSource();
   const dshHome = join(app.getPath('userData'), 'dsh');
@@ -406,6 +409,8 @@ async function createConversationSession(
     workspaceId: registration.id,
     workspace,
     configuredProviderIds,
+    statePath: join(app.getPath('userData'), 'workspace-state', `${createHash('sha256').update(workspace.path).digest('hex')}.json`),
+    summarize,
     onChanged: () => shellWindow?.notifyConversationChanged(),
   });
   let intentionalStop = false;
@@ -536,6 +541,11 @@ let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
+/**
+ * Ordinary LLM conversation-summary service (single request to the local
+ * Gateway; never the Task/DSH agent runtime). Null until bootstrap wires it.
+ */
+let conversationSummary: ReturnType<typeof createConversationSummaryService> | null = null;
 let quitting = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
@@ -699,9 +709,23 @@ async function bootstrap(): Promise<void> {
     console.warn('[wrenyard-desktop] Wrenyard service is unavailable; Desktop settings remain accessible:', error);
   });
 
+  // Workspace-scoped userData preference file: exactly one canonical model id,
+  // never a token/provider. Survives restart because it is a plain userData file.
+  const summaryPreferenceStore = new SummaryModelPreferenceStore(
+    join(app.getPath('userData'), 'conversation-summary.json'),
+  );
+  conversationSummary = createConversationSummaryService({
+    readGatewayConnection: () => readGatewayConnection(ipcPath),
+    preferenceStore: summaryPreferenceStore,
+  });
+  const summarize = (input: { previousSummaries: Array<{ user: string; summary: string }>; user: string; work: string; signal: AbortSignal }): Promise<string> => {
+    if (!conversationSummary) return Promise.reject(new Error('摘要服务未就绪'));
+    return conversationSummary.summarize(input);
+  };
+
   conversationController = new DesktopConversationController({
     initialWorkspace: workspaceConfiguration,
-    createSession: (workspace, onUnexpectedExit) => createConversationSession(workspace, ipcPath, onUnexpectedExit),
+    createSession: (workspace, onUnexpectedExit) => createConversationSession(workspace, ipcPath, onUnexpectedExit, summarize),
     onChanged: () => shellWindow?.notifyConversationChanged(),
   });
   await conversationController.start().catch((error: unknown) => {
@@ -845,7 +869,7 @@ async function bootstrap(): Promise<void> {
     createConversation: () => conversationController!.create(),
     selectConversationModel: (provider: string, model: string, reasoningEffort?: string) => conversationController!.selectModel(provider, model, reasoningEffort),
     sendConversation: (text: string, clientTimeZone?: string) => conversationController!.send(text, clientTimeZone),
-    cancelConversation: () => conversationController!.cancel(),
+    cancelConversation: (turnId?: string) => conversationController!.cancel(turnId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
     runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
@@ -853,6 +877,20 @@ async function bootstrap(): Promise<void> {
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
+    getSummarySettings: () => buildSummarySettingsSnapshot({
+      readGatewayConnection: () => readGatewayConnection(ipcPath),
+      readSummaryModel: () => conversationSummary!.selectedModel(),
+    }),
+    saveSummaryModel: async (canonicalModel: string): Promise<SummarySettingsSnapshot> => {
+      if (conversationSummary) {
+        // Persist only the canonical model id (no token/provider).
+        summaryPreferenceStore.save(canonicalModel);
+      }
+      return buildSummarySettingsSnapshot({
+        readGatewayConnection: () => readGatewayConnection(ipcPath),
+        readSummaryModel: () => conversationSummary!.selectedModel(),
+      });
+    },
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

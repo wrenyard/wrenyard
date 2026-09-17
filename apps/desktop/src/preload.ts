@@ -20,6 +20,7 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
+  type SummarySettingsSnapshot,
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
@@ -103,8 +104,8 @@ const api: WrenyardShellApi = {
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.conversationSend, text, clientTimeZone) as Promise<ConversationSnapshot>;
   },
-  cancelConversation(): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationCancel) as Promise<ConversationSnapshot>;
+  cancelConversation(turnId?: string): Promise<ConversationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.conversationCancel, turnId) as Promise<ConversationSnapshot>;
   },
   onConversationChanged(listener: () => void): () => void {
     const handler = (): void => listener();
@@ -148,6 +149,12 @@ const api: WrenyardShellApi = {
   },
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTestTasks) as Promise<TaskRoutingTestTasksResult>;
+  },
+  getSummarySettings(): Promise<SummarySettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.summaryModelSnapshot) as Promise<SummarySettingsSnapshot>;
+  },
+  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.summaryModelSave, canonicalModel) as Promise<SummarySettingsSnapshot>;
   },
 };
 

@@ -105,16 +105,11 @@
             <div class="conversation-composer" id="conversation-composer">
               <textarea id="conversation-input" rows="1" maxlength="100000" placeholder="交代一件事…" aria-label="发送消息"></textarea>
               <div class="composer-footer">
-                <span><kbd>↵</kbd> 发送 · <kbd>⇧↵</kbd> 换行</span>
                 <button class="composer-send" id="conversation-send" type="button" aria-label="发送">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></svg>
                 </button>
-                <button class="composer-stop" id="conversation-stop" type="button" aria-label="停止生成" hidden>
-                  <span></span>
-                </button>
               </div>
             </div>
-            <p>回答由 DSH 后端生成；执行本地操作前请检查内容。</p>
           </footer>
         </section>
       </section>
@@ -281,6 +276,7 @@
         <div class="settings-layout">
           <aside class="settings-toc" aria-label="设置分区">
             <a href="#runtime">运行环境</a>
+            <a href="#summary-settings">会话摘要</a>
             <a href="#companion">桌宠</a>
             <a href="#update">更新</a>
             <a href="#about">关于</a>
@@ -306,6 +302,11 @@
             <section class="settings-section" id="routing-settings">
               <div class="section-heading"><h2>路由权重</h2></div>
               <div class="settings-card" id="routing-weights-settings"></div>
+            </section>
+
+            <section class="settings-section" id="summary-settings">
+              <div class="section-heading"><h2>会话摘要</h2></div>
+              <div class="settings-card" id="summary-model-settings"></div>
             </section>
 
             <section class="settings-section" id="provider-settings">

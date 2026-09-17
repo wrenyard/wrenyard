@@ -277,13 +277,6 @@ export function conversationTurnLatestProgress(
   return '';
 }
 
-/** Bounded latest progress text: a single line, ~180 chars, ellipsized. */
-export function conversationSummaryText(text: string, maximum = 180): string {
-  const compact = text.replace(/\s+/gu, ' ').trim();
-  if (compact.length <= maximum) return compact;
-  return `${compact.slice(0, Math.max(1, maximum - 1)).trimEnd()}…`;
-}
-
 export function conversationGroupStatus(
   group: ConversationRenderGroup,
   preferredId?: string,
@@ -370,10 +363,42 @@ function conversationTurnTimingSignature(turn: ConversationTurnSnapshot): string
   ].join(':');
 }
 
+/**
+ * The rolling preview shows only the newest assistant prose step. It renders while the turn is being
+ * worked on (and while waiting for the next step to start), and disappears
+ * once the turn is finished. `key` identifies the step so a preview is replaced
+ * wholesale when the next step starts instead of being mutated in place.
+ */
+export function conversationStepPreview(
+  group: ConversationRenderGroup,
+  finalItemId?: string,
+): { text: string; key: string } | undefined {
+  for (let index = group.items.length - 1; index >= 0; index -= 1) {
+    const item = group.items[index];
+    if (!item || item.id === finalItemId) continue;
+    if (item.kind === 'assistant') {
+      const text = item.text.trim();
+      return text ? { text, key: item.id } : undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The stop control belongs to the running user message and is derived from the
+ * turn snapshot as well as the item, so an optimistic user item still exposes
+ * a cancel affordance while its turn is running.
+ */
+export function userItemRunning(item: ConversationItemSnapshot, turn?: ConversationTurnSnapshot): boolean {
+  if (turn?.running) return true;
+  return item.running === true;
+}
+
 function conversationItemSignature(item: ConversationItemSnapshot): string {
   return [
     item.id,
     item.kind,
+    item.running ? 1 : 0,
     item.toolState ?? '',
     item.toolName ?? '',
     item.step ?? '',
@@ -438,36 +463,21 @@ export function nextElapsedTickDelay(now: number, lastTickAt: number, interval =
   return Math.max(16, aligned);
 }
 
-/** Clock text for a running turn; the step-2 label is only used while unexpanded. */
-export function runningTurnClockText(options: {
-  expanded: boolean;
-  statusText: string;
-  elapsedSeconds?: number;
-  toolSummary?: string;
-}): string {
-  const status = conversationSummaryText(options.statusText, 180);
-  if (status) return status;
-  const tool = options.toolSummary ? conversationSummaryText(options.toolSummary, 120) : '';
-  if (tool) return tool;
-  if (options.elapsedSeconds === undefined) return '正在处理…';
-  return `${options.expanded ? '' : '⏱ '}已工作 ${formatTurnDuration(options.elapsedSeconds)}`;
-}
-
 /** Per-turn render state retained between feed updates (also feeds the timer). */
 interface TurnRenderPreferences {
   article?: HTMLElement;
   body?: HTMLElement;
-  content?: HTMLElement;
   summary?: HTMLElement;
   footer?: HTMLElement;
-  latest?: HTMLElement;
+  /** Rolling preview of the newest step; replaced wholesale when a step starts. */
+  preview?: HTMLElement;
+  /** Latest rendered step body; rendering it again must not rebuild the frame. */
+  previewStepId?: string;
   stats?: HTMLElement;
   statsSignature?: string;
   finalItem?: ConversationItemSnapshot;
   turn?: ConversationTurnSnapshot;
   running?: boolean;
-  statusText?: string;
-  toolSummaryLabel?: string;
   open?: boolean;
   completed?: boolean;
   manualExpanded?: boolean;
@@ -702,7 +712,6 @@ export class ConversationView {
   private readonly sessionList = element<HTMLElement>('conversation-session-list');
   private readonly input = element<HTMLTextAreaElement>('conversation-input');
   private readonly sendButton = element<HTMLButtonElement>('conversation-send');
-  private readonly stopButton = element<HTMLButtonElement>('conversation-stop');
   private readonly modelPickerHost = element<HTMLElement>('conversation-model-picker');
   private readonly modelSelect: SearchableSingleSelect;
   private readonly reasoningSelect: HTMLSelectElement;
@@ -737,7 +746,6 @@ export class ConversationView {
   private autoFollow = true;
   private readonly followTimers = new Map<number, number>();
   private timerTimeout: number | undefined;
-  private timerTurnId: string | undefined;
   private timerLastTickAt = 0;
   private feedListenersBound = false;
 
@@ -758,7 +766,6 @@ export class ConversationView {
     this.modelPickerHost.append(this.reasoningSelect);
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
-    this.stopButton.addEventListener('click', () => void this.cancel());
     element('workspace-open-settings').addEventListener('click', openSettings);
     element('workspace-quick-save').addEventListener('click', () => void this.saveWorkspace());
     this.gateMode.addEventListener('change', () => this.applyGateMode());
@@ -836,11 +843,12 @@ export class ConversationView {
       this.applyGateMode();
     }
     const canPrompt = ready && snapshot.models.routable !== false;
-    this.input.disabled = !canPrompt || this.busy;
-    this.sendButton.disabled = !canPrompt || this.busy || !this.input.value.trim();
-    this.sendButton.hidden = snapshot.selectedRunning;
-    this.stopButton.hidden = !snapshot.selectedRunning;
+    this.input.disabled = !canPrompt;
+    // A turn in flight never blocks typing or sending: concurrent turns are
+    // allowed, so only readiness and the trimmed draft gate the send icon.
+    this.syncSendState();
     if (snapshot.status === 'unavailable') this.showError(snapshot.message ?? 'DSH 会话后端暂时不可用');
+    else if (ready && snapshot.message) this.showError(snapshot.message);
     else if (snapshot.models.routable === false) this.showError('当前模型暂时不可用，请切换到其他模型');
     else if (snapshot.models.status === 'error') this.showError(snapshot.models.message ?? '模型目录暂时不可用');
     else this.hideError();
@@ -860,7 +868,6 @@ export class ConversationView {
     this.followTimers.clear();
     if (this.timerTimeout !== undefined) window.clearTimeout(this.timerTimeout);
     this.timerTimeout = undefined;
-    this.timerTurnId = undefined;
     this.expandedItemIds.clear();
     this.groupCompleted.clear();
     this.groupSignatures.clear();
@@ -943,7 +950,7 @@ export class ConversationView {
       this.feedEmpty = true;
       this.waitingNode = undefined;
     }
-    if (snapshot.items.length === 0) {
+    if (snapshot.items.length === 0 && !snapshot.turns?.some((turn) => turn.running)) {
       if (this.feedEmpty) {
         // A brand-new empty session still shows the welcome; it must never be
         // left over from a previous session once real items arrived.
@@ -961,9 +968,28 @@ export class ConversationView {
     const turns = new Map<string, ConversationTurnSnapshot>();
     for (const turn of snapshot.turns ?? []) turns.set(turn.id, turn);
     for (const group of groups) {
-      if (group.kind !== 'assistant-turn') continue;
-      const turn = turns.get(group.id);
+      if (group.kind === 'assistant-turn') {
+        const turn = turns.get(group.id);
+        if (turn) group.turn = turn;
+        continue;
+      }
+      // A single item (the user message) also resolves its turn, so its stop
+      // control follows a running turn snapshot even when the item itself was
+      // only optimistically inserted.
+      const item = group.items[0];
+      const turn = item?.turnId ? turns.get(item.turnId) : undefined;
       if (turn) group.turn = turn;
+    }
+    // A running turn whose items have not arrived yet still renders its header
+    // from the optimistic snapshot, so a turn never disappears into a bare
+    // spinner while the model is being reached.
+    const turnHasGroup = new Set(groups.filter((group) => group.kind === 'assistant-turn').map((group) => group.id));
+    for (const turn of snapshot.turns ?? []) {
+      if (!turn.running || turnHasGroup.has(turn.id)) continue;
+      const userIndex = groups.findIndex((group) => group.kind === 'item'
+        && group.items[0]?.kind === 'user' && group.items[0]?.turnId === turn.id);
+      groups.splice(userIndex < 0 ? groups.length : userIndex + 1, 0,
+        { kind: 'assistant-turn', items: [], id: turn.id, turn });
     }
     const hasRunningItem = snapshot.items.some((item) => item.running === true);
     const running = snapshot.selectedRunning || hasRunningItem;
@@ -1019,9 +1045,9 @@ export class ConversationView {
       this.waitingNode = undefined;
     }
     this.applyFeedOrder();
-    const active = groups.find((group) => group.kind === 'assistant-turn' && conversationTurnRunning(group));
-    if (!active || this.timerTurnId !== active.id) this.stopTurnClock();
-    if (active) this.scheduleTurnClock(active.id);
+    const active = groups.some((group) => group.kind === 'assistant-turn' && conversationTurnRunning(group));
+    if (!active) this.stopTurnClock();
+    else this.scheduleTurnClock();
   }
 
   private addExistingNode(node: HTMLElement | undefined): void {
@@ -1060,19 +1086,25 @@ export class ConversationView {
     const item = group.items[0];
     if (!item) return;
     const preferences = this.groupRenderPreferences(group.id);
-    const signature = conversationItemSignature(item);
+    // A running change comes from the turn snapshot too, so it is part of the
+    // item signature: the stop control must appear/disappear with the turn.
+    const signature = conversationItemSignature(item) + '\u0006' + (userItemRunning(item, group.turn) ? '1' : '0');
     if (this.itemSignatures.get(group.id) === signature && preferences.article?.isConnected) {
       this.addExistingNode(preferences.article);
       this.syncStreamingCursor(preferences.article, item);
       return;
     }
     this.itemSignatures.set(group.id, signature);
-    const node = this.renderItem(item, preferences);
+    const node = this.renderItem(item, preferences, group.turn);
     preferences.article = node;
     this.feedNodes.push(node);
   }
 
-  private renderItem(item: ConversationItemSnapshot, preferences: TurnRenderPreferences): HTMLElement {
+  private renderItem(
+    item: ConversationItemSnapshot,
+    preferences: TurnRenderPreferences,
+    turn?: ConversationTurnSnapshot,
+  ): HTMLElement {
     if (item.kind === 'tool') {
       const tool = this.renderToolItem(item, preferences);
       tool.dataset.scrollId = item.id;
@@ -1080,24 +1112,39 @@ export class ConversationView {
     }
     if (item.kind === 'assistant') {
       return this.renderAssistantTurn(
-        { kind: 'assistant-turn', items: [item], id: item.id },
+        { kind: 'assistant-turn', items: [item], id: item.id, ...(turn ? { turn } : {}) },
         false,
         preferences,
       );
     }
+    const running = userItemRunning(item, turn);
     const article = document.createElement('article');
-    article.className = 'message message-' + item.kind + (item.running ? ' is-streaming' : '');
+    article.className = 'message message-' + item.kind + (running ? ' is-streaming' : '');
     article.dataset.scrollId = item.id;
     const body = document.createElement('div');
     body.className = 'message-body';
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
     const content = document.createElement('div');
     content.className = 'message-content';
     content.append(renderRichText(item.text));
-    // The user message carries no avatar; its stamp sits at the lower right.
+    // The user message carries no avatar; its stamp sits inside the bubble.
     const time = document.createElement('time');
     time.className = 'message-time';
     time.textContent = formatClockTime(item.time);
-    body.append(content, time);
+    bubble.append(content, time);
+    body.append(bubble);
+    // The stop control sits to the right of the bubble, never under the stamp.
+    if (running && item.turnId) {
+      const stop = document.createElement('button');
+      stop.type = 'button';
+      stop.className = 'message-stop';
+      stop.setAttribute('aria-label', '停止生成');
+      stop.title = '停止生成';
+      stop.innerHTML = '<span></span>';
+      stop.addEventListener('click', () => void this.cancel(item.turnId));
+      article.append(stop);
+    }
     article.append(body);
     return article;
   }
@@ -1116,11 +1163,8 @@ export class ConversationView {
   ): HTMLElement {
     const finalItem = conversationTurnFinalItem(group);
     if (finalItem) preferences.finalItem = finalItem;
-    const latest = this.latestProgressText(group);
     const running = conversationTurnRunning(group);
     preferences.running = running;
-    preferences.statusText = latest;
-    preferences.toolSummaryLabel = this.currentToolSummary(group);
     preferences.startedAt = running ? this.turnStartedAt(group) : undefined;
 
     const article = document.createElement('article');
@@ -1137,28 +1181,17 @@ export class ConversationView {
 
     const summary = document.createElement('summary');
     summary.className = 'turn-activity-summary';
-    const summaryDot = document.createElement('span');
-    summaryDot.className = 'turn-activity-icon';
-    summaryDot.setAttribute('aria-hidden', 'true');
-    summaryDot.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6-3 3-2-2-8 8-3-3 8-8-2-2z"/><path d="m4 20 2-2"/></svg>';
     const summaryText = document.createElement('span');
-    summaryText.className = 'turn-activity-text';
+    summaryText.className = 'turn-activity-text' + (running ? ' turn-activity-clock' : '');
+    // The header carries only the bold elapsed label for a running turn; the
+    // newest step content is previewed below the header instead.
     summaryText.textContent = running
-      ? runningTurnClockText({
-        expanded: details.open,
-        statusText: latest,
-        elapsedSeconds: elapsedSeconds(this.turnStartedAt(group), Date.now()),
-        ...(preferences.toolSummaryLabel ? { toolSummary: preferences.toolSummaryLabel } : {}),
-      })
+      ? `打造了 ${formatTurnDuration(elapsedSeconds(this.turnStartedAt(group), Date.now()) ?? 0)}`
       : this.completedLabel(group);
-    if (running) {
-      summaryText.classList.add('turn-activity-clock');
-      if (details.open) summaryText.classList.add('is-plain');
-    }
     const summaryChevron = document.createElement('span');
     summaryChevron.className = 'turn-activity-chevron';
     summaryChevron.setAttribute('aria-hidden', 'true');
-    summary.append(summaryDot, summaryText, summaryChevron);
+    summary.append(summaryText, summaryChevron);
 
     const backlog = document.createElement('div');
     backlog.className = 'turn-activity-steps';
@@ -1168,7 +1201,9 @@ export class ConversationView {
       if (item?.kind === 'assistant') {
         const prose = document.createElement('div');
         prose.className = 'message-content turn-assistant-prose';
-        prose.append(renderRichText(item.text));
+        // The expanded work prose is never truncated; the process block is the
+        // reader's own disclosure, so it shows every observed step line.
+        prose.append(renderRichText(item.text.trim()));
         backlog.append(prose);
         index += 1;
         continue;
@@ -1195,29 +1230,16 @@ export class ConversationView {
       index += 1;
     }
 
-    if (running) {
-      const progress = document.createElement('div');
-      progress.className = 'turn-step turn-step-progress';
-      const dot = document.createElement('span');
-      dot.className = 'turn-step-dot';
-      const text = document.createElement('span');
-      text.className = 'turn-step-text turn-step-latest';
-      text.textContent = preferences.toolSummaryLabel
-        ? preferences.toolSummaryLabel + ' · 运行中'
-        : this.turnSummaryLabel(group);
-      progress.append(dot, text);
-      const dots = document.createElement('span');
-      dots.className = 'thinking-dots';
-      dots.innerHTML = '<i></i><i></i><i></i>';
-      progress.append(dots);
-      backlog.append(progress);
-      preferences.latest = text;
-    } else {
-      preferences.latest = undefined;
-    }
-
     details.append(summary, backlog);
     body.append(details);
+    // The rolling step preview sits immediately below the collapsed header and
+    // is a sibling of the disclosure, so it stays visible while the wait for
+    // the next step runs. It is rebuilt wholesale per step and never expanded.
+    const previewFrame = document.createElement('div');
+    previewFrame.className = 'turn-step-preview';
+    previewFrame.hidden = true;
+    body.append(previewFrame);
+    this.renderStepPreview(previewFrame, group, running, finalItem?.id);
     // The answer body lives outside the process block and only exists once the
     // turn is completed with a known finalItemId.
     const taskItems = processItems.filter((item) => item.kind === 'tool' && item.taskRun?.taskRunId);
@@ -1239,6 +1261,7 @@ export class ConversationView {
     if (finalItem) body.append(this.renderFinalContent(finalItem, group, preferences));
     const footer = document.createElement('div');
     footer.className = 'message-footer';
+    footer.hidden = running;
     if (finalItem && !running) footer.append(this.createCopyButton(finalItem.text));
     const stamp = document.createElement('time');
     stamp.className = 'message-time';
@@ -1251,7 +1274,6 @@ export class ConversationView {
 
     preferences.article = article;
     preferences.body = body;
-    preferences.content = body;
     preferences.summary = summaryText;
     preferences.footer = footer;
     if (group.turn) preferences.turn = group.turn;
@@ -1269,28 +1291,48 @@ export class ConversationView {
     return times.length > 0 ? Math.min(...times) : Date.now();
   }
 
-  private latestProgressText(group: ConversationRenderGroup): string {
-    return conversationTurnLatestProgress(group, group.turn?.finalItemId);
-  }
-
-  private turnSummaryLabel(group: ConversationRenderGroup): string {
-    const count = group.items.filter((item) => item.kind === 'tool' || item.text.trim()).length;
-    return count > 1 ? count + ' 个步骤进行中' : '正在处理…';
+  /**
+   * Renders the newest step into the preview frame below the collapsed header.
+   * The frame keeps its node across updates that stay on the same step (so a
+   * streaming line keeps its scroll position), and is replaced wholesale the
+   * moment the next step starts. It is hidden for a finished turn or when the
+   * reader expanded the process block, and the scroll lands on the newest line
+   * after layout so a long wrapped step is read from its end.
+   */
+  private renderStepPreview(
+    frame: HTMLElement,
+    group: ConversationRenderGroup,
+    running: boolean,
+    finalItemId: string | undefined,
+  ): void {
+    const preferences = this.groupRenderPreferences(group.id);
+    preferences.preview = frame;
+    const preview = running ? conversationStepPreview(group, finalItemId) : undefined;
+    if (!preview) {
+      preferences.previewStepId = undefined;
+      frame.replaceChildren();
+      frame.hidden = true;
+      return;
+    }
+    frame.hidden = this.expandedItemIds.has(group.id);
+    const stepChanged = preferences.previewStepId !== preview.key;
+    if (stepChanged || frame.dataset.text !== preview.text || !frame.firstChild) {
+      frame.dataset.text = preview.text;
+      preferences.previewStepId = preview.key;
+      let content = frame.firstElementChild;
+      if (stepChanged || !content) {
+        content = document.createElement('div');
+        content.className = 'turn-step-preview-content' + (stepChanged ? ' is-new-step' : '');
+        frame.replaceChildren(content);
+      }
+      content.replaceChildren(renderRichText(preview.text));
+    }
+    // Scrolling is deferred to layout so the measured scrollHeight is current.
+    requestAnimationFrame(() => { frame.scrollTop = frame.scrollHeight; });
   }
 
   private completedLabel(group: ConversationRenderGroup): string {
     return group.turn ? turnCompletionLabel(group.turn) : '完成';
-  }
-
-  /** Newest running Chinese tool summary; raw tool arguments are never used. */
-  private currentToolSummary(group: ConversationRenderGroup): string | undefined {
-    for (let index = group.items.length - 1; index >= 0; index -= 1) {
-      const item = group.items[index];
-      if (item && item.kind === 'tool' && item.toolState === 'running' && item.toolSummary) {
-        return item.toolSummary;
-      }
-    }
-    return undefined;
   }
 
   private toolCategory(item: ConversationItemSnapshot): string {
@@ -1502,6 +1544,15 @@ export class ConversationView {
   private renderStatsLines(preferences: TurnRenderPreferences): void {
     const turn = preferences.turn;
     if (!turn || !preferences.footer) return;
+    // A running turn has no finished consumption to report: while it is being
+    // worked on (and while waiting for the next step) every stat and copy
+    // affordance stays out of the footer instead of showing partial numbers.
+    if (turn.running === true) {
+      preferences.statsSignature = conversationTurnTimingSignature(turn);
+      preferences.stats?.remove();
+      preferences.stats = undefined;
+      return;
+    }
     const stats = document.createElement('div');
     stats.className = 'turn-stats';
     for (const line of buildConversationTurnStatLines(turn)) {
@@ -1530,12 +1581,8 @@ export class ConversationView {
   }
 
   /** Schedule the running group's independent one-second elapsed clock. */
-  private scheduleTurnClock(turnId: string): void {
-    const preferences = this.turnPreferences.get(turnId);
-    if (!preferences || !preferences.article?.isConnected) return;
-    if (preferences.clocking) return;
-    preferences.clocking = true;
-    this.timerTurnId = turnId;
+  private scheduleTurnClock(): void {
+    if (this.timerTimeout !== undefined) return;
     const delay = nextElapsedTickDelay(Date.now(), this.timerLastTickAt);
     this.timerTimeout = window.setTimeout(() => {
       this.timerTimeout = undefined;
@@ -1545,42 +1592,26 @@ export class ConversationView {
 
   /** One tick: refresh the summary clock text and re-arm the next second. */
   private tickTurnClock(): void {
-    const turnId = this.timerTurnId;
-    if (!turnId) return;
-    const preferences = this.turnPreferences.get(turnId);
-    if (!preferences || !preferences.running || !preferences.article?.isConnected) {
-      // The running turn's DOM is gone: the clock stops.
-      if (preferences) preferences.clocking = false;
-      this.timerTurnId = undefined;
-      return;
+    let running = false;
+    for (const preferences of this.turnPreferences.values()) {
+      if (!preferences.running || !preferences.article?.isConnected) continue;
+      running = true;
+      const elapsed = preferences.startedAt === undefined ? 0 : elapsedSeconds(preferences.startedAt, Date.now()) ?? 0;
+      if (preferences.summary?.isConnected) preferences.summary.textContent = `打造了 ${formatTurnDuration(elapsed)}`;
+      preferences.clocking = false;
     }
-    const summary = preferences.summary;
-    if (summary && summary.isConnected) {
-      const elapsed = preferences.startedAt !== undefined
-        ? elapsedSeconds(preferences.startedAt, Date.now())
-        : undefined;
-      const text = runningTurnClockText({
-        expanded: preferences.article.querySelector<HTMLDetailsElement>('.turn-activity')?.open === true,
-        statusText: preferences.statusText ?? '',
-        ...(preferences.toolSummaryLabel ? { toolSummary: preferences.toolSummaryLabel } : {}),
-        ...(elapsed === undefined ? {} : { elapsedSeconds: elapsed }),
-      });
-      if (summary.textContent !== text) summary.textContent = text;
-    }
-    preferences.clocking = false;
+    if (!running) { this.stopTurnClock(); return; }
     this.timerLastTickAt = Date.now();
-    this.scheduleTurnClock(turnId);
+    this.timerTimeout = window.setTimeout(() => {
+      this.timerTimeout = undefined;
+      this.tickTurnClock();
+    }, nextElapsedTickDelay(Date.now(), this.timerLastTickAt));
   }
 
   /** Stop the elapsed clock; used when no turn is observed running anymore. */
   private stopTurnClock(): void {
     if (this.timerTimeout !== undefined) window.clearTimeout(this.timerTimeout);
     this.timerTimeout = undefined;
-    if (this.timerTurnId !== undefined) {
-      const preferences = this.turnPreferences.get(this.timerTurnId);
-      if (preferences) preferences.clocking = false;
-    }
-    this.timerTurnId = undefined;
   }
 
   private renderToolItem(
@@ -1869,7 +1900,9 @@ export class ConversationView {
     details.addEventListener('toggle', () => {
       if (!details.isConnected) return;
       const taskSummary = details.parentElement?.querySelector<HTMLElement>('.turn-task-summary-rails');
+      const stepPreview = details.parentElement?.querySelector<HTMLElement>('.turn-step-preview');
       if (taskSummary) this.closeDescendants(taskSummary);
+      if (stepPreview) stepPreview.hidden = details.open;
       if (details.open) {
         this.expandedItemIds.add(id);
         preferences.manualExpanded = true;
@@ -2002,8 +2035,7 @@ export class ConversationView {
 
   private async send(): Promise<void> {
     const text = this.input.value.trim();
-    if (!text || this.busy || this.snapshot?.status !== 'ready') return;
-    this.busy = true;
+    if (!text || this.snapshot?.status !== 'ready') return;
     if (this.snapshot) this.renderModels(this.snapshot);
     this.input.value = '';
     this.resizeComposer();
@@ -2011,25 +2043,25 @@ export class ConversationView {
       const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       this.render(await this.api.sendConversation(text, zone));
     } catch (error) {
-      this.input.value = text;
+      // A failed send restores the draft only when the reader has not typed a
+      // newer one in the meantime; the newer draft always wins.
+      if (!this.input.value.trim()) {
+        this.input.value = text;
+        this.resizeComposer();
+      }
       this.showError(errorMessage(error));
     } finally {
-      this.busy = false;
       if (this.snapshot) this.render(this.snapshot);
       this.input.focus();
     }
   }
 
-  private async cancel(): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
-    if (this.snapshot) this.renderModels(this.snapshot);
+  private async cancel(turnId?: string): Promise<void> {
     try {
-      this.render(await this.api.cancelConversation());
+      this.render(await this.api.cancelConversation(turnId));
     } catch (error) {
       this.showError(errorMessage(error));
     } finally {
-      this.busy = false;
       if (this.snapshot) this.render(this.snapshot);
     }
   }
@@ -2067,13 +2099,26 @@ export class ConversationView {
       : '选择模式只会绑定已存在的 workspace 目录。';
   }
 
+  /**
+   * The composer is a single flex row: the textarea grows upward and the send
+   * icon keeps its place on the right. Only the trimmed input gates the send
+   * affordance (an explicit class drives opacity/pointer-events so a
+   * reduced-motion reader still gets the same non-interactive state), never the
+   * turn in flight — concurrent turns are allowed.
+   */
   private resizeComposer(): void {
     this.input.style.height = 'auto';
-    this.input.style.height = `${Math.min(180, Math.max(28, this.input.scrollHeight))}px`;
-    this.sendButton.disabled = this.busy
-      || this.snapshot?.status !== 'ready'
-      || this.snapshot.models.routable === false
-      || !this.input.value.trim();
+    this.input.style.height = `${Math.min(180, Math.max(32, this.input.scrollHeight))}px`;
+    this.syncSendState();
+  }
+
+  private syncSendState(): void {
+    const ready = this.snapshot?.status === 'ready' && this.snapshot.models.routable !== false;
+    const hasDraft = this.input.value.trim().length > 0;
+    const enabled = ready && hasDraft;
+    this.sendButton.disabled = !enabled;
+    this.sendButton.classList.toggle('is-ready', enabled);
+    this.sendButton.setAttribute('aria-disabled', String(!enabled));
   }
 
   private showError(message: string): void {

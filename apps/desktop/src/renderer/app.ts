@@ -1,4 +1,5 @@
 import { RoutingWeightsSettings } from './routing-weights-settings.js';
+import { SummaryModelSettings } from './summary-settings.js';
 import type {
   PetCompanionSettings,
   ProviderCatalogSnapshot,
@@ -70,6 +71,7 @@ const quotaPage = requireElement<HTMLElement>('quota-page');
 const clientsPage = requireElement<HTMLElement>('clients-page');
 const settingsPage = requireElement<HTMLElement>('settings-page');
 const routingWeightsSettings = new RoutingWeightsSettings(requireElement('routing-weights-settings'), window.wrenyardShell);
+const summaryModelSettings = new SummaryModelSettings(requireElement('summary-model-settings'), window.wrenyardShell);
 const refreshButton = requireElement<HTMLButtonElement>('refresh-button');
 const refreshLabel = requireElement<HTMLElement>('refresh-label');
 const quotaRefreshButton = requireElement<HTMLButtonElement>('quota-refresh-button');
@@ -1655,6 +1657,7 @@ async function navigate(page: ShellPage): Promise<void> {
     await routingWeightsSettings.load();
     await loadRuntimeAliases();
     await loadAutoCapState();
+    await summaryModelSettings.load();
   }
 }
 
@@ -2806,6 +2809,7 @@ window.wrenyardShell.onViewChanged(async (page) => {
     void routingWeightsSettings.load();
     void loadRuntimeAliases();
     void loadAutoCapState();
+    void summaryModelSettings.load();
   }
 });
 const refreshVisibleStats = (): void => {
