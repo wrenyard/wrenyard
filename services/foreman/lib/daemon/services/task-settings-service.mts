@@ -1950,15 +1950,14 @@ export class TaskSettingsService {
       const pricing = deepSeekAutomaticPricingOf(entry.choice, nowMs, params.timeoutMs)
       if (pricing !== undefined) deepSeekPricing.set(entry.choice.exactAgentRuntime, pricing)
     }
+    // Current choices originate from validated Catalog prices; optional metadata
+    // fields only describe older persisted dispatch records.
     const finiteReferences = collapsed
       .map((entry) => deepSeekPricing.get(entry.choice.exactAgentRuntime)?.safetyOutputUsdPerM
-        ?? entry.choice.reference_pricing.output_usd_per_million)
-      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+        ?? entry.choice.reference_pricing.output_usd_per_million!)
     const capUsdPerM = caps.length > 0
       ? Math.min(...caps)
-      : finiteReferences.length > 0
-        ? Math.max(...finiteReferences)
-        : 0
+      : Math.max(...finiteReferences)
 
     if (trace !== undefined) trace.capUsdPerMillion = capUsdPerM
 
@@ -1994,15 +1993,10 @@ export class TaskSettingsService {
       const candidate = toAutomaticCandidateInput(entry, context, pricing)
       if (candidate === null) {
         const referenceUsdPerM = pricing?.safetyOutputUsdPerM
-          ?? entry.choice.reference_pricing.output_usd_per_million
-        if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
-          eliminations.push(eliminationOf('price_limit'))
-          if (trace !== undefined) trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'price_limit' })
-        } else {
-          eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
-          if (trace !== undefined) {
-            trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })
-          }
+          ?? entry.choice.reference_pricing.output_usd_per_million!
+        eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
+        if (trace !== undefined) {
+          trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })
         }
         continue
       }
@@ -2475,10 +2469,7 @@ function toAutomaticCandidateInput(
 ): CandidateInput | null {
   const choice = entry.choice
   const referenceUsdPerM = deepSeekPricing?.safetyOutputUsdPerM
-    ?? choice.reference_pricing.output_usd_per_million
-  if (typeof referenceUsdPerM !== 'number' || !Number.isFinite(referenceUsdPerM) || referenceUsdPerM < 0) {
-    return null
-  }
+    ?? choice.reference_pricing.output_usd_per_million!
   const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
   if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
   const quotaEntry = context.snapshot?.entries.find(
@@ -2530,7 +2521,6 @@ function toAutomaticCandidateInput(
     canonicalId: choice.exactAgentRuntime,
     nowMs: context.nowMs,
     referenceUsdPerM,
-    referenceKind: referenceUsdPerM === 0 && freeFact ? 'verified_free' : 'listed',
     effectiveCapUsdPerM: context.capUsdPerM,
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,

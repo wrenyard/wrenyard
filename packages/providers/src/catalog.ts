@@ -5,7 +5,6 @@ const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
 const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
 const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
 const SRC_OPENAI = 'https://developers.openai.com';
-const SRC_OPENAI_SPARK = 'https://www.openai.com/index/introducing-gpt-5-3-codex-spark/';
 const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
 const SRC_AA_KIMI = 'https://artificialanalysis.ai/models/kimi-k3/';
 const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
@@ -54,9 +53,19 @@ export function isBuiltinClientGatewayProviderSupported(clientID: string, provid
   return client !== undefined && !client.unsupportedGatewayProviders?.includes(providerID);
 }
 
-type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence'> & {
+type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing'> & {
   speed?: ModelSpeedMeta;
   intelligence?: IntelligenceTier;
+  pricing?: ModelPricing;
+};
+
+// Explicit reference pricing for models without a verified public tariff.
+const REFERENCE_DEEPSEEK_FLASH_OFF_PEAK: ModelPricing = {
+  inputUsdPerMillion: 0.15,
+  cachedInputUsdPerMillion: 0.003,
+  outputUsdPerMillion: 0.6,
+  source: 'wrenyard:reference-deepseek-v4.1-flash-off-peak',
+  checkedAt: '2026-09-17',
 };
 type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly RawModelDefinition[] };
 
@@ -69,7 +78,6 @@ const CANONICAL_MODELS = {
   'claude-opus-5': { id: 'claude-opus-5', displayName: builtinModelDisplayName('claude-opus-5') },
   'glm-5.3': { id: 'glm-5.3', displayName: builtinModelDisplayName('glm-5.3') },
   'glm-5.3-flash': { id: 'glm-5.3-flash', displayName: builtinModelDisplayName('glm-5.3-flash') },
-  'gpt-5.3-codex-spark': { id: 'gpt-5.3-codex-spark', displayName: builtinModelDisplayName('gpt-5.3-codex-spark') },
   'gpt-5.6-luna': { id: 'gpt-5.6-luna', displayName: builtinModelDisplayName('gpt-5.6-luna') },
   'gpt-5.6-sol': { id: 'gpt-5.6-sol', displayName: builtinModelDisplayName('gpt-5.6-sol') },
   'gpt-5.6-terra': { id: 'gpt-5.6-terra', displayName: builtinModelDisplayName('gpt-5.6-terra') },
@@ -105,7 +113,7 @@ const anthropic = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'beare
   ({ protocol: 'anthropic_messages' as const, endpoint, authScheme });
 
 // Public thinking levels declared by confirmed model families. GPT-5.6/6
-// use the full five-level ladder; older GPT-5.5/5.4/Spark
+// use the full five-level ladder; older GPT-5.5/5.4
 // cap at xhigh; DeepSeek Flash and Kimi K3 support low/high/max.
 const THINKING_FULL: readonly ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const THINKING_UP_TO_XHIGH: readonly ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh'];
@@ -143,8 +151,8 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     nativeClients: ['codebuddy'], defaultModel: 'deepseek-v4.1-flash', useClientBinary: true,
     models: [
       model('deepseek-v4.1-flash', 1_000_000, 50_000, undefined, THINKING_LOW_HIGH_MAX),
-      model('hy4-preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']),
-      model('hy3'),
+      { ...model('hy4-preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']), free: true },
+      { ...model('hy3'), free: true },
       model('minimax-m3', undefined, undefined, CANONICAL_MODELS['minimax-m3']),
       model('kimi-k3', undefined, undefined, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
       model('glm-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']),
@@ -167,7 +175,6 @@ const builtinProviders: readonly RawProviderDefinition[] = [
       model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra'], THINKING_FULL),
       model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'], THINKING_FULL),
       model('gpt-6-astra', 1_050_000, 128_000, undefined, THINKING_FULL),
-      model('gpt-5.3-codex-spark', undefined, undefined, CANONICAL_MODELS['gpt-5.3-codex-spark'], THINKING_UP_TO_XHIGH),
       { ...model('gpt-5.5', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
       { ...model('gpt-5.4', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
       { ...model('gpt-5.4-mini', undefined, undefined, undefined, THINKING_UP_TO_XHIGH) },
@@ -180,7 +187,6 @@ const builtinProviders: readonly RawProviderDefinition[] = [
       'gpt-5.6-terra': { codex: effortLadder(THINKING_FULL) },
       'gpt-5.6-luna': { codex: effortLadder(THINKING_FULL) },
       'gpt-6-astra': { codex: effortLadder(THINKING_FULL) },
-      'gpt-5.3-codex-spark': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
       'gpt-5.5': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
       'gpt-5.4': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
       'gpt-5.4-mini': { codex: effortLadder(THINKING_UP_TO_XHIGH) },
@@ -313,12 +319,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'opencode-zen', displayName: 'OpenCode Zen 免费模型', credentialResolver: 'forge-managed', defaultModel: 'ling-3.0-flash-fin-free',
-    models: [model('mimo-v2.5-free', 1_048_576, 32_768), model('ling-3.0-flash-fin-free', 262_144, 32_768)],
+    models: [{ ...model('mimo-v2.5-free', 1_048_576, 32_768), free: true }, { ...model('ling-3.0-flash-fin-free', 262_144, 32_768), free: true }],
     protocols: [openAI('https://opencode.ai/zen/v1/chat/completions')],
   },
   {
     id: 'openrouter', displayName: 'OpenRouter 免费模型', credentialResolver: 'forge-managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
-    models: [model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929), model('cohere/north-mini-code:free', 256_000, 64_000)],
+    models: [{ ...model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929), free: true }, { ...model('cohere/north-mini-code:free', 256_000, 64_000), free: true }],
     protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
   },
   {
@@ -347,7 +353,7 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     setupHint: '请在 CodeBuddy 客户端完成登录，返回啾啾工坊后刷新状态。',
   },
   chatgpt: {
-    description: 'ChatGPT 共享的 Codex 编程模型与订阅额度：标准模型与低延迟 Spark 模型共用同一 ChatGPT 账号，但各自使用独立的额度池。',
+    description: 'ChatGPT 编程模型使用账号适用的 5h、7d 额度池。',
     setupHint: '请使用 Codex CLI 完成登录，返回啾啾工坊后刷新状态。',
   },
   cursor: {
@@ -459,7 +465,6 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'glm-5.2': speedDefault(62.8, 'https://artificialanalysis.ai/models/glm-5-2/', 'Artificial Analysis output-speed measurement for GLM-5.2.'),
   'glm-5.3': speedDefault(63.7, 'https://artificialanalysis.ai/models/glm-5-3/', 'Artificial Analysis output-speed measurement for GLM-5.3.'),
   'glm-5.3-flash': speedDefault(73.1, SRC_AA_GLMF, 'Artificial Analysis output-speed measurement for GLM-5.3 Flash.'),
-  'gpt-5.3-codex-spark': speedDefault(1000, SRC_OPENAI_SPARK, 'OpenAI reports more than 1000 tokens/s on Cerebras; 1000 is the conservative catalog lower bound.', true),
   'gpt-5.4': speedDefault(139.6, 'https://artificialanalysis.ai/models/gpt-5-4/', 'Artificial Analysis output-speed measurement for GPT-5.4.'),
   'gpt-5.4-mini': speedDefault(218.5, 'https://artificialanalysis.ai/models/gpt-5-4-mini/', 'Artificial Analysis output-speed measurement for GPT-5.4 Mini.'),
   'gpt-5.5': speedDefault(88.9, 'https://artificialanalysis.ai/models/gpt-5-5/', 'Artificial Analysis output-speed measurement for GPT-5.5.'),
@@ -497,7 +502,7 @@ type ModelMeta = {
   intelligence: IntelligenceTier;
   capabilities: readonly ModelCapability[];
   maxOutputTokens?: number;
-  pricing?: ModelPricing;
+  pricing: ModelPricing;
 };
 
 const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
@@ -532,13 +537,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     maxOutputTokens: 128_000,
     pricing: { inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50, source: SRC_OPENAI, checkedAt: DEFAULT_CHECKED_AT },
   },
-  'gpt-5.3-codex-spark': {
-    intelligence: 'mid',
-    capabilities: ['text'],
-    // Internal user-defined fixed reference prices mirror DeepSeek V4.1 Flash off-peak;
-    // these are not official OpenAI API prices, and Spark has no peak/off-peak switching.
-    pricing: { inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.003, outputUsdPerMillion: 0.6, source: 'wrenyard:reference-deepseek-v4.1-flash-off-peak', checkedAt: '2026-09-17' },
-  },
   'gpt-5.6-sol': {
     intelligence: 'high',
     capabilities: ['text', 'image'],
@@ -558,6 +556,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'high',
     capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'kimi-k3': {
     thinkingLevels: THINKING_LOW_HIGH_MAX,
@@ -584,26 +583,32 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'minimax-m2.7': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'MiniMax-M2.7': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'MiniMax-M2.7-highspeed': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'minimax-m3': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'MiniMax-M3': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'composer-2.5': {
     intelligence: 'low',
     capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'grok-4.6': {
     intelligence: 'high',
@@ -628,26 +633,32 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'grok-4.5': {
     intelligence: 'high',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3-coder-next': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3-coder-plus': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3.7-plus': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3.7-flash': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3.8-max': {
     intelligence: 'mid',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'claude-haiku-4-5-20251001': {
     intelligence: 'low',
@@ -657,14 +668,17 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'glm-4.7-flash': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'glm-5-turbo': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'glm-5.2': {
     intelligence: 'mid',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'gpt-5.4': {
     intelligence: 'mid',
@@ -684,18 +698,22 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'kimi-k2.5': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'kimi-k2.6': {
     intelligence: 'mid',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3.6-plus': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'qwen3.5-plus': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'claude-fable-5': {
     intelligence: 'premium',
@@ -715,26 +733,27 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   'doubao-seed-2-0-lite-260215': {
     intelligence: 'low',
     capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'mimo-v2.5-free': {
     intelligence: 'mid',
     capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'ling-3.0-flash-fin-free': {
     intelligence: 'low',
     capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENCODE_ZEN, checkedAt: '2026-09-10' },
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'nex-agi/nex-n2.5-mini:free': {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
-    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
   'cohere/north-mini-code:free': {
     intelligence: 'low',
     capabilities: ['text'],
-    pricing: { inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, outputUsdPerMillion: 0, source: SRC_OPENROUTER_MODELS, checkedAt: '2026-09-10' },
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
 };
 
@@ -744,12 +763,22 @@ function withMeta(def: RawModelDefinition): ModelDefinition {
     throw new Error(`built-in model ${def.id} is missing required default speed metadata`);
   }
   const meta = MODEL_METADATA[def.id];
+  const pricing = def.pricing ?? meta?.pricing;
+  if (!pricing) {
+    throw new Error(`built-in model ${def.id} is missing required pricing metadata`);
+  }
   const intelligence = def.intelligence ?? meta?.intelligence;
   if (intelligence !== 'low' && intelligence !== 'mid' && intelligence !== 'high' && intelligence !== 'premium') {
     throw new Error(`built-in model ${def.id} is missing required intelligence tier`);
   }
   if (!meta) {
-    return { ...def, intelligence, capabilities: def.capabilities ?? ['text'], speed };
+    return {
+      ...def,
+      intelligence,
+      capabilities: def.capabilities ?? ['text'],
+      speed,
+      pricing,
+    };
   }
   return {
     ...def,
@@ -758,7 +787,7 @@ function withMeta(def: RawModelDefinition): ModelDefinition {
     capabilities: def.capabilities ?? meta.capabilities,
     speed,
     maxOutputTokens: def.maxOutputTokens ?? meta.maxOutputTokens,
-    pricing: def.pricing ?? meta.pricing,
+    pricing,
   };
 }
 

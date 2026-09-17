@@ -49,7 +49,7 @@ func TestProfileQuotaProviderCanonicalNames(t *testing.T) {
 		{name: "anthropic", profile: profile{Client: "claude", Provider: "anthropic"}, want: ""},
 		{name: "explicit anthropic", profile: profile{Statusline: &statuslineConfig{QuotaProvider: "anthropic"}}, want: ""},
 		{name: "kimi-coding", profile: profile{Client: "claude", Provider: "kimi-coding"}, want: "kimi-coding"},
-		{name: "codex profile", profile: profile{Name: "codex-spark", Client: "codex", Provider: "chatgpt"}, want: "chatgpt"},
+		{name: "codex profile", profile: profile{Name: "codex-luna", Client: "codex", Provider: "chatgpt"}, want: "chatgpt"},
 		{name: "chatgpt provider", profile: profile{Client: "codex", Provider: "chatgpt"}, want: "chatgpt"},
 		{name: "zhipu canonical", profile: profile{Client: "claude", Provider: "zhipu-coding"}, want: "zhipu-coding"},
 		{name: "deepseek", profile: profile{Client: "claude", Provider: "deepseek"}, want: ""},
@@ -112,8 +112,8 @@ func TestOpenCodeQuotaProviderName(t *testing.T) {
 			want:  "",
 		},
 		{
-			name:  "chatgpt spark model provider",
-			input: sl.Input{Model: sl.Model{Provider: "chatgpt", ID: "chatgpt/gpt-5.3-codex-spark"}},
+			name:  "chatgpt luna model provider",
+			input: sl.Input{Model: sl.Model{Provider: "chatgpt", ID: "chatgpt/gpt-5.6-luna"}},
 			want:  "chatgpt",
 		},
 		{

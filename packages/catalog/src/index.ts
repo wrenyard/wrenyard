@@ -154,6 +154,25 @@ export interface ModelPricing {
   checkedAt: string;
 }
 
+function validateModelPricing(pricing: ModelPricing | undefined, label: string): void {
+  if (!pricing) throw new Error(`${label} is missing required pricing metadata`);
+  for (const [name, value] of Object.entries({
+    inputUsdPerMillion: pricing.inputUsdPerMillion,
+    cachedInputUsdPerMillion: pricing.cachedInputUsdPerMillion,
+    outputUsdPerMillion: pricing.outputUsdPerMillion,
+  })) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${label} pricing ${name} must be finite and non-negative`);
+    }
+  }
+  if (typeof pricing.source !== 'string' || pricing.source.trim() === '') {
+    throw new Error(`${label} pricing source must be a non-empty string`);
+  }
+  if (typeof pricing.checkedAt !== 'string' || pricing.checkedAt.trim() === '') {
+    throw new Error(`${label} pricing checkedAt must be a non-empty string`);
+  }
+}
+
 export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
 
 export interface ModelSpeedMeta {
@@ -200,7 +219,9 @@ export interface ModelDefinition {
   /** Supported input types, including image content returned by tools; not output generation. */
   capabilities?: readonly ModelCapability[];
   speed: ModelSpeedMeta;
-  pricing?: ModelPricing;
+  pricing: ModelPricing;
+  /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
+  free?: boolean;
 }
 
 export interface TaskDispatchRequirements {
@@ -447,6 +468,10 @@ export class Catalog {
       // A model's default speed is required: a registration without one is
       // rejected up front, before any further validation.
       validateSpeedMeta(model.speed, `provider ${provider.id} model ${model.id}`);
+      validateModelPricing(model.pricing, `provider ${provider.id} model ${model.id}`);
+      if (model.free !== undefined && typeof model.free !== 'boolean') {
+        throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
+      }
       validateThinkingLevels(provider.id, model);
       if (model.canonicalModel) {
         requireID('canonical model', model.canonicalModel.id);
@@ -587,7 +612,7 @@ export class Catalog {
           ...(model.thinkingLevels === undefined ? {} : { thinkingLevels: model.thinkingLevels }),
           ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
           ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
-          ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
+          pricing: model.pricing,
         })));
   }
 
@@ -766,9 +791,8 @@ export function resolveConstrainedDispatch(
       if (INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) continue;
     }
 
-    // Hard constraint: max output price. Fail closed when pricing is unknown.
+    // List-price constraint; account-specific free routing is evaluated by the routing policy.
     if (requirements.maxOutputUsdPerMillion !== undefined) {
-      if (!modelDef.pricing) continue;
       if (modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) continue;
     }
 
@@ -832,8 +856,8 @@ export function resolveConstrainedDispatch(
     const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
     const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
     if (aMeets !== bMeets) return aMeets ? -1 : 1;
-    const pa = a.model.pricing?.outputUsdPerMillion ?? Number.POSITIVE_INFINITY;
-    const pb = b.model.pricing?.outputUsdPerMillion ?? Number.POSITIVE_INFINITY;
+    const pa = a.model.pricing.outputUsdPerMillion;
+    const pb = b.model.pricing.outputUsdPerMillion;
     if (pa !== pb) return pa - pb;
     const idA = `${a.plan.provider}/${a.plan.model}`;
     const idB = `${b.plan.provider}/${b.plan.model}`;
@@ -997,7 +1021,6 @@ export type {
   QuotaState,
   QuotaTier,
   RankedCandidate,
-  ReferenceKind,
   ReplenishmentKind,
   RequiredQuotaConstraint,
   ScoreWeights,

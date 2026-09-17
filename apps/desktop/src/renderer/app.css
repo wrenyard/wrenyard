@@ -740,6 +740,9 @@ button, input, select { accent-color: var(--moss-deep); }
 .model-list-provider { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
 .model-list-icon { display: inline-flex; align-items: center; color: currentColor; }
 .model-list-icon img, .model-list-icon .model-brand-icon { width: 18px; height: 18px; }
+.task-run-model, .task-run-model-brand { display: inline-flex; align-items: center; gap: 6px; }
+.task-run-model-brand { white-space: nowrap; }
+.task-run-model-brand .model-brand-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
 .model-list .is-muted { color: var(--muted); }
 .model-list-empty { color: var(--muted); text-align: center; }
 

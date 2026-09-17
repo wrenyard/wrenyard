@@ -163,9 +163,11 @@ func dshTurnEndEvents(event map[string]any) []protocol.Event {
 				applyTrustedAgentTurnContract(usageData)
 			}
 		}
-		if samples, ok := validatedDSHTPSSamples(event); ok {
-			usageData["tps_sampling_contract"] = "response_v1"
-			usageData["tps_samples"] = samples
+		if status == "done" {
+			if samples, ok := dshTokenizerGenerationSamples(event); ok {
+				usageData["tps_sampling_contract"] = tokenizerTPSSamplingContract
+				usageData["tps_samples"] = samples
+			}
 		}
 		out = append(out, protocol.Event{Type: "turn_usage", Data: usageData})
 	}
@@ -394,37 +396,71 @@ func dshUsageToken(usage map[string]any, keys ...string) (int, bool) {
 	return 0, false
 }
 
-func validatedDSHTPSSamples(event map[string]any) ([]any, bool) {
-	if event["tps_sampling_contract"] != "response_v1" {
-		return nil, false
-	}
-	raw, ok := event["tps_samples"].([]any)
+// dshTokenizerGenerationSamples converts the bridge's transient
+// tps_generation payload into canonical tokenizer_v1 samples. Tokens are
+// counted with the shared fixed cl100k tokenizer over only the actually
+// observed generation blocks, and the speed window is the first-to-last
+// delta, so completion latency, tool waits, tool output and summaries never
+// contribute. Observed reasoning counts only for speed. Raw strings stay in this
+// function: only the canonical samples reach the persisted usage event. A
+// window the bridge could not observe (a single timestamp, under 100ms, or
+// no content) skips only its own sample; a malformed payload is rejected
+// outright. Legacy response_v1 payloads are skipped, never relabeled.
+func dshTokenizerGenerationSamples(event map[string]any) ([]any, bool) {
+	raw, ok := event["tps_generation"].([]any)
 	if !ok {
 		return nil, false
 	}
-	validated := make([]any, 0, len(raw))
+	samples := make([]any, 0, len(raw))
 	for _, value := range raw {
-		sample, ok := value.(map[string]any)
+		generation, ok := value.(map[string]any)
 		if !ok {
 			return nil, false
 		}
-		responseID, responseOK := sample["response_id"].(string)
-		model, modelOK := sample["model"].(string)
-		output, outputOK := dshSafeNonnegativeInteger(sample["output_tokens"])
-		first, firstOK := dshFiniteNumber(sample["first_token_at_ms"])
-		completed, completedOK := dshFiniteNumber(sample["completed_at_ms"])
-		if !responseOK || strings.TrimSpace(responseID) == "" || !modelOK || strings.TrimSpace(model) == "" || !outputOK || !firstOK || !completedOK || completed <= first {
+		responseID, responseOK := generation["response_id"].(string)
+		model, modelOK := generation["model"].(string)
+		blocks, blocksOK := generation["blocks"].(map[string]any)
+		if !responseOK || strings.TrimSpace(responseID) == "" || !modelOK || strings.TrimSpace(model) == "" || !blocksOK {
 			return nil, false
 		}
-		validated = append(validated, map[string]any{
-			"response_id":        responseID,
-			"model":              model,
-			"output_tokens":      output,
-			"first_token_at_ms":  first,
-			"completed_at_ms":    completed,
+		if len(blocks) == 0 {
+			continue
+		}
+		first, firstOK := dshFiniteNumber(generation["first_delta_at_ms"])
+		last, lastOK := dshFiniteNumber(generation["last_delta_at_ms"])
+		if !firstOK || !lastOK || last <= first || last-first < float64(tokenizerMinimumWindowMS) {
+			continue
+		}
+		var tokens int64
+		for _, rawBlock := range blocks {
+			text, ok := rawBlock.(string)
+			if !ok {
+				return nil, false
+			}
+			count, ok := countTPSTokens(text)
+			if !ok {
+				return nil, false
+			}
+			tokens += count
+		}
+		if tokens <= 0 {
+			continue
+		}
+		samples = append(samples, map[string]any{
+			"response_id": responseID,
+			"model":       model,
+			// Approximate cl100k count of observed generation content, never
+			// billed usage. completed_at_ms is the last observed delta, not
+			// the message completion, so completion latency stays excluded.
+			"output_tokens":     tokens,
+			"first_token_at_ms": first,
+			"completed_at_ms":   last,
 		})
 	}
-	return validated, true
+	if len(samples) == 0 {
+		return nil, false
+	}
+	return samples, true
 }
 
 func dshFiniteNumber(value any) (float64, bool) {
@@ -438,22 +474,4 @@ func dshFiniteNumber(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func dshSafeNonnegativeInteger(value any) (any, bool) {
-	switch number := value.(type) {
-	case int:
-		if number >= 0 && int64(number) <= dshMaxSafeInteger {
-			return number, true
-		}
-	case int64:
-		if number >= 0 && number <= dshMaxSafeInteger {
-			return number, true
-		}
-	case float64:
-		if number >= 0 && number <= dshMaxSafeInteger && math.Trunc(number) == number && !math.IsNaN(number) && !math.IsInf(number, 0) {
-			return number, true
-		}
-	}
-	return nil, false
 }

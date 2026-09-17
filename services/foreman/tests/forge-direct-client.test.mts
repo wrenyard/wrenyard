@@ -49,7 +49,7 @@ describe('forge direct client', () => {
   it('rejects legacy Forge task-session ids as direct runtime resume ids', () => {
     assert.throws(
       () => buildForgeCommand({
-        profile: 'forge/codex-spark',
+        profile: 'chatgpt/gpt-5.6-sol:codex',
         permission: 'readonly',
         cwd: process.cwd(),
         prompt: 'hello',

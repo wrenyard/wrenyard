@@ -4,12 +4,14 @@ go 1.26
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.2
+	github.com/tiktoken-go/tokenizer v0.8.1
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	modernc.org/sqlite v1.38.1
 )
 
 require (
+	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
       "codex-sol":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-sol","mode":"native"},
       "codex-terra":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-terra","mode":"native"},
       "codex-luna":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-luna","mode":"native"},
-      "codex-spark":{"client":"codex","provider":"chatgpt","model":"gpt-5.3-codex-spark","mode":"native"},
+      "codex-luna":{"client":"codex","provider":"chatgpt","model":"gpt-5.6-luna","mode":"native"},
       "cb-hy":{"client":"codebuddy","provider":"codebuddy","model":"hy4-preview","mode":"native"},
       "cb-ds":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},
       "cb-dsf":{"client":"codebuddy","provider":"codebuddy","model":"deepseek-v4.1-flash","mode":"native"},

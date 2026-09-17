@@ -68,9 +68,6 @@ test('derived task plans key representative native and gateway combinations cano
   assert.deepEqual(plans['chatgpt/gpt-5.6-sol:codex'], {
     client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol', mode: 'native', thinking: 'max', reasoningEffort: 'max', supportsWebSearch: true,
   });
-  assert.deepEqual(plans['chatgpt/gpt-5.3-codex-spark:codex'], {
-    client: 'codex', provider: 'chatgpt', model: 'gpt-5.3-codex-spark', mode: 'native', thinking: 'xhigh', reasoningEffort: 'xhigh', supportsWebSearch: true,
-  });
   assert.deepEqual(plans['codebuddy/minimax-m3:cb'], {
     client: 'codebuddy', provider: 'codebuddy', model: 'minimax-m3', mode: 'native',
   });
@@ -155,8 +152,6 @@ test('derived task plans carry canonical keys only — no legacy profile, policy
   assert.ok(!keys.some((key) => key.includes('codex-astra')));
   assert.ok(!keys.some((key) => key.endsWith(':dsh')), 'dsh is not a direct Task adapter');
   assert.equal(plans['chatgpt/gpt-6-astra:codex']?.model, 'gpt-6-astra');
-  // Spark is a model of ChatGPT and remains a native Task target.
-  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex']?.mode, 'native');
   // dsh stays a parseable public key and a compatible gateway route.
   assert.equal(catalog.resolveRun('dsh', 'codebuddy', 'glm-5.3').mode, 'gateway');
 });
@@ -200,8 +195,6 @@ test('Codex GPT plans default to the highest mapped thinking level and never inv
   assert.equal(plans['chatgpt/gpt-5.6-luna:codex'].thinking, 'max');
   assert.equal(plans['openai/gpt-5.6-sol:codex'].thinking, 'max');
   // Older GPT families cap at xhigh with the exact wire effort.
-  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex'].thinking, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.3-codex-spark:codex'].reasoningEffort, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.5:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.4:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.4-mini:codex'].thinking, 'xhigh');
@@ -263,9 +256,10 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k3Coding.speed?.tps, 39.7);
 
   // Kimi K2.8 Preview is registered only on kimi-coding with a 1M context,
-  // low/high/max thinking, high intelligence and image input. No max output or
-  // reference token price is published for the preview, so neither may be
-  // fabricated here, and its speed must be an explicitly conservative
+  // low/high/max thinking, high intelligence and image input. No official max
+  // output is published for the preview, so none is fabricated here; pricing is
+  // required, so the model carries explicit reference input/cached/output
+  // prices, and its speed must be an explicitly conservative
   // rounded-down single-probe default rather than an inherited K3 measurement.
   const k28 = catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!;
   assert.equal(k28.canonicalModel?.id, 'kimi-k2.8');
@@ -275,7 +269,10 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k28.intelligence, 'high');
   assert.deepEqual(k28.capabilities, ['text', 'image']);
   assert.equal(k28.maxTokens, undefined);
-  assert.equal(k28.pricing, undefined);
+  assert.equal(k28.pricing?.inputUsdPerMillion, 0.15);
+  assert.equal(k28.pricing?.cachedInputUsdPerMillion, 0.003);
+  assert.equal(k28.pricing?.outputUsdPerMillion, 0.6);
+  assert.equal(k28.pricing?.source, 'wrenyard:reference-deepseek-v4.1-flash-off-peak');
   assert.equal(k28.speed?.tps, 40);
   assert.equal(k28.speed?.source, 'local-benchmark:kimi-coding/2026-09-15');
   assert.equal(k28.speed?.checkedAt, '2026-09-15');
@@ -349,7 +346,6 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('moonshot', 'kimi-k3'), 'high');
   assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
 
-  assert.equal(tier('chatgpt', 'gpt-5.3-codex-spark'), 'mid');
   assert.equal(tier('anthropic-api', 'claude-sonnet-5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.4-mini'), 'low');
@@ -396,7 +392,7 @@ test('every registered built-in model has a valid authoritative speed default', 
   }
 
   const representative = new Map(entries.map(({ model }) => [model.id, model.speed.tps]));
-  assert.equal(representative.get('gpt-5.3-codex-spark'), 1000);
+  assert.equal(representative.get('gpt-6-astra'), 50.6);
   assert.equal(representative.get('gpt-5.6-terra'), 98.4);
   assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
   assert.equal(representative.get('qwen3.7-flash'), 111.12);

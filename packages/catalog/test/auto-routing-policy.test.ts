@@ -94,7 +94,6 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
     canonicalId: "canon-1",
     nowMs: NOW,
     referenceUsdPerM: 1,
-    referenceKind: "listed",
     effectiveCapUsdPerM: 100,
     timeoutMs: MINUTE_MS,
     minimumTps: 5,
@@ -518,10 +517,6 @@ test("invalid candidates and fields reject with machine reasons", () => {
     "invalid_timeout"
   );
   expectRejected(
-    cand({ referenceKind: "dynamic" as never }),
-    "invalid_reference_kind"
-  );
-  expectRejected(
     cand({ referenceUsdPerM: Number.NaN }),
     "invalid_reference_price"
   );
@@ -563,30 +558,9 @@ test("invalid candidates and fields reject with machine reasons", () => {
   );
 });
 
-test("listed zero reference is rejected; verified_free zero is the only zero", () => {
-  expectRejected(
-    cand({ referenceUsdPerM: 0, referenceKind: "listed" }),
-    "listed_reference_zero"
-  );
-  expectRejected(
-    cand({ referenceUsdPerM: 0, referenceKind: "listed", effectiveCapUsdPerM: 0 }),
-    "listed_reference_zero"
-  );
-  const free = expectAccepted(
-    cand({
-      referenceUsdPerM: 0,
-      referenceKind: "verified_free",
-      effectiveCapUsdPerM: 0,
-    })
-  );
-  assert.equal(free!.routingPriceUsdPerM, 0);
-  close(free!.priceFactor, 1, 1e-12, "free price factor");
-});
-
-test("cap zero admits only verified-free at zero", () => {
+test("cap zero admits only effective zero price", () => {
   const freeCand = cand({
     referenceUsdPerM: 0,
-    referenceKind: "verified_free",
     effectiveCapUsdPerM: 0,
   });
   const free = expectAccepted(freeCand);
@@ -594,7 +568,7 @@ test("cap zero admits only verified-free at zero", () => {
   // Anything above a zero cap is above-cap, and a positive price under zero
   // cap is impossible since reference > cap rejects first.
   expectRejected(
-    cand({ referenceUsdPerM: 0.01, referenceKind: "verified_free", effectiveCapUsdPerM: 0 }),
+    cand({ referenceUsdPerM: 0.01, effectiveCapUsdPerM: 0 }),
     "reference_above_cap"
   );
 });
@@ -1053,11 +1027,11 @@ test("intelligenceExpectedRank below the minimum or non-integer is rejected", ()
 test("minimum TPS gate rejects regardless of other strengths", () => {
   // Strong price, quota, and intelligence cannot outweigh a speed deficit.
   expectRejected(
-    cand({ minimumTps: 100, effectiveTps: 50, referenceUsdPerM: 0, referenceKind: "verified_free" }),
+    cand({ minimumTps: 100, effectiveTps: 50, referenceUsdPerM: 0 }),
     "speed_below_minimum"
   );
   const accepted = expectAccepted(
-    cand({ minimumTps: 5, effectiveTps: 5, referenceUsdPerM: 0, referenceKind: "verified_free" })
+    cand({ minimumTps: 5, effectiveTps: 5, referenceUsdPerM: 0 })
   );
   close(accepted!.speedFactor, clamp01(5 / 200), 1e-12, "min met S");
 });
@@ -1467,8 +1441,7 @@ test("verified-free changes routing price/P only and has no priority bucket", ()
   });
   const standard = cand({
     canonicalId: "std-a",
-    referenceUsdPerM: 0, // verified_free reference also P=1
-    referenceKind: "verified_free",
+    referenceUsdPerM: 0, // zero reference also P=1
     requiredQuota: [q("q", fullCycleEv(80, 1))], // healthy -> Q 0.8
   });
   const [f, s] = [free, standard].map((x) => expectAccepted(x)!);
@@ -1626,7 +1599,6 @@ test("all factors and the score stay within [0,1]", () => {
     cand({
       canonicalId: "best",
       referenceUsdPerM: 0,
-      referenceKind: "verified_free",
       effectiveTps: 1000,
       intelligenceRank: 3,
       requiredQuota: [q("q", rollingEv(100))],
@@ -1907,17 +1879,20 @@ test("missing, invalid, or expired free evidence stays standard", () => {
   assert.ok(unknownEnvironment.notes.includes("confirmed_free_supply_evidence_invalid_ignored"));
 });
 
-test("confirmed-free evidence never bypasses hard gates", () => {
+test("confirmed-free uses zero routing price while preserving list price and other gates", () => {
   const free = confirmedFreeSupply();
-  expectRejected(
+  const accepted = expectAccepted(
     cand({
       canonicalId: "free-over-cap",
       referenceUsdPerM: 7,
       effectiveCapUsdPerM: 6,
       confirmedFreeSupply: free,
-    }),
-    "reference_above_cap"
-  );
+    })
+  )!;
+  assert.equal(accepted.referenceUsdPerM, 7);
+  assert.equal(accepted.routingPriceUsdPerM, 0);
+  assert.equal(accepted.priceFactor, 1);
+  expectRejected(cand({ referenceUsdPerM: 7, effectiveCapUsdPerM: 6 }), "reference_above_cap");
   expectRejected(
     cand({
       canonicalId: "free-too-slow",
