@@ -30,6 +30,7 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
+  type SummarySettingsSnapshot,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -71,7 +72,7 @@ export interface ShellWindowOptions {
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
-  cancelConversation(): Promise<ConversationSnapshot>;
+  cancelConversation(turnId?: string): Promise<ConversationSnapshot>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
@@ -79,6 +80,8 @@ export interface ShellWindowOptions {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
+  getSummarySettings(): Promise<SummarySettingsSnapshot>;
+  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -503,9 +506,15 @@ export class ShellWindowController {
       if (clientTimeZone !== undefined && typeof clientTimeZone !== 'string') throw new Error('时区格式无效');
       return options.sendConversation(text, clientTimeZone);
     });
-    ipcMain.handle(SHELL_CHANNELS.conversationCancel, async (event) => {
+    ipcMain.handle(SHELL_CHANNELS.conversationCancel, async (event, turnId: unknown) => {
       assertShellSender(event.sender);
-      return options.cancelConversation();
+      if (turnId !== undefined && turnId !== null
+        && (typeof turnId !== 'string' || !turnId || turnId.length > 256)) {
+        throw new Error('会话回合 id 无效');
+      }
+      return options.cancelConversation(
+        turnId === undefined || turnId === null ? undefined : turnId,
+      );
     });
     ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown, taskId: unknown) => {
       assertShellSender(event.sender);
@@ -541,6 +550,18 @@ export class ShellWindowController {
     ipcMain.handle(SHELL_CHANNELS.taskRoutingTestTasks, async (event) => {
       assertShellSender(event.sender);
       return options.requestRoutingTestTasks();
+    });
+    ipcMain.handle(SHELL_CHANNELS.summaryModelSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getSummarySettings();
+    });
+    ipcMain.handle(SHELL_CHANNELS.summaryModelSave, async (event, canonicalModel: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof canonicalModel !== 'string' || !canonicalModel || canonicalModel.length > 256
+        || TASK_SETTINGS_CONTROL_CHARS.test(canonicalModel)) {
+        throw new Error('摘要模型无效');
+      }
+      return options.saveSummaryModel(canonicalModel);
     });
   }
 
@@ -579,6 +600,8 @@ export class ShellWindowController {
       SHELL_CHANNELS.runtimeAliasRemove,
       SHELL_CHANNELS.taskRoutingTest,
       SHELL_CHANNELS.taskRoutingTestTasks,
+      SHELL_CHANNELS.summaryModelSnapshot,
+      SHELL_CHANNELS.summaryModelSave,
     ]) ipcMain.removeHandler(channel);
   }
 

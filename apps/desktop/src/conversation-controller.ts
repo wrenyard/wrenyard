@@ -15,7 +15,7 @@ export interface DesktopConversationSession {
   create(): Promise<ConversationSnapshot>;
   selectModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
   send(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
-  cancel(): Promise<ConversationSnapshot>;
+  cancel(turnId?: string): Promise<ConversationSnapshot>;
   stop(): void | Promise<void>;
   /**
    * Live pid of the backing DSH child process while a session backend is active.
@@ -183,8 +183,8 @@ export class DesktopConversationController {
     return this.requireSession().send(text, clientTimeZone);
   }
 
-  cancel(): Promise<ConversationSnapshot> {
-    return this.requireSession().cancel();
+  cancel(turnId?: string): Promise<ConversationSnapshot> {
+    return this.requireSession().cancel(turnId);
   }
 
   private requireSession(): DesktopConversationSession {

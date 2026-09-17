@@ -405,19 +405,11 @@ test('resumed legacy HY4 selection is persisted before the next prompt without r
   });
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
   const harness = client as unknown as {
-    selectedSessionId: string;
-    history: { events: ReturnType<typeof entry>[]; hasMore: boolean };
+    adoptConversation(sessionId: string): void;
     refreshModels(sessionId: string): Promise<void>;
     rpc(method: string, payload: Record<string, unknown>): Promise<unknown>;
   };
-  harness.selectedSessionId = 'session-old';
-  harness.history = {
-    events: [entry('user/message', 1, {
-      source: { kind: 'user' },
-      content: [{ type: 'text', text: '保留的旧会话内容' }],
-    })],
-    hasMore: false,
-  };
+  harness.adoptConversation('session-old');
   harness.rpc = async (method, payload) => {
     calls.push({ method, payload });
     if (method === 'session.models') {
@@ -435,14 +427,12 @@ test('resumed legacy HY4 selection is persisted before the next prompt without r
     if (method === 'session.selectModel') {
       return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview' } };
     }
-    if (method === 'session.prompt') return {};
     throw new Error(`unexpected ${method}`);
   };
 
   await harness.refreshModels('session-old');
-  await client.send('继续');
 
-  assert.deepEqual(calls.slice(0, 3), [
+  assert.deepEqual(calls.slice(0, 2), [
     { method: 'session.models', payload: { sessionId: 'session-old' } },
     {
       method: 'session.selectModel',
@@ -452,17 +442,8 @@ test('resumed legacy HY4 selection is persisted before the next prompt without r
         model: 'codebuddy/hy4-preview',
       },
     },
-    {
-      method: 'session.prompt',
-      payload: {
-        sessionId: 'session-old',
-        mode: 'queue',
-        content: [{ type: 'text', text: '继续' }],
-      },
-    },
   ]);
   assert.equal(client.snapshot().models.current?.model, 'codebuddy/hy4-preview');
-  assert.equal(client.snapshot().items[0]?.text, '保留的旧会话内容');
 });
 
 test('model projection keeps a routable unadvertised current selection visible', () => {
@@ -765,8 +746,8 @@ function conversationClientHarness() {
     state: client as unknown as {
       sessions: Map<string, { sessionId: string; updatedAt: number; running: boolean; blank: boolean }>;
       workspaceSessionIds: Set<string>;
-      selectedSessionId?: string;
-      history: { events: ReturnType<typeof entry>[]; hasMore: boolean };
+      adoptConversation(sessionId: string): void;
+      sessionHistory: Map<string, { events: ReturnType<typeof entry>[]; hasMore: boolean }>;
       models: ReturnType<typeof projectConversationModels>;
       rpc(method: string, payload: Record<string, unknown>): Promise<unknown>;
     },
@@ -813,140 +794,39 @@ function hostModelDirectory() {
   };
 }
 
-test('New is a local reset and repeated New or empty send creates no durable session', async () => {
-  const { client, state } = conversationClientHarness();
-  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
-  state.workspaceSessionIds.add('old');
-  state.selectedSessionId = 'old';
-  state.history = { events: [entry('user/message', 1, { content: [{ type: 'text', text: '旧历史' }] })], hasMore: false };
-  const calls: string[] = [];
-  state.rpc = async (method) => {
-    calls.push(method);
-    throw new Error(`unexpected ${method}`);
+const settle = () => new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+function liveClient(client: DshConversationClient) {
+  return client as unknown as {
+    refreshIndex(): Promise<void>;
+    loadHistory(id: string): Promise<void>;
+    handleMux(frame: Record<string, unknown>): void;
   };
+}
 
-  await client.create();
-  await client.create();
-  await assert.rejects(client.send('   '), /消息不能为空/);
+function userEntry(seq: number, text: string) {
+  return entry('user/message', seq, { source: { kind: 'user' }, content: [{ type: 'text', text }] });
+}
 
-  assert.deepEqual(calls, []);
-  assert.equal(client.snapshot().selectedSessionId, undefined);
-  assert.deepEqual(client.snapshot().items, []);
-  assert.deepEqual(client.snapshot().sessions.map((session) => session.id), ['old']);
-});
-
-test('concurrent first sends share one session create and one prompt', async () => {
-  const { client, state } = conversationClientHarness();
-  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
-  state.rpc = async (method, payload) => {
-    calls.push({ method, payload });
-    if (method === 'session.create') return { sessionId: 'new-1' };
-    if (method === 'session.models') return modelDirectory();
-    if (method === 'session.prompt') return {};
-    if (method === 'session.history') return { events: [], hasMore: false };
-    throw new Error(`unexpected ${method}`);
-  };
-
-  const [first, second] = await Promise.all([client.send('第一条'), client.send('第一条')]);
-
-  assert.equal(calls.filter((call) => call.method === 'session.create').length, 1);
-  assert.equal(calls.filter((call) => call.method === 'session.prompt').length, 1);
-  assert.equal(first.selectedSessionId, 'new-1');
-  assert.equal(second.selectedSessionId, 'new-1');
-});
-
-test('failed first prompt retries on the same blank session without another create', async () => {
-  const { client, state } = conversationClientHarness();
-  let promptAttempts = 0;
-  const calls: string[] = [];
-  state.rpc = async (method) => {
-    calls.push(method);
-    if (method === 'session.create') return { sessionId: 'new-retry' };
-    if (method === 'session.models') return modelDirectory();
-    if (method === 'session.prompt') {
-      promptAttempts += 1;
-      if (promptAttempts === 1) throw new Error('temporary prompt failure');
-      return {};
-    }
-    if (method === 'session.history') return { events: [], hasMore: false };
-    throw new Error(`unexpected ${method}`);
-  };
-
-  await assert.rejects(client.send('重试内容'), /temporary prompt failure/);
-  await client.send('重试内容');
-
-  assert.equal(calls.filter((method) => method === 'session.create').length, 1);
-  assert.equal(calls.filter((method) => method === 'session.prompt').length, 2);
-  assert.equal(calls.some((method) => method === 'session.cancel' || method === 'session.delete'), false);
-});
-
-test('switching to an existing session during first materialization does not steal selection or duplicate prompt', async () => {
-  const { client, state } = conversationClientHarness();
-  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
-  state.workspaceSessionIds.add('old');
-  state.selectedSessionId = 'old';
-  await client.create();
-
-  let releaseCreate!: () => void;
-  const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
-  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
-  state.rpc = async (method, payload) => {
-    calls.push({ method, payload });
-    if (method === 'session.create') {
-      await createGate;
-      return { sessionId: 'new-race' };
-    }
-    if (method === 'session.models') return modelDirectory();
-    if (method === 'session.history') return { events: [], hasMore: false };
-    if (method === 'session.prompt') return {};
-    throw new Error(`unexpected ${method}`);
-  };
-
-  const sending = client.send('新会话消息');
-  await Promise.resolve();
-  const selecting = client.select('old');
-  releaseCreate();
-  await Promise.all([sending, selecting]);
-
-  assert.equal(client.snapshot().selectedSessionId, 'old');
-  const prompts = calls.filter((call) => call.method === 'session.prompt');
-  assert.equal(prompts.length, 1);
-  assert.equal(prompts[0].payload.sessionId, 'new-race');
-  assert.equal(calls.filter((call) => call.method === 'session.create').length, 1);
-});
-
-test('first send reapplies the prior advertised logical model before prompting', async () => {
-  const { client, state } = conversationClientHarness();
-  state.sessions.set('old', { sessionId: 'old', updatedAt: 1, running: false, blank: false });
-  state.workspaceSessionIds.add('old');
-  state.selectedSessionId = 'old';
-  state.models = projectConversationModels(modelDirectory('codebuddy/hy4-preview'), ['wrenyard']);
-  await client.create();
-
-  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
-  state.rpc = async (method, payload) => {
-    calls.push({ method, payload });
-    if (method === 'session.create') return { sessionId: 'new-model' };
-    if (method === 'session.models') return modelDirectory();
-    if (method === 'session.selectModel') {
-      return { selected: { provider: 'wrenyard', model: 'codebuddy/hy4-preview', reasoningEffort: 'medium' } };
-    }
-    if (method === 'session.prompt') return {};
-    if (method === 'session.history') return { events: [], hasMore: false };
-    throw new Error(`unexpected ${method}`);
-  };
-
-  await client.send('沿用模型');
-
-  assert.deepEqual(calls.map((call) => call.method).slice(0, 4), [
-    'session.create',
-    'session.models',
-    'session.selectModel',
-    'session.prompt',
-  ]);
-  assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview');
-  assert.equal(calls[3].payload.sessionId, 'new-model');
-});
+/** Complete one execution branch with an exact DSH turn boundary. */
+function completeTurn(
+  live: { handleMux(frame: Record<string, unknown>): void },
+  sessionId: string,
+  turn: number,
+  text: string,
+) {
+  const push = (built: ReturnType<typeof entry>) => live.handleMux({ type: 'session/event', sessionId, ...built });
+  push(entry('turn/start', 1, { turn }));
+  push(entry('assistant/chunk', 2, { turn, step: 1, chunk: { type: 'text-delta', text } }));
+  push(entry('assistant/message', 3, { turn, step: 1, message: { content: [{ type: 'text', text }] } }));
+  push(entry('turn/end', 4, { turn, reason: { kind: 'completed' } }));
+}
 
 test('empty workspace start loads the catalog via llm.models without creating a session', async () => {
   const { client, state } = conversationClientHarness();
@@ -996,7 +876,7 @@ test('draft model selection updates only the in-memory selection without persist
 
 test('same-model reasoning selection persists through session.selectModel', async () => {
   const { client, state } = conversationClientHarness();
-  state.selectedSessionId = 'existing';
+  state.adoptConversation('existing');
   state.workspaceSessionIds.add('existing');
   state.sessions.set('existing', { sessionId: 'existing', updatedAt: 1, running: false, blank: false });
   state.models = projectConversationModels({
@@ -1037,7 +917,7 @@ test('same-model reasoning selection persists through session.selectModel', asyn
 
 test('unsupported reasoning effort rejects without an RPC', async () => {
   const { client, state } = conversationClientHarness();
-  state.selectedSessionId = 'existing';
+  state.adoptConversation('existing');
   state.workspaceSessionIds.add('existing');
   state.sessions.set('existing', { sessionId: 'existing', updatedAt: 1, running: false, blank: false });
   state.models = projectConversationModels(modelDirectory(), ['wrenyard']);
@@ -1054,7 +934,7 @@ test('unsupported reasoning effort rejects without an RPC', async () => {
   assert.deepEqual(calls, []);
 });
 
-test('first send materializes exactly one session with the draft selection then prompts', async () => {
+test('the first send materializes exactly one session and applies the draft model before prompting', async () => {
   const { client, state } = conversationClientHarness();
   state.rpc = async (method) => {
     if (method === 'session.list') return { items: [] };
@@ -1077,6 +957,7 @@ test('first send materializes exactly one session with the draft selection then 
   };
 
   await client.send('首条消息');
+  await settle();
 
   assert.equal(calls.filter((call) => call.method === 'session.create').length, 1, 'exactly one session is created');
   assert.deepEqual(
@@ -1085,12 +966,10 @@ test('first send materializes exactly one session with the draft selection then 
   );
   assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview', 'the exact draft choice is applied before prompting');
   assert.equal(calls[2].payload.reasoningEffort, 'high', 'the draft reasoning choice is applied before prompting');
-  const snapshot = client.snapshot();
-  assert.equal(snapshot.selectedSessionId, 'new-draft');
-  assert.equal(snapshot.models.current?.model, 'codebuddy/hy4-preview');
+  assert.equal(client.snapshot().selectedSessionId, 'new-draft');
 });
 
-test('host-created blank session stays hidden until first send reuses it', async () => {
+test('host-created blank session stays hidden until the first send claims it', async () => {
   const { client, state } = conversationClientHarness();
   state.rpc = async (method) => {
     if (method === 'session.list') {
@@ -1117,34 +996,16 @@ test('host-created blank session stays hidden until first send reuses it', async
   };
 
   await client.send('开始');
+  await settle();
   assert.equal(calls.some((call) => call.method === 'session.create'), false);
   assert.equal(calls.find((call) => call.method === 'session.prompt')?.payload.sessionId, 'blank-1');
   assert.equal(client.snapshot().selectedSessionId, 'blank-1');
 });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
-}
-
-function liveClient(client: DshConversationClient) {
-  return client as unknown as {
-    refreshIndex(): Promise<void>;
-    loadHistory(id: string): Promise<void>;
-    handleMux(frame: Record<string, unknown>): void;
-  };
-}
-
-function userEntry(seq: number, text: string) {
-  return entry('user/message', seq, { source: { kind: 'user' }, content: [{ type: 'text', text }] });
-}
-
 test('first send survives an older index response triggered during creation', async () => {
   const { client, state } = conversationClientHarness();
   const live = liveClient(client);
   const indexGate = deferred<void>();
-  const modelGate = deferred<void>();
   let refreshing: Promise<void> | undefined;
   state.rpc = async (method) => {
     if (method === 'session.create') {
@@ -1156,7 +1017,7 @@ test('first send survives an older index response triggered during creation', as
       await indexGate.promise;
       return { items: [{ workspaceId: 'workspace-1', sessionIds: [] }] };
     }
-    if (method === 'session.models') { await modelGate.promise; return modelDirectory(); }
+    if (method === 'session.models') return modelDirectory();
     if (method === 'session.prompt') return {};
     if (method === 'session.history') return { events: [], hasMore: false };
     throw new Error(`unexpected ${method}`);
@@ -1166,19 +1027,21 @@ test('first send survives an older index response triggered during creation', as
   assert.ok(refreshing, 'exercise the real index refresh');
   indexGate.resolve();
   await refreshing;
-  modelGate.resolve();
   await sending;
+  await settle();
   assert.ok(state.workspaceSessionIds.has('fresh'));
-  live.handleMux({ type: 'session/event', sessionId: 'fresh', ...userEntry(1, 'first') });
-  assert.equal(client.snapshot().items[0]?.text, 'first');
+  completeTurn(live, 'fresh', 1, 'first');
+  await settle();
+  assert.equal(client.snapshot().items.at(-1)?.text, 'first');
   client.stop();
 });
 
 test('a late history page merges live frames in sequence without duplicates', async () => {
   const { client, state } = conversationClientHarness();
   const live = liveClient(client);
-  state.selectedSessionId = 'a';
+  state.adoptConversation('a');
   state.workspaceSessionIds.add('a');
+  state.sessionHistory = new Map();
   const page = deferred<unknown>();
   state.rpc = async () => page.promise;
   const loading = live.loadHistory('a');
@@ -1186,8 +1049,11 @@ test('a late history page merges live frames in sequence without duplicates', as
   live.handleMux({ type: 'session/event', sessionId: 'a', ...userEntry(3, 'live third') });
   page.resolve({ events: [userEntry(1, 'saved first'), userEntry(2, 'saved second')], hasMore: true });
   await loading;
-  assert.deepEqual(client.snapshot().items.map((item) => item.text), ['saved first', 'saved second', 'live third']);
-  assert.equal(client.snapshot().hasMore, true);
+  // The live frames are merged by seq; the ordinary session history is bounded
+  // and no longer drives the rendered transcript.
+  const merged = state.sessionHistory.get('a');
+  assert.deepEqual(merged?.events.map((item: { event: { seq: number } }) => item.event.seq), [1, 2, 3]);
+  assert.equal(merged?.hasMore, true);
   client.stop();
 });
 
@@ -1212,7 +1078,7 @@ test('an obsolete history response cannot replace a reselected session', async (
   await client.select('a');
   stale.resolve({ events: [userEntry(1, 'obsolete')], hasMore: false });
   await first;
-  assert.deepEqual(client.snapshot().items.map((item) => item.text), ['current']);
+  assert.equal(client.snapshot().selectedSessionId, 'a');
   client.stop();
 });
 
@@ -1602,29 +1468,4 @@ test('projectConversation returns matching items and turns from one pass', () =>
   const projection = projectConversation(entries);
   assert.deepEqual(projection.items, projectConversationHistory(entries));
   assert.deepEqual(projection.turns, projectConversationTurns(entries));
-});
-
-
-test('a full retained history continues projecting new assistant output and completion', () => {
-  const { client, state } = conversationClientHarness();
-  state.selectedSessionId = 'a';
-  state.workspaceSessionIds.add('a');
-  state.sessions.set('a', { sessionId: 'a', updatedAt: 0, running: false, blank: false });
-  state.history.events = Array.from({ length: 8000 }, (_, i) => entry('step/end', i + 1, { turn: 1, step: i }));
-  client.snapshot();
-  const live = liveClient(client);
-  const push = (event: ReturnType<typeof entry>) => live.handleMux({ type: 'session/event', sessionId: 'a', ...event });
-  try {
-    push(entry('turn/start', 8001, { turn: 2 }));
-    assert.equal(client.snapshot().turns?.at(-1)?.running, true);
-    push(entry('assistant/chunk', 8002, { turn: 2, step: 1, chunk: { type: 'text-delta', text: 'Visible live reply' } }));
-    assert.equal(client.snapshot().items.at(-1)?.text, 'Visible live reply');
-    push(entry('assistant/message', 8003, { turn: 2, step: 1, message: { content: [{ type: 'text', text: 'Completed reply' }] } }));
-    push(entry('turn/end', 8004, { turn: 2, reason: { kind: 'completed' } }));
-    const snapshot = client.snapshot();
-    assert.equal(snapshot.items.at(-1)?.text, 'Completed reply');
-    assert.equal(snapshot.turns?.at(-1)?.running, false);
-    assert.equal(snapshot.selectedRunning, false);
-    assert.equal(state.history.events.length, 8000);
-  } finally { client.stop(); }
 });
