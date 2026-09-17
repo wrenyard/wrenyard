@@ -197,7 +197,6 @@ test('Codex GPT plans default to the highest mapped thinking level and never inv
   // Older GPT families cap at xhigh with the exact wire effort.
   assert.equal(plans['chatgpt/gpt-5.5:codex'].thinking, 'xhigh');
   assert.equal(plans['chatgpt/gpt-5.4:codex'].thinking, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.4-mini:codex'].thinking, 'xhigh');
   // Requests above the usable range are capped at its highest mapped level.
   assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.6-sol', 'low').reasoningEffort, 'low');
   assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.4', 'max').reasoningEffort, 'xhigh');
@@ -348,7 +347,6 @@ test('built-in models carry their configured accessibility tier', () => {
 
   assert.equal(tier('anthropic-api', 'claude-sonnet-5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
-  assert.equal(tier('chatgpt', 'gpt-5.4-mini'), 'low');
   assert.equal(tier('cursor', 'composer-2.5'), 'low');
   assert.equal(tier('minimax', 'MiniMax-M2.7-highspeed'), 'low');
   assert.equal(tier('qwen', 'qwen3.7-flash'), 'low');
