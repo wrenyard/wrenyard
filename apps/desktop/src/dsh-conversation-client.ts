@@ -18,6 +18,7 @@ import type {
   ConversationSessionSnapshot,
   ConversationSnapshot,
   ConversationTurnSnapshot,
+  TaskRunSnapshot,
   WorkspaceConfigurationSnapshot,
 } from './shell-contract.js';
 
@@ -62,6 +63,12 @@ export interface ConversationSummaryInput {
   previousSummaries: Array<{ user: string; summary: string }>;
   user: string;
   work: string;
+  /**
+   * Which boundary of the work turn is being summarized. A `progress` note is
+   * written while dispatched work is still running and must never present it
+   * as finished; `final` is the turn's own answer once everything settled.
+   */
+  phase?: 'progress' | 'final';
   signal: AbortSignal;
 }
 
@@ -82,6 +89,18 @@ interface DshConversationClientOptions {
    * final assistant message.
    */
   summarize?(input: ConversationSummaryInput): Promise<string>;
+  /**
+   * Owner-only wait for exactly one task run this client's own work turn
+   * dispatched. It resolves with the authoritative terminal result the moment
+   * the run reaches a terminal status — there is no polling and no default
+   * deadline — and is abandoned through `signal`.
+   *
+   * When it is absent the dev32 behavior is preserved exactly: a dispatch is
+   * whatever the DSH tool result itself reported and no turn ever waits.
+   */
+  waitForTaskRun?(taskRunId: string, signal: AbortSignal): Promise<unknown>;
+  /** Owner-only cancellation of a run this client still owns. */
+  cancelTaskRun?(taskRunId: string): Promise<void>;
   /**
    * Absolute path of the product-owned conversation document. When supplied,
    * the linear conversation, its execution-session mapping, and the frozen
@@ -178,6 +197,75 @@ function taskIdentityFromArguments(args: Record<string, unknown> | undefined): s
   if (direct) return direct;
   const nested = args.task;
   return isObject(nested) ? firstString(nested, ['task_id', 'taskId', 'name', 'task_name', 'taskName']) : undefined;
+}
+
+/** Bounded authoritative result text of one dispatched task run. */
+const MAX_TASK_RESULT_TEXT = 8_000;
+/**
+ * The run statuses that are an observed outcome. A wait answering with
+ * anything else has not told the owner what the run did, so the answer is not
+ * an outcome the turn may consume.
+ */
+const TERMINAL_TASK_RUN_STATUSES: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled', 'interrupted']);
+/** Bounded total size of one internal task-result delivery envelope. */
+const MAX_TASK_ENVELOPE_TEXT = 24_000;
+/**
+ * Stable marker of the internal task-result envelope. It is the product's own
+ * data delivery back into an execution session, never a human message, so the
+ * marker makes that explicit to the model and to anything reading the branch.
+ */
+const TASK_RESULT_ENVELOPE_MARKER = '[wrenyard:task-results]';
+
+/**
+ * The exact `task_run_id` one dispatch reported. A nonblocking dispatch answers
+ * with the canonical run object followed by a bounded plain-text note, so the
+ * identity is read from the object when the whole text still parses as one and
+ * from its declared field otherwise. Nothing is inferred from the call
+ * arguments: a run id that was never reported is not an owned run.
+ */
+function taskRunIdFromResultText(text: string): string | undefined {
+  const declared = firstString(parseJsonObject(text) ?? {}, ['task_run_id', 'taskRunId']);
+  if (declared) return declared;
+  const quoted = /"task_run_id"\s*:\s*"([^"\n]+)"/u.exec(text)?.[1]
+    ?? /\btask_run_id\s*=\s*"([^"\n]+)"/u.exec(text)?.[1];
+  const trimmed = quoted?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Identity-only projection of a dispatch that has not resolved yet. Usage
+ * completeness is `unavailable` because nothing about the run's tokens, cost,
+ * or throughput has been observed — those stay absent instead of becoming
+ * substitute zeros, and the status is the nonterminal one it actually has.
+ */
+function launchTaskRunSnapshot(taskRunId: string, taskId: string, taskName?: string): TaskRunSnapshot {
+  return {
+    taskRunId,
+    taskId,
+    ...(taskName ? { taskName } : {}),
+    status: 'running',
+    usage: {
+      completeness: 'unavailable',
+      attemptCount: 0,
+      usageEventCount: 0,
+      referenceCostComplete: false,
+    },
+  };
+}
+
+/**
+ * Explicit marker that one result was cut by the per-result cap. A cut is
+ * always stated, so the coordinator never reads a silently shortened result as
+ * the whole of what the run returned.
+ */
+const TASK_RESULT_TRUNCATED_NOTE = '\n[结果已达单条长度上限，此处截断]';
+
+/** Bounded verbatim text of one authoritative task result. */
+function boundedTaskResultText(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? '';
+  return text.length > MAX_TASK_RESULT_TEXT
+    ? `${text.slice(0, MAX_TASK_RESULT_TEXT)}${TASK_RESULT_TRUNCATED_NOTE}`
+    : text;
 }
 
 const MAX_TOOL_SUMMARY = 120;
@@ -667,11 +755,16 @@ function deltaChunkContent(
  * `limit` bounds the projected transcript to its newest items; a caller that
  * owns the complete process of one branch passes `Infinity` so nothing the turn
  * actually did is dropped.
+ *
+ * The result also carries the aggregate throughput of every eligible response
+ * across every projected turn — total measured tokens over total measured
+ * generation time, on the same tokenizer contract as one turn — so a caller
+ * that owns several turns reads one true rate instead of averaging rates.
  */
 export function projectConversation(
   entries: HistoryEntry[],
   limit = 240,
-): { items: ConversationItemSnapshot[]; turns: ConversationTurnSnapshot[] } {
+): { items: ConversationItemSnapshot[]; turns: ConversationTurnSnapshot[]; outputTps?: number } {
   const items: Array<ConversationItemSnapshot & { order: number; seq: number }> = [];
   const drafts = new Map<string, ConversationItemSnapshot & { order: number; seq: number }>();
   const finalizedSteps = new Set<string>();
@@ -945,6 +1038,10 @@ export function projectConversation(
   const sortedItems = [...orderedItems].sort((left, right) => left.seq - right.seq);
   const visibleItemIds = new Set(orderedItems.map((item) => item.id));
   const turns: ConversationTurnSnapshot[] = [];
+  // The same eligible tokens and windows, accumulated across every turn, are
+  // the aggregate rate of the whole projection.
+  let aggregateTokens = 0;
+  let aggregateGenerationMs = 0;
   const sortedTurnIds = [...turnOrder].sort((left, right) => {
     const a = observedTurns.get(left);
     const b = observedTurns.get(right);
@@ -990,6 +1087,10 @@ export function projectConversation(
     const outputTps = responseCount > 0 && measuredGenerationMs > 0
       ? measuredTokens / (measuredGenerationMs / 1_000)
       : undefined;
+    if (outputTps !== undefined) {
+      aggregateTokens += measuredTokens;
+      aggregateGenerationMs += measuredGenerationMs;
+    }
     turns.push({
       id: observed.id,
       startedAt: observed.startedAt,
@@ -1008,6 +1109,9 @@ export function projectConversation(
   return {
     items: sortedItems.slice(-limit).map(({ order: _order, seq: _seq, ...item }) => item),
     turns,
+    ...(aggregateGenerationMs > 0
+      ? { outputTps: aggregateTokens / (aggregateGenerationMs / 1_000) }
+      : {}),
   };
 }
 
@@ -1041,9 +1145,78 @@ type ForkPlan =
   | { kind: 'blank' };
 
 /**
+ * One task run a work turn dispatched and owns until its authoritative result
+ * has been delivered to the coordinator exactly once:
+ *
+ * - `pending`  — dispatched; the owner-only wait has not answered yet.
+ * - `ready`    — the authoritative result arrived and is not delivered yet.
+ * - `consumed` — the result was delivered to the owning execution session, so
+ *   it is never resent no matter how often the boundary is re-observed.
+ */
+interface OwnedTaskRun {
+  taskRunId: string;
+  /** DSH tool call that dispatched it; the item its metadata is written onto. */
+  callId?: string;
+  status: 'pending' | 'ready' | 'consumed';
+  /** Authoritative projection: the launch identity, then the terminal result. */
+  taskRun?: TaskRunSnapshot;
+  /** Bounded authoritative result text handed to the coordinator on delivery. */
+  resultText?: string;
+  /** Abort handle of this run's single owner-only wait. */
+  controller?: AbortController;
+}
+
+/** Separator between two result blocks of one delivery. */
+const TASK_RESULT_BLOCK_SEPARATOR = '\n\n---\n\n';
+
+/**
+ * Build one bounded delivery from the results that are ready.
+ *
+ * The envelope states explicitly that this is automatically delivered task
+ * data rather than a new human message, so the model treats it as the result
+ * it was waiting for and nothing downstream reads it as user input.
+ *
+ * The bound selects whole results instead of slicing the combined body: every
+ * run in the returned batch carries its own complete id, status, and (already
+ * per-result capped, with any cut stated) result text, and a run that does not
+ * fit is simply not in this batch — it stays ready for the next delivery on
+ * the same session rather than being dropped. One oversized result still
+ * travels alone, so a delivery always makes progress.
+ */
+function taskResultBatch(tasks: readonly OwnedTaskRun[]): { text: string; delivered: OwnedTaskRun[] } {
+  const blocks: string[] = [];
+  const delivered: OwnedTaskRun[] = [];
+  let used = 0;
+  for (const task of tasks) {
+    const block = [
+      `task_run_id: ${task.taskRunId}`,
+      `status: ${task.taskRun?.status ?? 'unknown'}`,
+      task.resultText ?? '',
+    ].join('\n').trim();
+    const cost = block.length + (blocks.length > 0 ? TASK_RESULT_BLOCK_SEPARATOR.length : 0);
+    if (blocks.length > 0 && used + cost > MAX_TASK_ENVELOPE_TEXT) continue;
+    blocks.push(block);
+    delivered.push(task);
+    used += cost;
+  }
+  const text = [
+    TASK_RESULT_ENVELOPE_MARKER,
+    '以下是本轮派发任务的权威终态结果，由系统自动回传，不是用户的新消息。请据此继续你的工作。',
+    blocks.join(TASK_RESULT_BLOCK_SEPARATOR),
+  ].join('\n');
+  return { text, delivered };
+}
+
+/**
  * One local product turn: the optimistic display state the user sees and the
  * execution branch that backs it. Created synchronously on send, so several
  * turns can run in parallel and each one owns its own DSH session.
+ *
+ * A work turn is not one DSH turn. The coordinator ends an internal DSH turn
+ * to yield after dispatching tasks, and every delivered batch of results opens
+ * another internal turn on the same session, so one work turn owns a sequence
+ * of internal turns plus the runs it dispatched. It stays running — and keeps
+ * counting elapsed time — until both its own tasks and its coordinator settle.
  */
 interface LocalTurn {
   id: string;
@@ -1090,10 +1263,33 @@ interface LocalTurn {
    * or below it are the forked-from history and are never this turn's own.
    */
   inheritedMaxSeq?: number;
-  /** True once this turn's own branch reported its terminal `turn/end`. */
+  /**
+   * True once this work turn's coordination is over: its branch reported an
+   * internal `turn/end` with no owned task work and nothing left to deliver.
+   * An internal end that only yields never sets it.
+   */
   dshEnded?: boolean;
-  /** Exact `turn/end` time of this turn's own branch. */
+  /** Exact `turn/end` time of the newest internal turn of this turn's branch. */
   dshEndedAt?: number;
+  /** Task runs this work turn dispatched and owns, keyed by exact run id. */
+  ownedTasks: Map<string, OwnedTaskRun>;
+  /**
+   * Internal DSH turn identities whose end was already handled. A replayed
+   * frame or a reconnected history page therefore cannot reopen a boundary,
+   * duplicate a progress note, or deliver a result batch twice.
+   */
+  handledInternalTurns: Set<string>;
+  /** True while an internal end left this turn waiting on its own tasks. */
+  awaitingTasks?: boolean;
+  /** Latest progress note of the still-running work turn. */
+  progress?: string;
+  /** The progress note as a projected item; replaced by the final summary. */
+  progressItem?: ConversationItemSnapshot;
+  /** Generation of the progress call, so a superseded note is discarded. */
+  progressGeneration?: number;
+  progressController?: AbortController;
+  /** True while this turn's single result-delivery prompt is in flight. */
+  resumeInFlight?: boolean;
   work?: string;
   /**
    * The turn's own chronological process items, frozen when its branch ended.
@@ -1130,6 +1326,8 @@ export class DshConversationClient {
   private readonly workspace: DshConversationClientOptions['workspace'];
   private readonly configuredProviderIds: ReadonlySet<string>;
   private readonly summarize?: (input: ConversationSummaryInput) => Promise<string>;
+  private readonly waitForTaskRun?: (taskRunId: string, signal: AbortSignal) => Promise<unknown>;
+  private readonly cancelTaskRun?: (taskRunId: string) => Promise<void>;
   private readonly onChanged: () => void;
   private sessions = new Map<string, RawSessionSummary>();
   private workspaceSessionIds = new Set<string>();
@@ -1196,6 +1394,8 @@ export class DshConversationClient {
     this.workspace = options.workspace;
     this.configuredProviderIds = new Set(options.configuredProviderIds);
     this.summarize = options.summarize;
+    this.waitForTaskRun = options.waitForTaskRun;
+    this.cancelTaskRun = options.cancelTaskRun;
     this.onChanged = options.onChanged;
     if (options.statePath) {
       this.state = new ConversationStateStore({
@@ -1244,7 +1444,13 @@ export class DshConversationClient {
   stop(): void {
     this.stopped = true;
     this.modelGeneration += 1;
-    for (const turn of this.turns) turn.summaryController?.abort();
+    // Shutting the client down abandons every wait and summary it owns. The
+    // backend runs themselves are left alone: stopping is not cancelling.
+    for (const turn of this.turns) {
+      turn.summaryController?.abort();
+      turn.progressController?.abort();
+      for (const task of turn.ownedTasks.values()) task.controller?.abort();
+    }
     if (this.notifyTimer) clearTimeout(this.notifyTimer);
     for (const timer of this.reconnectTimers) clearTimeout(timer);
     this.reconnectTimers.clear();
@@ -1371,6 +1577,9 @@ export class DshConversationClient {
       // process block, and the answer is a separate final item. A running turn
       // projects its live branch; a settled one its frozen process.
       items.push(...(turn.processItems ?? this.liveProcessItems(turn)));
+      // The latest progress note belongs to the running turn only: the final
+      // summary replaces it rather than standing next to it in the transcript.
+      if (turn.status === 'running' && turn.progressItem) items.push(turn.progressItem);
       const finalItem = this.finalItemFor(turn);
       if (finalItem) items.push(finalItem);
     }
@@ -1392,9 +1601,38 @@ export class DshConversationClient {
    */
   private liveProcessItems(turn: LocalTurn): ConversationItemSnapshot[] {
     if (turn.entries.length === 0) return [];
-    return projectConversation(turn.entries, Number.POSITIVE_INFINITY).items
+    const items = projectConversation(turn.entries, Number.POSITIVE_INFINITY).items
       .filter((item) => item.kind !== 'user')
       .map((item) => ({ ...item, id: `${turn.id}:${item.id}`, turnId: turn.id }));
+    if (turn.ownedTasks.size === 0) return items;
+    return items.map((item) => this.withOwnedTaskRun(turn, item));
+  }
+
+  /**
+   * Overlay the observed metadata of an owned dispatch onto its own tool item.
+   * A run that is still executing carries its launch identity and nonterminal
+   * status, and a resolved one carries the authoritative `task.run.wait`
+   * projection, so an item never shows an outcome the run did not reach.
+   *
+   * A resolved run's own result text replaces the launch note as well, so the
+   * final summarizer and the saved process read what the run actually
+   * returned rather than the dispatch acknowledgement.
+   */
+  private withOwnedTaskRun(turn: LocalTurn, item: ConversationItemSnapshot): ConversationItemSnapshot {
+    const prefix = `${turn.id}:tool-`;
+    if (item.kind !== 'tool' || !item.id.startsWith(prefix)) return item;
+    const callId = item.id.slice(prefix.length);
+    const task = [...turn.ownedTasks.values()].find((candidate) => candidate.callId === callId);
+    const taskRun = task?.taskRun;
+    if (!taskRun) return item;
+    const nonterminal = taskRun.status === 'running' || taskRun.status === 'queued';
+    const failed = taskRun.status === 'failed' || taskRun.status === 'cancelled';
+    return {
+      ...item,
+      taskRun,
+      ...(task?.resultText ? { toolResultText: task.resultText.slice(0, MAX_TOOL_RESULT_TEXT) } : {}),
+      toolState: nonterminal ? 'running' : failed ? 'failed' : 'done',
+    };
   }
 
   async select(sessionId: string): Promise<ConversationSnapshot> {
@@ -1537,8 +1775,9 @@ export class DshConversationClient {
 
   /**
    * Cancel one user turn. With no `turnId` the oldest still-running turn is
-   * cancelled. Only that turn's own execution session is stopped, and its
-   * in-flight summarization is aborted, so parallel turns are unaffected.
+   * cancelled. Only that turn's own execution session is stopped, its in-flight
+   * summary or progress note is aborted, and only the task runs it owns are
+   * cancelled — so parallel turns and other conversations are unaffected.
    */
   async cancel(turnId?: string): Promise<ConversationSnapshot> {
     const target = turnId
@@ -1549,6 +1788,8 @@ export class DshConversationClient {
         .find((turn) => turn.status === 'running');
     if (!target || target.status !== 'running') return this.snapshot();
     target.summaryController?.abort();
+    target.progressController?.abort();
+    this.cancelOwnedTasks(target);
     target.cancelRequested = (target.cancelRequested ?? 0) + 1;
     const sessionId = target.sessionId;
     this.finishTurn(target, 'cancelled');
@@ -1687,41 +1928,418 @@ export class DshConversationClient {
   }
 
   /**
-   * Freeze the terminal per-turn telemetry from the turn's own branch. The
-   * projection owns the exact turn/start→turn/end boundaries and the TPS
-   * window, so completion/usage is copied verbatim once the turn ends.
+   * Fold the work turn's own branch after every observed frame.
+   *
+   * Ending an internal DSH turn is not completing the work: the coordinator
+   * also ends one to yield right after dispatching tasks. So usage is
+   * aggregated across every internal turn the branch runs, dispatches are
+   * adopted the moment their own tool result reports a run id, and only an
+   * internal `turn/end` that has not been handled yet advances the product
+   * turn's lifecycle. A handled boundary is remembered, so a replayed frame or
+   * a reconnected history page can never reopen it.
    */
   private updateTurnTelemetry(turn: LocalTurn): void {
-    // Terminal telemetry is captured exactly once. A frame arriving on the same
-    // branch after its `turn/end` never recomputes a settled turn's stats.
+    // A settled work turn is closed. A frame arriving on the same branch after
+    // it finished never recomputes its frozen stats or reopens it.
     if (turn.dshEnded || turn.entries.length === 0 || turn.status !== 'running') return;
     const projected = projectConversation(turn.entries, Number.POSITIVE_INFINITY);
-    const match = projected.turns.find((candidate) => candidate.running === false) ?? projected.turns.at(-1);
-    if (!match) return;
-    if (match.inputTokens !== undefined) turn.inputTokens = match.inputTokens;
-    if (match.outputTokens !== undefined) turn.outputTokens = match.outputTokens;
-    if (match.outputTps !== undefined) turn.outputTps = match.outputTps;
-    // A DSH turn that never ended is still running and keeps waiting for its
-    // own `turn/end`; only that event closes the branch.
-    if (match.running || match.endedAt === undefined) return;
-    turn.dshEnded = true;
-    turn.dshEndedAt = match.endedAt;
-    turn.dispatchCount = projected.turns.reduce((sum, candidate) => sum + candidate.dispatchCount, 0);
-    turn.processItems = this.freezeProcessItems(turn);
-    // Everything the branch actually did — its prose and its tool calls and
-    // results — is the work the summarizer receives.
-    turn.work = this.workTextOf(turn.processItems);
-    if (match.finalItemId === undefined) {
-      // An unclean end still tells the user what happened, without exposing the
-      // raw work text as if it were an answer.
-      turn.error = this.turnEndError(turn.entries);
-      turn.endedAt = match.endedAt;
-      this.finishTurn(turn, 'failed');
+    this.aggregateTurnUsage(turn, projected);
+    // A dispatch is owned as soon as its own result carries a run id, so a task
+    // that finishes before the internal end is already being waited on.
+    this.discoverOwnedTasks(turn, projected.items);
+    const ended = projected.turns.filter((candidate) => candidate.running === false
+      && candidate.endedAt !== undefined
+      && !turn.handledInternalTurns.has(candidate.id));
+    if (ended.length === 0) return;
+    for (const internal of ended) {
+      turn.handledInternalTurns.add(internal.id);
+      turn.dshEndedAt = internal.endedAt;
+    }
+    // Several boundaries can surface together after a reconnect; the newest one
+    // is the branch's current state and is the only one that decides.
+    this.handleInternalEnd(turn, ended[ended.length - 1] as ConversationTurnSnapshot);
+  }
+
+  /**
+   * Aggregate the work turn's telemetry over every internal turn its branch
+   * ran. A datum DSH never supplied stays absent instead of becoming zero, and
+   * throughput is the projection's own aggregate — total measured tokens over
+   * total measured generation time across every internal turn — never the
+   * arithmetic mean of per-turn rates, which would weight a short window
+   * exactly like a long one.
+   */
+  private aggregateTurnUsage(
+    turn: LocalTurn,
+    projected: { turns: readonly ConversationTurnSnapshot[]; outputTps?: number },
+  ): void {
+    const internal = projected.turns;
+    const total = (read: (item: ConversationTurnSnapshot) => number | undefined): number | undefined =>
+      internal.reduce<number | undefined>((sum, item) => {
+        const value = read(item);
+        return value === undefined ? sum : (sum ?? 0) + value;
+      }, undefined);
+    const inputTokens = total((item) => item.inputTokens);
+    const outputTokens = total((item) => item.outputTokens);
+    if (inputTokens !== undefined) turn.inputTokens = inputTokens;
+    if (outputTokens !== undefined) turn.outputTokens = outputTokens;
+    if (projected.outputTps !== undefined) turn.outputTps = projected.outputTps;
+    turn.dispatchCount = internal.reduce((sum, item) => sum + item.dispatchCount, 0);
+  }
+
+  /**
+   * Decide what one internal `turn/end` means for the product work turn.
+   *
+   * A boundary reached while the turn still owns dispatched work is a yield,
+   * never a failure — it carries no final assistant body by design. The turn
+   * keeps running and reports progress while runs are pending, delivers each
+   * completed batch back into the same session, and only produces its final
+   * answer once nothing is outstanding and the coordinator itself has ended.
+   *
+   * Only a clean end or the coordinator's own yield may advance owned work: a
+   * yield after dispatch ends the internal turn with `blocked`, because the
+   * pre-step refuses the empty continuation. Any other reason — an error, a
+   * token limit, a cancel, an abort — is a real failure of this branch and
+   * ends the work turn no matter how much it still owns, so dispatched runs
+   * can never launder a broken coordinator into an answer.
+   */
+  private handleInternalEnd(turn: LocalTurn, internal: ConversationTurnSnapshot): void {
+    const endedAt = internal.endedAt ?? Date.now();
+    const kind = this.internalEndKind(turn.entries);
+    if (kind !== 'completed' && kind !== 'blocked') {
+      this.failWorkTurn(turn, this.turnEndError(turn.entries), endedAt);
       return;
     }
+    if (this.pendingTasksOf(turn).length > 0) {
+      turn.awaitingTasks = true;
+      this.persistConversation();
+      void this.generateProgressSummary(turn);
+      this.notify();
+      return;
+    }
+    const ready = this.readyTasksOf(turn);
+    if (ready.length > 0) {
+      turn.awaitingTasks = true;
+      void this.deliverTaskResults(turn, ready);
+      return;
+    }
+    // Nothing is outstanding. The coordinator's own final body is its
+    // completion, and so is a clean end of a turn that did dispatch work. A
+    // yield with nothing left to wait for and nothing to say is not an answer:
+    // it is the unclean end the existing policy already reported.
+    if (internal.finalItemId !== undefined || (kind === 'completed' && turn.ownedTasks.size > 0)) {
+      this.completeWorkTurn(turn);
+      return;
+    }
+    this.failWorkTurn(turn, this.turnEndError(turn.entries), endedAt);
+  }
+
+  /**
+   * Close the work turn's coordination: everything it dispatched has settled
+   * and the coordinator produced nothing further, so the complete process of
+   * every internal turn is frozen and exactly one final summary is produced.
+   */
+  private completeWorkTurn(turn: LocalTurn): void {
+    if (turn.dshEnded) return;
+    turn.dshEnded = true;
+    turn.awaitingTasks = false;
+    // A progress note is intermediate state that the final answer replaces.
+    turn.progressController?.abort();
+    turn.progressController = undefined;
+    turn.progressItem = undefined;
+    turn.processItems = this.freezeProcessItems(turn);
+    // Everything the branch actually did — its prose and its tool calls and
+    // results, across every internal turn — is the work the summarizer receives.
+    turn.work = this.workTextOf(turn.processItems);
     // The product turn stays running through exactly one summarization call, so
     // a cancel arriving mid-summary still reaches it.
     void this.summarizeTurn(turn);
+  }
+
+  /**
+   * End the work turn without an answer. The complete process is still frozen
+   * and the runs it still owns are cancelled, because a settled turn can no
+   * longer consume their results.
+   */
+  private failWorkTurn(turn: LocalTurn, error: string, endedAt: number): void {
+    if (turn.dshEnded || turn.status !== 'running') return;
+    turn.dshEnded = true;
+    turn.dshEndedAt = endedAt;
+    turn.awaitingTasks = false;
+    turn.progressController?.abort();
+    turn.progressController = undefined;
+    turn.progressItem = undefined;
+    turn.processItems = this.freezeProcessItems(turn);
+    turn.work = this.workTextOf(turn.processItems);
+    // An unclean end still tells the user what happened, without exposing the
+    // raw work text as if it were an answer.
+    turn.error = error;
+    turn.endedAt = endedAt;
+    this.cancelOwnedTasks(turn);
+    this.finishTurn(turn, 'failed');
+  }
+
+  /** Exact reason kind of the newest observed internal `turn/end`. */
+  private internalEndKind(entries: readonly HistoryEntry[]): string | undefined {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const event = entries[index]?.event;
+      if (asString(event?.type) !== 'turn/end') continue;
+      const data = isObject(event?.data) ? event.data : {};
+      const reason = isObject(data.reason) ? data.reason : undefined;
+      return asString(reason?.kind);
+    }
+    return undefined;
+  }
+
+  private pendingTasksOf(turn: LocalTurn): OwnedTaskRun[] {
+    return [...turn.ownedTasks.values()].filter((task) => task.status === 'pending');
+  }
+
+  private readyTasksOf(turn: LocalTurn): OwnedTaskRun[] {
+    return [...turn.ownedTasks.values()].filter((task) => task.status === 'ready');
+  }
+
+  /**
+   * Adopt every task run this work turn's own dispatches reported, and start
+   * exactly one owner-only wait per run id. Only a `run_task`/`task_run`
+   * result of this turn's own branch is read, and a run that is already owned
+   * is never waited on twice, so a replayed frame or a reconnect can neither
+   * duplicate a wait nor duplicate a delivery.
+   */
+  private discoverOwnedTasks(turn: LocalTurn, items: readonly ConversationItemSnapshot[]): void {
+    if (!this.waitForTaskRun || turn.status !== 'running') return;
+    for (const item of items) {
+      if (item.kind !== 'tool' || !item.toolName || !TASK_RUN_TOOLS.has(item.toolName)) continue;
+      const resultText = item.toolResultText;
+      if (!resultText) continue;
+      const taskRunId = taskRunIdFromResultText(resultText);
+      if (!taskRunId || turn.ownedTasks.has(taskRunId)) continue;
+      const callId = item.id.startsWith('tool-') ? item.id.slice('tool-'.length) : undefined;
+      const launch = parseJsonObject(resultText);
+      const taskId = firstString(launch ?? {}, ['task_id', 'taskId'])
+        ?? taskIdentityFromArguments(parseJsonObject(item.text));
+      const task: OwnedTaskRun = {
+        taskRunId,
+        status: 'pending',
+        ...(callId ? { callId } : {}),
+        ...(taskId
+          ? { taskRun: launchTaskRunSnapshot(taskRunId, taskId, firstString(launch ?? {}, ['task_name', 'taskName'])) }
+          : {}),
+      };
+      turn.ownedTasks.set(taskRunId, task);
+      this.launchTaskWait(turn, task);
+    }
+  }
+
+  /**
+   * Start the single owner-only wait for one dispatched run. There is no
+   * polling and no default deadline: the adapter answers when the run itself
+   * reaches a terminal status, and the wait is abandoned only by an abort.
+   */
+  private launchTaskWait(turn: LocalTurn, task: OwnedTaskRun): void {
+    const wait = this.waitForTaskRun;
+    if (!wait) return;
+    const controller = new AbortController();
+    task.controller = controller;
+    void wait(task.taskRunId, controller.signal).then(
+      (value) => this.settleOwnedTask(turn, task, controller, { value }),
+      (error: unknown) => this.settleOwnedTask(turn, task, controller, { error }),
+    );
+  }
+
+  /**
+   * Record the authoritative outcome of one owned run exactly once. A late,
+   * aborted, or duplicate answer is dropped: it can neither reopen a settled
+   * work turn nor deliver the same result twice.
+   *
+   * Only this run's own terminal projection is an outcome. A rejected wait, an
+   * unparseable answer, an answer carrying another run's id, and an answer
+   * that is still nonterminal all mean the run's real result was never
+   * observed — the backend may well still be running it — so no status is
+   * invented, the run never becomes ready or consumed, and the work turn fails
+   * truthfully instead of completing on a result it does not have.
+   */
+  private settleOwnedTask(
+    turn: LocalTurn,
+    task: OwnedTaskRun,
+    controller: AbortController,
+    outcome: { value: unknown } | { error: unknown },
+  ): void {
+    if (task.controller !== controller || controller.signal.aborted) return;
+    if (task.status !== 'pending' || turn.status !== 'running') return;
+    task.controller = undefined;
+    if ('error' in outcome) {
+      const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+      this.failOwnedTaskWait(turn, `任务 ${task.taskRunId} 结果等待失败：${message}`);
+      return;
+    }
+    const record = isObject(outcome.value) ? outcome.value : undefined;
+    const snapshot = record ? parseTaskRunSnapshot(record) : null;
+    if (!snapshot || snapshot.taskRunId !== task.taskRunId
+      || snapshot.status === undefined || !TERMINAL_TASK_RUN_STATUSES.has(snapshot.status)) {
+      this.failOwnedTaskWait(turn, `任务 ${task.taskRunId} 未回传可用的终态结果`);
+      return;
+    }
+    task.taskRun = snapshot;
+    task.resultText = boundedTaskResultText(record);
+    task.status = 'ready';
+    this.persistConversation();
+    this.advanceWorkTurn(turn);
+    this.notify();
+  }
+
+  /**
+   * End the work turn on a wait that never produced the run's real outcome.
+   * The turn cannot answer from a result it never observed, so it fails with
+   * what actually happened, every run it still owns is stopped instead of
+   * being left to execute behind a settled turn, and a coordinator that is
+   * still holding an open internal turn or an in-flight delivery is aborted.
+   */
+  private failOwnedTaskWait(turn: LocalTurn, error: string): void {
+    const sessionId = turn.sessionId;
+    // The coordinator is idle only while the turn is parked on its own tasks
+    // with no delivery in flight; anything else is still executing.
+    const modelRunning = turn.awaitingTasks !== true || turn.resumeInFlight === true;
+    this.failWorkTurn(turn, error, Date.now());
+    if (sessionId !== undefined && modelRunning) {
+      void this.rpc('session.cancel', { sessionId }).catch(() => undefined);
+    }
+    this.notify();
+  }
+
+  /**
+   * Continue a work turn that already ended an internal DSH turn and is only
+   * waiting on its own dispatched runs. While any run is still pending the
+   * turn keeps waiting; once the batch is complete it is delivered in one go,
+   * and once nothing is left the turn produces its final answer.
+   */
+  private advanceWorkTurn(turn: LocalTurn): void {
+    if (turn.status !== 'running' || turn.awaitingTasks !== true || turn.resumeInFlight === true) return;
+    if (this.pendingTasksOf(turn).length > 0) return;
+    const ready = this.readyTasksOf(turn);
+    if (ready.length > 0) {
+      void this.deliverTaskResults(turn, ready);
+      return;
+    }
+    this.completeWorkTurn(turn);
+  }
+
+  /**
+   * Deliver one batch of authoritative task results back into the work turn's
+   * OWN execution session, exactly once.
+   *
+   * This is the product's internal data envelope, not a product message: it
+   * continues the same session instead of forking a new branch, it is never
+   * shown as a user bubble, and it never enters the completed user/summary
+   * history. Only the runs this batch actually carries are marked consumed,
+   * and that is recorded before the call, so a duplicate boundary or a
+   * reconnect can never resend the same batch while a run the bound excluded
+   * stays ready for the next delivery on this same session.
+   */
+  private async deliverTaskResults(turn: LocalTurn, ready: readonly OwnedTaskRun[]): Promise<void> {
+    const sessionId = turn.sessionId;
+    if (turn.resumeInFlight === true || turn.status !== 'running') return;
+    if (sessionId === undefined || ready.length === 0) return;
+    const batch = taskResultBatch(ready);
+    if (batch.delivered.length === 0) return;
+    turn.resumeInFlight = true;
+    for (const task of batch.delivered) task.status = 'consumed';
+    turn.awaitingTasks = false;
+    turn.progressController?.abort();
+    turn.progressController = undefined;
+    this.persistConversation();
+    // A cancel that lands while the delivery is in flight must not be undone
+    // by a prompt DSH accepts afterwards.
+    const cancelsBeforeResume = turn.cancelRequested ?? 0;
+    try {
+      await this.rpc('session.prompt', {
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: batch.text }],
+        ...(turn.clientTimeZone ? { clientTimeZone: turn.clientTimeZone } : {}),
+      });
+    } catch (error) {
+      turn.resumeInFlight = false;
+      const message = error instanceof Error ? error.message : String(error);
+      this.failWorkTurn(turn, `任务结果回传失败：${message}`, Date.now());
+      return;
+    }
+    turn.resumeInFlight = false;
+    if (turn.status !== 'running') {
+      if ((turn.cancelRequested ?? 0) > cancelsBeforeResume) {
+        await this.rpc('session.cancel', { sessionId }).catch(() => undefined);
+        turn.cancelReachedDsh = true;
+      }
+      return;
+    }
+    const summary = this.sessions.get(sessionId);
+    if (summary) {
+      summary.running = true;
+      summary.updatedAt = Date.now();
+    }
+    this.notify();
+    // A boundary observed while this delivery was in flight was suppressed by
+    // the in-flight flag rather than dropped, so the turn is advanced again now
+    // that the flag is clear: it is never left parked on a batch nobody will
+    // deliver. `advanceWorkTurn` itself decides whether anything is waiting.
+    this.advanceWorkTurn(turn);
+  }
+
+  /**
+   * Write one concise progress note for exactly this internal boundary. There
+   * is one ordinary summary request per boundary and no retry or fallback: a
+   * failed note simply leaves the previous one in place, because a progress
+   * note is never the turn's answer. A note that arrives after its boundary
+   * was superseded — by a delivery, a completion, or a cancel — is discarded.
+   */
+  private async generateProgressSummary(turn: LocalTurn): Promise<void> {
+    if (!this.summarize) return;
+    const generation = (turn.progressGeneration ?? 0) + 1;
+    turn.progressGeneration = generation;
+    turn.progressController?.abort();
+    const controller = new AbortController();
+    turn.progressController = controller;
+    let note: string | undefined;
+    try {
+      note = (await this.summarize({
+        previousSummaries: turn.previousSummaries,
+        user: turn.prompt,
+        work: this.workTextOf(this.liveProcessItems(turn)) ?? '',
+        phase: 'progress',
+        signal: controller.signal,
+      })).trim();
+    } catch {
+      // No retry and no fallback text: the boundary keeps its previous note.
+      return;
+    } finally {
+      if (turn.progressController === controller) turn.progressController = undefined;
+    }
+    if (turn.progressGeneration !== generation || controller.signal.aborted) return;
+    if (turn.status !== 'running' || turn.dshEnded || !note) return;
+    turn.progress = note;
+    turn.progressItem = {
+      id: `${turn.id}-progress-${generation}`,
+      kind: 'assistant',
+      text: note,
+      time: Date.now(),
+      turnId: turn.id,
+    };
+    this.persistConversation();
+    this.flushNotify();
+  }
+
+  /**
+   * Stop every run this work turn still owns and abandon its waits. A run that
+   * already reported its own outcome is left alone: only work still executing
+   * on the turn's behalf is cancelled.
+   */
+  private cancelOwnedTasks(turn: LocalTurn): void {
+    const cancel = this.cancelTaskRun;
+    for (const task of turn.ownedTasks.values()) {
+      task.controller?.abort();
+      task.controller = undefined;
+      if (task.status !== 'pending' || !cancel) continue;
+      void cancel(task.taskRunId).catch(() => undefined);
+    }
   }
 
   /** The turn's own process, frozen: a settled item is never still running. */
@@ -2074,6 +2692,8 @@ export class DshConversationClient {
         .filter((candidate) => candidate.status === 'completed' && candidate.summary !== undefined)
         .map((candidate) => ({ user: candidate.prompt, summary: candidate.summary as string })),
       entries: [],
+      ownedTasks: new Map(),
+      handledInternalTurns: new Set(),
     };
     this.turns.push(turn);
     this.turnsById.set(turn.id, turn);
@@ -2384,6 +3004,7 @@ export class DshConversationClient {
         previousSummaries: turn.previousSummaries,
         user: turn.prompt,
         work: turn.work ?? '',
+        phase: 'final',
         signal: controller.signal,
       });
       summary = result.trim();
@@ -2473,7 +3094,11 @@ export class DshConversationClient {
     return text || undefined;
   }
 
-  /** Turn telemetry of the selected conversation only, in send order. */
+  /**
+   * Turn telemetry of the selected conversation only, in send order. A work
+   * turn waiting on its own dispatched runs is still running, so it keeps no
+   * end time and its elapsed clock keeps counting.
+   */
   private turnSnapshots(): ConversationTurnSnapshot[] {
     return this.turnsOf(this.activeConversationId)
       .map((turn): ConversationTurnSnapshot => ({
@@ -2482,6 +3107,11 @@ export class DshConversationClient {
         ...(turn.endedAt !== undefined ? { endedAt: turn.endedAt } : {}),
         running: turn.status === 'running',
         ...(turn.finalItemId ? { finalItemId: turn.finalItemId } : {}),
+        ...(turn.status === 'running' && turn.progressItem ? { progressItemId: turn.progressItem.id } : {}),
+        ...(() => {
+          const pending = turn.status === 'running' ? this.pendingTasksOf(turn).length : 0;
+          return pending > 0 ? { pendingTaskCount: pending } : {};
+        })(),
         dispatchCount: this.dispatchCountFor(turn),
         ...(turn.inputTokens !== undefined ? { inputTokens: turn.inputTokens } : {}),
         ...(turn.outputTokens !== undefined ? { outputTokens: turn.outputTokens } : {}),
@@ -2546,9 +3176,31 @@ export class DshConversationClient {
         ...(turn.finalItemId ? { finalItemId: turn.finalItemId } : {}),
         ...(turn.inheritedMaxSeq !== undefined ? { inheritedMaxSeq: turn.inheritedMaxSeq } : {}),
         ...(turn.dshEndedAt !== undefined ? { dshEndedAt: turn.dshEndedAt } : {}),
-        ...(turn.processItems && turn.processItems.length > 0 ? { process: turn.processItems } : {}),
+        ...(() => {
+          // A turn that is still running is recorded with the process it has
+          // produced so far, so a restart of a work turn that was waiting on
+          // its own dispatched runs keeps the work it already did instead of
+          // restoring an empty interrupted turn.
+          const process = turn.processItems ?? this.liveProcessItems(turn);
+          return process.length > 0 ? { process } : {};
+        })(),
         ...(turn.work ? { work: turn.work } : {}),
         ...(turn.summary ? { summary: turn.summary } : {}),
+        // The latest progress note and the exact state of every owned run are
+        // recorded next to the process, so a restart can report the truth
+        // instead of dropping dispatched work or implying an outcome.
+        ...(turn.progress ? { progress: turn.progress } : {}),
+        ...(turn.ownedTasks.size > 0
+          ? {
+            tasks: [...turn.ownedTasks.values()].map((task) => ({
+              taskRunId: task.taskRunId,
+              status: task.status,
+              ...(task.callId ? { callId: task.callId } : {}),
+              ...(task.taskRun ? { taskRun: task.taskRun } : {}),
+            })),
+          }
+          : {}),
+        ...(turn.handledInternalTurns.size > 0 ? { internalTurnIds: [...turn.handledInternalTurns] } : {}),
         ...(turn.pendingModel ? { model: turn.pendingModel } : {}),
         dispatchCount: this.dispatchCountFor(turn),
         status: turn.status,
@@ -2623,7 +3275,15 @@ export class DshConversationClient {
     const summaryMessage = messageById(persisted.finalItemId);
     const interrupted = persisted.status === 'running';
     const endedAt = persisted.endedAt ?? (interrupted ? persisted.startedAt : undefined);
-    const error = persisted.error ?? (interrupted ? '已中断：上次运行未完成' : undefined);
+    // An interrupted model turn can never be resumed, so its dispatched runs
+    // are not re-attached: a restored turn that cannot consume a result must
+    // not silently wait on one. The exact task states are preserved verbatim
+    // and the interrupted message says what actually happened.
+    const tasks = persisted.tasks ?? [];
+    const unsettled = tasks.some((task) => task.status !== 'consumed');
+    const error = persisted.error ?? (interrupted
+      ? unsettled ? '已中断：上次运行未完成，其派发的任务结果未回传' : '已中断：上次运行未完成'
+      : undefined);
     return {
       id: persisted.id,
       seq: persisted.seq,
@@ -2653,9 +3313,17 @@ export class DshConversationClient {
       ...(persisted.outputTokens !== undefined ? { outputTokens: persisted.outputTokens } : {}),
       ...(persisted.outputTps !== undefined ? { outputTps: persisted.outputTps } : {}),
       ...(persisted.summary ? { summary: persisted.summary } : {}),
+      ...(persisted.progress ? { progress: persisted.progress } : {}),
       ...(error ? { error } : {}),
       previousSummaries,
       entries: [],
+      ownedTasks: new Map(tasks.map((task): [string, OwnedTaskRun] => [task.taskRunId, {
+        taskRunId: task.taskRunId,
+        status: task.status,
+        ...(task.callId ? { callId: task.callId } : {}),
+        ...(task.taskRun ? { taskRun: task.taskRun } : {}),
+      }])),
+      handledInternalTurns: new Set(persisted.internalTurnIds ?? []),
     };
   }
 
