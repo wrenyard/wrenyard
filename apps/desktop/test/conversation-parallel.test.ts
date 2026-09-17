@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
-import { mkdtempSync, rmSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DshConversationClient } from '../src/dsh-conversation-client.js';
+import { DshConversationClient, projectConversation } from '../src/dsh-conversation-client.js';
 
 // ---------------------------------------------------------------------------
 // Minimal fake DSH: an RPC endpoint over `fetch` plus an EventTarget-shaped
@@ -337,6 +337,194 @@ function emitTurn(
   return seq + 1;
 }
 
+/**
+ * The exact snake_case terminal envelope the daemon's `task.run.wait` answers
+ * with for one run. Nothing here is projected by the test; the client reads it
+ * exactly as it reads the real result.
+ */
+function terminalTaskResult(taskRunId: string, status = 'done'): Record<string, unknown> {
+  return {
+    task_run_id: taskRunId,
+    task_id: 'demo-task',
+    status,
+    output: { note: `${taskRunId} finished` },
+    usage: {
+      completeness: 'complete',
+      attempt_count: 1,
+      usage_event_count: 1,
+      output_tokens: 7,
+      reference_cost_usd: 0.0012,
+      reference_cost_complete: true,
+    },
+  };
+}
+
+/** One terminal result whose own body already exceeds the per-result cap. */
+function oversizedTaskResult(taskRunId: string): Record<string, unknown> {
+  return { ...terminalTaskResult(taskRunId), output: { note: 'x'.repeat(9_000) } };
+}
+
+/**
+ * One nonblocking dispatch backend. Each run's authoritative result is released
+ * by the test, and every wait, abort, and cancellation is recorded so a test can
+ * assert exactly which runs a turn owned.
+ */
+function fakeTaskRuns() {
+  const waits = new Map<string, (value: unknown) => void>();
+  const failures = new Map<string, (error: unknown) => void>();
+  const waited: string[] = [];
+  const cancelled: string[] = [];
+  const aborted: string[] = [];
+  return {
+    waited,
+    cancelled,
+    aborted,
+    waitForTaskRun(taskRunId: string, signal: AbortSignal): Promise<unknown> {
+      waited.push(taskRunId);
+      return new Promise<unknown>((resolve, reject) => {
+        waits.set(taskRunId, resolve);
+        failures.set(taskRunId, reject);
+        signal.addEventListener('abort', () => {
+          aborted.push(taskRunId);
+          reject(new Error('task wait aborted'));
+        }, { once: true });
+      });
+    },
+    cancelTaskRun(taskRunId: string): Promise<void> {
+      cancelled.push(taskRunId);
+      return Promise.resolve();
+    },
+    /** Deliver one run's authoritative terminal result to its owner-only wait. */
+    finish(taskRunId: string, result?: Record<string, unknown>): void {
+      waits.get(taskRunId)?.(result ?? terminalTaskResult(taskRunId));
+    },
+    /** Reject one run's wait, as a transport that broke before any result does. */
+    fail(taskRunId: string, message: string): void {
+      failures.get(taskRunId)?.(new Error(message));
+    },
+  };
+}
+
+/**
+ * The exact text a nonblocking `run_task` returns: the canonical launch object
+ * followed by the bounded dispatch note, so the whole result is deliberately
+ * not parseable as one JSON object.
+ */
+function launchResultText(taskRunId: string): string {
+  return `${JSON.stringify({ task_run_id: taskRunId, task_id: 'demo-task', status: 'queued' })}\n`
+    + `[async dispatch: task_run_id=${JSON.stringify(taskRunId)} is running. `
+    + 'The terminal result is pending and will be delivered automatically to this conversation; '
+    + 'do not poll, do not call task.run.wait, and do not fabricate a result.]';
+}
+
+/** One nonblocking `run_task` call plus its launch-only result. */
+function emitDispatchCall(
+  fake: FakeDsh,
+  sessionId: string,
+  turn: number,
+  taskRunId: string,
+  startSeq: number,
+): number {
+  const callId = `call-${taskRunId}`;
+  let seq = startSeq;
+  const push = (type: string, data: Record<string, unknown>): void => {
+    pushMux(fake, { type: 'session/event', sessionId, ...event(type, seq, data) });
+    seq += 1;
+  };
+  push('tool/call', { turn, step: 1, callId, name: 'run_task', arguments: JSON.stringify({ task_id: 'demo-task' }) });
+  push('tool/result', {
+    turn,
+    step: 1,
+    message: {
+      source: { kind: 'tool', callId },
+      content: [{
+        type: 'tool-result',
+        toolCallId: callId,
+        content: [{ type: 'text', text: launchResultText(taskRunId) }],
+        isError: false,
+      }],
+    },
+  });
+  return seq;
+}
+
+/** Emit one internal DSH turn's prose plus one nonblocking dispatch. */
+function emitDispatch(
+  fake: FakeDsh,
+  sessionId: string,
+  turn: number,
+  taskRunId: string,
+  startSeq: number,
+): number {
+  let seq = startSeq;
+  const push = (type: string, data: Record<string, unknown>): void => {
+    pushMux(fake, { type: 'session/event', sessionId, ...event(type, seq, data) });
+    seq += 1;
+  };
+  push('turn/start', { turn });
+  push('assistant/message', { turn, step: 1, message: { content: [{ type: 'text', text: '已派发后台任务。' }] } });
+  return emitDispatchCall(fake, sessionId, turn, taskRunId, seq);
+}
+
+/**
+ * End one internal DSH turn the way a yield-after-dispatch does: the installed
+ * agent loop's pre-step refuses the empty continuation, so the internal turn
+ * ends with `blocked` and no assistant final body at all.
+ */
+function emitYieldEnd(fake: FakeDsh, sessionId: string, turn: number, startSeq: number): number {
+  pushMux(fake, {
+    type: 'session/event',
+    sessionId,
+    ...event('turn/end', startSeq, { turn, reason: { kind: 'blocked', message: 'no new messages' } }),
+  });
+  return startSeq + 1;
+}
+
+/** Emit one internal turn that only takes a delivery and yields again. */
+function emitYieldTurn(fake: FakeDsh, sessionId: string, turn: number, startSeq: number): number {
+  pushMux(fake, { type: 'session/event', sessionId, ...event('turn/start', startSeq, { turn }) });
+  return emitYieldEnd(fake, sessionId, turn, startSeq + 1);
+}
+
+/** End one internal DSH turn with one exact reason of its own. */
+function emitTurnEnd(
+  fake: FakeDsh,
+  sessionId: string,
+  turn: number,
+  startSeq: number,
+  reason: Record<string, unknown>,
+): number {
+  pushMux(fake, { type: 'session/event', sessionId, ...event('turn/end', startSeq, { turn, reason }) });
+  return startSeq + 1;
+}
+
+/**
+ * One internal turn with exactly one measurable response window: two nonempty
+ * deltas `windowMs` apart and a clean finish, so the tokenizer TPS contract
+ * observes this response and nothing else.
+ */
+function emitMeasuredTurn(
+  fake: FakeDsh,
+  sessionId: string,
+  turn: number,
+  startSeq: number,
+  startTime: number,
+  windowMs: number,
+  text: string,
+): number {
+  let seq = startSeq;
+  const push = (type: string, time: number, data: Record<string, unknown>): void => {
+    pushMux(fake, { type: 'session/event', sessionId, event: { type, seq, time, data } });
+    seq += 1;
+  };
+  push('turn/start', startTime, { turn });
+  push('assistant/chunk', startTime, { turn, step: 1, chunk: { type: 'text-delta', text } });
+  push('assistant/chunk', startTime + windowMs, { turn, step: 1, chunk: { type: 'text-delta', text } });
+  push('assistant/chunk', startTime + windowMs, { turn, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } });
+  push('assistant/message', startTime + windowMs, { turn, step: 1, message: { content: [{ type: 'text', text: `${text}${text}` }] } });
+  return seq;
+}
+
 /** Open a client wired to a fake DSH, with a real temp state document. */
 interface Harness {
   client: DshConversationClient;
@@ -359,8 +547,11 @@ async function openHarness(options: {
     previousSummaries: Array<{ user: string; summary: string }>;
     user: string;
     work: string;
+    phase?: 'progress' | 'final';
     signal: AbortSignal;
   }) => Promise<string>;
+  waitForTaskRun?: (taskRunId: string, signal: AbortSignal) => Promise<unknown>;
+  cancelTaskRun?: (taskRunId: string) => Promise<void>;
   statePath?: string;
   sessions?: Array<{ sessionId: string; updatedAt: number; running: boolean; blank: boolean }>;
   /** Real DSH history for a durable session this harness did not itself
@@ -392,6 +583,8 @@ async function openHarness(options: {
     configuredProviderIds: ['wrenyard'],
     statePath,
     ...(options.summarize ? { summarize: options.summarize } : {}),
+    ...(options.waitForTaskRun ? { waitForTaskRun: options.waitForTaskRun } : {}),
+    ...(options.cancelTaskRun ? { cancelTaskRun: options.cancelTaskRun } : {}),
     onChanged() {},
   });
   const harness: Harness = {
@@ -1000,4 +1193,555 @@ test('fork history replay during the inherited-boundary read never completes the
     assert.ok(await waitFor(() => seen.length === 2));
     assert.equal(seen[1], 'New work');
   } finally { gate.resolve(); h.stop(); }
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 4: one work turn owning several internal DSH turns and the tasks it
+// dispatched asynchronously.
+// ---------------------------------------------------------------------------
+
+test('a dispatched task keeps the work turn running with a progress note, then one same-session delivery and one final summary', async () => {
+  const tasks = fakeTaskRuns();
+  const calls: Array<{ phase?: string; user: string; work: string }> = [];
+  const h = await openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async (input) => {
+      calls.push({ phase: input.phase, user: input.user, work: input.work });
+      return input.phase === 'progress' ? '正在等后台任务返回。' : '任务已完成，结果如下。';
+    },
+  });
+  try {
+    await h.client.send('派发一个后台任务');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    let seq = emitDispatch(h.fake, session, 1, 'tr-1', 1);
+    seq = emitYieldEnd(h.fake, session, 1, seq);
+
+    // The internal turn ended with no assistant final body, but the work turn
+    // owns a pending run: that yield is not a failure.
+    assert.ok(await waitFor(() => calls.some((call) => call.phase === 'progress')));
+    assert.ok(await waitFor(() => h.client.snapshot().items.some((item) => item.text === '正在等后台任务返回。')));
+    const waiting = h.client.snapshot().turns?.[0];
+    assert.equal(waiting?.running, true, 'a pre-step yield with owned tasks keeps the work turn running');
+    assert.equal(waiting?.endedAt, undefined, 'the elapsed clock keeps counting while tasks run');
+    assert.equal(waiting?.pendingTaskCount, 1);
+    assert.deepEqual(tasks.waited, ['tr-1'], 'exactly one owner-only wait per run id');
+    assert.equal(
+      h.client.snapshot().items.some((item) => item.text === '任务已完成，结果如下。'),
+      false,
+      'no final answer is produced while a dispatched run is pending',
+    );
+    // A pending dispatch shows its own nonterminal identity, never an outcome.
+    const pendingTool = h.client.snapshot().items.find((item) => item.taskRun?.taskRunId === 'tr-1');
+    assert.equal(pendingTool?.taskRun?.status, 'running');
+    assert.equal(pendingTool?.taskRun?.usage.completeness, 'unavailable');
+
+    // The authoritative result is delivered back into the SAME session, once.
+    tasks.finish('tr-1');
+    assert.ok(await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.prompt').length === 2));
+    const delivery = h.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
+    assert.equal(String(delivery?.payload.sessionId), session, 'the result resumes the same execution session');
+    const delivered = String((delivery?.payload.content as Array<{ text: string }>)[0].text);
+    assert.ok(delivered.includes('[wrenyard:task-results]'), 'the delivery is a marked internal data envelope');
+    assert.ok(delivered.includes('tr-1'));
+    assert.equal(h.fake.calls.filter((call) => call.method === 'session.fork').length, 0, 'a delivery never forks a new branch');
+    assert.equal(h.client.snapshot().turns?.[0]?.running, true, 'the work turn is still running after the delivery');
+
+    // Only the second internal turn's own answer completes the work turn.
+    emitTurn(h.fake, session, 2, '后台任务结果已汇总。', seq);
+    assert.ok(await waitFor(() => calls.some((call) => call.phase === 'final')));
+    const done = h.client.snapshot().turns?.[0];
+    assert.equal(done?.running, false);
+    assert.equal(typeof done?.endedAt, 'number', 'totals freeze only once everything settled');
+    assert.equal(done?.dispatchCount, 1, 'dispatches aggregate across every internal turn');
+    assert.equal(done?.pendingTaskCount, undefined);
+    const items = h.client.snapshot().items;
+    assert.equal(items.find((item) => item.id === done?.finalItemId)?.text, '任务已完成，结果如下。');
+    assert.equal(
+      items.some((item) => item.text === '正在等后台任务返回。'),
+      false,
+      'the final answer replaces the progress note instead of standing beside it',
+    );
+    assert.equal(calls.filter((call) => call.phase === 'final').length, 1, 'exactly one final summary per work turn');
+    assert.equal(h.fake.calls.filter((call) => call.method === 'session.prompt').length, 2, 'the result batch is consumed exactly once');
+    // The internal envelope is product data, never a user message.
+    assert.deepEqual(items.filter((item) => item.kind === 'user').map((item) => item.text), ['派发一个后台任务']);
+    assert.equal(items.some((item) => item.text.includes('[wrenyard:task-results]')), false);
+    // Both internal turns' process records survive in the settled turn.
+    assert.ok(items.some((item) => item.text === '已派发后台任务。'));
+    assert.ok(items.some((item) => item.text === '后台任务结果已汇总。'));
+    assert.ok(calls.find((call) => call.phase === 'final')?.work.includes('已派发后台任务。'));
+    // The authoritative terminal metadata replaces the launch identity.
+    const settledTool = items.find((item) => item.taskRun?.taskRunId === 'tr-1');
+    assert.equal(settledTool?.taskRun?.status, 'done');
+    assert.equal(settledTool?.toolState, 'done');
+
+    // The completed work turn persists exactly one user/final-summary pair, and
+    // its owned run is recorded as consumed.
+    const document = JSON.parse(readFileSync(h.statePath, 'utf8')) as {
+      records: Array<{
+        messages: Array<{ kind: string; text: string }>;
+        turns: Array<{ tasks?: Array<{ taskRunId: string; status: string }>; internalTurnIds?: string[]; progress?: string; summary?: string }>;
+      }>;
+    };
+    const record = document.records.at(-1);
+    assert.deepEqual(
+      record?.messages.map((message) => message.kind),
+      ['user', 'assistant'],
+      'one completed work turn is exactly one user/final-summary pair',
+    );
+    const persisted = record?.turns.at(-1);
+    assert.deepEqual(persisted?.tasks, [{ taskRunId: 'tr-1', status: 'consumed', callId: 'call-tr-1', taskRun: settledTool?.taskRun }]);
+    assert.deepEqual(persisted?.internalTurnIds, ['turn-1', 'turn-2'], 'both handled internal boundaries are recorded');
+    assert.equal(persisted?.summary, '任务已完成，结果如下。');
+  } finally { h.stop(); }
+});
+
+test('a task result that arrives before the internal end is delivered without any progress note', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async (input) => {
+      phases.push(input.phase ?? 'final');
+      return input.phase === 'progress' ? '进展' : '完成';
+    },
+  });
+  try {
+    await h.client.send('抢跑的任务');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const seq = emitDispatch(h.fake, session, 1, 'tr-race', 1);
+    assert.ok(await waitFor(() => tasks.waited.length === 1));
+
+    // The result wins the race against the internal boundary.
+    tasks.finish('tr-race');
+    await settle();
+    assert.equal(
+      h.fake.calls.filter((call) => call.method === 'session.prompt').length,
+      1,
+      'nothing is delivered while the internal turn is still open',
+    );
+    assert.equal(h.client.snapshot().turns?.[0]?.running, true);
+
+    // The internal end consumes the already-ready batch immediately.
+    emitYieldEnd(h.fake, session, 1, seq);
+    assert.ok(await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.prompt').length === 2));
+    assert.deepEqual(phases, [], 'a result that already arrived needs no progress note');
+    assert.equal(h.client.snapshot().turns?.[0]?.running, true);
+    assert.equal(h.client.snapshot().turns?.[0]?.endedAt, undefined);
+  } finally { h.stop(); }
+});
+
+test('cancelling a work turn stops only its own runs and leaves another conversation untouched', async () => {
+  const tasks = fakeTaskRuns();
+  const h = await openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async (input) => (input.phase === 'progress' ? '进展' : '完成'),
+  });
+  try {
+    const sent = await h.client.send('要取消的任务');
+    await settle();
+    const first = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const conversationOne = String(h.client.snapshot().selectedSessionId);
+    emitYieldEnd(h.fake, first, 1, emitDispatch(h.fake, first, 1, 'tr-cancel', 1));
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.pendingTaskCount === 1));
+
+    // A second conversation dispatches a run of its own.
+    await h.client.create();
+    await h.client.send('要保留的任务');
+    await settle();
+    const second = String(h.fake.calls.filter((call) => call.method === 'session.prompt').at(-1)?.payload.sessionId);
+    assert.notEqual(second, first);
+    let seq = emitDispatch(h.fake, second, 1, 'tr-keep', 1);
+    seq = emitYieldEnd(h.fake, second, 1, seq);
+    assert.ok(await waitFor(() => tasks.waited.length === 2));
+
+    await h.client.cancel(String(sent.turns?.[0]?.id));
+    await settle();
+    assert.deepEqual(tasks.cancelled, ['tr-cancel'], "only the cancelled turn's own run is stopped");
+    assert.deepEqual(tasks.aborted, ['tr-cancel'], 'only its own wait is abandoned');
+
+    // The other conversation still consumes its own result and completes.
+    tasks.finish('tr-keep');
+    assert.ok(await waitFor(
+      () => h.fake.calls.filter((call) => call.method === 'session.prompt' && call.payload.sessionId === second).length === 2,
+    ));
+    emitTurn(h.fake, second, 2, '保留的工作', seq);
+    assert.ok(await waitFor(() => h.client.snapshot().items.some((item) => item.text === '完成')));
+    assert.equal(h.client.snapshot().turns?.[0]?.running, false);
+
+    // A late result for the cancelled run never revives its turn.
+    tasks.finish('tr-cancel');
+    await settle();
+    await h.client.select(conversationOne);
+    const cancelled = h.client.snapshot().turns?.[0];
+    assert.equal(cancelled?.running, false);
+    assert.equal(cancelled?.pendingTaskCount, undefined);
+    assert.equal(h.client.snapshot().items.some((item) => item.text === '完成'), false, 'the cancelled conversation never gains an answer');
+  } finally { h.stop(); }
+});
+
+test('an interrupted work turn restores its dispatched runs truthfully and never re-executes them', async () => {
+  const savedDir = mkdtempSync(join(tmpdir(), 'wrenyard-task-restore-'));
+  const tasks = fakeTaskRuns();
+  const h = await openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async (input) => (input.phase === 'progress' ? '进展消息' : '最终答复'),
+  });
+  try {
+    await h.client.send('持久化派发');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    emitYieldEnd(h.fake, session, 1, emitDispatch(h.fake, session, 1, 'tr-persist', 1));
+    assert.ok(await waitFor(() => h.client.snapshot().items.some((item) => item.text === '进展消息')));
+
+    const document = JSON.parse(readFileSync(h.statePath, 'utf8')) as {
+      records: Array<{
+        messages: Array<{ kind: string }>;
+        turns: Array<{
+          status: string;
+          progress?: string;
+          internalTurnIds?: string[];
+          process?: Array<{ text: string }>;
+          tasks?: Array<{ taskRunId: string; status: string }>;
+        }>;
+      }>;
+    };
+    const persisted = document.records.at(-1)?.turns.at(-1);
+    assert.deepEqual(persisted?.tasks?.map((task) => [task.taskRunId, task.status]), [['tr-persist', 'pending']]);
+    assert.deepEqual(persisted?.internalTurnIds, ['turn-1']);
+    assert.equal(persisted?.progress, '进展消息', 'the latest progress note is persisted on the turn');
+    assert.ok(persisted?.process?.some((item) => item.text === '已派发后台任务。'), 'the process of a waiting turn is preserved');
+    assert.deepEqual(
+      document.records.at(-1)?.messages.map((message) => message.kind),
+      ['user'],
+      'a progress note never enters the completed user/summary history',
+    );
+
+    const statePath = join(savedDir, 'state.json');
+    copyFileSync(h.statePath, statePath);
+    const sessionHistory = Object.fromEntries([...h.fake.sessions].map(([id, record]) => [id, record.events]));
+    const sessions = [...h.fake.sessions.keys()].map((sessionId) => ({ sessionId, updatedAt: 1, running: false, blank: false }));
+    h.stop();
+
+    const restoredTasks = fakeTaskRuns();
+    const restored = await openHarness({
+      statePath,
+      sessions,
+      sessionHistory,
+      waitForTaskRun: restoredTasks.waitForTaskRun,
+      cancelTaskRun: restoredTasks.cancelTaskRun,
+      summarize: async () => 'unused',
+    });
+    try {
+      const items = restored.client.snapshot().items;
+      // The interrupted model turn stays explicitly interrupted: its dispatched
+      // run is neither re-awaited nor reported as finished.
+      assert.ok(items.some((item) => item.text.includes('已中断') && item.text.includes('未回传')));
+      assert.equal(items.some((item) => item.text === '最终答复'), false);
+      assert.deepEqual(restoredTasks.waited, [], 'a restored interrupted turn never re-executes its runs');
+      assert.equal(restored.client.snapshot().turns?.at(-1)?.running, false);
+      assert.ok(items.some((item) => item.text === '已派发后台任务。'), 'the preserved process still renders');
+      const tool = items.find((item) => item.taskRun?.taskRunId === 'tr-persist');
+      assert.equal(tool?.taskRun?.status, 'running', 'the run keeps the last state actually observed');
+    } finally { restored.stop(); }
+  } finally { h.stop(); rmSync(savedDir, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 5: a work turn may never answer from work that did not happen.
+// ---------------------------------------------------------------------------
+
+/** One task-owning harness with a phase-tagging summarizer. */
+async function openTaskHarness(tasks: ReturnType<typeof fakeTaskRuns>, phases: string[]): Promise<Harness> {
+  return openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async (input) => {
+      phases.push(input.phase ?? 'final');
+      return input.phase === 'progress' ? '进展' : '完成';
+    },
+  });
+}
+
+/** The text of every delivery this session received after its first prompt. */
+function deliveries(fake: FakeDsh, sessionId: string): string[] {
+  return fake.calls
+    .filter((call) => call.method === 'session.prompt' && call.payload.sessionId === sessionId)
+    .slice(1)
+    .map((call) => String((call.payload.content as Array<{ text: string }>)[0].text));
+}
+
+test('a real internal error never completes a work turn that owns a dispatched run', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  try {
+    await h.client.send('会出错的派发');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const seq = emitDispatch(h.fake, session, 1, 'tr-error', 1);
+    emitTurnEnd(h.fake, session, 1, seq, { kind: 'error', message: 'provider exploded' });
+
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false));
+    // An owned run is not a licence to treat a broken branch as a yield.
+    assert.deepEqual(phases, [], 'a failed branch produces neither a progress note nor an answer');
+    assert.equal(h.client.snapshot().items.some((item) => item.text === '完成'), false);
+    assert.ok(h.client.snapshot().items.some((item) => item.text.includes('provider exploded')));
+    assert.deepEqual(tasks.cancelled, ['tr-error'], 'the run it still owned is stopped');
+    assert.deepEqual(deliveries(h.fake, session), [], 'nothing is delivered into a failed branch');
+    assert.equal(h.client.snapshot().turns?.[0]?.pendingTaskCount, undefined);
+  } finally { h.stop(); }
+});
+
+test('a yield with nothing outstanding is a failure rather than an empty answer', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  try {
+    await h.client.send('空转的一轮');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    pushMux(h.fake, { type: 'session/event', sessionId: session, ...event('turn/start', 1, { turn: 1 }) });
+    emitYieldEnd(h.fake, session, 1, 2);
+
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false));
+    assert.deepEqual(phases, []);
+    assert.ok(h.client.snapshot().items.some((item) => item.text.startsWith('未完成')));
+  } finally { h.stop(); }
+});
+
+test('a rejected wait fails the work turn instead of answering from a result it never saw', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  try {
+    await h.client.send('等待会失败');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    emitYieldEnd(h.fake, session, 1, emitDispatch(h.fake, session, 1, 'tr-wait', 1));
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.pendingTaskCount === 1));
+
+    tasks.fail('tr-wait', 'transport closed');
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false));
+    assert.equal(h.client.snapshot().items.some((item) => item.text === '完成'), false, 'a failed wait never becomes an answer');
+    assert.ok(h.client.snapshot().items.some((item) => item.text.includes('transport closed')));
+    assert.deepEqual(deliveries(h.fake, session), [], 'an unobserved result is never delivered');
+    assert.deepEqual(tasks.cancelled, ['tr-wait'], 'the run is stopped rather than left running behind a settled turn');
+    // The coordinator had already yielded, so there was no model run to abort.
+    assert.equal(h.fake.calls.filter((call) => call.method === 'session.cancel').length, 0);
+
+    const document = JSON.parse(readFileSync(h.statePath, 'utf8')) as {
+      records: Array<{ turns: Array<{ tasks?: Array<{ status: string }> }> }>;
+    };
+    assert.deepEqual(
+      document.records.at(-1)?.turns.at(-1)?.tasks?.map((task) => task.status),
+      ['pending'],
+      'a run whose outcome was never observed is never recorded as consumed',
+    );
+  } finally { h.stop(); }
+});
+
+test('a nonterminal or mismatched run answer never becomes an outcome', async () => {
+  for (const answer of [
+    { label: 'nonterminal', result: { ...terminalTaskResult('tr-odd'), status: 'running' } },
+    { label: 'mismatched', result: terminalTaskResult('tr-other') },
+    { label: 'malformed', result: { note: 'not a run projection' } },
+  ]) {
+    const tasks = fakeTaskRuns();
+    const phases: string[] = [];
+    const h = await openTaskHarness(tasks, phases);
+    try {
+      await h.client.send(`异常回传：${answer.label}`);
+      await settle();
+      const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+      emitYieldEnd(h.fake, session, 1, emitDispatch(h.fake, session, 1, 'tr-odd', 1));
+      assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.pendingTaskCount === 1));
+
+      tasks.finish('tr-odd', answer.result);
+      assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false), answer.label);
+      assert.deepEqual(deliveries(h.fake, session), [], `${answer.label} is never delivered`);
+      assert.equal(
+        h.client.snapshot().items.some((item) => item.text === '完成'),
+        false,
+        `${answer.label} never becomes an answer`,
+      );
+      assert.ok(
+        h.client.snapshot().items.some((item) => item.text.includes('未回传可用的终态结果')),
+        answer.label,
+      );
+      assert.deepEqual(tasks.cancelled, ['tr-odd'], answer.label);
+    } finally { h.stop(); }
+  }
+});
+
+test('a result set larger than one envelope is delivered in bounded batches without losing a run', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  try {
+    await h.client.send('四个超大结果');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const ids = ['tr-big-1', 'tr-big-2', 'tr-big-3', 'tr-big-4'];
+    let seq = emitDispatch(h.fake, session, 1, ids[0], 1);
+    for (const id of ids.slice(1)) seq = emitDispatchCall(h.fake, session, 1, id, seq);
+    seq = emitYieldEnd(h.fake, session, 1, seq);
+    assert.ok(await waitFor(() => tasks.waited.length === ids.length));
+    for (const id of ids) tasks.finish(id, oversizedTaskResult(id));
+
+    assert.ok(await waitFor(() => deliveries(h.fake, session).length === 1));
+    const first = deliveries(h.fake, session)[0];
+    assert.ok(first.length <= 24_500, 'one delivery stays within the envelope bound');
+    assert.ok(first.includes('[结果已达单条长度上限'), 'a per-result cut is stated rather than silent');
+    assert.ok(ids.filter((id) => first.includes(id)).length < ids.length, 'the bound excluded at least one run');
+
+    // The excluded runs stayed ready, so the next boundary delivers them.
+    seq = emitYieldTurn(h.fake, session, 2, seq);
+    assert.ok(await waitFor(() => deliveries(h.fake, session).length === 2));
+    const batches = deliveries(h.fake, session);
+    for (const id of ids) {
+      assert.equal(
+        batches.filter((batch) => batch.includes(id)).length,
+        1,
+        `${id} is delivered exactly once across the deliveries`,
+      );
+    }
+    assert.ok(batches.every((batch) => batch.includes('[wrenyard:task-results]') && batch.length <= 24_500));
+
+    emitTurn(h.fake, session, 3, '四个结果都已汇总。', seq);
+    assert.ok(await waitFor(() => phases.includes('final')));
+    const done = h.client.snapshot().turns?.[0];
+    assert.equal(done?.running, false);
+    assert.equal(done?.dispatchCount, ids.length);
+    assert.equal(deliveries(h.fake, session).length, 2, 'no batch is resent after the turn completes');
+    const document = JSON.parse(readFileSync(h.statePath, 'utf8')) as {
+      records: Array<{ turns: Array<{ tasks?: Array<{ taskRunId: string; status: string }> }> }>;
+    };
+    assert.deepEqual(
+      document.records.at(-1)?.turns.at(-1)?.tasks?.map((task) => [task.taskRunId, task.status]),
+      ids.map((id) => [id, 'consumed']),
+      'every dispatched run is recorded as consumed exactly once',
+    );
+  } finally { h.stop(); }
+});
+
+test('cancelling while a result delivery is being accepted receives a post-accept stop', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  const gate = deferred<void>();
+  try {
+    const sent = await h.client.send('回传中取消');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    emitYieldEnd(h.fake, session, 1, emitDispatch(h.fake, session, 1, 'tr-late', 1));
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.pendingTaskCount === 1));
+
+    let awaitingAcceptance = false;
+    h.fake.beforeRpc = async (call) => {
+      if (call.method === 'session.prompt') { awaitingAcceptance = true; await gate.promise; }
+    };
+    tasks.finish('tr-late');
+    assert.ok(await waitFor(() => awaitingAcceptance));
+    await h.client.cancel(String(sent.turns?.[0]?.id));
+    assert.equal(h.fake.calls.filter((call) => call.method === 'session.cancel').length, 1);
+
+    gate.resolve();
+    assert.ok(
+      await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.cancel').length === 2),
+      'a delivery DSH accepted after the cancel is stopped again',
+    );
+    assert.equal(h.client.snapshot().turns?.[0]?.running, false);
+    assert.equal(h.client.snapshot().items.some((item) => item.text === '完成'), false);
+  } finally { gate.resolve(); h.stop(); }
+});
+
+test('a boundary observed while a delivery is in flight is still delivered once that prompt returns', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  const gate = deferred<void>();
+  try {
+    await h.client.send('回传竞态');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    let seq = emitYieldEnd(h.fake, session, 1, emitDispatch(h.fake, session, 1, 'tr-first', 1));
+    assert.ok(await waitFor(() => tasks.waited.length === 1));
+
+    let prompts = 0;
+    h.fake.beforeRpc = async (call) => {
+      if (call.method !== 'session.prompt') return;
+      prompts += 1;
+      if (prompts === 1) await gate.promise;
+    };
+    tasks.finish('tr-first');
+    assert.ok(await waitFor(() => prompts === 1), 'the first delivery is in flight');
+
+    // The coordinator dispatches and yields again before that prompt resolves.
+    seq = emitDispatch(h.fake, session, 2, 'tr-second', seq);
+    seq = emitYieldEnd(h.fake, session, 2, seq);
+    assert.ok(await waitFor(() => tasks.waited.length === 2));
+    tasks.finish('tr-second');
+    await settle();
+    assert.equal(prompts, 1, 'an in-flight delivery suppresses the next one');
+
+    gate.resolve();
+    assert.ok(await waitFor(() => prompts === 2), 'the suppressed batch is delivered once the prompt returns');
+    const batches = deliveries(h.fake, session);
+    assert.equal(batches.length, 2);
+    assert.ok(batches[1].includes('tr-second'));
+    assert.equal(batches[1].includes('tr-first'), false, 'a consumed result is never resent');
+
+    emitTurn(h.fake, session, 3, '两批结果都已汇总。', seq);
+    assert.ok(await waitFor(() => phases.includes('final')));
+    assert.equal(h.client.snapshot().turns?.[0]?.running, false);
+    assert.equal(deliveries(h.fake, session).length, 2, 'each batch is delivered exactly once');
+  } finally { gate.resolve(); h.stop(); }
+});
+
+test('a work turn reports total tokens over total generation time, not the mean of its turns', async () => {
+  const tasks = fakeTaskRuns();
+  const phases: string[] = [];
+  const h = await openTaskHarness(tasks, phases);
+  try {
+    await h.client.send('多轮吞吐');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const base = 1_700_000_000_000;
+    // A long slow window, then a short fast one: an arithmetic mean of the two
+    // rates and the true aggregate rate cannot coincide.
+    let seq = emitMeasuredTurn(h.fake, session, 1, 1, base, 4_000, '第一轮很长的流式输出内容，用来构成一个可测量的窗口。');
+    seq = emitDispatchCall(h.fake, session, 1, 'tr-tps', seq);
+    seq = emitYieldEnd(h.fake, session, 1, seq);
+    assert.ok(await waitFor(() => tasks.waited.length === 1));
+    tasks.finish('tr-tps');
+    assert.ok(await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.prompt').length === 2));
+
+    seq = emitMeasuredTurn(h.fake, session, 2, seq, base + 60_000, 200, '第二轮短输出。');
+    emitTurnEnd(h.fake, session, 2, seq, { kind: 'completed' });
+    assert.ok(await waitFor(() => phases.includes('final')));
+
+    const branch = h.fake.sessions.get(session)!.events.map((entry) => ({ event: entry }));
+    const projected = projectConversation(branch, Number.POSITIVE_INFINITY);
+    const measured = projected.turns
+      .map((turn) => turn.outputTps)
+      .filter((value): value is number => value !== undefined);
+    assert.equal(measured.length, 2, 'both internal turns have their own measurable window');
+    const totalTokens = measured[0] * 4 + measured[1] * 0.2;
+    const expected = totalTokens / 4.2;
+    assert.ok(Math.abs((projected.outputTps ?? 0) - expected) < 1e-6, 'the projection aggregates tokens over time');
+    const mean = (measured[0] + measured[1]) / 2;
+    assert.ok(Math.abs(expected - mean) > 1e-6, 'the two definitions really do differ here');
+    assert.equal(
+      h.client.snapshot().turns?.[0]?.outputTps,
+      projected.outputTps,
+      'the work turn reports the aggregate rate of every internal turn it ran',
+    );
+  } finally { h.stop(); }
 });

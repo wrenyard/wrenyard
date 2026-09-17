@@ -140,6 +140,35 @@ async function runPreExecute(ctx, exec, terminal) {
   return { decision, downstream };
 }
 
+// Runs the captured agent/pre-step waterfall in registration order. Once the
+// listeners are exhausted, `terminal` stands in for the loop's own default
+// decision ({kind:'enter', messages}), so tests can tell reject
+// short-circuits from forwarded steps.
+async function runPreStep(ctx, payload, terminal) {
+  const listeners = ctx.events.get('agent/pre-step') || [];
+  let index = 0;
+  let downstream = false;
+  const next = async () => {
+    const listener = listeners[index++];
+    if (!listener) {
+      downstream = true;
+      return terminal;
+    }
+    return listener(payload, next);
+  };
+  const decision = await next();
+  return { decision, downstream };
+}
+
+function stepMessage(sourceKind) {
+  return {
+    id: `m-${sourceKind}`,
+    role: 'user',
+    content: [{ type: 'text', text: `${sourceKind} content` }],
+    source: sourceKind === 'user' ? { kind: 'user' } : { kind: 'tool', callId: 'c-1' },
+  };
+}
+
 function testIpcPath(name) {
   ipcSequence += 1;
   return process.platform === 'win32'
@@ -458,6 +487,7 @@ function realSessionEvents() {
     assistantEvent(3, 'Looking at the parser now.', 'SECRET_INTERNAL_REASONING'),
     toolResultEvent(4, 'c3', 'RAW_TOOL_OUTPUT_SHOULD_NEVER_APPEAR'),
     userEvent(5, 'user', 'now dispatch the fix'),
+    userEvent(6, 'user', '[wrenyard:task-results]\nINTERNAL_RESULT_DELIVERY'),
   ];
 }
 
@@ -1111,4 +1141,178 @@ test('source-level: run_task IPC wait carries no implicit deadline and TASK_TIME
   assert.ok(waitCall, 'run_task invokes ipcRequest for task.run.wait');
   assert.ok(/timeout:\s*null/.test(waitCall[0]), 'task.run.wait is called with timeout:null (no implicit deadline)');
   assert.ok(!/timeout:\s*TASK_TIMEOUT_MS|timeout:\s*\d/.test(waitCall[0]), 'task.run.wait passes no numeric IPC deadline');
+});
+
+test('Desktop async mode: run_task returns the launch identity without task.run.wait and registers the pre-step hook', async () => {
+  const ipcCalls = [];
+  const ipcSocket = testIpcPath('async-launch');
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    ipcCalls.push(msg);
+    return { status: 'done' };
+  });
+  const taskCallNames = [];
+  const server = await startMcp((msg) => {
+    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
+    if (msg.method === 'tools/call') {
+      taskCallNames.push(msg.params.name);
+      if (msg.params.name === 'task_run') {
+        return okReply(msg, { structuredContent: { task_run_id: 't-async', status: 'queued' } });
+      }
+    }
+    return okReply(msg, {});
+  });
+  const ctx = makeCtx();
+  await withEnv({
+    WRENYARD_DESKTOP_ASYNC_TASKS: '1',
+    WRENYARD_MCP_URL: sseUrl(server),
+    WRENYARD_IPC_PATH: ipcSocket,
+  }, () => plugin.apply(ctx));
+
+  assert.equal((ctx.events.get('agent/pre-step') || []).length, 1, 'async mode installs exactly one pre-step listener');
+  const runTask = ctx.registered.find((d) => d.name === 'run_task');
+  assert.match(runTask.description, /return immediately/i, 'async description tells the model the call is nonblocking');
+  assert.match(runTask.description, /delivered automatically/i, 'async description says the result is auto-delivered');
+  assert.match(runTask.description, /do NOT wait, poll/i, 'async description forbids waiting and polling');
+  assert.match(runTask.description, /list_runtimes/, 'async description keeps the target-resolution rule');
+
+  // No agent session: dispatch still succeeds and no yield flag is trackable.
+  const bareOutput = await runTask.execute({ task_id: 't-async' }, {});
+  assert.match(bareOutput, /t-async/, 'launch identity is returned for a bare dispatch');
+  assert.match(bareOutput, /pending/i, 'the pending note is present');
+
+  const agent = { id: 'agent-async', session: { id: 'agent-async', events: [] } };
+  const started = Date.now();
+  const output = await runTask.execute({ task_id: 't-async' }, { callId: 'call-async', agent });
+  assert.ok(Date.now() - started < 500, 'async dispatch returns without any terminal wait');
+  assert.match(output, /t-async/, 'the output carries the canonical task_run_id');
+  assert.match(output, /pending/, 'the coordinator is told the result is pending');
+  assert.match(output, /do not fabricate a result/, 'no fabricated terminal result');
+  assert.deepEqual(taskCallNames, ['task_run', 'task_run'], 'only the create call runs');
+  assert.deepEqual(ipcCalls, [], 'no task.run.wait and no polling IPC in async mode');
+
+  server.close();
+  ipcServer.close();
+});
+
+test('Desktop async mode: the pre-step waterfall rejects the empty continuation, allows new input, and never rejects another agent', async () => {
+  const ipcSocket = testIpcPath('async-prestep');
+  const ipcServer = await startIpc(ipcSocket, (msg) => ({ task_run_id: msg.params.task_run_id, status: 'done' }));
+  const server = await startMcp((msg) => {
+    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
+    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
+      const id = msg.params.arguments.task_id;
+      return okReply(msg, { structuredContent: { task_run_id: id, status: 'queued' } });
+    }
+    return okReply(msg, {});
+  });
+  const ctx = makeCtx();
+  await withEnv({
+    WRENYARD_DESKTOP_ASYNC_TASKS: '1',
+    WRENYARD_MCP_URL: sseUrl(server),
+    WRENYARD_IPC_PATH: ipcSocket,
+  }, () => plugin.apply(ctx));
+
+  const runTask = ctx.registered.find((d) => d.name === 'run_task');
+  const terminal = { kind: 'enter', messages: [] };
+  const agentA = { id: 'agent-A', session: { id: 'agent-A', events: [] } };
+  const agentB = { id: 'agent-B', session: { id: 'agent-B', events: [] } };
+
+  await runTask.execute({ task_id: 't-a' }, { callId: 'call-a', agent: agentA });
+
+  // Empty continuation for the dispatching agent: rejected once, flag consumed.
+  const rejected = await runPreStep(ctx, { agent: agentA, messages: [], turn: 1, step: 2 }, terminal);
+  assert.deepEqual(rejected.decision, { kind: 'reject' }, 'the empty continuation step is rejected');
+  assert.equal(rejected.downstream, false, 'rejection short-circuits before the next model request');
+
+  const afterConsume = await runPreStep(ctx, { agent: agentA, messages: [], turn: 1, step: 3 }, terminal);
+  assert.equal(afterConsume.downstream, true, 'the yield flag is consumed by the first rejection');
+  assert.deepEqual(afterConsume.decision, terminal, 'later empty steps flow through normally');
+
+  // New input and tool results are never rejected.
+  await runTask.execute({ task_id: 't-a2' }, { callId: 'call-a2', agent: agentA });
+  const withInput = await runPreStep(ctx, { agent: agentA, messages: [stepMessage('user')], turn: 2, step: 1 }, terminal);
+  assert.equal(withInput.downstream, true, 'a step with new human input flows through');
+  assert.deepEqual(withInput.decision, terminal);
+  const withResult = await runPreStep(ctx, { agent: agentA, messages: [stepMessage('tool')], turn: 2, step: 2 }, terminal);
+  assert.equal(withResult.downstream, true, 'a step with a new tool result flows through');
+  assert.deepEqual(withResult.decision, terminal);
+
+  // Plugin-origin steering is real queued input too; rejecting would lose it.
+  await runTask.execute({ task_id: 't-steer' }, { agent: agentA });
+  const pluginInput = { source: { kind: 'plugin' }, content: [{ type: 'text', text: 'new workspace context' }] };
+  const withSteering = await runPreStep(ctx, { agent: agentA, messages: [pluginInput] }, terminal);
+  assert.equal(withSteering.downstream, true);
+
+  // No dispatch from agentB: its empty step is not rejected.
+  const otherAgent = await runPreStep(ctx, { agent: agentB, messages: [], turn: 1, step: 2 }, terminal);
+  assert.equal(otherAgent.downstream, true, 'another agent is never rejected by this agent\'s yield flag');
+  assert.deepEqual(otherAgent.decision, terminal);
+
+  // Two parallel dispatches from the same agent share one yield: the next
+  // empty step is rejected exactly once and both launch identities returned.
+  const [oa, ob] = await Promise.all([
+    runTask.execute({ task_id: 't-p1' }, { callId: 'call-p1', agent: agentB }),
+    runTask.execute({ task_id: 't-p2' }, { callId: 'call-p2', agent: agentB }),
+  ]);
+  assert.ok(oa.includes('t-p1') && ob.includes('t-p2'), 'parallel dispatches each return their own launch identity');
+  const parallelReject = await runPreStep(ctx, { agent: agentB, messages: [], turn: 1, step: 2 }, terminal);
+  assert.deepEqual(parallelReject.decision, { kind: 'reject' }, 'one yield covers the parallel dispatch step');
+
+  server.close();
+  ipcServer.close();
+});
+
+test('Desktop async mode: abort during creation cancels the owned run and skips the wait', async () => {
+  const ipcCalls = [];
+  const ipcSocket = testIpcPath('async-abort-create');
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    ipcCalls.push(msg);
+    return { status: 'cancelled' };
+  });
+  const taskCallNames = [];
+  const server = await startMcp((msg) => {
+    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
+    if (msg.method === 'tools/call') {
+      taskCallNames.push(msg.params.name);
+      if (msg.params.name === 'task_run') {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(okReply(msg, { structuredContent: { task_run_id: 't-async-abort' } })), 60);
+        });
+      }
+    }
+    return okReply(msg, {});
+  });
+  const ctx = makeCtx();
+  await withEnv({
+    WRENYARD_DESKTOP_ASYNC_TASKS: '1',
+    WRENYARD_MCP_URL: sseUrl(server),
+    WRENYARD_IPC_PATH: ipcSocket,
+  }, () => plugin.apply(ctx));
+
+  const runTask = ctx.registered.find((d) => d.name === 'run_task');
+  const agent = { id: 'agent-abort', session: { id: 'agent-abort', events: [] } };
+  const controller = new AbortController();
+  const pending = runTask.execute({}, { signal: controller.signal, agent });
+  setTimeout(() => controller.abort(), 20);
+  await assert.rejects(
+    () => pending,
+    (err) => err.name === 'AbortError',
+  );
+
+  assert.deepEqual(taskCallNames, ['task_run'], 'create is allowed to finish exactly once');
+  const cancelCall = ipcCalls.find((c) => c.method === 'task.run.cancel');
+  assert.ok(cancelCall, 'the owned backend run is cancelled on abort during creation');
+  assert.equal(cancelCall.params.task_run_id, 't-async-abort');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.cancel').length, 1, 'exactly one cancel');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.wait').length, 0, 'no wait in async mode');
+
+  // The aborted dispatch must not arm a yield flag: the agent's next empty
+  // step flows through instead of being rejected.
+  const terminal = { kind: 'enter', messages: [] };
+  const afterAbort = await runPreStep(ctx, { agent, messages: [], turn: 1, step: 2 }, terminal);
+  assert.equal(afterAbort.downstream, true, 'an aborted dispatch leaves no pending yield');
+  assert.deepEqual(afterAbort.decision, terminal);
+
+  server.close();
+  ipcServer.close();
 });

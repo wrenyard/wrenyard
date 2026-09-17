@@ -17,7 +17,7 @@ import {
 import { sameGatewayIdentity } from './service-recovery.js';
 import { defaultMcpUrl, WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
 import { prepareProfile } from './profile.js';
-import { SummaryModelPreferenceStore, createConversationSummaryService } from './conversation-summary.js';
+import { SummaryModelPreferenceStore, createConversationSummaryService, type ConversationSummaryInput } from './conversation-summary.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
@@ -369,11 +369,46 @@ async function runSmokeWindowLifecycle(shell: ShellWindowController): Promise<vo
   }
 }
 
+/**
+ * Owner-only wait for exactly one task run a conversation work turn
+ * dispatched. The daemon's own `task.run.wait` blocks until the run reaches a
+ * terminal status, so no server timeout is requested and the transport
+ * deadline stays disabled — a legitimately long task is never cut short and
+ * the model never polls. The wait owns its own connection and closes it on
+ * abort and on completion alike, so an abandoned wait leaves no socket behind.
+ */
+async function waitForTaskRunResult(
+  ipcPath: string,
+  taskRunId: string,
+  signal: AbortSignal,
+): Promise<unknown> {
+  if (signal.aborted) throw new Error('任务等待已取消');
+  const client = new WrenyardIpcClient({ path: ipcPath });
+  const onAbort = (): void => client.close();
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await client.taskRunWait(taskRunId);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    client.close();
+  }
+}
+
+/** Owner-only cancellation of a task run a conversation work turn still owns. */
+async function cancelOwnedTaskRun(ipcPath: string, taskRunId: string): Promise<void> {
+  const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: FOREMAN_HEALTH_TIMEOUT_MS });
+  try {
+    await client.request('task.run.cancel', { task_run_id: taskRunId });
+  } finally {
+    await client.close?.();
+  }
+}
+
 async function createConversationSession(
   workspace: ConfiguredWorkspace,
   ipcPath: string,
   onUnexpectedExit: (message: string) => void,
-  summarize: (input: { previousSummaries: Array<{ user: string; summary: string }>; user: string; work: string; signal: AbortSignal }) => Promise<string>,
+  summarize: (input: ConversationSummaryInput) => Promise<string>,
 ): Promise<DesktopConversationSession> {
   const shellSource = resolveShellSource();
   const dshHome = join(app.getPath('userData'), 'dsh');
@@ -411,6 +446,10 @@ async function createConversationSession(
     configuredProviderIds,
     statePath: join(app.getPath('userData'), 'workspace-state', `${createHash('sha256').update(workspace.path).digest('hex')}.json`),
     summarize,
+    // Nonblocking dispatch: a work turn owns the runs it dispatched and learns
+    // their authoritative outcome from the daemon itself, never from the model.
+    waitForTaskRun: (taskRunId, signal) => waitForTaskRunResult(ipcPath, taskRunId, signal),
+    cancelTaskRun: (taskRunId) => cancelOwnedTaskRun(ipcPath, taskRunId),
     onChanged: () => shellWindow?.notifyConversationChanged(),
   });
   let intentionalStop = false;
@@ -718,7 +757,7 @@ async function bootstrap(): Promise<void> {
     readGatewayConnection: () => readGatewayConnection(ipcPath),
     preferenceStore: summaryPreferenceStore,
   });
-  const summarize = (input: { previousSummaries: Array<{ user: string; summary: string }>; user: string; work: string; signal: AbortSignal }): Promise<string> => {
+  const summarize = (input: ConversationSummaryInput): Promise<string> => {
     if (!conversationSummary) return Promise.reject(new Error('摘要服务未就绪'));
     return conversationSummary.summarize(input);
   };
