@@ -12,7 +12,7 @@ export interface GatewayRequestCompletedEvent {
   /** Scoped execution id attributed by the request path, when present. */
   executionId?: string;
   /** Response sampling contract used for this request, when sampled. */
-  tps_sampling_contract?: 'response_v1';
+  tps_sampling_contract?: 'tokenizer_v1';
   /** Attributable paired response samples for this request, when sampled. */
   tps_samples?: ResponseTpsContract['tps_samples'];
 }
@@ -347,10 +347,11 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         delete body.route;
       }
 
-      // OpenAI chat streaming requests must report final usage so a response
-      // sample can be paired with its upstream-reported completion tokens. The
-      // flag is added only for streamed chat requests; every other field is
-      // preserved exactly and no token values are invented.
+      // OpenAI chat streaming requests must report final usage so clients keep
+      // receiving the provider's official billing numbers. Speed sampling no
+      // longer depends on it. The flag is added only for streamed chat
+      // requests; every other field is preserved exactly and no token values
+      // are invented.
       if (route.protocol === 'openai_chat' && body.stream === true) {
         const existing = body.stream_options;
         body.stream_options = {

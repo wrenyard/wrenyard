@@ -38,14 +38,13 @@ test('provider ordering swaps entries without moving unrelated providers', () =>
   ], 'chatgpt', 'cursor').map((entry) => entry.id), ['cursor', 'anthropic', 'chatgpt']);
 });
 
-test('legacy order collapses codex and codex-spark into one stable chatgpt entry', () => {
+test('legacy order collapses codex into one stable chatgpt entry', () => {
   assert.equal(canonicalProviderId('codex'), 'chatgpt');
-  assert.equal(canonicalProviderId('codex-spark'), 'chatgpt');
-  // First occurrence keeps the position; the later legacy duplicate is dropped.
+  // First occurrence keeps the position; the later canonical duplicate is dropped.
   assert.deepEqual(normalizeProviderOrder([
     { id: 'codex', enabled: true },
     { id: 'cursor', enabled: true },
-    { id: 'codex-spark', enabled: false },
+    { id: 'chatgpt', enabled: true },
     { id: 'anthropic', enabled: true },
   ]), [
     { id: 'chatgpt', enabled: true },

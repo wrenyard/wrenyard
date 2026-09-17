@@ -1479,12 +1479,22 @@ function taskRunModelLabel(run: TaskRunSnapshot): string | null {
 }
 
 function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
-  const cell = taskRunCell(taskRunModelLabel(run) ?? '-');
-  const provider = run.resolvedProviderDisplayName;
-  if (provider) {
-    const icon = brandIcon(familyBrand(classifyFamily(run.resolvedModelDisplayName ?? ''))) ?? brandIcon(providerBrand(provider));
-    if (icon) cell.prepend(icon);
-  }
+  const label = taskRunModelLabel(run);
+  const cell = taskRunCell(label ?? '-');
+  if (!label) return cell;
+  cell.className = 'task-run-model';
+  cell.textContent = '';
+  const appendBrand = (name: string, brand: string): void => {
+    const part = document.createElement('span');
+    part.className = 'task-run-model-brand';
+    const icon = brandIcon(brand);
+    if (icon) part.append(icon);
+    part.append(document.createTextNode(name));
+    cell.append(part);
+  };
+  appendBrand(run.resolvedProviderDisplayName!, providerBrand(run.resolvedProvider ?? run.resolvedProviderDisplayName!));
+  cell.append(document.createTextNode('·'));
+  appendBrand(run.resolvedModelDisplayName!, familyBrand(classifyFamily(run.resolvedModelDisplayName!)));
   return cell;
 }
 

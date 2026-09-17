@@ -234,9 +234,13 @@ func TestPrepare_CodexDeterministic(t *testing.T) {
 	if plan.ProfileName != "cx" {
 		t.Fatalf("profile=%q want cx", plan.ProfileName)
 	}
-	// CodexAdapter always begins with codex --search exec ... deterministically.
-	if len(plan.Command) == 0 || plan.Command[0] != "codex" {
-		t.Fatalf("command[0]=%q want codex", firstOr(plan.Command))
+	// Codex tasks run through the per-execution app-server bridge.
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Command) < 2 || plan.Command[0] != executable || plan.Command[1] != driver.CodexAppServerSubcommand {
+		t.Fatalf("command=%q want Forge app-server bridge", plan.Command)
 	}
 	if plan.Env["FORGE_PROFILE"] != "cx" {
 		t.Fatalf("env FORGE_PROFILE=%q want cx", plan.Env["FORGE_PROFILE"])

@@ -117,11 +117,9 @@ export interface ModelListRow {
 }
 
 /** A rendered price component: `min–max` when the providers disagree, else the shared value. */
-export function formatPriceRange(values: Array<number | undefined>): string {
-  const present = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  if (present.length === 0) return '—';
-  const min = Math.min(...present);
-  const max = Math.max(...present);
+export function formatPriceRange(values: number[]): string {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const format = (value: number) => String(value);
   return min === max ? format(min) : `${format(min)}–${format(max)}`;
 }
@@ -276,9 +274,9 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       providers: group.providers,
       active,
       tps: averageMeasuredTps(preferred),
-      inputLabel: formatPriceRange(group.models.map((model) => model.pricing?.inputUsdPerMillion)),
-      outputLabel: formatPriceRange(group.models.map((model) => model.pricing?.outputUsdPerMillion)),
-      cacheLabel: formatPriceRange(group.models.map((model) => model.pricing?.cachedInputUsdPerMillion)),
+      inputLabel: formatPriceRange(group.models.map((model) => model.pricing.inputUsdPerMillion)),
+      outputLabel: formatPriceRange(group.models.map((model) => model.pricing.outputUsdPerMillion)),
+      cacheLabel: formatPriceRange(group.models.map((model) => model.pricing.cachedInputUsdPerMillion)),
     });
   }
 

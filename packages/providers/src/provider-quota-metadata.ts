@@ -139,15 +139,6 @@ const CHATGPT_5H_POOL = quotaPool('chatgpt/5h', [
 const CHATGPT_7D_POOL = quotaPool('chatgpt/7d', [
   quotaWindow('7d', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
 ]);
-const CHATGPT_SPARK_5H_POOL = quotaPool('chatgpt/spark-5h', [
-  quotaWindow('spark-5h', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
-]);
-const CHATGPT_SPARK_7D_POOL = quotaPool('chatgpt/spark-7d', [
-  quotaWindow('spark-7d', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
-]);
-
-/** Spark models consume the Spark-only pools; every other model the standard pools. */
-const CHATGPT_SPARK_MODEL_ID = 'gpt-5.3-codex-spark';
 
 const explicitBindings: ProviderQuotaBinding[] = [
   binding('cursor', 'grok-4.6', [CURSOR_POOL]),
@@ -188,10 +179,8 @@ const explicitBindings: ProviderQuotaBinding[] = [
 ];
 
 /** Provider defaults also cover dynamically discovered models. */
-function defaultPoolsFor(providerId: string, modelId = '*'): readonly ProviderQuotaPool[] {
-  if (providerId === 'chatgpt') return modelId === CHATGPT_SPARK_MODEL_ID
-    ? [CHATGPT_SPARK_5H_POOL, CHATGPT_SPARK_7D_POOL]
-    : [CHATGPT_5H_POOL, CHATGPT_7D_POOL];
+function defaultPoolsFor(providerId: string): readonly ProviderQuotaPool[] {
+  if (providerId === 'chatgpt') return [CHATGPT_5H_POOL, CHATGPT_7D_POOL];
   if (providerId === 'kimi-coding') return [KIMI_5H_POOL, KIMI_7D_POOL];
   if (providerId === 'zhipu-coding') return [ZHIPU_5H_POOL, ZHIPU_7D_POOL];
   if (providerId === 'codebuddy') return [quotaPool('codebuddy/monthly', [])];
@@ -203,7 +192,7 @@ function defaultPoolsFor(providerId: string, modelId = '*'): readonly ProviderQu
 
 const catalogBindings = BUILTIN_PROVIDERS.flatMap((provider) => provider.models.map((model) =>
   explicitBindings.find((entry) => entry.providerId === provider.id && entry.modelId === model.id)
-    ?? binding(provider.id, model.id, defaultPoolsFor(provider.id, model.id)),
+    ?? binding(provider.id, model.id, defaultPoolsFor(provider.id)),
 ));
 
 /**

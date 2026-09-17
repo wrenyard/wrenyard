@@ -104,29 +104,47 @@ func numValue(t *testing.T, m map[string]any, key string) float64 {
 }
 
 // realTurn is the verified real upstream sequence: request/header route,
-// turn/start, step/start, a reasoning first token, an assistant/message final
-// with usage partitions, and a completed turn/end.
+// turn/start, step/start, a reasoning first token, streamed text deltas, an
+// assistant/message final with usage partitions, and a completed turn/end.
 func realTurn(seqBase int, model string, text string, outputTokens int) []map[string]any {
 	return []map[string]any{
 		{"type": "request/header", "seq": seqBase, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": model}}}},
 		{"type": "turn/start", "seq": seqBase + 1, "time": 1010, "data": map[string]any{"turn": 0}},
 		{"type": "step/start", "seq": seqBase + 2, "time": 1012, "data": map[string]any{"turn": 0, "step": 0}},
 		{"type": "assistant/chunk", "seq": seqBase + 3, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "reasoning-delta", "text": "r"}}},
-		{"type": "assistant/chunk", "seq": seqBase + 4, "time": 1020, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "hello"}}},
-		{"type": "assistant/message", "seq": seqBase + 5, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": outputTokens}}},
-		{"type": "turn/end", "seq": seqBase + 6, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "assistant/chunk", "seq": seqBase + 4, "time": 1020, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "hel"}}},
+		{"type": "assistant/chunk", "seq": seqBase + 5, "time": 1120, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "lo"}}},
+		{"type": "assistant/message", "seq": seqBase + 6, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": outputTokens}}},
+		{"type": "turn/end", "seq": seqBase + 7, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 	}
 }
 
-func TestBridgeRealTurnSampleAndText(t *testing.T) {
+func generationList(t *testing.T, end map[string]any) []map[string]any {
+	t.Helper()
+	raw, ok := end["tps_generation"].([]any)
+	if !ok {
+		t.Fatalf("turn/end must carry a tps_generation list: %#v", end)
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, entry := range raw {
+		generation, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("malformed generation entry: %#v", entry)
+		}
+		out = append(out, generation)
+	}
+	return out
+}
+
+func TestBridgeRealTurnGenerationAndText(t *testing.T) {
 	out := bridgeRun(t, realTurn(0, "gpt-5", "ok", 100))
 
 	chunks := findEventAll(out, "assistant/chunk")
-	if len(chunks) != 1 {
-		t.Fatalf("expected only the text-delta chunk to be surfaced, got %d: %v", len(chunks), chunks)
+	if len(chunks) != 2 {
+		t.Fatalf("expected only the text-delta chunks to be surfaced, got %d: %v", len(chunks), chunks)
 	}
-	if chunks[0]["kind"] != "text" || chunks[0]["text"] != "hello" {
-		t.Fatalf("text chunk mismatch: %v", chunks[0])
+	if chunks[0]["kind"] != "text" || chunks[0]["text"] != "hel" || chunks[1]["text"] != "lo" {
+		t.Fatalf("text chunk mismatch: %v", chunks)
 	}
 
 	msg := findEvent(out, "assistant/message")
@@ -135,34 +153,39 @@ func TestBridgeRealTurnSampleAndText(t *testing.T) {
 	}
 
 	end := findEvent(out, "turn/end")
-	if duration, ok := end["duration"].(float64); !ok || duration <= 0 {
-		t.Fatalf("complete usage must retain accounting duration: %#v", end)
-	}
 	if end == nil {
 		t.Fatal("missing turn/end")
+	}
+	if duration, ok := end["duration"].(float64); !ok || duration <= 0 {
+		t.Fatalf("complete usage must retain accounting duration: %#v", end)
 	}
 	if end["status"] != "complete" {
 		t.Fatalf("status = %v, want complete", end["status"])
 	}
-	if end["tps_sampling_contract"] != "response_v1" {
-		t.Fatalf("contract = %v", end["tps_sampling_contract"])
+	if _, ok := end["tps_sampling_contract"]; ok {
+		t.Fatalf("bridge must not emit a sampling contract: %#v", end)
 	}
-	samples, ok := end["tps_samples"].([]any)
-	if !ok || len(samples) != 1 {
-		t.Fatalf("expected exactly one sample, got %v", end["tps_samples"])
+	if _, ok := end["tps_samples"]; ok {
+		t.Fatalf("bridge must not emit canonical samples: %#v", end)
 	}
-	sample := samples[0].(map[string]any)
-	if numValue(t, sample, "output_tokens") != 100 {
-		t.Fatalf("output_tokens = %v", sample["output_tokens"])
+	generations := generationList(t, end)
+	if len(generations) != 1 {
+		t.Fatalf("expected exactly one generation, got %v", generations)
 	}
-	if sample["model"] != "gpt-5" {
-		t.Fatalf("model = %v", sample["model"])
+	generation := generations[0]
+	if generation["model"] != "gpt-5" {
+		t.Fatalf("model = %v", generation["model"])
 	}
-	if numValue(t, sample, "first_token_at_ms") != 1015 {
-		t.Fatalf("first_token_at_ms = %v, want 1015", sample["first_token_at_ms"])
+	blocks, ok := generation["blocks"].(map[string]any)
+	if !ok || blocks["text"] != "hello" {
+		t.Fatalf("deltas must concatenate per block: %v", generation["blocks"])
 	}
-	if numValue(t, sample, "completed_at_ms") != 1500 {
-		t.Fatalf("completed_at_ms = %v, want 1500", sample["completed_at_ms"])
+	// Observed reasoning contributes to speed but never to assistant text.
+	if numValue(t, generation, "first_delta_at_ms") != 1015 {
+		t.Fatalf("first_delta_at_ms = %v, want 1015", generation["first_delta_at_ms"])
+	}
+	if numValue(t, generation, "last_delta_at_ms") != 1120 {
+		t.Fatalf("last_delta_at_ms = %v, want 1120", generation["last_delta_at_ms"])
 	}
 
 	usage := end["usage"].(map[string]any)
@@ -179,25 +202,29 @@ func TestBridgeSecondResponseAfterToolWait(t *testing.T) {
 		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
 		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
 		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
-		{"type": "assistant/message", "seq": 3, "time": 1200, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}}}, "usage": map[string]any{"inputTokens": 5, "outputTokens": 50}}},
+		{"type": "assistant/chunk", "seq": 3, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
+		{"type": "assistant/message", "seq": 4, "time": 1200, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ab"}}}, "usage": map[string]any{"inputTokens": 5, "outputTokens": 50}}},
 		// A long tool wait, then a second step response in the same turn.
-		{"type": "assistant/chunk", "seq": 4, "time": 600000, "data": map[string]any{"turn": 0, "step": 1, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
-		{"type": "assistant/message", "seq": 5, "time": 600500, "data": map[string]any{"turn": 0, "step": 1, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "b"}}}, "usage": map[string]any{"inputTokens": 7, "outputTokens": 70}}},
-		{"type": "turn/end", "seq": 6, "time": 600510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "assistant/chunk", "seq": 5, "time": 600000, "data": map[string]any{"turn": 0, "step": 1, "chunk": map[string]any{"type": "text-delta", "text": "c"}}},
+		{"type": "assistant/chunk", "seq": 6, "time": 600100, "data": map[string]any{"turn": 0, "step": 1, "chunk": map[string]any{"type": "text-delta", "text": "d"}}},
+		{"type": "assistant/message", "seq": 7, "time": 600500, "data": map[string]any{"turn": 0, "step": 1, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "cd"}}}, "usage": map[string]any{"inputTokens": 7, "outputTokens": 70}}},
+		{"type": "turn/end", "seq": 8, "time": 600510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 	}
 	out := bridgeRun(t, events)
 	end := findEvent(out, "turn/end")
-	samples := end["tps_samples"].([]any)
-	if len(samples) != 2 {
-		t.Fatalf("expected two paired samples, got %v", samples)
+	generations := generationList(t, end)
+	if len(generations) != 2 {
+		t.Fatalf("expected two paired generations, got %v", generations)
 	}
-	firsts := map[float64]float64{}
-	for _, raw := range samples {
-		s := raw.(map[string]any)
-		firsts[numValue(t, s, "output_tokens")] = numValue(t, s, "first_token_at_ms")
+	windows := map[string][2]float64{}
+	for _, generation := range generations {
+		blocks := generation["blocks"].(map[string]any)
+		windows[blocks["text"].(string)] = [2]float64{numValue(t, generation, "first_delta_at_ms"), numValue(t, generation, "last_delta_at_ms")}
 	}
-	if firsts[50] != 1015 || firsts[70] != 600000 {
-		t.Fatalf("sample pairing wrong: %v", firsts)
+	// The tool wait must never stretch either response's own window, and
+	// completion latency (message after the last delta) must stay excluded.
+	if windows["ab"] != [2]float64{1015, 1115} || windows["cd"] != [2]float64{600000, 600100} {
+		t.Fatalf("generation pairing wrong: %v", windows)
 	}
 	usage := end["usage"].(map[string]any)
 	if numValue(t, usage, "input_tokens") != 12 || numValue(t, usage, "output_tokens") != 120 {
@@ -210,24 +237,26 @@ func TestBridgeInheritedModelNextTurn(t *testing.T) {
 		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
 		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
 		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
-		{"type": "assistant/message", "seq": 3, "time": 1200, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}}}, "usage": map[string]any{"inputTokens": 5, "outputTokens": 50}}},
-		{"type": "turn/end", "seq": 4, "time": 1210, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "assistant/chunk", "seq": 3, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/message", "seq": 4, "time": 1200, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "aa"}}}, "usage": map[string]any{"inputTokens": 5, "outputTokens": 50}}},
+		{"type": "turn/end", "seq": 5, "time": 1210, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 		// Next turn with no changed header must still inherit the route model.
-		{"type": "turn/start", "seq": 5, "time": 2000, "data": map[string]any{"turn": 1}},
-		{"type": "assistant/chunk", "seq": 6, "time": 2005, "data": map[string]any{"turn": 1, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
-		{"type": "assistant/message", "seq": 7, "time": 2300, "data": map[string]any{"turn": 1, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "b"}}}, "usage": map[string]any{"inputTokens": 6, "outputTokens": 60}}},
-		{"type": "turn/end", "seq": 8, "time": 2310, "data": map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "turn/start", "seq": 6, "time": 2000, "data": map[string]any{"turn": 1}},
+		{"type": "assistant/chunk", "seq": 7, "time": 2005, "data": map[string]any{"turn": 1, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
+		{"type": "assistant/chunk", "seq": 8, "time": 2105, "data": map[string]any{"turn": 1, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
+		{"type": "assistant/message", "seq": 9, "time": 2300, "data": map[string]any{"turn": 1, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "bb"}}}, "usage": map[string]any{"inputTokens": 6, "outputTokens": 60}}},
+		{"type": "turn/end", "seq": 10, "time": 2310, "data": map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}},
 	}
 	out := bridgeRun(t, events)
 	ends := findEventAll(out, "turn/end")
 	if len(ends) != 2 {
 		t.Fatalf("expected two turn/end, got %d", len(ends))
 	}
-	second := ends[1]["tps_samples"].([]any)
+	second := generationList(t, ends[1])
 	if len(second) != 1 {
-		t.Fatalf("second turn should have one sample, got %v", second)
+		t.Fatalf("second turn should have one generation, got %v", second)
 	}
-	if second[0].(map[string]any)["model"] != "gpt-5" {
+	if second[0]["model"] != "gpt-5" {
 		t.Fatalf("inherited model missing: %v", second[0])
 	}
 }
@@ -248,27 +277,48 @@ func TestBridgeReasoningNeverText(t *testing.T) {
 	if msg == nil || msg["text"] != "visible" {
 		t.Fatalf("reasoning block leaked into final text: %v", msg)
 	}
+	end := findEvent(out, "turn/end")
+	if generations := generationList(t, end); len(generations) != 0 {
+		t.Fatalf("reasoning-only deltas must not forward generation content: %v", generations)
+	}
+	// Hidden reasoning must never appear anywhere in the bridge output.
+	for _, event := range out {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "secret reasoning") {
+			t.Fatalf("hidden reasoning leaked into bridge output: %s", encoded)
+		}
+	}
 }
 
-func TestBridgeToolOnlyDeltaAndEmptyMessage(t *testing.T) {
+func TestBridgeToolArgsOnlyDeltasAndEmptyMessage(t *testing.T) {
 	events := []map[string]any{
 		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
 		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
-		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "tool-call-delta", "argumentsDelta": "{\"a\":1}"}}},
-		{"type": "assistant/message", "seq": 3, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
-		{"type": "turn/end", "seq": 4, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "tool-call-delta", "argumentsDelta": "{\"a\":"}}},
+		// A name-only tool delta carries no arguments and must not count.
+		{"type": "assistant/chunk", "seq": 3, "time": 1030, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "tool-call-delta", "name": "Bash"}}},
+		{"type": "assistant/chunk", "seq": 4, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "tool-call-delta", "argumentsDelta": "1}"}}},
+		{"type": "assistant/message", "seq": 5, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
+		{"type": "turn/end", "seq": 6, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 	}
 	out := bridgeRun(t, events)
 	if msg := findEvent(out, "assistant/message"); msg != nil {
 		t.Fatalf("empty final message must not emit a message event: %v", msg)
 	}
 	end := findEvent(out, "turn/end")
-	samples := end["tps_samples"].([]any)
-	if len(samples) != 1 {
-		t.Fatalf("tool-only delta must still pair a sample, got %v", samples)
+	generations := generationList(t, end)
+	if len(generations) != 1 {
+		t.Fatalf("tool-arguments stream must still forward a generation, got %v", generations)
 	}
-	if numValue(t, samples[0].(map[string]any), "first_token_at_ms") != 1015 {
-		t.Fatalf("first token timestamp wrong: %v", samples[0])
+	blocks, ok := generations[0]["blocks"].(map[string]any)
+	if !ok || blocks["tool"] != "{\"a\":1}" {
+		t.Fatalf("argument fragments must concatenate per arguments stream: %v", generations[0]["blocks"])
+	}
+	if numValue(t, generations[0], "first_delta_at_ms") != 1015 || numValue(t, generations[0], "last_delta_at_ms") != 1115 {
+		t.Fatalf("name-only delta must not open or extend the window: %v", generations[0])
 	}
 }
 
@@ -277,46 +327,65 @@ func TestBridgeDuplicateSeqIgnored(t *testing.T) {
 		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
 		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
 		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/chunk", "seq": 3, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "b"}}},
 		// Duplicate of seq 2 must be ignored entirely.
-		{"type": "assistant/chunk", "seq": 2, "time": 1016, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
-		{"type": "assistant/message", "seq": 3, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
-		{"type": "turn/end", "seq": 4, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+		{"type": "assistant/chunk", "seq": 2, "time": 1116, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/message", "seq": 4, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ab"}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
+		{"type": "turn/end", "seq": 5, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 	}
 	out := bridgeRun(t, events)
-	if chunks := findEventAll(out, "assistant/chunk"); len(chunks) != 1 {
+	if chunks := findEventAll(out, "assistant/chunk"); len(chunks) != 2 {
 		t.Fatalf("duplicate seq must be ignored, got %d chunks", len(chunks))
 	}
 	end := findEvent(out, "turn/end")
 	if usage := end["usage"].(map[string]any); numValue(t, usage, "output_tokens") != 100 {
 		t.Fatalf("duplicate must not double count usage: %v", usage)
 	}
+	generations := generationList(t, end)
+	if len(generations) != 1 {
+		t.Fatalf("duplicate seq must not split or drop the generation: %v", generations)
+	}
+	blocks, ok := generations[0]["blocks"].(map[string]any)
+	if !ok || blocks["text"] != "ab" {
+		t.Fatalf("duplicate must not double accumulate generation content: %v", generations[0]["blocks"])
+	}
+	if numValue(t, generations[0], "last_delta_at_ms") != 1115 {
+		t.Fatalf("duplicate timestamp must not extend the window: %v", generations[0])
+	}
 }
 
-func TestBridgeMissingHeaderChunkUsage(t *testing.T) {
+func TestBridgeMissingHeaderNoModelNoGeneration(t *testing.T) {
 	events := []map[string]any{
 		{"type": "turn/start", "seq": 0, "time": 1010, "data": map[string]any{"turn": 0}},
-		{"type": "assistant/message", "seq": 1, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
-		{"type": "turn/end", "seq": 2, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
-	}
-	out := bridgeRun(t, events)
-	end := findEvent(out, "turn/end")
-	if samples := end["tps_samples"].([]any); len(samples) != 0 {
-		t.Fatalf("no first-token chunk must not produce a sample, got %v", samples)
-	}
-}
-
-func TestBridgeMissingUsageNoSample(t *testing.T) {
-	events := []map[string]any{
-		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
-		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
-		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
-		{"type": "assistant/message", "seq": 3, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}}}}},
+		{"type": "assistant/chunk", "seq": 1, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/chunk", "seq": 2, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/message", "seq": 3, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}}, "usage": map[string]any{"inputTokens": 10, "outputTokens": 100}}},
 		{"type": "turn/end", "seq": 4, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
 	}
 	out := bridgeRun(t, events)
 	end := findEvent(out, "turn/end")
-	if samples := end["tps_samples"].([]any); len(samples) != 0 {
-		t.Fatalf("missing usage must not produce a sample, got %v", samples)
+	if generations := generationList(t, end); len(generations) != 0 {
+		t.Fatalf("a response without model evidence must not be forwarded, got %v", generations)
+	}
+}
+
+func TestBridgeMissingUsageStillForwardsGeneration(t *testing.T) {
+	events := []map[string]any{
+		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
+		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
+		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/chunk", "seq": 3, "time": 1115, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "a"}}},
+		{"type": "assistant/message", "seq": 4, "time": 1500, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "aa"}}}}},
+		{"type": "turn/end", "seq": 5, "time": 1510, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+	}
+	out := bridgeRun(t, events)
+	end := findEvent(out, "turn/end")
+	// Approximate speed no longer depends on billing usage partitions.
+	if generations := generationList(t, end); len(generations) != 1 {
+		t.Fatalf("missing usage must not suppress the generation, got %v", generations)
+	}
+	if _, ok := end["usage"]; ok {
+		t.Fatalf("missing usage must not be fabricated: %v", end)
 	}
 }
 
@@ -333,8 +402,8 @@ func TestBridgeInterruptedMessageNotSampled(t *testing.T) {
 		t.Fatalf("interrupted message must not be sampled or surfaced: %v", msg)
 	}
 	end := findEvent(out, "turn/end")
-	if samples := end["tps_samples"].([]any); len(samples) != 0 {
-		t.Fatalf("interrupted message must not produce a sample, got %v", samples)
+	if generations := generationList(t, end); len(generations) != 0 {
+		t.Fatalf("interrupted message must not forward a generation, got %v", generations)
 	}
 }
 
@@ -352,8 +421,8 @@ func TestBridgeAbortedTurnNotSuccess(t *testing.T) {
 		if end["status"] != "failed" {
 			t.Fatalf("reason %q must be failed, got %v", kind, end["status"])
 		}
-		if samples := end["tps_samples"].([]any); len(samples) != 0 {
-			t.Fatalf("reason %q must not produce TPS samples, got %v", kind, samples)
+		if generations := generationList(t, end); len(generations) != 0 {
+			t.Fatalf("reason %q must not forward generations, got %v", kind, generations)
 		}
 	}
 }
@@ -412,7 +481,41 @@ func TestBridgeModelSwitchInvalidatesSample(t *testing.T) {
 	}
 	out := bridgeRun(t, events)
 	end := findEvent(out, "turn/end")
-	if samples := end["tps_samples"].([]any); len(samples) != 0 {
-		t.Fatalf("mid-stream model switch must invalidate the sample, got %v", samples)
+	if generations := generationList(t, end); len(generations) != 0 {
+		t.Fatalf("mid-stream model switch must invalidate the generation, got %v", generations)
+	}
+}
+
+func TestBridgeBufferedWindowSkippedAlone(t *testing.T) {
+	events := []map[string]any{
+		{"type": "request/header", "seq": 0, "time": 1000, "data": map[string]any{"header": map[string]any{"config": map[string]any{"model": "gpt-5"}}}},
+		{"type": "turn/start", "seq": 1, "time": 1010, "data": map[string]any{"turn": 0}},
+		// Step 0 arrives buffered: every delta shares one timestamp, so the
+		// window is unobservable and must be skipped...
+		{"type": "assistant/chunk", "seq": 2, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "buf"}}},
+		{"type": "assistant/chunk", "seq": 3, "time": 1015, "data": map[string]any{"turn": 0, "step": 0, "chunk": map[string]any{"type": "text-delta", "text": "fered"}}},
+		{"type": "assistant/message", "seq": 4, "time": 1016, "data": map[string]any{"turn": 0, "step": 0, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "buffered"}}}, "usage": map[string]any{"inputTokens": 4, "outputTokens": 40}}},
+		// ...without poisoning step 1's complete valid window.
+		{"type": "assistant/chunk", "seq": 5, "time": 2000, "data": map[string]any{"turn": 0, "step": 1, "chunk": map[string]any{"type": "text-delta", "text": "val"}}},
+		{"type": "assistant/chunk", "seq": 6, "time": 2100, "data": map[string]any{"turn": 0, "step": 1, "chunk": map[string]any{"type": "text-delta", "text": "id"}}},
+		{"type": "assistant/message", "seq": 7, "time": 2200, "data": map[string]any{"turn": 0, "step": 1, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "valid"}}}, "usage": map[string]any{"inputTokens": 6, "outputTokens": 60}}},
+		{"type": "turn/end", "seq": 8, "time": 2210, "data": map[string]any{"turn": 0, "reason": map[string]any{"kind": "completed"}}},
+	}
+	out := bridgeRun(t, events)
+	end := findEvent(out, "turn/end")
+	generations := generationList(t, end)
+	if len(generations) != 1 {
+		t.Fatalf("only the observable window must be forwarded, got %v", generations)
+	}
+	blocks, ok := generations[0]["blocks"].(map[string]any)
+	if !ok || blocks["text"] != "valid" {
+		t.Fatalf("unexpected generation content: %v", generations[0])
+	}
+	if numValue(t, generations[0], "first_delta_at_ms") != 2000 || numValue(t, generations[0], "last_delta_at_ms") != 2100 {
+		t.Fatalf("valid window timestamps wrong: %v", generations[0])
+	}
+	usage := end["usage"].(map[string]any)
+	if numValue(t, usage, "input_tokens") != 10 || numValue(t, usage, "output_tokens") != 100 {
+		t.Fatalf("skipped window must not change billing: %v", usage)
 	}
 }

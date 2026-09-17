@@ -1,25 +1,51 @@
 /**
- * Response-paired gateway TPS sampler.
+ * Approximate gateway TPS sampler.
  *
- * Observes an OpenAI chat-completions SSE body and produces at most one sample
- * per upstream response: the exact response id, the canonical response model,
- * the upstream-reported completion tokens, the timestamp of the first nonempty
- * generated delta, and the timestamp of the terminal finish_reason. Tokens are
- * never estimated; a sample exists only when the stream completed successfully
- * with a valid terminal marker and a usage report.
+ * Observes an OpenAI chat-completions SSE body and produces at most one
+ * approximate speed sample per upstream response. Output tokens are counted
+ * with a fixed cl100k_base tokenizer over only the generation content that was
+ * actually observed on the wire: assistant text, visible reasoning, and tool
+ * call arguments. Each content channel (text, reasoning) and each tool
+ * argument block is accumulated and tokenized once as a whole, so the count is
+ * independent of how the stream was segmented into deltas or network chunks.
+ * The generation interval runs from the first nonempty delta arrival to the
+ * last nonempty delta arrival, so completion latency, trailing usage events,
+ * and anything after the last generated token never inflate the denominator.
+ *
+ * A sample exists only when the response completed successfully: error
+ * records, malformed events, data after [DONE], conflicting response ids or
+ * models, truncated streams, and multi-choice responses yield no sample.
+ * Official usage and
+ * billing are never read or altered by this contract.
  *
  * The clock is injected so sampling is deterministic under test.
  */
+import { getEncoding } from 'js-tiktoken';
+
+/** Minimum observable generation span for a trustworthy speed sample. */
+const MINIMUM_WINDOW_MS = 100;
+
+/** Fixed tokenizer, created lazily on the first sample. */
+let tokenizer: ReturnType<typeof getEncoding> | undefined;
+
+/** Counts text as ordinary text: special-token lookalikes never throw. */
+function countTokens(text: string): number {
+  if (text === '') return 0;
+  tokenizer ??= getEncoding('cl100k_base');
+  return tokenizer.encode(text, [], []).length;
+}
+
 export interface ResponseTpsSample {
   response_id: string;
   model: string;
+  /** cl100k_base approximation over observed generation content only. */
   output_tokens: number;
   first_token_at_ms: number;
   completed_at_ms: number;
 }
 
 export interface ResponseTpsContract {
-  tps_sampling_contract: 'response_v1';
+  tps_sampling_contract: 'tokenizer_v1';
   tps_samples: ResponseTpsSample[];
 }
 
@@ -27,10 +53,6 @@ export interface ResponseSamplerOptions {
   now?: () => number;
   /** Canonicalizes an upstream response model id to the public model id. */
   normalizeModel?: (model: string) => string;
-}
-
-interface Usage {
-  completionTokens?: number;
 }
 
 /** Accumulates one SSE response; state is discarded when the stream is not a fully successful completion. */
@@ -41,12 +63,15 @@ export class ResponseSampler {
   private model: string | undefined;
   private responseId: string | undefined;
   private firstDeltaAtMs: number | undefined;
-  private completedAtMs: number | undefined;
-  private usage: Usage | undefined;
+  private lastDeltaAtMs: number | undefined;
+  private readonly deltaTimestamps = new Set<number>();
+  /** Concatenated per-channel generation content; tokenized once at sample time. */
+  private textContent = '';
+  private reasoningContent = '';
+  private readonly toolArguments = new Map<string, string>();
   private sawData = false;
   private sawDone = false;
   private failed = false;
-  private usageConflict = false;
   private modelConflict = false;
   private idConflict = false;
   private sawNonStreamJson = false;
@@ -86,27 +111,29 @@ export class ResponseSampler {
     this.flushEvent();
   }
 
-  /** Emits the contract only when the whole stream was a successful complete response. */
+  /** Emits the contract when the response succeeded and its window is observable. */
   sample(): ResponseTpsContract | undefined {
-    if (!this.sawData || this.failed || this.sawNonStreamJson) return undefined;
-    if (!this.sawDone) return undefined;
-    if (this.usageConflict || this.modelConflict || this.idConflict) return undefined;
+    if (!this.sawData || !this.sawDone || this.failed || this.sawNonStreamJson) return undefined;
+    if (this.idConflict || this.modelConflict) return undefined;
     if (this.responseId === undefined || this.model === undefined) return undefined;
-    if (this.firstDeltaAtMs === undefined || this.completedAtMs === undefined) return undefined;
-    if (!Number.isFinite(this.firstDeltaAtMs) || this.firstDeltaAtMs <= 0) return undefined;
-    if (!Number.isFinite(this.completedAtMs) || this.completedAtMs <= this.firstDeltaAtMs) return undefined;
-    const completionTokens = this.usage?.completionTokens;
-    if (completionTokens === undefined || !Number.isSafeInteger(completionTokens) || completionTokens <= 0) {
+    if (this.firstDeltaAtMs === undefined || this.lastDeltaAtMs === undefined) return undefined;
+    // A fully buffered or otherwise single-timestamp window carries no timing signal.
+    if (this.deltaTimestamps.size < 2) return undefined;
+    const windowMs = this.lastDeltaAtMs - this.firstDeltaAtMs;
+    if (!Number.isFinite(windowMs) || windowMs < MINIMUM_WINDOW_MS) return undefined;
+    const outputTokens = countTokens(this.textContent) + countTokens(this.reasoningContent)
+      + [...this.toolArguments.values()].reduce((sum, args) => sum + countTokens(args), 0);
+    if (!Number.isSafeInteger(outputTokens) || outputTokens <= 0) {
       return undefined;
     }
     return {
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: this.responseId,
         model: this.model,
-        output_tokens: completionTokens,
+        output_tokens: outputTokens,
         first_token_at_ms: this.firstDeltaAtMs,
-        completed_at_ms: this.completedAtMs,
+        completed_at_ms: this.lastDeltaAtMs,
       }],
     };
   }
@@ -170,19 +197,7 @@ export class ResponseSampler {
       if (this.observedModels.size > 1) this.modelConflict = true;
     }
 
-    const usage = asRecord(record.usage);
-    if (usage && Object.prototype.hasOwnProperty.call(usage, 'completion_tokens')) {
-      const completion = usage.completion_tokens;
-      // The reported completion count is authoritative and never rounded; a
-      // fractional, negative, or unsafe value fails the whole response.
-      if (typeof completion !== 'number' || !Number.isSafeInteger(completion) || completion < 0) {
-        this.failed = true;
-      } else if (this.usage?.completionTokens === undefined) {
-        this.usage = { completionTokens: completion };
-      } else if (this.usage.completionTokens !== completion) {
-        this.usageConflict = true;
-      }
-    }
+    // Official usage passes through untouched; it is never a sampling input.
 
     // Only a single-choice response has an attributable generation interval.
     if (Array.isArray(record.choices) && record.choices.length > 1) {
@@ -205,13 +220,52 @@ export class ResponseSampler {
         this.failed = true;
         continue;
       }
-      const delta = asRecord(choiceRecord.delta);
-      if (delta && hasNonemptyDelta(delta) && this.firstDeltaAtMs === undefined) {
-        this.firstDeltaAtMs = this.now();
+      this.observeDelta(asRecord(choiceRecord.delta));
+    }
+  }
+
+  /** Accumulates one delta's observed generation content and its arrival time. */
+  private observeDelta(delta: Record<string, unknown> | undefined): void {
+    if (!delta) return;
+    let observed = false;
+
+    const content = delta.content;
+    if (typeof content === 'string' && content !== '') {
+      this.textContent += content;
+      observed = true;
+    }
+
+    // Only visible reasoning streams here; hidden reasoning and summaries are
+    // never observed on these channels and so are never counted.
+    for (const field of ['reasoning_content', 'reasoning'] as const) {
+      const value = delta[field];
+      if (typeof value === 'string' && value !== '') {
+        this.reasoningContent += value;
+        observed = true;
       }
-      if (finish !== undefined && finish !== null && finish !== '') {
-        if (this.completedAtMs === undefined) this.completedAtMs = this.now();
+    }
+
+    const toolCalls = delta.tool_calls;
+    if (Array.isArray(toolCalls)) {
+      for (const call of toolCalls) {
+        const callRecord = asRecord(call);
+        const args = asRecord(callRecord?.function)?.arguments;
+        // A tool call without streamed arguments contributes no tokens.
+        if (typeof args !== 'string' || args === '') continue;
+        const index = callRecord?.index;
+        const key = typeof index === 'number'
+          ? `index:${index}`
+          : typeof callRecord?.id === 'string' && callRecord.id !== '' ? `id:${callRecord.id}` : 'index:0';
+        this.toolArguments.set(key, (this.toolArguments.get(key) ?? '') + args);
+        observed = true;
       }
+    }
+
+    if (observed) {
+      const atMs = this.now();
+      this.firstDeltaAtMs ??= atMs;
+      this.lastDeltaAtMs = atMs;
+      this.deltaTimestamps.add(atMs);
     }
   }
 }
@@ -220,21 +274,4 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
-}
-
-function hasNonemptyDelta(delta: Record<string, unknown>): boolean {
-  const content = delta.content;
-  if (typeof content === 'string' && content !== '') return true;
-  if (typeof delta.reasoning_content === 'string' && delta.reasoning_content !== '') return true;
-  if (typeof delta.reasoning === 'string' && delta.reasoning !== '') return true;
-  const toolCalls = delta.tool_calls;
-  if (Array.isArray(toolCalls)) {
-    for (const call of toolCalls) {
-      const callRecord = asRecord(call);
-      const fn = asRecord(callRecord?.function);
-      const args = fn?.arguments;
-      if (typeof args === 'string' && args !== '') return true;
-    }
-  }
-  return false;
 }

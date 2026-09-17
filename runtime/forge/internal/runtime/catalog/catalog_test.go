@@ -980,10 +980,6 @@ func TestDialectCompatibilityNewProviders(t *testing.T) {
 	if codexProvider.QuotaProvider != "chatgpt" {
 		t.Fatalf("chatgpt provider quota provider = %q, want chatgpt", codexProvider.QuotaProvider)
 	}
-	// Single chatgpt provider owns the Spark model; no separate pool.
-	if _, ok := r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark"); !ok {
-		t.Fatal("chatgpt provider must own the Spark model in the same provider")
-	}
 
 	// opencode-native (opencode dialect) compatible with opencode client.
 	_, ocNative, err := r.ResolveBinding("opencode", "opencode-native")
@@ -1076,26 +1072,6 @@ func TestExistingProviderBindingsUnchanged(t *testing.T) {
 	}
 }
 
-func TestChatGPTOwnsSpark(t *testing.T) {
-	r := defaultReg()
-
-	chatgpt, err := r.LookupBinding("chatgpt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if chatgpt.QuotaProvider != "chatgpt" {
-		t.Fatalf("chatgpt quota = %q, want chatgpt", chatgpt.QuotaProvider)
-	}
-	if _, ok := r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark"); !ok {
-		t.Fatal("chatgpt must own the Spark model in the same provider")
-	}
-	for _, obsolete := range []string{"codex", "codex-spark"} {
-		if _, err := r.LookupBinding(obsolete); err == nil {
-			t.Fatalf("obsolete provider %q must not exist", obsolete)
-		}
-	}
-}
-
 func TestCodebuddyNoInferenceBinding(t *testing.T) {
 	r := defaultReg()
 	codebuddy, err := r.LookupBinding("codebuddy")
@@ -1168,11 +1144,6 @@ func TestProviderModelMap(t *testing.T) {
 		}
 	}
 
-	// chatgpt also owns gpt-5.3-codex-spark.
-	_, ok = r.LookupProviderModel("chatgpt", "gpt-5.3-codex-spark")
-	if !ok {
-		t.Fatal("chatgpt should own gpt-5.3-codex-spark")
-	}
 }
 
 func TestDSHClientDescriptor(t *testing.T) {

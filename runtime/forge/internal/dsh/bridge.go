@@ -16,10 +16,13 @@ const PluginFilename = "forge-dsh-bridge.mjs"
 // session streams, and emits one-line forge.dsh.stream.v1 JSON for the root
 // session: real first tokens from assistant/chunk deltas, the final answer
 // from assistant/message type=text content blocks, parent tool calls/results,
-// and response-paired TPS samples with usage partitions summed once per
-// response at turn/end. Model route evidence comes only from request/header
+// transient per-response generation blocks (concatenated text-delta and
+// tool-argument streams with first-to-last delta timestamps) forwarded at
+// turn/end for the Go adapter's tokenizer_v1 speed samples, and usage
+// partitions summed once per response at turn/end for official billing only.
+// Model route evidence comes only from request/header
 // and request/context and is retained across turns. Secrets are scrubbed and
-// never emitted.
+// never emitted; hidden reasoning is never forwarded.
 const PluginSource = `export const name = 'forge-dsh-bridge';
 
 const PROTOCOL = 'forge.dsh.stream.v1';
@@ -159,7 +162,11 @@ function responseFor(turn, response, sessionId) {
       usage: null,
       usageCounted: false,
       invalidSample: false,
-      messageSeen: false
+      messageSeen: false,
+      gen: new Map(),
+      genFirstAt: null,
+      genLastAt: null,
+      genInvalid: false
     };
     turn.responses.set(key, item);
   }
@@ -224,28 +231,77 @@ function assistantMessageText(data) {
   return out;
 }
 
-// finishSamples pairs each response's own first token, completion and usage.
-// Responses with
-// no first token, no usage, no model, or non-increasing timestamps are
-// skipped rather than fabricated.
-function finishSamples(turn) {
-  const samples = [];
+// blockKeyOf names one content channel so deltas concatenate per block and
+// the later token count never depends on how the stream is split.
+function blockKeyOf(chunk, fallback) {
+  if (chunk.id !== undefined) return fallback + ':id:' + identity(chunk.id);
+  if (chunk.callId !== undefined) return fallback + ':call:' + identity(chunk.callId);
+  if (chunk.index !== undefined) return fallback + ':index:' + identity(chunk.index);
+  return fallback;
+}
+
+// generationDeltaOf extracts one chunk's actually generated content for the
+// approximate tokenizer speed: text-delta text and tool-call argument
+// fragments and observed reasoning, keyed per content block. These transient
+// strings are converted to counts by the adapter; reasoning is never UI text.
+function generationDeltaOf(data) {
+  const chunk = data && data.chunk;
+  if (!chunk || typeof chunk !== 'object') return null;
+  const type = typeof chunk.type === 'string' ? chunk.type : '';
+  if (type === 'text-delta' || type === 'reasoning-delta') {
+    if (typeof chunk.text === 'string' && chunk.text !== '') {
+      return { key: blockKeyOf(chunk, type === 'reasoning-delta' ? 'reasoning' : 'text'), text: chunk.text };
+    }
+    return null;
+  }
+  if (type === 'tool-call-delta') {
+    if (typeof chunk.argumentsDelta === 'string' && chunk.argumentsDelta !== '') {
+      return { key: blockKeyOf(chunk, 'tool'), text: chunk.argumentsDelta };
+    }
+    return null;
+  }
+  return null;
+}
+
+// observeGeneration accumulates countable generation content per response.
+// Deltas concatenate per block, and the window runs from the first to the
+// last nonempty delta, so completion latency and tool waits never stretch it.
+// Out-of-order timestamps invalidate only this response's window.
+function observeGeneration(item, delta, at) {
+  if (!delta || at === null) return;
+  if (item.genLastAt !== null && at < item.genLastAt) {
+    item.genInvalid = true;
+    return;
+  }
+  if (item.genFirstAt === null) item.genFirstAt = at;
+  item.gen.set(delta.key, (item.gen.get(delta.key) || '') + delta.text);
+  item.genLastAt = at;
+}
+
+// finishGenerations forwards each successful response's accumulated
+// generation blocks with its first-to-last delta window so the Go adapter
+// can count tokens. The strings are transient: only the adapter's canonical
+// samples are persisted. Responses that never completed, lost their model,
+// were invalidated, or produced no two-timestamp window are skipped without
+// poisoning the rest.
+function finishGenerations(turn) {
+  const generations = [];
   for (const item of turn.responses.values()) {
-    if (!item.completed) continue;
-    const first = item.firstTokenAt;
-    if (first === null) continue;
-    if (!item.usage || item.usage.output === null) continue;
-    if (!item.model || item.invalidSample) continue;
-    if (!Number.isFinite(item.completedAt) || item.completedAt <= first) continue;
-    samples.push({
+    if (!item.completed || item.invalidSample) continue;
+    if (!item.model || item.genInvalid) continue;
+    if (item.genFirstAt === null || item.genLastAt === null || item.genLastAt <= item.genFirstAt) continue;
+    if (item.gen.size === 0) continue;
+    const blocks = {};
+    for (const entry of item.gen) blocks[entry[0]] = entry[1];
+    generations.push({
       response_id: item.responseId,
       model: item.model,
-      output_tokens: item.usage.output,
-      first_token_at_ms: first,
-      completed_at_ms: item.completedAt
+      blocks: blocks,
+      first_delta_at_ms: item.genFirstAt,
+      last_delta_at_ms: item.genLastAt
     });
   }
-  return samples;
+  return generations;
 }
 
 export function apply(ctx) {
@@ -316,14 +372,15 @@ export function apply(ctx) {
       let status;
       if (kind === 'completed') status = 'complete';
       else status = 'failed';
-      const samples = status === 'complete' ? finishSamples(turn) : [];
+      const generations = status === 'complete' ? finishGenerations(turn) : [];
       const out = Object.assign({}, base, {
         event: 'turn/end',
         status: status,
         // Retained for additive accounting only; never used for TPS.
         duration: Math.max(0, (timeMs(event) === null ? Date.now() : timeMs(event)) - turn.startedAt),
-        tps_sampling_contract: 'response_v1',
-        tps_samples: samples
+        // Transient generation blocks; the Go adapter counts them into
+        // tokenizer_v1 samples and never persists the raw strings.
+        tps_generation: generations
       });
       if (turn.usageObserved) {
         const usageOut = {};
@@ -339,11 +396,14 @@ export function apply(ctx) {
     }
 
     if (item && type === 'assistant/chunk') {
+      const chunk = data.chunk;
+      if (chunk && chunk.type === 'finish' && chunk.reason && ['error', 'aborted'].includes(chunk.reason.kind)) item.invalidSample = true;
       const first = firstTokenOf(data);
       if (first) {
         const at = timeMs(event);
         if (at !== null && (item.firstTokenAt === null || at < item.firstTokenAt)) item.firstTokenAt = at;
         applyPendingModel(s, item);
+        observeGeneration(item, generationDeltaOf(data), at);
       }
     }
 

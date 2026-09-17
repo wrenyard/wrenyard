@@ -5,14 +5,14 @@ export interface ProviderOrderEntry {
 }
 
 /** Collapse legacy/runtime-specific ids to the current product provider id.
- *  The legacy `codex`/`codex-spark` provider ids migrate to the single
- *  `chatgpt` provider (data migration only; the registry defines no aliases).
+ *  The legacy `codex` provider id migrates to the single `chatgpt` provider
+ *  (data migration only; the registry defines no aliases).
  *  The codex client remains distinct. */
 export function canonicalProviderId(rawId: string): string {
   const id = rawId.trim();
   if (id === 'xai') return 'spacex-ai';
   if (id === 'codebuddy' || id.startsWith('codebuddy-')) return 'codebuddy';
-  if (id === 'codex' || id === 'codex-spark') return 'chatgpt';
+  if (id === 'codex') return 'chatgpt';
   return id;
 }
 

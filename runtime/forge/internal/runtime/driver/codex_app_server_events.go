@@ -2,6 +2,7 @@ package driver
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -12,10 +13,10 @@ import (
 //	turn/started                        -> turn id capture only
 //	item/started                        -> item.started  (tool items only)
 //	item/completed                      -> item.completed
-//	item/agentMessage/delta             -> response sample timing only
-//	item/reasoning/summaryTextDelta     -> response sample timing only
-//	item/reasoning/textDelta            -> response sample timing only
-//	rawResponse/completed               -> response sample usage + turn usage
+//	item/agentMessage/delta             -> generation window accumulation
+//	item/reasoning/summaryTextDelta     -> generation window accumulation
+//	item/reasoning/textDelta            -> generation window accumulation
+//	rawResponse/completed               -> response usage + turn usage
 //	thread/tokenUsage/updated           -> resumed-turn usage (baseline delta)
 //	turn/completed                      -> turn.completed (status-aware)
 //	error                               -> turn.failed when not retryable
@@ -45,9 +46,11 @@ func (b *codexAppServerBridge) handleNotification(msg codexAppServerMessage) {
 	case "item/completed":
 		b.handleItemCompleted(params)
 	case "item/agentMessage/delta":
-		b.handleDelta(params)
-	case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
-		b.handleDelta(params)
+		b.handleDelta(params, codexDeltaChannelText)
+	case "item/reasoning/summaryTextDelta":
+		b.handleDelta(params, codexDeltaChannelSummary)
+	case "item/reasoning/textDelta":
+		b.handleDelta(params, codexDeltaChannelRaw)
 	case "rawResponse/completed":
 		b.handleRawResponseCompleted(params)
 	case "thread/tokenUsage/updated":
@@ -130,20 +133,87 @@ func (b *codexAppServerBridge) handleItemCompleted(params map[string]any) {
 	b.writeRecord(map[string]any{"type": "item.completed", "item": execItem})
 }
 
-// handleDelta records the first NON-EMPTY delta of the current response. The
-// timestamp is taken on arrival from the sampler's monotonic anchor. A response
-// with no delta produces no sample at all.
-func (b *codexAppServerBridge) handleDelta(params map[string]any) {
+// Delta content channels of one response window. Agent text and raw reasoning
+// concatenate directly; reasoning summaries concatenate separately so they can
+// be dropped when the same reasoning was already observed raw.
+const (
+	codexDeltaChannelText    = "text"
+	codexDeltaChannelSummary = "reasoning-summary"
+	codexDeltaChannelRaw     = "reasoning"
+)
+
+// codexDeltaWindow accumulates one response's observed generation: agent
+// message text and raw reasoning concatenate per block in gen, while reasoning
+// summaries concatenate in summaryGen and are merged only when no raw
+// reasoning was observed, because a server streaming both renders the same
+// reasoning twice. Tool output never arrives as a delta and is never counted.
+type codexDeltaWindow struct {
+	gen          tokenizerGeneration
+	summaryGen   tokenizerGeneration
+	rawReasoning bool
+}
+
+// observe accumulates one non-empty delta of the window into its content
+// block. Timestamps come from the sampler's monotonic anchor at arrival, so a
+// regressing stream marks the generation invalid.
+func (w *codexDeltaWindow) observe(channel, block, text string, at int64) {
+	if channel == codexDeltaChannelSummary {
+		if w.rawReasoning {
+			return
+		}
+		w.summaryGen.observe(block, text, at)
+		return
+	}
+	if channel == codexDeltaChannelRaw {
+		w.rawReasoning = true
+	}
+	w.gen.observe(block, text, at)
+}
+
+// measure counts the response as one window, combining observed channels before
+// applying the duration threshold. Summaries replace unavailable raw reasoning.
+func (w *codexDeltaWindow) measure() (tokens, first, last int64, ok bool) {
+	if w.rawReasoning || w.summaryGen.blocks == nil {
+		return w.gen.measure()
+	}
+	if w.gen.blocks == nil {
+		return w.summaryGen.measure()
+	}
+	combined := tokenizerGeneration{blocks: make(map[string]*strings.Builder), firstMS: min(w.gen.firstMS, w.summaryGen.firstMS), lastMS: max(w.gen.lastMS, w.summaryGen.lastMS), invalid: w.gen.invalid || w.summaryGen.invalid}
+	for key, block := range w.gen.blocks {
+		combined.blocks[key] = block
+	}
+	for key, block := range w.summaryGen.blocks {
+		combined.blocks[key] = block
+	}
+	return combined.measure()
+}
+
+// codexDeltaBlockKey names one streamed content block: the content channel,
+// the item id, and for summaries the summary index.
+func codexDeltaBlockKey(params map[string]any, channel string) string {
+	item, _ := params["itemId"].(string)
+	block := channel + "/" + item
+	if index, ok := params["summaryIndex"].(float64); ok {
+		block += "/" + strconv.FormatInt(int64(index), 10)
+	}
+	return block
+}
+
+// handleDelta accumulates one NON-EMPTY generation delta of the current
+// response window, stamped with the sampler's monotonic anchor at arrival. A
+// reasoning summary is ignored once raw reasoning was observed in the window:
+// the server would otherwise re-render reasoning it already streamed raw. A
+// response with no delta produces no sample at all.
+func (b *codexAppServerBridge) handleDelta(params map[string]any, channel string) {
 	if !b.withinTurn(params) {
 		return
 	}
-	if codexDeltaText(params) == "" {
+	text := codexDeltaText(params)
+	if text == "" {
 		return
 	}
-	if !b.firstDeltaSeen {
-		b.firstDeltaSeen = true
-		b.firstDeltaAtMS = b.sampler.timestamp(b.sampler.now())
-	}
+	b.responseWindow.observe(channel, codexDeltaBlockKey(params, channel), text, b.sampler.timestamp(b.sampler.now()))
 }
 
 // handleRawResponseCompleted records the exact usage of one upstream Responses
@@ -154,7 +224,8 @@ func (b *codexAppServerBridge) handleDelta(params map[string]any) {
 // carrying no id or no usable usage: a window must never outlive the response
 // that opened it. A completion whose id was already counted is ignored
 // completely, so a retransmitted completion cannot double count usage or erase
-// the next response's timing.
+// the next response's timing. The speed sample itself needs no usage: it is
+// measured from the response's own observed deltas.
 func (b *codexAppServerBridge) handleRawResponseCompleted(params map[string]any) {
 	if !b.withinTurn(params) {
 		return
@@ -171,24 +242,8 @@ func (b *codexAppServerBridge) handleRawResponseCompleted(params map[string]any)
 		return
 	}
 	b.accumulateResponseUsage(params)
-	if responseID != "" {
-		b.responseUsageSeen[responseID] = true
-	}
-
-	if b.firstDeltaSeen {
-		if outputTokens, ok := codexOutputTokens(params); ok {
-			completedAtMS := b.sampler.timestamp(b.sampler.now())
-			if completedAtMS > b.firstDeltaAtMS && strings.TrimSpace(b.model) != "" {
-				b.sampler.samples = append(b.sampler.samples, responseTPSSample{
-					ResponseID:     responseID,
-					Model:          b.model,
-					OutputTokens:   outputTokens,
-					FirstTokenAtMS: b.firstDeltaAtMS,
-					CompletedAtMS:  completedAtMS,
-				})
-			}
-		}
-	}
+	b.responseUsageSeen[responseID] = true
+	b.recordResponseSample(responseID)
 	b.finishResponse()
 }
 
@@ -213,11 +268,31 @@ func (b *codexAppServerBridge) accumulateResponseUsage(params map[string]any) {
 	}
 }
 
-// finishResponse always closes the per-response delta window so no response's
-// timing can bleed into the next one.
+// recordResponseSample closes the current response's observed generation into
+// one tokenizer_v1 speed sample: the fixed-tokenizer count of its streamed
+// content over the window from its first to its last non-empty delta. The
+// completion's own arrival time is never part of the window, and official
+// usage is not a prerequisite: usage accounting and the speed claim stay
+// independent, so a completion with missing or unusable usage still yields
+// its observable speed while billing stays exact.
+func (b *codexAppServerBridge) recordResponseSample(responseID string) {
+	tokens, first, last, ok := b.responseWindow.measure()
+	if !ok || strings.TrimSpace(b.model) == "" {
+		return
+	}
+	b.sampler.samples = append(b.sampler.samples, responseTPSSample{
+		ResponseID:     responseID,
+		Model:          b.model,
+		OutputTokens:   tokens,
+		FirstTokenAtMS: first,
+		CompletedAtMS:  last,
+	})
+}
+
+// finishResponse always closes the per-response generation window so no
+// response's deltas bleed into the next one.
 func (b *codexAppServerBridge) finishResponse() {
-	b.firstDeltaSeen = false
-	b.firstDeltaAtMS = 0
+	b.responseWindow = codexDeltaWindow{}
 	b.responseSeq++
 }
 
@@ -239,25 +314,6 @@ func codexDeltaText(params map[string]any) string {
 		}
 	}
 	return ""
-}
-
-// codexOutputTokens reads the exact output token count from a raw response
-// completion payload.
-func codexOutputTokens(params map[string]any) (int64, bool) {
-	candidates := []any{params["usage"]}
-	if usage, ok := params["usage"].(map[string]any); ok {
-		candidates = append(candidates, usage["outputTokens"], usage["output_tokens"])
-	}
-	candidates = append(candidates, params["outputTokens"], params["output_tokens"])
-	for _, candidate := range candidates {
-		if candidate == nil {
-			continue
-		}
-		if tokens, ok := safeResponseOutputTokens(candidate); ok {
-			return tokens, true
-		}
-	}
-	return 0, false
 }
 
 // handleTurnCompleted emits the exec-shaped turn.completed record. The native
@@ -336,8 +392,8 @@ func (b *codexAppServerBridge) turnUsage() map[string]any {
 	return usage
 }
 
-// attachSamples attaches the response_v1 TPS contract to a turn.completed
-// record without ever weakening the usage fields.
+// attachSamples attaches the turn's tokenizer_v1 TPS samples and contract to a
+// turn.completed record without ever weakening the usage fields.
 func (b *codexAppServerBridge) attachSamples(record map[string]any) {
 	b.sampler.takeSamples(record)
 }
@@ -394,7 +450,8 @@ func (b *codexAppServerBridge) emitTurnFailed(message string) {
 
 // cancelTurn reports an interrupted turn. Usage observed before the
 // interruption is still reported so accounting is not silently dropped, but no
-// TPS claim is emitted because no response completed its window.
+// TPS claim is emitted because no response's observed window is trusted from
+// an interrupted turn.
 func (b *codexAppServerBridge) cancelTurn() {
 	if b.turnCompleted || b.turnFailed {
 		return

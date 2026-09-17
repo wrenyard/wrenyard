@@ -35,8 +35,8 @@ func cursorTPSSamples(t *testing.T, events []protocol.Event) []any {
 		if event.Type != "turn_usage" {
 			continue
 		}
-		if event.Data["tps_sampling_contract"] != "response_v1" {
-			t.Fatalf("turn_usage missing response_v1 contract: %#v", event.Data)
+		if event.Data["tps_sampling_contract"] != "tokenizer_v1" {
+			t.Fatalf("turn_usage missing tokenizer_v1 contract: %#v", event.Data)
 		}
 		return event.Data["tps_samples"].([]any)
 	}
@@ -100,10 +100,13 @@ func testCursorTranscriptText(t *testing.T, lines ...string) string {
 	return streamed
 }
 
-// TestCursorTPSValidTextTurnAggregatesExactTerminalTokens verifies the primary
-// contract: one sample whose output_tokens is the exact terminal aggregate and
-// whose single generation window spans the observed delta boundaries.
-func TestCursorTPSValidTextTurnAggregatesExactTerminalTokens(t *testing.T) {
+// TestCursorTPSValidTextTurnCountsObservedGeneration verifies the primary
+// contract: one tokenizer_v1 sample whose output_tokens is the approximate
+// cl100k_base count of only the observed generation content (thinking and
+// text counted as separate concatenated blocks), whose single generation
+// window spans the first to last nonempty delta, and whose canonical official
+// usage stays the untouched billing record.
+func TestCursorTPSValidTextTurnCountsObservedGeneration(t *testing.T) {
 	tee, events, setClock := cursorTPSTee(t, "composer-2.5")
 	base := time.UnixMilli(10000)
 	writeCursorTPSLine(t, tee, base, setClock, cursorTPSInit)
@@ -113,6 +116,16 @@ func TestCursorTPSValidTextTurnAggregatesExactTerminalTokens(t *testing.T) {
 	writeCursorTPSLine(t, tee, base.Add(1200*time.Millisecond), setClock, cursorTPSResult(42))
 	tee.FinalizeCursorStream()
 
+	var usage map[string]any
+	for _, event := range *events {
+		if event.Type == "turn_usage" {
+			usage = event.Data
+		}
+	}
+	// Official billing tokens stay exactly the terminal usage values.
+	if usage["output_tokens"] != 42 || usage["input_tokens"] != 10 {
+		t.Fatalf("official usage changed: %#v", usage)
+	}
 	sample := singleCursorSample(t, *events)
 	if sample["response_id"] != "cursor-turn:req-1" {
 		t.Fatalf("response_id = %v", sample["response_id"])
@@ -120,24 +133,27 @@ func TestCursorTPSValidTextTurnAggregatesExactTerminalTokens(t *testing.T) {
 	if sample["model"] != "composer-2.5" {
 		t.Fatalf("model = %v", sample["model"])
 	}
-	if sample["output_tokens"] != int64(42) {
-		t.Fatalf("output_tokens = %v, want 42", sample["output_tokens"])
+	// cl100k_base: "pondering" (thinking block) + "hello world" (text block).
+	if sample["output_tokens"] != int64(4) {
+		t.Fatalf("output_tokens = %v, want 4", sample["output_tokens"])
 	}
 	windows := cursorWindows(t, sample)
-	if len(windows) != 1 || windows[0]["first_token_at_ms"] != int64(10200) || windows[0]["completed_at_ms"] != int64(10900) {
+	if len(windows) != 1 || windows[0]["first_token_at_ms"] != int64(10200) || windows[0]["completed_at_ms"] != int64(10900) || windows[0]["tokens"] != int64(4) {
 		t.Fatalf("windows = %#v", windows)
 	}
 }
 
 // TestCursorTPSSerialToolCallsExcludeToolWaits verifies that each serial tool
-// call closes the preceding generation window at the tool start and that the
-// next generation opens only after the tool completes, so tool wait time is
-// excluded from every window.
+// call closes the preceding generation window at its own last nonempty delta
+// (never at the later tool start, whose gap is completion latency) and that
+// the next generation opens only after the tool completes, so tool wait time
+// is excluded from every window.
 func TestCursorTPSSerialToolCallsExcludeToolWaits(t *testing.T) {
 	tee, events, setClock := cursorTPSTee(t, "composer-2.5")
 	base := time.UnixMilli(20000)
 	writeCursorTPSLine(t, tee, base, setClock, cursorTPSInit)
 	writeCursorTPSLine(t, tee, base.Add(100*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first"}]},"timestamp_ms":20100}`)
+	writeCursorTPSLine(t, tee, base.Add(200*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" chunk"}]},"timestamp_ms":20200}`)
 	writeCursorTPSLine(t, tee, base.Add(300*time.Millisecond), setClock, `{"type":"tool_call","subtype":"started","call_id":"c1","model_call_id":"m1","timestamp_ms":20300,"tool_call":{"shellToolCall":{"args":"{}"}}}`)
 	// A long tool execution gap must never be counted as generation time.
 	writeCursorTPSLine(t, tee, base.Add(9000*time.Millisecond), setClock, `{"type":"tool_call","subtype":"completed","call_id":"c1","model_call_id":"m1","timestamp_ms":29000,"tool_call":{"shellToolCall":{"result":{"success":{"stdout":"ok"}}}}}`)
@@ -147,18 +163,78 @@ func TestCursorTPSSerialToolCallsExcludeToolWaits(t *testing.T) {
 	tee.FinalizeCursorStream()
 
 	sample := singleCursorSample(t, *events)
-	if sample["output_tokens"] != int64(7) {
-		t.Fatalf("output_tokens = %v, want 7", sample["output_tokens"])
+	// cl100k_base: "first chunk" + "second half"; the terminal's official 7
+	// tokens are never attributed to the speed sample.
+	if sample["output_tokens"] != int64(4) {
+		t.Fatalf("output_tokens = %v, want 4", sample["output_tokens"])
 	}
 	windows := cursorWindows(t, sample)
 	if len(windows) != 2 {
 		t.Fatalf("want two serial windows, got %#v", windows)
 	}
-	if windows[0]["first_token_at_ms"] != int64(20100) || windows[0]["completed_at_ms"] != int64(20300) {
-		t.Fatalf("window 0 = %#v", windows[0])
+	if windows[0]["first_token_at_ms"] != int64(20100) || windows[0]["completed_at_ms"] != int64(20200) {
+		t.Fatalf("window 0 = %#v, want completion at the last delta 20200", windows[0])
 	}
 	if windows[1]["first_token_at_ms"] != int64(29100) || windows[1]["completed_at_ms"] != int64(29300) {
 		t.Fatalf("window 1 = %#v", windows[1])
+	}
+}
+
+// TestCursorTPSToolOnlyThenTextTurnProducesSample verifies a turn whose first
+// model response is tool-only (a pending tool with no preceding generation)
+// still yields a valid tokenizer_v1 sample from the later observable text
+// generation.
+func TestCursorTPSToolOnlyThenTextTurnProducesSample(t *testing.T) {
+	tee, events, setClock := cursorTPSTee(t, "composer-2.5")
+	base := time.UnixMilli(50000)
+	writeCursorTPSLine(t, tee, base, setClock, cursorTPSInit)
+	writeCursorTPSLine(t, tee, base.Add(100*time.Millisecond), setClock, `{"type":"tool_call","subtype":"started","call_id":"c1","model_call_id":"m1","timestamp_ms":50100,"tool_call":{"shellToolCall":{"args":"{}"}}}`)
+	writeCursorTPSLine(t, tee, base.Add(1000*time.Millisecond), setClock, `{"type":"tool_call","subtype":"completed","call_id":"c1","model_call_id":"m1","timestamp_ms":51000,"tool_call":{"shellToolCall":{"result":{"success":{"stdout":"ok"}}}}}`)
+	writeCursorTPSLine(t, tee, base.Add(1200*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ran"}]},"timestamp_ms":51200}`)
+	writeCursorTPSLine(t, tee, base.Add(1400*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" fine"}]},"timestamp_ms":51400}`)
+	writeCursorTPSLine(t, tee, base.Add(1600*time.Millisecond), setClock, cursorTPSResult(9))
+	tee.FinalizeCursorStream()
+
+	sample := singleCursorSample(t, *events)
+	if sample["output_tokens"] != int64(2) {
+		t.Fatalf("output_tokens = %v, want 2", sample["output_tokens"])
+	}
+	windows := cursorWindows(t, sample)
+	if len(windows) != 1 || windows[0]["first_token_at_ms"] != int64(51200) || windows[0]["completed_at_ms"] != int64(51400) {
+		t.Fatalf("windows = %#v", windows)
+	}
+}
+
+// TestCursorTPSSkipsBufferedWindowButKeepsLaterValidWindow verifies the
+// partial-observable rule: a generation the CLI buffered into a single
+// timestamp is skipped without poisoning the stream, a later complete valid
+// window still produces its sample, and the aggregate summary flush of the
+// observed text is never counted as generation content.
+func TestCursorTPSSkipsBufferedWindowButKeepsLaterValidWindow(t *testing.T) {
+	tee, events, setClock := cursorTPSTee(t, "composer-2.5")
+	base := time.UnixMilli(20000)
+	writeCursorTPSLine(t, tee, base, setClock, cursorTPSInit)
+	writeCursorTPSLine(t, tee, base.Add(100*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"buffered"}]},"timestamp_ms":20100}`)
+	// Aggregate summary flush of the buffered partial text: not content.
+	writeCursorTPSLine(t, tee, base.Add(150*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"buffered"}]},"timestamp_ms":20150,"model_call_id":"m0"}`)
+	writeCursorTPSLine(t, tee, base.Add(200*time.Millisecond), setClock, `{"type":"tool_call","subtype":"started","call_id":"c1","model_call_id":"m1","timestamp_ms":20200,"tool_call":{"shellToolCall":{"args":"{}"}}}`)
+	writeCursorTPSLine(t, tee, base.Add(9000*time.Millisecond), setClock, `{"type":"tool_call","subtype":"completed","call_id":"c1","model_call_id":"m1","timestamp_ms":29000,"tool_call":{"shellToolCall":{"result":{"success":{"stdout":"ok"}}}}}`)
+	writeCursorTPSLine(t, tee, base.Add(9100*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real"}]},"timestamp_ms":29100}`)
+	writeCursorTPSLine(t, tee, base.Add(9300*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" text"}]},"timestamp_ms":29300}`)
+	// Aggregate summary flush of the accumulated partial text: not content.
+	writeCursorTPSLine(t, tee, base.Add(9350*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real text"}]},"timestamp_ms":29350,"model_call_id":"m2"}`)
+	writeCursorTPSLine(t, tee, base.Add(9500*time.Millisecond), setClock, cursorTPSResult(31))
+	tee.FinalizeCursorStream()
+
+	sample := singleCursorSample(t, *events)
+	// Only the valid window's content counts: the buffered window and the
+	// summary flush contribute nothing.
+	if sample["output_tokens"] != int64(2) {
+		t.Fatalf("output_tokens = %v, want 2", sample["output_tokens"])
+	}
+	windows := cursorWindows(t, sample)
+	if len(windows) != 1 || windows[0]["first_token_at_ms"] != int64(29100) || windows[0]["completed_at_ms"] != int64(29300) {
+		t.Fatalf("windows = %#v", windows)
 	}
 }
 
@@ -609,5 +685,34 @@ func TestCursorTPSAllowsShellToolWithTaskDescription(t *testing.T) {
 	writeCursorTPSLine(t, tee, base.Add(850*time.Millisecond), setClock, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"z"}]},"timestamp_ms":60850}`)
 	writeCursorTPSLine(t, tee, base.Add(900*time.Millisecond), setClock, cursorTPSResult(3))
 	tee.FinalizeCursorStream()
-	singleCursorSample(t, *events)
+	sample := singleCursorSample(t, *events)
+	// The single-delta window before the tool is unobservable and skipped;
+	// only the final two-delta window is valid.
+	windows := cursorWindows(t, sample)
+	if len(windows) != 1 || windows[0]["first_token_at_ms"] != int64(60700) || windows[0]["completed_at_ms"] != int64(60850) {
+		t.Fatalf("windows = %#v", windows)
+	}
+}
+
+func TestCursorTPSParallelToolsPreserveLaterGeneration(t *testing.T) {
+	sampler := newCursorTPSSampler()
+	for _, line := range []string{
+		cursorTPSInit,
+		`{"type":"tool_call","subtype":"started","call_id":"c1","model_call_id":"m1","timestamp_ms":40100,"tool_call":{"readToolCall":{}}}`,
+		`{"type":"tool_call","subtype":"started","call_id":"c2","model_call_id":"m1","timestamp_ms":40100,"tool_call":{"readToolCall":{}}}`,
+		`{"type":"tool_call","subtype":"completed","call_id":"c2","model_call_id":"m1","timestamp_ms":40500}`,
+		`{"type":"tool_call","subtype":"completed","call_id":"c1","model_call_id":"m1","timestamp_ms":41000}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "}]},"timestamp_ms":42000}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"world!"}]},"timestamp_ms":42500}`,
+		cursorTPSResult(999),
+	} {
+		sampler.observe([]byte(line))
+	}
+	sample, ok := sampler.finalize(map[string]any{"output_tokens": int64(999)})
+	if !ok || sample.OutputTokens != 3 || len(sample.GenerationWindows) != 1 {
+		t.Fatalf("sample=%+v valid=%v", sample, ok)
+	}
+	if sample.GenerationWindows[0].CompletedAtMS-sample.GenerationWindows[0].FirstTokenAtMS != 500 {
+		t.Fatal("tool execution entered generation time")
+	}
 }

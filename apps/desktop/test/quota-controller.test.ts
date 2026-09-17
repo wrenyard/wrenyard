@@ -119,7 +119,7 @@ test('catalog projects discovered auth status and attaches quota by id', () => {
   assert.equal(kimi.quota, undefined);
 });
 
-test('catalog projects discovered model id/displayName choices without extra fields', () => {
+test('catalog projects discovered model id/displayName/pricing choices without extra fields', () => {
   const discovered: ProviderAuthStatus[] = [
     {
       id: 'deepseek',
@@ -127,8 +127,8 @@ test('catalog projects discovered model id/displayName choices without extra fie
       configured: true,
       authMode: 'environment',
       models: [
-        { id: 'deepseek-chat', displayName: 'DeepSeek Chat' },
-        { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+        { id: 'deepseek-chat', displayName: 'DeepSeek Chat', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+        { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } },
       ],
     },
     {
@@ -136,18 +136,23 @@ test('catalog projects discovered model id/displayName choices without extra fie
       displayName: 'Kimi Coding',
       configured: false,
       authMode: 'api-key',
-      models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', endpoint: 'must-not-leak' } as { id: string; displayName: string }],
+      models: [{
+        id: 'kimi-k2.5',
+        displayName: 'Kimi K2.5',
+        endpoint: 'must-not-leak',
+        pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 6, cachedInputUsdPerMillion: 0.3 },
+      } as { id: string; displayName: string; pricing: { inputUsdPerMillion: number; outputUsdPerMillion: number; cachedInputUsdPerMillion: number } }],
     },
     { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
   ];
   const snapshot = projectQuotaSnapshot(providers, [{ id: 'deepseek', enabled: true }], 1, undefined, discovered);
   const deepseek = snapshot.catalog.find((entry) => entry.id === 'deepseek')!;
   assert.deepEqual(deepseek.models, [
-    { id: 'deepseek-chat', displayName: 'DeepSeek Chat' },
-    { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+    { id: 'deepseek-chat', displayName: 'DeepSeek Chat', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+    { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } },
   ]);
   const kimi = snapshot.catalog.find((entry) => entry.id === 'kimi-coding')!;
-  assert.deepEqual(kimi.models, [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5' }]);
+  assert.deepEqual(kimi.models, [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 6, cachedInputUsdPerMillion: 0.3 } }]);
   assert.equal(JSON.stringify(kimi.models).includes('endpoint'), false);
   assert.equal(JSON.stringify(kimi.models).includes('must-not-leak'), false);
   const cursor = snapshot.catalog.find((entry) => entry.id === 'cursor')!;

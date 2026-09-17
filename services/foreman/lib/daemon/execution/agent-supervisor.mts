@@ -1766,6 +1766,12 @@ function mapTpsSamples(value: unknown): unknown[] | undefined {
       output_tokens: numberProp(item, 'output_tokens'),
       first_token_at_ms: numberProp(item, 'first_token_at_ms'),
       completed_at_ms: numberProp(item, 'completed_at_ms'),
+      generation_windows: Array.isArray(item.generation_windows)
+        ? item.generation_windows.map((window) => isRecord(window) ? dropUndefined({
+          first_token_at_ms: numberProp(window, 'first_token_at_ms'),
+          completed_at_ms: numberProp(window, 'completed_at_ms'),
+        }) : null)
+        : undefined,
     })]
   })
 }

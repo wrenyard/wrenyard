@@ -420,7 +420,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
-    const priceUsdPerMillion = modelDef.pricing?.outputUsdPerMillion
+    const priceUsdPerMillion = modelDef.pricing.outputUsdPerMillion
     const atGate = (
       code: TaskResolutionFailureCode,
       detail?: TaskResolutionFailureDetail,
@@ -459,7 +459,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     if (requirements.maxOutputUsdPerMillion !== undefined) {
-      if (!modelDef.pricing || modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+      if (priceUsdPerMillion > requirements.maxOutputUsdPerMillion) {
         return atGate('price_limit')
       }
     }
@@ -477,7 +477,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
     const provider = catalog.provider(candidate.provider)
     const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
-    return modelDef?.pricing?.outputUsdPerMillion
+    return modelDef?.pricing.outputUsdPerMillion
   }
 
   // Single authoritative evaluation. `resolve` selection and the `eligible`
@@ -544,14 +544,6 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
     const pricing = model.pricing
-    if (
-      !pricing
-      || pricing.inputUsdPerMillion === undefined
-      || pricing.outputUsdPerMillion === undefined
-      || !pricing.checkedAt
-    ) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
-    }
 
     const resolved = toResolvedDispatch(
       input.declaredRuntime ?? '',

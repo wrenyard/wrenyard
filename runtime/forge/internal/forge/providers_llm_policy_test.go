@@ -88,19 +88,19 @@ func TestProfileCredentialAvailableCodexNativeMissing(t *testing.T) {
 	}
 }
 
-func TestProfileCredentialAvailableCodexSpark(t *testing.T) {
+func TestProfileCredentialAvailableCodexLuna(t *testing.T) {
 	home := t.TempDir()
 	setupForgedHome(t, home)
 	t.Setenv("HOME", home)
 
-	// ChatGPT (codex-spark model) also uses codex auth.
+	// ChatGPT (codex-luna model) also uses codex auth.
 	codexDir := filepath.Join(home, ".codex")
 	if err := os.MkdirAll(codexDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	codexAuth := map[string]interface{}{
 		"tokens": map[string]interface{}{
-			"access_token": "codex-spark-token",
+			"access_token": "codex-luna-token",
 		},
 	}
 	data, _ := json.Marshal(codexAuth)
@@ -108,9 +108,9 @@ func TestProfileCredentialAvailableCodexSpark(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := profile{Name: "codex-spark", Client: "codex", Provider: "chatgpt"}
+	p := profile{Name: "codex-luna", Client: "codex", Provider: "chatgpt"}
 	if !profileCredentialAvailable(p) {
-		t.Fatal("codex-spark profile should be credential-available with valid Codex auth.json")
+		t.Fatal("codex-luna profile should be credential-available with valid Codex auth.json")
 	}
 }
 

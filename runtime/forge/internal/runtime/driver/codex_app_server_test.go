@@ -378,8 +378,10 @@ func TestCodexAppServerLastMessageKeepsFinalAgentText(t *testing.T) {
 
 // TestCodexAppServerTextReasoningAndUsageNormalized verifies the happy path end
 // to end: an agent message becomes a normalized assistant message, a reasoning
-// delta opens the sampling window without ever becoming content, and the turn's
-// usage is the SUM of the raw response completions with no native turn usage.
+// delta feeds the generation window without ever becoming content, and the
+// turn's usage is the SUM of the raw response completions with no native turn
+// usage. The speed sample is the tokenizer's view of the observed deltas over
+// their own first-to-last window, never the official usage figures.
 func TestCodexAppServerTextReasoningAndUsageNormalized(t *testing.T) {
 	bridge, clock, buffer := newHandlerBridge(t, "thread-happy", "turn-h", "gpt-5.1-codex")
 
@@ -389,8 +391,10 @@ func TestCodexAppServerTextReasoningAndUsageNormalized(t *testing.T) {
 	notify(t, bridge, "turn/started", turnStartedParams("thread-happy", "turn-h"))
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "item/reasoning/summaryTextDelta",
-		reasoningDeltaParams("thread-happy", "turn-h", "thinking about it"))
-	clock.advance(40 * time.Millisecond)
+		reasoningDeltaParams("thread-happy", "turn-h", "thinking about"))
+	clock.advance(110 * time.Millisecond)
+	notify(t, bridge, "item/reasoning/summaryTextDelta",
+		reasoningDeltaParams("thread-happy", "turn-h", " it"))
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-happy", "turn-h", "resp-1", 90, 12, 4))
 	notify(t, bridge, "item/completed", map[string]any{
 		"threadId": "thread-happy", "turnId": "turn-h",
@@ -422,12 +426,16 @@ func TestCodexAppServerTextReasoningAndUsageNormalized(t *testing.T) {
 	if samples[0]["response_id"] != "resp-1" {
 		t.Fatalf("unexpected TPS sample: %v", samples[0])
 	}
-	wantNum(t, "TPS sample", samples[0], "output_tokens", 12)
+	// The sample counts the streamed reasoning with the fixed tokenizer, not
+	// the official output_tokens of 12.
+	wantNum(t, "TPS sample", samples[0], "output_tokens", float64(wantTokens(t, "thinking about it")))
 	if samples[0]["model"] != "gpt-5.1-codex" {
 		t.Fatalf("sample model must be the resolved model: %v", samples[0])
 	}
-	if duration := num(t, samples[0]["completed_at_ms"]) - num(t, samples[0]["first_token_at_ms"]); duration != 40 {
-		t.Fatalf("window = %vms, want the 40ms the injected clock advanced: %v", duration, samples[0])
+	wantNum(t, "TPS sample", samples[0], "first_token_at_ms", 1_700_000_000_010)
+	wantNum(t, "TPS sample", samples[0], "completed_at_ms", 1_700_000_000_120)
+	if duration := num(t, samples[0]["completed_at_ms"]) - num(t, samples[0]["first_token_at_ms"]); duration != 110 {
+		t.Fatalf("window = %vms, want the 110ms the injected clock advanced between deltas: %v", duration, samples[0])
 	}
 
 	// The FINAL normalized events are what a consumer sees.
@@ -563,18 +571,17 @@ func TestCodexAppServerCommandMcpAndFileItemsNormalized(t *testing.T) {
 // TestCodexAppServerToolOnlyCompletionOmittedFromSamples verifies a response
 // with no delta still contributes its usage but produces no sampling window, so
 // a tool gap between two text responses stays measurable. Both real reasoning
-// delta method names are recognized as first-delta evidence.
+// delta method names feed the same window.
 func TestCodexAppServerToolOnlyCompletionOmittedFromSamples(t *testing.T) {
 	bridge, clock, buffer := newHandlerBridge(t, "thread-gap", "turn-g", "gpt-5.1-codex")
 
-	// First response: reasoning evidence then text, then its completion. A
-	// second reasoning delta must not restart the window.
+	// First response: reasoning evidence spanning an observable window, then
+	// its completion.
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "item/reasoning/summaryTextDelta",
 		reasoningDeltaParams("thread-gap", "turn-g", "thinking"))
-	clock.advance(5 * time.Millisecond)
-	notify(t, bridge, "item/reasoning/textDelta", reasoningDeltaParams("thread-gap", "turn-g", "more"))
-	clock.advance(15 * time.Millisecond)
+	clock.advance(105 * time.Millisecond)
+	notify(t, bridge, "item/reasoning/summaryTextDelta", reasoningDeltaParams("thread-gap", "turn-g", " more"))
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-gap", "turn-g", "resp-a", 10, 5, 0))
 
 	// A tool-only response: no delta, but its usage belongs to the turn.
@@ -589,10 +596,11 @@ func TestCodexAppServerToolOnlyCompletionOmittedFromSamples(t *testing.T) {
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-gap", "turn-g", "resp-tool", 20, 7, 0))
 
-	// Second response: its own delta opens a fresh window after the tool gap.
+	// Second response: its own deltas open a fresh window after the tool gap.
 	clock.advance(20 * time.Millisecond)
 	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-gap", "turn-g", "second"))
-	clock.advance(15 * time.Millisecond)
+	clock.advance(115 * time.Millisecond)
+	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-gap", "turn-g", " answer"))
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-gap", "turn-g", "resp-b", 30, 9, 0))
 
 	notify(t, bridge, "turn/completed", turnCompletedParams("thread-gap", "turn-g", "completed", 2200))
@@ -609,21 +617,54 @@ func TestCodexAppServerToolOnlyCompletionOmittedFromSamples(t *testing.T) {
 	if !ids["resp-a"] || !ids["resp-b"] || ids["resp-tool"] {
 		t.Fatalf("samples must be the two text responses only: %v", samples)
 	}
-	// The first window spans from the FIRST reasoning delta, not the repeat.
+	// The first window spans the summary deltas, and the tool wait between the
+	// responses is excluded because each response measures its own deltas.
 	wantNum(t, "first sample", samples[0], "first_token_at_ms", 1_700_000_000_010)
-	wantNum(t, "first sample", samples[0], "completed_at_ms", 1_700_000_000_030)
+	wantNum(t, "first sample", samples[0], "completed_at_ms", 1_700_000_000_115)
+	wantNum(t, "first sample", samples[0], "output_tokens", float64(wantTokens(t, "thinking more")))
+	wantNum(t, "second sample", samples[1], "first_token_at_ms", 1_700_000_000_175)
+	wantNum(t, "second sample", samples[1], "completed_at_ms", 1_700_000_000_290)
+	wantNum(t, "second sample", samples[1], "output_tokens", float64(wantTokens(t, "second answer")))
 	usageEvent := onlyEventOfType(t, normalizedEvents(t, buffer), "turn_usage")
 	if usageEvent.Data["output_tokens"] != 21 {
 		t.Fatalf("normalized usage must carry the tool-only response: %v", usageEvent.Data)
 	}
 }
 
+// TestCodexAppServerRawReasoningSupersedesSummary verifies a reasoning summary
+// is dropped from the sample once the same window observed raw reasoning: the
+// server re-rendered reasoning it had already streamed, so neither the summary
+// text nor its timestamps contribute.
+func TestCodexAppServerRawReasoningSupersedesSummary(t *testing.T) {
+	bridge, clock, buffer := newHandlerBridge(t, "thread-rs", "turn-rs", "gpt-5.1-codex")
+
+	clock.advance(10 * time.Millisecond)
+	notify(t, bridge, "item/reasoning/summaryTextDelta",
+		reasoningDeltaParams("thread-rs", "turn-rs", "summarized"))
+	clock.advance(20 * time.Millisecond)
+	notify(t, bridge, "item/reasoning/textDelta", reasoningDeltaParams("thread-rs", "turn-rs", "raw"))
+	clock.advance(110 * time.Millisecond)
+	notify(t, bridge, "item/reasoning/textDelta", reasoningDeltaParams("thread-rs", "turn-rs", " reasoning"))
+	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-rs", "turn-rs", "resp-rs", 5, 9, 0))
+	notify(t, bridge, "turn/completed", turnCompletedParams("thread-rs", "turn-rs", "completed", 500))
+
+	completed := lastRecordOfType(t, buffer, "turn.completed")
+	samples := tpsSamples(t, completed)
+	if len(samples) != 1 {
+		t.Fatalf("want exactly one sample: %v", samples)
+	}
+	wantNum(t, "sample", samples[0], "output_tokens", float64(wantTokens(t, "raw reasoning")))
+	wantNum(t, "sample", samples[0], "first_token_at_ms", 1_700_000_000_030)
+	wantNum(t, "sample", samples[0], "completed_at_ms", 1_700_000_000_140)
+}
+
 // TestCodexAppServerWindowResetRules verifies the per-response window rules: an
 // empty delta never opens one, a completion with no id closes one, a present
-// but unusable usage contributes nothing and closes one, and a turn whose
-// responses carried no usage reports no usage at all rather than zeroes.
+// but unusable usage closes the response but still yields the observable
+// tokenizer sample, and a turn whose responses carried no usage reports no
+// usage at all rather than zeroes while its speed samples survive.
 func TestCodexAppServerWindowResetRules(t *testing.T) {
-	// An empty delta is not first-token evidence, so the
+	// An empty delta is not generation evidence, so the
 	// usable usage that follows still produces no sample.
 	empty, emptyClock, emptyBuffer := newHandlerBridge(t, "thread-empty", "turn-e", "gpt-5.1-codex")
 	emptyClock.advance(10 * time.Millisecond)
@@ -657,12 +698,14 @@ func TestCodexAppServerWindowResetRules(t *testing.T) {
 		t.Fatalf("a completion with no id must reset the window: %v", samples)
 	}
 
-	// A present usage object with no usable token count contributes nothing and
-	// resets the window, while the NEXT valid response is counted exactly.
+	// A present usage object with no usable token count contributes nothing to
+	// usage, but the response's observed generation is still sampled exactly;
+	// the NEXT valid response is counted exactly too.
 	badUse, badClock, badBuffer := newHandlerBridge(t, "thread-baduse", "turn-b", "gpt-5.1-codex")
 	badClock.advance(10 * time.Millisecond)
 	notify(t, badUse, "item/agentMessage/delta", agentDeltaParams("thread-baduse", "turn-b", "text"))
-	badClock.advance(10 * time.Millisecond)
+	badClock.advance(105 * time.Millisecond)
+	notify(t, badUse, "item/agentMessage/delta", agentDeltaParams("thread-baduse", "turn-b", " observed"))
 	notify(t, badUse, "rawResponse/completed", map[string]any{
 		"threadId": "thread-baduse", "turnId": "turn-b", "responseId": "resp-bad",
 		"usage": map[string]any{"outputTokens": "unknown"},
@@ -674,19 +717,22 @@ func TestCodexAppServerWindowResetRules(t *testing.T) {
 	notify(t, badUse, "rawResponse/completed", rawCompletedParams("thread-baduse", "turn-b", "resp-later", 10, 6, 0))
 	notify(t, badUse, "turn/completed", turnCompletedParams("thread-baduse", "turn-b", "completed", 300))
 	badCompleted := lastRecordOfType(t, badBuffer, "turn.completed")
-	if samples := tpsSamples(t, badCompleted); len(samples) != 0 {
-		t.Fatalf("an unusable usage object must reset the window: %v", samples)
+	badSamples := tpsSamples(t, badCompleted)
+	if len(badSamples) != 1 || badSamples[0]["response_id"] != "resp-bad" {
+		t.Fatalf("an unusable usage object must not erase the observable sample: %v", badSamples)
 	}
+	wantNum(t, "unusable-usage sample", badSamples[0], "output_tokens", float64(wantTokens(t, "text observed")))
 	badUsage, _ := badCompleted["usage"].(map[string]any)
 	wantNum(t, "usage after an unusable response", badUsage, "input_tokens", 10)
 	wantNum(t, "usage after an unusable response", badUsage, "output_tokens", 6)
 
-	// A turn whose responses carried no usage reports no usage, no fabricated
-	// zeroes, and no TPS claim.
+	// A turn whose responses carried no usage reports no usage and no
+	// fabricated zeroes, but its observable generation is still sampled.
 	none, noneClock, noneBuffer := newHandlerBridge(t, "thread-none", "turn-none", "gpt-5.1-codex")
 	noneClock.advance(10 * time.Millisecond)
 	notify(t, none, "item/agentMessage/delta", agentDeltaParams("thread-none", "turn-none", "text only"))
-	noneClock.advance(20 * time.Millisecond)
+	noneClock.advance(110 * time.Millisecond)
+	notify(t, none, "item/agentMessage/delta", agentDeltaParams("thread-none", "turn-none", " here"))
 	notify(t, none, "rawResponse/completed", map[string]any{
 		"threadId": "thread-none", "turnId": "turn-none", "responseId": "resp-none",
 	})
@@ -699,9 +745,11 @@ func TestCodexAppServerWindowResetRules(t *testing.T) {
 	if _, present := noneCompleted["input_tokens"]; present {
 		t.Fatalf("a usage-less turn must not invent token fields: %v", noneCompleted)
 	}
-	if _, present := noneCompleted["tps_samples"]; present {
-		t.Fatalf("a usage-less response must produce no sample: %v", noneCompleted)
+	noneSamples := tpsSamples(t, noneCompleted)
+	if len(noneSamples) != 1 || noneSamples[0]["response_id"] != "resp-none" {
+		t.Fatalf("a usage-less response must still produce its tokenizer sample: %v", noneSamples)
 	}
+	wantNum(t, "usage-less sample", noneSamples[0], "output_tokens", float64(wantTokens(t, "text only here")))
 	// The normalized turn_usage loses the trusted agent_turn_v1 claim because
 	// the usage is incomplete, but the duration is still reported.
 	usageEvent := onlyEventOfType(t, normalizedEvents(t, noneBuffer), "turn_usage")
@@ -721,12 +769,16 @@ func TestCodexAppServerDuplicateCompletionKeepsNextWindow(t *testing.T) {
 
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-dup", "turn-d", " "))
+	clock.advance(150 * time.Millisecond)
+	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-dup", "turn-d", " continuation"))
 	clock.advance(20 * time.Millisecond)
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-dup", "turn-d", "resp-one", 10, 2, 0))
 
 	// The duplicate arrives while the NEXT response's window is open.
 	clock.advance(30 * time.Millisecond)
 	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-dup", "turn-d", "two"))
+	clock.advance(150 * time.Millisecond)
+	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-dup", "turn-d", " continuation"))
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-dup", "turn-d", "resp-one", 10, 2, 0))
 	clock.advance(20 * time.Millisecond)
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-dup", "turn-d", "resp-two", 30, 6, 0))
@@ -764,6 +816,8 @@ func TestCodexAppServerForeignNotificationsIgnored(t *testing.T) {
 
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-live", "turn-live", "fresh"))
+	clock.advance(150 * time.Millisecond)
+	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-live", "turn-live", " continuation"))
 	clock.advance(20 * time.Millisecond)
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-live", "turn-live", "resp-live", 11, 4, 0))
 	notify(t, bridge, "turn/completed", turnCompletedParams("thread-live", "turn-live", "completed", 300))
@@ -902,6 +956,8 @@ func TestCodexAppServerUnknownMethodsIgnored(t *testing.T) {
 	})
 	clock.advance(10 * time.Millisecond)
 	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-invented", "turn-i", "real"))
+	clock.advance(150 * time.Millisecond)
+	notify(t, bridge, "item/agentMessage/delta", agentDeltaParams("thread-invented", "turn-i", " continuation"))
 	clock.advance(20 * time.Millisecond)
 	notify(t, bridge, "rawResponse/completed", rawCompletedParams("thread-invented", "turn-i", "resp-i", 10, 4, 0))
 	notify(t, bridge, "turn/completed", turnCompletedParams("thread-invented", "turn-i", "completed", 300))
@@ -1264,3 +1320,18 @@ type discardWriteCloser struct{}
 
 func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (discardWriteCloser) Close() error                { return nil }
+
+func TestCodexTokenizerWindowCombinesChannels(t *testing.T) {
+	var w codexDeltaWindow
+	w.observe(codexDeltaChannelSummary, "reasoning-summary/r", "thinking", 1000)
+	w.observe(codexDeltaChannelText, "text/t", "answer", 1200)
+	tokens, first, last, ok := w.measure()
+	if !ok || tokens != 2 || first != 1000 || last != 1200 {
+		t.Fatalf("window=%d %d %d %v", tokens, first, last, ok)
+	}
+	w.observe(codexDeltaChannelRaw, "reasoning/r", "raw", 1300)
+	tokens, first, last, ok = w.measure()
+	if !ok || tokens != 2 || first != 1200 || last != 1300 {
+		t.Fatalf("raw window=%d %d %d %v", tokens, first, last, ok)
+	}
+}

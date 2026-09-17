@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalizeBuiltinPublicModelId, createBuiltinCatalog } from '@wrenyard/providers';
+import { getEncoding } from 'js-tiktoken';
 import { parseTaskRunSnapshot } from './stats-snapshot.js';
 import type {
   ConversationItemSnapshot,
@@ -552,15 +553,17 @@ interface ConversationProjection {
 }
 
 /**
- * One assistant response (one `turn`+`step` pair). Its generation clock starts
- * at the first delta that actually carries content, so an empty delta or a tool
- * wait never opens or extends a measurement window.
+ * One assistant response (one `turn`+`step` pair). Its generation window runs
+ * from the first nonempty delta to the last nonempty delta, so an empty delta,
+ * a tool wait, or completion latency never opens or extends a measurement.
  */
 interface ObservedResponse {
-  /** Timestamp of the first nonempty text/arguments/reasoning delta. */
-  generationStartedAt?: number;
-  /** Timestamp of the observed `finish` chunk for this exact step. */
-  finishedAt?: number;
+  /** Arrival times of the nonempty deltas, in fold (seq) order. */
+  deltaTimes: number[];
+  /** Concatenated nonempty deltas per content channel (type/block or call id). */
+  channels: Map<string, string>;
+  /** Terminal `finish` observed for this step; false until one arrives without a failure reason. */
+  finishedCleanly: boolean;
   /** Per-step usage, counted once even when DSH repeats the observation. */
   usage?: { inputTokens?: number; outputTokens?: number };
 }
@@ -580,24 +583,52 @@ interface ObservedTurn {
   dispatchCount: number;
 }
 
-/** True when a delta chunk actually carries content worth timing. */
-function deltaHasContent(chunkType: string | undefined, chunk: Record<string, unknown>): boolean {
-  if (chunkType === 'reasoning-delta' || chunkType === 'text-delta') {
-    return (asString(chunk.text) ?? '').length > 0;
+/**
+ * Fixed cl100k_base tokenizer behind the unified approximate TPS
+ * contract: one encoding for every model, so the estimate never varies by
+ * route. Special strings are counted as ordinary text instead of raising.
+ */
+const TOKENIZER = getEncoding('cl100k_base');
+
+/** cl100k_base token count of one fully concatenated content stream. */
+function countTokens(stream: string): number {
+  return TOKENIZER.encode(stream, [], []).length;
+}
+
+/**
+ * The content a delta chunk actually carries, routed to its own accumulation
+ * channel: `type:block-index` for text/reasoning streams and the exact tool
+ * call id for streamed arguments. The DSH 0.1.1-rc.2 chunk schema names the
+ * streamed tool arguments field `argumentsDelta`.
+ */
+function deltaChunkContent(
+  chunkType: string | undefined,
+  chunk: Record<string, unknown>,
+): { channel: string; text: string } | undefined {
+  if (chunkType === 'text-delta' || chunkType === 'reasoning-delta') {
+    const text = asString(chunk.text) ?? '';
+    if (!text) return undefined;
+    return { channel: `${chunkType}:${asNumber(chunk.index) ?? 0}`, text };
   }
-  if (chunkType === 'tool-call-delta') return (asString(chunk.arguments) ?? '').length > 0;
-  return false;
+  if (chunkType === 'tool-call-delta') {
+    const text = asString(chunk.argumentsDelta) ?? '';
+    if (!text) return undefined;
+    const callId = asString(chunk.id);
+    return { channel: `tool-call:${callId ?? asNumber(chunk.index) ?? 0}`, text };
+  }
+  return undefined;
 }
 
 /**
  * Project the durable DSH event history into the bounded product-owned renderer
  * model. Retained `turn/start`/`turn/end` events provide the exact turn
  * boundaries, and per-step `assistant/chunk` observations provide the response
- * generation clock and token counts. Only a `turn/end` may end the turn:
- * throughput comes from complete response samples with a paired generation
- * duration, so turn completion and tool waiting never inflate it. Reasoning
- * deltas advance the generation clock for throughput only and are never
- * projected as content.
+ * generation window and token counts. Only a `turn/end` may end the turn:
+ * TPS counts fixed cl100k_base tokens over only the deltas the stream
+ * actually carried and divides by exactly the first-to-last-delta window, so
+ * turn completion, tool waiting, and completion latency never inflate it.
+ * Reasoning and streamed tool-argument deltas participate in TPS only
+ * and are never projected as content.
  */
 export function projectConversation(
   entries: HistoryEntry[],
@@ -633,7 +664,11 @@ export function projectConversation(
     const turn = observeTurn(turnId, time, order);
     const existing = turn.responses.get(step);
     if (existing) return existing;
-    const response: ObservedResponse = {};
+    const response: ObservedResponse = {
+      deltaTimes: [],
+      channels: new Map<string, string>(),
+      finishedCleanly: false,
+    };
     turn.responses.set(step, response);
     return response;
   };
@@ -703,14 +738,19 @@ export function projectConversation(
         }
         continue;
       }
-      if (deltaHasContent(chunkType, chunk)) {
+      const content = deltaChunkContent(chunkType, chunk);
+      if (content) {
         const response = observeResponse(turnId, step, time, order);
-        response.generationStartedAt ??= time;
+        response.deltaTimes.push(time);
+        response.channels.set(content.channel, (response.channels.get(content.channel) ?? '') + content.text);
       }
       if (chunkType === 'finish') {
         // A finish completes this response only; the turn stays running until
-        // its own `turn/end` arrives.
-        observeResponse(turnId, step, time, order).finishedAt = time;
+        // its own `turn/end` arrives. `error` and `aborted` finishes report
+        // failures, and an unfinished response never contributes TPS.
+        const response = observeResponse(turnId, step, time, order);
+        const reasonKind = asString(isObject(chunk.reason) ? chunk.reason.kind : undefined);
+        response.finishedCleanly = reasonKind !== 'error' && reasonKind !== 'aborted';
         continue;
       }
       // Reasoning deltas are not conversation projection; only visible text is.
@@ -886,23 +926,30 @@ export function projectConversation(
       (sum, usage) => usage.outputTokens === undefined ? sum : (sum ?? 0) + usage.outputTokens,
       undefined,
     );
-    // Throughput is paired per response: only a response that reported usage and
-    // a positive generation window contributes, so a turn end or a tool wait
-    // never participates in the measurement.
-    let measuredOutputTokens = 0;
+    // Throughput follows the unified approximate contract: fixed cl100k_base
+    // tokens counted over only the deltas the stream actually carried, divided
+    // by exactly the response's first-to-last-delta window. A response
+    // contributes only when it finished successfully and its deltas arrived
+    // across at least two distinct timestamps spanning >=100ms; completion
+    // latency, tool waits, and tool output never enter the measurement, and one
+    // unobservable or buffered window never poisons the other valid windows.
+    let measuredTokens = 0;
     let measuredGenerationMs = 0;
     let responseCount = 0;
     for (const response of observed.responses.values()) {
-      if (response.generationStartedAt === undefined || response.finishedAt === undefined) continue;
-      const generationMs = response.finishedAt - response.generationStartedAt;
-      if (generationMs <= 0) continue;
-      if (response.usage?.outputTokens === undefined) continue;
-      measuredOutputTokens += response.usage.outputTokens;
+      if (!response.finishedCleanly) continue;
+      if (new Set(response.deltaTimes).size < 2) continue;
+      const generationMs = Math.max(...response.deltaTimes) - Math.min(...response.deltaTimes);
+      if (generationMs < 100) continue;
+      let responseTokens = 0;
+      for (const stream of response.channels.values()) responseTokens += countTokens(stream);
+      if (responseTokens === 0) continue;
+      measuredTokens += responseTokens;
       measuredGenerationMs += generationMs;
       responseCount += 1;
     }
     const outputTps = responseCount > 0 && measuredGenerationMs > 0
-      ? measuredOutputTokens / (measuredGenerationMs / 1_000)
+      ? measuredTokens / (measuredGenerationMs / 1_000)
       : undefined;
     turns.push({
       id: observed.id,

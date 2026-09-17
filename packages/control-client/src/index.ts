@@ -170,7 +170,7 @@ export interface WrenyardTaskUsage {
   total_tokens?: number;
   generation_ms?: number;
   output_tps?: number;
-  tps_contract?: 'response_v1';
+  tps_contract?: 'tokenizer_v1';
   reference_cost_usd?: number;
   reference_cost_complete: boolean;
   reference_cost_basis?: 'catalog_reference';
@@ -257,11 +257,15 @@ export interface WrenyardProviderStatus {
     canonicalId?: string;
     /** Catalog intelligence tier for the model. */
     intelligence?: 'low' | 'mid' | 'high' | 'premium';
-    /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
-    pricing?: {
-      inputUsdPerMillion?: number;
-      outputUsdPerMillion?: number;
-      cachedInputUsdPerMillion?: number;
+    /**
+     * Catalog pricing subset; only the USD-per-million input/output/cached
+     * numbers. Required and finite, mirroring the required Catalog
+     * ModelDefinition.pricing.
+     */
+    pricing: {
+      inputUsdPerMillion: number;
+      outputUsdPerMillion: number;
+      cachedInputUsdPerMillion: number;
     };
     /** Which evidence tier produced `effectiveTps`. */
     speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';

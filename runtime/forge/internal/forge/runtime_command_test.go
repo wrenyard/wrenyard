@@ -1,7 +1,6 @@
 package forge
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,37 +98,6 @@ func TestCCKimiAuthIncludesManagedSettings(t *testing.T) {
 	}
 	if contains(plan.Command, "agents") {
 		t.Fatalf("cc-kimi direct runtime must remain headless and must not enter Agent View: %#v", plan.Command)
-	}
-}
-
-func TestDirectRunCodexSparkKeepsCodexCommandAndProfile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	t.Setenv("FORGE_REPO_DIR", t.TempDir())
-	setFakeClientsOnPath(t, "codex")
-
-	plan, err := buildDirectRunPlan(directPlanInput{Profile: "codex-spark", Prompt: "inspect", CWD: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve current executable: %v", err)
-	}
-	if plan.Command[0] != executable {
-		t.Fatalf("codex-spark command[0] = %q, want the current Forge executable %q; command=%#v", plan.Command[0], executable, plan.Command)
-	}
-	if len(plan.Command) < 2 || plan.Command[1] != "__codex-app-server" {
-		t.Fatalf("codex-spark must run on the Codex app-server bridge: %#v", plan.Command)
-	}
-	if !contains(plan.Command, "gpt-5.3-codex-spark") {
-		t.Fatalf("codex-spark must preserve CODEX_MODEL value: %#v", plan.Command)
-	}
-	if plan.Env["FORGE_PROFILE"] != "codex-spark" {
-		t.Fatalf("codex-spark FORGE_PROFILE = %q, want codex-spark", plan.Env["FORGE_PROFILE"])
 	}
 }
 

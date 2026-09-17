@@ -725,12 +725,12 @@ describe('Graph Slip task identity and running profile projection', () => {
         node_id: 'node-deploy',
         task_run_id: 'task_x',
         task_id: 'forge-deploy',
-        resolved_profile: 'codex-spark',
+        resolved_profile: 'chatgpt/gpt-5.6-luna:codex',
       }),
     ]);
-    expect(dto.nodes['node-deploy'].profile).toBe('codex-spark');
+    expect(dto.nodes['node-deploy'].profile).toBe('chatgpt/gpt-5.6-luna:codex');
     const tip = nodeTip(dto.nodes['node-deploy'], 'task')!;
-    expect(tip.rows.find((r) => r.label === '运行配置')!.value).toBe('codex-spark');
+    expect(tip.rows.find((r) => r.label === '运行配置')!.value).toBe('chatgpt/gpt-5.6-luna:codex');
     // Running state is not a blocker — no completion gate around the profile.
     expect(dto.nodes['node-deploy'].state).toBe('running');
     expect(tip.firstLine).toBe('部署');

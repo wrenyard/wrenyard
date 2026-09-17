@@ -53,16 +53,6 @@ func TestChatGPTSingleProvider(t *testing.T) {
 	if quota := module.Quota(); quota.Kind != "chatgpt" || quota.Name != "chatgpt" {
 		t.Fatalf("chatgpt quota metadata = %#v, want kind/name chatgpt", quota)
 	}
-	spark, ok := module.Models()["gpt-5.3-codex-spark"]
-	if !ok {
-		t.Fatal("chatgpt must own the gpt-5.3-codex-spark model")
-	}
-	if spark.ID != "gpt-5.3-codex-spark" {
-		t.Fatalf("chatgpt spark model = %+v", spark)
-	}
-	if err := binding.ValidateModel("gpt-5.3-codex-spark"); err != nil {
-		t.Fatalf("chatgpt must allow the spark model: %v", err)
-	}
 }
 
 func TestProviderOverridesRespectDeclaredCapabilities(t *testing.T) {

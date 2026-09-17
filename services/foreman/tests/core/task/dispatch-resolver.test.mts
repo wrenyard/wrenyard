@@ -472,11 +472,11 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
   })
 
   it('explicit stays terminal with no fallback even when automatic mode has other candidates', () => {
-    // codebuddy/minimax-m3:cb is a parseable task-capable candidate, but it
-    // carries no truthful intelligence/evidence and can never serve. Explicit
+    // codebuddy/glm-5.3:cb is a fully evidenced task-capable target, but the
+    // explicit request requires an image capability it cannot serve. Explicit
     // mode fails terminally even though automatic selection has many eligible
     // alternatives: the explicit error is returned, never a substitute target.
-    const unavailable = resolver.resolveExplicit({ taskName: 'explicit-no-fallback', exactRuntime: 'codebuddy/minimax-m3:cb' })
+    const unavailable = resolver.resolveExplicit({ taskName: 'explicit-no-fallback', exactRuntime: GLM_CB, requiredCapabilities: ['image'] as const })
     const auto = resolver.resolve({
       taskName: 'explicit-no-fallback',
       requirements: { maxOutputUsdPerMillion: 2, minimumTps: 40, intelligenceMin: 'mid' } satisfies TaskDispatchRequirements,
@@ -485,7 +485,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(unavailable.error.code, 'EXPLICIT_RUNTIME_UNAVAILABLE')
     assert.ok(unavailable.error.reason.length > 0)
     assert.equal(auto.ok, true)
-    assert.notEqual(auto.exactAgentRuntime, 'codebuddy/minimax-m3:cb')
+    assert.notEqual(auto.exactAgentRuntime, GLM_CB)
   })
 
   it('new Flash identity does not inherit old V4 speed samples or retired ids', () => {
@@ -970,7 +970,7 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
   it('automatic without a thinking requirement selects the highest supported level', () => {
     const resolution = resolver.resolve({
       taskName: 'auto-thinking-default',
-      requirements: { minimumTps: 1, excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'chatgpt'), excludeModelIds: ['gpt-5.3-codex-spark', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] } satisfies TaskDispatchRequirements,
+      requirements: { minimumTps: 1, excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'chatgpt'), excludeModelIds: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, true)
     // The selection includes only thinking-capable models; the Catalog default

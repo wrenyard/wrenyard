@@ -35,7 +35,6 @@ describe('roleCandidates — client_family authority', () => {
 
 describe('roleCandidates — legacy profile fallback (client_family unknown)', () => {
   it('falls back to profile regex for codex profiles', () => {
-    expect(roleCandidates('unknown', 'codex-spark')).toContain('classic-codex');
     expect(roleCandidates('unknown', 'codex-mini')).toContain('classic-codex');
     expect(roleCandidates('unknown', 'codex')).toContain('classic-codex');
   });

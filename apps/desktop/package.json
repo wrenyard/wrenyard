@@ -45,7 +45,8 @@
     "@wrenyard/catalog": "workspace:*",
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/dsh-shell": "workspace:*",
-    "@wrenyard/providers": "workspace:*"
+    "@wrenyard/providers": "workspace:*",
+    "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -224,22 +225,42 @@ func TestDSHAdapterParseSessionID(t *testing.T) {
 	}
 }
 
-func TestDSHTurnEndValidTPSSamplingSurvivesNormalization(t *testing.T) {
-	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500,"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"exec:turn:step","model":"actual-model","output_tokens":3,"first_token_at_ms":1000,"completed_at_ms":2000}]}`))
+func TestDSHTokenizerSamplingSurvivesNormalization(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[{"response_id":"exec:turn:step","model":"actual-model","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`))
 	usages := collectTurnUsage(events)
 	if len(usages) != 1 {
 		t.Fatalf("turn_usage count = %d, want 1; events=%#v", len(usages), events)
 	}
 	usage := usages[0]
-	if usage["tps_sampling_contract"] != "response_v1" {
-		t.Fatalf("sampling contract=%v want response_v1", usage["tps_sampling_contract"])
+	if usage["tps_sampling_contract"] != "tokenizer_v1" {
+		t.Fatalf("sampling contract=%v want tokenizer_v1", usage["tps_sampling_contract"])
 	}
 	samples, ok := usage["tps_samples"].([]any)
 	if !ok || len(samples) != 1 {
 		t.Fatalf("tps_samples=%#v want one canonical sample", usage["tps_samples"])
 	}
-	if usage["input_tokens"] != 7 || usage["output_tokens"] != 3 || usage["duration_ms"] != 2500 {
+	sample := samples[0].(map[string]any)
+	if sample["response_id"] != "exec:turn:step" || sample["model"] != "actual-model" {
+		t.Fatalf("sample identity changed: %#v", sample)
+	}
+	if tokens, ok := sample["output_tokens"].(int64); !ok || tokens != 3 {
+		t.Fatalf("output_tokens=%#v want the cl100k count of the observed content", sample["output_tokens"])
+	}
+	if sample["first_token_at_ms"] != float64(1000) || sample["completed_at_ms"] != float64(2000) {
+		t.Fatalf("sample window changed: %#v", sample)
+	}
+	if usage["input_tokens"] != 7 || usage["output_tokens"] != 5 || usage["duration_ms"] != 2500 {
 		t.Fatalf("billing usage changed: %#v", usage)
+	}
+}
+
+func TestDSHTokenizerCountsBlocksNotDeltas(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[{"response_id":"r1","model":"m","blocks":{"text":"Hello world!","tool":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`))
+	usage := collectTurnUsage(events)[0]
+	samples := usage["tps_samples"].([]any)
+	tokens := samples[0].(map[string]any)["output_tokens"].(int64)
+	if tokens != 6 {
+		t.Fatalf("concatenated blocks must sum their counts, got %d", tokens)
 	}
 }
 
@@ -254,25 +275,84 @@ func TestDSHLegacyTurnNeverGainsTPSSamplingTrust(t *testing.T) {
 	}
 }
 
-func TestDSHInvalidTPSSamplesDoNotBecomeTrusted(t *testing.T) {
-	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500,"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"exec:turn:step","model":"actual-model","output_tokens":3,"first_token_at_ms":2000,"completed_at_ms":1000}]}`))
+func TestDSHLegacyResponseV1SamplesSkippedNotRelabeled(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":3},"duration":2500,"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"exec:turn:step","model":"actual-model","output_tokens":3,"first_token_at_ms":1000,"completed_at_ms":2000}]}`))
 	usage := collectTurnUsage(events)[0]
-	if _, ok := usage["tps_sampling_contract"]; ok {
-		t.Fatalf("invalid sample unexpectedly gained tps_sampling_contract: %#v", usage)
+	if contract, ok := usage["tps_sampling_contract"]; ok {
+		t.Fatalf("old response_v1 samples must be skipped, never relabeled: %v", contract)
 	}
 	if _, ok := usage["tps_samples"]; ok {
-		t.Fatalf("invalid sample unexpectedly gained tps_samples: %#v", usage)
+		t.Fatalf("old response_v1 samples must not be forwarded: %#v", usage)
+	}
+	if usage["input_tokens"] != 7 || usage["output_tokens"] != 3 {
+		t.Fatalf("legacy billing must survive: %#v", usage)
 	}
 }
 
-func TestDSHTPSSamplingDoesNotChangeFinalAnswerOrBilling(t *testing.T) {
-	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"final answer","usage":{"input_tokens":11,"output_tokens":5},"duration":1750,"tps_sampling_contract":"response_v1","tps_samples":[]}`))
+func TestDSHUnobservableWindowsSkippedWithoutPoisoning(t *testing.T) {
+	line := `{"event":"turn/end","status":"done","text":"answer","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[` +
+		`{"response_id":"short","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":1050},` +
+		`{"response_id":"single","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":1000},` +
+		`{"response_id":"empty","model":"m","blocks":{},"first_delta_at_ms":1000,"last_delta_at_ms":2000},` +
+		`{"response_id":"blank","model":"m","blocks":{"text":""},"first_delta_at_ms":1000,"last_delta_at_ms":2000},` +
+		`{"response_id":"valid","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":3000,"last_delta_at_ms":4000}]}`
+	usage := collectTurnUsage(dshNormalizer([]byte(line)))[0]
+	samples, ok := usage["tps_samples"].([]any)
+	if !ok || len(samples) != 1 {
+		t.Fatalf("only the valid window must survive, got %#v", usage["tps_samples"])
+	}
+	if samples[0].(map[string]any)["response_id"] != "valid" {
+		t.Fatalf("wrong sample survived: %#v", samples[0])
+	}
+}
+
+func TestDSHMalformedGenerationRejected(t *testing.T) {
+	for _, line := range []string{
+		`{"event":"turn/end","status":"done","text":"a","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[{"response_id":"","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`,
+		`{"event":"turn/end","status":"done","text":"a","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[{"response_id":"r","model":"m","blocks":{"text":42},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`,
+		`{"event":"turn/end","status":"done","text":"a","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":["nope"]}`,
+	} {
+		usage := collectTurnUsage(dshNormalizer([]byte(line)))[0]
+		if _, ok := usage["tps_sampling_contract"]; ok {
+			t.Fatalf("malformed generation must be rejected outright: %#v", usage)
+		}
+		if _, ok := usage["tps_samples"]; ok {
+			t.Fatalf("malformed generation must not become samples: %#v", usage)
+		}
+	}
+}
+
+func TestDSHFailedTurnNeverGainsTokenizerSamples(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"error","text":"answer","usage":{"input_tokens":7,"output_tokens":5},"duration":2500,"tps_generation":[{"response_id":"r","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`))
+	usage := collectTurnUsage(events)[0]
+	if _, ok := usage["tps_sampling_contract"]; ok {
+		t.Fatalf("failed turn must not gain sampling trust: %#v", usage)
+	}
+	if _, ok := usage["tps_samples"]; ok {
+		t.Fatalf("failed turn must not gain samples: %#v", usage)
+	}
+}
+
+func TestDSHTokenizerRawContentStrippedFromPersistedUsage(t *testing.T) {
+	events := dshNormalizer([]byte(`{"event":"turn/end","status":"done","text":"final answer","usage":{"input_tokens":11,"output_tokens":5},"duration":1750,"tps_generation":[{"response_id":"r1","model":"m","blocks":{"text":"Hello world!"},"first_delta_at_ms":1000,"last_delta_at_ms":2000}]}`))
 	if len(events) != 3 || events[0].Type != "message" || events[0].Data["text"] != "final answer" {
 		t.Fatalf("final answer changed: %#v", events)
 	}
 	usage := collectTurnUsage(events)[0]
 	if usage["input_tokens"] != 11 || usage["output_tokens"] != 5 || usage["duration_ms"] != 1750 {
 		t.Fatalf("billing fields changed: %#v", usage)
+	}
+	if _, ok := usage["tps_generation"]; ok {
+		t.Fatalf("raw generation buffers must never reach the canonical usage: %#v", usage)
+	}
+	for _, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "Hello world!") {
+			t.Fatalf("raw generation content leaked into a persisted event: %s", encoded)
+		}
 	}
 	if events[len(events)-1].Type != protocol.EventRunFinished {
 		t.Fatalf("terminal ordering changed: %#v", events)

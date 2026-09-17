@@ -21,7 +21,6 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'glm-5.2': 'GLM 5.2',
   'glm-5.3': 'GLM 5.3',
   'glm-5.3-flash': 'GLM 5.3 Flash',
-  'gpt-5.3-codex-spark': 'GPT 5.3 Codex Spark',
   'gpt-5.4': 'GPT 5.4',
   'gpt-5.4-mini': 'GPT 5.4 Mini',
   'gpt-5.5': 'GPT 5.5',

@@ -1708,7 +1708,7 @@ func TestClaudeOutputTextBlockNormalized(t *testing.T) {
 }
 
 // TestCodexTurnCompletedCarriesBridgeResponseVPSSamples verifies the bridge's
-// response_v1 paired samples survive Codex turn.completed normalization on the
+// tokenizer_v1 paired samples survive Codex turn.completed normalization on the
 // existing schema, and that the whole-turn duration is never substituted for
 // the per-response samples.
 func TestCodexTurnCompletedCarriesBridgeResponseVPSSamples(t *testing.T) {
@@ -1719,7 +1719,7 @@ func TestCodexTurnCompletedCarriesBridgeResponseVPSSamples(t *testing.T) {
 		},
 	}
 	line := []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250,` +
-		`"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
+		`"tps_sampling_contract":"tokenizer_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
 		`"output_tokens":120,"first_token_at_ms":1000,"completed_at_ms":1400}]}`)
 
 	events := codexNormalizer(line)
@@ -1744,12 +1744,12 @@ func TestCodexTurnCompletedCarriesBridgeResponseVPSSamples(t *testing.T) {
 }
 
 // TestCodexTurnCompletedOmitsAbsentOrEmptyResponseVSamples verifies an
-// unclaimed contract and an empty sample set never emit partial response_v1
+// unclaimed contract and an empty sample set never emit partial tokenizer_v1
 // fields.
 func TestCodexTurnCompletedOmitsAbsentOrEmptyResponseVSamples(t *testing.T) {
 	for name, line := range map[string][]byte{
 		"absent": []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250}`),
-		"empty":  []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250,"tps_sampling_contract":"response_v1","tps_samples":[]}`),
+		"empty":  []byte(`{"type":"turn.completed","duration_ms":9000,"input_tokens":100,"output_tokens":250,"tps_sampling_contract":"tokenizer_v1","tps_samples":[]}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			events := codexNormalizer(line)
@@ -1767,7 +1767,7 @@ func TestCodexTurnCompletedOmitsAbsentOrEmptyResponseVSamples(t *testing.T) {
 }
 
 // TestCodexTurnCompletedResponseVSamplesSurviveTranscriptTee proves the
-// bridge's response_v1 samples reach the transcript consumer unchanged through
+// bridge's tokenizer_v1 samples reach the transcript consumer unchanged through
 // the Codex Tee, where the native turn duration is measured but must never be
 // used to rebuild or replace the paired per-response samples.
 func TestCodexTurnCompletedResponseVSamplesSurviveTranscriptTee(t *testing.T) {
@@ -1783,7 +1783,7 @@ func TestCodexTurnCompletedResponseVSamplesSurviveTranscriptTee(t *testing.T) {
 	}
 	clock.Advance(1200 * time.Millisecond)
 	if _, err := tee.Write([]byte(`{"type":"turn.completed","duration_ms":9000,"usage":{"input_tokens":100,"output_tokens":250},` +
-		`"tps_sampling_contract":"response_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
+		`"tps_sampling_contract":"tokenizer_v1","tps_samples":[{"response_id":"resp_1","model":"gpt-5.6-sol",` +
 		`"output_tokens":120,"first_token_at_ms":1000,"completed_at_ms":1400}]}` + "\n")); err != nil {
 		t.Fatal(err)
 	}

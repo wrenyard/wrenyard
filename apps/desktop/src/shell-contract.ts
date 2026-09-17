@@ -270,7 +270,7 @@ export interface TaskRunUsage {
   totalTokens?: number;
   generationMs?: number;
   outputTps?: number;
-  tpsContract?: 'response_v1';
+  tpsContract?: 'tokenizer_v1';
   /** Estimated reference cost in USD. Absent (`undefined`) when CORE omits the numeric; never a fabricated value. */
   referenceCostUsd?: number;
   /** True when CORE fully costed this run; partial runs omit the cost. */
@@ -330,9 +330,9 @@ export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
 /** Catalog pricing subset surfaced for the Model List tab (USD per million tokens). */
 export interface ProviderModelPricingSnapshot {
-  inputUsdPerMillion?: number;
-  outputUsdPerMillion?: number;
-  cachedInputUsdPerMillion?: number;
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  cachedInputUsdPerMillion: number;
 }
 
 /** Shared provider-model row for the Provider and Model List surfaces. */
@@ -345,8 +345,8 @@ export interface ProviderModelSnapshot {
   canonicalId?: string;
   /** Catalog intelligence tier for the model. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
-  /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
-  pricing?: ProviderModelPricingSnapshot;
+  /** Catalog pricing subset; only the required USD-per-million input/output/cached numbers. */
+  pricing: ProviderModelPricingSnapshot;
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
   /** True when a credential is configured AND the resolver admits provider/model. */

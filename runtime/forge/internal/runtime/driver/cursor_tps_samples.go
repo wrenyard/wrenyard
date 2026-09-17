@@ -6,27 +6,21 @@ import (
 	"strings"
 )
 
-// cursorGenerationWindowMinimumMS is the internal (never surfaced, never
-// configurable) minimum duration a single serial model-generation interval
-// must span. A shorter interval means the CLI buffered or collapsed its
-// partial stream, so the observable boundaries no longer describe real
-// generation time and the whole sample is rejected.
-const cursorGenerationWindowMinimumMS = 100
-
 // cursorGenerationWindow is one serial model-generation interval inside a
-// single Cursor agent turn: it starts at the first nonempty text/thinking
-// delta and ends at the boundary that follows the generation (a tool start, or
-// the last nonempty delta for the final tool-free window).
+// single Cursor agent turn together with the approximate tokens of the
+// content the stream actually observed in it: it starts at the first nonempty
+// text/thinking delta and ends at the last nonempty delta of that generation.
 type cursorGenerationWindow struct {
+	Tokens         int64
 	FirstTokenAtMS int64
 	CompletedAtMS  int64
 }
 
 // cursorTPSSample is the single aggregate sample for one complete Cursor
-// terminal turn. OutputTokens is the exact terminal usage output_tokens (the
-// CLI already aggregates every serial model generation inside the turn), so no
-// per-response token allocation is ever invented; GenerationWindows is the
-// ordered list of the serial generation intervals observed on the stream.
+// terminal turn. OutputTokens is the sum of the approximate tokenizer counts
+// of the valid generation windows, never the terminal official usage (which
+// stays untouched as the billing record); GenerationWindows is the ordered
+// list of the valid serial generation intervals observed on the stream.
 type cursorTPSSample struct {
 	ResponseID        string
 	Model             string
@@ -36,9 +30,10 @@ type cursorTPSSample struct {
 
 // cursorTPSState is the sampling state machine for one Cursor invocation. Any
 // structural surprise (retry, reconnect, error, interaction query, malformed
-// timing, session change, parallel/interleaved tools, unknown tool
-// completion, truncated or duplicate terminal) poisons the whole stream so no
-// sample can be emitted; there is no partial credit.
+// timing, session change, unknown tool
+// completion, truncated or duplicate terminal) invalidates the stream. An unobservable
+// (buffered or collapsed) generation window is merely skipped, so it never
+// poisons the other complete valid windows.
 type cursorTPSState struct {
 	poisoned bool
 	// started is true once the first native record has been observed.
@@ -58,24 +53,19 @@ type cursorTPSState struct {
 	terminalSeen      bool
 	terminalOK        bool
 
-	// inGeneration is true while a serial model-generation window is open.
+	// generation accumulates the observable content of the active serial
+	// model-generation window, one block per content channel (text/thinking).
+	generation tokenizerGeneration
+	// inGeneration is true once the active generation window has observed its
+	// first nonempty delta.
 	inGeneration bool
-	firstTokenMS int64
 	// lastDeltaMS is the most recent nonempty delta boundary, which is the
 	// observable completion of the active (possibly not yet closed) window.
 	lastDeltaMS int64
 
-	// pendingTool is the call_id of a tool start that has not yet been
-	// completed. At most one tool may be outstanding (one tool per model
-	// call); generation activity while it is set is rejected.
-	pendingTool string
-	// pendingModelCall is the model_call_id of the outstanding tool start, which
-	// the matching completion must repeat.
-	pendingModelCall string
-
-	// modelCallIDs tracks every observed model_call_id so a reused id is
-	// rejected.
-	modelCallIDs map[string]bool
+	// Parallel tools may share a model call. Only generation observed outside
+	// outstanding tool execution is measurable.
+	pendingTools map[string]string
 	callIDs      map[string]bool
 
 	// partialText is the text accumulated from assistant records that carry a
@@ -89,13 +79,13 @@ type cursorTPSState struct {
 
 func newCursorTPSState() cursorTPSState {
 	return cursorTPSState{
-		modelCallIDs: make(map[string]bool),
+		pendingTools: make(map[string]string),
 		callIDs:      make(map[string]bool),
 	}
 }
 
 // cursorTPSSampler observes raw Cursor stream-json lines and, only when the
-// entire stream passes, yields one aggregate response_v1 sample.
+// entire stream passes, yields one aggregate tokenizer_v1 sample.
 type cursorTPSSampler struct {
 	state cursorTPSState
 }
@@ -153,7 +143,7 @@ func (s *cursorTPSSampler) observe(line []byte) {
 	case "result":
 		s.observeResult(record)
 	case "user":
-		if s.state.inGeneration || len(s.state.windows) != 0 || s.state.pendingTool != "" {
+		if s.state.inGeneration || len(s.state.windows) != 0 || len(s.state.pendingTools) != 0 {
 			s.state.poisoned = true
 		}
 	default:
@@ -220,11 +210,11 @@ func (s *cursorTPSSampler) observeThinking(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	if cursorRecordText(record) == "" {
+	text := cursorRecordText(record)
+	if text == "" {
 		return
 	}
-	if s.state.pendingTool != "" {
-		s.state.poisoned = true
+	if len(s.state.pendingTools) != 0 {
 		return
 	}
 	at, ok := cursorEventTimestamp(record)
@@ -232,7 +222,7 @@ func (s *cursorTPSSampler) observeThinking(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	s.markGenerationActivity(at)
+	s.markGenerationActivity("thinking", text, at)
 }
 
 // observeAssistant records a nonempty assistant delta. An assistant record
@@ -263,19 +253,14 @@ func (s *cursorTPSSampler) observeAssistant(record map[string]any) {
 		s.state.partialText.Reset()
 		return
 	}
-	if s.state.pendingTool != "" {
-		s.state.poisoned = true
+	s.state.partialText.WriteString(text)
+	if len(s.state.pendingTools) != 0 {
 		return
 	}
-	s.state.partialText.WriteString(text)
-	s.markGenerationActivity(at)
+	s.markGenerationActivity("text", text, at)
 }
 
-// observeToolCall validates the serial one-tool-per-model-call lifecycle. Every
-// tool start needs a preceding active generation window, a nonempty new unique
-// model_call_id and call_id, and no outstanding tool; completion must match the
-// active tool. Parallel/interleaved streams and unknown completions are
-// rejected.
+// observeToolCall tracks matching tool boundaries, including parallel calls.
 func (s *cursorTPSSampler) observeToolCall(record map[string]any) {
 	subtype, _ := getString(record, "subtype")
 	subtype = strings.ToLower(strings.TrimSpace(subtype))
@@ -305,17 +290,7 @@ func (s *cursorTPSSampler) observeToolStarted(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	if s.state.modelCallIDs[modelCallID] || s.state.callIDs[callID] {
-		s.state.poisoned = true
-		return
-	}
-	if s.state.pendingTool != "" {
-		s.state.poisoned = true
-		return
-	}
-	if !s.state.inGeneration {
-		// A tool start without a preceding active generation window is a
-		// direct tool-only response or a broken boundary.
+	if s.state.callIDs[callID] {
 		s.state.poisoned = true
 		return
 	}
@@ -324,18 +299,18 @@ func (s *cursorTPSSampler) observeToolStarted(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	// A tool start can never precede the generation boundary it closes.
-	if at < s.state.lastDeltaMS {
+	// A tool start can never precede the last delta of the generation it
+	// closes. A tool start without a preceding generation window is legal: a
+	// tool-only model response simply contributes no window.
+	if s.state.inGeneration && at < s.state.lastDeltaMS {
 		s.state.poisoned = true
 		return
 	}
-	if !s.closeGeneration(at) {
-		return
-	}
-	s.state.modelCallIDs[modelCallID] = true
+	// The active window closes at its own last nonempty delta: the interval
+	// from that delta to the tool start is completion latency, not generation.
+	s.closeGeneration()
 	s.state.callIDs[callID] = true
-	s.state.pendingTool = callID
-	s.state.pendingModelCall = modelCallID
+	s.state.pendingTools[callID] = modelCallID
 }
 
 func (s *cursorTPSSampler) observeToolCompleted(record map[string]any) {
@@ -344,11 +319,11 @@ func (s *cursorTPSSampler) observeToolCompleted(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	if s.state.pendingTool == "" || s.state.pendingTool != callID {
+	if s.state.pendingTools[callID] == "" {
 		s.state.poisoned = true
 		return
 	}
-	if modelCallID := strings.TrimSpace(cursorStringField(record, "model_call_id")); modelCallID == "" || modelCallID != s.state.pendingModelCall {
+	if modelCallID := strings.TrimSpace(cursorStringField(record, "model_call_id")); modelCallID == "" || modelCallID != s.state.pendingTools[callID] {
 		s.state.poisoned = true
 		return
 	}
@@ -356,8 +331,7 @@ func (s *cursorTPSSampler) observeToolCompleted(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	s.state.pendingTool = ""
-	s.state.pendingModelCall = ""
+	delete(s.state.pendingTools, callID)
 }
 
 // observeResult validates the single successful terminal of the turn. The
@@ -375,7 +349,7 @@ func (s *cursorTPSSampler) observeResult(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	if s.state.pendingTool != "" {
+	if len(s.state.pendingTools) != 0 {
 		s.state.poisoned = true
 		return
 	}
@@ -383,14 +357,9 @@ func (s *cursorTPSSampler) observeResult(record map[string]any) {
 		s.state.poisoned = true
 		return
 	}
-	if !s.state.inGeneration {
-		// A turn with no observable generation activity has no window.
-		s.state.poisoned = true
-		return
-	}
-	if !s.closeGeneration(s.state.lastDeltaMS) {
-		return
-	}
+	// The final window, if any, closes at its own last nonempty delta; a turn
+	// whose only generations were unobservable simply ends with no window.
+	s.closeGeneration()
 	usage := cursorUsage(record)
 	if usage == nil {
 		s.state.poisoned = true
@@ -407,47 +376,46 @@ func (s *cursorTPSSampler) observeResult(record map[string]any) {
 }
 
 // markGenerationActivity opens or extends the active generation window from a
-// nonempty delta boundary. Timestamps must be present and monotonic.
-func (s *cursorTPSSampler) markGenerationActivity(at int64) {
+// nonempty delta, accumulating its content as one block per content channel so
+// the count never depends on how the CLI splits its stream. Timestamps must
+// be present and monotonic.
+func (s *cursorTPSSampler) markGenerationActivity(channel, text string, at int64) {
 	if s.state.inGeneration && at < s.state.lastDeltaMS {
 		s.state.poisoned = true
 		return
 	}
-	if s.state.inGeneration && at < s.state.firstTokenMS {
-		s.state.poisoned = true
-		return
-	}
-	if !s.state.inGeneration {
-		s.state.inGeneration = true
-		s.state.firstTokenMS = at
-	}
+	s.state.inGeneration = true
+	s.state.generation.observe(channel, text, at)
 	s.state.lastDeltaMS = at
 }
 
-// closeGeneration ends the active generation window at the given boundary,
-// requiring the window to span at least the internal minimum interval so a
-// collapsed or buffered tiny interval rejects the whole sample.
-func (s *cursorTPSSampler) closeGeneration(endMS int64) bool {
+// closeGeneration ends the active generation window at its last nonempty
+// delta. A window that never spanned the minimum observable interval (a
+// buffered or collapsed CLI stream) is skipped without poisoning the stream,
+// so other complete valid windows still produce a sample.
+func (s *cursorTPSSampler) closeGeneration() {
 	if !s.state.inGeneration {
-		return false
+		return
 	}
-	first := s.state.firstTokenMS
 	s.state.inGeneration = false
-	if endMS < first || endMS-first < cursorGenerationWindowMinimumMS {
-		s.state.poisoned = true
-		return false
+	generation := s.state.generation
+	s.state.generation = tokenizerGeneration{}
+	tokens, first, last, ok := generation.measure()
+	if !ok {
+		return
 	}
 	s.state.windows = append(s.state.windows, cursorGenerationWindow{
+		Tokens:         tokens,
 		FirstTokenAtMS: first,
-		CompletedAtMS:  endMS,
+		CompletedAtMS:  last,
 	})
-	return true
 }
 
 // finalize returns the single aggregate sample, or false when the stream did
 // not pass. No sample is produced unless the whole turn is covered: it requires
-// exactly one init, a nonempty session, at least one closed generation window,
-// and a valid successful terminal.
+// exactly one init, a nonempty session, at least one valid generation window,
+// and a valid successful terminal. The sample tokens are the aggregate of the
+// per-window approximate counts, never the terminal official usage.
 func (s *cursorTPSSampler) finalize(usage map[string]any) (cursorTPSSample, bool) {
 	if s.state.poisoned || !s.state.terminalOK || !s.state.terminalSeen || !s.state.started {
 		return cursorTPSSample{}, false
@@ -458,13 +426,18 @@ func (s *cursorTPSSampler) finalize(usage map[string]any) (cursorTPSSample, bool
 	if s.state.inGeneration || len(s.state.windows) == 0 {
 		return cursorTPSSample{}, false
 	}
-	output, ok := safeResponseOutputTokens(usage["output_tokens"])
-	if !ok {
+	// The terminal official usage remains a validity gate for the canonical
+	// turn, but its counts are never attributed to the speed sample.
+	if _, ok := safeResponseOutputTokens(usage["output_tokens"]); !ok {
 		return cursorTPSSample{}, false
+	}
+	var tokens int64
+	for _, window := range s.state.windows {
+		tokens += window.Tokens
 	}
 	return cursorTPSSample{
 		ResponseID:        "cursor-turn:" + s.state.terminalRequestID,
-		OutputTokens:      output,
+		OutputTokens:      tokens,
 		GenerationWindows: s.state.windows,
 	}, true
 }
@@ -622,8 +595,10 @@ func cursorArgsBackground(raw any) bool {
 	return false
 }
 
-// attachCursorTPSSample writes the single aggregate response_v1 sample onto
+// attachCursorTPSSample writes the single aggregate tokenizer_v1 sample onto
 // canonical usage data. Callers invoke it only when the entire stream passed.
+// The canonical official usage fields are never modified: the sample carries
+// only the approximate tokenizer counts of the observed generation windows.
 func attachCursorTPSSample(data map[string]any, sample cursorTPSSample) {
 	if data == nil {
 		return
@@ -631,11 +606,12 @@ func attachCursorTPSSample(data map[string]any, sample cursorTPSSample) {
 	windows := make([]any, 0, len(sample.GenerationWindows))
 	for _, window := range sample.GenerationWindows {
 		windows = append(windows, map[string]any{
+			"tokens":            window.Tokens,
 			"first_token_at_ms": window.FirstTokenAtMS,
 			"completed_at_ms":   window.CompletedAtMS,
 		})
 	}
-	data["tps_sampling_contract"] = responseTPSSamplingContract
+	data["tps_sampling_contract"] = tokenizerTPSSamplingContract
 	data["tps_samples"] = []any{map[string]any{
 		"response_id":        sample.ResponseID,
 		"model":              sample.Model,

@@ -203,7 +203,6 @@ describe('Config — grok to super-grok quota migration', () => {
     expect(ids).toEqual(['chatgpt', 'cursor', 'deepseek', 'zhipu-coding', 'kimi-coding', 'super-grok']);
     expect(ids).not.toContain('grok');
     expect(ids).not.toContain('codex');
-    expect(ids).not.toContain('codex-spark');
   });
 
   it('inserts deepseek exactly once at the popularity position for legacy providers, preserving order/enabled', () => {
@@ -353,12 +352,11 @@ describe('Config — grok to super-grok quota migration', () => {
     expect(c.quota.providers.filter((p) => p.id === 'deepseek')).toHaveLength(1);
   });
 
-  it('normalizes persisted legacy codex and codex-spark entries into a single chatgpt provider', () => {
+  it('normalizes persisted legacy codex entries into a single chatgpt provider', () => {
     const c = normalizeConfig({
       quota: {
         providers: [
           { id: 'codex', enabled: true },
-          { id: 'codex-spark', enabled: false },
           { id: 'kimi-coding', enabled: true },
         ],
       },
@@ -371,7 +369,6 @@ describe('Config — grok to super-grok quota migration', () => {
     ]);
     expect(c.quota.providers.filter((p) => p.id === 'chatgpt')).toHaveLength(1);
     expect(c.quota.providers.map((p) => p.id)).not.toContain('codex');
-    expect(c.quota.providers.map((p) => p.id)).not.toContain('codex-spark');
   });
 
   it('lets an explicit chatgpt entry win over a mapped legacy codex entry while preserving unrelated preferences', () => {

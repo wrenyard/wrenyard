@@ -385,7 +385,7 @@ export class RuntimeAliasStore {
   /**
    * Re-read state from inside the mutation queue and apply the one-time
    * ChatGPT identity migration. When the persisted document contains legacy
-   * `codex`/`codex-spark` alias targets, provider keys, or policy provider
+   * `codex` alias targets, provider keys, or policy provider
    * keys, they are rewritten to `chatgpt`, the revision is bumped exactly
    * once, and the result is persisted atomically before the caller's own
    * mutation proceeds. This runs inside the queue (never re-enqueues) so it

@@ -22,6 +22,22 @@ import {
   resolveRunSyntax,
 } from '../src/index.ts';
 
+function pricingFixture() {
+  return { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 0.1, outputUsdPerMillion: 2, source: 'test-fixture', checkedAt: '2026-09-17' };
+}
+
+test('registration rejects missing or invalid model list prices', () => {
+  for (const pricing of [undefined, { ...pricingFixture(), outputUsdPerMillion: NaN },
+    { ...pricingFixture(), inputUsdPerMillion: -1 }, { ...pricingFixture(), cachedInputUsdPerMillion: undefined },
+    { ...pricingFixture(), source: '' }]) {
+    const catalog = new Catalog();
+    assert.throws(() => catalog.registerProvider({
+      id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+      models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing } as ModelDefinition],
+    }), /pricing/);
+  }
+});
+
 function speedFixture(tps = 40, source = 'benchmark-fixture', checkedAt = '2026-09-05'): ModelSpeedMeta {
   return { tps, source, checkedAt };
 }
@@ -38,7 +54,7 @@ test('native routing wins over a shared gateway protocol', () => {
   catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    nativeClients: ['native'], models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    nativeClients: ['native'], models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://example.com/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.equal(catalog.resolveRun('native', 'vendor', 'm').mode, 'native');
@@ -49,7 +65,7 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
   catalog.registerClient({ id: 'client', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{
+    models: [{ pricing: pricingFixture(),
       id: 'm',
       displayName: 'M',
       intelligence: 'mid',
@@ -75,7 +91,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     tps: number,
     outUsd: number | undefined,
     capabilities: readonly ModelCapability[] = ['text'] as readonly ModelCapability[],
-  ) => ({
+  ) => ({ pricing: pricingFixture(),
     id, displayName: id, intelligence, capabilities,
     speed: { tps, source: `benchmark-${id}`, checkedAt: '2026-09-05' },
     ...(outUsd !== undefined
@@ -90,7 +106,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
       mk('mmid', 'high', 30, 5),
       mk('mslow', 'mid', 5, 1),
       mk('mlow', 'low', 40, 3),
-      mk('mnoprice', 'mid', 50, undefined),
+      mk('mlisted', 'mid', 50, undefined),
       mk('mtextonly', 'mid', 50, 2, ['text']),
       mk('mvision', 'mid', 50, 4, ['text', 'image']),
     ],
@@ -107,7 +123,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     { profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' },
     { profileId: 'slow', client: 'c1', provider: 'p', model: 'mslow' },
     { profileId: 'low', client: 'c1', provider: 'p', model: 'mlow' },
-    { profileId: 'noprice', client: 'c1', provider: 'p', model: 'mnoprice' },
+    { profileId: 'noprice', client: 'c1', provider: 'p', model: 'mlisted' },
     { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
     { profileId: 'vision', client: 'c1', provider: 'p', model: 'mvision' },
   ];
@@ -256,24 +272,13 @@ test('a high-tier model fails a premium minimum while a premium tier qualifies',
   void candidates;
 });
 
-test('missing price metadata fails closed under a max-output-price requirement', () => {
-  const { catalog, candidates } = buildDispatchCatalog();
-  // mnoprice has no pricing; even though it would be the only candidate, it is excluded.
-  const onlyNoPrice: DispatchCandidate[] = [{ profileId: 'noprice', client: 'c1', provider: 'p', model: 'mnoprice' }];
-  const result = resolveConstrainedDispatch(catalog, onlyNoPrice, { maxOutputUsdPerMillion: 100 });
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, 'no-eligible-candidate');
-  void candidates;
-  void catalog;
-});
-
 test('registerProvider rejects missing, null, and invalid intelligence atomically', () => {
   const catalog = new Catalog();
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
   const invalidModels: Array<[string, object]> = [
-    ['missing', { id: 'm', displayName: 'M', speed: speedFixture() }],
-    ['null', { id: 'm', displayName: 'M', intelligence: null, speed: speedFixture() }],
-    ['invalid', { id: 'm', displayName: 'M', intelligence: 'frontier', speed: speedFixture() }],
+    ['missing', { pricing: pricingFixture(), id: 'm', displayName: 'M', speed: speedFixture() }],
+    ['null', { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: null, speed: speedFixture() }],
+    ['invalid', { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'frontier', speed: speedFixture() }],
   ];
   for (const [providerID, model] of invalidModels) {
     assert.throws(
@@ -288,7 +293,7 @@ test('registerProvider rejects missing, null, and invalid intelligence atomicall
   }
   catalog.registerProvider({
     id: 'valid', displayName: 'Valid', credentialResolver: 'forge-managed',
-    models: [{
+    models: [{ pricing: pricingFixture(),
       id: 'm', displayName: 'M', intelligence: 'mid',
       canonicalModel: { id: 'atomic-intelligence', displayName: 'Good Name' },
       speed: speedFixture(),
@@ -329,7 +334,7 @@ test('registerProvider rejects non-positive, non-finite, and empty-evidence defa
     assert.throws(
       () => catalog.registerProvider({
         id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-        models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed }],
+        models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed }],
         protocols,
       }),
       /speed/,
@@ -348,7 +353,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
     id,
     displayName,
     credentialResolver: 'forge-managed' as const,
-    models: [{
+    models: [{ pricing: pricingFixture(),
       id: 'route-model',
       displayName: `${displayName} route`,
       intelligence: 'mid' as const,
@@ -371,7 +376,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
   assert.throws(
     () => catalog.registerProvider({
       ...provider('invalid', 'Invalid', 'Shared Model V1', 'http://invalid.example/v1'),
-      models: [{
+      models: [{ pricing: pricingFixture(),
         id: 'other-route',
         displayName: 'Other route',
         intelligence: 'mid',
@@ -383,7 +388,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
   );
   catalog.registerProvider({
     ...provider('valid', 'Valid', 'Shared Model V1'),
-    models: [{
+    models: [{ pricing: pricingFixture(),
       id: 'other-route',
       displayName: 'Other route',
       intelligence: 'mid',
@@ -396,7 +401,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
 
 test('registerProvider validates modelSpeedOverrides evidence and exact canonical keys only', () => {
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
-  const canonicalModel = { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid' as const, speed: speedFixture(40) };
+  const canonicalModel = { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid' as const, speed: speedFixture(40) };
   const register = (extra: object) => new Catalog().registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [canonicalModel],
@@ -459,8 +464,8 @@ function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCan
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
-      { id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
-      { id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
+      { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
+      { pricing: pricingFixture(), id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
     ],
     modelSpeedOverrides: { m: { tps: 60, source: 'override-bench', checkedAt: '2026-09-06' } },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
@@ -532,8 +537,8 @@ test('exact provider/model local samples are isolated across models and stale sa
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
-      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) },
-      { id: 'other', displayName: 'Other', intelligence: 'mid', speed: speedFixture(20) },
+      { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) },
+      { pricing: pricingFixture(), id: 'other', displayName: 'Other', intelligence: 'mid', speed: speedFixture(20) },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -800,7 +805,7 @@ test('codex/gpt-6-astra:cc parses to the claude client yet still fails resolutio
   catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
   catalog.registerProvider({
     id: 'codex', displayName: 'Codex', credentialResolver: 'codex',
-    models: [{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'gpt-6-astra', displayName: 'GPT-6 Astra', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codex.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   // Parseable identity is not proof of compatibility: resolution fails closed.
@@ -813,7 +818,7 @@ test('a compatible target resolves exactly through Catalog.resolveRun with no fa
   catalog.registerProvider({
     id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
     nativeClients: ['claude'],
-    models: [{ id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-4:cc');
@@ -831,14 +836,14 @@ function buildTaskCatalog(): Catalog {
     id: 'anthropic-api', displayName: 'Anthropic', credentialResolver: 'forge-managed',
     modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
     models: [
-      { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', intelligence: 'mid', speed: speedFixture() },
-      { id: 'claude-task', displayName: 'Claude Task', taskOnly: true, intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'claude-task', displayName: 'Claude Task', taskOnly: true, intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   catalog.registerProvider({
     id: 'vendor-api', displayName: 'Vendor', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return catalog;
@@ -898,7 +903,7 @@ test('client gateway provider boundaries reject protocol-compatible but unexecut
   });
   catalog.registerProvider({
     id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
-    models: [{ id: 'hy3', displayName: 'HY3', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'hy3', displayName: 'HY3', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codebuddy.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   assert.throws(() => catalog.resolveRun('grok', 'codebuddy', 'hy3'), /cannot serve client grok/);
@@ -938,12 +943,12 @@ test('native web search is admitted only for a supported native client/provider 
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
     nativeClients: ['nsearch', 'nplain'],
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   catalog.registerProvider({
     id: 'other', displayName: 'Other', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://other.example/v1/chat/completions', authScheme: 'bearer' }],
   });
 
@@ -1010,7 +1015,7 @@ function buildThinkingCatalog(levels?: readonly ThinkingLevel[]): Catalog {
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { thinkingLevels: levels }) }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { thinkingLevels: levels }) }],
     thinkingMappings: {
       m: {
         c1: {
@@ -1071,7 +1076,7 @@ test('a request above the mapped maximum clamps to the highest usable level', ()
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high', 'max'] }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high', 'max'] }],
     thinkingMappings: {
       m: { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
     },
@@ -1091,7 +1096,7 @@ test('declaration order never decides the selected level', () => {
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['high', 'low', 'medium'] }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['high', 'low', 'medium'] }],
     thinkingMappings: {
       m: { c1: { low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' } } },
     },
@@ -1108,7 +1113,7 @@ test('a runtime with no usable thinking level returns no thinking and no wire ef
   unmapped.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   unmapped.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const unmappedPlan = unmapped.resolveRun('c1', 'p', 'm', 'low');
@@ -1143,7 +1148,7 @@ test('provider thinking mapping may substitute an upstream model and keeps the p
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'public-m', displayName: 'Public M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] }],
+    models: [{ pricing: pricingFixture(), id: 'public-m', displayName: 'Public M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'high'] }],
     thinkingMappings: {
       'public-m': {
         c1: {
@@ -1183,7 +1188,7 @@ test('registerProvider rejects invalid and duplicate thinking levels and bad map
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
   const register = (extra: object, levels?: readonly unknown[]) => new Catalog().registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { thinkingLevels: levels as readonly ThinkingLevel[] }) }],
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { thinkingLevels: levels as readonly ThinkingLevel[] }) }],
     protocols,
     ...extra,
   });
@@ -1299,8 +1304,8 @@ test('gateway model listing includes thinkingLevels', () => {
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [
-      { id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'medium'] },
-      { id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), thinkingLevels: ['low', 'medium'] },
+      { pricing: pricingFixture(), id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });

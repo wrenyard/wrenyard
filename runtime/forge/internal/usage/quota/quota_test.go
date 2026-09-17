@@ -3008,12 +3008,6 @@ func TestCLIAliasRejectsUnknown(t *testing.T) {
 	if got := canonicalName("grok"); got != "" {
 		t.Fatalf("expected legacy grok to be rejected, got %q", got)
 	}
-	if got := canonicalName("codex-spark"); got != "" {
-		t.Fatalf("expected removed codex-spark provider to be rejected, got %q", got)
-	}
-	if got := canonicalName("spark"); got != "" {
-		t.Fatalf("expected removed spark alias to be rejected, got %q", got)
-	}
 }
 
 func TestSuperGrokProviderUsesOfficialQuotaAdapter(t *testing.T) {
@@ -4133,7 +4127,7 @@ func TestCachedProviderFailClosedNeverReportsStale(t *testing.T) {
 func TestCachedProviderFailClosedChatGPTTTLExpired(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chatgpt-quota.json")
 	old := timeNow().Add(-2 * time.Minute)
-	oldQ := Quota{Provider: "chatgpt", Windows: []Window{{Name: "spark-5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
+	oldQ := Quota{Provider: "chatgpt", Windows: []Window{{Name: "5h", Pct: 30, WindowMinutes: 300}}, FetchedAt: old}
 	if err := writeCache(path, oldQ); err != nil {
 		t.Fatal(err)
 	}
@@ -4141,7 +4135,7 @@ func TestCachedProviderFailClosedChatGPTTTLExpired(t *testing.T) {
 	p := &CachedProvider{
 		Inner: fakeProvider{
 			name: "chatgpt",
-			q:    Quota{Provider: "chatgpt", Windows: []Window{{Name: "spark-5h", Pct: 60, WindowMinutes: 300}}, FetchedAt: timeNow()},
+			q:    Quota{Provider: "chatgpt", Windows: []Window{{Name: "5h", Pct: 60, WindowMinutes: 300}}, FetchedAt: timeNow()},
 		},
 		Path:       path,
 		TTL:        60 * time.Second,
@@ -5455,8 +5449,8 @@ func chatGPTFixtureProvider(q Quota) func(string, BillingInfo) Provider {
 }
 
 // TestChatGPTSingleProviderRowWithBothWindows verifies the canonical list
-// output contains exactly one chatgpt row carrying all four windows (5h/7d and
-// spark-5h/spark-7d) and no separate spark provider row.
+// output contains exactly one chatgpt row carrying both standard windows
+// (5h/7d) and no separate legacy codex provider row.
 func TestChatGPTSingleProviderRowWithBothWindows(t *testing.T) {
 	tmpDir := t.TempDir()
 	setFixedNow(t)
@@ -5470,8 +5464,6 @@ func TestChatGPTSingleProviderRowWithBothWindows(t *testing.T) {
 		Windows: []Window{
 			{Name: "5h", Pct: 12, WindowMinutes: 300},
 			{Name: "7d", Pct: 96, WindowMinutes: 10080},
-			{Name: "spark-5h", Pct: 66, WindowMinutes: 300},
-			{Name: "spark-7d", Pct: 10, WindowMinutes: 10080},
 		},
 	})
 
@@ -5483,7 +5475,7 @@ func TestChatGPTSingleProviderRowWithBothWindows(t *testing.T) {
 	var chatgptRows int
 	for _, e := range entries {
 		provider, _ := e["provider"].(string)
-		if provider == "codex" || provider == "codex-spark" || provider == "spark" {
+		if provider == "codex" {
 			t.Fatalf("legacy provider row %q must not appear: %#v", provider, e)
 		}
 		if provider != "chatgpt" {
@@ -5494,15 +5486,15 @@ func TestChatGPTSingleProviderRowWithBothWindows(t *testing.T) {
 			t.Fatalf("chatgpt label = %q, want ChatGPT", label)
 		}
 		windows, _ := e["windows"].([]any)
-		if len(windows) != 4 {
-			t.Fatalf("chatgpt windows = %d, want 4: %#v", len(windows), windows)
+		if len(windows) != 2 {
+			t.Fatalf("chatgpt windows = %d, want 2: %#v", len(windows), windows)
 		}
-		got := make([]string, 0, 4)
+		got := make([]string, 0, 2)
 		for _, raw := range windows {
 			w := raw.(map[string]any)
 			got = append(got, w["name"].(string))
 		}
-		want := []string{"5h", "7d", "spark-5h", "spark-7d"}
+		want := []string{"5h", "7d"}
 		for i := range want {
 			if got[i] != want[i] {
 				t.Fatalf("window[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)

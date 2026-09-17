@@ -156,15 +156,16 @@ function codeBuddyUpstreamResolve(environment: CodeBuddyEnvironment | undefined,
 
 /**
  * Confirmed-free evaluation scoped to one already-classified environment and
- * one exact model. Only the iOA environment plus the exact HY3/HY4 canonical
- * or wire ids ever qualify; every other model, environment and provider
+ * one declared free model. Only the iOA environment qualifies; other environments
  * resolves to undefined. Shared by the runtime surface and the active
  * snapshot so free facts cannot diverge.
  */
 function evaluateCodeBuddyFreeSupply(environment: CodeBuddyEnvironment | undefined, model: string): RoutingFreeSupplyFact | undefined {
   if (environment !== 'ioa') return undefined;
   const wireModel = codeBuddyUpstreamWireModel(model);
-  if (wireModel !== 'hy3-ioa' && wireModel !== 'hy4-preview-ioa') return undefined;
+  const definition = BUILTIN_PROVIDERS.find((provider) => provider.id === 'codebuddy')?.models
+    .find((entry) => codeBuddyUpstreamWireModel(entry.id) === wireModel);
+  if (definition?.free !== true) return undefined;
   return {
     confirmedFree: true,
     source: 'codebuddy.credential_environment',
@@ -174,12 +175,9 @@ function evaluateCodeBuddyFreeSupply(environment: CodeBuddyEnvironment | undefin
 
 /**
  * Confirmed-free evaluation for forge-managed free-pool providers. Only an
- * already-loaded, non-empty authenticated managed credential together with one
- * of the exact declared zero-price model ids ever qualifies; the model must
- * belong to the provider's registered models and reference all three token
- * prices exactly zero. opencode-go, anonymous/empty credentials, undeclared
- * paid models, arbitrary ``:free`` names, and any model missing a zero price
- * resolve to undefined.
+ * already-loaded, non-empty authenticated managed credential together with a
+ * declared free model ever qualifies; list pricing is deliberately independent
+ * from this provider/account entitlement.
  */
 function evaluateManagedFreeSupply(
   provider: ProviderDefinition,
@@ -190,32 +188,12 @@ function evaluateManagedFreeSupply(
   if (provider.credentialResolver !== 'forge-managed') return undefined;
   const definition = provider.models.find((entry) => entry.id === model);
   if (!definition) return undefined;
-  const pricing = definition.pricing;
-  if (
-    !pricing ||
-    pricing.inputUsdPerMillion !== 0 ||
-    pricing.cachedInputUsdPerMillion !== 0 ||
-    pricing.outputUsdPerMillion !== 0
-  ) {
-    return undefined;
-  }
-  if (provider.id === 'opencode-zen') {
-    if (model !== 'mimo-v2.5-free' && model !== 'ling-3.0-flash-fin-free') return undefined;
-    return {
-      confirmedFree: true,
-      source: 'opencode.zen.official',
-      ruleId: 'opencode-zen.free_model_confirmed_free',
-    };
-  }
-  if (provider.id === 'openrouter') {
-    if (model !== 'nex-agi/nex-n2.5-mini:free' && model !== 'cohere/north-mini-code:free') return undefined;
-    return {
-      confirmedFree: true,
-      source: 'openrouter.official',
-      ruleId: 'openrouter.free_model_confirmed_free',
-    };
-  }
-  return undefined;
+  if (definition.free !== true) return undefined;
+  return {
+    confirmedFree: true,
+    source: `${provider.id}.catalog`,
+    ruleId: `${provider.id}.free_model_confirmed_free`,
+  };
 }
 
 function runtimeAuthPath(env: NodeJS.ProcessEnv, home: string): string {

@@ -378,10 +378,10 @@ type codexAppServerBridge struct {
 
 	sampler responseTPSSampler
 
-	// Per-response sampling window. A sample pairs the first NON-EMPTY delta
-	// of one response with that same response's raw completion.
-	firstDeltaSeen bool
-	firstDeltaAtMS int64
+	// Per-response generation window. Deltas of one response accumulate here,
+	// concatenated per content channel and item id; the sample measures from
+	// the first to the last non-empty delta, never the completion's arrival.
+	responseWindow codexDeltaWindow
 	responseSeq    int
 
 	// Per-response usage window for the CURRENT TURN. turn/completed carries no

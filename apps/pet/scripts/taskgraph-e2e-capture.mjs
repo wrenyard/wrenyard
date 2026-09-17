@@ -1417,7 +1417,7 @@ var TASK_TIP_TITLE = '代码审查';
 var TASK_TIP_ROWS = [
   { label: '状态', value: '运行中' },
   { label: '任务 ID', value: 'forge-deploy' },
-  { label: '运行配置', value: 'codex-spark' },
+  { label: '运行配置', value: 'chatgpt/gpt-5.6-luna:codex' },
   { label: '工具调用', value: '3' },
   { label: '输出速度', value: '12.50' },
 ];
@@ -1481,7 +1481,7 @@ function overflowPresence(graphId, removed) {
         taskCategoryId: 'code-review',
         taskCategoryLabel: '代码审查',
         description: '审查代码改动并输出审查结论',
-        resolvedProfile: 'codex-spark',
+        resolvedProfile: 'chatgpt/gpt-5.6-luna:codex',
         toolCallCount: 3,
         tps: 12.5,
       };

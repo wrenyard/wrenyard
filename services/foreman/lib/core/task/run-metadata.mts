@@ -185,14 +185,15 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   }
 
   // --- TPS projection ---------------------------------------------------
-  // Shared response-paired rate. `readTaskTps` returns a value only when EVERY
-  // attempt is done and carries a complete sample, so a partial/failed attempt
-  // omits the speed fields. There is no second metric.
+  // Shared approximate rate. `readTaskTps` aggregates every done attempt that
+  // carries a measurable tokenizer_v1 sample, so an attempt without observable
+  // timing omits only its own contribution instead of hiding the run's speed.
+  // There is no second metric.
   const taskTps = readTaskTps(taskRunId)
   if (taskTps) {
     usage.generation_ms = taskTps.durationMs
     usage.output_tps = taskTps.tps
-    usage.tps_contract = 'response_v1'
+    usage.tps_contract = 'tokenizer_v1'
   }
 
   // --- Cost projection --------------------------------------------------

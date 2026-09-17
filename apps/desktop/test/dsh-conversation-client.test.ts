@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { getEncoding } from 'js-tiktoken';
 import {
   DshConversationClient,
   persistedModelSelectionRepair,
@@ -26,6 +27,15 @@ function toolResult(callId: string, text: string, isError = false) {
 /** Re-seq a helper-built event so a composed history keeps a monotonic seq. */
 function at(seq: number, built: ReturnType<typeof entry>) {
   return { event: { ...built.event, seq, time: 1_700_000_000_000 + seq } };
+}
+
+// The same fixed tokenizer the projection counts with: cl100k_base over each
+// fully concatenated observed stream, special strings treated as ordinary text.
+const cl100k = getEncoding('cl100k_base');
+
+/** Expected fixed-tokenizer token total for the given concatenated streams. */
+function observedTokens(...streams: string[]): number {
+  return streams.reduce((sum, stream) => sum + cl100k.encode(stream, [], []).length, 0);
 }
 
 test('conversation projection keeps user and finalized assistant content without duplicate chunks', () => {
@@ -1232,7 +1242,7 @@ test('repeated New and empty send remain non-persistent before the first message
   assert.equal(snapshot.models.status, 'ready', 'the catalog is retained through New');
 });
 
-test('turn projection reports exact boundaries, deduplicated usage, and paired throughput', () => {
+test('turn projection reports exact boundaries, deduplicated usage, and tokenizer-counted throughput', () => {
   const entries = [
     entry('turn/start', 1, { turn: 1 }),
     entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '思考中' } }),
@@ -1240,7 +1250,7 @@ test('turn projection reports exact boundaries, deduplicated usage, and paired t
     // DSH repeats the same per-step observation; it must count exactly once.
     entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 1966, outputTokens: 47 } } }),
     entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '完成' } }),
-    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'finish', reason: { kind: 'stop' } } }),
     entry('assistant/message', 7, {
       turn: 1,
       step: 1,
@@ -1248,6 +1258,10 @@ test('turn projection reports exact boundaries, deduplicated usage, and paired t
     }),
     entry('turn/end', 8, { turn: 1, reason: { kind: 'completed' } }),
   ];
+  // First nonempty delta (seq 2) to last nonempty delta (seq 5) spans 250ms; the
+  // finish 900ms later is completion latency and must not extend the window.
+  const elapsed = [1, 100, 150, 150, 350, 1250, 1300, 1400];
+  entries.forEach((item, index) => { item.event.time = 1_700_000_000_000 + elapsed[index]; });
 
   const items = projectConversationHistory(entries);
   const turns = projectConversationTurns(entries);
@@ -1256,13 +1270,14 @@ test('turn projection reports exact boundaries, deduplicated usage, and paired t
   assert.equal(turns[0].id, 'turn-1');
   // Exact turn/start and turn/end event times, not arrival or mutation times.
   assert.equal(turns[0].startedAt, 1_700_000_000_001);
-  assert.equal(turns[0].endedAt, 1_700_000_000_008);
+  assert.equal(turns[0].endedAt, 1_700_000_001_400);
   assert.equal(turns[0].running, false);
   assert.equal(turns[0].inputTokens, 1966, 'a repeated per-step usage observation is counted once');
-  assert.equal(turns[0].outputTokens, 47);
-  // Generation is measured from the first nonempty delta of the response to its
-  // own finish chunk — never to the turn end, and never across a tool wait.
-  assert.equal(turns[0].outputTps, 47 / ((1_700_000_000_006 - 1_700_000_000_002) / 1_000));
+  assert.equal(turns[0].outputTokens, 47, 'official usage stays exactly as observed for billing');
+  // Throughput counts fixed cl100k_base tokens over the observed reasoning and
+  // text streams — not the official outputTokens — and divides by exactly the
+  // 250ms first-to-last-delta window, never the turn end or completion latency.
+  assert.equal(turns[0].outputTps, observedTokens('思考中', '完成') / (250 / 1_000));
   assert.equal(turns[0].finalItemId, items.at(-1)?.id, 'the final assistant body of the completed turn');
   assert.equal(items.at(-1)?.kind, 'assistant');
   assert.equal(items.at(-1)?.text, '完成', 'reasoning is never projected as content');
@@ -1271,26 +1286,28 @@ test('turn projection reports exact boundaries, deduplicated usage, and paired t
 test('turn timing sums per-step responses and never counts a huge tool wait as generation', () => {
   const entries = [
     entry('turn/start', 1, { turn: 1 }),
-    // Step 1: 2s of generation, then a 100s tool wait that must not be measured.
+    // Step 1: 1.5s of streamed generation, then a 100s tool wait that must not be measured.
     entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '先查' } }),
     entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 100, outputTokens: 20 } } }),
-    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'finish' } }),
-    entry('tool/call', 5, { turn: 1, step: 1, callId: 'c-slow', name: 'run_task', arguments: '{"task_id":"slow-task"}' }),
-    entry('tool/result', 6, {
+    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '结果' } }),
+    entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('tool/call', 6, { turn: 1, step: 1, callId: 'c-slow', name: 'run_task', arguments: '{"task_id":"slow-task"}' }),
+    entry('tool/result', 7, {
       message: {
         source: { kind: 'tool', callId: 'c-slow' },
         content: [{ type: 'tool-result', toolCallId: 'c-slow', content: [{ type: 'text', text: '{"task_run_id":"r-1"}' }], isError: false }],
       },
     }),
     // Step 2: a duplicated usage observation must still count once per step.
-    entry('assistant/chunk', 7, { turn: 1, step: 2, chunk: { type: 'text-delta', text: '再写' } }),
-    entry('assistant/chunk', 8, { turn: 1, step: 2, chunk: { type: 'usage', usage: { inputTokens: 300, outputTokens: 30 } } }),
+    entry('assistant/chunk', 8, { turn: 1, step: 2, chunk: { type: 'text-delta', text: '再写' } }),
     entry('assistant/chunk', 9, { turn: 1, step: 2, chunk: { type: 'usage', usage: { inputTokens: 300, outputTokens: 30 } } }),
-    entry('assistant/chunk', 10, { turn: 1, step: 2, chunk: { type: 'finish' } }),
-    entry('turn/end', 11, { turn: 1, reason: { kind: 'completed' } }),
+    entry('assistant/chunk', 10, { turn: 1, step: 2, chunk: { type: 'usage', usage: { inputTokens: 300, outputTokens: 30 } } }),
+    entry('assistant/chunk', 11, { turn: 1, step: 2, chunk: { type: 'text-delta', text: '完成' } }),
+    entry('assistant/chunk', 12, { turn: 1, step: 2, chunk: { type: 'finish' } }),
+    entry('turn/end', 13, { turn: 1, reason: { kind: 'completed' } }),
   ];
 
-  const elapsed = [0, 0, 1000, 2000, 2001, 102001, 103000, 104000, 104000, 105000, 205000];
+  const elapsed = [0, 1000, 1800, 2500, 2600, 2601, 102001, 103000, 103500, 103500, 104500, 105000, 205000];
   entries.forEach((item, index) => { item.event.time = 1_700_000_000_000 + elapsed[index]; });
   const turns = projectConversationTurns(entries);
 
@@ -1298,9 +1315,10 @@ test('turn timing sums per-step responses and never counts a huge tool wait as g
   // Usage is summed once per step across the two responses.
   assert.equal(turns[0].inputTokens, 400);
   assert.equal(turns[0].outputTokens, 50);
-  // 4s of measured generation across two responses; the 100s turn tail after the
-  // last finish is excluded, so the rate never collapses toward zero.
-  assert.equal(turns[0].outputTps, 50 / 4);
+  // 3s of measured streaming across two responses — each step's window runs
+  // first to last delta, so the 100s tool wait between them and the turn tail
+  // after the last finish are excluded and the rate never collapses toward zero.
+  assert.equal(turns[0].outputTps, observedTokens('先查结果', '再写完成') / ((1_500 + 1_500) / 1_000));
   assert.equal(turns[0].endedAt, 1_700_000_205_000);
   assert.equal(turns[0].running, false);
 });
@@ -1324,18 +1342,27 @@ test('an empty delta does not start the generation clock', () => {
     entry('turn/start', 1, { turn: 1 }),
     entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '' } }),
     entry('assistant/chunk', 3, { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: '' } }),
-    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'tool-call-delta', arguments: '' } }),
-    // The first delta that genuinely carries content owns the clock.
+    entry('assistant/chunk', 4, { turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '' } }),
+    // The first delta that genuinely carries content owns the clock; streamed
+    // tool arguments accumulate on their own call channel.
     entry('assistant/chunk', 5, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '有内容' } }),
-    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 4 } } }),
-    entry('assistant/chunk', 7, { turn: 1, step: 1, chunk: { type: 'finish' } }),
-    entry('turn/end', 8, { turn: 1, reason: { kind: 'completed' } }),
+    entry('assistant/chunk', 6, { turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{"path":"README.md"}' } }),
+    entry('assistant/chunk', 7, { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 4 } } }),
+    entry('assistant/chunk', 8, { turn: 1, step: 1, chunk: { type: 'finish' } }),
+    entry('turn/end', 9, { turn: 1, reason: { kind: 'completed' } }),
   ];
+  // The window opens at the first nonempty delta (400ms), not at the empty ones.
+  const elapsed = [0, 10, 20, 30, 400, 650, 700, 800, 900];
+  entries.forEach((item, index) => { item.event.time = 1_700_000_000_000 + elapsed[index]; });
 
   const turns = projectConversationTurns(entries);
 
   assert.equal(turns[0].outputTokens, 4);
-  assert.equal(turns[0].outputTps, 4 / ((1_700_000_000_007 - 1_700_000_000_005) / 1_000));
+  assert.equal(
+    turns[0].outputTps,
+    observedTokens('有内容', '{"path":"README.md"}') / (250 / 1_000),
+    'text and streamed tool arguments both count over the first-to-last-delta window',
+  );
 });
 
 test('out-of-order and replayed events fold by seq, with duplicates counted once', () => {
@@ -1350,6 +1377,9 @@ test('out-of-order and replayed events fold by seq, with duplicates counted once
     message: { content: [{ type: 'text', text: '回答' }] },
   });
   const turnEnd = entry('turn/end', 7, { turn: 1, reason: { kind: 'completed' } });
+  [turnStart, reasoning, usage, text, finish, message, turnEnd].forEach((item, index) => {
+    item.event.time = 1_700_000_000_000 + [1, 100, 150, 400, 500, 600, 700][index];
+  });
 
   // A recovered page merged ahead of live frames, plus an exact duplicate of the
   // opening frame: seq order must win and the duplicate must be folded once.
@@ -1357,10 +1387,14 @@ test('out-of-order and replayed events fold by seq, with duplicates counted once
 
   assert.equal(turns.length, 1);
   assert.equal(turns[0].startedAt, 1_700_000_000_001);
-  assert.equal(turns[0].endedAt, 1_700_000_000_007);
+  assert.equal(turns[0].endedAt, 1_700_000_000_700);
   assert.equal(turns[0].inputTokens, 50, 'a replayed usage frame is not double counted');
   assert.equal(turns[0].outputTokens, 9);
-  assert.equal(turns[0].outputTps, 9 / 0.003, '3ms from the first delta (seq 2) to finish (seq 5)');
+  assert.equal(
+    turns[0].outputTps,
+    observedTokens('思考', '回答') / (300 / 1_000),
+    '300ms from the first delta (seq 2) to the last delta (seq 4), never to the finish',
+  );
   assert.equal(turns[0].dispatchCount, 0);
   assert.equal(turns[0].finalItemId, 'assistant-turn-1:1');
 });

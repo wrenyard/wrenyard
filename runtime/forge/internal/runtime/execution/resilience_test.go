@@ -850,8 +850,8 @@ func TestExecuteStreamHasOneTerminalRunFinished(t *testing.T) {
 func TestExecutePolicyRunStartedEmitsResolvedProfile(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 7, 12, 6, 30, 0, 0, time.UTC)}
 	deps := codexResilienceDeps(t, clock, func(_ context.Context, request AttemptRequest) ChildResult {
-		if request.Profile != "codex-spark" {
-			t.Fatalf("expected first candidate codex-spark to run, got %q", request.Profile)
+		if request.Profile != "codex-luna" {
+			t.Fatalf("expected first candidate codex-luna to run, got %q", request.Profile)
 		}
 		return ChildResult{Status: "done", Events: doneEvent("done")}
 	})
@@ -859,12 +859,12 @@ func TestExecutePolicyRunStartedEmitsResolvedProfile(t *testing.T) {
 	result, err := Execute(Request{
 		Selector:         "policy",
 		PolicyName:       "fast",
-		PolicyCandidates: []string{"codex-spark", "codex-dsf"},
+		PolicyCandidates: []string{"codex-luna", "codex-dsf"},
 		Prompt:           "p",
 		WorkDir:          tempDir(t),
 		Format:           protocol.OutputFormatStreamJSON,
 	}, deps, &out, &bytes.Buffer{})
-	if err != nil || result.Status != "done" || result.Profile != "codex-spark" {
+	if err != nil || result.Status != "done" || result.Profile != "codex-luna" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	var lines []string
@@ -883,8 +883,8 @@ func TestExecutePolicyRunStartedEmitsResolvedProfile(t *testing.T) {
 			if env.Data["policy"] != "fast" {
 				t.Fatalf("run_started policy=%v want fast", env.Data["policy"])
 			}
-			if env.Data["profile"] != "codex-spark" {
-				t.Fatalf("run_started profile=%v want codex-spark (resolved candidate)", env.Data["profile"])
+			if env.Data["profile"] != "codex-luna" {
+				t.Fatalf("run_started profile=%v want codex-luna (resolved candidate)", env.Data["profile"])
 			}
 		}
 		lines = append(lines, line)

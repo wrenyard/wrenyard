@@ -490,16 +490,16 @@ const CODEX_QUOTA_PROFILE: ProfileFixture = {
   outputUsd: 4,
 }
 
-const CODEX_SPARK_PROFILE: ProfileFixture = {
-    exactAgentRuntime: 'chatgpt/gpt-5.3-codex-spark:codex',
-    profile: 'codex-spark-native',
-    client: 'codex',
-    provider: 'chatgpt',
-    model: 'gpt-5.3-codex-spark',
-    intelligence: 'high',
+const CODEX_SOL_PROFILE: ProfileFixture = {
+  exactAgentRuntime: 'chatgpt/gpt-5.6-sol:codex',
+  profile: 'codex-sol-native',
+  client: 'codex',
+  provider: 'chatgpt',
+  model: 'gpt-5.6-sol',
+  intelligence: 'high',
   tps: 90,
-  inputUsd: 0.1,
-  outputUsd: 1,
+  inputUsd: 1,
+  outputUsd: 4,
 }
 
 /** Healthy Zhipu GLM-5.3-Flash candidate used to prove quota-tier ranking. Its
@@ -2097,11 +2097,11 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(nativeCalls, 3)
   })
 
-  it('samples shared Codex readiness for the unified ChatGPT provider Spark model', async () => {
+  it('samples shared Codex readiness for the unified ChatGPT provider model', async () => {
     writeConfig({})
     let nativeCalls = 0
     const service = context!.makeService({
-      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE] }),
+      resolver: createResolverFixture({ profiles: [CODEX_SOL_PROFILE] }),
       quotaSnapshots: unknownQuotaSnapshotService(() => QUOTA_T0),
       nativeProviderReadiness: async () => {
         nativeCalls += 1
@@ -2111,48 +2111,8 @@ describe('daemon task-settings-service (no-model)', () => {
     })
 
     const resolved = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
-    assert.equal(resolved.exactAgentRuntime, CODEX_SPARK_PROFILE.exactAgentRuntime)
+    assert.equal(resolved.exactAgentRuntime, CODEX_SOL_PROFILE.exactAgentRuntime)
     assert.equal(nativeCalls, 1, 'the native codex client must trigger one shared readiness sample')
-  })
-
-  it('routes the standard ChatGPT model when both standard and Spark pools share one healthy ChatGPT row', async () => {
-    writeConfig({})
-    let nativeCalls = 0
-    const resets5h = new Date(QUOTA_T0 + 3 * 60 * 60_000).toISOString()
-    const resets7d = new Date(QUOTA_T0 + 4 * 24 * 60 * 60_000).toISOString()
-    const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
-      queryJson: () => Promise.resolve(JSON.stringify([
-        {
-          provider: 'chatgpt',
-          status: 'ok',
-          stale: false,
-          fetched_at: new Date(QUOTA_T0).toISOString(),
-          windows: [
-            { name: '5h', pct: 20, resets_at: resets5h, window_minutes: 300 },
-            { name: '7d', pct: 20, resets_at: resets7d, window_minutes: 10_080 },
-            { name: 'spark-5h', pct: 100, resets_at: resets5h, window_minutes: 300 },
-            { name: 'spark-7d', pct: 100, resets_at: resets7d, window_minutes: 10_080 },
-          ],
-        },
-      ])),
-      now: () => QUOTA_T0,
-    })
-    const service = context!.makeService({
-      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE, CODEX_QUOTA_PROFILE] }),
-      quotaSnapshots,
-      nativeProviderReadiness: async () => {
-        nativeCalls += 1
-        return { sampledAtMs: QUOTA_T0, authByProvider: Object.freeze({ chatgpt: true }) }
-      },
-      runtimeAvailability: availabilityFromNativeSnapshot,
-    })
-
-    // The standard model's healthy standard pools admit it; the Spark model's
-    // exhausted Spark pools eliminate it — both read the same ChatGPT row.
-    const resolved = await service.resolveForRun({ taskName: 'commit', kind: 'builtin', defaults: {} })
-    assert.equal(resolved.exactAgentRuntime, CODEX_QUOTA_PROFILE.exactAgentRuntime)
-    assert.equal(resolved.dispatch?.auto_routing?.quota_coverage_complete, true)
-    assert.equal(nativeCalls, 1, 'one unified ChatGPT provider shares a single Codex auth sample only')
   })
 
   it('applies provider quota to a dynamically discovered model', async () => {
@@ -2179,15 +2139,21 @@ describe('daemon task-settings-service (no-model)', () => {
 
   it('uses nonempty unknown bindings for a candidate whose model has no snapshot entry', async () => {
     writeConfig({})
-    // The snapshot carries only the standard ChatGPT model row; the Spark model
-    // has no entry, so its candidate must still receive explicit null
-    // constraints for every bound pool instead of silently bypassing quota.
+    // The snapshot's ChatGPT row is stale, so the dynamically discovered model
+    // has no usable entry evidence; its candidate must still receive explicit
+    // null constraints for every bound pool instead of silently bypassing
+    // quota.
+    const discovered = {
+      ...CODEX_QUOTA_PROFILE,
+      model: 'gpt-dynamic-preview',
+      exactAgentRuntime: 'chatgpt/gpt-dynamic-preview:codex',
+    }
     const quotaSnapshots = new AutoRoutingQuotaSnapshotService({
       queryJson: () => Promise.resolve(JSON.stringify([
         {
           provider: 'chatgpt',
           status: 'ok',
-          stale: false,
+          stale: true,
           fetched_at: new Date(QUOTA_T0).toISOString(),
           windows: [
             { name: '5h', pct: 20, resets_at: new Date(QUOTA_T0 + 3 * 60 * 60_000).toISOString(), window_minutes: 300 },
@@ -2198,7 +2164,7 @@ describe('daemon task-settings-service (no-model)', () => {
       now: () => QUOTA_T0,
     })
     const service = context!.makeService({
-      resolver: createResolverFixture({ profiles: [CODEX_SPARK_PROFILE] }),
+      resolver: createResolverFixture({ profiles: [discovered] }),
       quotaSnapshots,
       nativeProviderReadiness: () => Promise.resolve({
         sampledAtMs: QUOTA_T0,
@@ -2207,8 +2173,8 @@ describe('daemon task-settings-service (no-model)', () => {
       runtimeAvailability: availabilityFromNativeSnapshot,
     })
 
-    const binding = findProviderQuotaBinding('chatgpt', 'gpt-5.3-codex-spark')
-    assert.ok(binding, 'the Spark model must have a non-empty bound pool set')
+    const binding = findProviderQuotaBinding('chatgpt', 'gpt-dynamic-preview')
+    assert.ok(binding, 'the dynamically discovered model must have a non-empty bound pool set')
     assert.ok(binding.pools.length > 0)
     assert.ok(binding.pools.every((pool) => pool.quotaPoolId.length > 0))
 

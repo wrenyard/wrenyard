@@ -24,7 +24,7 @@ const (
 
 // Versioned provenance for additive current-invocation usage. These wire tags
 // remain stable across clients. Foreman validates them for output token counts
-// for accounting only. TPS requires separate response_v1 paired samples.
+// for accounting only. TPS requires separate tokenizer_v1 paired samples.
 const (
 	tokenScopeAgentTurn    = "agent_turn"
 	durationScopeAgentTurn = "agent_turn"
@@ -980,10 +980,11 @@ func (t *TranscriptTee) emitCanonicalCursorUsage() {
 		clearTrustedAgentTurnContract(data)
 	}
 	ensureDurationMs(data)
-	// The aggregate response_v1 sample is attached only when the entire
+	// The aggregate tokenizer_v1 sample is attached only when the entire
 	// Cursor stream passed both the structural stream validity and the
-	// sampling checks. The output token count is the exact terminal aggregate
-	// carried by the canonical usage; no per-response allocation is invented.
+	// sampling checks. Its token count is the approximate tokenizer count of
+	// the observed generation content only; the canonical usage fields above
+	// stay the official billing record, unchanged.
 	if completeTokens && t.cursorTPSampler != nil && t.cursorTrack.result().IsValid() {
 		if sample, ok := t.cursorTPSampler.finalize(data); ok {
 			sample.Model = t.cursorSamplingModel
@@ -2248,10 +2249,10 @@ func codexNormalizer(line []byte) []protocol.Event {
 		if cachedInput, ok := nonnegativeInt(usage["cached_input_tokens"]); ok {
 			data["cached_input_tokens"] = cachedInput
 		}
-		// The bridge may carry a response_v1 TPS sample set produced by
+		// The bridge may carry a tokenizer_v1 TPS sample set produced by
 		// pairing each provider response's first token with its own raw
 		// completion. Those paired samples are the exact evidence for the
-		// response_v1 contract and are forwarded unchanged on the existing
+		// tokenizer_v1 contract and are forwarded unchanged on the existing
 		// schema; they are never reconstructed from the whole-turn timing.
 		if contract, ok := getString(event, "tps_sampling_contract"); ok && strings.TrimSpace(contract) != "" {
 			if samples, ok := event["tps_samples"].([]any); ok && len(samples) > 0 {
