@@ -328,6 +328,31 @@ export interface QuotaProviderSnapshot {
 
 export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
+/** Catalog pricing subset surfaced for the Model List tab (USD per million tokens). */
+export interface ProviderModelPricingSnapshot {
+  inputUsdPerMillion?: number;
+  outputUsdPerMillion?: number;
+  cachedInputUsdPerMillion?: number;
+}
+
+/** Shared provider-model row for the Provider and Model List surfaces. */
+export interface ProviderModelSnapshot {
+  id: string;
+  displayName: string;
+  effectiveTps?: number | null;
+  quotaAbundant?: boolean;
+  /** Provider-independent canonical model id; falls back to the model id. */
+  canonicalId?: string;
+  /** Catalog intelligence tier for the model. */
+  intelligence?: 'low' | 'mid' | 'high' | 'premium';
+  /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
+  pricing?: ProviderModelPricingSnapshot;
+  /** Which evidence tier produced `effectiveTps`. */
+  speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
+  /** True when a credential is configured AND the resolver admits provider/model. */
+  available?: boolean;
+}
+
 export interface ProviderAuthStatus {
   id: string;
   displayName?: string;
@@ -335,7 +360,7 @@ export interface ProviderAuthStatus {
   setupHint?: string;
   configured: boolean;
   authMode: ProviderAuthMode;
-  models?: Array<{ id: string; displayName: string; effectiveTps?: number | null; quotaAbundant?: boolean }>;
+  models?: ProviderModelSnapshot[];
 }
 
 export interface ProviderCatalogSnapshot {
@@ -346,7 +371,7 @@ export interface ProviderCatalogSnapshot {
   authMode: ProviderAuthMode;
   setupHint: string;
   quota?: QuotaProviderSnapshot;
-  models?: Array<{ id: string; displayName: string; effectiveTps?: number | null; quotaAbundant?: boolean }>;
+  models?: ProviderModelSnapshot[];
 }
 
 export interface ProviderOrderSnapshot {

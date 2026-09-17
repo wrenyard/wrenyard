@@ -1,6 +1,12 @@
 import type { JsonSchema } from '../jsonrpc.mts'
 
 export interface ProviderListParams {}
+export interface ProviderListModelPricing {
+  inputUsdPerMillion?: number
+  outputUsdPerMillion?: number
+  cachedInputUsdPerMillion?: number
+}
+
 export interface ProviderListModel {
   id: string
   displayName: string
@@ -9,6 +15,16 @@ export interface ProviderListModel {
   effectiveTps?: number | null
   quotaAbundant?: boolean
   taskOnly?: boolean
+  /** Provider-independent canonical model id; falls back to the model id. */
+  canonicalId?: string
+  /** Catalog intelligence tier for the model. */
+  intelligence?: 'low' | 'mid' | 'high' | 'premium'
+  /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
+  pricing?: ProviderListModelPricing
+  /** Which evidence tier produced `effectiveTps`. */
+  speedSource?: 'local_31d' | 'provider_override' | 'catalog_default'
+  /** True when a credential is configured AND the resolver admits provider/model. */
+  available?: boolean
 }
 export interface ProviderListResult {
   providers: Array<{
@@ -50,6 +66,17 @@ export const providerListResultSchema = {
             taskOnly: { type: 'boolean' },
             effectiveTps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
             quotaAbundant: { type: 'boolean' },
+            canonicalId: { type: 'string', minLength: 1, maxLength: 200 },
+            intelligence: { type: 'string', enum: ['low', 'mid', 'high', 'premium'] },
+            pricing: {
+              type: 'object', properties: {
+                inputUsdPerMillion: { type: 'number', minimum: 0 },
+                outputUsdPerMillion: { type: 'number', minimum: 0 },
+                cachedInputUsdPerMillion: { type: 'number', minimum: 0 },
+              }, additionalProperties: false,
+            },
+            speedSource: { type: 'string', enum: ['local_31d', 'provider_override', 'catalog_default'] },
+            available: { type: 'boolean' },
           }, additionalProperties: false,
         } },
       }, additionalProperties: false,

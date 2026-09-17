@@ -16,6 +16,7 @@ import {
   selectTaskResolutionFailure,
   type TaskResolutionElimination,
   type TaskResolutionFailureCode,
+  type TaskResolutionFailureDetail,
 } from './task-resolution-failure.mts'
 
 /**
@@ -142,6 +143,11 @@ export interface TaskDispatchDiagnosticChoice {
   admitted?: TaskResolvedDispatch
   /** Closed code of the first submitted gate that rejected the candidate. */
   rejectionCode?: TaskResolutionFailureCode
+  /** Closed specific cause behind `rejectionCode` when the gate is a
+   *  qualitative one (exclusion, unresolvable runtime, unsupported search or
+   *  input capability). Absent for the numeric gates, which the code already
+   *  names exactly. Never raw exception text. */
+  rejectionDetail?: TaskResolutionFailureDetail
 }
 
 export type TaskDispatchDiagnosticResult =
@@ -372,9 +378,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // Diagnostic-only first-real-gate classifier. resolveConstrainedDispatch is
   // the authoritative filter/order; after it rejects a candidate this mirror
   // replays its per-candidate hard gates in the exact same order and reports
-  // which real gate eliminated the candidate as one structured closed code. It
-  // never admits, rejects, sorts, changes gates, or parses exception text — the
-  // code is attached only after the authoritative rejection happened.
+  // which real gate eliminated the candidate as one structured closed code plus
+  // (for qualitative gates) its exact closed detail. It never admits, rejects,
+  // sorts, changes gates, or parses exception text — the code is attached only
+  // after the authoritative rejection happened, and only closed static
+  // identifiers are ever recorded (never raw exception text).
   const eliminationForCandidate = (
     candidate: DispatchCandidate,
     requirements: TaskDispatchRequirements,
@@ -384,13 +392,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const excludedProfiles = requirements.excludeProfileIds ?? []
     const excludedClients = requirements.excludeClientIds ?? []
     const excludedProviders = requirements.excludeProviderIds ?? []
-    if (
-      excludedModels.includes(candidate.model)
-      || excludedProfiles.includes(candidate.profileId)
-      || excludedClients.includes(candidate.client)
-      || excludedProviders.includes(candidate.provider)
-    ) {
-      return { code: 'no_available_provider' }
+    // First-real-gate order, matching the authoritative pre-poll gate order.
+    if (excludedModels.includes(candidate.model)) {
+      return { code: 'no_available_provider', detail: 'model_excluded' }
+    }
+    if (excludedProfiles.includes(candidate.profileId)) {
+      return { code: 'no_available_provider', detail: 'profile_excluded' }
+    }
+    if (excludedClients.includes(candidate.client)) {
+      return { code: 'no_available_provider', detail: 'client_excluded' }
+    }
+    if (excludedProviders.includes(candidate.provider)) {
+      return { code: 'no_available_provider', detail: 'provider_excluded' }
     }
 
     let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
@@ -398,26 +411,42 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.thinking)
     } catch {
       // Unresolvable plan mirrors the authoritative continue: no truthful path.
-      return { code: 'no_available_provider' }
+      return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     }
     if (requirements.requiresWebSearch === true && plan.supportsWebSearch !== true) {
-      return { code: 'no_available_provider' }
+      return { code: 'no_available_provider', detail: 'web_search_unsupported' }
     }
     const provider = catalog.provider(plan.provider)
-    if (!provider) return { code: 'no_available_provider' }
+    if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
-    if (!modelDef) return { code: 'no_available_provider' }
+    if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const priceUsdPerMillion = modelDef.pricing?.outputUsdPerMillion
-    const atGate = (code: TaskResolutionFailureCode): TaskResolutionElimination => ({ code, priceUsdPerMillion })
+    const atGate = (
+      code: TaskResolutionFailureCode,
+      detail?: TaskResolutionFailureDetail,
+    ): TaskResolutionElimination =>
+      detail === undefined ? { code, priceUsdPerMillion } : { code, priceUsdPerMillion, detail }
 
     // Canonical-alias model exclusion mirrors the same post-resolution gate.
-    if (excludedModels.includes(plan.model)) return atGate('no_available_provider')
+    if (excludedModels.includes(plan.model)) {
+      return atGate('no_available_provider', 'model_excluded')
+    }
 
     const requiredCapabilities = requirements.requiredCapabilities ?? []
     if (requiredCapabilities.length > 0) {
       const capabilities = modelDef.capabilities ?? []
-      const missing = requiredCapabilities.some((capability) => !capabilities.includes(capability))
-      if (missing) return atGate('no_available_provider')
+      const missing = requiredCapabilities.filter((capability) => !capabilities.includes(capability))
+      if (missing.length > 0) {
+        // Closed input-capability detail; any other missing capability keeps the
+        // generic code-only elimination (no invented cause).
+        if (missing.includes('image')) {
+          return atGate('no_available_provider', 'image_input_unsupported')
+        }
+        if (missing.includes('text')) {
+          return atGate('no_available_provider', 'text_input_unsupported')
+        }
+        return atGate('no_available_provider')
+      }
     }
 
     if (requirements.intelligenceMin) {
@@ -757,6 +786,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           ...(baseline.ok ? { baseline: baseline.resolved } : {}),
           ...(admitted.ok ? { admitted: admitted.resolved } : {}),
           ...(rejection !== undefined ? { rejectionCode: rejection.code } : {}),
+          ...(rejection?.detail !== undefined ? { rejectionDetail: rejection.detail } : {}),
         })
       }
       return { ok: true, choices }
