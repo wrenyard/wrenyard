@@ -22,7 +22,6 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'glm-5.3': 'GLM 5.3',
   'glm-5.3-flash': 'GLM 5.3 Flash',
   'gpt-5.4': 'GPT 5.4',
-  'gpt-5.4-mini': 'GPT 5.4 Mini',
   'gpt-5.5': 'GPT 5.5',
   'gpt-5.6-luna': 'GPT 5.6 Luna',
   'gpt-5.6-sol': 'GPT 5.6 Sol',
