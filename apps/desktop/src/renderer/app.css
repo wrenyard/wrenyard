@@ -375,9 +375,15 @@ button, input, select { accent-color: var(--moss-deep); }
 .message { width: min(100%, 820px); display: grid; margin: 0 auto 30px; }
 .message-body { min-width: 0; }
 /* User messages carry no avatar: the bubble is right-aligned and its clock sits
-   at the lower right, away from the assistant turn footer. */
-.message-user { display: flex; justify-content: flex-end; }
-.message-user .message-body { width: min(82%, 650px); display: flex; flex-direction: column; align-items: flex-end; padding: 12px 15px; border: 1px solid #d2c3a0; border-radius: 8px 2px 8px 8px; background: #eee1c5; }
+   inside it. A running message keeps its stop control to the right of the
+   bubble, never stacked under the stamp. */
+.message-user { display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px; }
+.message-stop { width: 24px; height: 24px; flex: 0 0 24px; display: grid; place-items: center; border: 0; border-radius: 4px; color: var(--terracotta); background: transparent; cursor: pointer; }
+.message-stop span { width: 8px; height: 8px; border-radius: 1px; background: currentColor; }
+.message-stop:hover { background: rgba(196, 78, 58, .12); }
+.message-stop:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
+.message-user .message-body { width: min(82%, 650px); }
+.message-user .message-bubble { display: flex; flex-direction: column; align-items: flex-end; padding: 12px 15px; border: 1px solid #d2c3a0; border-radius: 8px 2px 8px 8px; background: #eee1c5; }
 .message-user .message-content { width: 100%; }
 .message-time { align-self: flex-end; margin-top: 6px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
 .message-footer { display: flex; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 12px; margin-top: 8px; overflow-x: auto; }
@@ -409,26 +415,26 @@ button, input, select { accent-color: var(--moss-deep); }
 /* Progressive disclosure inside one assistant turn. The collapsed summary
    carries the working-process state; the final body always stays outside it. */
 .turn-activity { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 12px; background: rgba(238, 227, 202, .45); }
-.turn-activity > summary { display: flex; align-items: center; gap: 7px; padding: 9px 0; color: var(--muted); cursor: pointer; font-size: 13px; }
+.turn-activity > summary { display: flex; align-items: center; gap: 7px; padding: 9px 0; color: var(--muted); cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--line); }
 .turn-activity > summary:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: -2px; border-radius: 5px; }
 .turn-activity > summary::-webkit-details-marker { display: none; }
-.turn-activity-icon { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
-.turn-activity-icon svg { width: 100%; height: 100%; }
-.turn-activity.is-running .turn-activity-icon { animation: task-card-pulse 1.5s ease-in-out infinite; }
-.turn-activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.turn-activity-text { min-width: 0; flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; font-variant-numeric: tabular-nums; }
 /* The elapsed clock is reserved room so ticking digits never reflow the row. */
 .turn-activity-text.turn-activity-clock { font-variant-numeric: tabular-nums; }
-.turn-activity-text.turn-activity-clock.is-plain { font-weight: 600; }
-.turn-activity-chevron { flex: 0 0 auto; color: inherit; font-size: 12px; line-height: 1; }
+.turn-activity-chevron { flex: 0 0 auto; margin-left: auto; color: inherit; font-size: 12px; line-height: 1; }
 .turn-activity-chevron::before { content: '▷'; }
 .turn-activity[open] > summary .turn-activity-chevron::before { content: '▽'; }
 
 .message-assistant .message-body > .turn-activity { border-color: transparent; background: transparent; margin-bottom: 6px; }
-.turn-activity-steps { display: grid; gap: 9px; border-top: 1px solid var(--line); padding: 10px 0 8px; }
-.turn-step { display: flex; align-items: baseline; gap: 8px; min-height: 20px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.turn-step-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: rgba(139, 125, 107, .6); }
-.turn-step-text { min-width: 0; overflow-wrap: anywhere; }
-.turn-step-progress .turn-step-text { color: var(--ink-soft); font-weight: 650; transition: opacity 220ms ease; }
+/* The rolling step preview sits directly below the collapsed header: only the
+   newest step is shown, capped at five rendered lines and scrolled to its end
+   so a long wrapped line is read from where the model currently is. */
+.turn-step-preview { max-height: 8em; margin: -4px 0 10px; overflow: hidden; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.turn-step-preview[hidden] { display: none; }
+.turn-step-preview-content { color: var(--ink-soft); }
+.turn-step-preview-content p:last-child { margin-bottom: 0; }
+.turn-step-preview-content pre { max-height: 72px; margin: 6px 0; }
+.turn-activity-steps { display: grid; gap: 9px; padding: 10px 0 8px; }
 .turn-tool-icon { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; }
 .turn-tool-icon svg { width: 100%; height: 100%; }
 .turn-tool-row { min-width: 0; }
@@ -469,8 +475,6 @@ button, input, select { accent-color: var(--moss-deep); }
 .turn-stat { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .turn-stat small { color: var(--muted); font-size: 9px; }
 .turn-stat b { color: inherit; font-family: inherit; font-size: 10px; font-weight: 400; }
-.turn-step-progress .thinking-dots { padding-top: 0; margin-left: 2px; }
-.turn-step-progress .thinking-dots i { width: 4px; height: 4px; }
 .tool-card { width: min(calc(100% - 42px), 778px); margin: -17px auto 24px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: rgba(238, 227, 202, .55); font-size: 10px; }
 .message-body > .tool-card { width: 100%; margin: 12px 0; }
 .tool-card summary { padding: 9px 12px; cursor: pointer; }
@@ -500,26 +504,30 @@ button, input, select { accent-color: var(--moss-deep); }
 .tool-card-task.is-running > summary::before { animation: task-card-pulse 1.15s ease-in-out infinite; }
 @keyframes task-card-pulse { 50% { opacity: .35; transform: scale(.72); } }
 
-/* Subtle fade when a running turn's latest progress or tool summary changes. */
-.turn-step-progress .turn-step-latest { animation: turn-progress-in 220ms ease both; }
+/* The rolling preview replaces its content wholesale per step; the swap fades
+   in so a new step is noticeable without animating the line itself. */
+.turn-step-preview-content.is-new-step { animation: turn-progress-in 220ms ease both; }
 @keyframes turn-progress-in { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .turn-step-preview-content.is-new-step { animation: none; } }
 
 .conversation-error { margin: 0 max(28px, calc((100% - 820px) / 2)) 10px; border: 1px solid rgba(196, 78, 58, .35); border-radius: 4px; padding: 9px 11px; color: var(--terracotta); background: rgba(196, 78, 58, .07); font-size: 10px; }
 .composer-wrap { padding: 6px max(28px, calc((100% - 820px) / 2)) 17px; }
-.conversation-composer { border: 1px solid #cbbd99; border-radius: 8px; background: #fffaf0; box-shadow: 0 8px 30px rgba(72, 55, 36, .08); }
+/* One compact row: the textarea owns the width and the send icon keeps its
+   place on the right; the row only grows vertically as the draft wraps. */
+.conversation-composer { display: flex; flex-direction: row; align-items: flex-end; gap: 8px; padding: 8px 9px 8px 12px; border: 1px solid #cbbd99; border-radius: 8px; background: #fffaf0; box-shadow: 0 8px 30px rgba(72, 55, 36, .08); }
 .conversation-composer:focus-within { border-color: var(--moss-deep); box-shadow: 0 0 0 2px rgba(94, 124, 70, .1), 0 8px 30px rgba(72, 55, 36, .08); }
-.conversation-composer textarea { width: 100%; min-height: 46px; max-height: 180px; resize: none; display: block; border: 0; outline: 0; padding: 14px 15px 4px; color: var(--ink); background: transparent; font-size: 13px; line-height: 1.55; }
+.conversation-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 32px; max-height: 180px; resize: none; display: block; border: 0; outline: 0; padding: 5px 0; color: var(--ink); background: transparent; font-size: 13px; line-height: 1.55; }
 .conversation-composer textarea::placeholder { color: #aa9b85; }
 .conversation-composer textarea:disabled { cursor: not-allowed; opacity: .55; }
-.composer-footer { min-height: 40px; display: flex; align-items: center; padding: 4px 7px 7px 14px; }
-.composer-footer > span:first-child { margin-right: auto; color: var(--muted); font-size: 8px; }
-.composer-footer kbd { border: 1px solid var(--line); border-radius: 3px; padding: 1px 3px; background: var(--paper); font: inherit; }
-.composer-send, .composer-stop { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 5px; color: #fffaf0; background: var(--moss-deep); cursor: pointer; }
-.composer-send:disabled { color: #b8aa91; background: var(--paper-deep); cursor: default; }
+.composer-footer { flex: 0 0 auto; display: flex; align-items: center; min-height: 0; padding: 0; }
+.composer-send { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 5px; color: #fffaf0; background: var(--moss-deep); cursor: pointer; }
+/* The empty draft keeps the icon inert without removing it from the row; the
+   explicit class carries the state so opacity/pointer-events stay predictable
+   and the reduced-motion preference is never consulted for correctness. */
+.composer-send:not(.is-ready) { color: #b8aa91; background: var(--paper-deep); opacity: 0; pointer-events: none; cursor: default; }
+.composer-send { transition: opacity 180ms ease; }
 .composer-send svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.composer-stop { background: var(--terracotta); }
-.composer-stop span { width: 9px; height: 9px; border-radius: 1px; background: currentColor; }
-.composer-wrap > p { margin: 7px 0 0; color: var(--muted); font-size: 8px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .composer-send { transition: none; } }
 
 .workspace-gate { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 30px; background: rgba(41, 37, 31, .68); backdrop-filter: blur(8px); }
 .workspace-gate[hidden] { display: none; }
@@ -1061,8 +1069,7 @@ button, input, select { accent-color: var(--moss-deep); }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
   /* Conversation activity keeps its state readable without any motion. */
-  .thinking-dots i, .tool-card-task > summary::before, .streaming-cursor,
-  .turn-step-progress .turn-step-latest { animation: none !important; }
+  .thinking-dots i, .tool-card-task > summary::before, .streaming-cursor { animation: none !important; }
   .tool-card-task.is-running > summary::before { opacity: .55; }
 }
 
@@ -1081,7 +1088,6 @@ button, input, select { accent-color: var(--moss-deep); }
 @media (hover: none) { .message-assistant .message-footer { opacity: .72; pointer-events: auto; } }
 @media (prefers-reduced-motion: reduce) {
   .message-assistant .message-footer { transition: none; }
-  .turn-activity.is-running .turn-activity-icon { animation: none; }
 }
 
 .quota-unconfigured-details { margin-top: 18px; }

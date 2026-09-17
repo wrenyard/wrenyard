@@ -48,6 +48,8 @@ export const SHELL_CHANNELS = {
   runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
+  summaryModelSnapshot: 'wrenyard-shell:summary-model-snapshot',
+  summaryModelSave: 'wrenyard-shell:summary-model-save',
 } as const;
 
 export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
@@ -852,6 +854,31 @@ export interface TaskRoutingTestTasksResult {
   tasks: TaskRoutingTestTask[];
 }
 
+/**
+ * One canonical summary-model choice projected from the live local Gateway
+ * connection. `available` is credential evidence from the daemon gateway
+ * projection — a provider directory entry alone is never treated as usable.
+ */
+export interface SummaryModelOptionSnapshot {
+  /** Canonical (provider-independent) model id persisted by the preference. */
+  canonicalModel: string;
+  /** Exact `provider/model` public id the local Gateway expects, when usable. */
+  publicId?: string;
+  displayName: string;
+  /** Provider display label backing this option, when resolved. */
+  providerLabel?: string;
+  available: boolean;
+}
+
+export interface SummarySettingsSnapshot {
+  /** Exact canonical model id currently persisted (default DeepSeek V4.1 Flash). */
+  selectedCanonicalModel: string;
+  options: SummaryModelOptionSnapshot[];
+  /** True when the selected canonical model has no usable ordinary-LLM provider. */
+  unresolved: boolean;
+  message?: string;
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   navigate(page: ShellPage): Promise<void>;
@@ -880,7 +907,7 @@ export interface WrenyardShellApi {
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
   sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
-  cancelConversation(): Promise<ConversationSnapshot>;
+  cancelConversation(turnId?: string): Promise<ConversationSnapshot>;
   onConversationChanged(listener: () => void): () => void;
   onQuotaChanged(listener: () => void): () => void;
   onUpdateChanged(listener: () => void): () => void;
@@ -892,6 +919,8 @@ export interface WrenyardShellApi {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
+  getSummarySettings(): Promise<SummarySettingsSnapshot>;
+  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
