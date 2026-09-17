@@ -1491,7 +1491,10 @@ function taskRunModelCell(run: TaskRunSnapshot): HTMLElement {
     part.className = 'task-run-model-brand';
     const icon = brandIcon(brand);
     if (icon) part.append(icon);
-    part.append(document.createTextNode(name));
+    const text = document.createElement('span');
+    text.className = 'task-run-model-name';
+    text.textContent = name;
+    part.append(text);
     cell.append(part);
   };
   appendBrand(run.resolvedProviderDisplayName!, providerBrand(run.resolvedProvider ?? run.resolvedProviderDisplayName!));
