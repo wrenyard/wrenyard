@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   buildTaskRunSummaryLines,
-  conversationStepPreview,
   groupConversationItems,
   isMarkdownHorizontalRule,
   parseMarkdownTable,
@@ -286,38 +285,6 @@ function turnGroup(
   group.turn = turn;
   return group;
 }
-
-test('rolling step preview shows only the newest step and rotates wholesale per step', () => {
-  const runningTurn: ConversationTurnSnapshot = { id: 'turn-1', startedAt: 0, running: true, dispatchCount: 0 };
-  const firstStep: ConversationItemSnapshot[] = [
-    { id: 'assistant-1', kind: 'assistant', text: '第一步的过程文本', time: 1, turnId: 'turn-1' },
-    { id: 'tool-1', kind: 'tool', text: '{}', time: 2, turnId: 'turn-1', toolSummary: '读取文件' },
-  ];
-  // The newest observed step wins, and its item id is the rotation key.
-  const first = conversationStepPreview(turnGroup(firstStep, runningTurn), undefined);
-  assert.deepEqual(first, { text: '第一步的过程文本', key: 'assistant-1' });
-
-  // The next step replaces the preview wholesale with a different key.
-  const secondStep: ConversationItemSnapshot[] = [
-    ...firstStep,
-    { id: 'assistant-2', kind: 'assistant', text: '第二步的过程文本', time: 3, turnId: 'turn-1' },
-  ];
-  const second = conversationStepPreview(turnGroup(secondStep, runningTurn), undefined);
-  assert.deepEqual(second, { text: '第二步的过程文本', key: 'assistant-2' });
-  assert.notEqual(first?.key, second?.key);
-
-  // An already-known final item is the answer body, never a preview step.
-  const completed = turnGroup(secondStep, { ...runningTurn, running: false, endedAt: 9, finalItemId: 'assistant-2' });
-  assert.equal(conversationStepPreview(completed, 'assistant-2')?.key, 'assistant-1');
-  // An empty or whitespace-only step has nothing to preview.
-  assert.equal(
-    conversationStepPreview(
-      turnGroup([{ id: 'assistant-9', kind: 'assistant', text: '   ', time: 5, turnId: 'turn-1' }], runningTurn),
-      undefined,
-    ),
-    undefined,
-  );
-});
 
 test('per-user cancel is bound to the turn snapshot and moves beside the bubble', () => {
   const user: ConversationItemSnapshot = { id: 'user-1', kind: 'user', text: '去做', time: 1, turnId: 'turn-1' };

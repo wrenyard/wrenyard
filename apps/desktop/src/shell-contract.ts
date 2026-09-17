@@ -422,6 +422,18 @@ export interface ConversationTurnSnapshot {
   running: boolean;
   /** Last assistant message body projected for a completed turn. */
   finalItemId?: string;
+  /**
+   * Latest progress note of a work turn that is still running because it owns
+   * dispatched task runs. Replaced by `finalItemId` once the turn completes, so
+   * a progress note never survives next to the final answer.
+   */
+  progressItemId?: string;
+  /**
+   * Dispatched task runs this work turn still waits on. Present only while the
+   * turn runs and owns at least one unresolved run, so a settled turn never
+   * claims outstanding work.
+   */
+  pendingTaskCount?: number;
   /** Count of `run_task`/`task_run` tool calls observed inside this turn. */
   dispatchCount: number;
   inputTokens?: number;
@@ -441,7 +453,11 @@ export interface ConversationItemSnapshot {
   toolState?: 'running' | 'done' | 'failed';
   /** Bounded raw result text for the tool call, when CORE supplies one. */
   toolResultText?: string;
-  /** Terminal run_task metadata, present only after the task run resolves. */
+  /**
+   * Observed run_task metadata. A dispatch that is still executing carries its
+   * launch identity with a nonterminal `status` and identity-only usage; the
+   * authoritative terminal projection replaces it once the run resolves.
+   */
   taskRun?: TaskRunSnapshot;
   /** Exact DSH step number that produced this item, when the event carried one. */
   step?: number;

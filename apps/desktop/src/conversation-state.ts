@@ -19,6 +19,11 @@ import type {
  * turns to the execution session that ran it, and its frozen terminal
  * per-turn telemetry. Session ids are recorded for lineage/diagnostics only —
  * display state is never derived from them.
+ *
+ * The version is only raised by a change that makes an older document
+ * unreadable. Owned task runs, handled internal boundaries, and the latest
+ * progress note are additive optional fields, so a document written before
+ * them still loads — the turn simply restores with no dispatched tasks.
  */
 export const CONVERSATION_STATE_VERSION = 2;
 
@@ -45,6 +50,31 @@ export interface ConversationStateModel {
   provider: string;
   model: string;
   reasoningEffort?: string;
+}
+
+/**
+ * Lifecycle of one task run a work turn dispatched and owns:
+ *
+ * - `pending`  — dispatched; its authoritative result has not arrived yet.
+ * - `ready`    — the terminal result arrived and has not been delivered to the
+ *   model yet.
+ * - `consumed` — the result was delivered to the owning execution session
+ *   exactly once, so it is never resent.
+ */
+export type ConversationStateTaskStatus = 'pending' | 'ready' | 'consumed';
+
+/**
+ * One task run a work turn dispatched and owns. Persisted so a restart can
+ * report the truthful state of every dispatch instead of silently dropping it
+ * or implying an outcome that was never observed.
+ */
+export interface ConversationStateTask {
+  taskRunId: string;
+  status: ConversationStateTaskStatus;
+  /** DSH tool call that dispatched this run, used to re-attach its metadata. */
+  callId?: string;
+  /** Authoritative terminal projection, once the run resolved. */
+  taskRun?: TaskRunSnapshot;
 }
 
 /**
@@ -83,6 +113,20 @@ export interface ConversationStateTurn {
   work?: string;
   /** The summary produced for this turn, when a summarizer was configured. */
   summary?: string;
+  /**
+   * Latest progress note of a work turn that was still waiting on its own
+   * dispatched tasks. It is never a transcript message: it is replaced by the
+   * final summary and never appended next to it.
+   */
+  progress?: string;
+  /** Task runs this work turn dispatched and owns, with their exact states. */
+  tasks?: ConversationStateTask[];
+  /**
+   * Internal DSH turn identities of this work turn whose end was already
+   * handled. A replayed or reconnected `turn/end` therefore cannot reopen a
+   * boundary, duplicate a progress note, or resend a task result.
+   */
+  internalTurnIds?: string[];
   /** Model this turn was sent with, so a restored turn keeps its own choice. */
   model?: ConversationStateModel;
   /** Observed `run_task`/`task_run` dispatches; frozen with the turn. */
@@ -314,6 +358,49 @@ function normalizeProcess(value: unknown): ConversationStateProcessItem[] {
     .filter((item): item is ConversationStateProcessItem => item !== undefined);
 }
 
+/**
+ * Restore one owned task run. An entry without its run identity cannot be
+ * re-attached or truthfully reported, so it is dropped whole; a `pending` entry
+ * stays pending because a restart never observed an outcome for it.
+ */
+function normalizeTask(value: unknown): ConversationStateTask | undefined {
+  if (!isObject(value)) return undefined;
+  const taskRunId = optionalString(value.taskRunId);
+  if (!taskRunId) return undefined;
+  const status = value.status === 'ready' || value.status === 'consumed' ? value.status : 'pending';
+  const callId = optionalString(value.callId);
+  const taskRun = normalizeTaskRun(value.taskRun);
+  return {
+    taskRunId,
+    status,
+    ...(callId ? { callId } : {}),
+    ...(taskRun ? { taskRun } : {}),
+  };
+}
+
+function normalizeTasks(value: unknown): ConversationStateTask[] {
+  if (!Array.isArray(value)) return [];
+  const tasks: ConversationStateTask[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const task = normalizeTask(entry);
+    if (!task || seen.has(task.taskRunId)) continue;
+    seen.add(task.taskRunId);
+    tasks.push(task);
+  }
+  return tasks;
+}
+
+function normalizeInternalTurnIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids: string[] = [];
+  for (const entry of value) {
+    const id = optionalString(entry);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
   if (!isObject(value)) return undefined;
   const id = optionalString(value.id);
@@ -328,6 +415,8 @@ function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
   const inheritedMaxSeq = optionalNumber(value.inheritedMaxSeq);
   const dshEndedAt = optionalNumber(value.dshEndedAt);
   const process = normalizeProcess(value.process);
+  const tasks = normalizeTasks(value.tasks);
+  const internalTurnIds = normalizeInternalTurnIds(value.internalTurnIds);
   return {
     id,
     seq,
@@ -343,6 +432,9 @@ function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
     ...(process.length > 0 ? { process } : {}),
     ...(optionalString(value.work) ? { work: value.work as string } : {}),
     ...(optionalString(value.summary) ? { summary: value.summary as string } : {}),
+    ...(optionalString(value.progress) ? { progress: value.progress as string } : {}),
+    ...(tasks.length > 0 ? { tasks } : {}),
+    ...(internalTurnIds.length > 0 ? { internalTurnIds } : {}),
     ...(() => {
       const model = normalizeModel(value.model);
       return model ? { model } : {};
