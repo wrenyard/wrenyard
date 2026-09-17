@@ -356,32 +356,13 @@ function conversationTurnTimingSignature(turn: ConversationTurnSnapshot): string
     turn.endedAt ?? '',
     turn.running ? 1 : 0,
     turn.finalItemId ?? '',
+    turn.progressItemId ?? '',
+    turn.pendingTaskCount ?? '',
     turn.dispatchCount,
     turn.inputTokens ?? '',
     turn.outputTokens ?? '',
     turn.outputTps ?? '',
   ].join(':');
-}
-
-/**
- * The rolling preview shows only the newest assistant prose step. It renders while the turn is being
- * worked on (and while waiting for the next step to start), and disappears
- * once the turn is finished. `key` identifies the step so a preview is replaced
- * wholesale when the next step starts instead of being mutated in place.
- */
-export function conversationStepPreview(
-  group: ConversationRenderGroup,
-  finalItemId?: string,
-): { text: string; key: string } | undefined {
-  for (let index = group.items.length - 1; index >= 0; index -= 1) {
-    const item = group.items[index];
-    if (!item || item.id === finalItemId) continue;
-    if (item.kind === 'assistant') {
-      const text = item.text.trim();
-      return text ? { text, key: item.id } : undefined;
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -469,10 +450,6 @@ interface TurnRenderPreferences {
   body?: HTMLElement;
   summary?: HTMLElement;
   footer?: HTMLElement;
-  /** Rolling preview of the newest step; replaced wholesale when a step starts. */
-  preview?: HTMLElement;
-  /** Latest rendered step body; rendering it again must not rebuild the frame. */
-  previewStepId?: string;
   stats?: HTMLElement;
   statsSignature?: string;
   finalItem?: ConversationItemSnapshot;
@@ -1162,6 +1139,7 @@ export class ConversationView {
     signature = conversationGroupSignature(group, conversationTurnRunning(group)),
   ): HTMLElement {
     const finalItem = conversationTurnFinalItem(group);
+    const summaryItem = finalItem ?? group.items.find((item) => item.kind === 'assistant' && item.id === group.turn?.progressItemId);
     if (finalItem) preferences.finalItem = finalItem;
     const running = conversationTurnRunning(group);
     preferences.running = running;
@@ -1183,19 +1161,19 @@ export class ConversationView {
     summary.className = 'turn-activity-summary';
     const summaryText = document.createElement('span');
     summaryText.className = 'turn-activity-text' + (running ? ' turn-activity-clock' : '');
-    // The header carries only the bold elapsed label for a running turn; the
-    // newest step content is previewed below the header instead.
+    // Internal execution stays inside the disclosure; summaries sit below it.
     summaryText.textContent = running
       ? `打造了 ${formatTurnDuration(elapsedSeconds(this.turnStartedAt(group), Date.now()) ?? 0)}`
       : this.completedLabel(group);
     const summaryChevron = document.createElement('span');
     summaryChevron.className = 'turn-activity-chevron';
     summaryChevron.setAttribute('aria-hidden', 'true');
+    summaryChevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
     summary.append(summaryText, summaryChevron);
 
     const backlog = document.createElement('div');
     backlog.className = 'turn-activity-steps';
-    const processItems = group.items.filter((item) => !finalItem || item.id !== finalItem.id).sort((a, b) => a.time - b.time);
+    const processItems = group.items.filter((item) => !summaryItem || item.id !== summaryItem.id).sort((a, b) => a.time - b.time);
     for (let index = 0; index < processItems.length;) {
       const item = processItems[index];
       if (item?.kind === 'assistant') {
@@ -1232,33 +1210,22 @@ export class ConversationView {
 
     details.append(summary, backlog);
     body.append(details);
-    // The rolling step preview sits immediately below the collapsed header and
-    // is a sibling of the disclosure, so it stays visible while the wait for
-    // the next step runs. It is rebuilt wholesale per step and never expanded.
-    const previewFrame = document.createElement('div');
-    previewFrame.className = 'turn-step-preview';
-    previewFrame.hidden = true;
-    body.append(previewFrame);
-    this.renderStepPreview(previewFrame, group, running, finalItem?.id);
-    // The answer body lives outside the process block and only exists once the
-    // turn is completed with a known finalItemId.
+    // Owned task dispatches keep a distinct label list outside the process
+    // block: every owned run (running or terminal) shows its task name with a
+    // click-to-open task conversation link, even while the process is expanded.
     const taskItems = processItems.filter((item) => item.kind === 'tool' && item.taskRun?.taskRunId);
     const summaryRails = document.createElement('div');
     summaryRails.className = 'turn-task-summary-rails';
-    summaryRails.hidden = details.open || taskItems.length === 0;
-    const grouped = new Map<string, ConversationItemSnapshot[]>();
+    summaryRails.hidden = taskItems.length === 0;
     const seenRuns = new Set<string>();
     for (const item of taskItems) {
-      if (seenRuns.has(item.taskRun!.taskRunId)) continue;
-      seenRuns.add(item.taskRun!.taskRunId);
-      const key = item.taskRun!.taskId;
-      const bucket = grouped.get(key) ?? [];
-      bucket.push(item);
-      grouped.set(key, bucket);
+      const runId = item.taskRun!.taskRunId;
+      if (seenRuns.has(runId)) continue;
+      seenRuns.add(runId);
+      summaryRails.append(this.renderTaskSummaryLabel(item));
     }
-    for (const taskGroup of grouped.values()) summaryRails.append(this.renderToolStack(taskGroup, 'summary:'));
+    if (summaryItem) body.append(this.renderFinalContent(summaryItem, group, preferences));
     body.append(summaryRails);
-    if (finalItem) body.append(this.renderFinalContent(finalItem, group, preferences));
     const footer = document.createElement('div');
     footer.className = 'message-footer';
     footer.hidden = running;
@@ -1289,46 +1256,6 @@ export class ConversationView {
     if (group.turn) return group.turn.startedAt;
     const times = group.items.map((item) => item.time).filter((value) => Number.isFinite(value));
     return times.length > 0 ? Math.min(...times) : Date.now();
-  }
-
-  /**
-   * Renders the newest step into the preview frame below the collapsed header.
-   * The frame keeps its node across updates that stay on the same step (so a
-   * streaming line keeps its scroll position), and is replaced wholesale the
-   * moment the next step starts. It is hidden for a finished turn or when the
-   * reader expanded the process block, and the scroll lands on the newest line
-   * after layout so a long wrapped step is read from its end.
-   */
-  private renderStepPreview(
-    frame: HTMLElement,
-    group: ConversationRenderGroup,
-    running: boolean,
-    finalItemId: string | undefined,
-  ): void {
-    const preferences = this.groupRenderPreferences(group.id);
-    preferences.preview = frame;
-    const preview = running ? conversationStepPreview(group, finalItemId) : undefined;
-    if (!preview) {
-      preferences.previewStepId = undefined;
-      frame.replaceChildren();
-      frame.hidden = true;
-      return;
-    }
-    frame.hidden = this.expandedItemIds.has(group.id);
-    const stepChanged = preferences.previewStepId !== preview.key;
-    if (stepChanged || frame.dataset.text !== preview.text || !frame.firstChild) {
-      frame.dataset.text = preview.text;
-      preferences.previewStepId = preview.key;
-      let content = frame.firstElementChild;
-      if (stepChanged || !content) {
-        content = document.createElement('div');
-        content.className = 'turn-step-preview-content' + (stepChanged ? ' is-new-step' : '');
-        frame.replaceChildren(content);
-      }
-      content.replaceChildren(renderRichText(preview.text));
-    }
-    // Scrolling is deferred to layout so the measured scrollHeight is current.
-    requestAnimationFrame(() => { frame.scrollTop = frame.scrollHeight; });
   }
 
   private completedLabel(group: ConversationRenderGroup): string {
@@ -1363,11 +1290,10 @@ export class ConversationView {
     const rail = document.createElement('div');
     rail.className = 'turn-tool-rail';
     const taskGroup = this.toolCategory(items[0]!) === 'tasks';
-    stack.classList.toggle('is-task-group', taskGroup);
-    const widths = items.map((item) => taskGroup
-      ? Math.min(260, Math.max(108, Array.from(this.taskLabel(item)).reduce((width, char) => width + (/[^\x00-\x7f]/.test(char) ? 12 : 7), 42)))
-      : 28);
-    rail.style.setProperty('--collapsed-width', `${taskGroup ? widths[0] : 32}px`);
+    // Task dispatches render as plain task-category tool icons here; the task
+    // name text lives only in the label list outside the process block.
+    const widths = items.map(() => 28);
+    rail.style.setProperty('--collapsed-width', '32px');
     rail.style.setProperty('--expanded-width', `${widths.reduce((total, width) => total + width + 5, 0)}px`);
     const selected = document.createElement('div');
     selected.className = 'turn-tool-detail';
@@ -1409,12 +1335,6 @@ export class ConversationView {
       button.setAttribute('aria-expanded', 'false');
       if (taskGroup) button.append(createAgentTaskStatusIcon(state));
       else button.append(this.toolIcon(item));
-      if (taskGroup) {
-        const label = document.createElement('span');
-        label.className = 'turn-tool-label';
-        label.textContent = taskName!;
-        button.append(label);
-      }
       button.addEventListener('click', async () => {
         if (!taskRunId) { select(item, button); return; }
         button.disabled = true;
@@ -1464,6 +1384,34 @@ export class ConversationView {
     setExpanded(open);
     if (open && restoredItem >= 0) select(items[restoredItem]!, buttons[restoredItem]!, true);
     return stack;
+  }
+
+  /**
+   * One owned task label for the list below the turn summary: the task name
+   * with the single existing status icon (running pulses, terminal keeps its
+   * state color) and the click-to-open task conversation behavior.
+   */
+  private renderTaskSummaryLabel(item: ConversationItemSnapshot): HTMLElement {
+    const taskRun = item.taskRun!;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'turn-task-label-row';
+    const state = taskRun.status ?? item.toolState;
+    button.classList.add('is-' + (state === 'done' ? 'done' : ['queued', 'running', 'waiting'].includes(state ?? 'running') ? 'running' : 'failed'));
+    button.append(createAgentTaskStatusIcon(state));
+    const label = document.createElement('span');
+    label.className = 'turn-task-label-text';
+    label.textContent = this.taskLabel(item);
+    button.append(label);
+    button.title = [this.taskLabel(item), this.toolStateLabel(item), '点击查看任务对话'].filter(Boolean).join(' · ');
+    button.setAttribute('aria-label', button.title);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try { await this.api.openTaskTranscript(taskRun.taskRunId); }
+      catch (error) { button.title = `无法打开任务：${errorMessage(error)}`; }
+      finally { button.disabled = false; }
+    });
+    return button;
   }
 
   private taskLabel(item: ConversationItemSnapshot): string {
@@ -1899,19 +1847,13 @@ export class ConversationView {
     details.dataset.expandId = id;
     details.addEventListener('toggle', () => {
       if (!details.isConnected) return;
-      const taskSummary = details.parentElement?.querySelector<HTMLElement>('.turn-task-summary-rails');
-      const stepPreview = details.parentElement?.querySelector<HTMLElement>('.turn-step-preview');
-      if (taskSummary) this.closeDescendants(taskSummary);
-      if (stepPreview) stepPreview.hidden = details.open;
       if (details.open) {
         this.expandedItemIds.add(id);
         preferences.manualExpanded = true;
-        details.parentElement?.querySelector<HTMLElement>('.turn-task-summary-rails')?.toggleAttribute('hidden', true);
         return;
       }
       this.closeDescendants(details);
       this.expandedItemIds.delete(id);
-      if (taskSummary) taskSummary.hidden = taskSummary.childElementCount === 0;
       // Only an explicit collapse clears the manual expansion; a rebuild
       // replacing the node must not look like a reader collapse.
       preferences.manualExpanded = false;

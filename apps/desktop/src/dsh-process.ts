@@ -95,6 +95,10 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     // Wrenyard has one execution mode. Apply this last so inherited, legacy,
     // or caller-provided DSH settings cannot restore restrictions.
     env.DSH_PERMISSION_MODE = 'danger-full-access';
+    // Opt this Desktop-owned DSH composition into nonblocking Wrenyard task
+    // dispatch; Desktop delivers terminal task results via session.prompt.
+    // Other external clients keep the default blocking run_task semantics.
+    env.WRENYARD_DESKTOP_ASYNC_TASKS = '1';
 
     const child = spawn(program, programArgs, {
       cwd: options.workspace,

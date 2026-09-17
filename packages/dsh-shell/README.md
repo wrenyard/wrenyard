@@ -53,7 +53,7 @@ authority inside the harness.
 | --- | --- | --- |
 | `list_task` | MCP `task_list` | Canonical MCP definition |
 | `describe_task` | MCP `task_describe` | Canonical MCP definition |
-| `run_task` | MCP `task_run` + IPC `task.run.wait` / `task.run.cancel` | Terminal wait with no implicit deadline; cancellation is owned and idempotent |
+| `run_task` | MCP `task_run` + IPC `task.run.wait` / `task.run.cancel` | Terminal wait by default; Desktop returns a launch identity and owns the asynchronous wait |
 | `list_workspace_docs` | IPC `workspace.doc.list` | Optional `directory` string |
 | `read_workspace_doc` | IPC `workspace.doc.read` | Requires `path` |
 | `create_workspace_doc` | IPC `workspace.doc.create` | Requires `path` + `content` |
@@ -74,7 +74,7 @@ errors surface as bounded rejections (`Wrenyard IPC error: ...`).
 | `WRENYARD_IPC_PATH` | `\\.\pipe\wrenyard.sock` (Windows), `/tmp/wrenyard.sock` (elsewhere) | Owner-only NDJSON IPC socket/pipe |
 | `FOREMAN_MCP_URL` / `FOREMAN_MCP_SENDER` / `FOREMAN_IPC_PATH` | *(legacy)* | Deprecated pre-Wrenyard names, still read as fallbacks |
 
-All three `WRENYARD_*` variables share the same `wrenyard.sock` default with
+The IPC path shares the same `wrenyard.sock` default with
 `@wrenyard/control-client` and the desktop app. The MCP/IPC wire protocols are
 stable — only the product naming changed, so the legacy `FOREMAN_*` variables
 continue to work.
@@ -91,6 +91,13 @@ continue to work.
 `run_task` performs no status polling: it creates the backend task once, waits
 over the owner-only IPC socket for the terminal envelope, and cancels the owned
 backend task exactly once if the caller aborts.
+
+Desktop enables the internal `WRENYARD_DESKTOP_ASYNC_TASKS=1` composition flag.
+In this mode the tool returns the launch identity immediately, and
+`agent/pre-step` yields before an empty continuation can request the model.
+Desktop waits for the owned runs, delivers results into the same execution
+session, and keeps the user work turn active through its final summary.
+Other clients retain the default blocking contract. No user setting is added.
 
 ## Test / pack
 

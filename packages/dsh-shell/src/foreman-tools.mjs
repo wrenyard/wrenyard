@@ -44,6 +44,11 @@ const TASK_CANONICAL = {
 const IPC_WAIT_METHOD = 'task.run.wait';
 const IPC_CANCEL_METHOD = 'task.run.cancel';
 
+// Desktop-only opt-in: with WRENYARD_DESKTOP_ASYNC_TASKS=1 run_task returns
+// the launch identity immediately and Desktop delivers the terminal result
+// through session.prompt; every other client keeps the blocking wait.
+const DESKTOP_ASYNC_ENV = 'WRENYARD_DESKTOP_ASYNC_TASKS';
+
 const DOC_ALIAS_TO_IPC = {
   list_workspace_docs: 'workspace.doc.list',
   read_workspace_doc: 'workspace.doc.read',
@@ -485,7 +490,8 @@ export function deriveConversationTail(events) {
   let humanTurns = 0;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
+    if (event?.type === 'user/message' && event.data?.source?.kind === 'user'
+      && !contentText(event.data.content).trimStart().startsWith('[wrenyard:task-results]')) {
       startIndex = index;
       if (++humanTurns >= 8) break;
     }
@@ -499,7 +505,11 @@ export function deriveConversationTail(events) {
     if (event.type === 'user/message') {
       const message = event.data;
       if (!message || !message.source || message.source.kind !== 'user') continue;
-      const text = redactTranscriptText(contentText(message.content)).trim();
+      // DSH session.prompt labels internal result delivery as user input.
+      // Do not forward that system envelope as a fresh human request.
+      const rawText = contentText(message.content).trim();
+      if (rawText.startsWith('[wrenyard:task-results]')) continue;
+      const text = redactTranscriptText(rawText).trim();
       if (text) turns.push({ role: 'user', text });
     } else if (event.type === 'assistant/message') {
       // Only visible assistant text: reasoning blocks are dropped by
@@ -602,7 +612,26 @@ export function mergeOrchestrationContext(inputCtx, events, correlation = {}) {
  * helper, and the four workspace-doc aliases route only to their own
  * owner-only workspace.doc.* IPC methods.
  */
-function makeRunTaskExecute(mcpUrl, sender, socketPath) {
+/**
+ * Exact exec.agent/session identity for yield-after-dispatch tracking. The
+ * Agent type documents `agent.id` as the single identity shared with its
+ * session, so the session id is the fallback when a bare session object is
+ * supplied; a module-scoped "current session" is deliberately never used.
+ */
+function agentYieldKey(agent) {
+  const id = agent && typeof agent.id === 'string' && agent.id ? agent.id : undefined;
+  if (id) return id;
+  const session = agent && agent.session;
+  const sessionId = session && typeof session.id === 'string' ? session.id : undefined;
+  return sessionId || undefined;
+}
+
+/** Actual queued input must never be discarded by the yield guard. */
+function stepHasNewInputOrResult(messages) {
+  return Array.isArray(messages) && messages.length > 0;
+}
+
+function makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync = false, pendingYields } = {}) {
   return async function execute(input, exec = {}) {
     const { signal } = exec;
     if (signal && signal.aborted) throw abortError();
@@ -658,6 +687,25 @@ function makeRunTaskExecute(mcpUrl, sender, socketPath) {
     if (signal && signal.aborted) {
       await cancelOwned();
       throw abortError();
+    }
+
+    if (desktopAsync) {
+      // Nonblocking Desktop dispatch: return the canonical launch/run identity
+      // as soon as the run is durably created. The terminal result is pending
+      // and is delivered by Desktop through session.prompt; there is no wait,
+      // no polling, and no fabricated terminal outcome. The yield flag is
+      // keyed by this call's exact agent/session identity so the pre-step
+      // waterfall can refuse the empty continuation step this dispatch would
+      // otherwise trigger, while a later real wake still reaches the model.
+      const yieldKey = agentYieldKey(exec.agent);
+      if (yieldKey !== undefined && pendingYields) pendingYields.set(yieldKey, taskRunId);
+      const launchText = canonicalOutput(launch);
+      return (
+        `${launchText}\n` +
+        `[async dispatch: task_run_id=${JSON.stringify(taskRunId)} is running. ` +
+        'The terminal result is pending and will be delivered automatically to this conversation; ' +
+        'do not poll, do not call task.run.wait, and do not fabricate a result.]'
+      );
     }
 
     try {
@@ -731,11 +779,16 @@ function registerTool(tools, aliasName, canonicalTool, execute) {
   tools.register(definition);
 }
 
-function registerRunTask(tools, canonicalTool, execute) {
+function registerRunTask(tools, canonicalTool, execute, { desktopAsync = false } = {}) {
   const definition = {
     name: 'run_task',
-    description:
-      'Dispatch one Wrenyard Task and wait for its terminal result (no polling). ' +
+    description: desktopAsync
+      ? 'Dispatch one Wrenyard Task and return immediately with its launch identity (task_run_id); do NOT wait, poll, or invent an outcome — the terminal result is pending and is delivered automatically to this conversation. ' +
+        `When you need to name a target, runtime, provider, model, or client, call list_runtimes first and use an entry with available=true exactly as returned — ${RUNTIMES_TARGET_RULE} ` +
+        'Prefer the default automatic routing and omit any runtime target unless the user explicitly named one or routing already failed. ' +
+        `The caller\'s recent conversation in this session is attached to ctx.orchestration automatically (key \`${ORCHESTRATION_CONVERSATION_KEY}\`), so pass only the necessary delta in the task arguments — do not restate the whole chat, and do not write ctx.orchestration yourself. ` +
+        'Continue with other work after dispatch; a failed run reports its real error when delivered, and there is no implicit retry or fallback.'
+      : 'Dispatch one Wrenyard Task and wait for its terminal result (no polling). ' +
       `When you need to name a target, runtime, provider, model, or client, call list_runtimes first and use an entry with available=true exactly as returned — ${RUNTIMES_TARGET_RULE} ` +
       'Prefer the default automatic routing and omit any runtime target unless the user explicitly named one or routing already failed. ' +
       `The caller\'s recent conversation in this session is attached to ctx.orchestration automatically (key \`${ORCHESTRATION_CONVERSATION_KEY}\`), so pass only the necessary delta in the task arguments — do not restate the whole chat, and do not write ctx.orchestration yourself. ` +
@@ -750,6 +803,9 @@ function registerRunTask(tools, canonicalTool, execute) {
 
 export async function apply(ctx) {
   const { tools } = ctx;
+  const desktopAsync = process.env[DESKTOP_ASYNC_ENV] === '1';
+  // Yield-after-dispatch registry, keyed by exact exec.agent/session identity.
+  const pendingYields = new Map();
   if (typeof ctx.on === 'function') {
     ctx.on('tools/pre-execute', async (exec, next) => {
       // Authority for the nine Wrenyard aliases lives in the Wrenyard backend,
@@ -761,6 +817,21 @@ export async function apply(ctx) {
       }
       return next();
     });
+
+    if (desktopAsync) {
+      // Documented DSH agent/pre-step waterfall (dsh 0.1.1-rc.2): when this
+      // agent dispatched a task in the previous step and the proposed step
+      // carries no new input or tool result, consume its yield flag and
+      // reject the empty continuation before the next model request. New
+      // input and other agents always flow through via next().
+      ctx.on('agent/pre-step', async (payload, next) => {
+        const key = payload && agentYieldKey(payload.agent);
+        if (key === undefined || !pendingYields.has(key)) return next();
+        pendingYields.delete(key);
+        if (stepHasNewInputOrResult(payload && payload.messages)) return next();
+        return { kind: 'reject' };
+      });
+    }
   }
 
   const mcpUrl = process.env.WRENYARD_MCP_URL || process.env.FOREMAN_MCP_URL || DEFAULT_MCP_URL;
@@ -788,7 +859,7 @@ export async function apply(ctx) {
   registerTool(tools, 'describe_task', taskDescribe, makeExecute(mcpUrl, sender, TASK_CANONICAL.describe_task));
 
   const socketPath = wrenyardIpcPath();
-  registerRunTask(tools, taskRun, makeRunTaskExecute(mcpUrl, sender, socketPath));
+  registerRunTask(tools, taskRun, makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync, pendingYields }), { desktopAsync });
 
   // The four workspace-doc aliases depend only on the owner-only IPC socket,
   // not on the MCP task catalog, and inherit the same bounded-error path.
