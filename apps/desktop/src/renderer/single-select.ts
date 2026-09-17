@@ -95,7 +95,7 @@ export class SearchableSingleSelect {
     this.trigger.type = 'button';
     this.summary = document.createElement('span');
     this.trigger.append(this.summary);
-    this.trigger.className = 'multi-select-trigger';
+    this.trigger.className = 'multi-select-trigger single-select-trigger';
     if (config.label !== undefined) this.trigger.setAttribute('aria-label', config.label);
     this.trigger.setAttribute('aria-expanded', 'false');
     this.trigger.setAttribute('aria-controls', this.popupId);
