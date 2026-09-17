@@ -77,7 +77,7 @@ function seedTurnUsage(
     if (full.duration_ms !== null && typeof full.duration_ms === 'number') {
       sample.completed_at_ms = first + full.duration_ms
     }
-    full.tps_sampling_contract = 'response_v1'
+    full.tps_sampling_contract = 'tokenizer_v1'
     full.tps_samples = [sample]
   }
   db.prepare(
@@ -401,11 +401,11 @@ test('output-only trusted event emits output and TPS but not input/cached/cost',
     // TPS trusted independently of input/cache/cost completeness.
     assert.equal(usage.generation_ms, 1000)
     assert.ok(Math.abs((usage.output_tps ?? -1) - 50) < 1e-12)
-    assert.equal(usage.tps_contract, 'response_v1')
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
   })
 })
 
-test('projects response-paired generation_ms and response_v1 without using wall time', () => {
+test('projects response-paired generation_ms and tokenizer_v1 without using wall time', () => {
   withDb((db) => {
     const task = 'task-response-contract'
     seedTask(db, task)
@@ -414,13 +414,13 @@ test('projects response-paired generation_ms and response_v1 without using wall 
     seedTurnUsage(db, 'e1', task, {
       input_tokens: 10,
       output_tokens: 300,
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{ response_id: 'r1', model: 'sonnet', output_tokens: 300, first_token_at_ms: 1, completed_at_ms: 10001 }],
     })
     seedTurnUsage(db, 'e2', task, {
       input_tokens: 10,
       output_tokens: 300,
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{ response_id: 'r2', model: 'sonnet', output_tokens: 300, first_token_at_ms: 2, completed_at_ms: 30002 }],
     })
     seedTelemetry(db, task, { usage_event_count: 2 })
@@ -430,29 +430,64 @@ test('projects response-paired generation_ms and response_v1 without using wall 
     const { usage } = readTaskRunMetadata(task)
     assert.equal(usage.generation_ms, 40000)
     assert.equal(usage.output_tps, 15)
-    assert.equal(usage.tps_contract, 'response_v1')
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
   })
 })
 
-test('repairs the old misleading native duration with paired response timing', () => {
+test('ignores the misleading native duration in favor of observed tokenizer windows', () => {
   withDb((db) => {
     const task = 'task-repair'
     seedTask(db, task)
-    // Execution actually ran 4000ms even though the events report tiny native
-    // durations (1ms each). The corrected rate must use the execution interval.
+    // The events report tiny native durations (1ms each) while the observed
+    // generation windows span real time. The rate must use the windows only.
     seedExecution(db, 'e1', task, 4000)
-    seedTurnUsage(db, 'e1', task, { output_tokens: 100, duration_ms: 1 }, 0)
-    seedTurnUsage(db, 'e1', task, { output_tokens: 300, duration_ms: 1 }, 1)
+    seedTurnUsage(db, 'e1', task, {
+      output_tokens: 100, duration_ms: 1,
+      tps_sampling_contract: 'tokenizer_v1',
+      tps_samples: [{ response_id: 'r1', model: 'sonnet', output_tokens: 100, first_token_at_ms: 1, completed_at_ms: 2001 }],
+    }, 0)
+    seedTurnUsage(db, 'e1', task, {
+      output_tokens: 300, duration_ms: 1,
+      tps_sampling_contract: 'tokenizer_v1',
+      tps_samples: [{ response_id: 'r2', model: 'sonnet', output_tokens: 300, first_token_at_ms: 2002, completed_at_ms: 5002 }],
+    }, 1)
     seedTelemetry(db, task, { usage_event_count: 2 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { usage } = readTaskRunMetadata(task)
 
-    // (100 + 300) output tokens over 4000ms => 100 TPS, NOT the 2ms native sum
-    // (which would be 200000 TPS) nor any retired telemetry timing.
-    assert.equal(usage.generation_ms, 2)
-    assert.ok(Math.abs((usage.output_tps ?? -1) - 200000) < 1e-12)
-    assert.equal(usage.tps_contract, 'response_v1')
+    // (100 + 300) counted tokens over 5000ms of observed generation => 80 TPS,
+    // NOT the 2ms native sum (which would be 200000 TPS) nor any retired
+    // telemetry timing.
+    assert.equal(usage.generation_ms, 5000)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 80) < 1e-12)
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
+  })
+})
+
+test('aggregates the measurable attempt while an unobservable attempt hides nothing', () => {
+  withDb((db) => {
+    const task = 'task-partial-observed'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task)
+    seedExecution(db, 'e2', task)
+    seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 300 })
+    // e2's window was never observable: its billing tokens stay while its
+    // missing timing never hides e1's measurable rate.
+    seedTurnUsage(db, 'e2', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 50, duration_ms: null }, 1)
+    seedTelemetry(db, task, { usage_event_count: 2 })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+    seedDispatch(db, 'e2', task, fullPricedDispatch('e2', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    // Only the measurable attempt contributes generation time; billing still
+    // sums every additive event unchanged.
+    assert.equal(usage.generation_ms, 1000)
+    assert.ok(Math.abs((usage.output_tps ?? -1) - 300) < 1e-12)
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
+    assert.equal(usage.output_tokens, 350)
+    assert.equal(usage.completeness, 'complete')
   })
 })
 
@@ -477,7 +512,7 @@ test('mixed two-event attempt sums output/cached but omits input/cost, keeps TPS
     // Paired response TPS: 60 output tokens over two 1000ms generation intervals.
     assert.equal(usage.generation_ms, 2000)
     assert.ok(Math.abs((usage.output_tps ?? -1) - 30) < 1e-12)
-    assert.equal(usage.tps_contract, 'response_v1')
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
   })
 })
 
@@ -522,10 +557,10 @@ test('invalid numeric token stays undefined, cost incomplete, output/TPS visible
     assert.equal(usage.output_tokens, 50)
     assert.equal(usage.reference_cost_usd, undefined)
     assert.equal(usage.reference_cost_complete, false)
-    // output/TPS remain visible for the independent response_v1 contract.
+    // output/TPS remain visible for the independent tokenizer_v1 contract.
     assert.equal(usage.generation_ms, 1000)
     assert.ok(Math.abs((usage.output_tps ?? -1) - 50) < 1e-12)
-    assert.equal(usage.tps_contract, 'response_v1')
+    assert.equal(usage.tps_contract, 'tokenizer_v1')
   })
 })
 

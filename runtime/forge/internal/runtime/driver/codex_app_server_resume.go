@@ -23,11 +23,13 @@ import (
 //
 // The turn's usage is therefore the DELTA of `total` against the baseline, and
 // that delta must equal the notification's own `last` breakdown. Only when both
-// agree is the increment defensible; otherwise nothing is accounted and no
-// timing sample is paired. The TPS sample uses the same response_v1 formula as
-// the fresh path: the first non-empty delta of the response to the
-// notification's own arrival, using the notification's exact `last` output
-// tokens. A second speed metric is deliberately not introduced.
+// agree is the increment defensible; otherwise nothing is accounted and the
+// open sampling window is reset rather than paired with a partial figure. The
+// TPS sample uses the same tokenizer_v1 measurement as the fresh path: the
+// fixed-tokenizer count of the response's observed generation over the window
+// from its first to its last non-empty delta, with the notification's exact
+// `last` figures reserved for official usage only. A second speed metric is
+// deliberately not introduced.
 
 // codexResumeTotals is one thread token-usage breakdown. The field names match
 // the native camelCase payload.
@@ -94,8 +96,7 @@ func (b *codexAppServerBridge) handleTokenUsageUpdated(params map[string]any) {
 		// baseline rather than counting the whole turn from zero.
 		b.resumeUsage.baseline = totals
 		b.resumeUsage.haveBaseline = true
-		b.firstDeltaSeen = false
-		b.firstDeltaAtMS = 0
+		b.responseWindow = codexDeltaWindow{}
 		return
 	}
 
@@ -125,9 +126,7 @@ func (b *codexAppServerBridge) handleTokenUsageUpdated(params map[string]any) {
 	}
 
 	b.resumeResponseUsage(last)
-	if last.Output > 0 {
-		b.recordResumeSample(last.Output)
-	}
+	b.recordResumeSample()
 	b.finishResponse()
 
 	// The baseline advances past the response just counted, so the next
@@ -169,27 +168,13 @@ func (b *codexAppServerBridge) resumeResponseUsage(last codexResumeTotals) {
 	b.responseUsageObserved = true
 }
 
-// recordResumeSample pairs the current response's first non-empty delta with
-// the usage notification's arrival, using the notification's exact output
-// token count. The response id is a stable synthetic id so a resumed response
-// can never collide with a real upstream response id.
-func (b *codexAppServerBridge) recordResumeSample(outputTokens int64) {
-	if !b.firstDeltaSeen || strings.TrimSpace(b.model) == "" {
-		// No delta opened a window (a tool-only response), or no model was
-		// resolved: the usage is still accounted, but no TPS claim is made.
-		return
-	}
-	completedAtMS := b.sampler.timestamp(b.sampler.now())
-	if completedAtMS <= b.firstDeltaAtMS {
-		return
-	}
-	b.sampler.samples = append(b.sampler.samples, responseTPSSample{
-		ResponseID:     codexResumeResponseID(b.threadID, b.turnID, b.responseSeq+1),
-		Model:          b.model,
-		OutputTokens:   outputTokens,
-		FirstTokenAtMS: b.firstDeltaAtMS,
-		CompletedAtMS:  completedAtMS,
-	})
+// recordResumeSample closes the current response's observed generation into
+// one tokenizer_v1 sample through the same helper the fresh path uses, so a
+// resumed response and a fresh response make identical claims. The response id
+// is a stable synthetic id so a resumed response can never collide with a real
+// upstream response id.
+func (b *codexAppServerBridge) recordResumeSample() {
+	b.recordResponseSample(codexResumeResponseID(b.threadID, b.turnID, b.responseSeq+1))
 }
 
 // codexResumeResponseID builds the stable synthetic response id of one resumed

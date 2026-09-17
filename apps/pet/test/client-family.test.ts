@@ -17,7 +17,7 @@ describe('client family classification', () => {
 
   it('classifies codex from client_family or profile', () => {
     expect(classifyWorkerClient('unknown-profile', 'codex')).toBe('codex');
-    expect(classifyWorkerClient('codex-spark')).toBe('codex');
+    expect(classifyWorkerClient('codex-mini')).toBe('codex');
     expect(classifyWorkerClient('codex', 'claude')).toBe('codex');
   });
 

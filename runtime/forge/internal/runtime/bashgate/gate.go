@@ -198,6 +198,14 @@ func Run(input io.Reader, output io.Writer, requestedClient, encoded string) int
 		if sensitivePath(path, request.cwd, pathAccessExact, policy.SensitiveEnvKeys, policy.SensitiveFilesystemPaths) || anySensitivePathField(request.input, request.cwd, pathAccessExact, policy.SensitiveEnvKeys, policy.SensitiveFilesystemPaths) {
 			return deny("Forge BashGate denied a sensitive filesystem write")
 		}
+	case "write":
+		path, ok := requiredEditPath(request.input)
+		if !ok || hasPathGlob(path) || !validWriteInput(request.input) {
+			return deny("Forge BashGate denied malformed write tool input")
+		}
+		if sensitivePath(path, request.cwd, pathAccessExact, policy.SensitiveEnvKeys, policy.SensitiveFilesystemPaths) || anySensitivePathField(request.input, request.cwd, pathAccessExact, policy.SensitiveEnvKeys, policy.SensitiveFilesystemPaths) {
+			return deny("Forge BashGate denied a sensitive filesystem write")
+		}
 	default:
 		return deny("Forge BashGate denied an unknown guarded tool")
 	}
@@ -363,8 +371,10 @@ func toolKind(client Client, name string) string {
 			return "grep"
 		case "glob", "listdir", "list_dir":
 			return "list"
-		case "search_replace", "edit", "write", "multiedit":
+		case "search_replace", "edit", "multiedit":
 			return "edit"
+		case "write":
+			return "write"
 		}
 		return ""
 	}
@@ -419,6 +429,18 @@ func validEditInput(input map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// validWriteInput accepts the native write shape only: one file_path plus
+// string content with no unknown fields. Empty content is a valid empty file.
+func validWriteInput(input map[string]any) bool {
+	for key := range input {
+		if key != "file_path" && key != "content" {
+			return false
+		}
+	}
+	_, contentOK := input["content"].(string)
+	return contentOK
 }
 
 func searchPathFields(input map[string]any) ([]string, bool) {

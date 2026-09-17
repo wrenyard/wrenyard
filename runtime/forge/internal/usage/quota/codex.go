@@ -28,8 +28,7 @@ type codexAppServerProcess struct {
 
 // ChatGPTProvider fetches ChatGPT/Codex quota via the codex app-server stdio
 // protocol. It has exactly one authoritative source: account/rateLimits/read,
-// which returns both the regular codex bucket and, when present, the
-// codex_bengalfox (Spark) bucket in a single RPC response.
+// which returns the regular codex bucket in a single RPC response.
 type ChatGPTProvider struct{}
 
 func (p ChatGPTProvider) Name() string { return "chatgpt" }
@@ -309,25 +308,15 @@ func (p ChatGPTProvider) Fetch(ctx context.Context) (Quota, error) {
 	}
 
 	now := time.Now()
-	windows := make([]Window, 0, 4)
-	regular := addChatGPTBucketWindows(&windows, entry, "")
+	windows := make([]Window, 0, 2)
+	regular := addChatGPTBucketWindows(&windows, entry)
 
-	notApplicable := make([]string, 0, 2)
+	notApplicable := make([]string, 0, 1)
 	if len(windows) == 0 {
 		return Quota{}, conn.wrapErr(fmt.Errorf("%s: no rate limit windows available", p.Name()))
 	}
 	if strings.EqualFold(entry.PlanType, "pro") && regular.weekly && !regular.has5h && !regular.hasUnknown {
 		notApplicable = append(notApplicable, "5h")
-	}
-
-	// The Spark bucket is optional: when present, its windows join the same
-	// chatgpt row with spark-* names. When absent, the regular limits stand.
-	// Non-applicability is decided per-bucket from Spark's own windows only.
-	if spark, ok := resp.RateLimitsByLimitID["codex_bengalfox"]; ok {
-		sparkInfo := addChatGPTBucketWindows(&windows, spark, "spark-")
-		if strings.EqualFold(spark.PlanType, "pro") && sparkInfo.weekly && !sparkInfo.has5h && !sparkInfo.hasUnknown {
-			notApplicable = append(notApplicable, "spark-5h")
-		}
 	}
 
 	q := Quota{
@@ -374,8 +363,8 @@ func convertRateLimitWindow(rlw *RateLimitWindow, name string) *Window {
 	return &w
 }
 
-// chatGPTBucketWindows summarizes the windows successfully parsed from one
-// bucket, so callers can decide non-applicability without conflating buckets.
+// chatGPTBucketWindows summarizes the windows successfully parsed from the
+// bucket, so callers can decide non-applicability.
 type chatGPTBucketWindows struct {
 	weekly     bool // a valid 7d window was present
 	has5h      bool // a valid 5h window was present
@@ -384,10 +373,10 @@ type chatGPTBucketWindows struct {
 
 // addChatGPTBucketWindows classifies each window by its actual
 // windowDurationMins (300 => 5h, 10080 => 7d, anything else => unknown) and
-// appends the recognized windows to dst using the given name prefix. A window
-// with an unknown duration is not turned into a known pool, but is recorded
-// via hasUnknown so it is never treated as evidence of absence.
-func addChatGPTBucketWindows(dst *[]Window, entry RateLimitsEntry, prefix string) chatGPTBucketWindows {
+// appends the recognized windows to dst. A window with an unknown duration is
+// not turned into a known pool, but is recorded via hasUnknown so it is never
+// treated as evidence of absence.
+func addChatGPTBucketWindows(dst *[]Window, entry RateLimitsEntry) chatGPTBucketWindows {
 	var info chatGPTBucketWindows
 	for _, rlw := range []*RateLimitWindow{entry.Primary, entry.Secondary} {
 		if rlw == nil {
@@ -405,12 +394,12 @@ func addChatGPTBucketWindows(dst *[]Window, entry RateLimitsEntry, prefix string
 		switch *rlw.WindowDuration {
 		case 300:
 			info.has5h = true
-			if w := convertRateLimitWindow(rlw, prefix+"5h"); w != nil {
+			if w := convertRateLimitWindow(rlw, "5h"); w != nil {
 				*dst = append(*dst, *w)
 			}
 		case 10080:
 			info.weekly = true
-			if w := convertRateLimitWindow(rlw, prefix+"7d"); w != nil {
+			if w := convertRateLimitWindow(rlw, "7d"); w != nil {
 				*dst = append(*dst, *w)
 			}
 		default:

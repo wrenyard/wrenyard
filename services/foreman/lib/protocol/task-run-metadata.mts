@@ -147,7 +147,7 @@ export const taskUsageSchema = {
     total_tokens: { type: 'number', minimum: 0 },
     generation_ms: { type: 'number', minimum: 0 },
     output_tps: { type: 'number', minimum: 0 },
-    tps_contract: { const: 'response_v1' },
+    tps_contract: { const: 'tokenizer_v1' },
     reference_cost_usd: { type: 'number' },
     reference_cost_complete: { type: 'boolean' },
     reference_cost_basis: { const: 'catalog_reference' },

@@ -914,7 +914,7 @@ describe('taskgraph.slip atomic snapshot and v1 wire', () => {
       token_scope: 'agent_turn',
       duration_scope: 'agent_turn',
       tps_contract: 'agent_turn_v1',
-      tps_sampling_contract: 'response_v1',
+      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{ response_id: 'r1', model: 'sonnet', output_tokens: 2000, first_token_at_ms: Date.parse(T0), completed_at_ms: Date.parse(T0) + 1000 }],
     })
     writeEvent(db, 'exec_slip_bounds', 'task_1', 2, 'tool_call', { name: 'bash' })

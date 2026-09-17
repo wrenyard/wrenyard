@@ -4,10 +4,10 @@ function object(value: unknown): value is RecordValue {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 export function migrateProviderId(value: string): string {
-  return value === 'codex' || value === 'codex-spark' ? 'chatgpt' : value;
+  return value === 'codex' ? 'chatgpt' : value;
 }
 export function migrateProviderTargetId(value: string): string {
-  return value.replace(/^(?:codex|codex-spark)\//, 'chatgpt/');
+  return value.replace(/^codex\//, 'chatgpt/');
 }
 function migrate<T>(original: T, apply: (record: RecordValue) => void): { record: T; changed: boolean } {
   if (!object(original)) return { record: original, changed: false };
@@ -39,8 +39,8 @@ export function migrateForemanChatGPTReferences<T>(record: T): { record: T; chan
   });
 }
 function migrateProviderKeys(value: unknown): unknown {
-  if (!object(value) || !('codex' in value || 'codex-spark' in value)) return value;
-  const selected = value.chatgpt ?? value.codex ?? value['codex-spark'];
+  if (!object(value) || !('codex' in value)) return value;
+  const selected = value.chatgpt ?? value.codex;
   const next: RecordValue = {};
   for (const [key, entry] of Object.entries(value)) {
     const canonical = migrateProviderId(key);

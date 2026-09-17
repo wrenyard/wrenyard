@@ -19,10 +19,11 @@ func TestCursorTPSLiveTranscriptReplay(t *testing.T) {
 		accepted             bool
 		tokens, generationMS int64
 	}{
-		{"text", "cursor-grok-4.6-high", true, 673, 12677},
-		// Composer buffered its entire first generation into 21ms. Keeping the
-		// terminal's 881 tokens while dropping that window would inflate TPS.
-		{"composer", "composer-2.5", false, 881, 0},
+		{"text", "cursor-grok-4.6-high", true, 636, 12677},
+		// Composer buffered its entire first generation into 21ms: that
+		// unobservable window is skipped together with its content, and the
+		// later complete window yields a legal partial tokenizer_v1 sample.
+		{"composer", "composer-2.5", true, 592, 2609},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join("testdata", "cursor_tps_"+tc.name+"_sanitized.jsonl")
@@ -41,7 +42,7 @@ func TestCursorTPSLiveTranscriptReplay(t *testing.T) {
 				t.Fatal("invalid native stream")
 			}
 			usage := lastTurnUsage(events)
-			if (usage["tps_sampling_contract"] == "response_v1") != tc.accepted {
+			if (usage["tps_sampling_contract"] == "tokenizer_v1") != tc.accepted {
 				t.Fatalf("sampling acceptance: %#v", usage)
 			}
 			if tc.accepted {
@@ -124,7 +125,7 @@ func TestCursorTPSRejectsUnknownSignalsFromEligibleBaseline(t *testing.T) {
 				}
 			}
 			tee.FinalizeCursorStream()
-			admitted := lastTurnUsage(events)["tps_sampling_contract"] == "response_v1"
+			admitted := lastTurnUsage(events)["tps_sampling_contract"] == "tokenizer_v1"
 			if admitted != (signal == "") {
 				t.Fatalf("admitted=%v for %q", admitted, signal)
 			}

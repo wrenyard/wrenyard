@@ -229,13 +229,13 @@ describe('passive quota tips', () => {
     expect(tips[0].bars![0].provider.remainingPct).toBeNull();
   });
 
-  it('uses provider id (not label) for bar label and errorRow label to avoid collapsing codex-spark→spark', () => {
+  it('uses provider id (not label) for bar label and tip text to avoid collapsing super-grok→grok', () => {
     // Forge quota JSON maps pool→id (true provider name) and label→model-family label.
-    // buildQuotaTips must use p.id so "codex-spark" does not collapse to "spark".
+    // buildQuotaTips must use p.id so "super-grok" does not collapse to "grok".
     const provider: QuotaProviderState = {
-      id: 'codex-spark',
-      label: 'spark',
-      displayLine: 'spark 7d 25%',
+      id: 'super-grok',
+      label: 'grok',
+      displayLine: 'grok 7d 25%',
       error: null,
       status: 'ok',
       stale: false,
@@ -246,12 +246,12 @@ describe('passive quota tips', () => {
       },
     };
 
-    const tips = buildQuotaTips([provider], ['codex-spark']);
+    const tips = buildQuotaTips([provider], ['super-grok']);
     expect(tips).toHaveLength(1);
     expect(tips[0].bars).toBeDefined();
-    expect(tips[0].bars![0].label).toBe('codex-spark');
+    expect(tips[0].bars![0].label).toBe('super-grok');
     // Healthy tip text normalises family-label prefix to provider id
-    expect(tips[0].text).toBe('codex-spark 7d 25%');
+    expect(tips[0].text).toBe('super-grok 7d 25%');
   });
 
   it('uses provider id (not label) for errorRow label to avoid collapsing kimi-coding→kimi', () => {

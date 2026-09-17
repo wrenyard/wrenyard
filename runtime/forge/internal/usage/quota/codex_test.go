@@ -244,8 +244,8 @@ func newFakeRPC(t *testing.T, responses map[string]json.RawMessage) *fakeCodexRP
 }
 
 // chatGPTResponseOnce builds one account/rateLimits/read response containing
-// the regular codex bucket plus an optional codex_bengalfox (Spark) bucket.
-func chatGPTResponseOnce(codex, spark map[string]RateLimitsEntry, planType string) json.RawMessage {
+// the regular codex bucket.
+func chatGPTResponseOnce(codex map[string]RateLimitsEntry, planType string) json.RawMessage {
 	now := time.Now().Add(2 * time.Hour).Unix()
 	byID := map[string]RateLimitsEntry{
 		"codex": {
@@ -256,9 +256,6 @@ func chatGPTResponseOnce(codex, spark map[string]RateLimitsEntry, planType strin
 		},
 	}
 	for id, e := range codex {
-		byID[id] = e
-	}
-	for id, e := range spark {
 		byID[id] = e
 	}
 	resp := GetAccountRateLimitsResponse{RateLimitsByLimitID: byID}
@@ -336,96 +333,12 @@ func TestChatGPTProviderFetchPlusWeeklyOnlyDoesNotProve5hAbsent(t *testing.T) {
 	}
 }
 
-// TestChatGPTProviderFetchSparkWeeklyOnlyKeepsSparkPool verifies that a Spark
-// bucket delivering only a 10080 window is classified as spark-7d and marks
-// spark-5h nonapplicable from Spark's own evidence (not the regular bucket).
-func TestChatGPTProviderFetchSparkWeeklyOnlyKeepsSparkPool(t *testing.T) {
+// TestChatGPTProviderFetchUnknownDurationNoFalseAbsence covers a Pro bucket
+// whose only extra present window has a valid usedPercent but an unknown
+// duration: the unknown duration must not become a known pool, and must not
+// be taken as evidence of absence — so no 5h marker.
+func TestChatGPTProviderFetchUnknownDurationNoFalseAbsence(t *testing.T) {
 	fake := newFakeRPC(t, map[string]json.RawMessage{
-		"initialize": json.RawMessage(`{"capabilities":{}}`),
-		"account/rateLimits/read": chatGPTResponseBuckets(map[string]RateLimitsEntry{
-			"codex": {
-				Primary:   &RateLimitWindow{UsedPercent: float64Ptr(12), WindowDuration: float64Ptr(300)},
-				Secondary: &RateLimitWindow{UsedPercent: float64Ptr(96), WindowDuration: float64Ptr(10080)},
-				PlanType:  "pro",
-				LimitID:   "codex",
-			},
-			"codex_bengalfox": {
-				Primary:  &RateLimitWindow{UsedPercent: float64Ptr(44), WindowDuration: float64Ptr(10080)},
-				PlanType: "pro",
-				LimitID:  "codex_bengalfox",
-			},
-		}),
-	})
-	chatGPTRunRPC = fake.run
-	t.Cleanup(func() { chatGPTRunRPC = nil })
-
-	q, err := ChatGPTProvider{}.Fetch(context.Background())
-	if err != nil {
-		t.Fatalf("Fetch failed: %v", err)
-	}
-	wantNames := []string{"5h", "7d", "spark-7d"}
-	if len(q.Windows) != len(wantNames) {
-		t.Fatalf("windows = %#v, want %v", q.Windows, wantNames)
-	}
-	for i, name := range wantNames {
-		if q.Windows[i].Name != name {
-			t.Fatalf("window[%d].Name = %q, want %q", i, q.Windows[i].Name, name)
-		}
-	}
-	// Spark has no 5h of its own, so spark-5h is nonapplicable; the regular
-	// bucket is complete, so plain 5h is not.
-	if len(q.NotApplicableWindows) != 1 || q.NotApplicableWindows[0] != "spark-5h" {
-		t.Fatalf("NotApplicableWindows = %#v, want [spark-5h]", q.NotApplicableWindows)
-	}
-}
-
-// TestChatGPTProviderFetchSparkIndependentAndMalformedNoFalseAbsence covers
-// two properties at once: Spark keeping both of its pools (300 and 10080) and
-// a malformed/unknown present window never producing a false absence marker.
-func TestChatGPTProviderFetchSparkIndependentAndMalformedNoFalseAbsence(t *testing.T) {
-	// Case A: both duration pools present on Spark => both spark pools kept,
-	// no nonapplicable markers anywhere.
-	fake := newFakeRPC(t, map[string]json.RawMessage{
-		"initialize": json.RawMessage(`{"capabilities":{}}`),
-		"account/rateLimits/read": chatGPTResponseBuckets(map[string]RateLimitsEntry{
-			"codex": {
-				Primary:   &RateLimitWindow{UsedPercent: float64Ptr(12), WindowDuration: float64Ptr(300)},
-				Secondary: &RateLimitWindow{UsedPercent: float64Ptr(96), WindowDuration: float64Ptr(10080)},
-				PlanType:  "pro",
-				LimitID:   "codex",
-			},
-			"codex_bengalfox": {
-				Primary:   &RateLimitWindow{UsedPercent: float64Ptr(66), WindowDuration: float64Ptr(300)},
-				Secondary: &RateLimitWindow{UsedPercent: float64Ptr(10), WindowDuration: float64Ptr(10080)},
-				PlanType:  "pro",
-				LimitID:   "codex_bengalfox",
-			},
-		}),
-	})
-	chatGPTRunRPC = fake.run
-	t.Cleanup(func() { chatGPTRunRPC = nil })
-
-	q, err := ChatGPTProvider{}.Fetch(context.Background())
-	if err != nil {
-		t.Fatalf("Fetch failed: %v", err)
-	}
-	wantNames := []string{"5h", "7d", "spark-5h", "spark-7d"}
-	if len(q.Windows) != len(wantNames) {
-		t.Fatalf("windows = %#v, want %v", q.Windows, wantNames)
-	}
-	for i, name := range wantNames {
-		if q.Windows[i].Name != name {
-			t.Fatalf("window[%d].Name = %q, want %q", i, q.Windows[i].Name, name)
-		}
-	}
-	if len(q.NotApplicableWindows) != 0 {
-		t.Fatalf("NotApplicableWindows = %#v, want empty", q.NotApplicableWindows)
-	}
-
-	// Case B: a Pro bucket whose only present window has a valid usedPercent
-	// but an unknown duration. The unknown duration must not become a known
-	// pool, and must not be taken as evidence of absence — so no 5h marker.
-	fakeB := newFakeRPC(t, map[string]json.RawMessage{
 		"initialize": json.RawMessage(`{"capabilities":{}}`),
 		"account/rateLimits/read": chatGPTResponseBuckets(map[string]RateLimitsEntry{
 			"codex": {
@@ -436,24 +349,24 @@ func TestChatGPTProviderFetchSparkIndependentAndMalformedNoFalseAbsence(t *testi
 			},
 		}),
 	})
-	chatGPTRunRPC = fakeB.run
+	chatGPTRunRPC = fake.run
 	t.Cleanup(func() { chatGPTRunRPC = nil })
 
-	qB, err := ChatGPTProvider{}.Fetch(context.Background())
+	q, err := ChatGPTProvider{}.Fetch(context.Background())
 	if err != nil {
 		t.Fatalf("Fetch failed: %v", err)
 	}
-	for _, w := range qB.Windows {
+	for _, w := range q.Windows {
 		if w.Name != "7d" {
-			t.Fatalf("unknown duration must not map to a known pool, got %#v", qB.Windows)
+			t.Fatalf("unknown duration must not map to a known pool, got %#v", q.Windows)
 		}
 	}
-	if len(qB.NotApplicableWindows) != 0 {
-		t.Fatalf("unknown duration must not be absence evidence, got %#v", qB.NotApplicableWindows)
+	if len(q.NotApplicableWindows) != 0 {
+		t.Fatalf("unknown duration must not be absence evidence, got %#v", q.NotApplicableWindows)
 	}
 }
 
-func TestChatGPTProviderFetchBothBucketsOneRPC(t *testing.T) {
+func TestChatGPTProviderFetchAllWindowsOneRPC(t *testing.T) {
 	now := time.Now().Add(2 * time.Hour).Unix()
 	var calls int32
 	fake := newFakeRPC(t, map[string]json.RawMessage{
@@ -467,12 +380,6 @@ func TestChatGPTProviderFetchBothBucketsOneRPC(t *testing.T) {
 						Secondary: &RateLimitWindow{UsedPercent: float64Ptr(96), WindowDuration: float64Ptr(10080), ResetsAt: float64Ptr(float64(now + 3600))},
 						PlanType:  "prolite",
 						LimitID:   "codex",
-					},
-					"codex_bengalfox": {
-						Primary:   &RateLimitWindow{UsedPercent: float64Ptr(66), WindowDuration: float64Ptr(300)},
-						Secondary: &RateLimitWindow{UsedPercent: float64Ptr(10), WindowDuration: float64Ptr(10080)},
-						PlanType:  "pro",
-						LimitID:   "codex_bengalfox",
 					},
 				},
 			}
@@ -491,10 +398,10 @@ func TestChatGPTProviderFetchBothBucketsOneRPC(t *testing.T) {
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("account/rateLimits/read calls = %d, want exactly 1", got)
 	}
-	if len(q.Windows) != 4 {
-		t.Fatalf("expected 4 windows (5h,7d,spark-5h,spark-7d), got %d: %#v", len(q.Windows), q.Windows)
+	if len(q.Windows) != 2 {
+		t.Fatalf("expected 2 windows (5h,7d), got %d: %#v", len(q.Windows), q.Windows)
 	}
-	wantNames := []string{"5h", "7d", "spark-5h", "spark-7d"}
+	wantNames := []string{"5h", "7d"}
 	for i, name := range wantNames {
 		if q.Windows[i].Name != name {
 			t.Fatalf("window[%d].Name = %q, want %q", i, q.Windows[i].Name, name)
@@ -514,31 +421,6 @@ func TestChatGPTProviderFetchBothBucketsOneRPC(t *testing.T) {
 	}
 	if len(q.NotApplicableWindows) != 0 {
 		t.Fatalf("NotApplicableWindows = %#v, want empty for present windows", q.NotApplicableWindows)
-	}
-}
-
-func TestChatGPTProviderFetchSparkMissingDoesNotFailNormalLimits(t *testing.T) {
-	// Only the regular codex bucket is present; the fetch must succeed with
-	// the normal 5h/7d windows and no Spark windows.
-	fake := newFakeRPC(t, map[string]json.RawMessage{
-		"initialize":              json.RawMessage(`{"capabilities":{}}`),
-		"account/rateLimits/read": chatGPTResponseOnce(nil, nil, "prolite"),
-	})
-	chatGPTRunRPC = fake.run
-	t.Cleanup(func() { chatGPTRunRPC = nil })
-
-	q, err := ChatGPTProvider{}.Fetch(context.Background())
-	if err != nil {
-		t.Fatalf("Fetch failed: %v", err)
-	}
-	if len(q.Windows) != 2 {
-		t.Fatalf("expected 2 regular windows, got %d: %#v", len(q.Windows), q.Windows)
-	}
-	if q.Windows[0].Name != "5h" || q.Windows[1].Name != "7d" {
-		t.Fatalf("window names = %q,%q, want 5h,7d", q.Windows[0].Name, q.Windows[1].Name)
-	}
-	if len(q.NotApplicableWindows) != 0 {
-		t.Fatalf("NotApplicableWindows = %#v, want empty", q.NotApplicableWindows)
 	}
 }
 
@@ -667,7 +549,7 @@ func TestChatGPTProviderFetchInitializeError(t *testing.T) {
 func TestChatGPTProviderFetchContextCancelled(t *testing.T) {
 	fake := newFakeRPC(t, map[string]json.RawMessage{
 		"initialize":              json.RawMessage(`{"capabilities":{}}`),
-		"account/rateLimits/read": chatGPTResponseOnce(nil, nil, "pro"),
+		"account/rateLimits/read": chatGPTResponseOnce(nil, "pro"),
 	})
 	chatGPTRunRPC = fake.run
 	t.Cleanup(func() { chatGPTRunRPC = nil })
