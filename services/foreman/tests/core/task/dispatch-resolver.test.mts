@@ -970,7 +970,7 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
   it('automatic without a thinking requirement selects the highest supported level', () => {
     const resolution = resolver.resolve({
       taskName: 'auto-thinking-default',
-      requirements: { minimumTps: 1, excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'chatgpt'), excludeModelIds: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] } satisfies TaskDispatchRequirements,
+      requirements: { minimumTps: 1, excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'chatgpt'), excludeModelIds: ['gpt-5.5', 'gpt-5.4'] } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, true)
     // The selection includes only thinking-capable models; the Catalog default
