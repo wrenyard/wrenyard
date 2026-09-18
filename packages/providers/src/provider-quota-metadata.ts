@@ -140,6 +140,12 @@ const CHATGPT_7D_POOL = quotaPool('chatgpt/7d', [
   quotaWindow('7d', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
 ]);
 
+// OpenCode Zen / OpenRouter share one frozen free-pool instance across every
+// free model, plus a mandatory-balance instance for paid Zen models.
+const ZEN_FREE_POOL = quotaPool('opencode-zen/free', []);
+const ZEN_BALANCE_POOL = balancePool('opencode-zen/balance', '');
+const OPENROUTER_FREE_POOL = quotaPool('openrouter/free', []);
+
 const explicitBindings: ProviderQuotaBinding[] = [
   binding('cursor', 'grok-4.6', [CURSOR_POOL]),
   binding('cursor', 'composer-2.5', [CURSOR_POOL]),
@@ -170,12 +176,24 @@ const explicitBindings: ProviderQuotaBinding[] = [
   // Zhipu coding preserves the proven 5h rolling / 7d full-cycle resets.
   binding('zhipu-coding', 'glm-5.3', [ZHIPU_5H_POOL, ZHIPU_7D_POOL]),
   binding('zhipu-coding', 'glm-5.3-flash', [ZHIPU_5H_POOL, ZHIPU_7D_POOL]),
-  // Official deepseek/deepseek-flash: no registered official provider exists in
-  // the public catalog yet, so this explicit model binding carries ONLY a
-  // mandatory monetary balance resource (`deepseek` raw row). It deliberately
-  // inherits NO CodeBuddy or TokenHub balance: a missing/stale/unknown amount
-  // keeps coverage incomplete rather than fabricating a balance.
+  // Official deepseek pool: the official `deepseek` provider row carries a
+  // mandatory monetary balance resource (`deepseek/balance`) for every model it
+  // serves, including deepseek-flash. It deliberately inherits NO CodeBuddy or
+  // TokenHub balance: a missing/stale/unknown amount keeps coverage incomplete
+  // rather than fabricating a balance.
   binding('deepseek', 'deepseek-flash', [balancePool('deepseek/balance', DEEPSEEK_PARSER)]),
+  binding('deepseek', 'deepseek', [balancePool('deepseek/balance', DEEPSEEK_PARSER)]),
+  // OpenCode Zen free models draw on the shared free pool; paid models draw on
+  // the account balance pool. No balance endpoint is invented: the balance pool
+  // is evidence-free and resolves incomplete until a real row exists.
+  binding('opencode-zen', 'mimo-v2.5-free', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'ling-3.0-flash-fin-free', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'big-pickle', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'union-alpha', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'nemotron-3-ultra-free', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'nemotron-3.5-lightning-free', [ZEN_FREE_POOL]),
+  binding('opencode-zen', 'glm-5.3', [ZEN_BALANCE_POOL]),
+  binding('opencode-zen', 'kimi-k3', [ZEN_BALANCE_POOL]),
 ];
 
 /** Provider defaults also cover dynamically discovered models. */
@@ -184,7 +202,9 @@ function defaultPoolsFor(providerId: string): readonly ProviderQuotaPool[] {
   if (providerId === 'kimi-coding') return [KIMI_5H_POOL, KIMI_7D_POOL];
   if (providerId === 'zhipu-coding') return [ZHIPU_5H_POOL, ZHIPU_7D_POOL];
   if (providerId === 'codebuddy') return [quotaPool('codebuddy/monthly', [])];
-  if (['deepseek', 'anthropic-api', 'minimax', 'moonshot', 'openai', 'qwen', 'tokenhub', 'volcengine', 'zhipu'].includes(providerId)) {
+  if (providerId === 'opencode-zen') return [ZEN_FREE_POOL];
+  if (providerId === 'openrouter') return [OPENROUTER_FREE_POOL];
+  if (['deepseek', 'anthropic', 'minimax', 'moonshot', 'openai', 'qwen', 'tokenhub', 'volcengine', 'zhipu'].includes(providerId)) {
     return [balancePool(`${providerId}/balance`, providerId === 'deepseek' ? DEEPSEEK_PARSER : '')];
   }
   return [quotaPool(`${providerId}/usage`, [])];

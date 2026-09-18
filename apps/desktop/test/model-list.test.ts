@@ -144,6 +144,7 @@ test('provider ids map onto the supplying brand keys', () => {
   assert.equal(providerBrand('openai'), 'openai');
   assert.equal(providerBrand('anthropic'), 'claude');
   assert.equal(providerBrand('anthropic-api'), 'claude');
+  assert.equal(providerBrand('claude-coding'), 'claude');
   assert.equal(providerBrand('spacex-ai'), 'grok');
   assert.equal(providerBrand('zhipu-coding'), 'zhipu');
   assert.equal(providerBrand('tokenhub'), 'tencentcloud');

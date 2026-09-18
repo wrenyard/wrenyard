@@ -299,7 +299,7 @@ func TestProvidersListExposesPublicAPIProviderDirectory(t *testing.T) {
 	for _, entry := range entries {
 		seen[entry.ID] = true
 	}
-	for _, id := range []string{"anthropic-api", "minimax", "minimax-coding", "moonshot", "openai", "qwen", "qwen-coding", "tokenhub", "volcengine", "zhipu"} {
+	for _, id := range []string{"anthropic", "deepseek", "minimax", "minimax-coding", "moonshot", "openai", "qwen", "qwen-coding", "tokenhub", "volcengine", "zhipu"} {
 		if !seen[id] {
 			t.Fatalf("public provider directory missing %q", id)
 		}

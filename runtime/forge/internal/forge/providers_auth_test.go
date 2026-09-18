@@ -792,20 +792,20 @@ func TestProviderAuthStatusClaude(t *testing.T) {
 		forgeDataDir,
 		userHome,
 	)
-	status := resolver.ProviderAuthStatus("anthropic")
+	status := resolver.ProviderAuthStatus("claude-coding")
 	if !status.OK {
-		t.Fatalf("anthropic should be authenticated, got status: %+v", status)
+		t.Fatalf("claude-coding should be authenticated, got status: %+v", status)
 	}
 	if status.Kind != auth.ResolverClaude {
 		t.Fatalf("expected claude resolver, got %s", status.Kind)
 	}
 
-	cred, ok := resolver.Credential("anthropic")
+	cred, ok := resolver.Credential("claude-coding")
 	if !ok {
-		t.Fatal("anthropic credential should be available")
+		t.Fatal("claude-coding credential should be available")
 	}
 	if cred.Value != "claude-oauth-token" {
-		t.Fatalf("anthropic credential value = %q, want claude-oauth-token", cred.Value)
+		t.Fatalf("claude-coding credential value = %q, want claude-oauth-token", cred.Value)
 	}
 }
 
@@ -977,9 +977,9 @@ func TestProviderAuthStatusUnknownProvider(t *testing.T) {
 	}
 }
 
-func TestAnthropicIsNotForgeManagedAndResolverIsClaude(t *testing.T) {
-	if IsManagedProvider("anthropic") {
-		t.Fatal("anthropic must not be forge-managed; its credential resolver is claude")
+func TestClaudeCodingIsNotForgeManagedAndResolverIsClaude(t *testing.T) {
+	if IsManagedProvider("claude-coding") {
+		t.Fatal("claude-coding must not be forge-managed; its credential resolver is claude")
 	}
 	for _, id := range []string{"kimi-coding", "zhipu-coding"} {
 		if !IsManagedProvider(id) {
@@ -995,9 +995,9 @@ func TestAnthropicIsNotForgeManagedAndResolverIsClaude(t *testing.T) {
 		forgeDataDir,
 		userHome,
 	)
-	status := resolver.ProviderAuthStatus("anthropic")
+	status := resolver.ProviderAuthStatus("claude-coding")
 	if status.Kind != auth.ResolverClaude {
-		t.Fatalf("anthropic resolver = %s, want claude", status.Kind)
+		t.Fatalf("claude-coding resolver = %s, want claude", status.Kind)
 	}
 }
 

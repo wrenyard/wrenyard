@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  shell,
   type BrowserWindowConstructorOptions,
   type Input,
   type WebContents,
@@ -11,6 +12,7 @@ import {
   SHELL_CHANNELS,
   acceleratorPage,
   isShellPage,
+  providerKeyPageUrl,
   type ConversationSnapshot,
   type ConversationActivityItem,
   type StatsSnapshot,
@@ -411,6 +413,12 @@ export class ShellWindowController {
       if (typeof key !== 'string' || !key || key.length > 4096) throw new Error('API Key 无效');
       return options.configureProviderKey(providerId, key);
     });
+    ipcMain.handle(SHELL_CHANNELS.openProviderKeyPage, async (event, providerId: unknown) => {
+      assertShellSender(event.sender);
+      const url = providerKeyPageUrl(providerId);
+      if (url === null) throw new Error('不支持的 Provider 密钥页面');
+      await shell.openExternal(url);
+    });
     ipcMain.handle(SHELL_CHANNELS.clientConfigurationSnapshot, async (event) => {
       assertShellSender(event.sender);
       return options.getClientConfiguration();
@@ -573,6 +581,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.quotaSnapshot,
       SHELL_CHANNELS.saveProviderOrder,
       SHELL_CHANNELS.configureProviderKey,
+      SHELL_CHANNELS.openProviderKeyPage,
       SHELL_CHANNELS.clientConfigurationSnapshot,
       SHELL_CHANNELS.clientConfigurationPlan,
       SHELL_CHANNELS.clientConfigurationApply,

@@ -255,6 +255,153 @@ func TestCompleteOpenCodePlansRejectUnsupportedCapabilityToolsAndMCP(t *testing.
 	}
 }
 
+func openCodeNativeSpec(t *testing.T) ProfileSpec {
+	t.Helper()
+	return ProfileSpec{
+		Name: "opencode-native-test", Client: "opencode",
+		Launcher:     map[string]interface{}{"command": "opencode"},
+		Env:          map[string]string{"OPENCODE_MODEL": "opencode-zen/mimo-v2.5-free"},
+		ForgeDataDir: t.TempDir(),
+		Provider: catalog.Provider{
+			Name: "opencode-zen", Kind: "builtin",
+			Inference: &catalog.InferenceBinding{
+				Protocol: "openai-chat-completions", Endpoint: "https://opencode.ai/zen/v1/chat/completions",
+				CredentialResolver: catalog.CredentialResolverForgeManaged, AuthScheme: catalog.AuthSchemeBearer,
+			},
+		},
+		CredentialValue: "managed-zen-key",
+		ClientDesc: catalog.Client{
+			Name: "opencode", Dialect: catalog.DialectOpenCode,
+			PermissionAdapter: catalog.PermissionAdapterOpenCode,
+		},
+	}
+}
+
+func TestOpenCodeNativeRouteSelectsProviderModelAndManagedKey(t *testing.T) {
+	spec := openCodeNativeSpec(t)
+	plan, err := BuildPlan(PlanRequest{
+		Spec:       spec,
+		Prompt:     "inspect",
+		WorkDir:    t.TempDir(),
+		Permission: catalog.PermissionReadonly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Zen resolves through OpenCode's own built-in opencode provider, never a
+	// custom opencode-zen entry.
+	if !containsFlagPair(plan.Command, "-m", "opencode/mimo-v2.5-free") {
+		t.Fatalf("native OpenCode command model = %v, want opencode/mimo-v2.5-free", plan.Command)
+	}
+	// Free tasks must never trigger a paid automatic title: an explicit title
+	// is supplied instead of letting OpenCode generate one.
+	if !containsFlagPair(plan.Command, "--title", "Wrenyard task") {
+		t.Fatalf("native OpenCode command missing explicit title: %v", plan.Command)
+	}
+	base, err := os.ReadFile(plan.Env["OPENCODE_CONFIG"])
+	if err != nil {
+		t.Fatalf("read OpenCode native config: %v", err)
+	}
+	var config struct {
+		Model            string   `json:"model"`
+		SmallModel       string   `json:"small_model"`
+		EnabledProviders []string `json:"enabled_providers"`
+		Provider         map[string]struct {
+			Name    string `json:"name"`
+			NPM     string `json:"npm"`
+			Options struct {
+				BaseURL string `json:"baseURL"`
+				APIKey  string `json:"apiKey"`
+			} `json:"options"`
+			Models map[string]struct {
+				Name  string `json:"name"`
+				Limit struct {
+					Context int `json:"context"`
+					Output  int `json:"output"`
+				} `json:"limit"`
+			} `json:"models"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(base, &config); err != nil {
+		t.Fatalf("decode OpenCode native config: %v", err)
+	}
+	if config.Model != "opencode/mimo-v2.5-free" {
+		t.Fatalf("config model = %q, want the built-in opencode route", config.Model)
+	}
+	if config.SmallModel != config.Model {
+		t.Fatalf("small_model = %q, want it pinned to %q", config.SmallModel, config.Model)
+	}
+	if len(config.EnabledProviders) != 1 || config.EnabledProviders[0] != "opencode" {
+		t.Fatalf("enabled_providers = %v, want [opencode]", config.EnabledProviders)
+	}
+	provider, ok := config.Provider["opencode"]
+	if !ok {
+		t.Fatalf("native config missing built-in opencode provider entry: %#v", config.Provider)
+	}
+	// Forge must not redeclare the built-in provider's npm transport, endpoint,
+	// or identity.
+	if provider.NPM != "" || provider.Options.BaseURL != "" {
+		t.Fatalf("Zen native route overrode the built-in opencode provider: npm=%q baseURL=%q", provider.NPM, provider.Options.BaseURL)
+	}
+	if _, leaked := config.Provider["opencode-zen"]; leaked {
+		t.Fatal("native route must not emit a custom opencode-zen provider")
+	}
+	// The credential is referenced through the child-only env var, never
+	// written into the on-disk config.
+	if provider.Options.APIKey != "{env:"+openCodeNativeCredentialEnv+"}" {
+		t.Fatalf("provider apiKey = %q, want env reference", provider.Options.APIKey)
+	}
+	if strings.Contains(string(base), "managed-zen-key") {
+		t.Fatal("native config must not contain the credential value")
+	}
+	if plan.Env[openCodeNativeCredentialEnv] != "managed-zen-key" {
+		t.Fatalf("native credential env = %q", plan.Env[openCodeNativeCredentialEnv])
+	}
+	definition, ok := provider.Models["mimo-v2.5-free"]
+	if !ok {
+		t.Fatalf("provider model definitions missing the selected model: %#v", provider.Models)
+	}
+	// Limits come from the verified registry, not from a guessed default.
+	if definition.Limit.Context != 1048576 || definition.Limit.Output != 32768 {
+		t.Fatalf("provider model limits = %+v, want registry context/output", definition.Limit)
+	}
+	// The gateway-only wrenyard provider must not leak into the native route.
+	if _, ok := config.Provider["wrenyard"]; ok {
+		t.Fatal("native route must not emit the gateway provider")
+	}
+}
+
+// TestOpenCodeNativeRouteUnionAlphaStaysOnBuiltinProvider guards the genuine
+// protocol split: union-alpha speaks the Anthropic messages protocol, so the
+// route must stay opencode/union-alpha and must never synthesize an
+// openai-compatible transport for it.
+func TestOpenCodeNativeRouteUnionAlphaStaysOnBuiltinProvider(t *testing.T) {
+	spec := openCodeNativeSpec(t)
+	spec.Env["OPENCODE_MODEL"] = "opencode-zen/union-alpha"
+	plan, err := BuildPlan(PlanRequest{
+		Spec:       spec,
+		Prompt:     "inspect",
+		WorkDir:    t.TempDir(),
+		Permission: catalog.PermissionReadonly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsFlagPair(plan.Command, "-m", "opencode/union-alpha") {
+		t.Fatalf("union-alpha native route = %v, want opencode/union-alpha", plan.Command)
+	}
+	base, err := os.ReadFile(plan.Env["OPENCODE_CONFIG"])
+	if err != nil {
+		t.Fatalf("read OpenCode native config: %v", err)
+	}
+	if strings.Contains(string(base), "@ai-sdk/openai-compatible") {
+		t.Fatal("native route must not force an openai-compatible transport")
+	}
+	if !strings.Contains(string(base), `"limit"`) {
+		t.Fatalf("native route missing registry limits: %s", string(base))
+	}
+}
+
 func openCodeGatewaySession(t *testing.T, plan CommandPlan) string {
 	t.Helper()
 	base, err := os.ReadFile(plan.Env["OPENCODE_CONFIG"])

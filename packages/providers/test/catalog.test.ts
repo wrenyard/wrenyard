@@ -31,13 +31,19 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
   }
   // Both new Flash entries keep provider-local canonical identities.
   assert.equal(catalog.resolveRun('dsh', 'tokenhub', 'deepseek/deepseek-flash').protocol, 'openai_chat');
-  // All builtin deepseek identities are exactly the two new Flash entries.
+  // All builtin deepseek identities are exactly the CodeBuddy, TokenHub and
+  // official DeepSeek routes.
   const deepseekIds = [
     ...new Set(
       BUILTIN_PROVIDERS.flatMap((p) => p.models.map((m) => m.id)).filter((id) => id.includes('deepseek')),
     ),
   ].sort();
-  assert.deepEqual(deepseekIds, ['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
+  assert.deepEqual(deepseekIds, ['deepseek', 'deepseek-flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
+  // The official DeepSeek provider carries both official endpoint models.
+  assert.deepEqual(
+    BUILTIN_PROVIDERS.find((p) => p.id === 'deepseek')!.models.map((m) => m.id),
+    ['deepseek-flash', 'deepseek'],
+  );
   // Retired CodeBuddy/TokenHub deepseek ids are gone from the builtin catalog.
   for (const oldId of [
     'deepseek-v4-flash',
@@ -129,11 +135,15 @@ test('native web search is admitted only for explicitly supported native client/
   assert.equal(plans['kimi-coding/k3:gk']?.mode, 'gateway');
   assert.equal(plans['kimi-coding/k3:gk']?.supportsWebSearch, undefined);
 
-  // Native Claude has an empty model list, so no exact native candidate exists;
-  // the client metadata still declares native web search support.
-  assert.deepEqual(catalog.provider('anthropic')!.models, []);
+  // The Claude subscription provider has an empty model list, so no exact
+  // native candidate exists; the client metadata still declares native web
+  // search support. Its models live on the official `anthropic` provider.
+  assert.deepEqual(catalog.provider('claude-coding')!.models, []);
   assert.equal(catalog.clients().find((client) => client.id === 'claude')!.supportsNativeWebSearch, true);
-  assert.equal(plans['anthropic/claude-sonnet-5:cc'], undefined);
+  assert.equal(plans['claude-coding/claude-sonnet-5:cc'], undefined);
+  // The Claude client reaches the official Anthropic models over the gateway;
+  // the provider is not a native client provider.
+  assert.equal(plans['anthropic/claude-sonnet-5:cc']?.mode, 'gateway');
 });
 
 test('derived task plans carry canonical keys only — no legacy profile, policy, or alias ids', () => {
@@ -336,16 +346,16 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('codebuddy', 'hy4-preview'), 'mid');
   assert.equal(tier('codebuddy', 'deepseek-v4.1-flash'), 'mid');
   assert.equal(tier('tokenhub', 'deepseek/deepseek-flash'), 'mid');
-  assert.equal(tier('anthropic-api', 'claude-fable-5'), 'premium');
-  assert.equal(tier('anthropic-api', 'claude-opus-5'), 'premium');
-  assert.equal(tier('anthropic-api', 'claude-haiku-4-5-20251001'), 'low');
+  assert.equal(tier('anthropic', 'claude-fable-5'), 'premium');
+  assert.equal(tier('anthropic', 'claude-opus-5'), 'premium');
+  assert.equal(tier('anthropic', 'claude-haiku-4-5-20251001'), 'low');
   assert.equal(tier('zhipu', 'glm-4.7-flash'), 'low');
   assert.equal(tier('zhipu', 'glm-5-turbo'), 'low');
   assert.equal(tier('chatgpt', 'gpt-5.4'), 'mid');
   assert.equal(tier('moonshot', 'kimi-k3'), 'high');
   assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
 
-  assert.equal(tier('anthropic-api', 'claude-sonnet-5'), 'high');
+  assert.equal(tier('anthropic', 'claude-sonnet-5'), 'high');
   assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
   assert.equal(tier('cursor', 'composer-2.5'), 'low');
   assert.equal(tier('minimax', 'MiniMax-M2.7-highspeed'), 'low');
@@ -374,9 +384,11 @@ test('every registered built-in model has a valid authoritative speed default', 
       assert.doesNotMatch(model.speed.basis!, /external benchmark/u);
       assert.match(model.speed.basis!, /not composer-2\.5-fast/u);
     } else if (model.speed.source === 'bootstrap') {
-      assert.equal(model.speed.tps, 40);
+      // Unmeasured bootstrap baselines stay conservative; the newest free
+      // routes use an explicitly low placeholder rather than a measured value.
       assert.equal(model.speed.conservative, true);
-      assert.match(model.speed.basis!, /unmeasured fallback/iu);
+      assert.ok(model.speed.tps > 0, `${provider}/${model.id} bootstrap tps must be positive`);
+      assert.match(model.speed.basis!, /unmeasured|not derived from an external/iu);
     } else if (!model.speed.source.startsWith('local-benchmark')) {
       assert.match(model.speed.source, /^https:\/\//u, `${provider}/${model.id} needs a public evidence URL`);
     }
@@ -458,6 +470,8 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   // unversioned route.
   assert.equal(route('codebuddy', 'deepseek-v4.1-flash').canonicalModel, undefined);
   assert.equal(route('tokenhub', 'deepseek/deepseek-flash').canonicalModel, undefined);
+  assert.equal(route('deepseek', 'deepseek-flash').canonicalModel, undefined);
+  assert.equal(route('deepseek', 'deepseek').canonicalModel, undefined);
 
   const groups = new Map<string, Set<string>>();
   for (const provider of BUILTIN_PROVIDERS) {
@@ -505,9 +519,48 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
     ['MiniMax-M3', 'minimax-m3'],
     ['deepseek-flash', 'deepseek-v4.1-flash'],
     ['hy4-preview', 'hunyuan-hy4-preview'],
+    ['inclusionai/ling-3.0-flash-vl:free', 'ling-3.0-flash-vl'],
+    ['qwen/qwen3.8-27b:free', 'qwen3.8-27b'],
+    ['nemotron-3-ultra-free', 'nemotron-3-ultra'],
+    ['nemotron-3.5-lightning-free', 'nemotron-3.5-lightning'],
   ] as const) {
     assert.equal(builtinModelDisplayName(alias), builtinModelDisplayName(target));
   }
+});
+
+test('renamed providers expose their exact ids, labels, and client bindings', () => {
+  const catalog = createBuiltinCatalog();
+  // Claude subscription is the native Claude client provider; the official
+  // Anthropic API is a separately configured forge-managed provider.
+  const claudeCoding = catalog.provider('claude-coding')!;
+  assert.equal(claudeCoding.displayName, 'Claude');
+  assert.deepEqual(claudeCoding.nativeClients, ['claude']);
+  assert.equal(claudeCoding.credentialResolver, 'claude');
+  assert.equal(claudeCoding.quotaProvider, 'claude-coding');
+  const anthropic = catalog.provider('anthropic')!;
+  assert.equal(anthropic.displayName, 'Anthropic');
+  assert.equal(anthropic.credentialResolver, 'forge-managed');
+  assert.equal(anthropic.quotaProvider, 'anthropic');
+  assert.equal(anthropic.defaultModel, 'claude-sonnet-5');
+  assert.deepEqual(anthropic.models.map((entry) => entry.id), [
+    'claude-fable-5',
+    'claude-opus-5',
+    'claude-sonnet-5',
+    'claude-haiku-4-5-20251001',
+  ]);
+  // The retired anthropic-api id is gone; the official API is now `anthropic`.
+  assert.equal(catalog.provider('anthropic-api'), undefined, 'anthropic-api must not be registered');
+  // The OpenCode client binds to the Zen provider, and the retired
+  // opencode-native provider is no longer registered.
+  assert.equal(catalog.clients().find((client) => client.id === 'opencode')!.nativeProvider, 'opencode-zen');
+  assert.equal(catalog.provider('opencode-native'), undefined, 'opencode-native must not be registered');
+  // Short display labels for the remaining priced API providers.
+  assert.equal(catalog.provider('openai')!.displayName, 'OpenAI');
+  assert.equal(catalog.provider('minimax')!.displayName, 'MiniMax');
+  assert.equal(catalog.provider('moonshot')!.displayName, 'Moonshot');
+  assert.equal(catalog.provider('zhipu')!.displayName, 'Zhipu');
+  // The Grok native client provider is labelled "Super Grok".
+  assert.equal(catalog.provider('spacex-ai')!.displayName, 'Super Grok');
 });
 
 

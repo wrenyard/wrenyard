@@ -131,9 +131,10 @@ func providerFriendlyName(providerID string) string {
 }
 
 var friendlyProviderNames = map[string]string{
-	"kimi-coding":     "Kimi Coding",
-	"zhipu-coding":    "Zhipu Coding",
-	"anthropic":       "Anthropic",
-	"chatgpt":         "ChatGPT",
-	"opencode-native": "OpenCode",
+	"kimi-coding": "Kimi Coding",
+	"zhipu-coding": "Zhipu Coding",
+	"claude-coding": "Claude",
+	"anthropic":    "Anthropic",
+	"chatgpt":      "ChatGPT",
+	"spacex-ai":    "Super Grok",
 }
