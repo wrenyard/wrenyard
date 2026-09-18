@@ -101,7 +101,8 @@ function captureTaskRunEvents(taskRunId: string): { events: ForemanEvent[]; stop
 
 describe('daemon task gates', () => {
   function stripOutputContract(text: string): string {
-    return text.split('\n\n<foreman-output-contract')[0]?.trim() ?? text
+    const start = text.lastIndexOf('<wy-instruction>')
+    return start < 0 ? text.trim() : text.slice(start + '<wy-instruction>'.length).split('</wy-instruction>')[0].trim()
   }
 
   function xmlOutput(data: unknown, summary = 'Done.'): string {

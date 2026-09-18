@@ -530,14 +530,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         taskId,
         permission: 'yolo',
         repoWriteLock,
-        // Production collection boundary: every task launches unrestricted YOLO
-        // tools, so repository-lock metadata (repoWriteLock/writeTargets) cannot
-        // prove that a malformed attempt had no side effects. An automatic
-        // structured-output resume could therefore re-run a task that already
-        // mutated the repository. Force a single attempt for all Tasks here; the
-        // dormant retry helper in collectStructuredOutput stays intact for
-        // direct callers that never reach this boundary.
-        maxResumeAttempts: 0,
+        // Default correction budget: every task — including edit/commit — keeps
+        // the same bounded in-session output correction (three corrections after
+        // the initial attempt). A correction continues the original native
+        // session on the resolved model/profile and never replays the task.
         timeoutMs: resolvedTimeoutMs ?? config.timeoutMs,
         capabilities: selectedCapabilities,
         writePaths,
