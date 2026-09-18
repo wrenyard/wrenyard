@@ -315,7 +315,8 @@ function textOutput(result: string, summary = 'Done.'): string {
 }
 
 function stripOutputContract(text: string): string {
-  return text.replace(/\n\n<foreman-output-contract[\s\S]*$/u, '')
+  const start = text.lastIndexOf('<wy-instruction>')
+  return start < 0 ? text.trim() : text.slice(start + '<wy-instruction>'.length).split('</wy-instruction>')[0].trim()
 }
 
 function installSupervisorBackedAgent(): void {
@@ -434,7 +435,9 @@ describe('daemon execution', { concurrency: false }, () => {
     )
     await discoverTasks(workspace)
 
-    const agent = async (_profile: string, prompt: string): Promise<AgentResult> => ({ output: textOutput(prompt), status: 'done' })
+    // The task prompt is now composed with the stable output contract, so this
+    // test returns the task result directly instead of echoing prompt text.
+    const agent = async (): Promise<AgentResult> => ({ output: xmlOutput({ result: 'echo:hello' }), status: 'done' })
     assert.deepEqual(await runTask('echo', { text: 'hello' }, { workspaceRoot: workspace, primitives: { agent } }), { result: 'echo:hello' })
     await assert.rejects(
       () => runTask('echo', {}, { workspaceRoot: workspace, primitives: { agent } }),
@@ -897,7 +900,7 @@ describe('daemon execution fact events', { concurrency: false }, () => {
     )
     await discoverTasks(workspace)
 
-    const agent = async (_profile: string, prompt: string): Promise<AgentResult> => ({ output: textOutput(prompt), status: 'done' })
+    const agent = async (): Promise<AgentResult> => ({ output: xmlOutput({ result: 'done' }), status: 'done' })
     await runTask('simple', { text: 'hello' }, { workspaceRoot: workspace, primitives: { agent } })
 
     const facts = readDaemonFacts()
@@ -1296,7 +1299,7 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
 // ── Structured-output recovery mutation boundary (real kernel) ────────────
 
 describe('structured-output recovery mutation boundary', { concurrency: false }, () => {
-  it('keeps a legacy edit task one-shot and persists unverified structured failure evidence', async () => {
+  it('bounds an edit task to four attempts and persists unverified structured failure evidence', async () => {
     const workspace = makeTempDir('foreman-edit-unverified-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -1314,12 +1317,12 @@ describe('structured-output recovery mutation boundary', { concurrency: false },
     await discoverTasks(workspace)
 
     let agentCalls = 0
-    let mutationCounter = 0
-    const agent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+    const resumedSessions: Array<string | undefined> = []
+    const agent = async (_profile: string, _prompt: string, opts?: AgentOpts): Promise<AgentResult> => {
       agentCalls += 1
-      mutationCounter += 1
-      // Malformed/missing structured delivery, but advertises a resumable native
-      // session as if it had done real work.
+      resumedSessions.push(opts?.resume)
+      // Malformed structured delivery while advertising a resumable native
+      // session as if real work had happened.
       return {
         output: 'missing delivery block after a mutation',
         status: 'done',
@@ -1335,8 +1338,16 @@ describe('structured-output recovery mutation boundary', { concurrency: false },
       /output-schema/u,
     )
 
-    assert.equal(agentCalls, 1, 'mutation metadata must invoke the agent exactly once')
-    assert.equal(mutationCounter, 1, 'mutation-capable side effects must not be repeated')
+    assert.equal(
+      agentCalls,
+      4,
+      'a mutation-capable task keeps the default three corrections after the initial attempt',
+    )
+    assert.deepEqual(
+      resumedSessions,
+      [undefined, 'native_edit_kernel', 'native_edit_kernel', 'native_edit_kernel'],
+      'every correction must resume the original native session, never replay the task',
+    )
 
     const row = readTaskRowByTemplate('edit-unverified')
     assert.ok(row, 'a persisted task row must exist')
@@ -1356,7 +1367,7 @@ describe('structured-output recovery mutation boundary', { concurrency: false },
     assert.equal(errMsg.evidence?.side_effects_may_have_occurred, true, 'side effects may have occurred')
   })
 
-  it('keeps a legacy readonly task one-shot under YOLO', async () => {
+  it('corrects a legacy readonly task in-session and returns valid structured output', async () => {
     const workspace = makeTempDir('foreman-readonly-resume-')
     const projectDir = join(workspace, 'projects', 'app')
     mkdirSync(projectDir, { recursive: true })
@@ -1374,8 +1385,10 @@ describe('structured-output recovery mutation boundary', { concurrency: false },
     await discoverTasks(workspace)
 
     let agentCalls = 0
-    const agent = async (_profile: string, _prompt: string): Promise<AgentResult> => {
+    const resumedSessions: Array<string | undefined> = []
+    const agent = async (_profile: string, _prompt: string, opts?: AgentOpts): Promise<AgentResult> => {
       agentCalls += 1
+      resumedSessions.push(opts?.resume)
       if (agentCalls === 1) {
         return {
           output: 'missing delivery block on first attempt',
@@ -1390,16 +1403,16 @@ describe('structured-output recovery mutation boundary', { concurrency: false },
       }
     }
 
-    await assert.rejects(
-      () => executeTask('readonly-resume', undefined, { workspaceRoot: workspace, primitives: { agent } }),
-      /output-schema/u,
-    )
+    const output = await runTask('readonly-resume', undefined, {
+      workspaceRoot: workspace,
+      primitives: { agent },
+    })
 
-    assert.equal(agentCalls, 1, 'legacy readonly work must not be resumed under YOLO')
+    assert.deepEqual(output, { result: 'done' }, 'the corrected output must be collected')
+    assert.equal(agentCalls, 2, 'readonly work is corrected once in the original session')
+    assert.deepEqual(resumedSessions, [undefined, 'native_readonly_kernel'])
     const row = readTaskRowByTemplate('readonly-resume')
     assert.ok(row, 'a persisted task row must exist')
-    assert.equal(row?.status, 'failed')
-    assert.equal(row?.output, '')
-    assert.equal(row?.failure_category, 'gate_failed')
+    assert.equal(row?.status, 'done')
   })
 })

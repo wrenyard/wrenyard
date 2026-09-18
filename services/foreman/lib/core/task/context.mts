@@ -83,10 +83,10 @@ export function formatTaskContext(ctx: TaskContext | undefined): string | undefi
     return `### ${key}\n${escapeClosingTag(body)}`
   })
   return [
-    '<foreman-task-context>',
+    '<wy-ctx-task>',
     'This bounded context was supplied by Foreman. Use relevant entries as established context; do not call tools solely to rediscover exact content already present here. Task instructions and the current filesystem win if an entry is stale or conflicts.',
     ...sections,
-    '</foreman-task-context>',
+    '</wy-ctx-task>',
   ].join('\n\n')
 }
 
@@ -140,5 +140,5 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function escapeClosingTag(value: string): string {
-  return value.replaceAll('</foreman-task-context>', '<\\/foreman-task-context>')
+  return value.replaceAll('</wy-ctx-task>', '<\\/wy-ctx-task>')
 }

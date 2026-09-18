@@ -31,14 +31,14 @@ export async function buildTaskPrompt(
   })
   const { documents, promptBody } = await build
 
-  const parts: string[] = []
+  // Layering: static wy-system (documents + instruction body) first, then the
+  // per-run dynamic documents, bindings and context last.
+  const systemParts: string[] = []
   if (documents.length > 0) {
-    parts.push([
-      '<foreman-system-instructions>',
-      '<task-instruction-documents>',
+    systemParts.push([
+      '<wy-ctx-doc>',
       ...documents.map((document) => renderInstructionDocument(document.index, document.text)),
-      '</task-instruction-documents>',
-      '</foreman-system-instructions>',
+      '</wy-ctx-doc>',
     ].join('\n'))
   }
 
@@ -53,12 +53,18 @@ export async function buildTaskPrompt(
     }
   }
 
-  parts.push(promptBody)
-  if (dynamicDocuments.length > 0) parts.push(...dynamicDocuments)
-  if (capture.placeholders.length > 0) {
-    parts.push(TASK_PROMPT_PLACEHOLDER_NOTICE)
-    parts.push(renderTaskPromptBindings(capture))
-  }
+  systemParts.push([
+    '<wy-instruction>',
+    promptBody,
+    '</wy-instruction>',
+  ].join('\n'))
+
+  const parts: string[] = [
+    ['<wy-system>', ...systemParts, '</wy-system>'].join('\n'),
+  ]
+  if (capture.placeholders.length > 0) parts.push(TASK_PROMPT_PLACEHOLDER_NOTICE)
+  if (dynamicDocuments.length > 0) parts.push(['<wy-ctx-doc>', ...dynamicDocuments, '</wy-ctx-doc>'].join('\n'))
+  if (capture.placeholders.length > 0) parts.push(renderTaskPromptBindings(capture))
 
   const contextDocument = formatTaskContext(ctx)
   if (contextDocument) parts.push(contextDocument)
@@ -67,8 +73,8 @@ export async function buildTaskPrompt(
 
 function renderInstructionDocument(index: number, text: string): string {
   return [
-    `<instruction-document source="task.instructions[${index}]" order="${index + 1}">`,
+    `<wy-doc source="task.instructions[${index}]" order="${index + 1}">`,
     text,
-    '</instruction-document>',
+    '</wy-doc>',
   ].join('\n')
 }

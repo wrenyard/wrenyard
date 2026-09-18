@@ -64,6 +64,19 @@ export interface ConversationSummaryInput {
   user: string;
   work: string;
   /**
+   * The current turn's own newest final assistant answer of its execution
+   * branch, when one was observed. The final call passes it separately from
+   * the full work transcript so the input layer can state the branch's own
+   * conclusion without replaying the whole transcript inside the input.
+   */
+  latestAnswer?: string;
+  /**
+   * Truthful metadata about this call. Only fields whose values are already
+   * known are supplied; an unknown field stays absent. The summary model is
+   * resolved by the summary service itself, so it is not supplied here.
+   */
+  metadata?: { cwd?: string };
+  /**
    * Which boundary of the work turn is being summarized. A `progress` note is
    * written while dispatched work is still running and must never present it
    * as finished; `final` is the turn's own answer once everything settled.
@@ -2383,6 +2396,7 @@ export class DshConversationClient {
         previousSummaries: turn.previousSummaries,
         user: turn.prompt,
         work: this.workTextOf(this.liveProcessItems(turn)) ?? '',
+        metadata: this.summaryMetadata(),
         phase: 'progress',
         signal: controller.signal,
       })).trim();
@@ -2873,6 +2887,35 @@ export class DshConversationClient {
   }
 
   /**
+   * The newest assistant answer the branch itself has produced for the turn
+   * being summarized. It is the effective final answer once the turn settled,
+   * and otherwise the last assistant prose observed in the live process — the
+   * branch's own conclusion, which is what the final summary call must read
+   * without repeating the whole work transcript inside its input.
+   */
+  private latestAnswerOf(turn: LocalTurn): string | undefined {
+    const settled = this.finalAnswerOf(turn);
+    if (settled) return settled;
+    const process = turn.processItems ?? this.liveProcessItems(turn);
+    for (let index = process.length - 1; index >= 0; index -= 1) {
+      const item = process[index];
+      if (item.kind === 'assistant' && item.text.trim()) return item.text.trim();
+    }
+    return undefined;
+  }
+
+  /**
+   * Known metadata for one summary call: the workspace directory, only when a
+   * configured path actually exists. Nothing is invented — an unknown field is
+   * left out entirely so the request never claims a value the product does not
+   * have. The summary model is reported by the service that resolved it.
+   */
+  private summaryMetadata(): { cwd?: string } {
+    const cwd = this.workspace.path;
+    return { ...(cwd ? { cwd } : {}) };
+  }
+
+  /**
    * The prompt actually dispatched. When completed sibling exchanges are
    * missing from the branch, they are injected ahead of the user's new message
    * as one marked internal envelope in stable send order — only the visible
@@ -3203,6 +3246,8 @@ export class DshConversationClient {
         previousSummaries: turn.previousSummaries,
         user: turn.prompt,
         work: turn.work ?? '',
+        latestAnswer: this.latestAnswerOf(turn),
+        metadata: this.summaryMetadata(),
         phase: 'final',
         signal: controller.signal,
       });
