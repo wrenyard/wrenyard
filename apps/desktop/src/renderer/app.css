@@ -807,10 +807,10 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .model-list-provider { display: inline-flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
 .model-list-icon { display: inline-flex; align-items: center; color: currentColor; }
 .model-list-icon img, .model-list-icon .model-brand-icon { width: 18px; height: 18px; }
-.task-run-model, .task-run-model-brand { display: inline-flex; align-items: center; gap: 6px; }
-.task-run-model-brand { min-width: 0; white-space: nowrap; }
-.task-run-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-run-model-brand .model-brand-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
+.task-run-model { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
+.task-run-model-brand { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
+.task-run-model-name { min-width: 0; }
+.task-run-model-brand .model-brand-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; align-self: flex-start; }
 .model-list .is-muted { color: var(--muted); }
 .model-list-empty { color: var(--muted); text-align: center; }
 
@@ -943,8 +943,17 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .single-select-option-secondary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .single-select-option[aria-selected="true"] { color: var(--ink); background: #f8f0dc; box-shadow: inset 2px 0 var(--moss-deep); }
 .single-select-option:disabled { opacity: .58; cursor: default; }
-.routing-test-toolbar .single-select { flex: 0 1 240px; min-width: 0; }
+/* Toolbar task picker: keep a practical trigger width and resist shrinking so
+   the Chinese task label stays readable next to the 测试 button. */
+.routing-test-toolbar .single-select { flex: 0 1 320px; min-width: 180px; }
 .routing-test-toolbar .single-select .multi-select-trigger { min-height: 34px; font-size: 12px; }
+/* Options wrap naturally within the viewport rather than ellipsizing; the popup
+   is right-anchored and grows to fit its content up to a viewport-safe cap. */
+.routing-test-toolbar .single-select-popup { right: 0; left: auto; width: max-content; min-width: min(320px, calc(100vw - 48px)); max-width: min(520px, calc(100vw - 48px)); }
+.routing-test-toolbar .single-select-option { flex-wrap: wrap; white-space: normal; }
+.routing-test-toolbar .single-select-option-label { flex: 1 1 auto; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.routing-test-toolbar .single-select-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.routing-test-toolbar .single-select-option-secondary { flex: 1 1 100%; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 
 /* Conversation header model picker: the shared single-select host, sized for the
    header, with options that carry a model label plus provider secondary text. */
@@ -979,6 +988,9 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
   .routing-test-form { grid-template-columns: max-content minmax(0, 1fr); }
   .routing-test-head { align-items: stretch; }
   .routing-test-toolbar { width: 100%; flex-wrap: wrap; }
+  /* The picker takes its own full row on narrow screens; shrinking it into the
+     button would clip the task label the popup override exists to preserve. */
+  .routing-test-toolbar .single-select { flex: 1 1 100%; min-width: 0; }
   .routing-test-form input[type="number"], .routing-test-toolbar select { width: 100%; }
 }
 
@@ -1091,11 +1103,16 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .table-head span { color: var(--muted); font-family: inherit; font-size: 9px; font-weight: 750; letter-spacing: .05em; }
 #stats-profile-list .table-row { grid-template-columns: minmax(0, 1fr) 58px 78px 72px; }
 #stats-task-list .table-row { grid-template-columns: minmax(0, 1fr) 44px 48px 82px 44px; }
-#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(88px, .6fr) minmax(0, 2fr) minmax(100px, .9fr) 84px minmax(84px, .7fr) minmax(96px, .85fr); gap: 12px; }
+#stats-task-runs-list .table-row { grid-template-columns: 34px minmax(88px, .7fr) minmax(0, 2fr) minmax(76px, .7fr) 64px 68px minmax(84px, .8fr); gap: 12px; }
 #stats-task-runs-list .table-row > * { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
-#stats-task-runs-list .table-row > .task-run-model { overflow: hidden; white-space: nowrap; }
 #stats-task-runs-list .table-row > span { text-align: left; }
 #stats-task-runs-list .table-row > :nth-last-child(3), #stats-task-runs-list .table-row > :nth-last-child(2), #stats-task-runs-list .table-row > :last-child { text-align: right; }
+/* Paired Provider · Model labels must stay fully readable in the ledger: brand
+   groups wrap onto their own line when the column is narrow instead of
+   clipping the model name, and the leading brand icons keep their size and
+   stay aligned with the first line of their label. */
+#stats-task-runs-list .task-run-model-name { text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+#stats-task-runs-list .task-run-model-brand { flex: 0 1 auto; }
 .task-run-row > :first-child { justify-self: center; }
 @keyframes task-run-pulse { 50% { opacity: .42; } }
 .source-builtin > :nth-child(2) { color: var(--moss-deep); }

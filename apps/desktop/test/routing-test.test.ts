@@ -92,6 +92,16 @@ test('preload forwards the typed form request and lazily imports tasks without r
   );
 });
 
+/** Every channel named in the removeIpcHandlers disposal list. */
+function disposedChannels(win: string): string[] {
+  const start = win.indexOf('private removeIpcHandlers(): void {');
+  assert.ok(start >= 0, 'shell-window must dispose its IPC handlers');
+  const loop = win.indexOf('ipcMain.removeHandler(channel)', start);
+  assert.ok(loop > start, 'the disposal loop removes every registered channel');
+  const list = win.slice(start, loop);
+  return [...list.matchAll(/SHELL_CHANNELS\.([A-Za-z0-9_]+)/g)].map((match) => match[1]);
+}
+
 test('shell-window validates the sender, the typed form, and disposes both channels', () => {
   const win = readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
   assert.match(win, /requestTaskRoutingTest\(params: TaskRoutingTestParams\): Promise<TaskRoutingTestResult>;/);
@@ -99,7 +109,14 @@ test('shell-window validates the sender, the typed form, and disposes both chann
   assert.match(win, /function validateTaskRoutingTestParams\(value: unknown\): TaskRoutingTestParams \{/);
   assert.match(win, /ipcMain\.handle\(SHELL_CHANNELS\.taskRoutingTest, async \(event, params: unknown\) => \{\s*assertShellSender\(event\.sender\);\s*return options\.requestTaskRoutingTest\(validateTaskRoutingTestParams\(params\)\);/);
   assert.match(win, /ipcMain\.handle\(SHELL_CHANNELS\.taskRoutingTestTasks, async \(event\) => \{\s*assertShellSender\(event\.sender\);\s*return options\.requestRoutingTestTasks\(\);/);
-  assert.match(win, /SHELL_CHANNELS\.taskRoutingTestTasks,\s*\]\) ipcMain\.removeHandler\(channel\);/);
+
+  // Both routing channels are disposed, and neither is assumed to be the last
+  // entry: the list grows as handlers are added, so membership is the contract.
+  const disposed = disposedChannels(win);
+  assert.ok(disposed.includes('taskRoutingTest'), 'the routing test channel is disposed');
+  assert.ok(disposed.includes('taskRoutingTestTasks'), 'the routing tasks import channel is disposed');
+  assert.ok(disposed.length > 0, 'the disposal list is non-empty');
+  assert.equal(new Set(disposed).size, disposed.length, 'no channel is disposed twice');
 });
 
 test('main bridges the typed form request and routingTestTasks import with requestForeman', () => {
@@ -139,6 +156,45 @@ test('HTML hosts supply/routing tabs, keeps the supply config together, and turn
   assert.ok(
     routingMarkup.indexOf('routing-test-minimum-tps') < routingMarkup.indexOf('routing-test-expected-tps'),
     'minimum TPS controls stay left of expected TPS',
+  );
+});
+
+test('scoped picker styles keep the trigger practical and wrap option labels inside the viewport', async () => {
+  const css = await readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8');
+  const toolbarRule = (selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = css.match(new RegExp(`${escaped} \\{([^}]*)\\}`));
+    assert.ok(match, `scoped rule ${selector} must exist`);
+    return match[1];
+  };
+
+  // Trigger: practical width with flex-shrink protection while room remains.
+  const host = toolbarRule('.routing-test-toolbar .single-select');
+  assert.match(host, /flex: 0 1 320px;/, 'the picker asks for a practical 320px width');
+  assert.match(host, /min-width: 180px;/, 'the picker resists collapsing below a readable width');
+
+  // Popup: right anchored, content-sized, clamped to the viewport on both edges.
+  const popup = toolbarRule('.routing-test-toolbar .single-select-popup');
+  assert.match(popup, /right: 0;/, 'the popup hangs from the trigger right edge');
+  assert.match(popup, /left: auto;/, 'the popup overrides the shared left:0 anchor');
+  assert.match(popup, /width: max-content;/, 'the popup sizes to its content');
+  assert.match(popup, /min-width: min\(320px, calc\(100vw - 48px\)\);/, 'the popup has a viewport-clamped floor');
+  assert.match(popup, /max-width: min\(520px, calc\(100vw - 48px\)\);/, 'the popup has a viewport-clamped ceiling');
+
+  // Option text wraps naturally: no ellipsis clipping inside the scoped popup.
+  const label = toolbarRule('.routing-test-toolbar .single-select-option-label');
+  assert.match(label, /white-space: normal;/, 'option labels wrap');
+  assert.match(label, /text-overflow: clip;/, 'option labels never ellipsize');
+  assert.match(label, /overflow-wrap: anywhere;/, 'long unbroken labels still wrap');
+  const secondary = toolbarRule('.routing-test-toolbar .single-select-option-secondary');
+  assert.match(secondary, /white-space: normal;/, 'secondary option text wraps');
+  assert.match(secondary, /flex: 1 1 100%;/, 'secondary text owns its own line');
+
+  // Narrow screens hand the picker a full row rather than clipping it.
+  assert.match(
+    css,
+    /@media \(max-width: 820px\) \{[\s\S]*?\.routing-test-toolbar \.single-select \{ flex: 1 1 100%; min-width: 0; \}/,
+    'the picker takes a full row at narrow widths',
   );
 });
 
