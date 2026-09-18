@@ -1503,21 +1503,41 @@ function taskRunStatusCell(run: TaskRunSnapshot): HTMLElement {
   return createAgentTaskStatusIcon(run.status);
 }
 
-/** Stable identity from the authoritative TaskSettings rows, or null when unknowable. */
-function taskRunIdentity(run: TaskRunSnapshot): string | null {
-  if (run.source === 'builtin') return `builtin:${run.taskId}`;
-  if (run.source === 'project') {
-    const project = run.project;
-    return project && project.length > 0 ? `project:${project}:${run.taskId}` : null;
+/**
+ * Candidate identities a run may resolve through, most specific first. Project
+ * definitions are inherited: a task recorded under `gol/project` may be the
+ * inherited definition of project `gol`, so each parent is tried by repeatedly
+ * stripping the final `/` segment. Only the execution project's own inheritance
+ * chain is consulted — a sibling or unrelated project is never a candidate.
+ */
+function taskRunIdentityCandidates(run: TaskRunSnapshot): string[] {
+  if (run.source === 'builtin') return [`builtin:${run.taskId}`];
+  if (run.source !== 'project') return [];
+  const project = run.project;
+  if (project === undefined || project.length === 0) return [];
+  const candidates: string[] = [];
+  let scope: string | undefined = project;
+  while (scope !== undefined && scope.length > 0) {
+    candidates.push(`project:${scope}:${run.taskId}`);
+    const separator = scope.lastIndexOf('/');
+    scope = separator === -1 ? undefined : scope.slice(0, separator);
   }
-  return null;
+  return candidates;
 }
 
-/** Authoritative display name when the identity still exists; otherwise the exact identifier. */
+/**
+ * Authoritative display name when the identity still exists, else the name
+ * recorded on the run row, else the exact identifier. Historical rows whose
+ * recorded name is itself the raw id therefore still resolve here first.
+ */
 function taskDisplayLabel(run: TaskRunSnapshot): string {
-  const identity = taskRunIdentity(run);
-  if (identity === null) return run.taskId;
-  return taskDisplayNames.get(identity) ?? run.taskId;
+  for (const candidate of taskRunIdentityCandidates(run)) {
+    const displayName = taskDisplayNames.get(candidate);
+    if (displayName !== undefined) return displayName;
+  }
+  const recorded = run.taskName?.trim();
+  if (recorded !== undefined && recorded.length > 0) return recorded;
+  return run.taskId;
 }
 
 function taskRunCell(value: string): HTMLElement {
