@@ -265,7 +265,7 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k3Coding.speed?.tps, 39.7);
 
   // Kimi K2.8 Preview is registered only on kimi-coding with a 1M context,
-  // low/high/max thinking, high intelligence and image input. No official max
+  // low/high/max thinking, mid intelligence and image input. No official max
   // output is published for the preview, so none is fabricated here; pricing is
   // required, so the model carries explicit reference input/cached/output
   // prices, and its speed must be an explicitly conservative
@@ -275,7 +275,7 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
   assert.equal(k28.displayName, 'Kimi K2.8 Preview');
   assert.equal(k28.contextWindow, 1_048_576);
   assert.deepEqual(k28.thinkingLevels, ['low', 'high', 'max']);
-  assert.equal(k28.intelligence, 'high');
+  assert.equal(k28.intelligence, 'mid');
   assert.deepEqual(k28.capabilities, ['text', 'image']);
   assert.equal(k28.maxTokens, undefined);
   assert.equal(k28.pricing?.inputUsdPerMillion, 0.15);
@@ -292,7 +292,7 @@ test('reference metadata has real provenance and unknown fields stay absent', ()
     assert.equal(provider.models.find((entry) => entry.id === 'kimi-k2.8'), undefined, `${provider.id} must not register kimi-k2.8`);
   }
   assert.equal(catalog.provider('kimi-coding')!.defaultModel, 'k3');
-  assert.equal(catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!.intelligence, 'high');
+  assert.equal(catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!.intelligence, 'mid');
 
   // Hy4 preview carries the Tencent reference price.
   const hy = codebuddy.models.find((entry) => entry.id === 'hy4-preview')!;
