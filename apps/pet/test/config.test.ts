@@ -388,6 +388,93 @@ describe('Config — grok to super-grok quota migration', () => {
       { id: 'zhipu-coding', enabled: false },
     ]);
   });
+
+  it('renames legacy anthropic-api and opencode-native providers without collapsing the subscription claude-coding provider', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'anthropic-api', enabled: true },
+          { id: 'claude-coding', enabled: false },
+          { id: 'opencode-native', enabled: true },
+        ],
+      },
+    });
+    expect(c.quota.providers).toEqual([
+      { id: 'anthropic', enabled: true },
+      { id: 'claude-coding', enabled: false },
+      { id: 'opencode-zen', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+    ]);
+    expect(c.quota.providers.map((p) => p.id)).not.toContain('anthropic-api');
+    expect(c.quota.providers.map((p) => p.id)).not.toContain('opencode-native');
+  });
+
+  it('renames the legacy subscription anthropic id to claude-coding without chaining the API id', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'anthropic', enabled: false },
+          { id: 'anthropic-api', enabled: true },
+        ],
+      },
+    });
+    // The legacy subscription id becomes claude-coding; the legacy API id
+    // becomes the modern anthropic in the same simultaneous pass.
+    expect(c.quota.providers).toEqual([
+      { id: 'claude-coding', enabled: false },
+      { id: 'anthropic', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'anthropic')).toHaveLength(1);
+    expect(c.quota.providers.filter((p) => p.id === 'claude-coding')).toHaveLength(1);
+  });
+
+  it('leaves a marked document untouched so a modern anthropic API preference stays anthropic', () => {
+    const c = normalizeConfig({
+      providerMigration: 'provider-identity-v1',
+      quota: { providers: [{ id: 'anthropic', enabled: true }] },
+    });
+    expect(c.quota.providers[0]).toEqual({ id: 'anthropic', enabled: true });
+    expect(c.quota.providers.map((p) => p.id)).not.toContain('claude-coding');
+  });
+
+  it('merges a renamed provider id into an existing canonical entry exactly once', () => {
+    const c = normalizeConfig({
+      quota: {
+        providers: [
+          { id: 'anthropic-api', enabled: false },
+          { id: 'anthropic', enabled: true },
+          { id: 'opencode-zen', enabled: false },
+          { id: 'opencode-native', enabled: true },
+        ],
+      },
+    });
+    // Position-preserving renames: `anthropic-api` (first) becomes the modern
+    // `anthropic` carrying its own enabled value, and the legacy subscription
+    // `anthropic` (second) is re-anchored to `claude-coding` at its own slot.
+    expect(c.quota.providers).toEqual([
+      { id: 'anthropic', enabled: false },
+      { id: 'claude-coding', enabled: true },
+      { id: 'opencode-zen', enabled: false },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+    ]);
+    expect(c.quota.providers.filter((p) => p.id === 'anthropic')).toHaveLength(1);
+    expect(c.quota.providers.filter((p) => p.id === 'opencode-zen')).toHaveLength(1);
+  });
+
+  it('renames legacy pools anthropic-api and opencode-native ids', () => {
+    const c = normalizeConfig({ quota: { pools: ['anthropic-api', 'opencode-native', 'kimi-coding'] } });
+    expect(c.quota.providers).toEqual([
+      { id: 'anthropic', enabled: true },
+      { id: 'opencode-zen', enabled: true },
+      { id: 'kimi-coding', enabled: true },
+      { id: 'cursor', enabled: true },
+      { id: 'deepseek', enabled: true },
+    ]);
+  });
 });
 
 // ── Temp-dir helpers for hermetic file I/O tests ──
@@ -532,8 +619,8 @@ describe('Config — legacy migration (hermetic)', () => {
     expect(cfg.scale).toBe(2);
     expect(cfg.house).toEqual({ displayId: 7, x: 50, y: -30 });
 
-    // Settings path should NOT exist yet (not saved back during load)
-    expect(fs.existsSync(cfgPath)).toBe(false);
+    // Loading persists the provider migration marker exactly once.
+    expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).providerMigration).toBe('provider-identity-v1');
 
     mod.saveConfig(cfg, { configHome: cfgHome });
     expect(fs.existsSync(cfgPath)).toBe(true);
@@ -591,10 +678,68 @@ describe('Config — legacy migration (hermetic)', () => {
     expect(cfg.scale).toBe(4);
     expect(cfg.house).toEqual({ displayId: 7, x: undefined, y: undefined, entityX: undefined, entityY: undefined });
 
-    // New path is not created until the migrated config is saved back.
-    expect(fs.existsSync(newSettingsPath)).toBe(false);
+    // The migrated document is marked before later reads can reinterpret IDs.
+    expect(JSON.parse(fs.readFileSync(newSettingsPath, 'utf-8')).providerMigration).toBe('provider-identity-v1');
     mod.saveConfig(cfg, { configHome: cfgHome });
     expect(fs.existsSync(newSettingsPath)).toBe(true);
+  });
+});
+
+describe('Pet provider identity migration (hermetic)', () => {
+  it('migrates the legacy subscription anthropic preference once and preserves it across reads', async () => {
+    const cfgHome = makeTempDir();
+    const cfgPath = settingsConfigPath(cfgHome);
+
+    // An unmarked legacy document: the subscription `anthropic` preference
+    // must become claude-coding rather than being silently reinterpreted as the
+    // modern API anthropic provider.
+    writeFile(cfgPath, JSON.stringify({
+      quota: { providers: [{ id: 'anthropic', enabled: true }] },
+    }));
+
+    const mod = await importFreshConfig();
+    const cfg = mod.loadConfig({ configHome: cfgHome });
+    expect(cfg.quota.providers[0]).toEqual({ id: 'claude-coding', enabled: true });
+
+    // The migrated document is persisted with the marker exactly once.
+    const persisted = fs.readFileSync(cfgPath, 'utf-8');
+    const parsed = JSON.parse(persisted);
+    expect(parsed.providerMigration).toBe('provider-identity-v1');
+    expect(parsed.quota.providers[0]).toEqual({ id: 'claude-coding', enabled: true });
+
+    // A second read neither rewrites the file nor re-aliases the id.
+    const again = mod.loadConfig({ configHome: cfgHome });
+    expect(again.quota.providers[0]).toEqual({ id: 'claude-coding', enabled: true });
+    expect(fs.readFileSync(cfgPath, 'utf-8')).toBe(persisted);
+  });
+
+  it('leaves a modern marked document untouched so an anthropic API preference stays anthropic', async () => {
+    const cfgHome = makeTempDir();
+    const cfgPath = settingsConfigPath(cfgHome);
+
+    writeFile(cfgPath, JSON.stringify({
+      providerMigration: 'provider-identity-v1',
+      quota: { providers: [{ id: 'anthropic', enabled: true }, { id: 'claude-coding', enabled: false }] },
+    }));
+    const before = fs.readFileSync(cfgPath, 'utf-8');
+
+    const mod = await importFreshConfig();
+    const cfg = mod.loadConfig({ configHome: cfgHome });
+    expect(cfg.quota.providers[0]).toEqual({ id: 'anthropic', enabled: true });
+    expect(cfg.quota.providers[1]).toEqual({ id: 'claude-coding', enabled: false });
+    expect(fs.readFileSync(cfgPath, 'utf-8')).toBe(before);
+  });
+
+  it('marks a freshly created default config so it never triggers a legacy rewrite', async () => {
+    const cfgHome = makeTempDir();
+    const cfgPath = settingsConfigPath(cfgHome);
+
+    const mod = await importFreshConfig();
+    mod.loadConfig({ configHome: cfgHome });
+
+    const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    expect(parsed.providerMigration).toBe('provider-identity-v1');
+    expect(parsed.quota.providers.map((p: { id: string }) => p.id)).not.toContain('claude-coding');
   });
 });
 

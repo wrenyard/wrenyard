@@ -287,7 +287,7 @@ func (ctx Context) ProfileFamily() string {
 		return "cb"
 	case name == "ccg" || provider == "zhipu-coding":
 		return "ccg"
-	case provider == "anthropic":
+	case provider == "claude-coding":
 		return "claude-native"
 	default:
 		return name

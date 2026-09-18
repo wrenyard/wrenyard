@@ -98,6 +98,12 @@ export interface ConversationStateTurn {
   baseSessionId?: string;
   /** Inclusive anchor inside `baseSessionId` observed when this turn completed. */
   baseAtSeq?: number;
+  /**
+   * Send-seqs of the earlier completed turns whose visible exchanges this
+   * turn's branch already contains (inherited through its fork cut or
+   * injected at dispatch), so a later fork never injects an exchange twice.
+   */
+  coveredTurnSeqs?: number[];
   /** Terminal assistant message of this turn, once it completed. */
   finalItemId?: string;
   /**
@@ -401,6 +407,15 @@ function normalizeInternalTurnIds(value: unknown): string[] {
   return ids;
 }
 
+/** Restore the persisted per-turn ancestry as a sorted, de-duplicated seq list. */
+function normalizeCoveredTurnSeqs(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seqs = value
+    .map(optionalNumber)
+    .filter((seq): seq is number => seq !== undefined);
+  return seqs.length > 0 ? [...new Set(seqs)].sort((left, right) => left - right) : undefined;
+}
+
 function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
   if (!isObject(value)) return undefined;
   const id = optionalString(value.id);
@@ -417,6 +432,7 @@ function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
   const process = normalizeProcess(value.process);
   const tasks = normalizeTasks(value.tasks);
   const internalTurnIds = normalizeInternalTurnIds(value.internalTurnIds);
+  const coveredTurnSeqs = normalizeCoveredTurnSeqs(value.coveredTurnSeqs);
   return {
     id,
     seq,
@@ -426,6 +442,7 @@ function normalizeTurn(value: unknown): ConversationStateTurn | undefined {
     ...(optionalNumber(value.forkAtSeq) !== undefined ? { forkAtSeq: value.forkAtSeq as number } : {}),
     ...(optionalString(value.baseSessionId) ? { baseSessionId: value.baseSessionId as string } : {}),
     ...(optionalNumber(value.baseAtSeq) !== undefined ? { baseAtSeq: value.baseAtSeq as number } : {}),
+    ...(coveredTurnSeqs ? { coveredTurnSeqs } : {}),
     ...(optionalString(value.finalItemId) ? { finalItemId: value.finalItemId as string } : {}),
     ...(inheritedMaxSeq !== undefined ? { inheritedMaxSeq } : {}),
     ...(dshEndedAt !== undefined ? { dshEndedAt } : {}),

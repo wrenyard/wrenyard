@@ -69,7 +69,11 @@ const FAMILY_BRAND: Record<ModelFamily, string> = {
 const PROVIDER_BRAND: ReadonlyArray<[string, string]> = [
   ['chatgpt', 'openai'],
   ['openai', 'openai'],
+  // `anthropic` is the API provider and `claude-coding` the subscription one;
+  // both render the Claude brand.
   ['anthropic', 'claude'],
+  ['anthropic-api', 'claude'],
+  ['claude-coding', 'claude'],
   ['claude', 'claude'],
   ['gemini', 'gemini'],
   ['google', 'gemini'],

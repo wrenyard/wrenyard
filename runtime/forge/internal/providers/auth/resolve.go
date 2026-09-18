@@ -80,3 +80,52 @@ func MigrateAuthFromSecrets(path string, lookup func(keys ...string) string) ([]
 	}
 	return migrated, nil
 }
+
+// legacyProviderIDRenames maps the exact historical provider ids whose public
+// identity was renamed to their canonical id. Only these exact ids are
+// migrated; the subscription provider keeps its distinct claude-coding
+// identity and is never aliased from the API provider id.
+var legacyProviderIDRenames = map[string]string{
+	"anthropic-api":   "anthropic",
+	"opencode-native": "opencode-zen",
+}
+
+// MigrateLegacyProviderIDs performs a once-only credential-store migration for
+// renamed provider identities. It is safe and idempotent:
+//
+//   - an existing canonical entry is never overwritten;
+//   - only api-type entries are moved, so a subscription oauth credential is
+//     never converted into an API key;
+//   - the moved entry keeps its value and type, and the file is rewritten at
+//     the existing 0600 permissions by Write.
+func MigrateLegacyProviderIDs(path string) ([]string, error) {
+	auth, err := Read(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(auth) == 0 {
+		return nil, nil
+	}
+	migrated := []string{}
+	for legacy, canonical := range legacyProviderIDRenames {
+		entry, ok := auth[legacy]
+		if !ok {
+			continue
+		}
+		// Never clobber a user-set canonical entry, and never convert a
+		// subscription oauth credential into an API key.
+		if _, exists := auth[canonical]; exists || entry.Type != "api" || entry.Key == "" {
+			continue
+		}
+		auth[canonical] = entry
+		delete(auth, legacy)
+		migrated = append(migrated, canonical)
+	}
+	if len(migrated) == 0 {
+		return nil, nil
+	}
+	if err := Write(path, auth); err != nil {
+		return nil, err
+	}
+	return migrated, nil
+}

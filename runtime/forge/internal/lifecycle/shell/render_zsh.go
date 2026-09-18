@@ -180,5 +180,5 @@ func providerSupportsCCShortcut(provider string) bool {
 }
 
 func isRawClaudeAliasProfile(p Profile) bool {
-	return p.Provider == "anthropic"
+	return p.Provider == "claude-coding"
 }

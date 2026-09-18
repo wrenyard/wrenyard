@@ -125,6 +125,7 @@ export class RoutingWeightsSettings {
   private readonly inputs: Record<RoutingWeightKey, HTMLInputElement>;
   private readonly saveButton: HTMLButtonElement;
   private readonly resetButton: HTMLButtonElement;
+  private readonly total: HTMLElement;
   private readonly status: HTMLElement;
 
   constructor(
@@ -141,6 +142,8 @@ export class RoutingWeightsSettings {
       field.className = 'routing-weights-field';
       const caption = document.createElement('span');
       caption.textContent = ROUTING_WEIGHT_LABELS[key];
+      const unit = document.createElement('span');
+      unit.className = 'routing-weights-unit';
       const input = document.createElement('input');
       input.type = 'number';
       input.min = '0';
@@ -148,8 +151,13 @@ export class RoutingWeightsSettings {
       input.step = '1';
       input.className = 'routing-weights-input';
       input.dataset.weight = key;
+      input.setAttribute('aria-describedby', 'routing-weights-total');
+      const suffix = document.createElement('span');
+      suffix.textContent = '%';
+      suffix.setAttribute('aria-hidden', 'true');
       this.inputs[key] = input;
-      field.append(caption, input);
+      unit.append(input, suffix);
+      field.append(caption, unit);
       form.append(field);
     }
 
@@ -163,12 +171,22 @@ export class RoutingWeightsSettings {
     this.resetButton.textContent = '恢复默认';
     actions.append(this.saveButton, this.resetButton);
 
+    this.total = document.createElement('p');
+    this.total.className = 'routing-weights-total';
+    this.total.id = 'routing-weights-total';
+    this.total.setAttribute('role', 'status');
+
     this.status = document.createElement('p');
     this.status.className = 'routing-weights-status';
     this.status.setAttribute('role', 'status');
 
-    form.append(actions, this.status);
+    form.append(actions, this.total, this.status);
     this.host.replaceChildren(form);
+
+    for (const key of ROUTING_WEIGHT_KEYS) {
+      this.inputs[key].addEventListener('input', () => this.updateTotal());
+    }
+    this.updateTotal();
 
     form.addEventListener('submit', (event) => event.preventDefault());
     this.saveButton.addEventListener('click', () => void this.save());
@@ -180,6 +198,18 @@ export class RoutingWeightsSettings {
     for (const key of ROUTING_WEIGHT_KEYS) {
       this.inputs[key].value = String(percent[key]);
     }
+    this.updateTotal();
+  }
+
+  /** Live sum feedback only; validation on save is unchanged (sum must be 100). */
+  private updateTotal(): void {
+    const sum = ROUTING_WEIGHT_KEYS.reduce((acc, key) => {
+      const value = Number(this.inputs[key].value);
+      return acc + (Number.isFinite(value) ? value : 0);
+    }, 0);
+    const rounded = Math.round(sum);
+    this.total.textContent = `当前合计 ${rounded}%`;
+    this.total.classList.toggle('is-error', rounded !== PERCENT_SUM);
   }
 
   /** Reads the current raw input values. */

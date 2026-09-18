@@ -12,8 +12,8 @@ import (
 )
 
 // noInferenceClientBinaryRegistry returns a registry containing a public
-// no-inference client-binary provider plus an internal opencode-native
-// binding that must stay hidden from public provider listings.
+// no-inference client-binary provider plus an internal no-transport binding
+// that must stay hidden from public provider listings.
 func noInferenceClientBinaryRegistry() *catalog.Registry {
 	reg := catalog.NewRegistry()
 	reg.RegisterBinding(catalog.Provider{
@@ -23,7 +23,7 @@ func noInferenceClientBinaryRegistry() *catalog.Registry {
 		UseClientBinary:    true,
 	})
 	reg.RegisterBinding(catalog.Provider{
-		Name: "opencode-native", Kind: "builtin",
+		Name: "internal-no-transport", Kind: "builtin",
 		CompatibleDialects: []catalog.Dialect{catalog.DialectOpenCode},
 	})
 	return reg
@@ -77,9 +77,10 @@ func TestProvidersListIncludesNoInferenceClientBinaryProvider(t *testing.T) {
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		t.Fatalf("unmarshal list output: %v", err)
 	}
-	// The no-inference client-binary provider is public; opencode-native is not.
+	// The no-inference client-binary provider is public; the internal
+	// no-transport binding is not.
 	if len(entries) != 1 || entries[0].ID != "codebuddy" {
-		t.Fatalf("list entries = %#v, want only codebuddy (opencode-native excluded)", entries)
+		t.Fatalf("list entries = %#v, want only codebuddy (internal binding excluded)", entries)
 	}
 	if !entries[0].AuthOK {
 		t.Fatal("codebuddy auth_ok should be true (resolved via CredentialSource without inference)")

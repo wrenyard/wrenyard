@@ -10,7 +10,7 @@ import (
 )
 
 func TestAllProviderModulesRegisterBindingAndModels(t *testing.T) {
-	want := []string{"anthropic", "anthropic-api", "chatgpt", "codebuddy", "cursor", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-go", "opencode-native", "opencode-zen", "openrouter", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
+	want := []string{"anthropic", "chatgpt", "claude-coding", "codebuddy", "cursor", "deepseek", "kimi-coding", "minimax", "minimax-coding", "moonshot", "openai", "opencode-go", "opencode-zen", "openrouter", "qwen", "qwen-coding", "spacex-ai", "tokenhub", "volcengine", "zhipu", "zhipu-coding"}
 	modules := providers.Modules()
 	got := make([]string, len(modules))
 	reg := catalog.DefaultRegistry()
@@ -73,7 +73,8 @@ func TestPublicAPIProviderContracts(t *testing.T) {
 		endpoint   string
 		authScheme catalog.AuthScheme
 	}{
-		{"anthropic-api", "anthropic-messages", "https://api.anthropic.com/v1/messages", catalog.AuthSchemeAPIKey},
+		{"anthropic", "anthropic-messages", "https://api.anthropic.com/v1/messages", catalog.AuthSchemeAPIKey},
+		{"deepseek", "openai-chat-completions", "https://api.deepseek.com/chat/completions", catalog.AuthSchemeBearer},
 		{"minimax", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer},
 		{"minimax-coding", "openai-chat-completions", "https://api.minimaxi.com/v1/chat/completions", catalog.AuthSchemeBearer},
 		{"moonshot", "openai-chat-completions", "https://api.moonshot.cn/v1/chat/completions", catalog.AuthSchemeBearer},
@@ -108,7 +109,7 @@ func TestPublicAPIProviderContracts(t *testing.T) {
 }
 
 func TestPlanAndOpenPlatformCredentialsRemainSeparate(t *testing.T) {
-	for _, pair := range [][2]string{{"minimax", "minimax-coding"}, {"qwen", "qwen-coding"}, {"moonshot", "kimi-coding"}, {"zhipu", "zhipu-coding"}, {"openai", "chatgpt"}, {"anthropic-api", "anthropic"}} {
+	for _, pair := range [][2]string{{"minimax", "minimax-coding"}, {"qwen", "qwen-coding"}, {"moonshot", "kimi-coding"}, {"zhipu", "zhipu-coding"}, {"openai", "chatgpt"}, {"anthropic", "claude-coding"}} {
 		left, leftOK := providers.Lookup(pair[0])
 		right, rightOK := providers.Lookup(pair[1])
 		if !leftOK || !rightOK || left.ID() == right.ID() {
@@ -146,8 +147,43 @@ func TestLegacyXAIOverrideStillUsesCanonicalProviderPolicy(t *testing.T) {
 	}
 }
 
+func TestClaudeSubscriptionAndAPIIdentitiesStayDistinct(t *testing.T) {
+	subscription, ok := providers.Lookup("claude-coding")
+	if !ok {
+		t.Fatal("claude-coding subscription module must be registered")
+	}
+	if got := subscription.Binding().CredentialSource(); got != catalog.CredentialResolverClaude {
+		t.Fatalf("claude-coding credential source = %q, want claude", got)
+	}
+	api, ok := providers.Lookup("anthropic")
+	if !ok {
+		t.Fatal("anthropic API module must be registered")
+	}
+	if got := api.Binding().CredentialSource(); got != catalog.CredentialResolverForgeManaged {
+		t.Fatalf("anthropic credential source = %q, want forge-managed", got)
+	}
+	if subscription.ID() == api.ID() {
+		t.Fatal("subscription and API provider identities must stay distinct")
+	}
+}
+
+func TestLegacyProviderIDAliasesAreExactAndOnceOnly(t *testing.T) {
+	if got := providers.CanonicalID("anthropic-api"); got != "anthropic" {
+		t.Fatalf("CanonicalID(anthropic-api) = %q, want anthropic", got)
+	}
+	if got := providers.CanonicalID("opencode-native"); got != "opencode-zen" {
+		t.Fatalf("CanonicalID(opencode-native) = %q, want opencode-zen", got)
+	}
+	// The subscription identity is never aliased from the legacy API id.
+	if providers.CanonicalID("anthropic-api") == "claude-coding" {
+		t.Fatal("anthropic-api must not alias to claude-coding")
+	}
+	if got := providers.CanonicalID("claude-coding"); got != "claude-coding" {
+		t.Fatalf("CanonicalID(claude-coding) = %q, want unchanged", got)
+	}
+}
+
 func TestCodeBuddyProviderModule(t *testing.T) {
-	reg := catalog.DefaultRegistry()
 	module, ok := providers.Lookup("codebuddy")
 	if !ok {
 		t.Fatal("codebuddy builtin module must be registered")
@@ -204,8 +240,8 @@ func TestCodeBuddyProviderModule(t *testing.T) {
 			t.Fatalf("codebuddy must reject internal near-id %q as a public model", near)
 		}
 	}
-	if _, err := reg.LookupBinding("deepseek"); err == nil {
-		t.Fatal("deepseek must not be a registered Forge binding")
+	if _, ok := providers.Lookup("deepseek"); !ok {
+		t.Fatal("deepseek official provider must be registered")
 	}
 }
 

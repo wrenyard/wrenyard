@@ -45,7 +45,7 @@ export class SummaryModelSettings {
 
     const selectHost = document.createElement('div');
     selectHost.id = 'summary-model-select';
-    selectHost.className = 'routing-weights-field';
+    selectHost.className = 'summary-model-select-host';
 
     this.select = new SearchableSingleSelect(selectHost, {
       placeholder: '选择摘要模型',
