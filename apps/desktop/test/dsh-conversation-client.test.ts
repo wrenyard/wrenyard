@@ -728,7 +728,17 @@ test('raw run_task result text is capped at 16000 characters', () => {
   assert.equal(items[0].taskRun, undefined);
 });
 
-function conversationClientHarness() {
+function conversationClientHarness(
+  summarize?: (input: {
+    previousSummaries: Array<{ user: string; summary: string }>;
+    user: string;
+    work: string;
+    latestAnswer?: string;
+    metadata?: { cwd?: string };
+    phase?: 'progress' | 'final';
+    signal: AbortSignal;
+  }) => Promise<string>,
+) {
   const client = new DshConversationClient({
     baseUrl: 'http://127.0.0.1:1',
     workspaceId: 'workspace-1',
@@ -740,6 +750,7 @@ function conversationClientHarness() {
       readOnly: false,
     },
     configuredProviderIds: ['wrenyard'],
+    ...(summarize ? { summarize } : {}),
     onChanged() {},
   });
   return {
@@ -968,6 +979,66 @@ test('the first send materializes exactly one session and applies the draft mode
   assert.equal(calls[2].payload.model, 'codebuddy/hy4-preview', 'the exact draft choice is applied before prompting');
   assert.equal(calls[2].payload.reasoningEffort, 'high', 'the draft reasoning choice is applied before prompting');
   assert.equal(client.snapshot().selectedSessionId, 'new-draft');
+});
+
+test('final summary receives the branch work plus the newest answer separately', async () => {
+  const inputs: Array<{
+    previousSummaries: Array<{ user: string; summary: string }>;
+    user: string;
+    work: string;
+    latestAnswer?: string;
+    metadata?: { cwd?: string };
+    phase?: 'progress' | 'final';
+  }> = [];
+  const { client, state } = conversationClientHarness(async (input) => {
+    inputs.push(input);
+    return '面向用户的答复';
+  });
+  const live = liveClient(client);
+  state.rpc = async (method) => {
+    if (method === 'session.create') return { sessionId: 's-1' };
+    if (method === 'session.models') return modelDirectory();
+    if (method === 'session.selectModel') return { selected: { provider: 'wrenyard', model: 'codebuddy/deepseek-v4.1-flash' } };
+    if (method === 'session.prompt') return {};
+    if (method === 'session.history') return { events: [], hasMore: false };
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await client.send('请检查构建');
+  await settle();
+
+  // A branch that produces prose and a tool call, then ends cleanly.
+  const push = (built: ReturnType<typeof entry>) => live.handleMux({ type: 'session/event', sessionId: 's-1', ...built });
+  push(entry('turn/start', 1, { turn: 1 }));
+  push(entry('assistant/chunk', 2, { turn: 1, step: 1, chunk: { type: 'text-delta', text: '先看一下构建日志。' } }));
+  push(entry('tool/call', 3, { turn: 1, step: 1, callId: 'c-read', name: 'Read', arguments: '{"path":"build.log"}' }));
+  push(entry('tool/result', 4, {
+    message: {
+      source: { kind: 'tool', callId: 'c-read' },
+      content: [{ type: 'tool-result', toolCallId: 'c-read', content: [{ type: 'text', text: '构建通过' }], isError: false }],
+    },
+  }));
+  push(entry('assistant/message', 5, {
+    turn: 1,
+    step: 2,
+    message: { content: [{ type: 'text', text: '构建已通过，无需修改。' }] },
+  }));
+  push(entry('turn/end', 6, { turn: 1, reason: { kind: 'completed' } }));
+  await settle();
+
+  assert.equal(inputs.length, 1, 'exactly one final summary call');
+  const call = inputs[0]!;
+  assert.equal(call.phase, 'final');
+  assert.equal(call.user, '请检查构建');
+  // The full chronological work — prose and the tool call/result — is the work.
+  assert.equal(call.work.includes('先看一下构建日志。'), true);
+  assert.equal(call.work.includes('[读取文件 build.log]'), true);
+  assert.equal(call.work.includes('构建通过'), true);
+  // The branch's own newest answer is passed separately, not as the transcript.
+  assert.equal(call.latestAnswer, '构建已通过，无需修改。');
+  // Only truthful metadata: the real workspace path.
+  assert.equal(call.metadata?.cwd, '/workspace');
+  client.stop();
 });
 
 test('host-created blank session stays hidden until the first send claims it', async () => {

@@ -130,13 +130,17 @@ test('buildTaskPrompt emits a stable prefix for the same builtin across differen
     { note: 'second', extra: true },
   )
 
-  const stablePrefix = (prompt: string): string => prompt.slice(0, prompt.indexOf('<task-input-bindings>'))
+  const stablePrefix = (prompt: string): string => prompt.slice(0, prompt.indexOf('<wy-input>'))
   assert.equal(stablePrefix(first), stablePrefix(second))
   // The static instruction document is part of the prefix; the input-dependent
   // task body keeps its placeholder after the captured values.
   assert.ok(stablePrefix(first).includes('# Shell Usage'))
   assert.ok(stablePrefix(first).includes('You are an **Edit Executor**'))
-  assert.ok(first.slice(first.indexOf('<task-input-bindings>')).includes('[[task-prompt:changes:0]] =\n'))
+  assert.ok(stablePrefix(first).includes('<wy-system>'))
+  assert.ok(stablePrefix(first).includes('<wy-ctx-doc>'))
+  assert.ok(stablePrefix(first).includes('<wy-doc source="task.instructions[0]" order="1">'))
+  assert.ok(stablePrefix(first).includes('<wy-instruction>'))
+  assert.ok(first.slice(first.indexOf('<wy-input>')).includes('[[task-prompt:changes:0]] =\n'))
   assert.ok(first.includes('## Edit Instructions\n[[task-prompt:changes:0]]'))
 })
 
@@ -152,7 +156,7 @@ test('buildTaskPrompt preserves original values once, at the parameter tail, wit
     { changes: [{ id: 'change-2', target: { kind: 'file', value: 'omega.mts' }, action: 'remove', instruction: 'B' }] },
   )
 
-  const bindings = first.slice(first.indexOf('<task-input-bindings>'))
+  const bindings = first.slice(first.indexOf('<wy-input>'))
   assert.ok(bindings.includes('[[task-prompt:changes:0]] ='))
   assert.ok(bindings.includes('alpha.mts'))
   assert.equal(first.split('alpha.mts').length - 1, 1)
@@ -166,8 +170,8 @@ test('buildTaskPrompt keeps the task context after the static template and param
   const definition = await loadBuiltin('edit')
   const prompt = await buildTaskPrompt(definition, { changes: [] }, { note: 'ctx-value' })
 
-  const bindingsAt = prompt.indexOf('<task-input-bindings>')
-  const contextAt = prompt.indexOf('<foreman-task-context>')
+  const bindingsAt = prompt.indexOf('<wy-input>')
+  const contextAt = prompt.indexOf('<wy-ctx-task>')
   const bodyAt = prompt.indexOf('You are an **Edit Executor**')
   assert.ok(bodyAt >= 0 && bindingsAt > bodyAt && contextAt > bindingsAt)
   assert.ok(prompt.includes('ctx-value'))
@@ -187,9 +191,9 @@ test('buildTaskPrompt keeps a custom prompt byte-exact and moves ctx after the b
   const prompt = await buildTaskPrompt(definition as never, {}, { note: 'ctx-value' })
 
   assert.equal(prompt.includes(body), true)
-  assert.ok(prompt.indexOf(body) < prompt.indexOf('<foreman-task-context>'))
+  assert.ok(prompt.indexOf(body) < prompt.indexOf('<wy-ctx-task>'))
   assert.ok(prompt.indexOf('static instruction') < prompt.indexOf(body))
-  assert.equal(prompt.includes('<task-input-bindings>'), false)
+  assert.equal(prompt.includes('<wy-input>'), false)
 })
 
 test('buildTaskPrompt isolates concurrent template captures per build', async () => {
@@ -234,10 +238,10 @@ test('runWithTaskPromptCapture falls back to dynamic rendering outside the scope
 test('renderTaskPromptBindings escapes a closing wrapper tag without dropping content', () => {
   const template: TaskPromptTemplate = { strings: ['', ''], label: 'payload' }
   const { capture, result } = runWithTaskPromptCapture(() =>
-    renderTaskPromptTemplate(template, ['before </task-input-bindings> after']))
+    renderTaskPromptTemplate(template, ['before </wy-input> after']))
   assert.equal(result, '[[task-prompt:payload:0]]')
   const bindings = renderTaskPromptBindings(capture)
-  assert.ok(bindings.includes('<\\/task-input-bindings>'))
+  assert.ok(bindings.includes('<\\/wy-input>'))
   assert.equal(bindings.split('before').length - 1, 1)
   assert.ok(bindings.includes('after'))
 })
