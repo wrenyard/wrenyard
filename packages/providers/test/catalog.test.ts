@@ -355,7 +355,7 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('moonshot', 'kimi-k3'), 'high');
   assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
 
-  assert.equal(tier('anthropic', 'claude-sonnet-5'), 'high');
+  assert.equal(tier('anthropic', 'claude-sonnet-5'), 'mid');
   assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
   assert.equal(tier('cursor', 'composer-2.5'), 'low');
   assert.equal(tier('minimax', 'MiniMax-M2.7-highspeed'), 'low');
@@ -600,7 +600,7 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['gpt-5.6-sol']!.intelligence, 'high');
   assert.equal(byId['gpt-5.6-terra']!.intelligence, 'mid');
   assert.equal(byId['gpt-5.6-luna']!.intelligence, 'mid');
-  assert.equal(byId['claude-sonnet-5']!.intelligence, 'high');
+  assert.equal(byId['claude-sonnet-5']!.intelligence, 'mid');
   assert.equal(byId['claude-fable-5']!.intelligence, 'premium');
   assert.equal(byId['claude-opus-5']!.intelligence, 'premium');
   assert.equal(byId['claude-fable-5-1']!.intelligence, 'premium');

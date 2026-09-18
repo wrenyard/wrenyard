@@ -787,7 +787,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     pricing: { inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 25, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
   'claude-sonnet-5': {
-    intelligence: 'high',
+    intelligence: 'mid',
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.2, outputUsdPerMillion: 10, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
