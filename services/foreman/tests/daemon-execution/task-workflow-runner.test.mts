@@ -113,6 +113,7 @@ afterEach(() => {
 type TaskRow = {
   id: string
   template: string
+  project: string | null
   status: string
   output: string | null
   summary: string | null
@@ -235,11 +236,15 @@ type ExecutionOutputRow = {
 }
 
 function readOnlyTaskRow(): TaskRow | undefined {
-  return dbGet<TaskRow>('SELECT id, template, status, output, summary, failure_category, error_message FROM tasks ORDER BY created_at LIMIT 1')
+  return dbGet<TaskRow>('SELECT id, template, project, status, output, summary, failure_category, error_message FROM tasks ORDER BY created_at LIMIT 1')
 }
 
 function readTaskRowByTemplate(template: string): TaskRow | undefined {
-  return dbGet<TaskRow>('SELECT id, template, status, output, summary, failure_category, error_message FROM tasks WHERE template = ?', template)
+  return dbGet<TaskRow>('SELECT id, template, project, status, output, summary, failure_category, error_message FROM tasks WHERE template = ?', template)
+}
+
+function readTaskRowById(taskRunId: string): TaskRow | undefined {
+  return dbGet<TaskRow>('SELECT id, template, project, status, output, summary, failure_category, error_message FROM tasks WHERE id = ?', taskRunId)
 }
 
 
@@ -1293,6 +1298,229 @@ describe('daemon execution task settings resolver', { concurrency: false }, () =
       /settings resolution exploded/,
     )
     assert.equal(agentCalls, 0, 'no agent may launch when settings resolution fails')
+  })
+
+  function writeScopedSettingsTask(workspace: string): void {
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(
+      join(projectDir, 'scoped-settings.task.ts'),
+`export default defineTask({
+  permission: 'readonly',
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'scoped',
+})
+`,
+      'utf-8',
+    )
+  }
+
+  function writeChildOverrideTask(workspace: string): void {
+    const childDir = join(workspace, 'projects', 'app', 'child')
+    mkdirSync(childDir, { recursive: true })
+    writeFileSync(
+      join(childDir, 'child.fmproj'),
+      'name: child\ndescription: Child project\n',
+      'utf-8',
+    )
+    writeFileSync(
+      join(childDir, 'child.task.ts'),
+`export default defineTask({
+  permission: 'readonly',
+  ${NO_INPUT_SCHEMA}
+  ${TEXT_OUTPUT_SCHEMA}
+  prompt: () => 'child',
+})
+`,
+      'utf-8',
+    )
+  }
+
+  it('resolves settings with the owning project, not the execution project, and launches the owning runtime', async () => {
+    const workspace = makeTempDir('foreman-settings-owner-project-')
+    writeScopedSettingsTask(workspace)
+    await discoverTasks(workspace)
+
+    const resolvedParams: Array<{ taskName: string; kind: string | undefined; project: string | undefined }> = []
+    const resolver: TaskRunSettingsResolver = async (params) => {
+      resolvedParams.push({ taskName: params.taskName, kind: params.kind, project: params.project })
+      return automaticResolution('kimi-coding/k3:gk')
+    }
+    const launchedProfiles: string[] = []
+    const agent = async (profile: string, _prompt: string): Promise<AgentResult> => {
+      launchedProfiles.push(profile)
+      return { output: textOutput('done'), status: 'done' }
+    }
+
+    const runner = new TaskWorkflowRunner({
+      db: getDb(),
+      agentExecutionHost: fakeExecutionHost(agent),
+    })
+    runner.setTaskSettingsResolver(resolver)
+
+    const handle = await runner.startTaskRun({
+      taskName: 'scoped-settings',
+      definitionName: 'scoped-settings',
+      // Owning project is the parent 'app'; the execution project is the child.
+      project: 'app',
+      executionProject: 'app/child',
+      input: {},
+      workspaceRoot: workspace,
+      workingDirectory: workspace,
+      source: 'project',
+    })
+
+    let row: TaskRow | undefined
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      row = readTaskRowById(handle.task_run_id)
+      if (row && row.status !== 'running') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    assert.equal(row?.status, 'done')
+    assert.equal(
+      row?.project,
+      'app/child',
+      'the persisted run keeps the execution project, not the owning project',
+    )
+    assert.deepEqual(
+      resolvedParams,
+      [{ taskName: 'scoped-settings', kind: 'project', project: 'app' }],
+      'the settings resolver must receive the owning definition project, not the execution project',
+    )
+    assert.deepEqual(
+      launchedProfiles,
+      ['kimi-coding/k3:gk'],
+      'the owning project pin must be the only launched runtime',
+    )
+  })
+
+  it('resolves builtin settings with no project scope', async () => {
+    const workspace = makeTempDir('foreman-settings-builtin-scope-')
+    const projectDir = join(workspace, 'projects', 'app')
+    mkdirSync(projectDir, { recursive: true })
+
+    const resolvedParams: Array<{ taskName: string; kind: string | undefined; project: string | undefined }> = []
+    let agentCalls = 0
+    // The builtin `explore` definition validates its own structured output, so
+    // the fake agent must return that definition's real shape.
+    const builtinOutput = xmlOutput({
+      results: [
+        {
+          question_id: 'q1',
+          status: 'answered',
+          findings: [
+            {
+              id: 'f1',
+              conclusion: 'the kernel passes the definition project',
+              targets: [{ kind: 'path', value: 'services/foreman/lib' }],
+              evidences: ['e1'],
+              confidence: 'high',
+            },
+          ],
+        },
+      ],
+      evidences: [
+        {
+          id: 'e1',
+          source: { kind: 'path', value: 'services/foreman/lib/daemon/execution/execution-kernel.mts' },
+          observation: 'resolver receives target.project',
+        },
+      ],
+    })
+    const runner = new TaskWorkflowRunner({
+      db: getDb(),
+      agentExecutionHost: fakeExecutionHost(async (_profile, _prompt) => {
+        agentCalls += 1
+        return { output: builtinOutput, status: 'done' }
+      }),
+    })
+    runner.setTaskSettingsResolver(async (params) => {
+      resolvedParams.push({ taskName: params.taskName, kind: params.kind, project: params.project })
+      return automaticResolution('forge/builtin-resolved')
+    })
+
+    // A genuinely builtin definition (`explore`) has no project task file, so
+    // discovery registers only the builtin layer and there is no owning
+    // project to scope the settings lookup to.
+    await discoverTasks(workspace)
+
+    const handle = await runner.startTaskRun({
+      taskName: 'explore',
+      definitionName: 'explore',
+      project: 'app',
+      executionProject: 'app',
+      input: {
+        goal: { outcome: 'locate the settings resolver call site' },
+        questions: [{ id: 'q1', ask: 'which project is passed?', blocking: true }],
+        targets: [{ kind: 'path', value: 'services/foreman/lib' }],
+      },
+      workspaceRoot: workspace,
+      workingDirectory: workspace,
+    })
+
+    let row: TaskRow | undefined
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      row = readTaskRowById(handle.task_run_id)
+      if (row && row.status !== 'running') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    assert.equal(row?.status, 'done', 'builtin definition must run and persist a done task row')
+    assert.equal(agentCalls, 1)
+    assert.deepEqual(
+      resolvedParams,
+      [{ taskName: 'explore', kind: 'builtin', project: undefined }],
+      'builtin definitions carry no project scope to the settings resolver',
+    )
+  })
+
+  it('resolves an overridden child task with the child owner project', async () => {
+    const workspace = makeTempDir('foreman-settings-child-owner-')
+    writeChildOverrideTask(workspace)
+    await discoverTasks(workspace)
+
+    const resolvedProjects: Array<{ taskName: string; kind: string | undefined; project: string | undefined }> = []
+    const launchedProfiles: string[] = []
+    const runner = new TaskWorkflowRunner({
+      db: getDb(),
+      agentExecutionHost: fakeExecutionHost(async (profile, _prompt) => {
+        launchedProfiles.push(profile)
+        return { output: textOutput('done'), status: 'done' }
+      }),
+    })
+    runner.setTaskSettingsResolver(async (params) => {
+      resolvedProjects.push({ taskName: params.taskName, kind: params.kind, project: params.project })
+      return automaticResolution('kimi-coding/k3:gk')
+    })
+
+    const handle = await runner.startTaskRun({
+      taskName: 'child',
+      definitionName: 'child',
+      project: 'app/child',
+      executionProject: 'app/child',
+      input: {},
+      workspaceRoot: workspace,
+      workingDirectory: workspace,
+      source: 'project',
+    })
+
+    let row: TaskRow | undefined
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      row = readTaskRowById(handle.task_run_id)
+      if (row && row.status !== 'running') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    assert.equal(row?.status, 'done')
+    assert.equal(row?.project, 'app/child')
+    assert.deepEqual(
+      resolvedProjects,
+      [{ taskName: 'child', kind: 'project', project: 'app/child' }],
+      'a child-owned definition resolves settings with the child owner project',
+    )
+    assert.deepEqual(launchedProfiles, ['kimi-coding/k3:gk'])
   })
 })
 

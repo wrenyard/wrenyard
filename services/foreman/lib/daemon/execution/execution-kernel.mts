@@ -471,7 +471,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       const settingsResolution = await options.taskSettingsResolver({
         taskName: target.name,
         kind: target.source,
-        project: record.project || undefined,
+        project: target.project,
         defaults: {
           timeoutMs: config.timeoutMs,
           ...(config.dispatch ? { dispatch: config.dispatch as unknown as Record<string, unknown> } : {}),
