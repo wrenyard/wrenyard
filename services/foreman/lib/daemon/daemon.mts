@@ -622,6 +622,7 @@ async function startForemanDaemonWithRuntime(
               ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
               ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
               ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
+              ...(model.free === undefined ? {} : { free: model.free }),
               ...(status === undefined ? {} : status),
               effectiveTps: speed.tps,
               speedSource: speed.source,

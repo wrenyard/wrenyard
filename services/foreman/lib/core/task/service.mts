@@ -72,6 +72,9 @@ export interface TaskRunAccepted {
   id: string
   task_run_id: string
   hint: string
+  /** Authoritative display name from the resolved definition (builtin or
+   *  project); omitted when the definition declares none. */
+  task_name?: string
 }
 
 export interface TaskInputRequired {
@@ -265,7 +268,7 @@ export class TaskService {
       )
     }
 
-    return this.requireRunner().startTaskRun({
+    const accepted = await this.requireRunner().startTaskRun({
       definitionName: taskId,
       taskName: target.name,
       project,
@@ -279,6 +282,9 @@ export class TaskService {
       taskContext,
       invocationSettings: params.invocationSettings,
     })
+    return description.displayName === undefined
+      ? accepted
+      : { ...accepted, task_name: description.displayName }
   }
 
   async cancel(taskRunId: string): Promise<JsonRecord> {
@@ -298,7 +304,7 @@ export class TaskService {
 
   status(taskRunId: string): JsonRecord | null {
     const row = readTaskStatusRow(taskRunId)
-    return row ? taskStatusRowToJson(row) : null
+    return row ? { ...taskStatusRowToJson(row), ...this.taskNameField(row) } : null
   }
 
   async taskRunEvents(params: {
@@ -389,6 +395,7 @@ export class TaskService {
     return {
       task_run_id: row.id,
       task_id: row.template,
+      ...this.taskNameField(row),
       status: row.status,
       ...(row.summary ? { summary: row.summary } : {}),
       output: parsedOutput === undefined ? output : parsedOutput,
@@ -425,6 +432,10 @@ export class TaskService {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<JsonRecord> {
+    // Populate the in-memory definition registry (no-op when already
+    // discovered) so the terminal output() can attach task_name without
+    // re-executing definition scripts.
+    await this.workspace.ensureDiscovered()
     const row = readTaskStatusRow(taskRunId)
     if (!row) {
       throw new TaskServiceError('task_not_found', `Task run '${taskRunId}' not found`, 404)
@@ -508,6 +519,19 @@ export class TaskService {
       // that landed between the initial read and the subscription is observed.
       checkTerminal()
     })
+  }
+
+  /** Best-effort synchronous task_name lookup for status()/output(). Uses only
+   *  the in-memory definition registry (single displayName SSOT for builtins
+   *  and project tasks); returns nothing when the registry has not been
+   *  populated or the definition is unknown. */
+  private taskNameField(row: DbTaskStatusRow): JsonRecord {
+    try {
+      const displayName = this.workspace.tasks.find(row.template, row.project ?? undefined)?.displayName
+      return displayName === undefined ? {} : { task_name: displayName }
+    } catch {
+      return {}
+    }
   }
 
   private normalizeTaskInput(input: unknown): unknown {

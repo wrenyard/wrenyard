@@ -346,6 +346,7 @@ function terminalTaskResult(taskRunId: string, status = 'done'): Record<string, 
   return {
     task_run_id: taskRunId,
     task_id: 'demo-task',
+    task_name: '演示任务',
     status,
     output: { note: `${taskRunId} finished` },
     usage: {
@@ -411,7 +412,7 @@ function fakeTaskRuns() {
  * not parseable as one JSON object.
  */
 function launchResultText(taskRunId: string): string {
-  return `${JSON.stringify({ task_run_id: taskRunId, task_id: 'demo-task', status: 'queued' })}\n`
+  return `${JSON.stringify({ task_run_id: taskRunId, task_id: 'demo-task', task_name: '演示任务', status: 'queued' })}\n`
     + `[async dispatch: task_run_id=${JSON.stringify(taskRunId)} is running. `
     + 'The terminal result is pending and will be delivered automatically to this conversation; '
     + 'do not poll, do not call task.run.wait, and do not fabricate a result.]';
@@ -1236,6 +1237,7 @@ test('a dispatched task keeps the work turn running with a progress note, then o
     const pendingTool = h.client.snapshot().items.find((item) => item.taskRun?.taskRunId === 'tr-1');
     assert.equal(pendingTool?.taskRun?.status, 'running');
     assert.equal(pendingTool?.taskRun?.usage.completeness, 'unavailable');
+    assert.equal(pendingTool?.taskRun?.taskName, '演示任务', 'the launch payload display name is adopted');
 
     // The authoritative result is delivered back into the SAME session, once.
     tasks.finish('tr-1');
@@ -1275,6 +1277,7 @@ test('a dispatched task keeps the work turn running with a progress note, then o
     // The authoritative terminal metadata replaces the launch identity.
     const settledTool = items.find((item) => item.taskRun?.taskRunId === 'tr-1');
     assert.equal(settledTool?.taskRun?.status, 'done');
+    assert.equal(settledTool?.taskRun?.taskName, '演示任务', 'the terminal envelope keeps the display name');
     assert.equal(settledTool?.toolState, 'done');
 
     // The completed work turn persists exactly one user/final-summary pair, and
@@ -1295,6 +1298,38 @@ test('a dispatched task keeps the work turn running with a progress note, then o
     assert.deepEqual(persisted?.tasks, [{ taskRunId: 'tr-1', status: 'consumed', callId: 'call-tr-1', taskRun: settledTool?.taskRun }]);
     assert.deepEqual(persisted?.internalTurnIds, ['turn-1', 'turn-2'], 'both handled internal boundaries are recorded');
     assert.equal(persisted?.summary, '任务已完成，结果如下。');
+  } finally { h.stop(); }
+});
+
+test('settling keeps the launch display name when an older daemon terminal result reports none', async () => {
+  const tasks = fakeTaskRuns();
+  const h = await openHarness({
+    waitForTaskRun: tasks.waitForTaskRun,
+    cancelTaskRun: tasks.cancelTaskRun,
+    summarize: async () => '完成',
+  });
+  try {
+    await h.client.send('旧守护进程的任务');
+    await settle();
+    const session = String(h.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    const seq = emitDispatch(h.fake, session, 1, 'tr-keep-name', 1);
+    emitYieldEnd(h.fake, session, 1, seq);
+    assert.ok(await waitFor(() => tasks.waited.length === 1));
+
+    // The launch text carries the display name even though the appended async
+    // note makes the whole result unparseable as one JSON object.
+    const pendingTool = h.client.snapshot().items.find((item) => item.taskRun?.taskRunId === 'tr-keep-name');
+    assert.equal(pendingTool?.taskRun?.status, 'running');
+    assert.equal(pendingTool?.taskRun?.taskName, '演示任务');
+
+    // An older daemon's terminal envelope has no task_name to offer.
+    const legacy = { ...terminalTaskResult('tr-keep-name') };
+    delete legacy.task_name;
+    tasks.finish('tr-keep-name', legacy);
+    assert.ok(await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.prompt').length === 2));
+    const settledTool = h.client.snapshot().items.find((item) => item.taskRun?.taskRunId === 'tr-keep-name');
+    assert.equal(settledTool?.taskRun?.status, 'done');
+    assert.equal(settledTool?.taskRun?.taskName, '演示任务', 'the name observed at launch survives settling');
   } finally { h.stop(); }
 });
 

@@ -103,10 +103,16 @@ export interface WrenyardGatewayConnection {
  *
  * `task_id` (the persisted definition template) and `usage` are required;
  * `resolved` is present only when the run has a schema-valid dispatch snapshot.
+ * `task_name` is the authoritative definition display name the server
+ * resolves from its registry; it is optional and absent rather than guessed
+ * when the definition cannot be resolved.
  */
 export interface WrenyardTaskRunOutputResult {
   task_run_id: string;
   task_id: string;
+  /** Authoritative definition display name (builtin or project), sent only
+   * when the daemon's registry can resolve it. */
+  task_name?: string;
   status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
   summary?: string;
   output: unknown;
@@ -253,6 +259,7 @@ export interface WrenyardProviderStatus {
     taskOnly?: boolean;
     effectiveTps?: number | null;
     quotaAbundant?: boolean;
+    free?: boolean;
     /** Provider-independent canonical model id; falls back to the model id. */
     canonicalId?: string;
     /** Catalog intelligence tier for the model. */

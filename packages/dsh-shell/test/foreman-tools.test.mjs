@@ -1156,7 +1156,9 @@ test('Desktop async mode: run_task returns the launch identity without task.run.
     if (msg.method === 'tools/call') {
       taskCallNames.push(msg.params.name);
       if (msg.params.name === 'task_run') {
-        return okReply(msg, { structuredContent: { task_run_id: 't-async', status: 'queued' } });
+        // Production shape: the accepted create result carries the resolved
+        // definition display name alongside the run identity.
+        return okReply(msg, { structuredContent: { task_run_id: 't-async', status: 'queued', task_name: '探索调查' } });
       }
     }
     return okReply(msg, {});
@@ -1179,6 +1181,7 @@ test('Desktop async mode: run_task returns the launch identity without task.run.
   const bareOutput = await runTask.execute({ task_id: 't-async' }, {});
   assert.match(bareOutput, /t-async/, 'launch identity is returned for a bare dispatch');
   assert.match(bareOutput, /pending/i, 'the pending note is present');
+  assert.match(bareOutput, /"task_name": "探索调查"/, 'the server-returned display name survives the launch payload');
 
   const agent = { id: 'agent-async', session: { id: 'agent-async', events: [] } };
   const started = Date.now();
@@ -1186,6 +1189,7 @@ test('Desktop async mode: run_task returns the launch identity without task.run.
   assert.ok(Date.now() - started < 500, 'async dispatch returns without any terminal wait');
   assert.match(output, /t-async/, 'the output carries the canonical task_run_id');
   assert.match(output, /pending/, 'the coordinator is told the result is pending');
+  assert.match(output, /"task_name": "探索调查"/, 'the display name stays in the async launch text');
   assert.match(output, /do not fabricate a result/, 'no fabricated terminal result');
   assert.deepEqual(taskCallNames, ['task_run', 'task_run'], 'only the create call runs');
   assert.deepEqual(ipcCalls, [], 'no task.run.wait and no polling IPC in async mode');

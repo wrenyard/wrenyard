@@ -42,6 +42,7 @@ export class ProviderService {
           ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
           ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
           ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+          ...(model.free === undefined ? {} : { free: model.free }),
           ...(model.canonicalId === undefined ? {} : { canonicalId: model.canonicalId }),
           ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
           ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),

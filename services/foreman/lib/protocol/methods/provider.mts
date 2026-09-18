@@ -14,6 +14,7 @@ export interface ProviderListModel {
   maxTokens?: number
   effectiveTps?: number | null
   quotaAbundant?: boolean
+  free?: boolean
   taskOnly?: boolean
   /** Provider-independent canonical model id; falls back to the model id. */
   canonicalId?: string
@@ -66,6 +67,7 @@ export const providerListResultSchema = {
             taskOnly: { type: 'boolean' },
             effectiveTps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
             quotaAbundant: { type: 'boolean' },
+            free: { type: 'boolean' },
             canonicalId: { type: 'string', minLength: 1, maxLength: 200 },
             intelligence: { type: 'string', enum: ['low', 'mid', 'high', 'premium'] },
             pricing: {

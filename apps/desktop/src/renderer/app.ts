@@ -458,6 +458,15 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
   status.textContent = statusLabel;
   status.className = `status-pill ${statusClass}`;
   setText('update-description', description);
+  const attempt = snapshot.lastAttempt;
+  requireElement('update-last-attempt').hidden = !attempt;
+  if (attempt) {
+    const outcome = attempt.status === 'succeeded' ? '成功'
+      : attempt.status === 'failed' ? '失败'
+        : attempt.status === 'cancelled' ? '已取消' : '尚未记录结束';
+    setText('update-last-attempt-title', `最近更新：${attempt.sourceVersion} → ${attempt.targetVersion} · ${outcome}`);
+    setText('update-last-attempt-detail', JSON.stringify(attempt, null, 2));
+  }
   updateActionButton.textContent = action;
   updateActionButton.className = primary ? 'primary-button' : 'secondary-button';
   updateActionButton.disabled = disabled;

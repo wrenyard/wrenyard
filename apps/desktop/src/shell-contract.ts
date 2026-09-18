@@ -1,4 +1,5 @@
 import type { PetSettingsPayload } from '@wrenyard/pet/config';
+import type { UpdateAttemptRecord } from './update-attempt.js';
 import type {
   ClientConfigurationDto,
   ClientConfigurationId,
@@ -116,6 +117,7 @@ export interface UpdateSnapshot {
   progress?: number;
   activeTaskCount?: number;
   message?: string;
+  lastAttempt?: UpdateAttemptRecord;
 }
 
 export interface SettingsSnapshot {
@@ -343,6 +345,12 @@ export interface ProviderModelSnapshot {
   displayName: string;
   effectiveTps?: number | null;
   quotaAbundant?: boolean;
+  /**
+   * Authoritative catalog free-model flag. Only an explicit `true` marks a
+   * model free; absence/`undefined` means unknown and must never be inferred
+   * from a missing or zero price.
+   */
+  free?: boolean;
   /** Provider-independent canonical model id; falls back to the model id. */
   canonicalId?: string;
   /** Catalog intelligence tier for the model. */

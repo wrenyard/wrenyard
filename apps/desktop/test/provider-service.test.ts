@@ -19,6 +19,7 @@ class FakeClient implements ProviderControlClient {
           id: 'hy4-preview-ioa',
           displayName: 'HY4 Preview',
           secret: 'must-not-leak',
+          free: true,
           pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 },
         } as { id: string; displayName: string; pricing: { inputUsdPerMillion: number; outputUsdPerMillion: number; cachedInputUsdPerMillion: number } }],
       },
@@ -52,7 +53,7 @@ test('provider list comes only from daemon IPC', async () => {
       setupHint: 'Sign in through CodeBuddy.',
       configured: true,
       authMode: 'native',
-      models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }],
+      models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }],
     },
     {
       id: 'kimi-coding',
@@ -71,7 +72,7 @@ test('provider list projects only sanitized model id, displayName, and pricing',
   const client = new FakeClient();
   const service = new ProviderService({ ipcPath: '/tmp/wrenyard.sock', clientFactory: () => client });
   const listed = await service.listProviders();
-  assert.deepEqual(listed[0]?.models, [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]);
+  assert.deepEqual(listed[0]?.models, [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]);
   assert.equal(JSON.stringify(listed).includes('must-not-leak'), false);
   assert.equal(JSON.stringify(listed).includes('secret'), false);
 });

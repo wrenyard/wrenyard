@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-dev.33
+
+Development preview release.
+
+- Align model names and icons, use themed speed and free-model badges, and show
+  quota details in a scrollable themed tooltip.
+- Compact the session list, preview truncated titles, show the workspace folder
+  name, and simplify conversation chrome with a rounded composer and send button.
+- Preserve task definition display names from dispatch through completion and
+  keep task labels arranged horizontally with wrapping.
+- Remove page reload shortcuts from the application menu.
+- Retain a sanitized last-update-attempt record across restarts and update checks,
+  including the failed phase, native error, exit code and recovery outcome.
+
 ## 1.0.0-dev.32
 
 Development preview release.

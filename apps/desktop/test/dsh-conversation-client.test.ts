@@ -606,6 +606,7 @@ test('run_task result updates the same single card with raw text and parsed task
   assert.ok(tool.taskRun);
   assert.equal(tool.taskRun?.taskRunId, 'run-001');
   assert.equal(tool.taskRun?.taskId, 'task-abc');
+  assert.equal(tool.taskRun?.taskName, 'nightly-build');
   assert.equal(tool.taskRun?.resolvedClient, 'codebuddy');
   assert.equal(tool.taskRun?.resolvedProvider, 'zhipu-coding');
   assert.equal(tool.taskRun?.resolvedModel, 'glm-5.3');

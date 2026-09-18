@@ -19,6 +19,15 @@ import { basename, dirname, join, win32 } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { UpdateChannel, UpdateInstallReason, UpdateSnapshot } from './shell-contract.js';
+import {
+  readUpdateAttempt,
+  sanitizeUpdateAttemptDetail,
+  writeUpdateAttempt,
+  UPDATE_ATTEMPT_SCHEMA,
+  type UpdateAttemptPhase,
+  type UpdateAttemptRecord,
+  type UpdateAttemptStatus,
+} from './update-attempt.js';
 import type { UpdateHelperConfig } from './update-helper.js';
 import type { InstallationDiscovery, InstallCapabilityReason } from './installation-discovery.js';
 
@@ -433,6 +442,7 @@ export class DesktopUpdateController {
   private snapshotValue: UpdateSnapshot;
   private candidate?: UpdateCandidate;
   private prepared?: PreparedUpdate;
+  private attempt?: UpdateAttemptRecord;
   private releaseCache?: { fetchedAt: number; channel: UpdateChannel; manifest: UpdateManifest | null };
   private checkPromise?: Promise<UpdateSnapshot>;
   private delayTimer?: unknown;
@@ -479,7 +489,51 @@ export class DesktopUpdateController {
       installSupported: capability.installSupported,
       ...(capability.reason !== undefined ? { installReason: capability.reason } : {}),
     };
+    // The durable attempt record outlives the transient result file: it is read
+    // once here and only ever replaced by a NEW install attempt, so a failed
+    // update stays diagnosable across restarts and repeated version checks.
+    this.attempt = readUpdateAttempt(this.userDataPath);
     this.consumeHelperResult();
+  }
+
+  /** Diagnostics for the most recent install attempt, if one was ever made. */
+  getLastAttempt(): UpdateAttemptRecord | undefined {
+    return this.attempt ? { ...this.attempt } : undefined;
+  }
+
+  private beginAttempt(targetVersion: string): void {
+    this.recordAttempt({
+      schema: UPDATE_ATTEMPT_SCHEMA,
+      sourceVersion: this.currentVersion,
+      targetVersion,
+      startedAt: this.now(),
+      status: 'in-progress',
+      phase: 'prepare',
+    });
+  }
+
+  private markAttemptPhase(phase: UpdateAttemptPhase): void {
+    if (this.attempt?.status !== 'in-progress') return;
+    this.recordAttempt({ ...this.attempt, phase });
+  }
+
+  private settleAttempt(status: UpdateAttemptStatus, phase: UpdateAttemptPhase, error?: unknown): void {
+    if (this.attempt?.status !== 'in-progress') return;
+    const detail = sanitizeUpdateAttemptDetail(error instanceof Error ? error.message : error);
+    this.recordAttempt({
+      ...this.attempt,
+      status,
+      phase,
+      completedAt: this.now(),
+      ...(detail !== undefined ? { error: detail } : {}),
+    });
+  }
+
+  private recordAttempt(record: UpdateAttemptRecord): void {
+    this.attempt = record;
+    try {
+      writeUpdateAttempt(this.userDataPath, record);
+    } catch { /* diagnostics never block or fail an install */ }
   }
 
   /**
@@ -530,7 +584,8 @@ export class DesktopUpdateController {
   }
 
   snapshot(): UpdateSnapshot {
-    return { ...this.snapshotValue };
+    const lastAttempt = this.getLastAttempt();
+    return { ...this.snapshotValue, ...(lastAttempt ? { lastAttempt } : {}) };
   }
 
   start(): void {
@@ -716,6 +771,7 @@ export class DesktopUpdateController {
         this.installIntent = false;
         return this.snapshot();
       }
+      this.beginAttempt(this.candidate.version);
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'preparing',
@@ -727,6 +783,7 @@ export class DesktopUpdateController {
       try {
         this.prepared = await this.prepareCandidate(this.candidate);
       } catch (error) {
+        this.settleAttempt('failed', prepareFailurePhase(error), error);
         this.installIntent = false;
         this.cleanupPrepared();
         this.setSnapshot({
@@ -800,6 +857,7 @@ export class DesktopUpdateController {
     this.installIntent = false;
     this.launched = false;
     this.installing = false;
+    this.settleAttempt('cancelled', 'waiting');
     this.clearPendingTimer();
     const version = this.prepared?.candidate.version;
     this.setSnapshot({
@@ -855,6 +913,7 @@ export class DesktopUpdateController {
     try {
       mkdirSync(this.userDataPath, { recursive: true });
       rmSync(this.resultPath, { force: true });
+      this.markAttemptPhase('launch-helper');
       const configPath = join(this.prepared.cleanupRoots[0], 'helper-config.json');
       const helperCopy = join(this.prepared.cleanupRoots[0], 'update-helper.cjs');
       copyFileSync(this.helperPath, helperCopy);
@@ -875,7 +934,8 @@ export class DesktopUpdateController {
         env: { ...process.env },
       });
       return true;
-    } catch {
+    } catch (error) {
+      this.settleAttempt('failed', 'launch-helper', error);
       this.setSnapshot({
         ...this.snapshotValue,
         state: 'install-failed',
@@ -1055,6 +1115,22 @@ export function installUnavailableMessage(reason: UpdateInstallReason | undefine
     default:
       return '当前无法应用内安装，请检查本机安装后重试。';
   }
+}
+
+/**
+ * The failing preparation step, keyed to the exact errors preparation raises.
+ * The user-facing message stays deliberately generic, so this is the only place
+ * that says whether the download, the checksum, extraction or staging failed.
+ */
+function prepareFailurePhase(error: unknown): UpdateAttemptPhase {
+  const message = error instanceof Error ? error.message : '';
+  if (message.includes('download failed')) return 'download';
+  if (message.includes('checksum mismatch')) return 'checksum';
+  if (message.includes('extraction failed') || message.includes('must contain')) return 'extract';
+  if (message.includes('staging failed') || message.includes('signature') || message.includes('version mismatch')) {
+    return 'stage';
+  }
+  return 'prepare';
 }
 
 function preparationFailureMessage(error: unknown): string {

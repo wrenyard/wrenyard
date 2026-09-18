@@ -66,10 +66,9 @@
           </header>
           <div class="workspace-binding" title="由啾啾工坊设置固定绑定">
             <span class="workspace-dot"></span>
-            <span id="conversation-workspace">工坊工作区</span>
+            <span id="conversation-workspace"></span>
           </div>
           <div class="conversation-session-list" id="conversation-session-list" role="list"></div>
-          <footer class="conversation-sidebar-footer">DSH BACKEND · DESKTOP SURFACE</footer>
         </aside>
 
         <section class="conversation-main" aria-label="当前会话">
@@ -97,7 +96,6 @@
               <img src="./icon-256.png" alt="" />
               <p class="eyebrow">THE WRENYARD WORKSHOP</p>
               <h2>今天想让工坊做些什么？</h2>
-              <p>会话固定运行在 Wrenyard workspace 中。DSH 提供后端能力，界面与工作流由啾啾工坊管理。</p>
             </div>
           </div>
           <div class="conversation-error" id="conversation-error" hidden></div>
@@ -365,6 +363,10 @@
                   <div class="update-status-copy"><h3>自动更新</h3><p id="update-description">尚未检查更新。</p><small id="update-checked-at">启动后会在后台自动检查</small></div>
                   <span class="status-pill is-pending" id="update-status">尚未检查</span>
                 </div>
+                <details id="update-last-attempt" hidden>
+                  <summary id="update-last-attempt-title">最近更新记录</summary>
+                  <pre id="update-last-attempt-detail"></pre>
+                </details>
               </div>
               <div class="settings-save-row update-action-row"><span>安装前会确认当前没有运行中的任务。</span><button class="secondary-button" id="update-action-button" type="button">检查更新</button></div>
             </section>

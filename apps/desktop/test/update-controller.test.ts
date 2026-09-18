@@ -19,6 +19,7 @@ import {
   type UpdateManifest,
   type UpdateScheduler,
 } from '../src/update-controller.js';
+import { readUpdateAttempt, UPDATE_ATTEMPT_FILENAME } from '../src/update-attempt.js';
 
 const REPOSITORY = 'wrenyard/wrenyard';
 const BASE_URL = 'https://metadata.test/updates';
@@ -811,6 +812,8 @@ test('cancelPendingInstall clears intent and prevents a later launch without rep
   const cancelled = controller.cancelPendingInstall();
   assert.equal(cancelled.state, 'available', 'returns to available, retaining staged artifact');
   assert.notEqual(cancelled.state, 'up-to-date', 'must not report success');
+  assert.equal(controller.getLastAttempt()?.status, 'cancelled', 'cancellation closes the attempt record');
+  assert.equal(controller.getLastAttempt()?.phase, 'waiting');
 
   busy = false;
   controller.wake();
@@ -860,9 +863,95 @@ test('preparation failure preserves the current version and reports a friendly e
   const failed = await controller.requestInstall();
   assert.equal(failed.state, 'install-failed');
   assert.equal(failed.currentVersion, '1.0.0-dev.25');
-  assert.equal(JSON.stringify(failed).includes('token'), false);
+  assert.equal((failed.message ?? '').includes('token'), false);
 
   rmSync(root, { recursive: true, force: true });
+});
+
+test('a failed preparation leaves sanitized diagnostics that survive restart and later checks', async () => {
+  const root = fakeUpdateRoot();
+  const userDataPath = join(root, 'data');
+  try {
+    const controller = new DesktopUpdateController(baseOptions({
+      userDataPath,
+      cliPath: '/suite/wrenyard',
+      helperPath: ensureHelper(root),
+      helperRuntimePath: '/suite/node',
+      desktopPath: join(root, 'app'),
+      fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+      isBusy: async () => false,
+      prepareCandidate: async () => {
+        throw new Error('desktop checksum mismatch token=hunter2 Authorization: Bearer opaque-credential \"access_token\":\"json-credential\" https://github.test/a /Users/private/staged /private/var/folders/temp');
+      },
+      now: () => 4_000,
+      scheduler: isolatedScheduler(),
+    }));
+
+    await controller.check(true);
+    assert.equal(controller.getLastAttempt(), undefined, 'discovery alone never records an attempt');
+
+    const failed = await controller.requestInstall();
+    assert.equal(failed.state, 'install-failed');
+    const attempt = controller.getLastAttempt()!;
+    assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.phase, 'checksum', 'the generic message hides the step; the record keeps it');
+    assert.equal(attempt.sourceVersion, '1.0.0-dev.25');
+    assert.equal(attempt.targetVersion, '1.0.0-dev.26');
+    assert.equal(attempt.startedAt, 4_000);
+    assert.equal(attempt.completedAt, 4_000);
+    assert.equal(attempt.error?.includes('hunter2'), false);
+    assert.equal(attempt.error?.includes('opaque-credential'), false);
+    assert.equal(attempt.error?.includes('json-credential'), false);
+    assert.deepEqual(failed.lastAttempt, attempt);
+    assert.equal(attempt.error?.includes('github.test'), false);
+    assert.equal(attempt.error?.includes('private'), false);
+    assert.match(attempt.error ?? '', /desktop checksum mismatch/u);
+
+    // The record lives in userData, outside every cleanup root the update uses.
+    assert.equal(existsSync(join(userDataPath, UPDATE_ATTEMPT_FILENAME)), true);
+    assert.deepEqual(readUpdateAttempt(userDataPath), attempt);
+
+    // A restart plus a fresh version check must not erase the diagnosis.
+    const restarted = new DesktopUpdateController(baseOptions({
+      userDataPath,
+      fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+    }));
+    assert.deepEqual(restarted.getLastAttempt(), attempt);
+    await restarted.check(true);
+    assert.deepEqual(restarted.getLastAttempt(), attempt, 'a recheck never overwrites the record');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a helper that cannot be launched records the launch phase instead of vanishing', async () => {
+  const root = fakeUpdateRoot();
+  const userDataPath = join(root, 'data');
+  try {
+    const controller = new DesktopUpdateController(baseOptions({
+      userDataPath,
+      cliPath: '/suite/wrenyard',
+      helperPath: ensureHelper(root),
+      helperRuntimePath: '/suite/node',
+      desktopPath: join(root, 'app'),
+      fetcher: async () => metadataResponse(manifestJson('1.0.0-dev.26')),
+      activeTaskCount: async () => 0,
+      prepareCandidate: async (candidate: UpdateCandidate): Promise<PreparedUpdate> => ({
+        candidate, stagedDesktop: join(root, 'staged'), cleanupRoots: [root],
+      }),
+      spawnDetached: () => { throw new Error('spawn helper failed for /Users/private/node'); },
+      scheduler: isolatedScheduler(),
+    }));
+
+    const failed = await controller.requestInstall();
+    assert.equal(failed.state, 'install-failed');
+    const attempt = readUpdateAttempt(userDataPath)!;
+    assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.phase, 'launch-helper');
+    assert.equal(attempt.error?.includes('private'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('direct launchPreparedUpdate cannot bypass the busy safety gate', async () => {
