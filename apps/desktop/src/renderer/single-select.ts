@@ -11,7 +11,7 @@ export interface SingleSelectOption {
   triggerLabel?: string;
   /** Optional trusted DOM factory for a provider/model brand icon. */
   icon?: () => HTMLElement;
-  badges?: Array<{ kind: 'fast' | 'very-fast' | 'quota'; label: string }>;
+  badges?: Array<{ kind: 'fast' | 'very-fast' | 'quota' | 'free'; label: string }>;
 }
 
 export interface SearchableSingleSelectConfig {
@@ -54,6 +54,154 @@ function matchesQuery(option: SingleSelectOption, query: string): boolean {
   return option.value.toLowerCase().includes(needle);
 }
 
+export interface ThemedTooltipHandle {
+  /** Hides the overlay while this binding owns it. */
+  hide(): void;
+  /** Removes the binding's listeners and hides the overlay if it owns it. */
+  detach(): void;
+}
+
+/**
+ * Shared themed tooltip overlay. One singleton element lives directly under
+ * <body> — outside every popup scroller — and is placed with fixed
+ * coordinates clamped to the viewport next to its anchor. It renders short
+ * multiline plain text, stays hoverable and scrollable while shown, and
+ * closes on pointer leave, blur, Escape, outside scrolling and window resize.
+ */
+class ThemedTooltip {
+  private static element: HTMLDivElement | undefined;
+  private static owner: ThemedTooltip | undefined;
+
+  /** Hides whichever binding currently owns the overlay. */
+  static hide(): void {
+    ThemedTooltip.owner?.hideNow();
+  }
+
+  private static ensureElement(): HTMLDivElement {
+    if (!ThemedTooltip.element) {
+      const element = document.createElement('div');
+      element.id = 'themed-tooltip';
+      element.className = 'themed-tooltip';
+      element.setAttribute('role', 'tooltip');
+      element.hidden = true;
+      element.addEventListener('pointerenter', () => ThemedTooltip.owner?.cancelHide());
+      element.addEventListener('pointerleave', () => ThemedTooltip.owner?.hideSoon());
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') ThemedTooltip.hide();
+      }, true);
+      // Any scroll outside the overlay itself (option list, session list,
+      // window) detaches a stale anchor; scrolling the overlay keeps it open.
+      document.addEventListener('scroll', (event) => {
+        const target = event.target;
+        if (target instanceof Node && ThemedTooltip.element?.contains(target)) return;
+        ThemedTooltip.hide();
+      }, true);
+      window.addEventListener('resize', () => ThemedTooltip.hide());
+      ThemedTooltip.element = element;
+    }
+    if (!ThemedTooltip.element.isConnected) document.body.append(ThemedTooltip.element);
+    return ThemedTooltip.element;
+  }
+
+  private hideTimer = 0;
+
+  constructor(
+    private readonly target: HTMLElement,
+    private readonly text: () => string,
+  ) {
+    target.addEventListener('pointerenter', this.onEnter);
+    target.addEventListener('pointerleave', this.onLeave);
+    target.addEventListener('focus', this.onFocus);
+    target.addEventListener('blur', this.onBlur);
+  }
+
+  private readonly onEnter = (): void => this.show();
+  private readonly onLeave = (): void => this.hideSoon();
+  private readonly onFocus = (): void => {
+    if (this.target.matches(':focus-visible')) this.show();
+  };
+  private readonly onBlur = (): void => this.hideNow();
+
+  show(): void {
+    const text = this.text().trim();
+    if (!text) return;
+    this.cancelHide();
+    if (ThemedTooltip.owner && ThemedTooltip.owner !== this) ThemedTooltip.owner.hideNow();
+    ThemedTooltip.owner = this;
+    const element = ThemedTooltip.ensureElement();
+    element.textContent = text;
+    element.hidden = false;
+    this.target.setAttribute('aria-describedby', element.id);
+    this.position(element);
+  }
+
+  hideNow(): void {
+    this.cancelHide();
+    if (ThemedTooltip.owner !== this) return;
+    ThemedTooltip.owner = undefined;
+    const element = ThemedTooltip.element;
+    if (!element) return;
+    element.hidden = true;
+    element.textContent = '';
+    this.target.removeAttribute('aria-describedby');
+  }
+
+  /** Small grace so the pointer can cross the gap into the overlay itself. */
+  hideSoon(): void {
+    if (this.hideTimer) return;
+    this.hideTimer = window.setTimeout(() => {
+      this.hideTimer = 0;
+      this.hideNow();
+    }, 120);
+  }
+
+  cancelHide(): void {
+    if (!this.hideTimer) return;
+    window.clearTimeout(this.hideTimer);
+    this.hideTimer = 0;
+  }
+
+  /** Unbinds the anchor; the singleton overlay itself stays reusable. */
+  detach(): void {
+    this.hideNow();
+    this.target.removeEventListener('pointerenter', this.onEnter);
+    this.target.removeEventListener('pointerleave', this.onLeave);
+    this.target.removeEventListener('focus', this.onFocus);
+    this.target.removeEventListener('blur', this.onBlur);
+  }
+
+  /** Fixed coordinates next to the anchor, clamped inside the viewport. */
+  private position(element: HTMLDivElement): void {
+    element.style.left = '0px';
+    element.style.top = '0px';
+    const anchor = this.target.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    const margin = 6;
+    const gap = 5;
+    const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - box.width - margin));
+    const below = anchor.bottom + gap;
+    const top = below + box.height <= window.innerHeight - margin
+      ? below
+      : Math.max(margin, anchor.top - box.height - gap);
+    element.style.left = `${Math.round(left)}px`;
+    element.style.top = `${Math.round(top)}px`;
+  }
+}
+
+/** Attaches the shared themed tooltip to one anchor element. */
+export function bindThemedTooltip(target: HTMLElement, text: () => string): ThemedTooltipHandle {
+  const tooltip = new ThemedTooltip(target, text);
+  return {
+    hide: (): void => tooltip.hideNow(),
+    detach: (): void => tooltip.detach(),
+  };
+}
+
+/** Hides the shared themed tooltip overlay, whichever anchor owns it. */
+export function hideThemedTooltip(): void {
+  ThemedTooltip.hide();
+}
+
 /**
  * Reusable searchable single-select popup. Reuses the multi-select CSS
  * foundation with single-select-specific selectors. Selecting an option closes
@@ -72,6 +220,8 @@ export class SearchableSingleSelect {
   private readonly optionsList: HTMLDivElement;
   private readonly emptyMessage: HTMLDivElement;
   private readonly popupId: string;
+  private readonly triggerTooltip: ThemedTooltipHandle;
+  private triggerTitle = '';
   private options: SingleSelectOption[] = [];
   private selected = '';
   private searchQuery = '';
@@ -108,6 +258,12 @@ export class SearchableSingleSelect {
     this.popup.id = this.popupId;
     this.popup.className = 'multi-select-popup single-select-popup';
     this.popup.hidden = true;
+
+    // Themed trigger tooltip: the shared body-level overlay, suppressed while
+    // the popup is open because the popup covers the same area. The native
+    // `title` bubble is deliberately not used: it renders inert OS chrome
+    // outside the theme and flashes abruptly.
+    this.triggerTooltip = bindThemedTooltip(this.trigger, () => (this.open ? '' : this.triggerTitle));
 
     this.searchInput = document.createElement('input');
     this.searchInput.type = 'search';
@@ -217,10 +373,11 @@ export class SearchableSingleSelect {
     if (loading) this.close(false);
   }
 
-  /** Trigger tooltip; an empty string removes the attribute. */
+  /** Themed trigger tooltip text; an empty string hides it and clears the text. */
   setTitle(title: string): void {
-    if (title) this.trigger.title = title;
-    else this.trigger.removeAttribute('title');
+    this.triggerTitle = title.trim();
+    this.trigger.removeAttribute('title');
+    if (!this.triggerTitle) this.triggerTooltip.hide();
   }
 
   /** aria-label for the popup search box. */
@@ -232,6 +389,8 @@ export class SearchableSingleSelect {
   destroy(): void {
     document.removeEventListener('click', this.onDocumentClick);
     document.removeEventListener('keydown', this.onDocumentKeyDown, true);
+    this.triggerTooltip.detach();
+    ThemedTooltip.hide();
   }
 
   private labelFor(value: string): string {
@@ -249,6 +408,7 @@ export class SearchableSingleSelect {
     const option = this.options.find((candidate) => candidate.value === this.selected);
     if (option?.icon) this.summary.append(option.icon());
     const label = document.createElement('span');
+    label.className = 'single-select-name';
     label.textContent = this.selected.length === 0 ? this.placeholder : this.labelFor(this.selected);
     this.summary.append(label);
     if (option?.badges) this.appendBadges(this.summary, option.badges);
@@ -256,6 +416,10 @@ export class SearchableSingleSelect {
   }
 
   private refreshOptions(): void {
+    // Rows are rebuilt: a tooltip still showing for a removed row must not
+    // linger. Rows can only be hovered while the popup is open, so the closed
+    // popup keeps an open trigger tooltip across background re-renders.
+    if (this.open) ThemedTooltip.hide();
     const searchFocused = document.activeElement === this.searchInput;
     const filtered = this.options.filter((option) => matchesQuery(option, this.searchQuery));
     this.optionsList.replaceChildren();
@@ -273,7 +437,10 @@ export class SearchableSingleSelect {
       const label = document.createElement('span');
       label.className = 'single-select-option-label';
       if (option.icon) row.append(option.icon());
-      label.textContent = option.label;
+      const name = document.createElement('span');
+      name.className = 'single-select-name';
+      name.textContent = option.label;
+      label.append(name);
       if (option.badges) this.appendBadges(label, option.badges);
       row.append(label);
       if (option.secondary !== undefined) {
@@ -282,7 +449,9 @@ export class SearchableSingleSelect {
         secondary.textContent = option.secondary;
         row.append(secondary);
       }
-      row.title = option.title ?? option.label;
+      // Themed row tooltip (quota details) for pointer hover and keyboard focus
+      // instead of the native `title` OS bubble.
+      bindThemedTooltip(row, () => option.title ?? option.label);
       if (!option.disabled) row.addEventListener('click', () => this.select(option.value));
       this.optionsList.append(row);
     }
@@ -290,7 +459,7 @@ export class SearchableSingleSelect {
     if (searchFocused) this.searchInput.focus();
   }
 
-  private appendBadges(target: HTMLElement, badges: readonly { kind: 'fast' | 'very-fast' | 'quota'; label: string }[]): void {
+  private appendBadges(target: HTMLElement, badges: readonly { kind: 'fast' | 'very-fast' | 'quota' | 'free'; label: string }[]): void {
     for (const badge of badges) {
       const item = document.createElement('span');
       item.className = `single-select-badge ${badge.kind}`;
@@ -300,9 +469,13 @@ export class SearchableSingleSelect {
       icon.setAttribute('viewBox', '0 0 24 24');
       icon.setAttribute('aria-hidden', 'true');
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      // Monochrome stroke glyphs only; `free` uses the gift/zero-cost outline so
+      // it never carries an invented accent color.
       path.setAttribute('d', badge.kind === 'quota'
         ? 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M8 12l3 3 5-6'
-        : 'M13 2 4 14h7l-1 8 10-13h-7z');
+        : badge.kind === 'free'
+          ? 'M4 10h16v10H4zM4 10l1.6-3.2h12.8L20 10M12 6.8V20M12 6.8C10 3.2 6.4 3.6 6.4 6.2c0 2 2.4 2.6 5.6.6M12 6.8c2-3.6 5.6-3.2 5.6-.6 0 2-2.4 2.6-5.6.6'
+          : 'M13 2 4 14h7l-1 8 10-13h-7z');
       icon.append(path);
       item.append(icon);
       target.append(item);
@@ -351,6 +524,8 @@ export class SearchableSingleSelect {
     this.open = true;
     this.popup.hidden = false;
     this.trigger.setAttribute('aria-expanded', 'true');
+    // The popup covers the trigger tooltip area; only row tooltips remain.
+    ThemedTooltip.hide();
     this.refreshOptions();
     this.searchInput.focus();
     this.onOpen?.();
@@ -361,6 +536,7 @@ export class SearchableSingleSelect {
     this.open = false;
     this.popup.hidden = true;
     this.trigger.setAttribute('aria-expanded', 'false');
+    ThemedTooltip.hide();
     if (restoreFocus) this.trigger.focus();
   }
 

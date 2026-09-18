@@ -127,7 +127,7 @@ test('catalog projects discovered model id/displayName/pricing choices without e
       configured: true,
       authMode: 'environment',
       models: [
-        { id: 'deepseek-chat', displayName: 'DeepSeek Chat', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+        { id: 'deepseek-chat', displayName: 'DeepSeek Chat', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
         { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } },
       ],
     },
@@ -148,7 +148,7 @@ test('catalog projects discovered model id/displayName/pricing choices without e
   const snapshot = projectQuotaSnapshot(providers, [{ id: 'deepseek', enabled: true }], 1, undefined, discovered);
   const deepseek = snapshot.catalog.find((entry) => entry.id === 'deepseek')!;
   assert.deepEqual(deepseek.models, [
-    { id: 'deepseek-chat', displayName: 'DeepSeek Chat', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+    { id: 'deepseek-chat', displayName: 'DeepSeek Chat', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
     { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } },
   ]);
   const kimi = snapshot.catalog.find((entry) => entry.id === 'kimi-coding')!;

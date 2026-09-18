@@ -4,6 +4,7 @@ import type {
   ConversationModelOptionSnapshot,
   ConversationSnapshot,
   ConversationTurnSnapshot,
+  ProviderModelSnapshot,
   QuotaSnapshot,
   TaskRunSnapshot,
   WrenyardShellApi,
@@ -13,7 +14,7 @@ import {
   type ConversationProviderPresentation,
 } from './conversation-provider-status.js';
 import { formatCompactTokenCount } from './format.js';
-import { SearchableSingleSelect } from './single-select.js';
+import { SearchableSingleSelect, bindThemedTooltip, hideThemedTooltip } from './single-select.js';
 import { brandIcon } from './brand-icons.js';
 import { providerBrand, classifyFamily, familyBrand } from './model-list.js';
 import { createAgentTaskStatusIcon } from './agent-task-icon.js';
@@ -39,6 +40,30 @@ function formatSessionTime(value: number): string {
   const today = new Date();
   if (date.toDateString() === today.toDateString()) return formatTime(value);
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date);
+}
+
+/**
+ * Splits a ` · `-joined provider presentation tooltip into short readable
+ * lines: provider label and quota status stay on one line, every concrete
+ * window/balance/message detail gets its own line.
+ */
+function tooltipLines(presentation: string): string[] {
+  const parts = presentation.split(' · ').filter(Boolean);
+  if (parts.length < 2) return parts;
+  return [parts.slice(0, 2).join(' · '), ...parts.slice(2)];
+}
+
+/**
+ * Basename of a configured workspace path for the sidebar label. Handles both
+ * POSIX (`/a/b/c`) and Windows (`C:\\a\\b`, `\\\\server\\share\\dir`) separators,
+ * tolerates a trailing separator, and never falls back to the raw full path
+ * when no separator is present.
+ */
+export function workspaceDisplayName(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/u, '');
+  if (!trimmed) return path.trim();
+  const segments = trimmed.split(/[\\/]+/u);
+  return segments[segments.length - 1] || trimmed;
 }
 
 function errorMessage(error: unknown): string {
@@ -800,8 +825,9 @@ export class ConversationView {
     this.snapshot = snapshot;
     const ready = snapshot.status === 'ready';
     const workspaceLabel = element('conversation-workspace');
-    workspaceLabel.textContent = '工坊工作区';
-    workspaceLabel.title = snapshot.workspace.path ? '当前绑定的工坊工作区' : '尚未绑定工坊工作区';
+    const workspacePath = snapshot.workspace.path?.trim();
+    workspaceLabel.textContent = workspacePath ? workspaceDisplayName(workspacePath) : '未绑定工作区';
+    workspaceLabel.title = workspacePath ? workspacePath : '尚未绑定工作区';
     element('conversation-title').textContent = snapshot.selectedTitle ?? '新会话';
 
     this.renderModels(snapshot);
@@ -1717,10 +1743,17 @@ export class ConversationView {
       ? '读取模型…'
       : snapshot.selectedSessionId ? '选择模型' : '选择模型后开始对话';
     this.modelSelect.placeholder = placeholder;
+    // Themed trigger tooltip: model identity on the first line, then the
+    // provider quota section as short readable multiline lines.
+    const currentModel = current ? this.modelEntries.find((entry) => entry.current) : undefined;
+    const currentCatalogModel = currentModel ? this.catalogModel(currentModel) : undefined;
     this.modelSelect.setTitle(current
-      ? [current.label, current.reasoningEffort, current.advertised ? '' : '当前目录未提供',
-          this.providerPresentation(current.catalogProvider).tooltip]
-        .filter(Boolean).join(' · ')
+      ? [
+          [current.label, current.reasoningEffort, current.advertised ? '' : '当前目录未提供',
+            currentCatalogModel && this.modelIsFree(currentCatalogModel) ? '免费模型' : '']
+            .filter(Boolean).join(' · '),
+          ...tooltipLines(this.providerPresentation(current.catalogProvider).tooltip),
+        ].filter(Boolean).join('\n')
       : directory.message ?? placeholder);
     const selectedEntry = this.modelEntries.find((entry) => entry.current);
     const efforts = selectedEntry?.reasoningEfforts ?? [];
@@ -1752,14 +1785,41 @@ export class ConversationView {
     return presentation;
   }
 
+  /** Catalog model row backing a picker entry, matched on the canonical id. */
+  private catalogModel(entry: ModelPickerEntry): ProviderModelSnapshot | undefined {
+    // DSH gateway entries already carry canonical provider/model public IDs.
+    const prefix = `${entry.catalogProvider}/`;
+    const modelId = entry.provider === 'wrenyard' && entry.model.startsWith(prefix)
+      ? entry.model.slice(prefix.length) : entry.model;
+    return this.quotaSnapshot?.catalog
+      .find((provider) => provider.id === entry.catalogProvider)?.models
+      ?.find((candidate) => candidate.id === modelId);
+  }
+
+  /**
+   * Themed option tooltip copy: model identity and input capability on the
+   * first line, the free-state note, then the provider quota section as short
+   * readable multiline lines inside the shared themed tooltip.
+   */
   private optionTitle(entry: ModelPickerEntry): string {
     const capability = entry.inputTypes === undefined
       ? '图片：未知'
       : entry.inputTypes.includes('image') ? '图片：支持' : '图片：不支持';
-    const presentation = this.providerPresentation(entry.catalogProvider);
-    return [entry.description ?? entry.model, capability, presentation.tooltip]
-      .filter(Boolean)
-      .join(' · ');
+    const model = this.catalogModel(entry);
+    return [
+      [entry.description ?? entry.model, capability].filter(Boolean).join(' · '),
+      model && this.modelIsFree(model) ? '免费额度' : '',
+      ...tooltipLines(this.providerPresentation(entry.catalogProvider).tooltip),
+    ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Authoritative free-model predicate. Only the catalog's explicit free flag
+   * counts; a missing/zero price is never treated as evidence of a free model,
+   * because unpriced rows are exactly the unknown case.
+   */
+  private modelIsFree(model: ProviderModelSnapshot): boolean {
+    return model.free === true;
   }
 
   private updateModelSelect(): void {
@@ -1778,17 +1838,16 @@ export class ConversationView {
       title: this.optionTitle(entry),
       disabled: !entry.advertised,
       badges: entry.advertised ? (() => {
-        // DSH gateway entries already carry canonical provider/model public IDs.
-        const prefix = `${entry.catalogProvider}/`;
-        const modelId = entry.provider === 'wrenyard' && entry.model.startsWith(prefix)
-          ? entry.model.slice(prefix.length) : entry.model;
-        const model = this.quotaSnapshot?.catalog.find((provider) => provider.id === entry.catalogProvider)?.models?.find((candidate) => candidate.id === modelId);
-        const badges: Array<{ kind: 'fast' | 'very-fast' | 'quota'; label: string }> = [];
+        const model = this.catalogModel(entry);
+        const badges: Array<{ kind: 'fast' | 'very-fast' | 'quota' | 'free'; label: string }> = [];
         if (model?.effectiveTps !== undefined && model.effectiveTps !== null) {
           if (model.effectiveTps > 200) badges.push({ kind: 'very-fast', label: `极速 · ${model.effectiveTps} TPS` });
           else if (model.effectiveTps > 100) badges.push({ kind: 'fast', label: `快速 · ${model.effectiveTps} TPS` });
         }
         if (model?.quotaAbundant) badges.push({ kind: 'quota', label: '额度充足' });
+        // Monochrome free-model icon sits beside the speed/quota badges and is
+        // driven only by the authoritative catalog flag.
+        if (model && this.modelIsFree(model)) badges.push({ kind: 'free', label: '免费模型' });
         return badges;
       })() : undefined,
     })));
@@ -1797,6 +1856,8 @@ export class ConversationView {
   }
 
   private renderSessions(snapshot: ConversationSnapshot): void {
+    // Rebuilt rows lose their tooltip anchors; any open tooltip closes with them.
+    hideThemedTooltip();
     if (snapshot.sessions.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'session-list-empty';
@@ -1811,11 +1872,16 @@ export class ConversationView {
       button.setAttribute('role', 'listitem');
       button.addEventListener('click', () => void this.select(session.id));
       const copy = document.createElement('span');
+      copy.className = 'session-row-copy';
       const title = document.createElement('strong');
+      // Compact row: no preset/DSH subtitle. The full title stays reachable
+      // through the themed hover/focus tooltip since the label ellipsizes.
       title.textContent = session.title;
-      const meta = document.createElement('small');
-      meta.textContent = session.agentPreset ? session.agentPreset : 'DSH';
-      copy.append(title, meta);
+      copy.append(title);
+      // Real themed full-title tooltip: only when the row actually truncates
+      // the label; the long title wraps and scrolls inside the overlay.
+      // Clicking anywhere on the row still selects the session.
+      bindThemedTooltip(button, () => (title.scrollWidth > title.clientWidth ? session.title : ''));
       const time = document.createElement('time');
       time.textContent = session.running ? '工作中' : formatSessionTime(session.updatedAt);
       if (session.running) time.className = 'is-running';
