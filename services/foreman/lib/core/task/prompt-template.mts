@@ -75,7 +75,7 @@ export function runWithTaskPromptCapture<T>(build: () => T): { capture: TaskProm
 export const TASK_PROMPT_PLACEHOLDER_NOTICE = [
   '## Placeholder Bindings',
   'The static instructions above keep stable `[[task-prompt:<label>:<index>]]` placeholders so they stay identical across tasks.',
-  'Each placeholder was filled at render time by the original value bound to it during assembly; those original values are listed in order in the `task-input-bindings` block below, matched by index. Read each placeholder as replaced by its listed value; do not treat the placeholder token itself as content.',
+  'Each placeholder was filled at render time by the original value bound to it during assembly; those original values are listed in order in the `wy-input` block below, matched by index. Read each placeholder as replaced by its listed value; do not treat the placeholder token itself as content.',
 ].join('\n')
 
 /**
@@ -87,7 +87,7 @@ export function renderTaskPromptBindings(capture: TaskPromptCapture): string {
   const bindings = capture.placeholders.map(
     (placeholder, index) => `${placeholder} =\n${escapeClosingWrapperTag(String(capture.values[index]))}`,
   )
-  return ['<task-input-bindings>', ...bindings, '</task-input-bindings>'].join('\n')
+  return ['<wy-input>', ...bindings, '</wy-input>'].join('\n')
 }
 
 function sanitize(label: string): string {
@@ -96,7 +96,7 @@ function sanitize(label: string): string {
 
 /** Escape a closing wrapper tag so captured content cannot terminate its wrapper. */
 function escapeClosingWrapperTag(value: string): string {
-  return value.replaceAll('</task-input-bindings>', '<\\/task-input-bindings>')
+  return value.replaceAll('</wy-input>', '<\\/wy-input>')
 }
 
 export function withTaskPromptTemplates<T extends Function>(prompt: T, templates: readonly TaskPromptTemplate[]): T {

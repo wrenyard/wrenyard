@@ -67,12 +67,12 @@ afterEach(() => {
 })
 
 describe('production structured-output resume boundary', () => {
-  // An observational task declares no writeTargets (no repository write lock),
-  // yet production always launches it with unrestricted YOLO tools. Because the
-  // lock metadata cannot prove the attempt had no side effects, the production
-  // collection boundary must start the agent exactly once and never auto-resume
-  // after malformed structured output.
-  it('starts an observational YOLO task exactly once on malformed structured output', async () => {
+  // An observational task may launch with unrestricted YOLO tools. Corrections
+  // are therefore bounded and restricted to the original native session:
+  // the production collection boundary repairs malformed structured output
+  // in-session (not by replaying the task), capped at the default three
+  // corrections after the initial attempt.
+  it('corrects malformed structured output in-session and bounds the total attempts', async () => {
     const workspace = makeTempDir('foreman-structured-once-')
     const projectDir = join(workspace, 'projects', 'app')
     writeFileSync(join(projectDir, 'observe.task.ts'), `export default defineTask({
@@ -83,11 +83,52 @@ describe('production structured-output resume boundary', () => {
     await discoverTasks(workspace)
 
     let agentStarts = 0
+    const resumedSessions: Array<string | undefined> = []
     const malformedOutput = 'not a foreman delivery block'
     const primitives = {
-      agent: async (_profile: string, _prompt: string): Promise<AgentResult> => {
+      agent: async (_profile: string, _prompt: string, opts?: { resume?: string }): Promise<AgentResult> => {
         agentStarts += 1
+        resumedSessions.push(opts?.resume)
+        // Malformed output and no native session id: the boundary must not
+        // start a fresh replay of the original task.
         return { output: malformedOutput, status: 'done' }
+      },
+    }
+
+    await assert.rejects(
+      executeTask('observe', {}, { workspaceRoot: workspace, primitives }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error, `expected an Error, got ${String(error)}`)
+        assert.match(error.message, /no resumable native session id/u)
+        return true
+      },
+    )
+
+    assert.equal(
+      agentStarts,
+      1,
+      'without a resumable native session the boundary must not start a fresh-task replay',
+    )
+    assert.deepEqual(resumedSessions, [undefined])
+  })
+
+  it('issues the default three corrections when the original attempt exposes a resumable session', async () => {
+    const workspace = makeTempDir('foreman-structured-corrections-')
+    const projectDir = join(workspace, 'projects', 'app')
+    writeFileSync(join(projectDir, 'observe.task.ts'), `export default defineTask({
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }).strict(),
+  prompt: () => 'observe something',
+})\n`, 'utf-8')
+    await discoverTasks(workspace)
+
+    let agentStarts = 0
+    const resumedSessions: Array<string | undefined> = []
+    const primitives = {
+      agent: async (_profile: string, _prompt: string, opts?: { resume?: string }): Promise<AgentResult> => {
+        agentStarts += 1
+        resumedSessions.push(opts?.resume)
+        return { output: 'still not a foreman delivery block', status: 'done', nativeSessionId: 'native_observe' }
       },
     }
 
@@ -99,10 +140,11 @@ describe('production structured-output resume boundary', () => {
       },
     )
 
-    assert.equal(
-      agentStarts,
-      1,
-      'an observational YOLO task must start exactly once; the production boundary forces maxResumeAttempts 0',
+    assert.equal(agentStarts, 4, 'initial attempt plus the default three in-session corrections')
+    assert.deepEqual(
+      resumedSessions,
+      [undefined, 'native_observe', 'native_observe', 'native_observe'],
+      'every correction must continue the original native session',
     )
   })
 })

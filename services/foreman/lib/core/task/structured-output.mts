@@ -137,17 +137,17 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   const schema = compileSchema(opts.outputSchema)
   assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
   const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
-  // ── Mutation-aware resume budget ──
+  // ── Mutation-aware evidence only ──
   // Task coordination metadata, not the universally-YOLO runtime mode, decides
-  // whether an attempt may have changed repository state. Direct legacy callers
-  // that omit the marker retain the old conservative permission fallback.
-  // Capability packs remain one-shot because their mutation risk is not
-  // classified here.
+  // whether an attempt may have changed repository state. It no longer gates
+  // retries: every task — including edit/commit — gets the same bounded
+  // in-session output correction. The marker is only used to attach
+  // unverified-side-effect evidence when every attempt is exhausted.
   const mutationCapable =
     (opts.repoWriteLock ?? (opts.permission !== 'readonly')) ||
     (opts.capabilities?.length ?? 0) > 0
-  const configuredResumeAttempts = opts.maxResumeAttempts ?? 3
-  const maxResumeAttempts = mutationCapable ? 0 : configuredResumeAttempts
+  // Default remains three corrections after the initial attempt.
+  const maxResumeAttempts = opts.maxResumeAttempts ?? 3
   let lastValidationErrors: string[] | undefined
   let lastOutputExcerpt: string | undefined
   let lastActivity: string | undefined
@@ -158,11 +158,11 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   // ── Main attempt loop: dispatch injected agent runner, parse delivery output ──
   //
   // timeoutMs is one total model-execution budget shared by the initial attempt
-  // and every structured resume attempt: the single deadline is fixed here when
-  // collection begins (queue/admission/pre-gates run before this function and
-  // never consume it), and it is never renewed. Before each attempt the
+  // and every structured correction attempt: the single deadline is fixed here
+  // when collection begins (queue/admission/pre-gates run before this function
+  // and never consume it), and it is never renewed. Before each attempt the
   // dispatched timeout is min(attempt cap, positive remaining total) — the
-  // initial cap is the total budget, the retry cap stays
+  // initial cap is the total budget, the correction cap stays
   // STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS. An expired budget throws the existing
   // agent-timeout classification without starting another agent.
   const deadlineMs = Date.now() + totalBudgetMs
@@ -175,6 +175,19 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         attempt,
         totalBudgetMs,
         lastActivity ?? 'no model execution started after the shared task execution deadline',
+      )
+    }
+    // A correction is only ever a continuation of the original native session,
+    // on the same resolved model/profile. Without a concrete resumable session
+    // there is nothing safe to correct: fail with a precise diagnostic instead
+    // of replaying the original task as a fresh run. The session check runs
+    // before profile resolution so the missing-session diagnostic is always the
+    // one reported.
+    if (attempt > 0 && !resume) {
+      throw new Error(
+        `Cannot correct invalid structured output (attempt ${attempt + 1}): the previous turn returned no resumable native session id. ` +
+          'A correction continues the original native session only; replaying the original task as a fresh run is refused. ' +
+          `Previous diagnostics: ${describeCorrectionErrors(lastValidationErrors)}`,
       )
     }
     const attemptProfile = attempt === 0
@@ -204,7 +217,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         },
       )
     lastExecutionId = terminal.executionId ?? lastExecutionId
-    resume = terminal.nativeSessionId ?? resume
+    resume = terminal.nativeSessionId?.trim() || resume
     if (terminal.resolvedProfile) {
       resolvedProfile = terminal.resolvedProfile
     }
@@ -268,7 +281,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     ? `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema. Fix protocol, JSON, or schema errors and retry.`
     : `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema.`
   const remediation = mutationCapable
-    ? `${remediationBase} The action outcome is UNVERIFIED and side effects may have occurred: inspect the exact task targets and the captured evidence before any explicit retry, and never retry automatically. Do not infer success from a clean working tree or a stable HEAD.`
+    ? `${remediationBase} Every automatic in-session output correction was attempted and exhausted. The action outcome is UNVERIFIED and side effects may have occurred: inspect the exact task targets and the captured evidence before any explicit task replay, and never auto-replay. Do not infer success from a clean working tree or a stable HEAD.`
     : remediationBase
 
   const gateErr = new GateFailureError('post', 'output-schema',
@@ -278,7 +291,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         'raw output excerpt captured',
         ...(hasPlaceholderErrors ? ['placeholder result rejected'] : []),
         ...(validationErrors.length > 0 ? [`${validationErrors.length} structured output errors`] : []),
-        ...(mutationCapable ? ['mutation-capable run did not retry structured delivery'] : []),
+        ...(mutationCapable ? ['mutation-capable run exhausted in-session output corrections'] : []),
       ].join('; ')
       : 'no valid Foreman structured output delivery block',
     {
@@ -472,17 +485,23 @@ function formatDiagnostic(diagnostic: StructuredOutputDiagnostic): string {
 
 // ── Prompt helpers ──
 
+/**
+ * Stable output contract and schema first, then the task instruction body.
+ * The contract is byte-identical for the same output schema, so it leads the prompt and the
+ * per-run task instructions follow it.
+ */
 export function firstPrompt(instructions: string, schema: CompiledSchema): string {
   return [
-    instructions,
-    '',
     outputContract(schema),
+    '',
+    instructions,
   ].join('\n')
 }
 
 function outputContract(schema: CompiledSchema): string {
   return [
-    '<foreman-output-contract mode="structured-xml">',
+    '<wy-system>',
+    '<wy-instruction mode="structured-xml">',
     'IMPORTANT: Return one Foreman structured output block as your final response:',
     DELIVERY_START,
     SUMMARY_START,
@@ -497,34 +516,70 @@ function outputContract(schema: CompiledSchema): string {
     `Foreman also records the ${SUMMARY_START} text as the task summary; if the output schema has a summary field, keep it consistent with ${SUMMARY_START}.`,
     `The ${RESULT_START} content must be one strict JSON value matching the output schema below.`,
     `Do not include markdown fences, prose, comments, or explanations inside ${RESULT_START}.`,
+    'Escape literal newline, tab, and other control characters inside JSON strings (`\\n`, `\\t`, `\\u0000`); never emit a raw control character inside a JSON string.',
     `Prefer not to include prose before ${DELIVERY_START} or after ${DELIVERY_END}; Foreman extracts the first complete block and ignores surrounding prose.`,
     'If the delivery block is missing or invalid, the task will fail.',
     '',
     'Output schema:',
     JSON.stringify(schema.schema, null, 2),
-    '</foreman-output-contract>',
+    '</wy-instruction>',
+    '</wy-system>',
   ].join('\n')
 }
 
+/**
+ * Correction-only continuation of the original native session.
+ *
+ * Stable `wy-system`/`wy-instruction` (correction rules + schema) come first,
+ * then the per-attempt `wy-ctx-error` diagnostics, with the `wy-sysinfo`
+ * attempt counter last.
+ */
 export function resumePrompt(
   attempt: number,
   schema: CompiledSchema,
   validationErrors?: string[],
 ): string {
   const normalizedDiagnostics = normalizeDiagnostics(validationErrors)
-  const errors = normalizedDiagnostics.length > 0
-    ? `\n\nErrors from your previous output:\n${formatDiagnosticsForPrompt(normalizedDiagnostics)}\n\nFix these errors and return one corrected ${DELIVERY_START} block.`
-    : ''
   return [
-    `Your previous turn did not return a valid Foreman structured output delivery block.`,
-    `Retry ${attempt}: Return one corrected ${DELIVERY_START} block.`,
-    `${RESULT_START} must contain one strict JSON value matching the output schema.`,
-    `Do not include markdown fences, prose, comments, or explanations inside ${RESULT_START}.`,
-    errors,
-    '',
-    'Output schema:',
-    JSON.stringify(schema.schema, null, 2),
+    '<wy-system>',
+    [
+      '<wy-instruction>',
+      '## Output Correction Only',
+      `Your previous final output did not produce a valid Foreman ${DELIVERY_START} structured delivery block.`,
+      'This is a correction of that final output only.',
+      'Do NOT use any tools or actions, do not repeat, redo, or continue the original task, and do not change any files, repository, or external state.',
+      `Only fix the previous final output so it becomes one valid ${DELIVERY_START} block.`,
+      `The corrected block must contain ${SUMMARY_START} and ${RESULT_START}, and ${RESULT_START} must hold one strict JSON value matching the output schema below.`,
+      `Do not include markdown fences, prose, comments, or explanations inside ${RESULT_START}.`,
+      'Escape literal newline, tab, and other control characters inside JSON strings (`\\n`, `\\t`, `\\u0000`); never emit a raw control character inside a JSON string.',
+      '',
+      'Output schema:',
+      JSON.stringify(schema.schema, null, 2),
+      '</wy-instruction>',
+    ].join('\n'),
+    renderCorrectionDiagnostics(normalizedDiagnostics),
+    `<wy-sysinfo attempt="${attempt}"/>`,
+    '</wy-system>',
   ].join('\n')
+}
+
+function renderCorrectionDiagnostics(diagnostics: StructuredOutputDiagnostic[]): string {
+  const body = diagnostics.length > 0
+    ? formatDiagnosticsForPrompt(diagnostics)
+    : 'No structured diagnostics were captured for the previous output.'
+  return [
+    '<wy-ctx-error>',
+    body.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+    '</wy-ctx-error>',
+  ].join('\n')
+}
+
+/** Compact, single-line rendering of the last correction errors for a failure message. */
+function describeCorrectionErrors(validationErrors: string[] | undefined): string {
+  const normalized = normalizeDiagnostics(validationErrors)
+  return normalized.length > 0
+    ? normalized.map((diagnostic) => `${diagnostic.kind}: ${diagnostic.message}`).join('; ')
+    : 'none captured'
 }
 
 function normalizeDiagnostics(diagnostics: string[] | undefined): StructuredOutputDiagnostic[] {

@@ -60,7 +60,7 @@ describe('core task structured-output', () => {
     assert.equal(starts[0].permission, 'yolo')
     assert.equal('mcp' in starts[0], false)
     assert.match(starts[0].prompt, /Return one Foreman structured output block/u)
-    assert.match(starts[0].prompt, /^classify\n\n<foreman-output-contract mode="structured-xml">/u)
+    assert.match(starts[0].prompt, /^<wy-system>\n<wy-instruction mode="structured-xml">/u)
     assert.match(starts[0].prompt, /<foreman-task-output>/u)
     assert.match(starts[0].prompt, /extracts the first complete block/iu)
     assert.doesNotMatch(starts[0].prompt, /submit_result|MCP/u)
@@ -191,7 +191,7 @@ describe('core task structured-output', () => {
     const prompts: string[] = []
     const agent: StructuredOutputAgent = async (_profile, prompt) => {
       prompts.push(prompt)
-      return { output: xmlOutput({ label: 'placeholder' }), status: 'done' }
+      return { output: xmlOutput({ label: 'placeholder' }), status: 'done', nativeSessionId: 'native_placeholder' }
     }
 
     let caughtErr: unknown
@@ -233,6 +233,125 @@ describe('core task structured-output', () => {
     assert.equal(calls, 2)
     assert.deepEqual(resumeIds, [undefined, 'native_queued'])
     assert.deepEqual(result, { label: 'done after retry' })
+  })
+
+  it('continues the original native session on the same resolved profile for a malformed first output', async () => {
+    let calls = 0
+    const seenProfiles: string[] = []
+    const seenResumes: Array<string | undefined> = []
+    const seenPrompts: string[] = []
+
+    const result = await collectWithAgent(async (profile, prompt, opts) => {
+      calls += 1
+      seenProfiles.push(profile)
+      seenResumes.push((opts as { resume?: string } | undefined)?.resume)
+      seenPrompts.push(prompt)
+      if (calls === 1) {
+        return {
+          output: 'no delivery block at all',
+          status: 'done',
+          nativeSessionId: 'native_same_session',
+          resolvedProfile: 'codebuddy/deepseek-v4-flash:cb',
+        } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
+      }
+      return {
+        output: xmlOutput({ label: 'corrected in session' }),
+        status: 'done',
+        nativeSessionId: 'native_same_session',
+      }
+    }, { maxResumeAttempts: 1 })
+
+    assert.equal(calls, 2)
+    assert.equal(seenProfiles[0], 'test')
+    assert.equal(seenProfiles[1], 'codebuddy/deepseek-v4-flash:cb',
+      'the correction must reuse the resolved model/profile of the original attempt')
+    assert.deepEqual(seenResumes, [undefined, 'native_same_session'],
+      'the correction must resume the original native session')
+    assert.match(seenPrompts[1], /<wy-sysinfo attempt="1"\/>/u)
+    assert.deepEqual(result, { label: 'corrected in session' })
+  })
+
+  it('fails with a clear diagnostic instead of replaying the task when no resumable session exists', async () => {
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        // Malformed output with no native session id: there is nothing safe to
+        // continue, and a fresh-task replay must never happen.
+        return { output: 'malformed output without a session', status: 'done' }
+      }, { maxResumeAttempts: 3 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 1, 'without a resumable session no further agent attempt may start')
+    assert.ok(caughtErr instanceof Error, `Expected Error, got ${caughtErr?.constructor?.name}`)
+    assert.match((caughtErr as Error).message, /no resumable native session id/u)
+    assert.match((caughtErr as Error).message, /replaying the original task as a fresh run is refused/u)
+  })
+
+  it('applies the default three corrections after the initial attempt for a mutation-capable run', async () => {
+    stubDateNow()
+    let calls = 0
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async () => {
+        calls += 1
+        return {
+          output: 'malformed mutation-capable output',
+          status: 'done',
+          nativeSessionId: 'native_edit_default_cap',
+          resolvedProfile: 'forge/test',
+        } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
+      }, { permission: 'edit', maxResumeAttempts: 3, timeoutMs: 300_000 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    assert.equal(calls, 4, 'edit/commit tasks get the default three corrections after the initial attempt')
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+    const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
+    assert.equal(evidence?.outcome_unverified, true)
+    assert.equal(evidence?.side_effects_may_have_occurred, true)
+  })
+
+  it('stops after three corrections and reports the shared cumulative timeout', async () => {
+    const clock = stubDateNow()
+    const seenTimeouts: Array<number | undefined> = []
+    let calls = 0
+
+    let caughtErr: unknown
+    try {
+      await collectWithAgent(async (_profile, _prompt, opts) => {
+        calls += 1
+        seenTimeouts.push(opts?.timeoutMs)
+        // Correctable malformed output every time: the delivery wrapper parses
+        // but the result JSON fails the schema, so the correction loop runs
+        // until it either succeeds or the shared budget is exhausted.
+        return {
+          output: xmlOutput({ wrong: true }),
+          status: 'done',
+          nativeSessionId: 'native_cumulative_timeout',
+          executionId: 'exec_cumulative_timeout',
+        } as StructuredOutputAgentResult & { nativeSessionId: string; executionId: string }
+      }, { timeoutMs: 180_000, maxResumeAttempts: 3 })
+    } catch (err) {
+      caughtErr = err
+    }
+
+    // The initial attempt runs the 180s total cap; each correction runs the 60s
+    // retry cap and consumes nothing, so the cumulative deadline survives.
+    assert.deepEqual(seenTimeouts, [
+      180_000,
+      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
+      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
+      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
+    ])
+    assert.equal(calls, 4, 'the configured cap is three corrections after the initial attempt')
+    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
+    assert.ok((caughtErr as GateFailureError).failure.evidence, 'exhausted corrections keep their diagnostics')
+    void clock
   })
 
   it('forwards the same private CodeBuddy execution binding to the initial attempt and retry', async () => {
@@ -366,7 +485,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async (_profile, _prompt, opts) => {
         calls += 1
         seenTimeouts.push(opts?.timeoutMs)
-        return { output: xmlOutput({ wrong: true }), status: 'done' }
+        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_short_cap' }
       }, { timeoutMs: totalBudgetMs, maxResumeAttempts: 2 })
     } catch (err) {
       caughtErr = err
@@ -386,7 +505,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async (_profile, _prompt, opts) => {
         seenTimeouts.push(opts?.timeoutMs)
         if (seenTimeouts.length === 1) clock.advance(175_000)
-        return { output: xmlOutput({ wrong: true }), status: 'done' }
+        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_capped' }
       }, { timeoutMs: 180_000, maxResumeAttempts: 1 })
     } catch (err) {
       caughtErr = err
@@ -408,7 +527,7 @@ describe('core task structured-output', () => {
         seenTimeouts.push(opts?.timeoutMs)
         if (seenTimeouts.length === 1) clock.advance(15_000)
         if (seenTimeouts.length === 2) clock.advance(10_000)
-        return { output: xmlOutput({ wrong: true }), status: 'done' }
+        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_never_renewed' }
       }, { timeoutMs: 120_000, maxResumeAttempts: 2 })
     } catch (err) {
       caughtErr = err
@@ -487,46 +606,63 @@ describe('core task structured-output', () => {
     let calls = 0
     const result = await collectWithAgent(async () => {
       calls += 1
-      if (calls === 1) return { output: xmlOutput({ wrong: true }), status: 'done' }
-      return { output: xmlOutput({ label: 'all done after retry' }), status: 'done' }
+      if (calls === 1) return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_recover' }
+      return { output: xmlOutput({ label: 'all done after retry' }), status: 'done', nativeSessionId: 'native_recover' }
     }, { maxResumeAttempts: 1 })
 
     assert.equal(calls, 2)
     assert.deepEqual(result, { label: 'all done after retry' })
   })
 
-  it('firstPrompt and resumePrompt require XML delivery without MCP instructions', () => {
+  it('firstPrompt leads with the stable output contract and resumePrompt layers correction-only rules', () => {
     const schema = compileSchema(labelSchema())
 
     const first = firstPrompt('classify', schema)
     assert.match(first, /Return one Foreman structured output block/u)
-    assert.match(first, /^classify\n\n<foreman-output-contract mode="structured-xml">/u)
+    assert.match(first, /^<wy-system>\n<wy-instruction mode="structured-xml">/u)
     assert.match(first, /<foreman-task-output>/u)
     assert.match(first, /<summary>/u)
     assert.match(first, /<result>/u)
     assert.match(first, /Do not include markdown fences/u)
     assert.match(first, /extracts the first complete block/u)
-    assert.match(first, /<\/foreman-output-contract>$/u)
+    assert.match(first, /Escape literal newline, tab, and other control characters/u)
     assert.doesNotMatch(first, /\n---\n/u)
     assert.doesNotMatch(first, /submit_result|MCP|FALLBACK/u)
     assert.match(first, /Output schema/u)
     assert.ok(first.includes(JSON.stringify(schema.schema, null, 2)))
+    // The contract precedes the per-run dynamic instruction body.
+    assert.ok(first.indexOf('<wy-instruction') < first.indexOf('classify'))
+    assert.ok(first.endsWith('classify'))
 
     const resume = resumePrompt(2, schema, [
       'protocol error: missing </summary> closing tag',
       'json error: <result> is not valid JSON',
       'schema error: <result> schema validation failed: / must have required property label',
     ])
-    assert.match(resume, /Retry 2/u)
+    // Stable correction-only system instruction + schema come first.
+    assert.match(resume, /^<wy-system>\n<wy-instruction>/u)
+    assert.match(resume, /Output Correction Only/u)
+    assert.match(resume, /Do NOT use any tools or actions/u)
+    assert.match(resume, /Only fix the previous final output/iu)
+    assert.match(resume, /do not repeat, redo, or continue the original task/iu)
+    assert.match(resume, /Do not include markdown fences/u)
+    assert.match(resume, /Escape literal newline, tab, and other control characters/u)
+    assert.match(resume, /Output schema/u)
     assert.match(resume, /<foreman-task-output>/u)
+    // Diagnostics follow the stable instruction, and the attempt counter is last.
+    const instructionEnd = resume.indexOf('</wy-instruction>')
+    const diagnosticsAt = resume.indexOf('<wy-ctx-error>')
+    const sysinfoAt = resume.indexOf('<wy-sysinfo')
+    assert.ok(instructionEnd >= 0 && diagnosticsAt > instructionEnd && sysinfoAt > diagnosticsAt)
+    assert.ok(resume.trimEnd().endsWith('</wy-system>'))
+    assert.match(resume, /<wy-sysinfo attempt="2"\/>/u)
     assert.match(resume, /Protocol errors:/u)
     assert.match(resume, /JSON errors:/u)
     assert.match(resume, /Schema errors:/u)
-    assert.match(resume, /missing <\/summary>/u)
+    assert.match(resume, /missing &lt;\/summary&gt;/u)
     assert.match(resume, /not valid JSON/u)
     assert.match(resume, /required property label/u)
     assert.doesNotMatch(resume, /submit_result|MCP|FALLBACK/u)
-    assert.match(resume, /Output schema/u)
   })
 
   it('timeout status wins over valid-looking terminal JSON', async () => {
@@ -607,8 +743,8 @@ describe('core task structured-output', () => {
     const result = await collectWithAgent(async (profile, _prompt) => {
       calls += 1
       seenProfiles.push(profile)
-      if (calls === 1) return { output: 'bad output', status: 'done' }
-      return { output: xmlOutput({ label: 'retried ok' }), status: 'done' }
+      if (calls === 1) return { output: 'bad output', status: 'done', nativeSessionId: 'native_legacy_verbatim' }
+      return { output: xmlOutput({ label: 'retried ok' }), status: 'done', nativeSessionId: 'native_legacy_verbatim' }
     }, { maxResumeAttempts: 1, profile: 'forge/codex-luna' })
 
     assert.equal(calls, 2)
@@ -622,6 +758,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async () => ({
         output: 'invalid output',
         status: 'done',
+        nativeSessionId: 'native_policy_no_profile',
       }), { maxResumeAttempts: 1, profile: 'forge/general' })
     } catch (err) {
       caughtErr = err
@@ -763,24 +900,27 @@ describe('core task structured-output', () => {
       'the original agent error text must be preserved')
   })
 
-  it('forwards selected capabilities to the first attempt without resuming it', async () => {
+  it('forwards selected capabilities and corrects in-session within the mutation-capable default', async () => {
     const seenCaps: Array<readonly string[] | undefined> = []
+    let calls = 0
     const agent: StructuredOutputAgent = async (_profile, _prompt, opts) => {
+      calls += 1
       seenCaps.push((opts as { capabilities?: readonly string[] } | undefined)?.capabilities)
-      return { output: 'invalid output', status: 'done', nativeSessionId: 'native_cap' }
+      if (calls === 1) {
+        return { output: 'invalid output', status: 'done', nativeSessionId: 'native_cap' }
+      }
+      return { output: xmlOutput({ label: 'capability corrected' }), status: 'done', nativeSessionId: 'native_cap' }
     }
 
-    await assert.rejects(
-      () => collectWithAgent(agent, {
-        maxResumeAttempts: 1,
-        capabilities: ['browser-use', 'computer-use'],
-      }),
-      (error: unknown) => error instanceof GateFailureError
-        && (error.failure.evidence as Record<string, unknown> | undefined)?.outcome_unverified === true,
-    )
+    const result = await collectWithAgent(agent, {
+      capabilities: ['browser-use', 'computer-use'],
+      maxResumeAttempts: 1,
+    })
 
-    assert.equal(seenCaps.length, 1, 'a capability-bearing attempt must be one-shot')
+    assert.deepEqual(result, { label: 'capability corrected' })
+    assert.equal(calls, 2, 'a capability-bearing attempt still gets bounded in-session correction')
     assert.deepEqual(seenCaps[0], ['browser-use', 'computer-use'], 'first attempt must have capabilities')
+    assert.deepEqual(seenCaps[1], ['browser-use', 'computer-use'], 'the correction keeps the same capabilities')
   })
 
   it('passes capabilities without throwing when no capabilities provided', async () => {
@@ -792,7 +932,7 @@ describe('core task structured-output', () => {
     assert.deepEqual(result, { label: 'no caps' })
   })
 
-  it('invokes edit permission at most once despite maxResumeAttempts>0 and marks output unverified', async () => {
+  it('records unverified side-effect evidence when a mutation-capable run exhausts every correction', async () => {
     let calls = 0
     let caughtErr: unknown
     try {
@@ -804,30 +944,30 @@ describe('core task structured-output', () => {
       caughtErr = err
     }
 
-    assert.equal(calls, 1, 'edit permission must be one-shot regardless of maxResumeAttempts')
+    assert.equal(calls, 3, 'edit permission corrects in-session while it stays bounded')
     assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
     const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
     assert.ok(evidence)
     assert.equal(evidence.outcome_unverified, true)
     assert.equal(evidence.side_effects_may_have_occurred, true)
     assert.match(caughtErr.failure.remediation ?? '', /UNVERIFIED/u)
-    assert.match(caughtErr.failure.remediation ?? '', /never retry automatically/u)
+    assert.match(caughtErr.failure.remediation ?? '', /never auto-replay/u)
     assert.match(caughtErr.failure.remediation ?? '', /clean working tree or a stable HEAD/u)
   })
 
-  it('invokes yolo permission at most once despite maxResumeAttempts>0 and marks output unverified', async () => {
+  it('records unverified side-effect evidence for a yolo run that exhausts every correction', async () => {
     let calls = 0
     let caughtErr: unknown
     try {
       await collectWithAgent(async () => {
         calls += 1
         return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_yolo_unverified' }
-      }, { maxResumeAttempts: 3, permission: 'yolo' })
+      }, { maxResumeAttempts: 1, permission: 'yolo' })
     } catch (err) {
       caughtErr = err
     }
 
-    assert.equal(calls, 1, 'yolo permission must be one-shot regardless of maxResumeAttempts')
+    assert.equal(calls, 2, 'yolo permission also corrects in-session while it stays bounded')
     assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
     const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
     assert.ok(evidence)
@@ -835,19 +975,19 @@ describe('core task structured-output', () => {
     assert.equal(evidence.side_effects_may_have_occurred, true)
   })
 
-  it('treats an absent permission conservatively as mutation-capable and cannot resume', async () => {
+  it('treats an absent permission conservatively as mutation-capable and still corrects in-session', async () => {
     let calls = 0
     let caughtErr: unknown
     try {
       await collectWithAgent(async () => {
         calls += 1
         return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_missing_perm' }
-      }, { maxResumeAttempts: 2, permission: undefined })
+      }, { maxResumeAttempts: 1, permission: undefined })
     } catch (err) {
       caughtErr = err
     }
 
-    assert.equal(calls, 1, 'absent permission must be one-shot, never resuming')
+    assert.equal(calls, 2, 'absent permission is conservatively mutation-capable yet still corrects in-session')
     assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
     const evidence = caughtErr.failure.evidence as Record<string, unknown> | undefined
     assert.ok(evidence)
