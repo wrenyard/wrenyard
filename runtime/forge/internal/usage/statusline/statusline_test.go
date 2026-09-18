@@ -52,7 +52,7 @@ func TestRenderGolden(t *testing.T) {
 				"context_window_size": 200000.0,
 			},
 		},
-		Profile:       Profile{Name: "ccc", Client: "claude", Provider: "anthropic"},
+		Profile:       Profile{Name: "ccc", Client: "claude", Provider: "claude-coding"},
 		Billing:       billing,
 		QuotaProvider: staticQuota{q: quota.Quota{Used: quota.Float64(100), Total: quota.Float64(7000)}},
 		Home:          dir,
@@ -68,7 +68,7 @@ func TestRenderWithoutContextWindowDoesNotPanic(t *testing.T) {
 	out := Render(Context{
 		Context: context.Background(),
 		Input:   Input{Model: Model{ID: "claude-sonnet-4"}},
-		Profile: Profile{Name: "ccc", Provider: "anthropic", Segments: []string{"model", "context"}},
+		Profile: Profile{Name: "ccc", Provider: "claude-coding", Segments: []string{"model", "context"}},
 		Billing: Billing{},
 	})
 	for _, want := range []string{"🤖 Sonnet 4", "🧠 0.0% · 200K"} {
@@ -91,7 +91,7 @@ func TestTranscriptLineWithoutMessageIsSkippedSafely(t *testing.T) {
 
 func TestDetectProfileCbDs(t *testing.T) {
 	profiles := map[string]Profile{
-		"ccc":     {Name: "ccc", Client: "claude", Provider: "anthropic"},
+		"ccc":     {Name: "ccc", Client: "claude", Provider: "claude-coding"},
 		"cb-ds":   {Name: "cb-ds", Client: "codebuddy", Provider: "codebuddy"},
 		"cb-dsf":  {Name: "cb-dsf", Client: "codebuddy", Provider: "codebuddy"},
 		"unknown": {Name: "unknown"},
@@ -139,7 +139,7 @@ func TestWindowRenderIncludesReset(t *testing.T) {
 	out := Render(Context{
 		Context: context.Background(),
 		Input:   Input{Model: Model{ID: "claude-opus-4-8"}},
-		Profile: Profile{Name: "ccc", Provider: "anthropic", Segments: []string{"quota"}},
+		Profile: Profile{Name: "ccc", Provider: "claude-coding", Segments: []string{"quota"}},
 		Billing: Billing{},
 		QuotaProvider: staticQuota{q: quota.Quota{Windows: []quota.Window{
 			{Name: "5h", Pct: 82, ResetsAt: &reset, WindowMinutes: 300},
@@ -401,7 +401,7 @@ func TestModelDisplayNameFromStdin(t *testing.T) {
 	out := Render(Context{
 		Context: context.Background(),
 		Input:   Input{Model: Model{DisplayName: "claude-fable-5"}},
-		Profile: Profile{Name: "ccc", Provider: "anthropic", Segments: []string{"model"}},
+		Profile: Profile{Name: "ccc", Provider: "claude-coding", Segments: []string{"model"}},
 		Billing: billing,
 	})
 	if !strings.Contains(out, "Fable 5") {
@@ -430,7 +430,7 @@ func TestQuotaSegmentStaleMarker(t *testing.T) {
 			out := Render(Context{
 				Context:       context.Background(),
 				Input:         Input{Model: Model{ID: "claude-sonnet-4"}},
-				Profile:       Profile{Name: "ccc", Provider: "anthropic", Segments: []string{"quota"}},
+				Profile:       Profile{Name: "ccc", Provider: "claude-coding", Segments: []string{"quota"}},
 				Billing:       Billing{},
 				QuotaProvider: staticQuota{q: tc.q},
 			})
@@ -462,7 +462,7 @@ func TestProfileFamilyZhipuCodingPlan(t *testing.T) {
 func TestDetectProfileZhipu(t *testing.T) {
 	profiles := map[string]Profile{
 		"ccg":     {Name: "ccg", Client: "claude", Provider: "zhipu-coding"},
-		"ccc":     {Name: "ccc", Client: "claude", Provider: "anthropic"},
+		"ccc":     {Name: "ccc", Client: "claude", Provider: "claude-coding"},
 		"unknown": {Name: "unknown"},
 	}
 	// Should detect as ccg family via provider match.

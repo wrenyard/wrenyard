@@ -21,7 +21,7 @@ const SRC_CURSOR = 'https://cursor.com/docs/models-and-pricing';
 const clients: readonly ClientDefinition[] = [
   // Native WebSearch is documented at https://code.claude.com/docs/en/tools-reference
   // (checked 2026-09-10); native-capable only against its exact nativeProvider.
-  { id: 'claude', nativeProvider: 'anthropic', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true },
+  { id: 'claude', nativeProvider: 'claude-coding', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true },
   { id: 'codebuddy', nativeProvider: 'codebuddy', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
   // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
   // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
@@ -40,7 +40,7 @@ const clients: readonly ClientDefinition[] = [
     // (checked 2026-09-10); our Grok gateway projection stays SupportsBackendSearch=false.
     supportsNativeWebSearch: true,
   },
-  { id: 'opencode', nativeProvider: 'opencode-native', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
+  { id: 'opencode', nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
 ];
 
 /**
@@ -132,12 +132,12 @@ const cursorGptThinkingMappings = (modelId: string): Readonly<Record<ThinkingLev
 
 const builtinProviders: readonly RawProviderDefinition[] = [
   {
-    id: 'anthropic', displayName: 'Claude Subscription', credentialResolver: 'claude',
-    nativeClients: ['claude'], models: [], quotaProvider: 'anthropic', useClientBinary: true,
+    id: 'claude-coding', displayName: 'Claude', credentialResolver: 'claude',
+    nativeClients: ['claude'], models: [], quotaProvider: 'claude-coding', useClientBinary: true,
   },
   {
-    id: 'anthropic-api', displayName: 'Anthropic API', credentialResolver: 'forge-managed',
-    defaultModel: 'claude-sonnet-5',
+    id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'forge-managed',
+    defaultModel: 'claude-sonnet-5', quotaProvider: 'anthropic',
     models: [
       { ...model('claude-fable-5', 1_000_000, 131_072), family: 'claude', supports1MContext: true },
       { ...model('claude-opus-5', 1_000_000, 131_072, CANONICAL_MODELS['claude-opus-5']), family: 'claude', claudeTier: 'opus', supports1MContext: true },
@@ -253,7 +253,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     },
   },
   {
-    id: 'minimax', displayName: 'MiniMax Open Platform', credentialResolver: 'forge-managed', defaultModel: 'MiniMax-M3',
+    id: 'minimax', displayName: 'MiniMax', credentialResolver: 'forge-managed', defaultModel: 'MiniMax-M3',
     models: [model('MiniMax-M3', 1_000_000, 131_072, CANONICAL_MODELS['minimax-m3']), model('MiniMax-M2.7', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7']), model('MiniMax-M2.7-highspeed', 204_800, 32_768, CANONICAL_MODELS['minimax-m2.7-highspeed'])],
     protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   },
@@ -263,12 +263,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   },
   {
-    id: 'moonshot', displayName: 'Moonshot API', credentialResolver: 'forge-managed', defaultModel: 'kimi-k3',
+    id: 'moonshot', displayName: 'Moonshot', credentialResolver: 'forge-managed', defaultModel: 'kimi-k3',
     models: [model('kimi-k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'])],
     protocols: [openAI('https://api.moonshot.cn/v1/chat/completions')],
   },
   {
-    id: 'openai', displayName: 'OpenAI API', credentialResolver: 'forge-managed', defaultModel: 'gpt-5.6-sol',
+    id: 'openai', displayName: 'OpenAI', credentialResolver: 'forge-managed', defaultModel: 'gpt-5.6-sol',
     models: [model('gpt-5.6-sol', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-sol'], THINKING_FULL), model('gpt-5.6-terra', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-terra'], THINKING_FULL), model('gpt-5.6-luna', 1_050_000, 131_072, CANONICAL_MODELS['gpt-5.6-luna'], THINKING_FULL)],
     thinkingMappings: Object.fromEntries(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'].map(id => [id, {
       codex: effortLadder(THINKING_FULL), codebuddy: effortLadder(THINKING_FULL), grok: effortLadder(THINKING_FULL),
@@ -279,7 +279,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     ],
   },
   {
-    id: 'opencode-native', displayName: 'OpenCode Native', credentialResolver: 'forge-managed', nativeClients: ['opencode'], models: [],
+    id: 'deepseek', displayName: 'DeepSeek', credentialResolver: 'forge-managed', defaultModel: 'deepseek-flash',
+    models: [
+      model('deepseek-flash', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
+      model('deepseek', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
+    ],
+    protocols: [openAI('https://api.deepseek.com/chat/completions')],
   },
   {
     id: 'qwen', displayName: 'Qwen Model Studio', credentialResolver: 'forge-managed', defaultModel: 'qwen3.7-plus',
@@ -292,7 +297,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://coding.dashscope.aliyuncs.com/v1/chat/completions'), anthropic('https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages')],
   },
   {
-    id: 'spacex-ai', displayName: 'SpaceX AI', credentialResolver: 'grok-oauth', nativeClients: ['grok'], defaultModel: 'grok-4.5', quotaProvider: 'spacex-ai', useClientBinary: true,
+    id: 'spacex-ai', displayName: 'Super Grok', credentialResolver: 'grok-oauth', nativeClients: ['grok'], defaultModel: 'grok-4.5', quotaProvider: 'spacex-ai', useClientBinary: true,
     models: [model('grok-4.5', 2_000_000, 131_072)],
   },
   {
@@ -306,7 +311,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://ark.cn-beijing.volces.com/api/v3/chat/completions')],
   },
   {
-    id: 'zhipu', displayName: 'Zhipu Open Platform', credentialResolver: 'forge-managed', defaultModel: 'glm-5-turbo',
+    id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'forge-managed', defaultModel: 'glm-5-turbo',
     models: [model('glm-5-turbo', 202_752, 32_768), model('glm-4.7-flash', 202_752, 32_768)],
     protocols: [openAI('https://open.bigmodel.cn/api/paas/v4/chat/completions')],
   },
@@ -316,13 +321,51 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'), anthropic('https://open.bigmodel.cn/api/anthropic/v1/messages')],
   },
   {
-    id: 'opencode-zen', displayName: 'OpenCode Zen 免费模型', credentialResolver: 'forge-managed', defaultModel: 'ling-3.0-flash-fin-free',
-    models: [{ ...model('mimo-v2.5-free', 1_048_576, 32_768), free: true }, { ...model('ling-3.0-flash-fin-free', 262_144, 32_768), free: true }],
-    protocols: [openAI('https://opencode.ai/zen/v1/chat/completions')],
+    id: 'opencode-zen', displayName: 'OpenCode Zen', credentialResolver: 'forge-managed',
+    nativeClients: ['opencode'], defaultModel: 'kimi-k3',
+    models: [
+      // Zen free pool: usable only through the genuine OpenCode client
+      // transport, so these never appear in the client-agnostic gateway
+      // directory. `union-alpha` speaks the Anthropic messages protocol; the
+      // remaining free models are chat-completions only.
+      { ...model('mimo-v2.5-free', 1_048_576, 32_768), free: true, supportedClients: ['opencode'] },
+      { ...model('ling-3.0-flash-fin-free', 262_144, 32_768), free: true, supportedClients: ['opencode'] },
+      { ...model('big-pickle'), free: true, supportedClients: ['opencode'] },
+      { ...model('union-alpha'), free: true, supportedClients: ['opencode'] },
+      { ...model('nemotron-3-ultra-free', 1_000_000, 32_768), free: true, supportedClients: ['opencode'] },
+      { ...model('nemotron-3.5-lightning-free', 1_000_000, 32_768), free: true, supportedClients: ['opencode'] },
+      // Paid Zen pool: gateway-usable, priced by the existing catalog metadata.
+      model('glm-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']),
+      model('kimi-k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
+    ],
+    protocols: [
+      openAI('https://opencode.ai/zen/v1/chat/completions'),
+      anthropic('https://opencode.ai/zen/v1/messages'),
+    ],
   },
   {
-    id: 'openrouter', displayName: 'OpenRouter 免费模型', credentialResolver: 'forge-managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
-    models: [{ ...model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929), free: true }, { ...model('cohere/north-mini-code:free', 256_000, 64_000), free: true }],
+    id: 'openrouter', displayName: 'OpenRouter', credentialResolver: 'forge-managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
+    models: [
+      { ...model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929), free: true, capabilities: ['text', 'image'] },
+      { ...model('nex-agi/nex-n2.5-pro:free', 262_144, 235_929), free: true, capabilities: ['text', 'image'] },
+      { ...model('cohere/north-mini-code:free', 256_000, 64_000), free: true },
+      { ...model('inclusionai/ling-3.0-flash-vl:free', 262_144, 32_768), free: true, capabilities: ['text', 'image'] },
+      { ...model('inclusionai/ling-3.0-flash-sante:free', 262_144, 32_768), free: true },
+      { ...model('inclusionai/ling-3.0-flash-fin:free', 262_144, 32_768), free: true },
+      { ...model('qwen/qwen3.8-27b:free', 262_144, 235_929), free: true, capabilities: ['text', 'image'] },
+      { ...model('dots-studio/dots-3-note-preview:free', 512_000, 460_800), free: true, capabilities: ['text', 'image'] },
+      { ...model('liquid/lfm-2.5-2.6b:free', 65_536, 8_192), free: true },
+      { ...model('nvidia/nemotron-3.5-lightning:free', 1_000_000, 65_536), free: true },
+      { ...model('thinkingmachines/inkling-small:free', 1_048_576, 262_144), free: true, capabilities: ['text', 'image'] },
+      { ...model('thinkingmachines/inkling:free', 1_048_576, 262_144), free: true, capabilities: ['text', 'image'] },
+      { ...model('poolside/laguna-s-2.1:free', 262_144, 32_768), free: true },
+      { ...model('poolside/laguna-xs-2.1:free', 262_144, 32_768), free: true },
+      { ...model('nvidia/nemotron-3-ultra-550b-a55b:free', 1_000_000, 65_536), free: true },
+      { ...model('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 256_000, 65_536), free: true, capabilities: ['text', 'image'] },
+      { ...model('google/gemma-4-26b-a4b-it:free', 262_144, 32_768), free: true, capabilities: ['text', 'image'] },
+      { ...model('google/gemma-4-31b-it:free', 262_144, 32_768), free: true, capabilities: ['text', 'image'] },
+      { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929), free: true },
+    ],
     protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
   },
   {
@@ -338,11 +381,11 @@ const builtinProviders: readonly RawProviderDefinition[] = [
 ];
 
 const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setupHint: string }>> = {
-  anthropic: {
+  'claude-coding': {
     description: 'Claude Code 与 Anthropic 模型服务。',
     setupHint: '请使用 Claude Code 完成登录，返回啾啾工坊后刷新状态。',
   },
-  'anthropic-api': {
+  anthropic: {
     description: 'Anthropic 官方开放平台 API，与 Claude Code 登录态分开配置。',
     setupHint: '输入 Anthropic API Key；Key 仅写入本机 Wrenyard runtime。',
   },
@@ -378,10 +421,6 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     description: 'OpenAI 官方开放平台 API，与 Codex 登录态分开配置。',
     setupHint: '输入 OpenAI API Key；Key 仅写入本机 Wrenyard runtime。',
   },
-  'opencode-native': {
-    description: 'OpenCode 原生模型服务。',
-    setupHint: '请在 OpenCode 中完成配置，返回啾啾工坊后刷新状态。',
-  },
   qwen: {
     description: '阿里云百炼按量计费的 Qwen 模型。',
     setupHint: '输入百炼按量计费 API Key；它与 Coding Plan Key 分开保存。',
@@ -411,12 +450,12 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
     setupHint: '输入 GLM Coding API Key；Key 仅写入本机 Wrenyard runtime。',
   },
   'opencode-zen': {
-    description: 'OpenCode Zen 免费试用模型。',
-    setupHint: '免费试用模型可能将提交数据用于改进，并受额度限制；输入 OpenCode Zen 托管凭据即可使用。',
+    description: 'OpenCode Zen 免费与付费模型。',
+    setupHint: '免费模型仅可通过 OpenCode 客户端使用，数据可能用于改进并受额度限制；付费模型走 OpenCode Zen 余额。输入 OpenCode Zen 托管凭据即可使用。',
   },
   openrouter: {
     description: 'OpenRouter 免费模型。',
-    setupHint: '免费池共享 50 次/天、20 次/分钟限制；累计购买至少 $10 额度 后提升至 1000 次/天。输入 OpenRouter API Key；每日剩余免费次数暂不可查询。',
+    setupHint: '免费池共享 50 次/天、20 次/分钟限制；累计购买至少 $10 额度后提升至 1000 次/天。输入 OpenRouter API Key；每日剩余免费次数暂不可查询。',
   },
   'opencode-go': {
     description: 'OpenCode Go 付费订阅模型（$10/月）。',
@@ -490,8 +529,32 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'mimo-v2.5-free': { tps: 29, source: 'https://openrouter.ai/xiaomi/mimo-v2.5', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer route public P50 baseline; Zen endpoint unmeasured.' },
   'ling-3.0-flash-fin-free': { tps: 119, source: 'https://openrouter.ai/inclusionai/ling-3.0-flash-fin:free', checkedAt: '2026-09-10', conservative: true, basis: 'Same-model Novita public P50 baseline; Zen endpoint unmeasured.' },
   'nex-agi/nex-n2.5-mini:free': { tps: 119, source: 'https://openrouter.ai/nex-agi/nex-n2.5-mini:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
+  'nex-agi/nex-n2.5-pro:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
   'cohere/north-mini-code:free': { tps: 78, source: 'https://openrouter.ai/cohere/north-mini-code:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
+  // Newly registered free routes have no measured throughput; 20 TPS is an
+  // explicit conservative placeholder, not an external measurement.
+  'inclusionai/ling-3.0-flash-vl:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'inclusionai/ling-3.0-flash-sante:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'inclusionai/ling-3.0-flash-fin:free': { tps: 119, source: 'https://openrouter.ai/inclusionai/ling-3.0-flash-fin:free', checkedAt: '2026-09-18', conservative: true, basis: 'Same-model inclusionAI route public P50 baseline; local exact-profile samples supersede it.' },
+  'qwen/qwen3.8-27b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'dots-studio/dots-3-note-preview:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'liquid/lfm-2.5-2.6b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'nvidia/nemotron-3.5-lightning:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'thinkingmachines/inkling-small:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'thinkingmachines/inkling:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'poolside/laguna-s-2.1:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'poolside/laguna-xs-2.1:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'google/gemma-4-26b-a4b-it:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'google/gemma-4-31b-it:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'nvidia/nemotron-3-super-120b-a12b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
+  'big-pickle': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
+  'union-alpha': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
+  'nemotron-3-ultra-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
+  'nemotron-3.5-lightning-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
   'deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). OpenCode Go endpoint is unmeasured; never represented as a local agent_turn_v1 sample.' },
+  deepseek: { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official DeepSeek 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). Official endpoint is unmeasured per model; never represented as a local agent_turn_v1 sample.' },
 };
 
 type ModelMeta = {
@@ -510,6 +573,12 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
   'deepseek/deepseek-flash': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
+  },
+  'deepseek-flash': {
     thinkingLevels: THINKING_LOW_HIGH_MAX,
     intelligence: 'mid',
     capabilities: ['text', 'image'],
@@ -742,10 +811,121 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text', 'image'],
     pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
+  'nex-agi/nex-n2.5-pro:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
   'cohere/north-mini-code:free': {
     intelligence: 'low',
     capabilities: ['text'],
     pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'inclusionai/ling-3.0-flash-vl:free': {
+    intelligence: 'low',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'inclusionai/ling-3.0-flash-sante:free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'inclusionai/ling-3.0-flash-fin:free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'qwen/qwen3.8-27b:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'dots-studio/dots-3-note-preview:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'liquid/lfm-2.5-2.6b:free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nvidia/nemotron-3.5-lightning:free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'thinkingmachines/inkling-small:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'thinkingmachines/inkling:free': {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'poolside/laguna-s-2.1:free': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'poolside/laguna-xs-2.1:free': {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': {
+    intelligence: 'high',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': {
+    intelligence: 'low',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'google/gemma-4-26b-a4b-it:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'google/gemma-4-31b-it:free': {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nvidia/nemotron-3-super-120b-a12b:free': {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'big-pickle': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'union-alpha': {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nemotron-3-ultra-free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  'nemotron-3.5-lightning-free': {
+    intelligence: 'low',
+    capabilities: ['text'],
+    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+  },
+  deepseek: {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
 };
 

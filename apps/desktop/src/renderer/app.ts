@@ -25,6 +25,7 @@ import type {
   TaskSettingsTaskRow,
   WrenyardShellApi,
 } from '../shell-contract.js';
+import { providerKeyPageUrl } from '../shell-contract.js';
 import { RoutingTestController, defaultRoutingTestForm, formFromTask, type RoutingTestFormState } from './routing-test.js';
 import { SearchableMultiSelect } from './multi-select.js';
 import { SearchableSingleSelect } from './single-select.js';
@@ -37,7 +38,7 @@ import type {
   GatewayProtocol,
 } from '../client-configuration/contract.js';
 import { daemonStatusPresentation } from '../daemon-status.js';
-import { reorderProviders, swapProviders } from '../provider-order.js';
+import { reorderProviders } from '../provider-order.js';
 import { ConversationView } from './conversation.js';
 import { buildActivityHeatmap } from './activity-heatmap.js';
 import { renderModelList } from './model-list.js';
@@ -124,6 +125,17 @@ const providerKeyInput = requireElement<HTMLInputElement>('provider-key-input');
 const providerDialogError = requireElement<HTMLElement>('provider-dialog-error');
 const providerDialogCancel = requireElement<HTMLButtonElement>('provider-dialog-cancel');
 const providerDialogSave = requireElement<HTMLButtonElement>('provider-dialog-save');
+// Link-styled entry to the provider's official key-creation page; visible only
+// for allowlisted providers and wired to pass the provider id alone.
+const providerKeyPageLink = document.createElement('button');
+providerKeyPageLink.id = 'provider-key-page-link';
+providerKeyPageLink.type = 'button';
+providerKeyPageLink.hidden = true;
+providerKeyPageLink.textContent = '打开官方密钥页面 ↗';
+providerKeyPageLink.style.cssText = 'margin:9px 0 0;padding:0;border:0;background:none;color:var(--moss-deep);font-size:11px;font-weight:650;text-decoration:underline;cursor:pointer;';
+providerKeyInput.after(providerKeyPageLink);
+const aboutDialog = requireElement<HTMLElement>('about-dialog');
+const aboutDialogClose = requireElement<HTMLButtonElement>('about-dialog-close');
 const updateActionButton = requireElement<HTMLButtonElement>('update-action-button');
 const updateChannelSwitcher = requireElement<HTMLElement>('update-channel-switcher');
 const statsHeatTooltip = requireElement<HTMLElement>('stats-heat-tooltip');
@@ -227,6 +239,8 @@ const historicalTaskNames: Readonly<Record<string, string>> = {
 let currentQuota: QuotaSnapshot | null = null;
 let selectedPeriod: StatsPeriod = '24h';
 let providerOrderSaving = false;
+/** Provider id currently being dragged by its handle; gates drop targets. */
+let providerDragId: string | null = null;
 let currentUpdate: UpdateSnapshot | null = null;
 let updateActionBusy = false;
 let updatePopupOpen = false;
@@ -338,6 +352,11 @@ function renderSnapshot(snapshot: SettingsSnapshot): void {
   setText('desktop-version', snapshot.about.desktopVersion);
   setText('desktop-build-time', formatBuildTime(snapshot.about.buildTime));
   setText('dsh-version', snapshot.about.dshVersion);
+  // About dialog mirrors the same live about metadata already shown in Settings.
+  setText('about-wrenyard-version', snapshot.about.wrenyardVersion);
+  setText('about-desktop-version', snapshot.about.desktopVersion);
+  setText('about-desktop-build-time', formatBuildTime(snapshot.about.buildTime));
+  setText('about-dsh-version', snapshot.about.dshVersion);
 }
 
 function formatUpdateCheckTime(checkedAt: number | undefined): string {
@@ -664,15 +683,64 @@ function collectPetSettings(): PetCompanionSettings | null {
   };
 }
 
-function providerMoveButton(label: string, disabled: boolean, move: () => void): HTMLButtonElement {
+function providerGearIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const outline = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  // Same gear glyph as the settings nav item so provider config reads as the
+  // app's own settings entry point.
+  outline.setAttribute('d', 'M12 8.25A3.75 3.75 0 1 0 12 15.75 3.75 3.75 0 0 0 12 8.25Z');
+  outline.setAttribute('fill', 'none');
+  const spokes = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  spokes.setAttribute('d', 'M19.4 13.5a7.7 7.7 0 0 0 .05-1.5 7.7 7.7 0 0 0-.05-1.5l2-1.55-2-3.46-2.46 1a7.75 7.75 0 0 0-2.6-1.5L14 2.35h-4L9.66 5a7.75 7.75 0 0 0-2.6 1.5l-2.46-1 2-3.46 2 1.55a7.7 7.7 0 0 0-.05 1.5 7.7 7.7 0 0 0 .05 1.5l-2 1.55 2 3.46 2.46-1a7.75 7.75 0 0 0 2.6 1.5l.34 2.64h4l.34-2.64a7.75 7.75 0 0 0 2.6-1.5l2.46 1 2-3.46-2-1.55Z');
+  spokes.setAttribute('fill', 'none');
+  svg.append(outline, spokes);
+  return svg;
+}
+
+/** Icon-only configuration button; the accessible name carries the provider. */
+function providerConfigButton(entry: ProviderCatalogSnapshot): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'provider-move';
-  button.textContent = label;
-  button.disabled = disabled;
-  button.setAttribute('aria-label', label === '↑' ? '上移' : '下移');
-  button.addEventListener('click', move);
+  button.className = 'provider-config-button icon-button';
+  const name = entry.label ?? entry.id;
+  button.setAttribute('aria-label', entry.configured ? `配置 ${name}` : `激活 ${name}`);
+  button.title = entry.configured ? '配置' : '激活';
+  button.append(providerGearIcon());
+  button.addEventListener('click', () => openProviderDialog(entry));
   return button;
+}
+
+/** Grip handle that owns row dragging; the row itself is not draggable, so
+ *  dragging from any other control can never start a row reorder. */
+function providerDragHandle(entry: ProviderCatalogSnapshot): HTMLElement {
+  const handle = document.createElement('span');
+  handle.className = 'provider-drag-handle';
+  handle.draggable = true;
+  handle.title = '拖动调整顺序';
+  handle.setAttribute('role', 'button');
+  handle.setAttribute('aria-label', `拖动调整 ${entry.label ?? entry.id} 的顺序`);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const dots = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  dots.setAttribute('d', 'M9 5.5h.01M15 5.5h.01M9 12h.01M15 12h.01M9 18.5h.01M15 18.5h.01');
+  dots.setAttribute('fill', 'none');
+  svg.append(dots);
+  handle.append(svg);
+  handle.addEventListener('dragstart', (event) => {
+    providerDragId = entry.id;
+    event.dataTransfer?.setData('text/plain', entry.id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    handle.closest('.provider-directory-row')?.classList.add('is-dragging');
+  });
+  handle.addEventListener('dragend', () => {
+    providerDragId = null;
+    document.querySelectorAll('.provider-directory-row.is-dragging, .provider-directory-row.is-drop-before, .provider-directory-row.is-drop-after')
+      .forEach((row) => row.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after'));
+  });
+  return handle;
 }
 
 function renderStats(snapshot: StatsSnapshot): void {
@@ -703,9 +771,9 @@ function renderQuota(snapshot: QuotaSnapshot): void {
     if (details) details.hidden = true;
     return;
   }
-  list.replaceChildren(...catalog.filter((entry) => entry.configured).map((entry) => quotaProviderRow(entry, catalog.indexOf(entry), catalog)));
+  list.replaceChildren(...catalog.filter((entry) => entry.configured).map((entry) => quotaProviderRow(entry, catalog)));
   const unconfiguredEntries = catalog.filter((entry) => !entry.configured);
-  unconfigured.replaceChildren(...unconfiguredEntries.map((entry) => quotaProviderRow(entry, catalog.indexOf(entry), catalog)));
+  unconfigured.replaceChildren(...unconfiguredEntries.map((entry) => quotaProviderRow(entry, catalog)));
   if (details) details.hidden = unconfiguredEntries.length === 0;
 }
 
@@ -726,37 +794,28 @@ function syncRoutingExclusionOptions(snapshot: QuotaSnapshot): void {
 
 function quotaProviderRow(
   entry: ProviderCatalogSnapshot,
-  index: number,
   catalog: ProviderCatalogSnapshot[],
 ): HTMLElement {
   const row = document.createElement('article');
   row.className = `provider-directory-row${entry.configured ? '' : ' is-unconfigured'}`;
 
-  const header = document.createElement('div');
-  header.className = 'provider-directory-header';
   const identity = document.createElement('div');
+  identity.className = 'provider-directory-identity';
+  if (entry.configured) identity.append(providerDragHandle(entry));
+  const icon = brandIcon(providerBrand(entry.id));
+  if (icon) identity.append(icon);
   const title = document.createElement('h2');
   title.textContent = entry.label ?? entry.id;
-  const id = document.createElement('code');
-  id.textContent = entry.id;
-  const description = document.createElement('p');
-  description.textContent = entry.description;
-  identity.append(title, id, description);
-  const state = document.createElement('span');
-  state.className = `provider-directory-state ${entry.configured ? 'is-ok' : 'is-unavailable'}`;
-  state.textContent = entry.quota?.code === 'configuration_missing'
-    ? '未配置'
-    : entry.quota?.code === 'authentication_required'
-      ? '未登录'
-      : entry.configured
-        ? entry.authMode === 'none' ? '无需配置' : '已配置'
-        : entry.authMode === 'native' ? '未登录' : '未激活';
-  const meta = document.createElement('div');
-  meta.className = 'provider-directory-header-meta';
-  const orderButtons = entry.configured ? quotaProviderOrderButtons(entry, index, catalog) : undefined;
-  meta.append(state);
-  if (orderButtons) meta.append(orderButtons);
-  header.append(identity, meta);
+  identity.append(title);
+
+  const models = document.createElement('div');
+  models.className = 'provider-directory-models';
+  for (const model of entry.models ?? []) {
+    const chip = document.createElement('span');
+    chip.className = 'provider-directory-model';
+    chip.textContent = model.displayName;
+    models.append(chip);
+  }
 
   const quota = document.createElement('div');
   quota.className = 'provider-directory-quota';
@@ -764,43 +823,63 @@ function quotaProviderRow(
 
   const action = providerRowAction(entry);
 
-  row.append(header, quota, action);
+  row.append(identity, models, quota, action);
+  if (entry.configured) attachProviderRowDropZone(row, entry, catalog);
   return row;
 }
 
-function quotaProviderOrderButtons(
+/** Configured rows accept drops only while a handle-initiated drag is live, so
+ *  reordering can never be triggered by other controls or foreign drags. */
+function attachProviderRowDropZone(
+  row: HTMLElement,
   entry: ProviderCatalogSnapshot,
-  index: number,
   catalog: ProviderCatalogSnapshot[],
-): HTMLElement {
-  const controls = document.createElement('span');
-  controls.className = 'provider-directory-order';
-  const previous = catalog[index - 1];
-  const next = catalog[index + 1];
-  controls.append(
-    providerMoveButton('↑', providerOrderSaving || !previous || previous.configured !== entry.configured, () => {
-      if (previous) void saveQuotaProviderMove(entry.id, previous.id, catalog);
-    }),
-    providerMoveButton('↓', providerOrderSaving || !next || next.configured !== entry.configured, () => {
-      if (next) void saveQuotaProviderMove(entry.id, next.id, catalog);
-    }),
-  );
-  return controls;
+): void {
+  row.addEventListener('dragover', (event) => {
+    if (!providerDragId || providerDragId === entry.id || providerOrderSaving) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const rect = row.getBoundingClientRect();
+    const before = event.clientY < rect.top + rect.height / 2;
+    row.classList.toggle('is-drop-before', before);
+    row.classList.toggle('is-drop-after', !before);
+  });
+  row.addEventListener('dragleave', () => {
+    row.classList.remove('is-drop-before', 'is-drop-after');
+  });
+  row.addEventListener('drop', (event) => {
+    row.classList.remove('is-drop-before', 'is-drop-after');
+    const sourceId = providerDragId ?? event.dataTransfer?.getData('text/plain') ?? '';
+    if (!sourceId || sourceId === entry.id || providerOrderSaving) return;
+    event.preventDefault();
+    const rect = row.getBoundingClientRect();
+    const before = event.clientY < rect.top + rect.height / 2;
+    void saveQuotaProviderDrag(sourceId, entry.id, before, catalog);
+  });
 }
 
-async function saveQuotaProviderMove(
+async function saveQuotaProviderDrag(
   providerId: string,
-  neighborId: string,
+  targetId: string,
+  placeBefore: boolean,
   catalog: ProviderCatalogSnapshot[],
 ): Promise<void> {
-  if (!currentQuota || providerOrderSaving) return;
+  if (!currentQuota || providerOrderSaving || providerId === targetId) return;
   providerOrderSaving = true;
+  // Stable complete order: reuse the persisted order, then insert the dragged
+  // provider before/after the drop target within that single sequence.
   const completeOrder = reorderProviders(currentQuota.providerOrder, catalog.map((entry) => entry.id));
-  const nextOrder = swapProviders(completeOrder, providerId, neighborId);
+  const ids = completeOrder.map((entry) => entry.id).filter((id) => id !== providerId);
+  const targetIndex = ids.indexOf(targetId);
+  if (targetIndex === -1) {
+    providerOrderSaving = false;
+    return;
+  }
+  ids.splice(placeBefore ? targetIndex : targetIndex + 1, 0, providerId);
   let failure = '';
   renderQuota(currentQuota);
   try {
-    renderQuota(await window.wrenyardShell.saveProviderOrder(nextOrder.map((entry) => entry.id)));
+    renderQuota(await window.wrenyardShell.saveProviderOrder(ids));
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
   } finally {
@@ -899,40 +978,8 @@ function quotaBalanceRow(balance: QuotaProviderSnapshot['balances'][number]): HT
 function providerRowAction(entry: ProviderCatalogSnapshot): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'provider-directory-action';
-  const mode = entry.authMode;
-  if (mode === 'api-key') {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'secondary-button';
-    button.textContent = entry.configured ? '更新 Key' : '激活 Provider';
-    button.addEventListener('click', () => openProviderDialog(entry));
-    wrap.append(button);
-    return wrap;
-  }
-  if (mode === 'native' || mode === 'environment') {
-    const hint = document.createElement('span');
-    hint.className = 'provider-directory-hint';
-    hint.textContent = providerModeHint(mode);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'secondary-button';
-    button.textContent = entry.configured ? '查看指引' : '激活 Provider';
-    button.addEventListener('click', () => openProviderDialog(entry));
-    wrap.append(hint, button);
-    return wrap;
-  }
-  const hint = document.createElement('span');
-  hint.className = 'provider-directory-hint';
-  hint.textContent = entry.configured ? providerModeHint(mode) : '等待 Runtime 激活';
-  wrap.append(hint);
+  wrap.append(providerConfigButton(entry));
   return wrap;
-}
-
-function providerModeHint(mode: ProviderCatalogSnapshot['authMode']): string {
-  if (mode === 'api-key') return '支持配置 API Key';
-  if (mode === 'native') return '浏览器登录验证';
-  if (mode === 'environment') return '由环境变量提供';
-  return '无需密钥配置';
 }
 
 function openProviderDialog(entry: ProviderCatalogSnapshot): void {
@@ -948,6 +995,7 @@ function openProviderDialog(entry: ProviderCatalogSnapshot): void {
   providerDialogGuidance.textContent = appendProviderPlanBilling(entry.id, entry.setupHint || providerDialogGuidanceText(mode));
   providerKeyLabel.hidden = !apiKeyMode;
   providerKeyInput.hidden = !apiKeyMode;
+  providerKeyPageLink.hidden = providerKeyPageUrl(entry.id) === null;
   providerDialogSave.hidden = !apiKeyMode;
   providerDialogError.textContent = '';
   if (apiKeyMode) {
@@ -997,7 +1045,20 @@ function closeProviderDialog(): void {
   providerKeyInput.value = '';
   providerKeyInput.disabled = false;
   providerDialogSave.disabled = false;
+  providerKeyPageLink.hidden = true;
+  providerKeyPageLink.disabled = false;
   dialogProvider = null;
+}
+
+function openAboutDialog(): void {
+  aboutDialog.hidden = false;
+  aboutDialog.setAttribute('aria-hidden', 'false');
+  aboutDialogClose.focus();
+}
+
+function closeAboutDialog(): void {
+  aboutDialog.hidden = true;
+  aboutDialog.setAttribute('aria-hidden', 'true');
 }
 
 function emptyQuotaCard(message: string): HTMLElement {
@@ -2352,7 +2413,21 @@ function applyTaskSettingsSnapshot(snapshot: TaskSettingsSnapshot): void {
   taskSettings = { ...snapshot, rows: [...rows.values()] };
 }
 
-async function loadTasks(): Promise<void> {
+let tasksLoadPromise: Promise<void> | null = null;
+
+function loadTasks(): Promise<void> {
+  if (tasksLoadPromise) return tasksLoadPromise;
+  tasksLoadPromise = refreshTasksList().finally(() => { tasksLoadPromise = null; });
+  return tasksLoadPromise;
+}
+
+async function refreshTasksList(): Promise<void> {
+  if (taskSettings) {
+    renderTasksList();
+    if (tasksSelectedTaskId) renderTasksDetail();
+  }
+  tasksList.setAttribute('aria-busy', 'true');
+  if (!taskSettings) tasksList.replaceChildren(emptyRow('读取任务…'));
   tasksRefresh.disabled = true;
   tasksRefreshLabel.textContent = '读取中…';
   try {
@@ -2365,12 +2440,14 @@ async function loadTasks(): Promise<void> {
     else tasksDetail.hidden = true;
     setTasksError('');
   } catch (error) {
-    taskSettings = null;
-    tasksSelectedTaskId = null;
-    tasksList.replaceChildren(emptyRow('无法读取任务设置'));
-    tasksDetail.hidden = true;
+    if (!taskSettings) {
+      tasksSelectedTaskId = null;
+      tasksList.replaceChildren(emptyRow('无法读取任务设置'));
+      tasksDetail.hidden = true;
+    }
     setTasksError(`读取失败：${tasksErrorMessage(error)}`);
   } finally {
+    tasksList.setAttribute('aria-busy', 'false');
     tasksRefresh.disabled = false;
     tasksRefreshLabel.textContent = '刷新';
   }
@@ -2621,6 +2698,23 @@ updateChannelSwitcher.addEventListener('click', (event) => {
   if (channel === 'stable' || channel === 'dev') void selectUpdateChannel(channel);
 });
 providerDialogCancel.addEventListener('click', () => closeProviderDialog());
+providerKeyPageLink.addEventListener('click', () => {
+  const entry = dialogProvider;
+  if (!entry) return;
+  providerKeyPageLink.disabled = true;
+  providerDialogError.textContent = '';
+  void window.wrenyardShell.openProviderKeyPage(entry.id)
+    .catch((error: unknown) => {
+      providerDialogError.textContent = error instanceof Error ? error.message : '打开密钥页面失败，请重试。';
+    })
+    .finally(() => { providerKeyPageLink.disabled = false; });
+});
+requireElement<HTMLButtonElement>('about-trigger').addEventListener('click', openAboutDialog);
+aboutDialogClose.addEventListener('click', closeAboutDialog);
+// Backdrop click (outside the card) closes, matching other app dialogs.
+aboutDialog.addEventListener('click', (event) => {
+  if (event.target === aboutDialog) closeAboutDialog();
+});
 providerDialogSave.addEventListener('click', () => {
   const entry = dialogProvider;
   if (!entry) return;
@@ -2712,6 +2806,11 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !clientPlanDialog.hidden) {
     event.preventDefault();
     closeClientPlan();
+    return;
+  }
+  if (event.key === 'Escape' && !aboutDialog.hidden) {
+    event.preventDefault();
+    closeAboutDialog();
     return;
   }
   if (event.key === 'Escape' && currentPage !== 'workbench') {

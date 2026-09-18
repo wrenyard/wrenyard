@@ -82,6 +82,46 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
   });
 });
 
+test('model-level supportedClients restricts resolution and hides gateway publication', () => {
+  const catalog = new Catalog();
+  catalog.registerClient({ id: 'opencode', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'] });
+  catalog.registerProvider({
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    nativeClients: ['opencode'],
+    models: [
+      { pricing: pricingFixture(), id: 'free-m', displayName: 'Free M', intelligence: 'mid', speed: speedFixture(), free: true, supportedClients: ['opencode'] },
+      { pricing: pricingFixture(), id: 'paid-m', displayName: 'Paid M', intelligence: 'mid', speed: speedFixture() },
+    ],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+
+  // A restricted model resolves only for its exact declared client, and only
+  // through that client's native transport.
+  const native = catalog.resolveRun('opencode', 'vendor', 'free-m');
+  assert.equal(native.mode, 'native');
+  assert.throws(() => catalog.resolveRun('codebuddy', 'vendor', 'free-m'), /is not available on client codebuddy/);
+
+  // Restricted models never appear in the client-agnostic gateway directory nor
+  // resolve through a gateway protocol.
+  const listed = catalog.listGatewayModels('openai_chat').map((entry) => entry.id);
+  assert.ok(!listed.includes('free-m'));
+  assert.ok(listed.includes('paid-m'));
+  assert.throws(() => catalog.resolveGatewayModel('openai_chat', 'vendor/free-m'), /not available through the gateway/);
+  assert.equal(catalog.resolveGatewayModel('openai_chat', 'vendor/paid-m').model.id, 'paid-m');
+
+  // Registration validates the restriction atomically.
+  const register = (supportedClients: readonly string[]) => new Catalog().registerProvider({
+    id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
+    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), supportedClients }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  });
+  assert.throws(() => register([]), /supportedClients must not be empty/);
+  assert.throws(() => register(['c1', 'c1']), /duplicate supported client c1/);
+  assert.throws(() => register(['   ']), /empty supported client id/);
+  assert.doesNotThrow(() => register(['c1']));
+});
+
 function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandidate[] } {
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });

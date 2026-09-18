@@ -926,12 +926,14 @@ export class TaskSettingsService {
     const userGlobal = readGlobalTaskSettings(tasks)
 
     const summaries = await this.collectSnapshotSummaries(params)
-    const rows: TaskSettingsTaskRow[] = []
-    // Request-scoped automatic preview memo for this snapshot request only:
-    // automatic rows reuse one immutable quota snapshot and one readiness probe
-    // per canonical runtime, so the list never repeats quota/credential reads.
+    // Request-scoped preview memo for this snapshot request only: automatic
+    // rows reuse one immutable quota snapshot and one readiness probe per
+    // canonical runtime, and explicit rows sharing a canonical triple reuse one
+    // readiness probe, so the list never repeats quota/credential reads. Rows
+    // build concurrently and Promise.all keeps the exact summary order.
     const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
-    for (const summary of summaries) {
+    const filteredSummaries = summaries.filter((summary) => {
+      if (params.task_id === undefined) return true
       const kind: 'builtin' | 'project' = summary.kind
         ?? (summary.project !== undefined || params.project !== undefined ? 'project' : 'builtin')
       const identity = taskSettingsIdentity({
@@ -939,9 +941,11 @@ export class TaskSettingsService {
         name: summary.name,
         ...(kind === 'project' ? { project: summary.project ?? params.project } : {}),
       })
-      if (params.task_id !== undefined && summary.name !== params.task_id && identity !== params.task_id) continue
-      rows.push(await this.buildRow(summary, params.project, tasks, userGlobal, previewMemo))
-    }
+      return summary.name === params.task_id || identity === params.task_id
+    })
+    const rows = await Promise.all(
+      filteredSummaries.map((summary) => this.buildRow(summary, params.project, tasks, userGlobal, previewMemo)),
+    )
 
     const loadErrors = this.definitions.listLoadErrors !== undefined
       ? await this.definitions.listLoadErrors()
@@ -1531,10 +1535,11 @@ export class TaskSettingsService {
                   model_display_name: labels.modelDisplayName,
                 }
               : priced
-            readiness = await this.runtimeReadiness(
+            readiness = await this.previewRuntimeReadiness(
               summary.name,
               explicitResolution.exactAgentRuntime,
               TaskSettingsService.tripleOf(explicitResolution.resolved),
+              previewMemo,
             )
           } else {
             issues.push({
@@ -1689,6 +1694,29 @@ export class TaskSettingsService {
       available: daemonOk && providerOk,
       issues,
     }
+  }
+
+  /** Non-billable daemon admission plus provider credential/route readiness for
+   *  one explicit runtime. When a request-scoped preview memo is supplied
+   *  (explicit snapshot rows), each canonical triple is probed at most once and
+   *  explicit rows referencing the same runtime share the same resolved
+   *  readiness; the run/save-preflight paths pass no memo and probe fresh per
+   *  call. The probe takes only the canonical triple, so one memo entry per
+   *  triple is semantically identical to probing again. */
+  private async previewRuntimeReadiness(
+    taskName: string,
+    exactRuntime: string,
+    runtime: TaskSettingsRuntimeAvailabilityTarget,
+    previewMemo?: AutomaticPreviewMemo,
+  ): Promise<TaskSettingsRuntimeReadiness> {
+    if (previewMemo === undefined) return this.runtimeReadiness(taskName, exactRuntime, runtime)
+    const key = runtimeTripleKey(runtime)
+    let memoized = previewMemo.readiness?.get(key)
+    if (memoized === undefined) {
+      memoized = this.runtimeReadiness(taskName, exactRuntime, runtime)
+      ;(previewMemo.readiness ?? (previewMemo.readiness = new Map())).set(key, memoized)
+    }
+    return await memoized
   }
 
   /** Non-billable live daemon admission, authoritative client readiness, and
@@ -1873,14 +1901,18 @@ export class TaskSettingsService {
       if (previewMemo !== undefined) previewMemo.nativeProviderReadiness = nativeReadinessPromise
     }
 
-    // Start the independent non-inference samples together and bind both
+    // Start the independent non-inference samples together and bind all
     // completed immutable results to every readiness decision in this
-    // selection. A failed native sample remains explicit null/unknown and is
-    // never retried or replaced inside the evaluation.
-    const [boundSnapshot, nativeProviderReadiness]: [
+    // selection. A failed sample remains explicit null/unknown and is never
+    // retried or replaced inside the evaluation. The client-readiness sample is
+    // warmed concurrently with the quota/native samples so the independent
+    // reads are not serialized.
+    const clientSamplePromise = this.clientReadinessSample(previewMemo)
+    const [boundSnapshot, nativeProviderReadiness, clientSample]: [
       AutoRoutingBoundQuotaSnapshot | null,
       ForgeProviderReadinessSnapshot | null,
-    ] = await Promise.all([quotaPromise, nativeReadinessPromise])
+      ForgeClientReadinessSnapshot | null,
+    ] = await Promise.all([quotaPromise, nativeReadinessPromise, clientSamplePromise])
     const snapshot: AutoRoutingQuotaSnapshot | null = boundSnapshot?.snapshot ?? null
     const availabilityContext: TaskSettingsRuntimeAvailabilityContext = {
       codeBuddySnapshot: boundSnapshot?.codeBuddySnapshot,
@@ -1893,44 +1925,68 @@ export class TaskSettingsService {
       trace.nowMs = nowMs
     }
 
-    // Bind the authoritative Forge client-readiness sample to this evaluation
-    // when the callback is configured. It is consulted for every exact choice
-    // BEFORE the provider readiness probe and BEFORE collapseAutomaticChoices,
-    // so a client that is disabled or not installed can never admit a pair and
-    // an unavailable client (e.g. grok) cannot hide a ready sibling client.
-    const clientSample = await this.clientReadinessSample(previewMemo)
+    // The authoritative Forge client-readiness sample bound above is consulted
+    // for every exact choice BEFORE the provider readiness probe and BEFORE
+    // collapseAutomaticChoices, so a client that is disabled or not installed
+    // can never admit a pair and an unavailable client (e.g. grok) cannot hide
+    // a ready sibling client.
 
     // Structured actual eliminations, recorded at the exact stage that empties
     // the surviving pool; deterministic selection never parses error text.
     const eliminations: TaskResolutionElimination[] = []
     const probed: AutomaticProbeEntry[] = []
+    // Every independent eligible runtime probe starts before any is awaited, so
+    // concurrent probes are not serialized; the request-scoped memo still runs
+    // each canonical triple at most once. Candidate ordering and rejection
+    // details are preserved by consuming the results in the original eligible
+    // order below.
+    type ProbePlanEntry =
+      | { choice: TaskDispatchChoice; availability: Promise<TaskSettingsProviderAvailability | undefined> }
+      | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' }
+    const probePlan: ProbePlanEntry[] = []
     for (const choice of eligible.choices) {
       // Authoritative client gate: disabled or not-installed clients are
       // eliminated before provider readiness, so an unavailable client never
       // hides a ready sibling client sharing the same provider+model.
       if (!this.clientAdmitted(choice.client, clientSample)) {
-        eliminations.push({ code: 'no_available_provider' })
-        if (trace !== undefined) trace.readinessRejectedIds.push(choice.exactAgentRuntime)
+        probePlan.push({ choice, eliminated: 'client' })
         continue
       }
       if (blocked.has(choice.provider)) {
         // A determinate hard-blocked provider is a real quota gate.
-        eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(choice)))
-        if (trace !== undefined) trace.quotaBlockedIds.push(choice.exactAgentRuntime)
+        probePlan.push({ choice, eliminated: 'blocked' })
         continue
       }
-      const availability = await this.previewRuntimeAvailability(
+      const availability = this.previewRuntimeAvailability(
         TaskSettingsService.tripleOf(choice),
         previewMemo,
         availabilityContext,
       )
+      // Keep later-started probes handled when an earlier probe rejects and
+      // aborts the ordered consume; the rejection itself still propagates
+      // unchanged from the await below.
+      void availability.catch(() => undefined)
+      probePlan.push({ choice, availability })
+    }
+    for (const entry of probePlan) {
+      if ('eliminated' in entry) {
+        if (entry.eliminated === 'client') {
+          eliminations.push({ code: 'no_available_provider' })
+          if (trace !== undefined) trace.readinessRejectedIds.push(entry.choice.exactAgentRuntime)
+        } else {
+          eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(entry.choice)))
+          if (trace !== undefined) trace.quotaBlockedIds.push(entry.choice.exactAgentRuntime)
+        }
+        continue
+      }
+      const availability = await entry.availability
       if (availability !== undefined && !availability.available) {
         // The live readiness probe rejected the exact choice: no available provider.
         eliminations.push({ code: 'no_available_provider' })
-        if (trace !== undefined) trace.readinessRejectedIds.push(choice.exactAgentRuntime)
+        if (trace !== undefined) trace.readinessRejectedIds.push(entry.choice.exactAgentRuntime)
         continue
       }
-      probed.push({ choice, availability })
+      probed.push({ choice: entry.choice, availability })
     }
     const collapsed = collapseAutomaticChoices(probed)
     if (trace !== undefined) trace.collapsedChoices = collapsed.map((entry) => entry.choice)
@@ -2259,13 +2315,14 @@ interface AutomaticProbeEntry {
   availability?: TaskSettingsProviderAvailability
 }
 
-/** Request-scoped automatic-preview memo built per snapshot() request and
- *  passed through buildRow -> resolveAutomaticSelection for automatic rows
- *  only. It holds the request's single immutable quota snapshot (unknown/
- *  fail-closed results included) and one non-billable readiness probe promise
- *  per canonical runtime triple, so N automatic rows sharing the same eligible
- *  runtimes never repeat quota reads or identical credential reads. resolveForRun
- *  and save preflight never construct or pass a memo: they always probe fresh. */
+/** Request-scoped preview memo built per snapshot() request and passed
+ *  through buildRow to resolveAutomaticSelection (automatic rows) and to
+ *  previewRuntimeReadiness (explicit rows). It holds the request's single
+ *  immutable quota snapshot (unknown/fail-closed results included) and one
+ *  non-billable probe promise per canonical runtime triple, so N rows sharing
+ *  the same eligible runtimes never repeat quota reads or identical credential
+ *  reads. resolveForRun and save preflight never construct or pass a memo:
+ *  they always probe fresh. */
 interface AutomaticPreviewMemo {
   /** Immutable quota snapshot promise for this request, created on the first
    *  automatic row that needs one and reused by the rest of the rows. */
@@ -2280,6 +2337,10 @@ interface AutomaticPreviewMemo {
   clientReadiness?: Promise<ForgeClientReadinessSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
+  /** Non-billable explicit-readiness probe (daemon admission + provider
+   *  credential/route) per canonical runtime triple, shared by explicit rows
+   *  referencing the same runtime in this snapshot request. */
+  readiness?: Map<string, Promise<TaskSettingsRuntimeReadiness>>
 }
 
 /** Canonical string key of a resolved runtime triple used to dedupe identical

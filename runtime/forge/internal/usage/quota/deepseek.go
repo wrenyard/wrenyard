@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -14,10 +15,11 @@ import (
 // deepseekBalanceEndpoint is the official DeepSeek balance endpoint.
 const deepseekBalanceEndpoint = "https://api.deepseek.com/user/balance"
 
-// DeepSeekProvider is a quota-only provider that reads the official
-// DeepSeek balance API. It is strictly quota: it never registers inference
-// or auth behavior. Token comes from the user-owned DEEPSEEK_API_KEY /
-// FORGE_DEEPSEEK_API_KEY environment variable, never from auth.json.
+// DeepSeekProvider reads the official DeepSeek balance API. Its token is the
+// same credential the DeepSeek inference provider resolves: the managed
+// auth.json API entry first, then the user-owned FORGE_DEEPSEEK_API_KEY /
+// DEEPSEEK_API_KEY environment keys. The resolved token is only ever sent to
+// the DeepSeek balance endpoint; it is never echoed into quota JSON or logs.
 type DeepSeekProvider struct {
 	Token  string
 	URL    string
@@ -118,6 +120,27 @@ func ParseDeepSeekBalance(raw []byte) (Quota, error) {
 		return Quota{}, errors.New("deepseek: no balance info available")
 	}
 	return Quota{Balances: balances}, nil
+}
+
+// DeepSeekQuotaToken resolves the single DeepSeek credential shared by quota
+// and inference: the managed auth.json API entry for "deepseek" wins, then the
+// user-owned environment keys FORGE_DEEPSEEK_API_KEY and DEEPSEEK_API_KEY are
+// the compatibility fallback. loadManaged, when non-nil, is the caller's
+// managed-store reader; when nil the environment compatibility keys are used
+// alone. An empty result means DeepSeek is unconfigured; the token value is
+// never echoed or logged.
+func DeepSeekQuotaToken(loadManaged func() string) string {
+	if loadManaged != nil {
+		if managed := strings.TrimSpace(loadManaged()); managed != "" {
+			return managed
+		}
+	}
+	for _, key := range []string{"FORGE_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // validCurrencyCode reports whether s is an uppercase three-letter code.

@@ -11,7 +11,12 @@ import {
   resolveForemanConfigPath,
   resolveWriteForemanConfigPath,
 } from './path.mts'
-import { migrateForemanChatGPTReferences } from './chatgpt-migration.mts'
+import {
+  FOREMAN_PROVIDER_MIGRATION_MARKER_ENTRY,
+  hasForemanProviderMigrationMarker,
+  markForemanProviderMigration,
+  migrateForemanChatGPTReferences,
+} from './chatgpt-migration.mts'
 import {
   normalizeForemanServiceConfig,
   type NormalizeForemanConfigOptions,
@@ -47,16 +52,21 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
       )
     }
 
-    // Migrate persisted ChatGPT identity references (legacy codex
-    // target refs and exclusion ids) to their canonical chatgpt form. The
-    // migration only touches known identity fields; unrelated data is left
-    // unchanged. When something changed it is persisted exactly once through
-    // the existing atomic write so task pins/exclusions resolve canonically.
-    const migrated = migrateForemanChatGPTReferences(parsed)
-    if (migrated.changed) {
-      const record = migrated.record as ConfigRecord
-      this.write(configPath, record)
-      return record
+    // One-time persisted provider-identity migration. A document without the
+    // marker predates the `anthropic` -> `claude-coding` (subscription) /
+    // `anthropic-api` -> `anthropic` (API) split, so legacy provider refs are
+    // rewritten exactly once and the migration marker is persisted in the same
+    // atomic write. A document that already carries the marker — or a modern
+    // document with no legacy reference at all — is left byte-identical, so
+    // canonical `anthropic` API references are never re-interpreted as the
+    // subscription provider on subsequent reads.
+    if (!hasForemanProviderMigrationMarker(parsed)) {
+      const migrated = migrateForemanChatGPTReferences(parsed)
+      if (migrated.changed) {
+        const record = markForemanProviderMigration(migrated.record).record as ConfigRecord
+        this.write(configPath, record)
+        return record
+      }
     }
 
     return parsed as ConfigRecord
@@ -71,7 +81,7 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
     // config. The formatted JSON shape (+ trailing newline) is unchanged.
     const tempPath = join(dir, `.${basename(configPath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
     try {
-      writeFileSync(tempPath, JSON.stringify(data, null, 2) + '\n', {
+      writeFileSync(tempPath, JSON.stringify({ ...data, ...FOREMAN_PROVIDER_MIGRATION_MARKER_ENTRY }, null, 2) + '\n', {
         encoding: 'utf-8',
         mode: 0o600,
       })
@@ -125,7 +135,13 @@ export class ForemanConfigManager {
 
   loadData(configPathValue?: unknown): LoadDataResult {
     const configPath = this.resolvePath(configPathValue)
-    const defaults = createDefaultForemanConfigData({ env: this.env })
+    // Freshly generated defaults are pre-marked: a first-run config uses
+    // canonical provider ids, so it must never trigger a legacy rewrite. The
+    // marker rides on the defaults only and is overlaid by on-disk data.
+    const defaults = {
+      ...createDefaultForemanConfigData({ env: this.env }),
+      ...FOREMAN_PROVIDER_MIGRATION_MARKER_ENTRY,
+    } as ForemanConfigData
     const raw = this.store.read(configPath)
     const overlay = raw ?? ({} as ForemanConfigData)
     const data = mergeForemanConfigData(defaults, overlay)

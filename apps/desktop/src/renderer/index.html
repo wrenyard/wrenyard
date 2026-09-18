@@ -9,9 +9,9 @@
   </head>
   <body>
     <nav class="activity-bar" aria-label="啾啾工坊功能">
-      <div class="activity-brand" role="img" aria-label="啾啾工坊标识">
+      <button class="activity-brand" id="about-trigger" type="button" aria-label="关于啾啾工坊">
         <img class="app-icon" src="./icon-256.png" alt="" />
-      </div>
+      </button>
       <button class="activity-item is-selected" id="workbench-nav" type="button" aria-label="会话" aria-current="page" data-page="workbench">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M4 5.5h16v11H10l-5 3v-3H4v-11Z" />
@@ -374,10 +374,10 @@
             <section class="settings-section" id="about">
               <div class="section-heading"><h2>关于</h2><p>啾啾工坊是 Wrenyard 套件的 Desktop 主界面。</p></div>
               <div class="settings-card">
-                <div class="setting-row"><div><h3>Wrenyard</h3><p>统一任务编排与本地运行环境</p></div><span class="version" id="wrenyard-version">—</span></div>
-                <div class="setting-row"><div><h3>Desktop</h3><p>Electron 产品壳与桌宠宿主</p></div><span class="version" id="desktop-version">—</span></div>
-                <div class="setting-row"><div><h3>构建时间</h3><p>当前安装的 Desktop 构建生成时间</p></div><span class="version" id="desktop-build-time">—</span></div>
-                <div class="setting-row"><div><h3>DSH</h3><p>主工作台引擎</p></div><span class="version" id="dsh-version">—</span></div>
+                <div class="setting-row"><div><h3>Wrenyard</h3></div><span class="version" id="wrenyard-version">—</span></div>
+                <div class="setting-row"><div><h3>Desktop</h3></div><span class="version" id="desktop-version">—</span></div>
+                <div class="setting-row"><div><h3>构建时间</h3></div><span class="version" id="desktop-build-time">—</span></div>
+                <div class="setting-row"><div><h3>DSH</h3></div><span class="version" id="dsh-version">—</span></div>
               </div>
             </section>
           </div>
@@ -516,6 +516,23 @@
         <div class="workspace-gate-actions">
           <button class="secondary-button" id="workspace-open-settings" type="button">前往设置</button>
           <button class="primary-button" id="workspace-quick-save" type="button">保存并应用</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-dialog-backdrop" id="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-dialog-title" aria-hidden="true" hidden>
+      <div class="about-dialog-card">
+        <img class="about-dialog-icon" src="./icon-256.png" alt="" />
+        <p class="eyebrow">WRENYARD WORKSHOP</p>
+        <h2 id="about-dialog-title">关于啾啾工坊</h2>
+        <div class="about-dialog-rows">
+          <div class="about-dialog-row"><div><h3>Wrenyard</h3></div><span class="version" id="about-wrenyard-version">—</span></div>
+          <div class="about-dialog-row"><div><h3>Desktop</h3></div><span class="version" id="about-desktop-version">—</span></div>
+          <div class="about-dialog-row"><div><h3>构建时间</h3></div><span class="version" id="about-desktop-build-time">—</span></div>
+          <div class="about-dialog-row"><div><h3>DSH</h3></div><span class="version" id="about-dsh-version">—</span></div>
+        </div>
+        <div class="about-dialog-actions">
+          <button class="primary-button" id="about-dialog-close" type="button">关闭</button>
         </div>
       </div>
     </div>

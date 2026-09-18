@@ -25,9 +25,10 @@ type CommandDeps struct {
 	ResolveBigModelToken func() string
 	// ResolveKimiToken resolves the Kimi API token.
 	ResolveKimiToken func() string
-	// ResolveDeepSeekToken resolves the DeepSeek quota bearer token from
-	// the user-owned DEEPSEEK_API_KEY / FORGE_DEEPSEEK_API_KEY. DeepSeek is
-	// quota-only and never reads auth.json.
+	// ResolveDeepSeekToken resolves the DeepSeek balance bearer token using the
+	// same credential the DeepSeek inference provider resolves: the managed
+	// auth.json API entry first, then the user-owned DEEPSEEK_API_KEY /
+	// FORGE_DEEPSEEK_API_KEY environment compatibility keys.
 	ResolveDeepSeekToken func() string
 	// CodexBarEnabled reports whether CodexBar snapshot is enabled.
 	CodexBarEnabled func() bool
@@ -113,7 +114,7 @@ func quotaWindowsJSON(windows []Window) []quotaWindowJSON {
 }
 
 // canonicalProviders lists the canonical provider names in deterministic order.
-var canonicalProviders = []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "anthropic", "super-grok"}
+var canonicalProviders = []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "claude-coding", "super-grok"}
 
 // Command dispatches the quota command. Usage: forge quota [name] [--json] [--refresh]
 func Command(deps CommandDeps, args []string) int {
@@ -233,9 +234,9 @@ func handleRefreshProvider(deps CommandDeps, args []string) int {
 
 	q, err := provider.Fetch(ctx)
 	if err != nil {
-	// Codex/ChatGPT, cursor, and deepseek use fail-closed cache: replace
-	// expired quota with a failure marker instead of preserving stale
-	// data. The failure-marker write is atomic with ownership: the token
+		// Codex/ChatGPT, cursor, and deepseek use fail-closed cache: replace
+		// expired quota with a failure marker instead of preserving stale
+		// data. The failure-marker write is atomic with ownership: the token
 		// is re-verified under the guard immediately before the write, so a
 		// stale worker resumed after reclaim can never overwrite a newer
 		// owner's cache or marker. On ownership loss we exit without
@@ -732,18 +733,18 @@ func cacheEligibleForProvider(cached Quota, providerID string) bool {
 }
 
 var canonicalProviderMap = map[string]string{
-	"chatgpt":      "chatgpt",
-	"codex":        "chatgpt",
-	"cursor":       "cursor",
-	"deepseek":     "deepseek",
-	"ds":           "deepseek",
-	"kimi-coding":  "kimi-coding",
-	"kimi":         "kimi-coding",
-	"zhipu-coding": "zhipu-coding",
-	"glm":          "zhipu-coding",
-	"zai":          "zhipu-coding",
-	"anthropic":    "anthropic",
-	"super-grok":   "super-grok",
+	"chatgpt":       "chatgpt",
+	"codex":         "chatgpt",
+	"cursor":        "cursor",
+	"deepseek":      "deepseek",
+	"ds":            "deepseek",
+	"kimi-coding":   "kimi-coding",
+	"kimi":          "kimi-coding",
+	"zhipu-coding":  "zhipu-coding",
+	"glm":           "zhipu-coding",
+	"zai":           "zhipu-coding",
+	"claude-coding": "claude-coding",
+	"super-grok":    "super-grok",
 }
 
 func ptrFloatVal(f *float64) float64 {
@@ -770,7 +771,7 @@ func innerProviderFor(deps CommandDeps, name string, billing BillingInfo) Provid
 		return BigModelProvider{Token: token}
 	case "kimi-coding":
 		return KimiProvider{Token: deps.ResolveKimiToken()}
-	case "anthropic":
+	case "claude-coding":
 		cfg, _, _ := deps.LoadConfig()
 		staleDur := time.Duration(cfg.QuotaSnapshotStaleMin) * time.Minute
 		return ClaudeProvider{

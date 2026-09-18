@@ -12,13 +12,13 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/chatgpt"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/codebuddy"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/cursor"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/deepseek"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/freepool"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/kimi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxapi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/minimaxcoding"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/moonshot"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/openaiapi"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/opencode"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/qwenapi"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/qwencoding"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/schema"
@@ -41,11 +41,11 @@ var modules = append([]ProviderModule{
 	chatgpt.Module(),
 	codebuddy.Module(),
 	cursor.Module(),
+	deepseek.Module(),
 	kimi.Module(),
 	minimaxapi.Module(),
 	minimaxcoding.Module(),
 	moonshot.Module(),
-	opencode.Module(),
 	openaiapi.Module(),
 	qwenapi.Module(),
 	qwencoding.Module(),
@@ -58,12 +58,25 @@ var modules = append([]ProviderModule{
 
 const SpaceXAIProviderID = "spacex-ai"
 
+// legacyProviderIDAliases maps the exact historical provider ids whose public
+// identity was renamed to their current canonical id. Only these exact ids are
+// remapped; the migration is once-only and never acts as an ambiguous global
+// alias. The subscription provider keeps its distinct claude-coding identity
+// and is never aliased from the API provider id.
+var legacyProviderIDAliases = map[string]string{
+	"anthropic-api":   "anthropic",
+	"opencode-native": "opencode-zen",
+}
+
 // CanonicalID maps provider ids accepted from historical user configuration
 // to the current product id. New catalog and product output must only emit the
 // canonical id.
 func CanonicalID(id string) string {
 	if id == "xai" {
 		return SpaceXAIProviderID
+	}
+	if canonical, ok := legacyProviderIDAliases[id]; ok {
+		return canonical
 	}
 	return id
 }

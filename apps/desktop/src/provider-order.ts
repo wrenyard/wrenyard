@@ -7,12 +7,15 @@ export interface ProviderOrderEntry {
 /** Collapse legacy/runtime-specific ids to the current product provider id.
  *  The legacy `codex` provider id migrates to the single `chatgpt` provider
  *  (data migration only; the registry defines no aliases).
- *  The codex client remains distinct. */
+ *  The codex client remains distinct.
+ *  The legacy internal `opencode-native` id migrates to the current
+ *  `opencode-zen` provider so a saved order entry keeps its position. */
 export function canonicalProviderId(rawId: string): string {
   const id = rawId.trim();
   if (id === 'xai') return 'spacex-ai';
   if (id === 'codebuddy' || id.startsWith('codebuddy-')) return 'codebuddy';
   if (id === 'codex') return 'chatgpt';
+  if (id === 'opencode-native') return 'opencode-zen';
   return id;
 }
 
@@ -53,22 +56,6 @@ export function reorderProviders(
   for (const id of orderedIds) append(id);
   for (const id of existing.keys()) append(id);
   return result.map((entry) => ({ ...entry }));
-}
-
-/** Swap two providers in the shared persisted order. */
-export function swapProviders(
-  entries: readonly ProviderOrderEntry[],
-  firstId: string,
-  secondId: string,
-): ProviderOrderEntry[] {
-  const order = normalizeProviderOrder(entries);
-  if (!order.some((entry) => entry.id === firstId)) order.push({ id: firstId, enabled: true });
-  if (!order.some((entry) => entry.id === secondId)) order.push({ id: secondId, enabled: true });
-  const first = order.findIndex((entry) => entry.id === firstId);
-  const second = order.findIndex((entry) => entry.id === secondId);
-  if (first < 0 || second < 0 || first === second) return order;
-  [order[first], order[second]] = [order[second], order[first]];
-  return order;
 }
 
 /** Available providers form the leading section; user order is stable inside each section. */

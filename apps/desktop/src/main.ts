@@ -492,6 +492,66 @@ let recoveryTickRunning = false;
 let gatewayDownObserved = false;
 /** Last gateway connection read at DSH spawn time, for identity comparison only. */
 let lastGatewayConnection: WrenyardGatewayConnection | null = null;
+/**
+ * A gateway model refresh (provider key configured) whose backend rebuild is
+ * deferred because turns were still running. The recovery watcher completes it
+ * once no turn is active, so configuring a key never cancels an ongoing message.
+ */
+let pendingModelRefreshRebuild = false;
+
+/**
+ * True while any conversation turn is still executing. Rebuilding the DSH
+ * backend under an active turn would cancel it, so this is exactly the state
+ * a deferred rebuild waits on.
+ */
+function conversationHasActiveTurns(): boolean {
+  const controller = conversationController;
+  if (!controller) return false;
+  const snapshot = controller.snapshot();
+  if (snapshot.status !== 'ready') return false;
+  return snapshot.selectedRunning === true
+    || snapshot.sessions.some((session) => session.running)
+    || (snapshot.turns?.some((turn) => turn.running) ?? false);
+}
+
+/**
+ * Refresh the conversation backend after provider credentials changed. The
+ * DSH model patch is generated from the gateway connection at spawn time, so
+ * new routes only become selectable once the backend is rebuilt with a fresh
+ * patch. The rebuild reuses the selection-preserving recovery lifecycle and is
+ * deferred while any turn runs; a gateway whose identity did not change needs
+ * no rebuild at all. Errors are warned, not thrown: the key itself was saved
+ * and the recovery watcher retries a failed session rebuild on its own.
+ */
+async function refreshConversationBackendAfterProviderChange(ipcPath: string): Promise<void> {
+  const controller = conversationController;
+  if (!controller || controller.workspace.status !== 'configured' || !controller.workspace.path) return;
+  // Mark the refresh pending before any read or recovery is attempted: if the
+  // gateway snapshot cannot be read, or the rebuild below fails transiently,
+  // the flag must survive so the recovery watcher retries it instead of the
+  // new provider route being silently lost for this session.
+  pendingModelRefreshRebuild = true;
+  let connection: WrenyardGatewayConnection;
+  try {
+    connection = await readGatewayConnection(ipcPath);
+  } catch (error) {
+    console.warn('[wrenyard-desktop] gateway connection refresh after provider change failed:', error instanceof Error ? error.message : String(error));
+    return;
+  }
+  // Only a confirmed unchanged gateway identity makes the refresh unnecessary.
+  if (lastGatewayConnection !== null && sameGatewayIdentity(lastGatewayConnection, connection)) {
+    pendingModelRefreshRebuild = false;
+    return;
+  }
+  if (conversationHasActiveTurns()) return;
+  await controller.recover(true)
+    .then(() => {
+      pendingModelRefreshRebuild = false;
+    })
+    .catch((error: unknown) => {
+      console.warn('[wrenyard-desktop] conversation backend rebuild after provider change failed:', error instanceof Error ? error.message : String(error));
+    });
+}
 
 /** Refresh quota/provider projection once and notify existing surfaces after a daemon restart. */
 async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
@@ -531,6 +591,7 @@ function stopGatewayRecoveryWatcher(): void {
   }
   recoveryTickRunning = false;
   gatewayDownObserved = false;
+  pendingModelRefreshRebuild = false;
 }
 
 async function runGatewayRecoveryTick(ipcPath: string): Promise<void> {
@@ -562,13 +623,41 @@ async function runGatewayRecoveryTick(ipcPath: string): Promise<void> {
     const identityChanged = lastGatewayConnection !== null
       && !sameGatewayIdentity(lastGatewayConnection, connection);
     lastGatewayConnection = connection;
-    if (!workspaceConfigured) return;
-    await controller.recover(identityChanged).catch((error: unknown) => {
-      console.warn('[wrenyard-desktop] gateway recovery failed:', error instanceof Error ? error.message : String(error));
-    });
+    if (!workspaceConfigured) {
+      pendingModelRefreshRebuild = false;
+      return;
+    }
+    // A forced identity rebuild already carries the freshest gateway models,
+    // so a deferred provider refresh becomes obsolete the moment it runs —
+    // but only once that rebuild actually succeeded.
+    await controller.recover(identityChanged)
+      .then(() => {
+        if (identityChanged) pendingModelRefreshRebuild = false;
+      })
+      .catch((error: unknown) => {
+        console.warn('[wrenyard-desktop] gateway recovery failed:', error instanceof Error ? error.message : String(error));
+      });
     return;
   }
-  if (!workspaceConfigured) return;
+  if (!workspaceConfigured) {
+    pendingModelRefreshRebuild = false;
+    return;
+  }
+  if (pendingModelRefreshRebuild) {
+    // Complete the deferred provider-key rebuild only once every turn settled;
+    // while any is still running the rebuild stays deferred, never forced.
+    if (conversationHasActiveTurns()) return;
+    // The flag is cleared only after a successful rebuild: a transient
+    // recovery failure must leave it pending so the next tick retries.
+    await controller.recover(true)
+      .then(() => {
+        pendingModelRefreshRebuild = false;
+      })
+      .catch((error: unknown) => {
+        console.warn('[wrenyard-desktop] deferred provider model refresh failed:', error instanceof Error ? error.message : String(error));
+      });
+    return;
+  }
   await controller.recover(false).catch((error: unknown) => {
     console.warn('[wrenyard-desktop] DSH session recovery failed:', error instanceof Error ? error.message : String(error));
   });
@@ -865,9 +954,10 @@ async function bootstrap(): Promise<void> {
     },
     configureProviderKey: async (providerId: string, key: string) => {
       await providerService.configureApiKey(providerId, key);
-      if (conversationController) {
-        await conversationController.configure(conversationController.workspace);
-      }
+      // A fresh key can change the gateway's model routes: refresh the
+      // conversation backend's model patch (deferred while turns run) so the
+      // new routes become selectable without an app restart.
+      await refreshConversationBackendAfterProviderChange(ipcPath);
       return quotaController!.getSnapshot(true);
     },
     getClientConfiguration: () => clientConfigurationService.snapshot(),
@@ -899,6 +989,9 @@ async function bootstrap(): Promise<void> {
       const saved = create ? await createProductWorkspace(path) : await saveProductWorkspace(path);
       await runPlannedDaemonRestart({ cli });
       await conversationController!.configure(saved);
+      // configure() spawns a fresh backend reading the current gateway
+      // connection, so any deferred provider refresh is already satisfied.
+      pendingModelRefreshRebuild = false;
       return saved;
     },
     getConversation: async () => conversationController!.snapshot(),

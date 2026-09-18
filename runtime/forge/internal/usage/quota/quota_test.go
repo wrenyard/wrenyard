@@ -2742,7 +2742,7 @@ func TestCachePathCanonicalContract(t *testing.T) {
 		{"cursor", "cursor.json"},
 		{"kimi-coding", "kimi-coding.json"},
 		{"zhipu-coding", "zhipu-coding.json"},
-		{"anthropic", "anthropic.json"},
+		{"claude-coding", "claude-coding.json"},
 	}
 	dataDir := "/some/data"
 	for _, tc := range tests {
@@ -2906,8 +2906,8 @@ func TestQuotaListAllJSONWindowPreservation(t *testing.T) {
 				t.Fatal("super-grok should have an error message")
 			}
 			label, _ := e["label"].(string)
-			if label != "super-grok" {
-				t.Fatalf("super-grok label = %q, want super-grok", label)
+			if label != "Super Grok" {
+				t.Fatalf("super-grok label = %q, want Super Grok", label)
 			}
 		}
 	}
@@ -2989,7 +2989,7 @@ func TestCLIAliasResolution(t *testing.T) {
 		{"zhipu-coding", "zhipu-coding"},
 		{"glm", "zhipu-coding"},
 		{"zai", "zhipu-coding"},
-		{"anthropic", "anthropic"},
+		{"claude-coding", "claude-coding"},
 		{"super-grok", "super-grok"},
 	}
 	for _, tc := range tests {
@@ -3225,8 +3225,8 @@ func TestQuotaShowOneSuperGrokReturnsUnavailable(t *testing.T) {
 	if result["provider"] != "super-grok" {
 		t.Fatalf("expected provider=super-grok, got %v", result["provider"])
 	}
-	if result["label"] != "super-grok" {
-		t.Fatalf("expected label=super-grok, got %v", result["label"])
+	if result["label"] != "Super Grok" {
+		t.Fatalf("expected label=Super Grok, got %v", result["label"])
 	}
 	if result["status"] != "unavailable" {
 		t.Fatalf("expected status=unavailable, got %v", result["status"])
@@ -3838,7 +3838,7 @@ func TestCursorCanonicalLabelAndAlias(t *testing.T) {
 }
 
 func TestCanonicalPoolsOrder(t *testing.T) {
-	want := []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "anthropic", "super-grok"}
+	want := []string{"chatgpt", "cursor", "deepseek", "zhipu-coding", "kimi-coding", "claude-coding", "super-grok"}
 	if len(canonicalProviders) != len(want) {
 		t.Fatalf("canonicalProviders length = %d, want %d", len(canonicalProviders), len(want))
 	}
@@ -3914,7 +3914,7 @@ func TestCursorFailClosedAndRequiredSource(t *testing.T) {
 	if !failClosedProvider("chatgpt") {
 		t.Fatal("chatgpt must remain fail-closed")
 	}
-	if failClosedProvider("kimi-coding") || failClosedProvider("anthropic") {
+	if failClosedProvider("kimi-coding") || failClosedProvider("claude-coding") {
 		t.Fatal("kimi-coding and anthropic must not be fail-closed")
 	}
 	// DeepSeek is a fail-closed quota-only pool with authoritative source.
@@ -4630,7 +4630,7 @@ func TestQuotaListAllWritesCacheAfterSuccessfulFetch(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 		ProviderForOverride: func(name string, billing BillingInfo) Provider {
-			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
+			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "claude-coding" {
 				return fakeProvider{
 					name: name,
 					q: Quota{
@@ -4735,7 +4735,7 @@ func TestQuotaListAllWithRefreshStillWritesCache(t *testing.T) {
 		ResolveKimiToken:     func() string { return "" },
 		CodexBarEnabled:      func() bool { return false },
 		ProviderForOverride: func(name string, billing BillingInfo) Provider {
-			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "anthropic" {
+			if name == "chatgpt" || name == "kimi-coding" || name == "zhipu-coding" || name == "claude-coding" {
 				return fakeProvider{
 					name: name,
 					q: Quota{

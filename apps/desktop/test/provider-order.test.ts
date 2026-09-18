@@ -5,7 +5,6 @@ import {
   normalizeProviderOrder,
   reorderProviders,
   sortProvidersByAvailability,
-  swapProviders,
 } from '../src/provider-order.js';
 
 test('provider ordering migrates legacy enablement away and activates new discoveries', () => {
@@ -30,14 +29,6 @@ test('provider ordering migrates legacy xai to spacex-ai without losing enableme
   ]);
 });
 
-test('provider ordering swaps entries without moving unrelated providers', () => {
-  assert.deepEqual(swapProviders([
-    { id: 'chatgpt', enabled: true },
-    { id: 'anthropic', enabled: false },
-    { id: 'cursor', enabled: true },
-  ], 'chatgpt', 'cursor').map((entry) => entry.id), ['cursor', 'anthropic', 'chatgpt']);
-});
-
 test('legacy order collapses codex into one stable chatgpt entry', () => {
   assert.equal(canonicalProviderId('codex'), 'chatgpt');
   // First occurrence keeps the position; the later canonical duplicate is dropped.
@@ -50,6 +41,18 @@ test('legacy order collapses codex into one stable chatgpt entry', () => {
     { id: 'chatgpt', enabled: true },
     { id: 'cursor', enabled: true },
     { id: 'anthropic', enabled: true },
+  ]);
+});
+
+test('legacy opencode-native order entry collapses into one opencode-zen entry', () => {
+  assert.equal(canonicalProviderId('opencode-native'), 'opencode-zen');
+  assert.deepEqual(normalizeProviderOrder([
+    { id: 'opencode-native', enabled: true },
+    { id: 'cursor', enabled: true },
+    { id: 'opencode-zen', enabled: true },
+  ]), [
+    { id: 'opencode-zen', enabled: true },
+    { id: 'cursor', enabled: true },
   ]);
 });
 

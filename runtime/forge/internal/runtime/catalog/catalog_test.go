@@ -19,8 +19,8 @@ func TestRegistryLookupDescriptor(t *testing.T) {
 	if d.Name != "claude" || d.Dialect != DialectClaudeCode {
 		t.Fatalf("unexpected claude descriptor: %+v", d)
 	}
-	if d.DefaultProvider != "anthropic" {
-		t.Fatalf("claude default provider = %q, want anthropic", d.DefaultProvider)
+	if d.DefaultProvider != "claude-coding" {
+		t.Fatalf("claude default provider = %q, want claude-coding", d.DefaultProvider)
 	}
 
 	d, err = r.LookupDescriptor("codebuddy")
@@ -78,10 +78,10 @@ func TestRegistryLookupBindingUnknown(t *testing.T) {
 
 func TestDialectCompatibilityValidation(t *testing.T) {
 	r := defaultReg()
-	// ResolveBinding with claude + anthropic should succeed (both claude-code).
-	_, _, err := r.ResolveBinding("claude", "anthropic")
+	// ResolveBinding with claude + claude-coding should succeed (both claude-code).
+	_, _, err := r.ResolveBinding("claude", "claude-coding")
 	if err != nil {
-		t.Fatalf("claude + anthropic should be compatible: %v", err)
+		t.Fatalf("claude + claude-coding should be compatible: %v", err)
 	}
 
 	_, kimiBinding, err := r.ResolveBinding("claude", "kimi-coding")
@@ -103,8 +103,8 @@ func TestDialectCompatibilityValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude with default binding should resolve: %v", err)
 	}
-	if b.Name != "anthropic" {
-		t.Fatalf("claude default binding = %q, want anthropic", b.Name)
+	if b.Name != "claude-coding" {
+		t.Fatalf("claude default binding = %q, want claude-coding", b.Name)
 	}
 
 	_, b, err = r.ResolveBinding("codebuddy", "")
@@ -136,13 +136,21 @@ func TestAPIKeyProvidersUseForgeManagedCredentials(t *testing.T) {
 			t.Fatalf("native provider %s must use codex credential resolver", id)
 		}
 	}
-	// anthropic uses claude resolver.
+	// claude-coding (subscription) uses the claude resolver.
+	claudeCoding, err := r.LookupBinding("claude-coding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeCoding.Inference == nil || claudeCoding.Inference.CredentialResolver != CredentialResolverClaude {
+		t.Fatalf("claude-coding credential resolver = %#v, want claude", claudeCoding.Inference)
+	}
+	// anthropic is the official API provider with forge-managed credentials.
 	anthropic, err := r.LookupBinding("anthropic")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if anthropic.Inference == nil || anthropic.Inference.CredentialResolver != CredentialResolverClaude {
-		t.Fatalf("anthropic credential resolver = %#v, want claude", anthropic.Inference)
+	if anthropic.Inference == nil || anthropic.Inference.CredentialResolver != CredentialResolverForgeManaged {
+		t.Fatalf("anthropic credential resolver = %#v, want forge-managed", anthropic.Inference)
 	}
 	// codebuddy is a native client: no public inference transport, with the
 	// CodeBuddy native auth file as its credential source.
@@ -765,15 +773,12 @@ func TestModelWhitelistReject(t *testing.T) {
 }
 
 func TestModelWhitelistEmptyAllowsAny(t *testing.T) {
-	b, err := defaultReg().LookupBinding("anthropic")
+	b, err := defaultReg().LookupBinding("chatgpt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.ValidateModel("claude-opus-4.8"); err != nil {
-		t.Fatalf("anthropic should allow any model: %v", err)
-	}
 	if err := b.ValidateModel("any-random-model"); err != nil {
-		t.Fatalf("anthropic should allow any model: %v", err)
+		t.Fatalf("chatgpt should allow any model: %v", err)
 	}
 }
 
@@ -858,8 +863,8 @@ func TestClaudeClientDefaultProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.DefaultProvider != "anthropic" {
-		t.Fatalf("claude default provider = %q, want anthropic", d.DefaultProvider)
+	if d.DefaultProvider != "claude-coding" {
+		t.Fatalf("claude default provider = %q, want claude-coding", d.DefaultProvider)
 	}
 }
 
@@ -937,24 +942,24 @@ func TestClientDescriptorsCodexOpenCode(t *testing.T) {
 	if oc.Binary.Name != "opencode" {
 		t.Fatalf("opencode binary name = %q", oc.Binary.Name)
 	}
-	if oc.DefaultProvider != "opencode-native" {
-		t.Fatalf("opencode default provider = %q, want opencode-native", oc.DefaultProvider)
+	if oc.DefaultProvider != "opencode-zen" {
+		t.Fatalf("opencode default provider = %q, want opencode-zen", oc.DefaultProvider)
 	}
 }
 
 func TestDialectCompatibilityNewProviders(t *testing.T) {
 	r := defaultReg()
 
-	// anthropic (claude-code) must be compatible with claude client.
-	_, anthropic, err := r.ResolveBinding("claude", "anthropic")
+	// claude-coding (claude-code dialect) compatible with claude client.
+	_, anthropic, err := r.ResolveBinding("claude", "claude-coding")
 	if err != nil {
-		t.Fatalf("claude + anthropic should be compatible: %v", err)
+		t.Fatalf("claude + claude-coding should be compatible: %v", err)
 	}
-	if anthropic.QuotaProvider != "anthropic" {
-		t.Fatalf("anthropic binding quota provider = %q, want anthropic", anthropic.QuotaProvider)
+	if anthropic.QuotaProvider != "claude-coding" {
+		t.Fatalf("claude-coding binding quota provider = %q, want claude-coding", anthropic.QuotaProvider)
 	}
 	if !anthropic.UsesClientBinary() {
-		t.Fatalf("anthropic binding should use client binary")
+		t.Fatalf("claude-coding binding should use client binary")
 	}
 
 	// zhipu-coding (claude-code) compatible with claude client.
@@ -981,20 +986,20 @@ func TestDialectCompatibilityNewProviders(t *testing.T) {
 		t.Fatalf("chatgpt provider quota provider = %q, want chatgpt", codexProvider.QuotaProvider)
 	}
 
-	// opencode-native (opencode dialect) compatible with opencode client.
-	_, ocNative, err := r.ResolveBinding("opencode", "opencode-native")
+	// opencode-zen (opencode dialect) compatible with opencode client.
+	_, ocNative, err := r.ResolveBinding("opencode", "opencode-zen")
 	if err != nil {
-		t.Fatalf("opencode + opencode-native should be compatible: %v", err)
+		t.Fatalf("opencode + opencode-zen should be compatible: %v", err)
 	}
 	if ocNative.QuotaProvider != "" {
-		t.Fatalf("opencode-native quota provider = %q, want empty", ocNative.QuotaProvider)
+		t.Fatalf("opencode-zen quota provider = %q, want empty", ocNative.QuotaProvider)
 	}
 }
 
 func TestProviderUsesClientBinaryPolicy(t *testing.T) {
 	r := defaultReg()
 
-	for _, name := range []string{"anthropic", "kimi-coding", "codebuddy"} {
+	for _, name := range []string{"claude-coding", "kimi-coding", "codebuddy"} {
 		b, err := r.LookupBinding(name)
 		if err != nil {
 			t.Fatal(err)
@@ -1004,7 +1009,7 @@ func TestProviderUsesClientBinaryPolicy(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"zhipu-coding", "chatgpt", "opencode-native"} {
+	for _, name := range []string{"zhipu-coding", "chatgpt", "opencode-zen"} {
 		b, err := r.LookupBinding(name)
 		if err != nil {
 			t.Fatal(err)
@@ -1023,7 +1028,8 @@ func TestCredentialResolverMapping(t *testing.T) {
 	}{
 		{"kimi-coding", CredentialResolverForgeManaged},
 		{"zhipu-coding", CredentialResolverForgeManaged},
-		{"anthropic", CredentialResolverClaude},
+		{"claude-coding", CredentialResolverClaude},
+		{"anthropic", CredentialResolverForgeManaged},
 		{"chatgpt", CredentialResolverCodex},
 	}
 	for _, tc := range tests {
@@ -1039,8 +1045,8 @@ func TestCredentialResolverMapping(t *testing.T) {
 		}
 	}
 	// Verify deepseek is NOT mapped to codebuddy in any alias sense.
-	if _, err := r.LookupBinding("deepseek"); err == nil {
-		t.Fatal("deepseek must not be a registered binding")
+	if _, err := r.LookupBinding("deepseek"); err != nil {
+		t.Fatal("deepseek must be a registered binding")
 	}
 }
 

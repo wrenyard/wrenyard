@@ -765,7 +765,10 @@ export class ConversationView {
     this.reasoningSelect.setAttribute('aria-label', '思考强度');
     this.reasoningSelect.hidden = true;
     this.reasoningSelect.addEventListener('change', () => void this.selectReasoningEffort(this.reasoningSelect.value));
-    this.modelPickerHost.append(this.reasoningSelect);
+    // The reasoning control belongs before the model trigger in the same host,
+    // so the DOM order matches the picker order; it is the existing control,
+    // only repositioned.
+    this.modelPickerHost.prepend(this.reasoningSelect);
     element('new-conversation-button').addEventListener('click', () => void this.create());
     this.sendButton.addEventListener('click', () => void this.send());
     element('workspace-open-settings').addEventListener('click', openSettings);
@@ -1069,9 +1072,7 @@ export class ConversationView {
     eyebrow.textContent = 'THE WRENYARD WORKSHOP';
     const title = document.createElement('h2');
     title.textContent = '今天想让工坊做些什么？';
-    const copy = document.createElement('p');
-    copy.textContent = 'DSH 在后台提供会话能力，所有工作默认发生在已绑定的 Wrenyard workspace。';
-    welcome.append(image, eyebrow, title, copy);
+    welcome.append(image, eyebrow, title);
     return welcome;
   }
 

@@ -84,12 +84,84 @@ async function loadCodeBuddySnapshot(auth: Record<string, unknown>, attributes: 
 test('forge-managed credentials are read without being projected into catalog data', async () => {
   const runtime = createBuiltinProviderRuntime({
     env: { XDG_DATA_HOME: '/data' }, home: '/home',
-    readFile: async () => JSON.stringify({ openai: { key: 'secret' } }),
+    readFile: async () => JSON.stringify({ openai: { type: 'api', key: 'secret' } }),
   });
   const provider = createBuiltinCatalog().provider('openai')!;
   const credential = await runtime.credential(provider);
   assert.equal(credential?.value, 'secret');
   assert.equal(upstreamAuthHeaders(provider, credential!, 'openai_chat').get('authorization'), 'Bearer secret');
+});
+
+test('DeepSeek resolves the managed auth.json API entry and never leaks it into catalog data', async () => {
+  const requestedPaths: string[] = [];
+  const runtime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data' }, home: '/home',
+    readFile: async (path) => {
+      requestedPaths.push(path);
+      return JSON.stringify({ deepseek: { type: 'api', key: 'managed-deepseek-key' } });
+    },
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  const credential = await runtime.credential(provider);
+  assert.equal(credential?.value, 'managed-deepseek-key');
+  assert.equal(upstreamAuthHeaders(provider, credential!, 'openai_chat').get('authorization'), 'Bearer managed-deepseek-key');
+  // The credential store path is the only file read; nothing is written.
+  assert.deepEqual(requestedPaths, ['/data/wrenyard/runtime/auth.json']);
+});
+
+test('DeepSeek falls back to an environment key only when the managed store has no entry', async () => {
+  const runtime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data', FORGE_DEEPSEEK_API_KEY: 'env-forge-key', DEEPSEEK_API_KEY: 'env-legacy-key' },
+    home: '/home',
+    readFile: async () => JSON.stringify({}),
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  assert.deepEqual(await runtime.credential(provider), { value: 'env-forge-key' });
+});
+
+test('DeepSeek accepts DEEPSEEK_API_KEY as the legacy environment fallback', async () => {
+  const runtime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data', DEEPSEEK_API_KEY: 'env-legacy-key' },
+    home: '/home',
+    readFile: async () => JSON.stringify({}),
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  assert.deepEqual(await runtime.credential(provider), { value: 'env-legacy-key' });
+});
+
+test('DeepSeek managed key wins over an environment key for the same provider', async () => {
+  const runtime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data', DEEPSEEK_API_KEY: 'env-legacy-key' },
+    home: '/home',
+    readFile: async () => JSON.stringify({ deepseek: { type: 'api', key: 'managed-wins' } }),
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  assert.deepEqual(await runtime.credential(provider), { value: 'managed-wins' });
+});
+
+test('DeepSeek is unconfigured with neither managed nor environment credential', async () => {
+  const runtime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data' },
+    home: '/home',
+    readFile: async () => JSON.stringify({}),
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  assert.equal(await runtime.credential(provider), undefined);
+});
+
+test('DeepSeek ignores a non-api managed entry and a missing credential store', async () => {
+  const oauthRuntime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data' }, home: '/home',
+    readFile: async () => JSON.stringify({ deepseek: { type: 'oauth', refresh: 'r', access: 'a' } }),
+  });
+  const provider = createBuiltinCatalog().provider('deepseek')!;
+  assert.equal(await oauthRuntime.credential(provider), undefined);
+
+  const missingRuntime = createBuiltinProviderRuntime({
+    env: { XDG_DATA_HOME: '/data' }, home: '/home',
+    readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
+  });
+  assert.equal(await missingRuntime.credential(provider), undefined);
 });
 
 test('CodeBuddy reuses the native nested access token without a managed credential store', async () => {
@@ -618,4 +690,45 @@ test('CodeBuddy snapshot scope is an opaque versioned digest free of raw account
     assert.ok(!JSON.stringify(snapshot.stableScope).includes(raw), `scope must not include ${raw}`);
     assert.ok(!JSON.stringify(snapshot).includes(raw), `snapshot must not include ${raw}`);
   }
+});
+
+test('credential store migrates a legacy anthropic-api API entry to the new anthropic provider', async () => {
+  const store: Record<string, { type?: string; key?: string }> = {
+    'anthropic-api': { type: 'api', key: 'legacy-api-key' },
+  };
+  let written = '';
+  const runtime = createBuiltinProviderRuntime({
+    home: '/native-home',
+    readFile: async () => JSON.stringify(store),
+    writeFile: async (_path, data) => { written = data; },
+    rename: async () => { Object.assign(store, JSON.parse(written)); },
+    mkdir: async () => undefined,
+  });
+  const provider = createBuiltinCatalog().provider('anthropic')!;
+
+  assert.deepEqual(await runtime.credential(provider), { value: 'legacy-api-key' });
+
+  await runtime.configureApiKey(provider, 'new-api-key');
+  const persisted = JSON.parse(written) as Record<string, { type?: string; key?: string }>;
+  assert.deepEqual(persisted.anthropic, { type: 'api', key: 'new-api-key' });
+  assert.equal(persisted['anthropic-api'], undefined);
+});
+
+test('credential store keeps an existing anthropic API key and never promotes a subscription oauth entry', async () => {
+  const preserved: Record<string, { type?: string; key?: string }> = {
+    anthropic: { type: 'api', key: 'existing-api-key' },
+    'anthropic-api': { type: 'api', key: 'stale-api-key' },
+  };
+  const preservedRuntime = createBuiltinProviderRuntime({
+    home: '/native-home',
+    readFile: async () => JSON.stringify(preserved),
+  });
+  const provider = createBuiltinCatalog().provider('anthropic')!;
+  assert.deepEqual(await preservedRuntime.credential(provider), { value: 'existing-api-key' });
+
+  const oauthOnly = createBuiltinProviderRuntime({
+    home: '/native-home',
+    readFile: async () => JSON.stringify({ 'anthropic-api': { type: 'oauth', key: 'subscription-token' } }),
+  });
+  assert.equal(await oauthOnly.credential(provider), undefined);
 });

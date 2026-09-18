@@ -28,7 +28,11 @@ func TestCanonicalLabel(t *testing.T) {
 		{"deepseek", "DeepSeek"},
 		{"kimi-coding", "KIMI"},
 		{"zhipu-coding", "GLM"},
-		{"super-grok", "super-grok"},
+		{"super-grok", "Super Grok"},
+		{"claude-coding", "Claude"},
+		{"anthropic", "Anthropic"},
+		{"deepseek", "DeepSeek"},
+		{"opencode-zen", "OpenCode Zen"},
 		{"unknown", "unknown"},
 	}
 	for _, tc := range tests {

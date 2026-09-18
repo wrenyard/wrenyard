@@ -133,6 +133,45 @@ func openCodeGatewayModel(spec ProfileSpec, model string) string {
 	return "wrenyard/" + public
 }
 
+// openCodeCommandModel returns the OpenCode -m value for the resolved spec.
+// Gateway-routed invocations keep their wrenyard/<model> route; the genuine
+// Zen native route addresses the model through OpenCode's own built-in
+// provider id (opencode/<model>), never through a custom provider entry.
+func openCodeCommandModel(spec ProfileSpec, model string) string {
+	if spec.Provider.GatewayRouted {
+		return openCodeGatewayModel(spec, model)
+	}
+	return openCodeNativeRoute(spec, model)
+}
+
+// openCodeBuiltinProviderID is the OpenCode built-in provider that serves the
+// genuine Zen native route. Its protocol, npm transport, and endpoint are
+// owned by OpenCode itself, so Forge must never redeclare them.
+const openCodeBuiltinProviderID = "opencode"
+
+// openCodeNativeRoute returns the OpenCode -m value for the genuine native
+// route. Zen models resolve through the built-in opencode provider; any other
+// native provider keeps its own <provider>/<model> mapping.
+func openCodeNativeRoute(spec ProfileSpec, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	rawProviderID := strings.TrimSpace(spec.Provider.Name)
+	if rawProviderID == "" {
+		return model
+	}
+	// The caller carries the vendor route prefix; strip it against the raw
+	// provider id before applying the OpenCode-facing provider id so the
+	// result is never double-prefixed.
+	model = strings.TrimPrefix(model, rawProviderID+"/")
+	providerID := rawProviderID
+	if providerID == "opencode-zen" {
+		providerID = openCodeBuiltinProviderID
+	}
+	return providerID + "/" + model
+}
+
 func modelFromArgs(args []string) string {
 	for i, a := range args {
 		if a == "--model" && i+1 < len(args) {

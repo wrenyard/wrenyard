@@ -160,13 +160,52 @@ test('API-billed providers bind their own balance resource only where proven', (
 test('free providers get their own free-usage pool, never a mandatory paid balance', () => {
   for (const [providerId, modelId] of [
     ['opencode-zen', 'mimo-v2.5-free'],
+    ['opencode-zen', 'ling-3.0-flash-fin-free'],
+    ['opencode-zen', 'big-pickle'],
+    ['opencode-zen', 'union-alpha'],
+    ['opencode-zen', 'nemotron-3-ultra-free'],
+    ['opencode-zen', 'nemotron-3.5-lightning-free'],
     ['openrouter', 'nex-agi/nex-n2.5-mini:free'],
+    ['openrouter', 'cohere/north-mini-code:free'],
+    ['openrouter', 'inclusionai/ling-3.0-flash-vl:free'],
+    ['openrouter', 'qwen/qwen3.8-27b:free'],
   ] as const) {
     const binding = expectBinding(providerId, modelId);
     assert.equal(binding.pools.length, 1);
     assert.equal(binding.pools[0]!.kind, 'quota');
     assert.ok(binding.pools[0]!.quotaPoolId.startsWith(`${providerId}/`));
   }
+});
+
+test('paid Zen models bind the account balance pool while free models share the free pool', () => {
+  const free = expectBinding('opencode-zen', 'big-pickle');
+  assert.deepEqual(bindingPoolIds(free), ['opencode-zen/free']);
+  assert.equal(free.pools[0]!.kind, 'quota');
+  // All free Zen telemetry shares one exact pool instance.
+  assert.equal(free.pools[0], expectBinding('opencode-zen', 'mimo-v2.5-free').pools[0]);
+  for (const paidId of ['glm-5.3', 'kimi-k3']) {
+    const paid = expectBinding('opencode-zen', paidId);
+    assert.deepEqual(bindingPoolIds(paid), ['opencode-zen/balance']);
+    assert.equal(paid.pools[0]!.kind, 'balance');
+    assert.deepEqual(paid.pools[0]!.windows, []);
+  }
+  // A discovered Zen model falls back to the free pool default, not a balance.
+  assert.deepEqual(bindingPoolIds(findProviderQuotaBinding('opencode-zen', 'zen-new-model')!), ['opencode-zen/free']);
+  assert.deepEqual(bindingPoolIds(findProviderQuotaBinding('openrouter', 'vendor/new:free')!), ['openrouter/free']);
+});
+
+test('official DeepSeek routes bind one own-provider balance resource', () => {
+  for (const modelId of ['deepseek-flash', 'deepseek']) {
+    const binding = expectBinding('deepseek', modelId);
+    assert.equal(binding.pools.length, 1);
+    assert.equal(binding.pools[0]!.kind, 'balance');
+    assert.equal(binding.pools[0]!.quotaPoolId, 'deepseek/balance');
+    assert.deepEqual(binding.pools[0]!.windows, []);
+  }
+  // The official Anthropic API provider resolves to its own balance pool.
+  const anthropic = expectBinding('anthropic', 'claude-sonnet-5');
+  assert.deepEqual(bindingPoolIds(anthropic), ['anthropic/balance']);
+  assert.equal(anthropic.pools[0]!.kind, 'balance');
 });
 
 test('provider-scoped pool ids are unique across the whole graph', () => {

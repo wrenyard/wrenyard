@@ -28,6 +28,7 @@ export const SHELL_CHANNELS = {
   conversationSend: 'wrenyard-shell:conversation-send',
   conversationCancel: 'wrenyard-shell:conversation-cancel',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
+  openProviderKeyPage: 'wrenyard-shell:open-provider-key-page',
   clientConfigurationSnapshot: 'wrenyard-shell:client-configuration-snapshot',
   clientConfigurationPlan: 'wrenyard-shell:client-configuration-plan',
   clientConfigurationApply: 'wrenyard-shell:client-configuration-apply',
@@ -911,6 +912,7 @@ export interface WrenyardShellApi {
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
+  openProviderKeyPage(providerId: string): Promise<void>;
   getClientConfiguration(): Promise<ClientConfigurationSnapshotDto>;
   planClientConfiguration(clientId: ClientConfigurationId, selection: ClientModelSelectionDto): Promise<ClientConfigurationPlanDto>;
   applyClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
@@ -949,6 +951,27 @@ export interface WrenyardShellApi {
 
 export function isShellPage(value: unknown): value is ShellPage {
   return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings' || value === 'tasks';
+}
+
+/**
+ * Hardcoded official key-creation pages for providers that need an external
+ * visit to mint an API key. The renderer passes only the provider id; the
+ * resolved URL is always one of these fixed values and never renderer input.
+ */
+export const PROVIDER_KEY_PAGE_URLS: Readonly<Record<string, string>> = {
+  'opencode-zen': 'https://opencode.ai/auth',
+  openrouter: 'https://openrouter.ai/settings/keys',
+};
+
+/**
+ * Resolves the fixed official key-creation URL for an allowlisted provider id.
+ * Returns null for every other value so no arbitrary URL can reach
+ * `shell.openExternal` through this contract.
+ */
+export function providerKeyPageUrl(providerId: unknown): string | null {
+  if (typeof providerId !== 'string' || !Object.hasOwn(PROVIDER_KEY_PAGE_URLS, providerId)) return null;
+  const url = PROVIDER_KEY_PAGE_URLS[providerId];
+  return url === undefined ? null : url;
 }
 
 export function isSettingsLaunchRequest(value: string): boolean {

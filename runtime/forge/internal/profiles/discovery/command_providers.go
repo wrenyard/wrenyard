@@ -126,7 +126,8 @@ func providersList(deps ProviderDeps, args []string) int {
 }
 
 // canonicalProviderIDs returns the public canonical provider ids in
-// deterministic order, excluding internal providers such as opencode-native.
+// deterministic order, excluding internal providers that declare no inference
+// transport and no client-binary execution.
 // A binding is public when it declares an inference transport or runs through
 // a client binary.
 func canonicalProviderIDs(reg *catalog.Registry) []string {

@@ -91,7 +91,7 @@ func claudeClient() Client {
 		},
 		Hygiene:         nil,
 		ResumeFlag:      ResumeFlagLong,
-		DefaultProvider: "anthropic",
+		DefaultProvider: "claude-coding",
 	}
 }
 
@@ -169,6 +169,6 @@ func opencodeClient() Client {
 		},
 		Hygiene:         nil,
 		ResumeFlag:      ResumeFlagLong,
-		DefaultProvider: "opencode-native",
+		DefaultProvider: "opencode-zen",
 	}
 }

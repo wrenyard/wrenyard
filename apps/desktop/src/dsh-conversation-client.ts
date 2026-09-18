@@ -102,6 +102,14 @@ interface DshConversationClientOptions {
   /** Owner-only cancellation of a run this client still owns. */
   cancelTaskRun?(taskRunId: string): Promise<void>;
   /**
+   * Bounded startup window for one accepted `session.prompt`: if the branch
+   * observes no own event within it, the prompt never started and the turn
+   * fails with a visible error. Only this window is watched — once the branch
+   * begins, arbitrarily slow tools and generations are legitimate and never
+   * time out. Defaults to 30s; overridable so tests stay deterministic.
+   */
+  promptStartupTimeoutMs?: number;
+  /**
    * Absolute path of the product-owned conversation document. When supplied,
    * the linear conversation, its execution-session mapping, and the frozen
    * terminal turn telemetry persist across restarts. Omitted → memory only.
@@ -1224,6 +1232,31 @@ function taskResultBatch(tasks: readonly OwnedTaskRun[]): { text: string; delive
 }
 
 /**
+ * Stable marker of the internal inherited-history envelope. A fork cut can
+ * predate sibling turns that completed while the new turn waited to dispatch;
+ * their visible exchanges ride in the one prompt this turn already sends,
+ * marked as product-delivered context rather than a new human message. DSH
+ * exposes no append API for prior turns, so the prompt itself is the only
+ * transport. The envelope is execution detail: it never becomes a visible
+ * transcript item and never enters the summarizer's work text.
+ */
+const HISTORY_ENVELOPE_MARKER = '[wrenyard:conversation-history]';
+/** Bounded final-answer text of one injected exchange. */
+const MAX_HISTORY_EXCHANGE_TEXT = 8_000;
+const HISTORY_TRUNCATED_NOTE = '\n[历史回复已达补传长度上限，此处截断]';
+
+function boundedHistoryText(text: string): string {
+  return text.length > MAX_HISTORY_EXCHANGE_TEXT
+    ? `${text.slice(0, MAX_HISTORY_EXCHANGE_TEXT)}${HISTORY_TRUNCATED_NOTE}`
+    : text;
+}
+
+/** Sorted, de-duplicated send-seq list of the turns a branch already holds. */
+function sortedUniqueSeqs(values: readonly number[]): number[] {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+/**
  * One local product turn: the optimistic display state the user sees and the
  * execution branch that backs it. Created synchronously on send, so several
  * turns can run in parallel and each one owns its own DSH session.
@@ -1265,6 +1298,21 @@ interface LocalTurn {
   baseAtSeq?: number;
   /** The immutable execution cut captured for this turn at send time. */
   forkPlan: ForkPlan;
+  /**
+   * Send-seqs of the earlier completed turns of this conversation whose
+   * visible user/final exchanges this turn's branch already contains —
+   * through its fork cut or through injection at dispatch. Kept per turn and
+   * persisted, so no later fork ever injects an exchange twice.
+   */
+  coveredTurnSeqs: number[];
+  /**
+   * Bounded startup watch for one accepted prompt: an accepted prompt whose
+   * branch produced no own event within the window failed to start and the
+   * turn fails visibly instead of spinning forever. It is not a tool or
+   * generation watchdog — the first own event retires it, and slow work after
+   * that is never timed out.
+   */
+  startupWatch?: { timer: ReturnType<typeof setTimeout>; entries: number; lastSeq?: number };
   /** Model choice captured at send time, applied before the branch prompts. */
   pendingModel?: Pick<ConversationModelSelectionSnapshot, 'provider' | 'model' | 'reasoningEffort'>;
   /** Context captured at send time: only turns completed before it. */
@@ -1336,6 +1384,10 @@ interface LocalTurn {
   summaryController?: AbortController;
 }
 
+/** Bounded startup window before an accepted prompt's first own event. */
+const DEFAULT_PROMPT_STARTUP_TIMEOUT_MS = 30_000;
+const PROMPT_STARTUP_TIMEOUT_MESSAGE = '会话未开始执行，请重试';
+
 export class DshConversationClient {
   private readonly baseUrl: URL;
   private readonly workspaceId: string;
@@ -1344,6 +1396,7 @@ export class DshConversationClient {
   private readonly summarize?: (input: ConversationSummaryInput) => Promise<string>;
   private readonly waitForTaskRun?: (taskRunId: string, signal: AbortSignal) => Promise<unknown>;
   private readonly cancelTaskRun?: (taskRunId: string) => Promise<void>;
+  private readonly promptStartupTimeoutMs: number;
   private readonly onChanged: () => void;
   private sessions = new Map<string, RawSessionSummary>();
   private workspaceSessionIds = new Set<string>();
@@ -1412,6 +1465,7 @@ export class DshConversationClient {
     this.summarize = options.summarize;
     this.waitForTaskRun = options.waitForTaskRun;
     this.cancelTaskRun = options.cancelTaskRun;
+    this.promptStartupTimeoutMs = options.promptStartupTimeoutMs ?? DEFAULT_PROMPT_STARTUP_TIMEOUT_MS;
     this.onChanged = options.onChanged;
     if (options.statePath) {
       this.state = new ConversationStateStore({
@@ -1463,6 +1517,7 @@ export class DshConversationClient {
     // Shutting the client down abandons every wait and summary it owns. The
     // backend runs themselves are left alone: stopping is not cancelling.
     for (const turn of this.turns) {
+      this.clearStartupWatch(turn);
       turn.summaryController?.abort();
       turn.progressController?.abort();
       for (const task of turn.ownedTasks.values()) task.controller?.abort();
@@ -2297,6 +2352,9 @@ export class DshConversationClient {
       summary.running = true;
       summary.updatedAt = Date.now();
     }
+    // A delivery prompt is watched for its bounded startup window exactly like
+    // the turn's first prompt: accepted-but-never-started must fail visibly.
+    this.armStartupWatch(turn, sessionId);
     this.notify();
     // A boundary observed while this delivery was in flight was suppressed by
     // the in-flight flag rather than dropped, so the turn is advanced again now
@@ -2688,6 +2746,9 @@ export class DshConversationClient {
    */
   private createTurn(conversationId: string, prompt: string, clientTimeZone?: string): LocalTurn {
     const seq = ++this.turnSequence;
+    // The execution cut is decided here, before any await, so a turn never
+    // adopts a base another parallel turn established while it waited.
+    const forkPlan = this.captureForkPlan(conversationId);
     const turn: LocalTurn = {
       id: `turn-${seq}`,
       seq,
@@ -2697,9 +2758,8 @@ export class DshConversationClient {
       ...(clientTimeZone ? { clientTimeZone } : {}),
       status: 'running',
       startedAt: Date.now(),
-      // The execution cut is decided here, before any await, so a turn never
-      // adopts a base another parallel turn established while it waited.
-      forkPlan: this.captureForkPlan(conversationId),
+      forkPlan,
+      coveredTurnSeqs: this.coveredByForkPlan(conversationId, forkPlan),
       pendingModel: this.models.current?.advertised && this.models.current.configured
         ? {
           provider: this.models.current.provider,
@@ -2765,6 +2825,115 @@ export class DshConversationClient {
   }
 
   /**
+   * Send-seqs of the completed prior turns whose visible exchanges the new
+   * turn's branch already contains through its fork cut. A fork from a
+   * completed turn inherits everything that turn's branch held — its own
+   * `coveredTurnSeqs` plus its own exchange; a legacy-root fork and a blank
+   * execution start with none of this conversation's product turns.
+   */
+  private coveredByForkPlan(conversationId: string, plan: ForkPlan): number[] {
+    if (plan.kind !== 'fork') return [];
+    const base = this.turnsOf(conversationId)
+      .filter((candidate) => candidate.status === 'completed' && candidate.baseSessionId === plan.sessionId)
+      .at(-1);
+    return base ? sortedUniqueSeqs([...base.coveredTurnSeqs, base.seq]) : [];
+  }
+
+  /**
+   * Snapshot the completed earlier turns of this conversation whose visible
+   * exchanges this turn's branch does not yet contain, taken at dispatch so a
+   * sibling that finished while this turn waited to prompt is still included.
+   * Each snapshot is marked covered immediately — injection is what carries it
+   * into the branch — so no later fork of this branch repeats it. Still-running
+   * siblings stay excluded: only finished work belongs to the conversation.
+   */
+  private snapshotMissingExchanges(turn: LocalTurn): LocalTurn[] {
+    const covered = new Set(turn.coveredTurnSeqs);
+    const missing = this.turnsOf(turn.conversationId)
+      .filter((candidate) => candidate.seq < turn.seq
+        && candidate.status === 'completed'
+        && !covered.has(candidate.seq));
+    if (missing.length === 0) return missing;
+    turn.coveredTurnSeqs = sortedUniqueSeqs([
+      ...turn.coveredTurnSeqs,
+      ...missing.map((candidate) => candidate.seq),
+    ]);
+    return missing;
+  }
+
+  /** The distinct final assistant text of a completed turn, when it has one. */
+  private finalAnswerOf(turn: LocalTurn): string | undefined {
+    const summary = turn.summaryItem?.text.trim();
+    if (summary) return summary;
+    if (!turn.finalItemId) return undefined;
+    const item = (turn.processItems ?? []).find(
+      (candidate) => candidate.id === turn.finalItemId && candidate.kind === 'assistant',
+    );
+    return item?.text.trim() || undefined;
+  }
+
+  /**
+   * The prompt actually dispatched. When completed sibling exchanges are
+   * missing from the branch, they are injected ahead of the user's new message
+   * as one marked internal envelope in stable send order — only the visible
+   * user prompt and final assistant answer, never reasoning or tool internals.
+   * A branch that already inherited an exchange through its fork cut never
+   * receives it again.
+   */
+  private promptWithInheritedHistory(turn: LocalTurn, missing: readonly LocalTurn[]): string {
+    const blocks: string[] = [];
+    for (const sibling of missing) {
+      const answer = this.finalAnswerOf(sibling);
+      if (!answer) continue;
+      blocks.push(`用户：${sibling.prompt}\n助手：${boundedHistoryText(answer)}`);
+    }
+    if (blocks.length === 0) return turn.prompt;
+    return [
+      HISTORY_ENVELOPE_MARKER,
+      '以下是本会话此前已完成的对话记录，由系统在并行回合收束后自动补传，不是用户的新消息。请将其视为已有上下文，不要重复作答，然后只回答最后一条新的用户消息。',
+      blocks.join('\n\n'),
+      '---',
+      `用户的新消息：${turn.prompt}`,
+    ].join('\n');
+  }
+
+  /**
+   * Arm the bounded startup watch for one accepted prompt, recording the
+   * branch's own-event position. If no own event arrives within the window,
+   * the accepted prompt never started — the turn fails with a visible error
+   * and the branch is stopped, instead of running silently forever. Any own
+   * event before the deadline retires the check at fire time, so legitimately
+   * slow tools and generations behind the first event are never touched.
+   */
+  private armStartupWatch(turn: LocalTurn, sessionId: string): void {
+    this.clearStartupWatch(turn);
+    // Only a genuinely silent startup may be watched: if this turn already
+    // holds any own event — even one replayed by the history load that runs
+    // just before this call — the prompt has started, and a quiet long tool
+    // behind that first event must never be cancelled by this guard.
+    if (turn.entries.some((entry) => this.isOwnEvent(turn, entry))) return;
+    const entries = turn.entries.length;
+    const lastSeq = turn.lastSeq;
+    const timer = setTimeout(() => {
+      if (turn.startupWatch?.timer !== timer) return;
+      turn.startupWatch = undefined;
+      if (turn.status !== 'running') return;
+      if (turn.entries.length !== entries || turn.lastSeq !== lastSeq) return;
+      this.failWorkTurn(turn, PROMPT_STARTUP_TIMEOUT_MESSAGE, Date.now());
+      void this.rpc('session.cancel', { sessionId }).catch(() => undefined);
+      this.notify();
+    }, this.promptStartupTimeoutMs);
+    turn.startupWatch = { timer, entries, lastSeq };
+  }
+
+  private clearStartupWatch(turn: LocalTurn): void {
+    const watch = turn.startupWatch;
+    if (!watch) return;
+    turn.startupWatch = undefined;
+    clearTimeout(watch.timer);
+  }
+
+  /**
    * Bind one turn to its execution session. Ownership is what routes that
    * session's events into the turn and keeps them out of the linear
    * conversation history, and it is also what `cancel()` reads to reach the
@@ -2808,6 +2977,10 @@ export class DshConversationClient {
         turn.entries = turn.entries.filter((entry) => this.isOwnEvent(turn, entry));
         if (await this.abandonIfCancelled(turn, sessionId)) return;
       }
+      // Snapshot the completed exchanges this branch does not yet hold — a
+      // sibling may have finished while this turn waited to dispatch — so the
+      // prompt can carry them and the persisted ancestry stays truthful.
+      const missingExchanges = this.snapshotMissingExchanges(turn);
       this.persistConversation();
       await this.applyModel(sessionId, turn.pendingModel);
       if (await this.abandonIfCancelled(turn, sessionId)) return;
@@ -2819,7 +2992,7 @@ export class DshConversationClient {
       await this.rpc('session.prompt', {
         sessionId,
         mode: 'queue',
-        content: [{ type: 'text', text: turn.prompt }],
+        content: [{ type: 'text', text: this.promptWithInheritedHistory(turn, missingExchanges) }],
         ...(turn.clientTimeZone ? { clientTimeZone: turn.clientTimeZone } : {}),
       });
       // A cancel that landed while the prompt was in flight must not be undone.
@@ -2837,6 +3010,9 @@ export class DshConversationClient {
         summary.updatedAt = Date.now();
       }
       await this.loadTurnHistory(turn, sessionId).catch(() => undefined);
+      // An accepted prompt that produced no own event yet is watched for its
+      // bounded startup window only; the first own event retires the watch.
+      if (turn.status === 'running') this.armStartupWatch(turn, sessionId);
       this.persistConversation();
       this.notify();
     } catch (error) {
@@ -2965,6 +3141,8 @@ export class DshConversationClient {
     if (turn.status !== 'running') return;
     turn.status = status;
     turn.endedAt = turn.endedAt ?? Date.now();
+    // A settled turn no longer watches for its prompt to start.
+    this.clearStartupWatch(turn);
     // A turn cancelled or failed before its branch ended never froze its own
     // counts, so they are taken from what the branch did observe — once.
     if (turn.dispatchCount === undefined) {
@@ -3194,6 +3372,7 @@ export class DshConversationClient {
         ...(turn.forkAtSeq !== undefined ? { forkAtSeq: turn.forkAtSeq } : {}),
         ...(turn.baseSessionId ? { baseSessionId: turn.baseSessionId } : {}),
         ...(turn.baseAtSeq !== undefined ? { baseAtSeq: turn.baseAtSeq } : {}),
+        ...(turn.coveredTurnSeqs.length > 0 ? { coveredTurnSeqs: turn.coveredTurnSeqs } : {}),
         ...(turn.finalItemId ? { finalItemId: turn.finalItemId } : {}),
         ...(turn.inheritedMaxSeq !== undefined ? { inheritedMaxSeq: turn.inheritedMaxSeq } : {}),
         ...(turn.dshEndedAt !== undefined ? { dshEndedAt: turn.dshEndedAt } : {}),
@@ -3267,10 +3446,14 @@ export class DshConversationClient {
         this.localConversationSequence = Math.max(this.localConversationSequence, Number(local[1]));
       }
       const summaries: Array<{ user: string; summary: string }> = [];
+      // Already-restored turns of this conversation, in send order, so a turn
+      // can recover the ancestry its pre-upgrade document never persisted.
+      const restoredTurns: LocalTurn[] = [];
       for (const persisted of [...record.turns].sort((left, right) => left.seq - right.seq)) {
-        const turn = this.restoreTurn(record, persisted, [...summaries]);
+        const turn = this.restoreTurn(record, persisted, [...summaries], restoredTurns);
         this.turns.push(turn);
         this.turnsById.set(turn.id, turn);
+        restoredTurns.push(turn);
         // A branch a turn ran on that is not the conversation's own root is an
         // internal execution session; restoring it as hidden keeps the sidebar
         // showing conversations rather than the branches behind them.
@@ -3287,6 +3470,7 @@ export class DshConversationClient {
     record: ConversationStateRecord,
     persisted: ConversationStateTurn,
     previousSummaries: Array<{ user: string; summary: string }>,
+    restoredTurns: readonly LocalTurn[],
   ): LocalTurn {
     const messageById = (id: string | undefined): ConversationStateMessage | undefined => (
       id === undefined ? undefined : record.messages.find((candidate) => candidate.id === id)
@@ -3319,6 +3503,7 @@ export class DshConversationClient {
       ...(persisted.forkAtSeq !== undefined ? { forkAtSeq: persisted.forkAtSeq } : {}),
       ...(persisted.baseSessionId ? { baseSessionId: persisted.baseSessionId } : {}),
       ...(persisted.baseAtSeq !== undefined ? { baseAtSeq: persisted.baseAtSeq } : {}),
+      coveredTurnSeqs: this.restoredCoveredTurnSeqs(persisted, restoredTurns),
       ...(persisted.finalItemId ? { finalItemId: persisted.finalItemId } : {}),
       ...(summaryMessage ? { summaryItem: this.messageItem(summaryMessage, persisted.id) } : {}),
       ...(persisted.process && persisted.process.length > 0 ? { processItems: persisted.process } : {}),
@@ -3346,6 +3531,30 @@ export class DshConversationClient {
       }])),
       handledInternalTurns: new Set(persisted.internalTurnIds ?? []),
     };
+  }
+
+  /**
+   * Persisted ancestry of one restored turn. A list persisted by this version
+   * is authoritative. An absent list is a pre-upgrade document: its absence is
+   * never read as "this branch inherited nothing", because a linear history
+   * would then look like it was missing its inherited ancestors and inject
+   * them again. Instead the ancestry is recovered from the already-restored
+   * same-conversation turn this one forked from — its own covered seqs plus its
+   * exchange — which is exactly what a fork of that completed cut carried.
+   * A blank execution or a fork of the legacy root has no product parent and
+   * keeps an empty ancestry. A sibling branch never inherits another branch's
+   * turns this way, because only the exact forked-from session matches.
+   */
+  private restoredCoveredTurnSeqs(
+    persisted: ConversationStateTurn,
+    restoredTurns: readonly LocalTurn[],
+  ): number[] {
+    if (persisted.coveredTurnSeqs !== undefined) return sortedUniqueSeqs(persisted.coveredTurnSeqs);
+    if (!persisted.forkParentSessionId) return [];
+    const parent = restoredTurns
+      .filter((candidate) => candidate.sessionId === persisted.forkParentSessionId)
+      .at(-1);
+    return parent ? sortedUniqueSeqs([...parent.coveredTurnSeqs, parent.seq]) : [];
   }
 
   private messageItem(message: ConversationStateMessage, turnId: string): ConversationItemSnapshot {

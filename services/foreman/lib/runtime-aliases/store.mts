@@ -29,7 +29,12 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { formatRunSyntax, parseRunSyntax } from '@wrenyard/catalog';
-import { migrateRuntimeChatGPTReferences } from '../config/chatgpt-migration.mts';
+import {
+  hasRuntimeProviderMigrationMarker,
+  markRuntimeProviderMigration,
+  migrateRuntimeChatGPTReferences,
+  RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY,
+} from '../config/chatgpt-migration.mts';
 
 export type StoreFileSystem = Pick<
   typeof defaultFs,
@@ -347,7 +352,10 @@ export class RuntimeAliasStore {
         aliases[name] = value;
       }
       aliases[alias] = canonical;
-      await this.writeJson({ ...state.extra, revision, aliases });
+      // put() writes canonical data, so the document is marked as migrated:
+      // a later load must not reinterpret the caller's canonical target as a
+      // legacy id (an API `anthropic` alias must never become `claude-coding`).
+      await this.writeJson({ ...state.extra, ...RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY, revision, aliases });
       return { alias, canonical, revision };
     });
   }
@@ -371,7 +379,7 @@ export class RuntimeAliasStore {
       }
       delete aliases[alias];
       const revision = state.revision + 1;
-      await this.writeJson({ ...state.extra, revision, aliases });
+      await this.writeJson({ ...state.extra, ...RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY, revision, aliases });
       return { alias, removed: true, revision };
     });
   }
@@ -384,16 +392,22 @@ export class RuntimeAliasStore {
 
   /**
    * Re-read state from inside the mutation queue and apply the one-time
-   * ChatGPT identity migration. When the persisted document contains legacy
-   * `codex` alias targets, provider keys, or policy provider
-   * keys, they are rewritten to `chatgpt`, the revision is bumped exactly
-   * once, and the result is persisted atomically before the caller's own
-   * mutation proceeds. This runs inside the queue (never re-enqueues) so it
+   * provider identity migration. An unmarked persisted document may contain
+   * legacy provider references (for example the legacy subscription `anthropic`
+   * now canonicalized as `claude-coding`, or `anthropic-api` as `anthropic`);
+   * those are rewritten, the migration marker is written in the same atomic
+   * update, the revision is bumped exactly once, and the result is persisted
+   * before the caller's own mutation proceeds. A document that already carries
+   * the marker — or one that contains no legacy provider reference at all — is
+   * returned untouched, so canonical `anthropic` API references written by an
+   * earlier pass are never re-aliased and unrelated mutations never observe a
+   * phantom revision bump. This runs inside the queue (never re-enqueues) so it
    * cannot deadlock and the caller's CAS uses the migrated revision.
    */
   private async migrateStateInsideQueue(): Promise<ReadState> {
     const state = await this.readState();
     if (!state.exists) return state;
+    if (hasRuntimeProviderMigrationMarker(state.extra)) return state;
 
     const migrated = migrateRuntimeChatGPTReferences({
       aliases: state.rawAliases,
@@ -401,7 +415,7 @@ export class RuntimeAliasStore {
     });
     if (!migrated.changed) return state;
 
-    const record = migrated.record as Record<string, unknown>;
+    const record = markRuntimeProviderMigration(migrated.record).record as Record<string, unknown>;
     const { aliases, ...extra } = record;
     const rawAliases =
       typeof aliases === 'object' && aliases !== null && !Array.isArray(aliases)

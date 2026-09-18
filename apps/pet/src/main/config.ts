@@ -47,6 +47,10 @@ export interface AppConfig {
   windows: {
     graphSlip?: WindowGeometry;
   };
+  /** Persisted marker: provider identities in this document were migrated once.
+   *  Its presence is what stops a modern `anthropic` API preference from being
+   *  silently reinterpreted as the legacy subscription provider again. */
+  providerMigration?: string;
 }
 
 /** Desktop-owned, user-editable projection of the headless Pet component. */
@@ -77,6 +81,43 @@ const DEEPSEEK_PROVIDER_ID = 'deepseek';
 /** Single unified ChatGPT provider; legacy codex ids normalize here. */
 const CHATGPT_PROVIDER_ID = 'chatgpt';
 const LEGACY_CHATGPT_PROVIDER_IDS = ['codex'];
+
+/**
+ * Exact legacy quota-provider ids mapped to their renamed canonical ids.
+ * `anthropic-api` was the API provider that is now simply `anthropic`; the
+ * legacy `anthropic` id was the subscription provider that is now
+ * `claude-coding`. The internal `opencode-native` route is now `opencode-zen`.
+ * Only these exact ids change, and only while the document is unmarked.
+ */
+const LEGACY_PROVIDER_ID_MAP: Readonly<Record<string, string>> = {
+  'anthropic-api': 'anthropic',
+  'opencode-native': 'opencode-zen',
+};
+/** Legacy subscription provider id, renamed to the distinct `claude-coding`. */
+const LEGACY_SUBSCRIPTION_PROVIDER_ID = 'anthropic';
+const SUBSCRIPTION_PROVIDER_ID = 'claude-coding';
+
+/** Marker persisted alongside the config once provider identities are migrated. */
+const PROVIDER_MIGRATION_MARKER = 'provider-identity-v1';
+
+/** One-shot left-to-right renames. The legacy subscription id is checked first
+ *  so the legacy subscription `anthropic` becomes `claude-coding`; the legacy
+ *  API `anthropic-api` is checked afterwards and becomes `anthropic` without
+ *  being chained into `claude-coding`. Matching stops at the first hit, so a
+ *  value is rewritten at most once and a canonical `anthropic` written by an
+ *  earlier migration is only preserved while the document stays unmarked. */
+const PROVIDER_ID_RENAMES: ReadonlyArray<readonly [string, string]> = [
+  [LEGACY_SUBSCRIPTION_PROVIDER_ID, SUBSCRIPTION_PROVIDER_ID],
+  ...Object.entries(LEGACY_PROVIDER_ID_MAP).map(([from, to]) => [from, to] as const),
+];
+
+/** Collapse an exact legacy quota-provider id to its canonical id. */
+function canonicalQuotaProviderId(id: string): string {
+  for (const [from, to] of PROVIDER_ID_RENAMES) {
+    if (id === from) return to;
+  }
+  return id;
+}
 
 const DEFAULT_PROVIDER_IDS = [
   CHATGPT_PROVIDER_ID,
@@ -152,7 +193,14 @@ export function loadConfig(opts?: LoadConfigOptions): AppConfig {
       try {
         const raw = fs.readFileSync(legacySource, 'utf-8');
         const parsed = JSON.parse(raw);
-        return normalizeConfig(parsed);
+        // The page order is a runtime concern, not a persisted one, so it is
+        // computed during normalization and dropped before saving.
+        const { config, changed } = normalizeConfigWithMigration(parsed);
+        const result = { ...config };
+        // Persist the migrated document once so a legacy subscription id is
+        // not reinterpreted on the next read; saveConfig writes the marker.
+        if (changed) saveConfig(result, opts);
+        return result;
       } catch {
         return createDefaultConfig(cfgPath);
       }
@@ -166,15 +214,71 @@ export function loadConfig(opts?: LoadConfigOptions): AppConfig {
     }
     const raw = fs.readFileSync(cfgPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    return normalizeConfig(parsed);
+    const { config, changed } = normalizeConfigWithMigration(parsed);
+    const result = { ...config };
+    if (changed) saveConfig(result, opts);
+    return result;
   } catch {
     return createDefaultConfig(cfgPath);
   }
 }
 
 export function normalizeConfig(parsed: unknown): AppConfig {
-  const obj = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  const { config } = normalizeConfigWithMigration(parsed);
+  return config;
+}
 
+/**
+ * Normalize a persisted document and, when its provider identities are still
+ * on legacy ids, rewrite them exactly once: the legacy subscription `anthropic`
+ * becomes `claude-coding`, legacy API `anthropic-api` becomes `anthropic`, and
+ * `opencode-native` becomes `opencode-zen`. Order, enabled flags, and unknown
+ * providers are preserved. Unmarked documents are persisted with the marker
+ * even when they contain no old provider references.
+ */
+function normalizeConfigWithMigration(
+  parsed: unknown,
+): { config: AppConfig; changed: boolean } {
+  const obj = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  if (obj.providerMigration === PROVIDER_MIGRATION_MARKER) {
+    return { config: normalizeConfigDocument(obj, false), changed: false };
+  }
+  const firstId = firstQuotaProviderId(obj);
+  const rewritten = firstId !== undefined && canonicalQuotaProviderId(firstId) !== firstId;
+  const config = normalizeConfigDocument(
+    obj,
+    true,
+    rewritten ? DEFAULT_PROVIDER_IDS[0] : undefined,
+  );
+  return { config, changed: true };
+}
+
+function firstQuotaProviderId(obj: Record<string, unknown>): string | undefined {
+  const quota = obj.quota && typeof obj.quota === 'object' ? obj.quota as Record<string, unknown> : undefined;
+  if (!quota) return undefined;
+  if (Array.isArray(quota.pools)) {
+    return typeof quota.pools[0] === 'string' ? quota.pools[0] : undefined;
+  }
+  const providers = quota.providers;
+  if (!Array.isArray(providers)) return undefined;
+  for (const entry of providers) {
+    if (entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>).id === 'string') {
+      return (entry as Record<string, unknown>).id as string;
+    }
+  }
+  return undefined;
+}
+
+/** Marker entry spread into every fresh or migrated persisted document. */
+function migrationMarkerEntry(): { providerMigration: string } {
+  return { providerMigration: PROVIDER_MIGRATION_MARKER };
+}
+
+function normalizeConfigDocument(
+  obj: Record<string, unknown>,
+  migrateProviders: boolean,
+  reorderAfterKey?: string,
+): AppConfig {
   return {
     enabled: typeof obj.enabled === 'boolean' ? obj.enabled : DEFAULT_CONFIG.enabled,
     scale: validateRangeNumber(obj.scale, DEFAULT_CONFIG.scale, 1, 6),
@@ -183,19 +287,24 @@ export function normalizeConfig(parsed: unknown): AppConfig {
     house: normalizeHouseConfig(obj),
     entities: normalizeEntityVisibility(obj.entities),
     appearance: normalizeAppearanceConfig(obj),
-    quota: normalizeQuotaConfig(obj),
+    quota: normalizeQuotaConfig(obj, migrateProviders, reorderAfterKey),
     windows: normalizeWindowConfig(obj.windows),
   };
 }
 
-export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['quota'] {
+export function normalizeQuotaConfig(
+  obj: Record<string, unknown>,
+  migrateProviders = true,
+  reorderAfterKey?: string,
+): AppConfig['quota'] {
   const quotaObj = obj.quota && typeof obj.quota === 'object' ? obj.quota as Record<string, unknown> : {};
 
   // Legacy migration: if quota.pools (string[]) exists, convert to providers
   if (Array.isArray(quotaObj.pools)) {
     const ids = quotaObj.pools as string[];
+    const migratedIds = migrateProviders ? migrateQuotaPoolIds(ids) : ids;
     return {
-      providers: migrateDefaultGapProviders(migrateQuotaPoolIds(ids).map((id) => ({ id, enabled: true }))),
+      providers: migrateDefaultGapProviders(migratedIds.map((id) => ({ id, enabled: true })), reorderAfterKey),
     };
   }
 
@@ -214,7 +323,8 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
       }
     }
     if (providers.length > 0) {
-      return { providers: migrateDefaultGapProviders(migrateQuotaProviderIds(providers)) };
+      const migrated = migrateProviders ? migrateQuotaProviderIds(providers) : providers;
+      return { providers: migrateDefaultGapProviders(migrated, reorderAfterKey) };
     }
   }
 
@@ -227,12 +337,18 @@ export function normalizeQuotaConfig(obj: Record<string, unknown>): AppConfig['q
 /**
  * Insert the cursor provider enabled:true exactly once when absent, preserving
  * explicit cursor disabled state and the relative order of existing entries.
- * Also inserts deepseek exactly once immediately after cursor when cursor
- * exists, otherwise after chatgpt, when absent — preserving enabled values and
- * unknown providers and never duplicating entries.
+ * When the first entry's id was itself rewritten during migration
+ * (`reorderAfterKey`), the newly inserted gap default is placed after that
+ * re-anchored entry instead of before it. Also inserts deepseek exactly once
+ * immediately after cursor when cursor exists, otherwise after chatgpt, when
+ * absent — preserving enabled values and unknown providers and never
+ * duplicating entries.
  */
-function migrateDefaultGapProviders(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
-  const result = appendCursorWhenAbsent(providers);
+function migrateDefaultGapProviders(
+  providers: QuotaProviderEntry[],
+  reorderAfterKey?: string,
+): QuotaProviderEntry[] {
+  const result = appendCursorWhenAbsent(providers, reorderAfterKey);
   const hasDeepseek = result.some((p) => p.id === DEEPSEEK_PROVIDER_ID);
   if (hasDeepseek) return result;
   // Insert deepseek immediately after cursor when present to reflect its
@@ -253,11 +369,19 @@ function migrateDefaultGapProviders(providers: QuotaProviderEntry[]): QuotaProvi
  * ChatGPT is absent), preserving explicit cursor state and existing relative
  * order.
  */
-function appendCursorWhenAbsent(providers: QuotaProviderEntry[]): QuotaProviderEntry[] {
+function appendCursorWhenAbsent(
+  providers: QuotaProviderEntry[],
+  reorderAfterKey?: string,
+): QuotaProviderEntry[] {
   const hasCursor = providers.some((p) => p.id === CURSOR_PROVIDER_ID);
   if (hasCursor) return providers;
   const chatgptIdx = providers.findIndex((p) => p.id === CHATGPT_PROVIDER_ID);
-  const insertAt = chatgptIdx === -1 ? providers.length : chatgptIdx + 1;
+  let insertAt: number;
+  if (chatgptIdx !== -1) {
+    insertAt = reorderAfterKey === CHATGPT_PROVIDER_ID ? 0 : chatgptIdx + 1;
+  } else {
+    insertAt = providers.length;
+  }
   return [
     ...providers.slice(0, insertAt),
     { id: CURSOR_PROVIDER_ID, enabled: true },
@@ -275,11 +399,12 @@ function migrateQuotaPoolIds(ids: string[]): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
-    const mapped = id === LEGACY_GROK_ID
+    const renamed = canonicalQuotaProviderId(id);
+    const mapped = renamed === LEGACY_GROK_ID
       ? GROK_PROVIDER_ID
-      : LEGACY_CHATGPT_PROVIDER_IDS.includes(id)
+      : LEGACY_CHATGPT_PROVIDER_IDS.includes(renamed)
         ? CHATGPT_PROVIDER_ID
-        : id;
+        : renamed;
     if (seen.has(mapped)) continue;
     seen.add(mapped);
     result.push(mapped);
@@ -299,24 +424,24 @@ function migrateQuotaProviderIds(entries: QuotaProviderEntry[]): QuotaProviderEn
   const result: QuotaProviderEntry[] = [];
   const mergedIndexById = new Map<string, number>();
   for (const entry of entries) {
-    const mappedId = entry.id === LEGACY_GROK_ID
+    const renamedId = canonicalQuotaProviderId(entry.id);
+    const mappedId = renamedId === LEGACY_GROK_ID
       ? GROK_PROVIDER_ID
-      : LEGACY_CHATGPT_PROVIDER_IDS.includes(entry.id)
+      : LEGACY_CHATGPT_PROVIDER_IDS.includes(renamedId)
         ? CHATGPT_PROVIDER_ID
-        : entry.id;
-    if (mappedId !== GROK_PROVIDER_ID && mappedId !== CHATGPT_PROVIDER_ID) {
-      result.push(entry);
-      continue;
-    }
+        : renamedId;
+    // Every canonical id is tracked so a renamed legacy id (anthropic-api ->
+    // anthropic, opencode-native -> opencode-zen) merges into an already-present
+    // canonical entry instead of duplicating it. The merged entry keeps the
+    // first occurrence's position; an explicit canonical entry's enabled value
+    // wins over any mapped legacy duplicate.
     const mergedIndex = mergedIndexById.get(mappedId);
     if (mergedIndex === undefined) {
       mergedIndexById.set(mappedId, result.length);
       result.push({ id: mappedId, enabled: entry.enabled });
     } else if (entry.id === mappedId) {
-      // Explicit canonical entry's enabled value wins over a mapped legacy entry.
       result[mergedIndex].enabled = entry.enabled;
     }
-    // Legacy duplicate after the merged entry is dropped entirely.
   }
   return result;
 }
@@ -369,7 +494,12 @@ export function saveConfig(config: AppConfig, opts?: SaveConfigOptions): void {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8');
+    // Persist canonical provider identities once.
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({ ...config, ...migrationMarkerEntry() }, null, 2),
+      'utf-8',
+    );
   } catch {
     // silently ignore write errors
   }
@@ -471,7 +601,13 @@ function createDefaultConfig(configPath: string): AppConfig {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
+    // Fresh defaults already use canonical provider ids, so they are written
+    // pre-marked and never trigger a legacy rewrite.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...DEFAULT_CONFIG, ...migrationMarkerEntry() }, null, 2),
+      'utf-8',
+    );
   } catch {
     // silently ignore write errors
   }
@@ -521,5 +657,6 @@ function cloneDefaultConfig(): AppConfig {
       providers: DEFAULT_CONFIG.quota.providers.map((p) => ({ ...p })),
     },
     windows: { ...DEFAULT_CONFIG.windows },
+    ...migrationMarkerEntry(),
   };
 }

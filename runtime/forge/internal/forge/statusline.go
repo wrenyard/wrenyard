@@ -3,9 +3,9 @@ package forge
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/grok"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/catalog"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
@@ -40,17 +40,21 @@ func quotaCommand(args []string) int {
 	return quota.Command(deps, args)
 }
 
-// resolveDeepSeekQuotaToken returns the DeepSeek quota bearer token from the
-// user-owned DEEPSEEK_API_KEY with FORGE_DEEPSEEK_API_KEY compatibility only.
-// DeepSeek is quota-only: it never reads/writes auth.json and never registers
-// an inference binding.
+// resolveDeepSeekQuotaToken returns the DeepSeek balance bearer token from the
+// same credential the DeepSeek inference provider resolves: the managed
+// auth.json API entry wins, with FORGE_DEEPSEEK_API_KEY / DEEPSEEK_API_KEY as
+// the environment compatibility fallback. The managed lookup reuses the
+// existing safe auth-store read (api-typed entries only) rather than
+// re-implementing credential resolution. The token is only used for the
+// balance request and is never printed.
 func resolveDeepSeekQuotaToken() string {
-	for _, key := range []string{"FORGE_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
+	return quota.DeepSeekQuotaToken(func() string {
+		entries, err := auth.Read(authPath())
+		if err != nil || entries["deepseek"].Type != "api" {
+			return ""
 		}
-	}
-	return ""
+		return entries["deepseek"].Key
+	})
 }
 
 func statuslineCommand(args []string) int {
