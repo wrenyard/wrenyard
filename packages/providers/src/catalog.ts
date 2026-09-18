@@ -620,7 +620,7 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
   },
   'kimi-k2.8': {
     thinkingLevels: THINKING_LOW_HIGH_MAX,
-    intelligence: 'high',
+    intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
   },
