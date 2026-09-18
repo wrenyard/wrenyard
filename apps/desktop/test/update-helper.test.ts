@@ -10,7 +10,25 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import {
+  readUpdateAttempt,
+  writeUpdateAttempt,
+  UPDATE_ATTEMPT_FILENAME,
+  UPDATE_ATTEMPT_SCHEMA,
+} from '../src/update-attempt.js';
 import { applyPreparedUpdate, type UpdateHelperConfig } from '../src/update-helper.js';
+
+/** The in-progress record the controller writes when it launches the helper. */
+function beginAttempt(config: UpdateHelperConfig): void {
+  writeUpdateAttempt(config.userDataPath, {
+    schema: UPDATE_ATTEMPT_SCHEMA,
+    sourceVersion: '1.0.0-dev.15',
+    targetVersion: config.version,
+    startedAt: 1_000,
+    status: 'in-progress',
+    phase: 'launch-helper',
+  });
+}
 
 function fixture(platform: 'darwin' | 'win32' = 'darwin'): { root: string; config: UpdateHelperConfig } {
   const root = mkdtempSync(join(tmpdir(), 'wrenyard-update-helper-'));
@@ -66,6 +84,7 @@ test('helper replaces Desktop, updates the suite and records success', async () 
     assert.ok(commands.some((command) => command.includes('update --version 1.0.0-dev.16 --suite-only --json')));
     assert.deepEqual(relaunched, [config.destinationDesktop]);
     assert.equal(JSON.parse(readFileSync(config.resultPath, 'utf8')).status, 'success');
+    assert.equal(readUpdateAttempt(config.userDataPath)?.status, 'succeeded');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -93,6 +112,70 @@ test('helper restores the previous Desktop when suite update fails', async () =>
   }
 });
 
+test('a failed suite update keeps the native cause in a record that outlives cleanup', async () => {
+  const { root, config } = fixture();
+  try {
+    beginAttempt(config);
+    // Cleanup really runs, and must not take the diagnostics with it.
+    mkdirSync(config.cleanupRoots[0]!, { recursive: true });
+    writeFileSync(join(config.cleanupRoots[0]!, 'archive.zip'), 'staged bytes');
+
+    const ok = await applyPreparedUpdate(config, {
+      homePath: root,
+      processAlive: () => false,
+      wait: async () => undefined,
+      run: (command) => command === config.cliPath
+        ? {
+          status: 1,
+          stderr: `daemon refused the suite token=hunter2 at /Users/private/suite ${'x'.repeat(400)}`,
+        }
+        : 0,
+      relaunch: () => undefined,
+    });
+
+    assert.equal(ok, false);
+    assert.equal(existsSync(config.cleanupRoots[0]!), false, 'cleanup removed the work root');
+    assert.equal(existsSync(join(config.userDataPath, UPDATE_ATTEMPT_FILENAME)), true);
+
+    const attempt = readUpdateAttempt(config.userDataPath)!;
+    assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.phase, 'suite-update');
+    assert.equal(attempt.exitCode, 1);
+    assert.equal(attempt.recovery, 'restored-previous');
+    assert.equal(attempt.sourceVersion, '1.0.0-dev.15', 'the controller attempt is extended, not replaced');
+    assert.equal(attempt.targetVersion, config.version);
+    assert.equal(attempt.startedAt, 1_000);
+    assert.ok((attempt.completedAt ?? 0) > 0);
+    assert.match(attempt.error ?? '', /suite update failed \| daemon refused the suite/u);
+    assert.equal(attempt.error?.includes('hunter2'), false);
+    assert.equal(attempt.error?.includes('private'), false);
+    assert.ok((attempt.error ?? '').length <= 240, 'the captured stderr stays bounded');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a Desktop that never exits records the parent wait instead of only a result file', async () => {
+  const { root, config } = fixture();
+  try {
+    beginAttempt(config);
+    const ok = await applyPreparedUpdate(config, {
+      homePath: root,
+      processAlive: () => true,
+      wait: async () => undefined,
+      run: () => 0,
+      relaunch: () => undefined,
+    });
+    assert.equal(ok, false);
+    const attempt = readUpdateAttempt(config.userDataPath)!;
+    assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.phase, 'parent-wait');
+    assert.equal(attempt.recovery, 'cleanup-only');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('helper rejects broad cleanup roots before touching the installed app', async () => {
   const { root, config } = fixture();
   try {
@@ -105,6 +188,10 @@ test('helper rejects broad cleanup roots before touching the installed app', asy
       relaunch: () => undefined,
     }), /invalid cleanup roots/);
     assert.equal(readFileSync(join(config.destinationDesktop, 'version.txt'), 'utf8'), 'old');
+    const attempt = readUpdateAttempt(config.userDataPath)!;
+    assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.phase, 'prepare');
+    assert.match(attempt.error ?? '', /invalid cleanup roots/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

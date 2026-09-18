@@ -233,6 +233,22 @@ function taskRunIdFromResultText(text: string): string | undefined {
 }
 
 /**
+ * Authoritative dispatch display name read the same two ways as the run id:
+ * from the object when the whole text still parses as one, and from its
+ * declared JSON field otherwise (the async-dispatch annotation appended after
+ * the launch JSON makes the combined text non-JSON). Display names are
+ * single-line by contract, so the bounded line pattern is sufficient.
+ */
+function taskNameFromResultText(text: string): string | undefined {
+  const declared = firstString(parseJsonObject(text) ?? {}, ['task_name', 'taskName']);
+  if (declared) return declared;
+  const quoted = /"task_name"\s*:\s*"([^"\n]+)"/u.exec(text)?.[1]
+    ?? /"taskName"\s*:\s*"([^"\n]+)"/u.exec(text)?.[1];
+  const trimmed = quoted?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
  * Identity-only projection of a dispatch that has not resolved yet. Usage
  * completeness is `unavailable` because nothing about the run's tokens, cost,
  * or throughput has been observed — those stay absent instead of becoming
@@ -2122,7 +2138,7 @@ export class DshConversationClient {
         status: 'pending',
         ...(callId ? { callId } : {}),
         ...(taskId
-          ? { taskRun: launchTaskRunSnapshot(taskRunId, taskId, firstString(launch ?? {}, ['task_name', 'taskName'])) }
+          ? { taskRun: launchTaskRunSnapshot(taskRunId, taskId, taskNameFromResultText(resultText)) }
           : {}),
       };
       turn.ownedTasks.set(taskRunId, task);
@@ -2179,7 +2195,12 @@ export class DshConversationClient {
       this.failOwnedTaskWait(turn, `任务 ${task.taskRunId} 未回传可用的终态结果`);
       return;
     }
-    task.taskRun = snapshot;
+    // The terminal snapshot is authoritative, but an older daemon may omit
+    // task_name; keep the name observed at launch rather than losing it here.
+    const knownName = task.taskRun?.taskName;
+    task.taskRun = snapshot.taskName === undefined && knownName !== undefined
+      ? { ...snapshot, taskName: knownName }
+      : snapshot;
     task.resultText = boundedTaskResultText(record);
     task.status = 'ready';
     this.persistConversation();

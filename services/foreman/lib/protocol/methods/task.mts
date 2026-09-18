@@ -110,6 +110,9 @@ export interface TaskRunAccepted {
   id: string
   task_run_id: string
   hint: string
+  /** Authoritative display name from the resolved definition (builtin or
+   *  project); omitted when the definition declares none. */
+  task_name?: string
 }
 
 export interface TaskInputRequired {
@@ -155,6 +158,9 @@ export interface TaskRunStatusParams {
 export interface TaskRunStatusResult {
   task_run_id: string
   task_id: string
+  /** Authoritative definition display name when resolvable; optional and
+   *  omitted rather than guessed when the registry has no definition. */
+  task_name?: string
   status: TaskRunStatus
   summary?: string
   resolved?: TaskResolvedDispatch
@@ -175,6 +181,9 @@ export interface TaskRunOutputParams {
 export interface TaskRunOutputResult {
   task_run_id: string
   task_id: string
+  /** Authoritative definition display name when resolvable; optional and
+   *  omitted rather than guessed when the registry has no definition. */
+  task_name?: string
   status: TaskRunStatus
   summary?: string
   resolved?: TaskResolvedDispatch
@@ -340,6 +349,7 @@ export const taskRunAcceptedSchema = {
     id: { type: 'string', minLength: 1 },
     task_run_id: { type: 'string', minLength: 1 },
     hint: { type: 'string', minLength: 1 },
+    task_name: { type: 'string' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -421,6 +431,7 @@ export const taskRunStatusResultSchema = {
   properties: {
     task_run_id: { type: 'string', minLength: 1 },
     task_id: { type: 'string', minLength: 1 },
+    task_name: { type: 'string' },
     status: { enum: taskRunStatusValues },
     summary: { type: 'string' },
     resolved: taskResolvedDispatchSchema,
@@ -444,6 +455,7 @@ export const taskRunOutputResultSchema = {
   properties: {
     task_run_id: { type: 'string', minLength: 1 },
     task_id: { type: 'string', minLength: 1 },
+    task_name: { type: 'string' },
     status: { enum: taskRunStatusValues },
     summary: { type: 'string' },
     resolved: taskResolvedDispatchSchema,

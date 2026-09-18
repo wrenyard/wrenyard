@@ -1,20 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname as osHostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, initDb } from '../lib/db/connection.mts'
 import { readTaskRunMetadata } from '../lib/core/task/run-metadata.mts'
 import { resolveTaskAgentEnv } from '../lib/daemon/execution/agent-supervisor.mts'
+import { TaskService } from '../lib/core/task/service.mts'
+import { discoverTasks, resetRegistry } from '../lib/workspace/definition-registry.mts'
+import { invalidateProjectCache } from '../lib/core/project/loader.mts'
 
 const TS = '2026-01-01T00:00:00.000Z'
 
-function withDb(fn: (db: ReturnType<typeof initDb>) => void): void {
+async function withDb(fn: (db: ReturnType<typeof initDb>) => void | Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'wrenyard-task-run-metadata-'))
   const dbPath = join(dir, 'wrenyard.db')
   const db = initDb(dbPath)
   try {
-    fn(db)
+    await fn(db)
   } finally {
     closeDb()
     rmSync(dir, { recursive: true, force: true })
@@ -941,4 +944,137 @@ test('gateway execution attribution scopes child endpoints without changing pare
   assert.equal(child.WRENYARD_GATEWAY_OPENAI_RESPONSES_URL, 'http://127.0.0.1:8787/gateway/openai-responses/execution/exec_new/v1')
   assert.equal(child.WRENYARD_GATEWAY_ANTHROPIC_URL, env.WRENYARD_GATEWAY_ANTHROPIC_URL)
   assert.equal(JSON.stringify(env), original)
+})
+
+// ── task_name production contract ─────────────────────────────────────────────
+// The display name on every run surface comes from the definition registry
+// (ListedDefinition.displayName) — the same single source of truth that list
+// and describe already serve for builtins and project tasks. No run surface
+// invents its own label.
+
+function seedNamedTask(
+  db: ReturnType<typeof initDb>,
+  taskRunId: string,
+  template: string,
+  project: string | null,
+): void {
+  db.prepare(
+    `INSERT INTO tasks (id, template, project, status, retry_policy, created_at, updated_at)
+     VALUES (?, ?, ?, 'done', 'side-effects', ?, ?)`,
+  ).run(taskRunId, template, project, TS, TS)
+}
+
+function registerNamedProject(projectDir: string, name: string): void {
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(
+    join(projectDir, `${name}.fmproj`),
+    `name: ${name}\ndescription: test project\nhosts:\n  ${osHostname()}: ${JSON.stringify(projectDir)}\n`,
+    'utf-8',
+  )
+}
+
+function namedTaskSource(name: string, extraConfig = ''): string {
+  return `export default defineTask({
+  permission: 'readonly',
+${extraConfig}
+  input: foremanSchemas.z.object({}),
+  output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
+  prompt: () => '${name}',
+})
+`
+}
+
+test('run accepted envelope carries the project definition displayName as task_name', async () => {
+  await withDb(async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'wrenyard-task-name-accepted-'))
+    const projectDir = join(workspace, 'projects', 'app')
+    registerNamedProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'nightly.task.ts'), namedTaskSource('nightly', "  displayName: '每夜构建',"), 'utf-8')
+    try {
+      invalidateProjectCache()
+      await discoverTasks(workspace)
+      let started = false
+      const service = new TaskService({
+        workspaceRoot: workspace,
+        operations: {
+          runner: {
+            startTaskRun: async () => {
+              started = true
+              return { id: 'run-accepted', task_run_id: 'run-accepted', hint: 'ok' }
+            },
+            cancelTaskRun: async () => ({}),
+          } as never,
+        },
+      })
+      const accepted = await service.run({ taskId: 'nightly', project: 'app', input: {} })
+      assert.equal(started, true, 'the mock runner must have started the run')
+      assert.ok(!('error_type' in accepted), `run must be accepted, got ${JSON.stringify(accepted)}`)
+      assert.equal((accepted as { task_name?: string }).task_name, '每夜构建')
+    } finally {
+      resetRegistry(workspace)
+      invalidateProjectCache()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+test('wait hydrates and status/output return the builtin displayName as task_name', async () => {
+  await withDb(async (db) => {
+    const workspace = mkdtempSync(join(tmpdir(), 'wrenyard-task-name-builtin-'))
+    try {
+      // The registry is intentionally NOT discovered up front: wait() itself
+      // must populate it once (no polling, no script re-execution afterwards).
+      seedNamedTask(db, 'run-name-builtin', 'explore', null)
+      const service = new TaskService({ workspaceRoot: workspace })
+      const waited = await service.wait('run-name-builtin')
+      assert.equal(waited.task_name, '探索调查', 'wait terminal result carries the builtin Chinese display name')
+      assert.equal(service.status('run-name-builtin')?.task_name, '探索调查')
+      assert.equal(service.output('run-name-builtin')?.task_name, '探索调查')
+    } finally {
+      resetRegistry(workspace)
+      invalidateProjectCache()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+test('status/output return the project definition displayName for project-scoped runs', async () => {
+  await withDb(async (db) => {
+    const workspace = mkdtempSync(join(tmpdir(), 'wrenyard-task-name-project-'))
+    const projectDir = join(workspace, 'projects', 'app')
+    registerNamedProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'nightly.task.ts'), namedTaskSource('nightly', "  displayName: '每夜构建',"), 'utf-8')
+    try {
+      invalidateProjectCache()
+      await discoverTasks(workspace)
+      seedNamedTask(db, 'run-name-project', 'nightly', 'app')
+      const service = new TaskService({ workspaceRoot: workspace })
+      assert.equal(service.status('run-name-project')?.task_name, '每夜构建')
+      assert.equal(service.output('run-name-project')?.task_name, '每夜构建')
+    } finally {
+      resetRegistry(workspace)
+      invalidateProjectCache()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+test('a definition that cannot be resolved omits task_name instead of guessing one', async () => {
+  await withDb(async (db) => {
+    const workspace = mkdtempSync(join(tmpdir(), 'wrenyard-task-name-unknown-'))
+    try {
+      await discoverTasks(workspace)
+      seedNamedTask(db, 'run-name-unknown', 'never-registered-anywhere', null)
+      const service = new TaskService({ workspaceRoot: workspace })
+      const status = service.status('run-name-unknown')
+      const output = service.output('run-name-unknown')
+      assert.ok(status && output)
+      assert.equal('task_name' in status, false, 'status must omit task_name when no definition resolves')
+      assert.equal('task_name' in output, false, 'output must omit task_name when no definition resolves')
+    } finally {
+      resetRegistry(workspace)
+      invalidateProjectCache()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })
