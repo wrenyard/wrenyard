@@ -36,8 +36,8 @@ test('Cmd+W close binding is macOS-only and existing menus stay intact', () => {
   assert.equal(mac[0]?.role, 'appMenu');
   assert.equal(win[0]?.role, 'fileMenu');
   assert.deepEqual(
-    mac.slice(2).map((item) => item.role),
-    ['editMenu', 'viewMenu', 'windowMenu', 'help'],
+    mac.slice(2).map((item) => item.role ?? item.label),
+    ['editMenu', 'View', 'windowMenu', 'help'],
   );
   assert.ok(!win.some((item) => item.role === 'close'), 'Windows must not get the macOS-only close binding');
 

@@ -265,7 +265,7 @@ function projectCatalog(
         : '该来源没有独立 API Key 配置入口。'),
       models: (discoveredStatus?.models ?? []).map((model) => ({
         id: model.id, displayName: model.displayName,
-        ...Object.fromEntries(['contextWindow', 'maxTokens', 'taskOnly', 'effectiveTps', 'quotaAbundant', 'canonicalId', 'intelligence', 'speedSource', 'available']
+        ...Object.fromEntries(['contextWindow', 'maxTokens', 'taskOnly', 'effectiveTps', 'quotaAbundant', 'free', 'canonicalId', 'intelligence', 'speedSource', 'available']
           .filter((key) => model[key as keyof typeof model] !== undefined)
           .map((key) => [key, model[key as keyof typeof model]])),
         // Pricing is projected explicitly from the required catalog value:
