@@ -183,3 +183,48 @@ func TestParseDeepSeekBalanceMalformedAmount(t *testing.T) {
 		t.Fatal("expected error on malformed amount")
 	}
 }
+
+// --- Shared DeepSeek quota/inference credential resolver ---
+
+func TestDeepSeekQuotaTokenManagedWins(t *testing.T) {
+	t.Setenv("FORGE_DEEPSEEK_API_KEY", "env-forge-key")
+	t.Setenv("DEEPSEEK_API_KEY", "env-legacy-key")
+	got := DeepSeekQuotaToken(func() string { return "managed-key" })
+	if got != "managed-key" {
+		t.Fatalf("DeepSeekQuotaToken = %q, want managed-key", got)
+	}
+}
+
+func TestDeepSeekQuotaTokenEnvOnly(t *testing.T) {
+	t.Setenv("FORGE_DEEPSEEK_API_KEY", "env-forge-key")
+	t.Setenv("DEEPSEEK_API_KEY", "env-legacy-key")
+	if got := DeepSeekQuotaToken(nil); got != "env-forge-key" {
+		t.Fatalf("DeepSeekQuotaToken = %q, want env-forge-key", got)
+	}
+}
+
+func TestDeepSeekQuotaTokenLegacyEnvFallback(t *testing.T) {
+	t.Setenv("FORGE_DEEPSEEK_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "env-legacy-key")
+	if got := DeepSeekQuotaToken(nil); got != "env-legacy-key" {
+		t.Fatalf("DeepSeekQuotaToken = %q, want env-legacy-key", got)
+	}
+}
+
+func TestDeepSeekQuotaTokenEmptyManagedFallsBackToEnv(t *testing.T) {
+	t.Setenv("FORGE_DEEPSEEK_API_KEY", "env-forge-key")
+	if got := DeepSeekQuotaToken(func() string { return "   " }); got != "env-forge-key" {
+		t.Fatalf("DeepSeekQuotaToken = %q, want env-forge-key after blank managed value", got)
+	}
+}
+
+func TestDeepSeekQuotaTokenMissing(t *testing.T) {
+	t.Setenv("FORGE_DEEPSEEK_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	if got := DeepSeekQuotaToken(func() string { return "" }); got != "" {
+		t.Fatalf("DeepSeekQuotaToken = %q, want empty when unconfigured", got)
+	}
+	if got := DeepSeekQuotaToken(nil); got != "" {
+		t.Fatalf("DeepSeekQuotaToken(nil) = %q, want empty when unconfigured", got)
+	}
+}

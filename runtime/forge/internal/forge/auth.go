@@ -37,7 +37,15 @@ func ResolveCredential(providerID string) (string, bool) {
 func IsManagedProvider(providerID string) bool { return providers.IsManaged(providerID) }
 
 func MigrateAuthFromSecrets() ([]string, error) {
-	return auth.MigrateAuthFromSecrets(authPath(), firstRepoSecret)
+	migrated, err := auth.MigrateAuthFromSecrets(authPath(), firstRepoSecret)
+	if err != nil {
+		return nil, err
+	}
+	renamed, renameErr := auth.MigrateLegacyProviderIDs(authPath())
+	if renameErr != nil {
+		return migrated, renameErr
+	}
+	return append(migrated, renamed...), nil
 }
 
 func AuthPermsOK(path string) bool { return auth.PermsOK(path) }

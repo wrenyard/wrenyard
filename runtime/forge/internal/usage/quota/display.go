@@ -28,7 +28,35 @@ func CanonicalLabel(pool string) string {
 	case "zhipu-coding":
 		return "GLM"
 	case "super-grok":
-		return "super-grok"
+		return "Super Grok"
+	case "claude-coding":
+		return "Claude"
+	case "anthropic":
+		return "Anthropic"
+	case "openai":
+		return "OpenAI"
+	case "qwen":
+		return "Qwen"
+	case "qwen-coding":
+		return "Qwen Coding"
+	case "minimax":
+		return "MiniMax"
+	case "minimax-coding":
+		return "MiniMax Coding"
+	case "moonshot":
+		return "Moonshot"
+	case "tokenhub":
+		return "TokenHub"
+	case "volcengine":
+		return "Volcengine"
+	case "zhipu":
+		return "Zhipu"
+	case "opencode-zen":
+		return "OpenCode Zen"
+	case "opencode-go":
+		return "OpenCode Go"
+	case "openrouter":
+		return "OpenRouter"
 	default:
 		return pool
 	}

@@ -163,7 +163,7 @@ func fakeOpenCodeExecutionDependencies(t *testing.T, dataHome string) execution.
 			return execution.ProfileDefinition{}, false, nil
 		}
 		return execution.ProfileDefinition{
-			Name: name, Client: "opencode", Provider: "opencode-native",
+			Name: name, Client: "opencode", Provider: "opencode-zen",
 			Launcher: map[string]interface{}{"command": "opencode"}, Env: map[string]string{}, Settings: map[string]interface{}{},
 		}, true, nil
 	}
@@ -172,7 +172,7 @@ func fakeOpenCodeExecutionDependencies(t *testing.T, dataHome string) execution.
 		if err != nil {
 			return runtimeprofile.ResolvedProfile{}, err
 		}
-		provider, err := catalog.DefaultRegistry().LookupBinding("opencode-native")
+		provider, err := catalog.DefaultRegistry().LookupBinding("opencode-zen")
 		if err != nil {
 			return runtimeprofile.ResolvedProfile{}, err
 		}

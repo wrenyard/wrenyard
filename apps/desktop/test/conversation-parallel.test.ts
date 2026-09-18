@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
-import { mkdtempSync, rmSync, copyFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DshConversationClient, projectConversation } from '../src/dsh-conversation-client.js';
@@ -553,6 +553,8 @@ async function openHarness(options: {
   }) => Promise<string>;
   waitForTaskRun?: (taskRunId: string, signal: AbortSignal) => Promise<unknown>;
   cancelTaskRun?: (taskRunId: string) => Promise<void>;
+  /** Bounded prompt startup window, lowered so startup-failure tests stay fast. */
+  promptStartupTimeoutMs?: number;
   statePath?: string;
   sessions?: Array<{ sessionId: string; updatedAt: number; running: boolean; blank: boolean }>;
   /** Real DSH history for a durable session this harness did not itself
@@ -586,6 +588,7 @@ async function openHarness(options: {
     ...(options.summarize ? { summarize: options.summarize } : {}),
     ...(options.waitForTaskRun ? { waitForTaskRun: options.waitForTaskRun } : {}),
     ...(options.cancelTaskRun ? { cancelTaskRun: options.cancelTaskRun } : {}),
+    ...(options.promptStartupTimeoutMs !== undefined ? { promptStartupTimeoutMs: options.promptStartupTimeoutMs } : {}),
     onChanged() {},
   });
   const harness: Harness = {
@@ -760,6 +763,293 @@ test('a third send while another turn runs inherits the completed cut but exclud
   } finally {
     harness.stop();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 1b: completed sibling history is never lost to a later fork.
+// ---------------------------------------------------------------------------
+
+test('a send after three out-of-order concurrent turns inherits every completed exchange exactly once', async () => {
+  const savedDir = mkdtempSync(join(tmpdir(), 'wrenyard-sibling-history-'));
+  const harness = await openHarness({
+    summarize: async (input) => `摘要：${input.user}`,
+  });
+  try {
+    await harness.client.send('问题一');
+    await harness.client.send('问题二');
+    await harness.client.send('问题三');
+    await settle();
+    const prompts = harness.fake.calls.filter((call) => call.method === 'session.prompt');
+    assert.equal(prompts.length, 3);
+    const sessions = prompts.map((call) => String(call.payload.sessionId));
+    assert.equal(new Set(sessions).size, 3, 'the three concurrent turns run on separate branches');
+
+    // Complete out of send order: three, one, two.
+    emitTurn(harness.fake, sessions[2]!, 1, '第三条的工作', 1);
+    emitTurn(harness.fake, sessions[0]!, 1, '第一条的工作', 1);
+    emitTurn(harness.fake, sessions[1]!, 1, '第二条的工作', 1);
+    assert.ok(await waitFor(
+      () => (harness.client.snapshot().turns?.filter((turn) => turn.running === false) ?? []).length === 3,
+    ));
+
+    await harness.client.send('第四个问题');
+    assert.ok(await waitFor(() => harness.fake.calls.filter((call) => call.method === 'session.prompt').length === 4));
+    const fourth = harness.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
+    assert.ok(fourth, 'the fourth send dispatches exactly one prompt');
+    const text = String((fourth.payload.content as Array<{ text: string }>)[0]!.text);
+
+    // The fork base is the latest completed cut in send order (turn three), so
+    // that exchange arrives through the branch itself and is never injected.
+    const forkCalls = harness.fake.calls.filter((call) => call.method === 'session.fork');
+    assert.equal(forkCalls.length, 1);
+    assert.equal(String(forkCalls[0]!.payload.sessionId), sessions[2]);
+    assert.notEqual(String(fourth.payload.sessionId), sessions[2], 'the new turn runs on its own fork of that cut');
+    assert.ok(text.includes('[wrenyard:conversation-history]'), 'missing exchanges ride in one marked envelope');
+    assert.ok(text.includes('用户：问题一'));
+    assert.ok(text.includes('摘要：问题一'));
+    assert.ok(text.includes('用户：问题二'));
+    assert.ok(text.includes('摘要：问题二'));
+    assert.equal(text.includes('问题三'), false, 'the inherited base exchange is not injected a second time');
+    assert.ok(text.includes('用户的新消息：第四个问题'), 'the new prompt follows the injected history');
+
+    // The visible transcript keeps each exchange exactly once and never shows
+    // the envelope itself as an item.
+    const items = harness.client.snapshot().items;
+    assert.deepEqual(
+      items.filter((item) => item.kind === 'user').map((item) => item.text),
+      ['问题一', '问题二', '问题三', '第四个问题'],
+    );
+    for (const label of ['摘要：问题一', '摘要：问题二', '摘要：问题三']) {
+      assert.equal(items.filter((item) => item.text === label).length, 1, `${label} appears exactly once`);
+    }
+    assert.equal(items.some((item) => item.text.includes('[wrenyard:conversation-history]')), false);
+
+    // Complete the fourth turn, persist, and restore: the next send forks the
+    // fourth cut with the whole ancestry already covered and injects nothing.
+    const fourthSession = String(fourth.payload.sessionId);
+    emitTurn(harness.fake, fourthSession, 7, '第四条的工作', 5);
+    assert.ok(await waitFor(
+      () => (harness.client.snapshot().turns?.filter((turn) => turn.running === false) ?? []).length === 4,
+    ));
+
+    const statePath = join(savedDir, 'state.json');
+    copyFileSync(harness.statePath, statePath);
+    const sessionHistory = Object.fromEntries([...harness.fake.sessions].map(([id, session]) => [id, session.events]));
+    const durableSessions = [...harness.fake.sessions.keys()]
+      .map((sessionId) => ({ sessionId, updatedAt: 1, running: false, blank: false }));
+    harness.stop();
+    const restored = await openHarness({
+      statePath,
+      sessions: durableSessions,
+      sessionHistory,
+      summarize: async (input) => `摘要：${input.user}`,
+    });
+    try {
+      await restored.client.send('第五个问题');
+      assert.ok(await waitFor(() => restored.fake.calls.filter((call) => call.method === 'session.prompt').length === 1));
+      const fifth = restored.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
+      const fifthText = String((fifth?.payload.content as Array<{ text: string }>)[0]?.text);
+      assert.equal(fifthText, '第五个问题', 'a fully covered ancestry injects nothing, even after restore');
+      const forkAfterRestore = restored.fake.calls.filter((call) => call.method === 'session.fork');
+      assert.equal(forkAfterRestore.length, 1);
+      assert.equal(String(forkAfterRestore[0]!.payload.sessionId), fourthSession, 'the restored send forks the fourth turn cut');
+    } finally {
+      restored.stop();
+    }
+  } finally {
+    harness.stop();
+    rmSync(savedDir, { recursive: true, force: true });
+  }
+});
+
+test('a pre-upgrade linear chain restores its ancestry instead of injecting its own ancestors', async () => {
+  const savedDir = mkdtempSync(join(tmpdir(), 'wrenyard-legacy-linear-'));
+  const harness = await openHarness({ summarize: async (input) => `摘要：${input.user}` });
+  try {
+    // Build a completed linear fork chain: the first turn runs on the root,
+    // each later turn forks the previous completed cut.
+    await harness.client.send('问题一');
+    await settle();
+    const firstSession = String(harness.fake.calls.find((call) => call.method === 'session.prompt')?.payload.sessionId);
+    emitTurn(harness.fake, firstSession, 1, '第一条的工作', 1);
+    assert.ok(await waitFor(
+      () => harness.client.snapshot().turns?.filter((turn) => turn.running === false).length === 1,
+    ));
+
+    await harness.client.send('问题二');
+    await settle();
+    const secondSession = String(harness.fake.calls.filter((call) => call.method === 'session.prompt').at(-1)?.payload.sessionId);
+    assert.notEqual(secondSession, firstSession, 'the second turn forks the first completed cut');
+    emitTurn(harness.fake, secondSession, 2, '第二条的工作', 10);
+    assert.ok(await waitFor(
+      () => harness.client.snapshot().turns?.filter((turn) => turn.running === false).length === 2,
+    ));
+
+    await harness.client.send('问题三');
+    await settle();
+    const thirdSession = String(harness.fake.calls.filter((call) => call.method === 'session.prompt').at(-1)?.payload.sessionId);
+    assert.notEqual(thirdSession, secondSession, 'the third turn forks the second completed cut');
+    emitTurn(harness.fake, thirdSession, 3, '第三条的工作', 20);
+    assert.ok(await waitFor(
+      () => harness.client.snapshot().turns?.filter((turn) => turn.running === false).length === 3,
+    ));
+
+    // Persist, then strip `coveredTurnSeqs` from every turn to reproduce the
+    // document a previous installed schema wrote: the field did not exist, so
+    // it is simply absent rather than an explicit empty ancestry.
+    const statePath = join(savedDir, 'state.json');
+    copyFileSync(harness.statePath, statePath);
+    const document = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      records: Array<{ turns: Array<Record<string, unknown>> }>;
+    };
+    for (const record of document.records) {
+      for (const turn of record.turns) delete turn.coveredTurnSeqs;
+    }
+    writeFileSync(statePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+
+    const sessionHistory = Object.fromEntries([...harness.fake.sessions].map(([id, session]) => [id, session.events]));
+    const durableSessions = [...harness.fake.sessions.keys()]
+      .map((sessionId) => ({ sessionId, updatedAt: 1, running: false, blank: false }));
+    harness.stop();
+
+    const restored = await openHarness({
+      statePath,
+      sessions: durableSessions,
+      sessionHistory,
+      summarize: async (input) => `摘要：${input.user}`,
+    });
+    try {
+      await restored.client.send('第四个问题');
+      assert.ok(await waitFor(() => restored.fake.calls.filter((call) => call.method === 'session.prompt').length === 1));
+      const fourth = restored.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
+      const fourthText = String((fourth?.payload.content as Array<{ text: string }>)[0]?.text);
+
+      // The restored ancestry makes the new turn fork the third cut with turns
+      // one and two already covered: a linear history never re-injects its own
+      // inherited ancestors.
+      assert.equal(fourthText, '第四个问题', 'an old linear chain injects none of its inherited ancestors');
+      const forksAfterRestore = restored.fake.calls.filter((call) => call.method === 'session.fork');
+      assert.equal(forksAfterRestore.length, 1);
+      assert.equal(String(forksAfterRestore[0]!.payload.sessionId), thirdSession, 'the restored send forks the third cut');
+
+      const items = restored.client.snapshot().items;
+      assert.deepEqual(
+        items.filter((item) => item.kind === 'user').map((item) => item.text),
+        ['问题一', '问题二', '问题三', '第四个问题'],
+      );
+      for (const label of ['摘要：问题一', '摘要：问题二', '摘要：问题三']) {
+        assert.equal(items.filter((item) => item.text === label).length, 1, `${label} appears exactly once`);
+      }
+      assert.equal(items.some((item) => item.text.includes('[wrenyard:conversation-history]')), false);
+    } finally {
+      restored.stop();
+    }
+  } finally {
+    harness.stop();
+    rmSync(savedDir, { recursive: true, force: true });
+  }
+});
+
+test('a still-running sibling stays out of the injected history', async () => {
+  const harness = await openHarness({
+    summarize: async (input) => `摘要：${input.user}`,
+  });
+  try {
+    await harness.client.send('问题一');
+    await harness.client.send('问题二');
+    await harness.client.send('问题三');
+    await settle();
+    const sessions = harness.fake.calls
+      .filter((call) => call.method === 'session.prompt')
+      .map((call) => String(call.payload.sessionId));
+
+    // One and three finish; two is still running.
+    emitTurn(harness.fake, sessions[0]!, 1, '第一条的工作', 1);
+    emitTurn(harness.fake, sessions[2]!, 1, '第三条的工作', 1);
+    assert.ok(await waitFor(
+      () => (harness.client.snapshot().turns?.filter((turn) => turn.running === false) ?? []).length === 2,
+    ));
+
+    await harness.client.send('第四个问题');
+    assert.ok(await waitFor(() => harness.fake.calls.filter((call) => call.method === 'session.prompt').length === 4));
+    const fourth = harness.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
+    const text = String((fourth?.payload.content as Array<{ text: string }>)[0]?.text);
+    // The fork base is turn three; only turn one's exchange is missing.
+    assert.ok(text.includes('[wrenyard:conversation-history]'));
+    assert.ok(text.includes('摘要：问题一'));
+    assert.equal(text.includes('问题二'), false, 'a still-running sibling is never injected');
+    assert.equal(text.includes('摘要：问题三'), false, 'the forked cut already carries the base exchange');
+  } finally {
+    harness.stop();
+  }
+});
+
+test('a rejected prompt fails the turn visibly instead of leaving it running', async () => {
+  const h = await openHarness({ promptStartupTimeoutMs: 500 });
+  try {
+    h.fake.beforeRpc = async (call) => {
+      if (call.method === 'session.prompt') throw new Error('provider 403');
+    };
+    await h.client.send('会被拒绝的消息');
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false));
+    assert.ok(
+      h.client.snapshot().items.some((item) => item.text.includes('provider 403')),
+      'the real sanitized rejection error is visible',
+    );
+  } finally { h.stop(); }
+});
+
+test('an accepted prompt that never starts fails the turn after the bounded startup window', async () => {
+  const h = await openHarness({ promptStartupTimeoutMs: 120 });
+  try {
+    await h.client.send('没有回音的消息');
+    assert.ok(await waitFor(() => h.client.snapshot().turns?.[0]?.running === false, 2_000));
+    assert.ok(
+      h.client.snapshot().items.some((item) => item.text.includes('未开始执行')),
+      'a silent startup failure terminates visibly rather than running forever',
+    );
+    assert.ok(
+      h.fake.calls.some((call) => call.method === 'session.cancel'),
+      'the branch that never started is stopped',
+    );
+  } finally { h.stop(); }
+});
+
+test('a prompt whose own turn and tool already started is never cancelled by the startup window', async () => {
+  // The tool stays quiet far past the bounded window while the branch is
+  // clearly started: the guard must retire itself on the first own event
+  // rather than cancelling a legitimately long-running tool.
+  const h = await openHarness({ promptStartupTimeoutMs: 120 });
+  try {
+    h.fake.beforeRpc = async (call) => {
+      if (call.method !== 'session.prompt') return;
+      const sessionId = String(call.payload.sessionId);
+      // DSH accepts the prompt and emits this branch's own turn/tool start
+      // before the accepted prompt call returns to the client.
+      pushMux(h.fake, { type: 'session/event', sessionId, ...event('turn/start', 1, { turn: 1 }) });
+      pushMux(h.fake, { type: 'session/event', sessionId, ...event('tool/call', 2, {
+        turn: 1,
+        step: 1,
+        callId: 'call-slow-tool',
+        name: 'demo_tool',
+        arguments: '{}',
+      }) });
+    };
+    await h.client.send('会跑很久的消息');
+    assert.ok(await waitFor(() => h.fake.calls.some((call) => call.method === 'session.prompt')));
+    // Stay quiet well past the startup window.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 400); });
+    assert.equal(
+      h.client.snapshot().turns?.[0]?.running,
+      true,
+      'a started turn with a quiet long tool keeps running past the startup window',
+    );
+    assert.equal(
+      h.fake.calls.some((call) => call.method === 'session.cancel'),
+      false,
+      'the startup guard never cancels a branch whose own turn already started',
+    );
+  } finally { h.stop(); }
 });
 
 // ---------------------------------------------------------------------------

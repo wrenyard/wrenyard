@@ -218,6 +218,12 @@ export interface ModelDefinition {
   maxOutputTokens?: number;
   /** Supported input types, including image content returned by tools; not output generation. */
   capabilities?: readonly ModelCapability[];
+  /** Model-level client restriction: when present, ONLY these client ids may
+   * resolve a run for this model (native or gateway). Used for entitlements
+   * that are usable solely through a client's genuine transport (e.g. free
+   * OpenCode Zen tiers); restricted models are never published through the
+   * public gateway model directory. */
+  supportedClients?: readonly string[];
   speed: ModelSpeedMeta;
   pricing: ModelPricing;
   /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
@@ -472,6 +478,23 @@ export class Catalog {
       if (model.free !== undefined && typeof model.free !== 'boolean') {
         throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
       }
+      // Model-level supported-client restriction: a declared list must carry
+      // unique, well-formed client ids; membership is enforced at run
+      // resolution, not registration (clients may register after providers).
+      if (model.supportedClients !== undefined) {
+        const restrictedClients = new Set<string>();
+        for (const clientID of model.supportedClients) {
+          if (!clientID.trim()) throw new Error(`provider ${provider.id} model ${model.id} has an empty supported client id`);
+          requireID('supported client', clientID);
+          if (restrictedClients.has(clientID)) {
+            throw new Error(`provider ${provider.id} model ${model.id} has duplicate supported client ${clientID}`);
+          }
+          restrictedClients.add(clientID);
+        }
+        if (restrictedClients.size === 0) {
+          throw new Error(`provider ${provider.id} model ${model.id} supportedClients must not be empty`);
+        }
+      }
       validateThinkingLevels(provider.id, model);
       if (model.canonicalModel) {
         requireID('canonical model', model.canonicalModel.id);
@@ -597,6 +620,10 @@ export class Catalog {
       .filter((provider) => provider.protocols?.some((entry) => entry.protocol === protocol))
       .flatMap((provider) => provider.models
         .filter((model) => !model.taskOnly)
+        // Client-restricted models are usable only through their exact client
+        // transport and are never published through the client-agnostic public
+        // gateway directory.
+        .filter((model) => model.supportedClients === undefined)
         .map((model) => ({
           id: model.id,
           displayName: model.displayName,
@@ -628,6 +655,11 @@ export class Catalog {
     const modelID = provider.modelAliases?.[requestedModelID] ?? requestedModelID;
     const model = provider.models.find((entry) => entry.id === modelID && !entry.taskOnly);
     if (!model) throw new Error(`unknown model: ${publicID}`);
+    // The public gateway is client-agnostic: a model restricted to specific
+    // clients can never be resolved through a gateway protocol.
+    if (model.supportedClients !== undefined) {
+      throw new Error(`model ${publicID} is not available through the gateway`);
+    }
     const capability = provider.protocols?.find((entry) => entry.protocol === protocol);
     if (!capability) throw new Error(`model ${publicID} does not support ${protocol}`);
     return {
@@ -647,6 +679,11 @@ export class Catalog {
     modelID = provider.modelAliases?.[modelID] ?? modelID;
     const modelDef = provider.models.find((model) => model.id === modelID);
     if (!modelDef) throw new Error(`unknown model: ${providerID}/${modelID}`);
+    // Model-level client restriction applies to native AND gateway runs alike:
+    // a restricted model resolves only for its exact declared client ids.
+    if (modelDef.supportedClients !== undefined && !modelDef.supportedClients.includes(clientID)) {
+      throw new Error(`model ${providerID}/${modelID} is not available on client ${clientID}`);
+    }
     // Runtime invalid *public enum* validation. A legal level is never rejected
     // here for being unsupported by a model/runtime; it is adapted into the
     // plan's runtime parameters by resolveThinking.

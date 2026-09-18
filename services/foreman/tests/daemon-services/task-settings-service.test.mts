@@ -970,6 +970,56 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal('declared_runtime' in review.builtin, false)
   })
 
+  it('starts independent runtime probes before any resolves and probes each triple once per snapshot', async () => {
+    // Deferred-probe regression: two automatic rows share the same three
+    // eligible profiles. Every independent probe must start while all probes
+    // are still pending (concurrent probes are never serialized), each
+    // canonical triple is probed exactly once for the whole request
+    // (request-scoped pending-promise memo), and rows stay in summary order
+    // regardless of probe completion order.
+    const tripleKey = (profile: ProfileFixture): string =>
+      `${profile.provider}/${profile.model}:${profile.client}#${profile.mode ?? 'native'}`
+    const events: string[] = []
+    const gates = new Map<string, () => void>()
+    const runtimeAvailability: TaskSettingsRuntimeAvailabilityCallback = (runtime) => {
+      const key = `${runtime.provider}/${runtime.model}:${runtime.client}#${runtime.mode}`
+      events.push(`start:${key}`)
+      return new Promise((resolve) => {
+        gates.set(key, () => {
+          events.push(`resolve:${key}`)
+          resolve({
+            providerCredential: 'available',
+            providerLive: 'available',
+            quota: 'available',
+            available: true,
+          })
+        })
+      })
+    }
+    const service = context!.makeService({ runtimeAvailability })
+    const snapshotPromise = service.snapshot({})
+    // Drain the microtask queue: every independent probe must have started
+    // before any probe resolves.
+    await new Promise((resolve) => setImmediate(resolve))
+    const starts = events.filter((event) => event.startsWith('start:'))
+    assert.equal(starts.length, PROFILES.length)
+    for (const profile of PROFILES) {
+      assert.equal(starts.filter((event) => event === `start:${tripleKey(profile)}`).length, 1)
+    }
+    assert.equal(events.some((event) => event.startsWith('resolve:')), false)
+    // Reverse completion order: it must not change row order or selection.
+    for (const gate of [...gates.values()].reverse()) gate()
+    const snapshot = await snapshotPromise
+    assert.deepEqual(snapshot.rows.map((row) => row.name), ['commit', 'review', 'auto-fail'])
+    const commit = snapshot.rows.find((row) => row.identity === 'builtin:commit')
+    const review = snapshot.rows.find((row) => row.identity === 'builtin:review')
+    const eligibleRuntimes = new Set(PROFILES.map((profile) => profile.exactAgentRuntime))
+    assert.ok(commit?.automatic_selection)
+    assert.ok(review?.automatic_selection)
+    assert.ok(eligibleRuntimes.has(commit.automatic_selection.exact_runtime))
+    assert.equal(commit.automatic_selection.exact_runtime, review.automatic_selection.exact_runtime)
+  })
+
   it('reset deletes only the current-layer field and cleans empty containers', async () => {
     writeConfig({
       top_level: { keep: true },

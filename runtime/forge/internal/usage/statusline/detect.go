@@ -66,7 +66,7 @@ func firstProfile(profiles map[string]Profile, family string) string {
 				return name
 			}
 		case "ccc":
-			if name == "ccc" || provider == "anthropic" {
+			if name == "ccc" || provider == "claude-coding" {
 				return name
 			}
 		}

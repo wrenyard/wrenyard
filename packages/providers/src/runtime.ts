@@ -201,6 +201,73 @@ function runtimeAuthPath(env: NodeJS.ProcessEnv, home: string): string {
   return join(dataHome, 'wrenyard', 'runtime', 'auth.json');
 }
 
+/**
+ * Provider id renames whose persisted credential-store entries must keep
+ * resolving after the rename. Only the exact legacy id is rewritten, and only
+ * for a store entry that is an API key (`type: 'api'`): a subscription OAuth
+ * entry is never promoted to an API key, and the modern `anthropic` provider
+ * means the API provider on every read. New writes always use the canonical id.
+ */
+const LEGACY_CREDENTIAL_STORE_IDS: Readonly<Record<string, string>> = {
+  'anthropic-api': 'anthropic',
+};
+
+function canonicalCredentialStoreId(providerId: string): string {
+  return LEGACY_CREDENTIAL_STORE_IDS[providerId] ?? providerId;
+}
+
+/** The exact legacy store ids that rename onto the given canonical provider. */
+function legacyCredentialStoreIds(providerId: string): string[] {
+  return Object.entries(LEGACY_CREDENTIAL_STORE_IDS)
+    .filter(([, canonical]) => canonical === providerId)
+    .map(([legacy]) => legacy);
+}
+
+/** Reads one forge-managed API-key entry, accepting only an explicit `api` type. */
+function apiKeyEntry(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entry = value as { type?: unknown; key?: unknown };
+  if (entry.type !== 'api') return undefined;
+  return nonEmptyString(entry.key);
+}
+
+/**
+ * Resolve the persisted API key for a forge-managed provider. The canonical id
+ * is tried first so an explicit new-id key always wins; only when it is absent
+ * does an exact legacy id fall back, and only for an API-typed entry, so a
+ * subscription OAuth entry is never exposed as an API key.
+ */
+function resolveManagedApiKey(entries: Record<string, unknown>, providerId: string): string | undefined {
+  const canonical = canonicalCredentialStoreId(providerId);
+  const direct = apiKeyEntry(entries[canonical]);
+  if (direct !== undefined) return direct;
+  // The requested id may itself be a legacy id, or a canonical id whose exact
+  // legacy predecessor is still persisted from before the rename.
+  const candidates = canonical === providerId ? legacyCredentialStoreIds(providerId) : [providerId];
+  for (const candidate of candidates) {
+    const value = apiKeyEntry(entries[candidate]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
+ * DeepSeek environment compatibility keys, in precedence order. DeepSeek
+ * inference is a forge-managed provider whose configured key lives in
+ * auth.json, but a key exported through these names by an existing setup must
+ * keep working. Read-only: this resolver never writes auth.json, so a managed
+ * configure always wins over a pre-existing environment key.
+ */
+const DEEPSEEK_ENV_API_KEYS = ['FORGE_DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'] as const;
+
+function deepSeekEnvApiKey(env: NodeJS.ProcessEnv): string | undefined {
+  for (const name of DEEPSEEK_ENV_API_KEYS) {
+    const value = nonEmptyString(env[name]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 function codeBuddyAuthPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string {
   const filename = 'Tencent-Cloud.coding-copilot.info';
   if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'CodeBuddyExtension', 'Data', 'Public', 'auth', filename);
@@ -471,13 +538,23 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       let path: string;
       if (provider.credentialResolver === 'forge-managed') {
         path = runtimeAuthPath(env, home);
+        let managed: string | undefined;
         try {
-          const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, { key?: unknown }>;
-          const value = nonEmptyString(parsed?.[provider.id]?.key);
-          return value ? { value } : undefined;
+          const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+          managed = resolveManagedApiKey(parsed ?? {}, provider.id);
         } catch {
-          return undefined;
+          managed = undefined;
         }
+        if (managed !== undefined) return { value: managed };
+        // DeepSeek keeps an existing environment-configured key working even
+        // before auth.json is written. A managed configure always stores the
+        // canonical entry, which the lookup above returns first, so this is a
+        // read-only compatibility fallback and never masks a managed key.
+        if (provider.id === 'deepseek') {
+          const envKey = deepSeekEnvApiKey(env);
+          if (envKey !== undefined) return { value: envKey };
+        }
+        return undefined;
       }
       if (provider.credentialResolver === 'codebuddy') {
         path = codeBuddyAuthPath(platform, env, home);
@@ -534,6 +611,16 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('provider credential store is invalid');
       }
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      // One-time canonicalization of a legacy id entry: only an API-typed entry
+      // is moved to the canonical id, and never over an existing canonical key.
+      for (const legacyId of legacyCredentialStoreIds(provider.id)) {
+        if (!(legacyId in entries) || entries[legacyId]?.type !== 'api') continue;
+        const canonicalEntry = entries[provider.id];
+        if (canonicalEntry === undefined || canonicalEntry.type !== 'api') {
+          entries[provider.id] = entries[legacyId]!;
+        }
+        delete entries[legacyId];
+      }
       entries[provider.id] = { type: 'api', key: normalized };
       const temporary = `${path}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify(entries, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
