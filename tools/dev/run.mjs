@@ -3,11 +3,18 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createSupervisor } from './lib/supervisor.mjs';
 import { EXIT } from './lib/constants.mjs';
+import { parseDevArgs } from './lib/release-desktop.mjs';
 
 const checkout = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const parsed = parseDevArgs(process.argv.slice(2));
+if (parsed.unknown.length > 0) {
+  process.stderr.write(`Unknown argument: ${parsed.unknown[0]}\n`);
+  process.exit(EXIT.failed);
+}
 
 const supervisor = createSupervisor({
   checkout,
+  killDesktop: parsed.killDesktop,
   stdout: (line) => process.stdout.write(`${line}\n`),
   onStopped() {
     process.exit(EXIT.ok);

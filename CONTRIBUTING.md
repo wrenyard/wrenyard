@@ -28,14 +28,16 @@ Daily commands from the same checkout root (aliases share one client):
 
 ```sh
 pnpm dev              # Terminal A, stays running
+pnpm dev --kill-desktop   # same start; terminate a stuck installed Desktop first
 pnpm dev:restart      # or: pnpm restart
 pnpm dev:stop         # or: pnpm stop
 ```
 
-Source-development reuses the installed user data domain and will switch
-away from a running installed instance after drain. It does not install a
-release, change `current`, or start at login. After stop, open the installed
-app yourself if you want it back.
+Source-development reuses the installed user data domain. `pnpm dev` will
+not freeze the service while an installed Desktop is still running; quit
+from the tray, or pass `--kill-desktop` once to terminate that Desktop tree.
+It does not install a release, change `current`, or start at login. After
+stop, open the installed app yourself if you want it back.
 
 If a lockfile or package manifest changes, stop, reinstall with
 `--frozen-lockfile`, rebuild, then `pnpm dev`. Watcher/supervisor source

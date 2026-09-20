@@ -55,4 +55,5 @@ export const ERRORS = Object.freeze({
   notRunning: 3,
   degraded: 4,
   cancelled: 5,
+  desktopRunning: 6,
 });
