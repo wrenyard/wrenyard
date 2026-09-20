@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Catalog, GatewayProtocol, ProviderDefinition, PublicGatewayModel } from '@wrenyard/catalog';
 import { upstreamAuthHeaders, type ProviderRuntime } from '@wrenyard/providers';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
@@ -66,6 +67,15 @@ const RESPONSE_HEADER_ALLOWLIST = new Set([
 ]);
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 
+const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
+const CODEBUDDY_ROUND_CACHE_LIMIT = 512;
+
+interface CodeBuddyRound {
+  conversationId: string;
+  conversationRequestId: string;
+  lastSeenMs: number;
+}
+
 /**
  * Splits an optional `/execution/<safe id>` scope out of a gateway request
  * path. Only a well-formed ASCII execution token (letters, digits, `_`, `-`,
@@ -123,6 +133,52 @@ function openCodeSessionHeader(headers: IncomingHttpHeaders): string | undefined
   if (value.length === 0 || value.length > 256) return undefined;
   if (value.includes('\r') || value.includes('\n')) return undefined;
   return value;
+}
+
+/** CodeBuddy ids are UUIDs with the dashes stripped. */
+function codeBuddyId(): string {
+  return randomUUID().replace(/-/gu, '');
+}
+
+/**
+ * True when this request continues the current user turn rather than starting a
+ * new one. The official client keeps one conversation request id for the whole
+ * tool loop and only rotates it on a new user turn, so a trailing tool result -
+ * or an assistant message that is still waiting on its tool calls - must reuse
+ * the cached id.
+ */
+function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== 'object' || Array.isArray(last)) return false;
+  const entry = last as Record<string, unknown>;
+  const role = typeof entry.role === 'string' ? entry.role : '';
+  if (role === 'tool' || role === 'function') return true;
+  if (role !== 'assistant') return false;
+  return Array.isArray(entry.tool_calls) || entry.function_call !== undefined;
+}
+
+/**
+ * Stable conversation key for round grouping. A scoped execution id is the
+ * exact caller-supplied conversation scope; without one the conversation is
+ * keyed by a digest of everything up to and including its first user message.
+ * That prefix never changes while the tool loop and later turns append to the
+ * same history, and it still separates two conversations that merely share a
+ * system prompt. No message content is retained.
+ */
+function codeBuddyConversationKey(executionId: string | undefined, body: Record<string, unknown>): string {
+  if (executionId !== undefined) return `execution:${executionId}`;
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const firstUser = messages.findIndex(
+    (entry) =>
+      entry !== null &&
+      typeof entry === 'object' &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).role === 'user',
+  );
+  const prefix = messages.slice(0, firstUser >= 0 ? firstUser + 1 : 1);
+  return `prefix:${createHash('sha256').update(JSON.stringify(prefix)).digest('hex')}`;
 }
 
 interface ResponseModelContext {
@@ -260,10 +316,42 @@ async function availableModels(catalog: Catalog, providers: ProviderRuntime, pro
 export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const active = new Set<AbortController>();
+  const codeBuddyRounds = new Map<string, CodeBuddyRound>();
   let closed = false;
 
   const emit = async (event: GatewayRequestCompletedEvent): Promise<void> => {
     try { await options.onRequestCompleted?.(event); } catch { /* stats must not fail inference */ }
+  };
+
+  /**
+   * Conversation round identity for one CodeBuddy request. Entries expire so a
+   * long-idle client starts a new round instead of being folded into a stale
+   * one, and the map is bounded so an unbounded client population cannot grow
+   * it without limit.
+   */
+  const codeBuddyRound = (key: string, continuesTurn: boolean, nowMs: number): CodeBuddyRound => {
+    for (const [entryKey, entry] of codeBuddyRounds) {
+      if (nowMs - entry.lastSeenMs > CODEBUDDY_ROUND_TTL_MS) codeBuddyRounds.delete(entryKey);
+    }
+    const existing = codeBuddyRounds.get(key);
+    const round: CodeBuddyRound = existing !== undefined
+      ? {
+          conversationId: existing.conversationId,
+          conversationRequestId: continuesTurn ? existing.conversationRequestId : codeBuddyId(),
+          lastSeenMs: nowMs,
+        }
+      : { conversationId: codeBuddyId(), conversationRequestId: codeBuddyId(), lastSeenMs: nowMs };
+    // Re-inserting refreshes the key's position, so the size trim below evicts
+    // the least recently used conversation rather than the oldest one still in
+    // active use.
+    codeBuddyRounds.delete(key);
+    codeBuddyRounds.set(key, round);
+    while (codeBuddyRounds.size > CODEBUDDY_ROUND_CACHE_LIMIT) {
+      const oldest = codeBuddyRounds.keys().next();
+      if (oldest.done || oldest.value === key) break;
+      codeBuddyRounds.delete(oldest.value);
+    }
+    return round;
   };
 
   return {
@@ -337,6 +425,38 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         headers.set('user-agent', 'wrenyard');
         const session = openCodeSessionHeader(request.headers);
         if (session) headers.set('x-opencode-session', session);
+      }
+
+      // CodeBuddy counts one user turn - including its whole tool loop - as a
+      // single usage record, keyed off the official client's product identity
+      // and conversation round headers. Reproducing them here keeps a Gateway
+      // client billed like the official CLI instead of once per HTTP request.
+      if (resolved.provider.id === 'codebuddy' && route.protocol === 'openai_chat') {
+        const identity = await options.providers.codeBuddyClientIdentity?.(resolved.provider);
+        if (identity) {
+          const incomingAgent = headers.get('user-agent');
+          const version = identity.version;
+          const agent = [`${identity.platform}/${version}`, `${identity.productName}/${version}`, incomingAgent]
+            .filter((part): part is string => typeof part === 'string' && part.length > 0)
+            .join(' ');
+          headers.set('user-agent', agent);
+          headers.set('x-product', identity.deploymentType);
+          headers.set('x-ide-type', identity.platform);
+          headers.set('x-ide-name', identity.platform);
+          headers.set('x-ide-version', version);
+        }
+        headers.set('x-requested-with', 'XMLHttpRequest');
+        headers.set('x-agent-intent', 'craft');
+        const round = codeBuddyRound(
+          codeBuddyConversationKey(executionId, body),
+          codeBuddyContinuesTurn(body),
+          options.now?.() ?? Date.now(),
+        );
+        const messageId = codeBuddyId();
+        headers.set('x-conversation-id', round.conversationId);
+        headers.set('x-conversation-request-id', round.conversationRequestId);
+        headers.set('x-conversation-message-id', messageId);
+        headers.set('x-request-id', messageId);
       }
 
       // OpenRouter free requests must not carry a model fallback list or route
@@ -423,6 +543,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       closed = true;
       for (const controller of active) controller.abort();
       active.clear();
+      codeBuddyRounds.clear();
     },
   };
 }

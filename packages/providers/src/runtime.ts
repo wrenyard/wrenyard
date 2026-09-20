@@ -68,6 +68,13 @@ export interface ProviderRuntime {
    * Optional so existing non-CodeBuddy runtime callers remain compatible.
    */
   codeBuddySnapshot?(provider: ProviderDefinition): Promise<CodeBuddyActiveSnapshot | undefined>;
+  /**
+   * Installed CodeBuddy client product identity, resolved from the same
+   * installed CLI package that already supplies the environment domain
+   * attributes. Non-CodeBuddy providers and an absent installation resolve to
+   * undefined. Carries no credential, account identity or domain.
+   */
+  codeBuddyClientIdentity?(provider: ProviderDefinition): Promise<CodeBuddyClientIdentity | undefined>;
 }
 
 export interface BuiltinProviderRuntimeOptions {
@@ -83,6 +90,17 @@ export interface BuiltinProviderRuntimeOptions {
 }
 
 export type CodeBuddyEnvironment = 'internal' | 'ioa' | 'cloudhosted' | 'external' | 'unknown';
+
+export interface CodeBuddyClientIdentity {
+  /** product.json `platform`, e.g. `CLI`. */
+  readonly platform: string;
+  /** product.json `productName`, e.g. `CodeBuddy`. */
+  readonly productName: string;
+  /** Installed package version, used as both platform and product version. */
+  readonly version: string;
+  /** product.json `deploymentType`, defaulting to `SaaS`. */
+  readonly deploymentType: string;
+}
 
 interface CodeBuddyAuthenticationAttributes {
   internalDomain?: unknown;
@@ -492,11 +510,10 @@ function codeBuddyProductCandidates(
   return candidates;
 }
 
-async function loadCodeBuddyAuthenticationAttributes(
+async function resolveCodeBuddyProductPaths(
   candidates: readonly string[],
-  readFile: (path: string, encoding: 'utf8') => Promise<string>,
   realpath: (path: string) => Promise<string>,
-): Promise<CodeBuddyAuthenticationAttributes | undefined> {
+): Promise<string[]> {
   const productPaths: string[] = [];
   const addProductPath = (path: string): void => {
     if (!productPaths.includes(path)) productPaths.push(path);
@@ -510,7 +527,15 @@ async function loadCodeBuddyAuthenticationAttributes(
       addProductPath(join(dirname(await realpath(candidate)), '..', 'product.json'));
     } catch { /* unavailable PATH entry */ }
   }
-  for (const path of productPaths) {
+  return productPaths;
+}
+
+async function loadCodeBuddyAuthenticationAttributes(
+  candidates: readonly string[],
+  readFile: (path: string, encoding: 'utf8') => Promise<string>,
+  realpath: (path: string) => Promise<string>,
+): Promise<CodeBuddyAuthenticationAttributes | undefined> {
+  for (const path of await resolveCodeBuddyProductPaths(candidates, realpath)) {
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
       const authentication = parsed.authentication;
@@ -518,6 +543,41 @@ async function loadCodeBuddyAuthenticationAttributes(
       const attributes = (authentication as Record<string, unknown>).attributes;
       if (!attributes || typeof attributes !== 'object' || Array.isArray(attributes)) continue;
       return attributes as CodeBuddyAuthenticationAttributes;
+    } catch { /* try the next installed product candidate */ }
+  }
+  return undefined;
+}
+
+/**
+ * Installed CodeBuddy client product identity from one resolved product.json
+ * and its sibling package.json. The official CLI resolves its client info the
+ * same way: `platform`/`productName` come from the product configuration and
+ * the version falls back to the installed package, where a publish-time custom
+ * package version wins over the plain package version. Nothing here reads auth
+ * state, so no credential or account identity is involved.
+ */
+async function loadCodeBuddyClientIdentity(
+  candidates: readonly string[],
+  readFile: (path: string, encoding: 'utf8') => Promise<string>,
+  realpath: (path: string) => Promise<string>,
+): Promise<CodeBuddyClientIdentity | undefined> {
+  for (const path of await resolveCodeBuddyProductPaths(candidates, realpath)) {
+    try {
+      const product = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      const platform = nonEmptyString(product.platform);
+      const productName = nonEmptyString(product.productName);
+      if (platform === undefined || productName === undefined) continue;
+      const deploymentType = nonEmptyString(product.deploymentType) ?? 'SaaS';
+      let version = nonEmptyString(product.productVersion);
+      if (version === undefined) {
+        try {
+          const manifest = JSON.parse(await readFile(join(dirname(path), 'package.json'), 'utf8')) as Record<string, unknown>;
+          const publishConfig = manifest.publishConfig as { customPackage?: { version?: unknown } } | undefined;
+          version = nonEmptyString(publishConfig?.customPackage?.version) ?? nonEmptyString(manifest.version);
+        } catch { /* fall through to the next product candidate */ }
+      }
+      if (version === undefined) continue;
+      return { platform, productName, version, deploymentType };
     } catch { /* try the next installed product candidate */ }
   }
   return undefined;
@@ -653,6 +713,14 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       } catch {
         return undefined;
       }
+    },
+    async codeBuddyClientIdentity(provider) {
+      if (provider.id !== 'codebuddy' || provider.credentialResolver !== 'codebuddy') return undefined;
+      return loadCodeBuddyClientIdentity(
+        codeBuddyProductCandidates(env, platform, options.codeBuddyProductPath),
+        readFile,
+        realpath,
+      );
     },
   };
 }

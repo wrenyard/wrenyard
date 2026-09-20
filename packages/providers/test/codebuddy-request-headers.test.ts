@@ -63,3 +63,52 @@ test('legacy native fields are supported while CRLF values are not emitted', asy
   assert.equal(headers.get('x-enterprise-id'), null);
   assert.equal(headers.get('x-tenant-id'), null);
 });
+
+// Identity fixtures stub both product.json and its sibling package.json, so
+// version resolution can be exercised without touching a real installation.
+function identityFixture(product: unknown, manifest?: () => Promise<string>) {
+  return createBuiltinProviderRuntime({
+    home: '/synthetic-home', codeBuddyProductPath: '/product.json',
+    readFile: async (path) => {
+      if (path === '/product.json') return JSON.stringify(product);
+      if (path === '/package.json' && manifest) return manifest();
+      throw new Error(`unexpected read ${path}`);
+    },
+  });
+}
+
+test('client identity resolves platform, product and installed package version', async () => {
+  const runtime = identityFixture(
+    { platform: 'CLI', productName: 'CodeBuddy', deploymentType: 'SaaS' },
+    async () => JSON.stringify({ version: '2.117.2' }),
+  );
+  assert.deepEqual(await runtime.codeBuddyClientIdentity!(provider), {
+    platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS',
+  });
+});
+
+test('a publish-time custom package version wins over the plain version field', async () => {
+  const runtime = identityFixture(
+    { platform: 'CLI', productName: 'CodeBuddy', deploymentType: 'SaaS' },
+    async () => JSON.stringify({ version: '2.117.2', publishConfig: { customPackage: { version: '2.117.2-custom.1' } } }),
+  );
+  assert.equal((await runtime.codeBuddyClientIdentity!(provider))!.version, '2.117.2-custom.1');
+});
+
+test('a product-declared version is used without reading the installed package', async () => {
+  const runtime = identityFixture({ platform: 'CLI', productName: 'CodeBuddy', deploymentType: 'SaaS', productVersion: '9.9.9' });
+  assert.deepEqual(await runtime.codeBuddyClientIdentity!(provider), {
+    platform: 'CLI', productName: 'CodeBuddy', version: '9.9.9', deploymentType: 'SaaS',
+  });
+});
+
+test('a non-CodeBuddy provider resolves to no client identity', async () => {
+  const runtime = identityFixture({ platform: 'CLI', productName: 'CodeBuddy', deploymentType: 'SaaS', productVersion: '9.9.9' });
+  const other = createBuiltinCatalog().provider('openai')!;
+  assert.equal(await runtime.codeBuddyClientIdentity!(other), undefined);
+});
+
+test('an unreadable product configuration resolves to undefined instead of throwing', async () => {
+  const runtime = identityFixture(undefined);
+  assert.equal(await runtime.codeBuddyClientIdentity!(provider), undefined);
+});
