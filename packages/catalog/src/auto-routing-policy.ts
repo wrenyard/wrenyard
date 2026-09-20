@@ -31,7 +31,8 @@ const SCORE_WEIGHTS_SUM_TOLERANCE = 1e-9;
  * Final normalized score weights. The unified ranking score is a convex blend
  * of four bounded [0, 1] factors:
  *   P = price factor (cheaper per-M output price scores higher),
- *   S = speed factor (effective TPS, saturated at 200),
+ *   S = speed factor (effective TPS, saturated at SPEED_SATURATION_BASE_TPS plus
+ *       the task's expected TPS),
  *   Q = quota headroom quality,
  *   I = intelligence factor.
  *   score = .40*P + .30*S + .20*Q + .10*I, always within [0, 1].
@@ -108,11 +109,30 @@ export const PRICE_FACTOR_ANCHORS: ReadonlyArray<readonly [number, number]> = [
 ];
 
 /**
+ * Global default speed saturation base (TPS). The speed factor saturates at
+ * this base plus the task's declared expected TPS, so a task that expects a
+ * fast model keeps rewarding faster candidates instead of treating every
+ * candidate above one fixed ceiling as equally fast. A task that declares no
+ * expectation saturates at the bare base.
+ */
+export const SPEED_SATURATION_BASE_TPS = 100;
+
+/**
  * Zero headroom contributed by every unknown/missing/rejected constraint and
  * by every positive pay-as-you-go balance. Such evidence is an absence of
  * trusted headroom, never a neutral (or positive) quota quality.
  */
 export const ZERO_QUOTA_HEADROOM = 0;
+
+/**
+ * Quota headroom credited to an aggregate that carries no trusted headroom
+ * while a provider-verified unknown-quota floor applies. The value is owned by
+ * the policy, never supplied by the caller, so evidence can only switch the
+ * floor on - it can never inject an arbitrary quota boost. It feeds the quota
+ * factor Q only: H, the tier, coverage and every eligibility gate are
+ * untouched, exactly like verified quota-burn efficiency.
+ */
+export const UNKNOWN_QUOTA_FLOOR_HEADROOM = 0.5;
 
 /** Full-cycle replenishment assessment constants. */
 export const FULL_CYCLE_MIN_REMAINING = 0.05;
@@ -238,6 +258,22 @@ export interface ConfirmedFreeSupplyEvidence {
   ruleId: string;
 }
 
+/**
+ * Provider-verified evidence that a login's quota genuinely cannot be observed
+ * rather than being exhausted, so an otherwise unknown aggregate still carries
+ * a conservative routable floor. It is a marker with provenance and an
+ * applicability interval; it carries no headroom value of its own.
+ */
+export interface UnknownQuotaFloorEvidence {
+  kind: "unknown_quota_floor";
+  appliesFromMs: number;
+  appliesUntilMs: number;
+  source: string;
+  ruleId: string;
+  /** Conservative literal: only worst-applicable evidence is accepted. */
+  worst_applicable: WorstApplicableMarker;
+}
+
 /** Caller-supplied inputs for one candidate snapshot. */
 export interface CandidateInput {
   snapshotId: string;
@@ -251,6 +287,13 @@ export interface CandidateInput {
   timeoutMs: number;
   minimumTps: number;
   effectiveTps: number;
+  /**
+   * Optional task-declared expected TPS. It raises the speed saturation point
+   * to SPEED_SATURATION_BASE_TPS + expectedTps; absent means the bare base. It
+   * is a scoring preference only and never gates eligibility - minimumTps
+   * remains the sole speed hard gate.
+   */
+  expectedTps?: number;
   intelligenceRank: number;
   intelligenceMinRank: number;
   /**
@@ -269,6 +312,12 @@ export interface CandidateInput {
    */
   verifiedEfficiency?: QuotaBurnEfficiencyEvidence | null;
   confirmedFreeSupply?: ConfirmedFreeSupplyEvidence | null;
+  /**
+   * Optional provider-verified unknown-quota floor. It raises Q only while the
+   * aggregate quota carries no trusted headroom and the interval covers
+   * [now, now + timeoutMs].
+   */
+  unknownQuotaFloor?: UnknownQuotaFloorEvidence | null;
 }
 
 export type ConstraintState =
@@ -345,13 +394,15 @@ export interface CandidateAssessment {
   supplyClass: SupplyClass;
   confirmedFreeSupplyApplied: boolean;
   confirmedFreeSupplyEvidence: { source: string; ruleId: string } | null;
+  /** Marks a Q floor credited to an unknown aggregate. */
+  unknownQuotaFloorApplied: boolean;
   /** Raw headroom H feeding the quota headroom factor Q. */
   headroom: number;
   /** Quota headroom factor Q used in the score (may blend verified efficiency). */
   quotaQuality: number;
   /** Diagnostic price factor; kept as a public field but no longer ranked. */
   priceFactor: number;
-  /** Diagnostic speed factor (effective TPS saturated at 200); kept as a public field but no longer ranked. */
+  /** Diagnostic speed factor (effective TPS saturated at SPEED_SATURATION_BASE_TPS plus the task's expected TPS); kept as a public field but no longer ranked. */
   speedFactor: number;
   /** Intelligence factor I used in the score (bounded [0, 1]). */
   intelligenceFactor: number;
@@ -399,6 +450,8 @@ export interface RankedCandidate {
   supplyClass: SupplyClass;
   confirmedFreeSupplyApplied: boolean;
   confirmedFreeSupplyEvidence: { source: string; ruleId: string } | null;
+  /** Marks a Q floor credited to an unknown aggregate. */
+  unknownQuotaFloorApplied: boolean;
   headroom: number;
   quotaQuality: number;
   priceFactor: number;
@@ -810,6 +863,19 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     };
   }
 
+  let unknownQuotaFloor: UnknownQuotaFloorEvidence | null = null;
+  const quotaFloor = input.unknownQuotaFloor ?? null;
+  if (quotaFloor !== null && typeof quotaFloor === "object") {
+    unknownQuotaFloor = {
+      kind: quotaFloor.kind,
+      appliesFromMs: quotaFloor.appliesFromMs,
+      appliesUntilMs: quotaFloor.appliesUntilMs,
+      source: quotaFloor.source,
+      ruleId: quotaFloor.ruleId,
+      worst_applicable: quotaFloor.worst_applicable,
+    };
+  }
+
   const snapshot: CandidateInput = {
     snapshotId: input.snapshotId,
     canonicalId: input.canonicalId,
@@ -819,6 +885,7 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     timeoutMs: input.timeoutMs,
     minimumTps: input.minimumTps,
     effectiveTps: input.effectiveTps,
+    expectedTps: input.expectedTps,
     intelligenceRank: input.intelligenceRank,
     intelligenceMinRank: input.intelligenceMinRank,
     intelligenceExpectedRank: input.intelligenceExpectedRank,
@@ -826,6 +893,7 @@ function snapshotCandidate(input: CandidateInput): CandidateInput {
     marginalPrice,
     verifiedEfficiency,
     confirmedFreeSupply,
+    unknownQuotaFloor,
   };
   return snapshot;
 }
@@ -895,8 +963,13 @@ export function evaluateCandidate(
   ) {
     return rejected(snapshotId, canonicalId, "invalid_speed", "speed numbers must be finite and non-negative");
   }
+  const expectedTps = candidate.expectedTps;
+  if (expectedTps !== undefined && expectedTps !== null && (!isFiniteNumber(expectedTps) || expectedTps < 0)) {
+    return rejected(snapshotId, canonicalId, "invalid_speed", "expected TPS is not a finite non-negative number");
+  }
   // Only a deficient effectiveTps against the minimumTps hard gate is rejected;
-  // the score's speed factor S uses effectiveTps directly (saturated at 200).
+  // the score's speed factor S uses effectiveTps directly (saturated at
+  // SPEED_SATURATION_BASE_TPS plus the task's expected TPS).
   if (candidate.effectiveTps < candidate.minimumTps) {
     return rejected(snapshotId, canonicalId, "speed_below_minimum", "effective TPS is below the minimum TPS");
   }
@@ -1096,13 +1169,51 @@ export function evaluateCandidate(
   }
 
   const headroom = quota.headroom === null ? ZERO_QUOTA_HEADROOM : quota.headroom;
+
+  // A provider-verified unknown-quota floor credits Q when the aggregate
+  // carries no trusted headroom, so a login whose quota simply cannot be
+  // observed is not ranked as if it were exhausted. It never raises a trusted
+  // headroom, never rescues a blocked candidate, and never changes H, the tier,
+  // coverage or any eligibility gate.
+  let unknownQuotaFloorApplied = false;
+  const quotaFloor = candidate.unknownQuotaFloor;
+  if (quotaFloor !== null && quotaFloor !== undefined) {
+    const floorEvidenceWellFormed =
+      quotaFloor.kind === "unknown_quota_floor" &&
+      isFiniteNumber(quotaFloor.appliesFromMs) &&
+      isFiniteNumber(quotaFloor.appliesUntilMs) &&
+      quotaFloor.appliesFromMs <= quotaFloor.appliesUntilMs &&
+      typeof quotaFloor.source === "string" &&
+      quotaFloor.source.length > 0 &&
+      typeof quotaFloor.ruleId === "string" &&
+      quotaFloor.ruleId.length > 0 &&
+      quotaFloor.worst_applicable === "worst_applicable";
+    if (!floorEvidenceWellFormed) {
+      notes.push("unknown_quota_floor_evidence_invalid_ignored");
+    } else if (
+      quotaFloor.appliesFromMs > candidate.nowMs ||
+      quotaFloor.appliesUntilMs < candidate.nowMs + candidate.timeoutMs
+    ) {
+      notes.push("unknown_quota_floor_interval_does_not_cover_timeout_horizon");
+    } else if (quota.headroomTrusted) {
+      notes.push("unknown_quota_floor_with_trusted_headroom_ignored");
+    } else {
+      unknownQuotaFloorApplied = true;
+      notes.push("unknown_quota_floor_applied");
+    }
+  }
+
+  const quotaHeadroomForQuality = unknownQuotaFloorApplied
+    ? Math.max(headroom, UNKNOWN_QUOTA_FLOOR_HEADROOM)
+    : headroom;
+
   // Quota headroom factor Q in [0, 1]: raw trust headroom, or a blend with
   // verified quota-burn efficiency when present. Q never depends on price/speed.
   const quotaQuality =
     verifiedEfficiency === null
-      ? clamp01(headroom)
+      ? clamp01(quotaHeadroomForQuality)
       : clamp01(
-          EFFICIENCY_HEADROOM_WEIGHT * headroom +
+          EFFICIENCY_HEADROOM_WEIGHT * quotaHeadroomForQuality +
             EFFICIENCY_EVIDENCE_WEIGHT * verifiedEfficiency
         );
 
@@ -1111,8 +1222,12 @@ export function evaluateCandidate(
   // >= 50 scores 0. Confirmed-free routing already zeroed routingPriceUsdPerM.
   const priceFactor = interpolatePriceFactor(routingPriceUsdPerM);
 
-  // Normalized speed factor S in [0, 1]: effective TPS saturated at 200.
-  const speedFactor = clamp01(candidate.effectiveTps / 200);
+  // Normalized speed factor S in [0, 1]: effective TPS saturated at the global
+  // base plus the task's expected TPS. A candidate below the expectation scores
+  // proportionally less and one above it keeps gaining until saturation, so the
+  // same absolute TPS is worth less to a task that expects a fast model.
+  const speedSaturationTps = SPEED_SATURATION_BASE_TPS + (isFiniteNumber(expectedTps) ? expectedTps : 0);
+  const speedFactor = clamp01(candidate.effectiveTps / speedSaturationTps);
 
   // Normalized intelligence factor I in [0, 1]. When an expected rank is
   // supplied (already validated as an integer at or above the minimum), I
@@ -1156,6 +1271,7 @@ export function evaluateCandidate(
     supplyClass,
     confirmedFreeSupplyApplied,
     confirmedFreeSupplyEvidence,
+    unknownQuotaFloorApplied,
     headroom,
     quotaQuality,
     priceFactor,
@@ -1194,6 +1310,7 @@ function toRankedCandidate(
     supplyClass: assessment.supplyClass,
     confirmedFreeSupplyApplied: assessment.confirmedFreeSupplyApplied,
     confirmedFreeSupplyEvidence: assessment.confirmedFreeSupplyEvidence,
+    unknownQuotaFloorApplied: assessment.unknownQuotaFloorApplied,
     headroom: assessment.headroom,
     quotaQuality: assessment.quotaQuality,
     priceFactor: assessment.priceFactor,
