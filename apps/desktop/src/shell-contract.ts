@@ -103,7 +103,8 @@ export type UpdateInstallReason =
   | 'unsupported-platform'
   | 'missing-cli'
   | 'missing-runtime'
-  | 'missing-helper';
+  | 'missing-helper'
+  | 'source-development';
 
 export interface UpdateSnapshot {
   channel: UpdateChannel;
@@ -132,6 +133,8 @@ export interface SettingsSnapshot {
     dshVersion: string;
     buildTime?: string;
     channel: UpdateChannel;
+    /** Present only while Desktop is running from `pnpm dev`. */
+    sourceDevelopment?: boolean;
   };
 }
 

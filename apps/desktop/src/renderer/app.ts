@@ -357,6 +357,8 @@ function renderSnapshot(snapshot: SettingsSnapshot): void {
   setText('about-desktop-version', snapshot.about.desktopVersion);
   setText('about-desktop-build-time', formatBuildTime(snapshot.about.buildTime));
   setText('about-dsh-version', snapshot.about.dshVersion);
+  const sourceDevRow = document.getElementById('about-source-dev-row');
+  if (sourceDevRow) sourceDevRow.hidden = snapshot.about.sourceDevelopment !== true;
 }
 
 function formatUpdateCheckTime(checkedAt: number | undefined): string {
@@ -378,6 +380,8 @@ function updateInstallReasonText(reason: UpdateInstallReason | undefined): strin
       return '未找到更新助手组件：请重新安装 Desktop，然后点“重新检测”。';
     case 'unsupported-platform':
       return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
+    case 'source-development':
+      return '当前为源码开发模式，不会检查、下载或安装发行版更新。使用 `pnpm dev:stop` 后再打开已安装的啾啾工坊。';
     default:
       return '当前无法应用内安装，请检查本机安装后点“重新检测”。';
   }

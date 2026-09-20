@@ -589,6 +589,38 @@ describe('lib/protocol JSON-RPC contract', () => {
     })
   })
 
+  it('accepts optional source-development identity on health.ping', () => {
+    const payload = {
+      ok: true,
+      uptimeMs: 12,
+      identity: {
+        mode: 'source',
+        checkout: '/src',
+        instanceId: 'abc',
+        node: '/node',
+        runtimeBin: '/forge',
+      },
+    }
+    assert.deepEqual(parseMethodResult('health.ping', payload), payload)
+    assert.deepEqual(parseMethodResult('health.ping', {
+      ok: true,
+      identity: { mode: 'installed', node: '/suite/node' },
+    }), {
+      ok: true,
+      identity: { mode: 'installed', node: '/suite/node' },
+    })
+    assert.throws(
+      () => parseMethodResult('health.ping', {
+        ok: true,
+        identity: { mode: 'dev' },
+      }),
+      (error) => {
+        assertProtocolError(error, INVALID_PARAMS.code)
+        return true
+      },
+    )
+  })
+
   it('validates task service-shaped results', () => {
     assert.deepEqual(parseMethodResult('daemon.shutdown', {
       ok: true,

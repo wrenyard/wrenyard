@@ -114,6 +114,23 @@ export interface CoreRpcHandlerOptions {
 
 export type CoreRpcTransport = 'ipc' | 'http' | 'mcp'
 
+export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
+  mode: 'source' | 'installed'
+  checkout?: string
+  instanceId?: string
+  node: string
+  runtimeBin?: string
+} {
+  const source = env.WRENYARD_SOURCE_DEV === '1'
+  return {
+    mode: source ? 'source' : 'installed',
+    ...(source && env.WRENYARD_SOURCE_CHECKOUT ? { checkout: env.WRENYARD_SOURCE_CHECKOUT } : {}),
+    ...(source && env.WRENYARD_DEV_INSTANCE_ID ? { instanceId: env.WRENYARD_DEV_INSTANCE_ID } : {}),
+    node: process.execPath,
+    ...(env.WRENYARD_RUNTIME_BIN?.trim() ? { runtimeBin: env.WRENYARD_RUNTIME_BIN.trim() } : {}),
+  }
+}
+
 export interface CoreRpcContext {
   transport?: CoreRpcTransport
   connectingId?: string
@@ -140,6 +157,8 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     const result: {
       ok: true
       uptimeMs: number
+      identity: ReturnType<typeof readProcessIdentity>
+      gateway?: { status: 'ready' }
       dispatch?: {
         mode: 'accepting' | 'frozen' | 'planned_restart'
         frozen: boolean
@@ -158,6 +177,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     } = {
       ok: true as const,
       uptimeMs: Math.max(0, Date.now() - options.startedAt),
+      identity: readProcessIdentity(),
       ...(options.gatewayConnection ? { gateway: { status: 'ready' as const } } : {}),
     }
     if (options.dispatchControl) {
