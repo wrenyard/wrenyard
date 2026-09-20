@@ -35,6 +35,15 @@ import { resolveInstallation } from './installation-discovery.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import {
+  applySourceDevelopmentIdentity,
+  CAPTURE_UI_SCRIPT,
+  connectSourceSupervisor,
+  isSourceDevelopment,
+  isSupervised,
+  restoreUiScript,
+  type DesktopUiState,
+} from './source-dev.js';
+import {
   createMacQuitConfirmationGate,
   trayPrimaryClickOpensDesktop,
   type QuitOrigin,
@@ -48,6 +57,7 @@ import {
 import { assertDaemonIdle, runPlannedDaemonRestart } from './workspace-activation.js';
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
+applySourceDevelopmentIdentity(app);
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 /** Task definition enumeration may cold-load the workspace and model catalog. */
 const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
@@ -159,6 +169,16 @@ function startWrenyardService(cli: string): void {
 async function assertForemanHealthy(): Promise<void> {
   const ipcPath = resolveWrenyardIpcPath();
   if (await probeWrenyard(ipcPath)) return;
+
+  if (isSupervised()) {
+    for (let attempt = 1; attempt <= SERVICE_RETRY_ATTEMPTS; attempt += 1) {
+      if (await probeWrenyard(ipcPath)) return;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, SERVICE_RETRY_DELAY_MS));
+    }
+    throw new Error(
+      `Wrenyard is unavailable: supervised source-development Desktop will not start an installed daemon. health.ping failed on ${ipcPath}`,
+    );
+  }
 
   const cli = resolveWrenyardCli();
   if (!cli) {
@@ -675,6 +695,8 @@ let updateController: DesktopUpdateController | null = null;
  */
 let conversationSummary: ReturnType<typeof createConversationSummaryService> | null = null;
 let quitting = false;
+let sourceDevQuit = false;
+let sourceDevBridge: { close: () => void } | null = null;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
 
@@ -884,6 +906,7 @@ async function bootstrap(): Promise<void> {
     onInstall: () => setImmediate(() => app.quit()),
     activeTaskCount: readUpdateActiveTaskCount,
     onChanged: () => shellWindow?.notifyUpdateChanged(),
+    sourceDevelopment: isSourceDevelopment(),
   });
   petController = new DesktopPetController({
     loadConfig: () => petSettings.load(),
@@ -938,6 +961,7 @@ async function bootstrap(): Promise<void> {
     readGatewayModels: () => readGatewayConnection(ipcPath).then((connection) => connection.models),
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),
+    sourceDevelopment: isSourceDevelopment(),
   });
   shellWindow = await ShellWindowController.create({
     rendererPath: join(app.getAppPath(), 'dist', 'renderer', 'index.html'),
@@ -982,15 +1006,24 @@ async function bootstrap(): Promise<void> {
       return getSettings();
     },
     saveWorkspace: async (path: string, create = false) => {
-      const cli = resolveWrenyardCli();
-      if (!cli) throw new Error('未找到 Wrenyard CLI，无法应用工作区');
       const idle = assertDaemonIdle(await requestForeman('daemon.status', {}));
       if (!idle.idle) throw new Error(idle.reason);
       const saved = create ? await createProductWorkspace(path) : await saveProductWorkspace(path);
-      await runPlannedDaemonRestart({ cli });
+      if (isSupervised()) {
+        await requestForeman('daemon.shutdown', { reason: 'source-development workspace activation' });
+        for (let attempt = 1; attempt <= SERVICE_RETRY_ATTEMPTS; attempt += 1) {
+          if (await probeWrenyard(ipcPath)) break;
+          if (attempt === SERVICE_RETRY_ATTEMPTS) {
+            throw new Error('源码 supervisor 未能在工作区切换后拉起 daemon');
+          }
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, SERVICE_RETRY_DELAY_MS));
+        }
+      } else {
+        const cli = resolveWrenyardCli();
+        if (!cli) throw new Error('未找到 Wrenyard CLI，无法应用工作区');
+        await runPlannedDaemonRestart({ cli });
+      }
       await conversationController!.configure(saved);
-      // configure() spawns a fresh backend reading the current gateway
-      // connection, so any deferred provider refresh is already satisfied.
       pendingModelRefreshRebuild = false;
       return saved;
     },
@@ -1048,10 +1081,10 @@ async function bootstrap(): Promise<void> {
       });
     },
   )));
-  if (!SMOKE) updateController.start();
+  if (!SMOKE && !isSourceDevelopment()) updateController.start();
 
   shellWindow.window.on('close', (event) => {
-    if (quitting) return;
+    if (quitting || sourceDevQuit) return;
     event.preventDefault();
     shellWindow?.window.hide();
   });
@@ -1065,6 +1098,64 @@ async function bootstrap(): Promise<void> {
     openDesktop: () => showDesktop('workbench'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
   }, process.platform);
+
+  if (isSourceDevelopment() && process.env.WRENYARD_DEV_CONTROL) {
+    sourceDevBridge = connectSourceSupervisor(process.env.WRENYARD_DEV_CONTROL, {
+      async activity() {
+        const snapshot = conversationController?.snapshot();
+        const running = snapshot?.selectedRunning === true
+          || (snapshot?.sessions.some((session) => session.running) ?? false);
+        let modalOpen = false;
+        try {
+          const ui = await shellWindow?.window.webContents.executeJavaScript(CAPTURE_UI_SCRIPT) as DesktopUiState | undefined;
+          modalOpen = ui?.modalOpen === true;
+        } catch {
+          modalOpen = false;
+        }
+        return { running, streaming: running, modalOpen, busy: running || modalOpen };
+      },
+      async snapshotUi() {
+        const snapshot = conversationController?.snapshot();
+        let ui: DesktopUiState = {};
+        try {
+          ui = await shellWindow?.window.webContents.executeJavaScript(CAPTURE_UI_SCRIPT) as DesktopUiState;
+        } catch {
+          ui = {};
+        }
+        return {
+          ...ui,
+          selectedSessionId: snapshot?.selectedSessionId,
+          streaming: snapshot?.selectedRunning === true,
+        };
+      },
+      async restoreUi(state) {
+        if (state.selectedSessionId) {
+          await conversationController?.select(state.selectedSessionId).catch(() => undefined);
+        }
+        if (state.page && state.page !== 'workbench') {
+          shellWindow?.setPage(state.page as ShellPage, false);
+        }
+        try {
+          await shellWindow?.window.webContents.executeJavaScript(restoreUiScript(state));
+        } catch {
+          // Draft restoration is best-effort UI state only.
+        }
+      },
+      async reload() {
+        const window = shellWindow?.window;
+        if (!window || window.isDestroyed()) return;
+        await window.webContents.reload();
+        await new Promise<void>((resolveReload) => {
+          window.webContents.once('did-finish-load', () => resolveReload());
+          setTimeout(resolveReload, 5_000);
+        });
+      },
+      async quit() {
+        sourceDevQuit = true;
+        app.quit();
+      },
+    });
+  }
 
   if (openSettingsOnReady) {
     openSettingsOnReady = false;
@@ -1107,6 +1198,8 @@ app.on('before-quit', (event) => {
   void (async () => {
     try {
       stopGatewayRecoveryWatcher();
+      sourceDevBridge?.close();
+      sourceDevBridge = null;
       desktopTray?.destroy();
       desktopTray = null;
       quotaController?.stop();
