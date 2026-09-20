@@ -2,7 +2,16 @@ import { createConnection, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+/** Chinese display brand. Window/tray/dialog titles only — never a data directory name. */
 export const PRODUCT_NAME = '啾啾工坊';
+/**
+ * Stable data identity of the installed Desktop package (`package.json` `name`).
+ * Electron derives `app.getPath('userData')` from this when no explicit
+ * `userData` override exists, so source-development must reuse the exact same
+ * directory as the installed release. Keep it decoupled from PRODUCT_NAME,
+ * which is localized display branding and must never name a data directory.
+ */
+export const DESKTOP_DATA_IDENTITY = '@wrenyard/desktop';
 export const SOURCE_DEV_FLAG = '1';
 
 export interface ElectronPathApp {
@@ -28,13 +37,13 @@ export function resolveSourceDesktopUserData(
   const override = env.WRENYARD_DESKTOP_USER_DATA?.trim();
   if (override) return resolve(override);
   if (platform === 'win32') {
-    return join(appData ?? env.APPDATA ?? join(home, 'AppData', 'Roaming'), PRODUCT_NAME);
+    return join(appData ?? env.APPDATA ?? join(home, 'AppData', 'Roaming'), DESKTOP_DATA_IDENTITY);
   }
   if (platform === 'darwin') {
-    return join(home, 'Library', 'Application Support', PRODUCT_NAME);
+    return join(home, 'Library', 'Application Support', DESKTOP_DATA_IDENTITY);
   }
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  return join(xdg ? resolve(xdg) : join(home, '.config'), PRODUCT_NAME);
+  return join(xdg ? resolve(xdg) : join(home, '.config'), DESKTOP_DATA_IDENTITY);
 }
 
 /** Must run before app ready so the single-instance lock shares the installed identity. */

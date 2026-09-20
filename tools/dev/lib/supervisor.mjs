@@ -11,7 +11,7 @@ import {
 } from './constants.mjs';
 import { combineActivity, identityMatchesSource } from './activity.mjs';
 import { buildGeneration } from './builder.mjs';
-import { spawnDaemonProcess, spawnDesktopProcess, stopChild, componentLogPath } from './children.mjs';
+import { spawnDaemonProcess, spawnDesktopProcess, stopChild, stopOwnedDesktopTree, componentLogPath, childHasExited } from './children.mjs';
 import { attachHandler, connectControl, isAddrInUse, listenControl } from './control.mjs';
 import { sourceChildEnv } from './env.mjs';
 import { COMPONENTS, expandDependents, isRendererOnly } from './graph.mjs';
@@ -36,6 +36,7 @@ import {
   createInspectReleaseDesktop,
   createTerminateReleaseDesktop,
   gateReleaseDesktop,
+  runExecFile,
 } from './release-desktop.mjs';
 import { createGenerationQueue } from './queue.mjs';
 import { createRequestQueue } from './requests.mjs';
@@ -49,6 +50,42 @@ function sleep(ms) {
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code, ok: false, message });
+}
+
+const TRANSIENT_STATUSES = new Set([
+  'preparing',
+  'starting',
+  'waiting-for-idle',
+  'restarting',
+  'stopping',
+]);
+
+/**
+ * Status measured from the live components, ignoring transient operation status.
+ * @param {{ daemon: unknown, desktop: unknown, desktopStoppedByUser: boolean }} components
+ */
+export function healthyComponentStatus(components) {
+  const alive = (child) => Boolean(child) && !childHasExited(child);
+  if (!alive(components?.daemon)) return 'degraded';
+  if (components.desktopStoppedByUser) return 'ready';
+  if (!alive(components?.desktop)) return 'degraded';
+  return 'ready';
+}
+
+/**
+ * Pick the status to publish after a failed lifecycle operation. A snapshot that
+ * is itself transient (or missing) is replaced by the live component truth, so a
+ * blocked stop never leaves `stopping` / `waiting-for-idle` behind.
+ * @param {string|null|undefined} snapshotStatus
+ * @param {{ daemon: unknown, desktop: unknown, desktopStoppedByUser: boolean }} components
+ */
+export function restoredStatus(snapshotStatus, components) {
+  const live = healthyComponentStatus(components);
+  if (live === 'degraded') return 'degraded';
+  if (!snapshotStatus || TRANSIENT_STATUSES.has(snapshotStatus)) {
+    return live;
+  }
+  return snapshotStatus;
 }
 
 export function createSupervisor(options = {}) {
@@ -170,6 +207,24 @@ export function createSupervisor(options = {}) {
     for (const session of sessions) {
       session.send?.({ jsonrpc: '2.0', method: 'dev.event', params: { status: next, detail } });
     }
+  }
+
+  /**
+   * Status that truthfully reflects the live components, independent of any
+   * transient operation status (stopping / waiting-for-idle / restarting).
+   */
+  function healthyStatus() {
+    return healthyComponentStatus({ daemon, desktop, desktopStoppedByUser });
+  }
+
+  /**
+   * Restore the pre-operation status after a failed lifecycle operation.
+   * Falls back to the live component truth when the snapshot is itself a
+   * transient operation status, so a failed stop never leaves the supervisor
+   * stuck in `stopping` / `waiting-for-idle`.
+   */
+  function restoreStatusAfterFailure(snapshotStatus, detail) {
+    setStatus(restoredStatus(snapshotStatus, { daemon, desktop, desktopStoppedByUser }), detail);
   }
 
   function snapshot() {
@@ -299,14 +354,30 @@ export function createSupervisor(options = {}) {
 
   async function quitDesktop() {
     if (!desktop) return;
+    const target = desktop;
+    let graceful = false;
     if (desktopSession) {
       try {
         await desktopSession.request('desktop.quit', {});
+        graceful = true;
       } catch {
-        // Fall through to child signal.
+        // Not a graceful success: fall through to owned-tree termination.
       }
     }
-    await stopChild(desktop);
+    // Acknowledged RPC quit still needs time to finish; the owned-tree stop
+    // below waits for that window before any forced platform kill.
+    const stopped = await stopOwnedDesktopTree(target, {
+      platform,
+      run: options.runCommand ?? runExecFile,
+      timeoutMs: options.desktopStopMs,
+      afterGraceful: graceful,
+    });
+    if (!stopped.ok) {
+      // Keep ownership so the failure stays visible and controllable rather
+      // than reporting a successful stop for a still-live Desktop.
+      logger.error('desktop-stop-failed', stopped.error ?? 'Desktop did not exit cleanly');
+      throw fail(ERRORS.internal, stopped.error ?? `Desktop pid ${target.pid ?? 'unknown'} did not exit`);
+    }
     desktop = null;
     desktopSession = null;
   }
@@ -372,13 +443,15 @@ export function createSupervisor(options = {}) {
     } catch {
       // Process stop below is the fallback.
     }
-    if (daemon) await stopChild(daemon);
-    daemon = null;
-    try {
-      await waitForIpcDown(8_000);
-    } catch (error) {
-      throw error;
+    if (daemon) {
+      const stopped = await stopChild(daemon);
+      if (!stopped.ok) {
+        // Keep ownership so a still-live daemon stays visible and controllable.
+        throw fail(ERRORS.internal, stopped.error ?? `Daemon pid ${daemon.pid ?? 'unknown'} did not exit`);
+      }
+      daemon = null;
     }
+    await waitForIpcDown(8_000);
   }
 
   async function startDaemon() {
@@ -564,15 +637,30 @@ export function createSupervisor(options = {}) {
           }
         }
         const ui = needsDesktop ? await captureDesktopUi() : null;
-        const token = await freezeAndDrain();
-        if (needsDesktop) await quitDesktop();
-        if (needsDaemon) await stopDaemon();
-        if (needsDaemon) await startDaemon();
-        if (needsDesktop && !desktopStoppedByUser) {
-          await startDesktop();
-          await restoreDesktopUi(ui);
+        // Snapshot the pre-switch status so a busy/blocked drain restores the
+        // real status instead of leaving `waiting-for-idle` behind.
+        const priorStatus = status;
+        let token;
+        try {
+          token = await freezeAndDrain();
+        } catch (error) {
+          restoreStatusAfterFailure(priorStatus, 'update aborted before stopping components');
+          throw error;
         }
-        await restoreAdmission(token);
+        try {
+          if (needsDesktop) await quitDesktop();
+          if (needsDaemon) await stopDaemon();
+          if (needsDaemon) await startDaemon();
+          if (needsDesktop && !desktopStoppedByUser) {
+            await startDesktop();
+            await restoreDesktopUi(ui);
+          }
+          await restoreAdmission(token);
+        } catch (error) {
+          await restoreAdmission(token);
+          restoreStatusAfterFailure(priorStatus, 'component switch failed');
+          throw error;
+        }
       }
       queue.finishApply(generation, true);
       return { applied: true, action: needsDaemon ? 'restart-stack' : needsDesktop ? 'restart-desktop' : 'noop' };
@@ -628,6 +716,7 @@ export function createSupervisor(options = {}) {
   }
 
   async function explicitRestart() {
+    const priorStatus = status;
     setStatus('restarting');
     return withBuildLock(async () => {
       const pending = queue.pending ?? queue.building;
@@ -636,35 +725,56 @@ export function createSupervisor(options = {}) {
       }
       const generation = queue.current ?? pending ?? { id: 'explicit', components: [COMPONENTS.daemon, COMPONENTS.desktopMain], files: [] };
       desktopStoppedByUser = false;
-      const applied = await applyGeneration({
-        ...generation,
-        components: [COMPONENTS.daemon, COMPONENTS.desktopMain, COMPONENTS.desktopPreload, COMPONENTS.renderer],
-        artifacts: { runtimeBin: currentRuntimeBin },
-      }, 'restart');
-      if (!applied.applied && applied.reason === 'busy') throw fail(ERRORS.busy, 'restart waiting for idle work timed out');
+      let applied;
+      try {
+        applied = await applyGeneration({
+          ...generation,
+          components: [COMPONENTS.daemon, COMPONENTS.desktopMain, COMPONENTS.desktopPreload, COMPONENTS.renderer],
+          artifacts: { runtimeBin: currentRuntimeBin },
+        }, 'restart');
+      } catch (error) {
+        restoreStatusAfterFailure(priorStatus, 'restart aborted before stopping components');
+        throw error;
+      }
+      if (!applied.applied && applied.reason === 'busy') {
+        // Idle wait timed out with components untouched: keep truthful status
+        // and preserve the still-pending generation instead of claiming ready.
+        if (queue.pending || queue.building) setStatus('pending', queue.pending?.id ?? queue.building?.id);
+        else restoreStatusAfterFailure(priorStatus, 'restart waiting for idle work timed out');
+        throw fail(ERRORS.busy, 'restart waiting for idle work timed out');
+      }
       setStatus('ready');
       return snapshot();
     });
   }
 
   async function explicitStop() {
+    const priorStatus = status;
     stopping = true;
     setStatus('stopping');
     buildAbort?.abort();
     await buildLock.catch(() => undefined);
-    watcher?.close();
-    watcher = null;
+    // The watcher stays alive until the stop fully succeeds: a failed drain or
+    // component stop must leave a usable supervisor, not a dead one. The
+    // `stopping` flag keeps new file changes from being applied meanwhile.
+    let token;
     try {
       const health = await pingDaemon().catch(() => null);
-      if (health) await freezeAndDrain();
+      if (health) token = await freezeAndDrain();
+      await quitDesktop();
+      await stopDaemon();
     } catch (error) {
+      // Nothing is reported as stopped: restore admission so the still-running
+      // stack is controllable, clear `stopping`, and publish the real status.
+      await restoreAdmission(token);
       stopping = false;
+      restoreStatusAfterFailure(priorStatus, 'stop aborted; supervisor remains usable');
       throw error;
     }
-    await quitDesktop();
-    await stopDaemon();
-    setStatus('stopped');
     try {
+      watcher?.close();
+      watcher = null;
+      setStatus('stopped');
       server?.close();
     } catch {
       // ignore

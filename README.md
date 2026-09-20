@@ -102,8 +102,15 @@ pnpm stop
 ```
 
 Source-development and an installed release share the same user config,
-state, Desktop `userData`, and DSH session location. Only one Wrenyard
-instance may use that data domain at a time. `pnpm dev` first checks for a
+state, Desktop `userData`, and DSH session location. The Desktop `userData`
+directory is keyed to the installed package identity `@wrenyard/desktop`
+(Electron's default for that package), not to the localized **啾啾工坊**
+display name, so source-development reuses the settings and DSH session the
+installed release already wrote. There is no migration, copy, or Pet-default
+workaround, and your existing files are left untouched; set
+`WRENYARD_DESKTOP_USER_DATA` to point source-development at a different
+directory, and only one Wrenyard instance may use that data domain at a
+time. `pnpm dev` first checks for a
 running installed Wrenyard Desktop, including a tray-only instance. If it
 is still open, the command prints a reminder to fully quit from the tray and
 exits without freezing the service or starting source components. Closing

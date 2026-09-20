@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { join, resolve, sep, win32, posix } from 'node:path';
-import { PRODUCT_NAME, WINDOWS_BUSINESS_PIPE, WINDOWS_DEV_PIPE, POSIX_BUSINESS_SOCK } from './constants.mjs';
+import { DESKTOP_DATA_IDENTITY, WINDOWS_BUSINESS_PIPE, WINDOWS_DEV_PIPE, POSIX_BUSINESS_SOCK } from './constants.mjs';
 
 /**
  * @param {string} value
@@ -80,18 +80,24 @@ export function businessIpcPath(platform = process.platform, env = process.env) 
   return platform === 'win32' ? WINDOWS_BUSINESS_PIPE : POSIX_BUSINESS_SOCK;
 }
 
+/**
+ * Installed Desktop `userData` directory. Mirrors the identity Electron derives
+ * from the packaged `package.json` `name` (`@wrenyard/desktop`), not the
+ * localized display brand, so supervisor records and the source Electron child
+ * agree with the installed release.
+ */
 export function desktopUserData(platform = process.platform, env = process.env, home = osHomedir()) {
   const override = env.WRENYARD_DESKTOP_USER_DATA?.trim();
   if (override) return resolve(override);
   if (platform === 'win32') {
     const appData = env.APPDATA?.trim() || join(home, 'AppData', 'Roaming');
-    return join(appData, PRODUCT_NAME);
+    return join(appData, DESKTOP_DATA_IDENTITY);
   }
   if (platform === 'darwin') {
-    return join(home, 'Library', 'Application Support', PRODUCT_NAME);
+    return join(home, 'Library', 'Application Support', DESKTOP_DATA_IDENTITY);
   }
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  return join(xdg ? resolve(xdg) : join(home, '.config'), PRODUCT_NAME);
+  return join(xdg ? resolve(xdg) : join(home, '.config'), DESKTOP_DATA_IDENTITY);
 }
 
 export function runtimeGenerationDir(checkout, generation) {
