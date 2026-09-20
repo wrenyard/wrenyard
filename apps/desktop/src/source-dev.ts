@@ -70,7 +70,10 @@ export interface DesktopUiState {
 export const CAPTURE_UI_SCRIPT = `(() => ({
   page: document.documentElement.dataset.page ?? 'workbench',
   draft: document.getElementById('conversation-input')?.value ?? '',
-  modalOpen: Boolean(document.querySelector('[aria-modal="true"]:not([hidden])')),
+  modalOpen: Array.from(document.querySelectorAll('[aria-modal="true"]')).some((element) =>
+    !element.closest('[hidden], [aria-hidden="true"]')
+    && element.getClientRects().length > 0
+    && getComputedStyle(element).visibility !== 'hidden'),
 }))()`;
 
 export function restoreUiScript(state: DesktopUiState): string {

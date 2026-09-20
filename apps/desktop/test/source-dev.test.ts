@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import { DesktopPetSettingsStore } from '../src/pet-settings-store.js';
 import {
   applySourceDevelopmentIdentity,
@@ -128,4 +129,27 @@ test('UI capture/restore never sends a message or reruns a task', () => {
   const script = restoreUiScript({ draft: 'hello', page: 'workbench', selectedSessionId: 's1' });
   assert.match(script, /hello/);
   assert.doesNotMatch(script, /sendConversation|click\(\)|task\.run/);
+});
+
+test('UI activity ignores dialogs hidden by an ancestor or CSS but blocks visible dialogs', () => {
+  const capture = (ancestorHidden: boolean, rectCount: number, visibility = 'visible') => {
+    const dialog = {
+      closest: () => ancestorHidden ? {} : null,
+      getClientRects: () => Array.from({ length: rectCount }, () => ({})),
+    };
+    return runInNewContext(CAPTURE_UI_SCRIPT, {
+      document: {
+        documentElement: { dataset: {} },
+        getElementById: () => null,
+        // The old selector incorrectly matches the workspace gate's inner card.
+        querySelector: () => dialog,
+        querySelectorAll: () => [dialog],
+      },
+      getComputedStyle: () => ({ visibility }),
+    }) as { modalOpen: boolean };
+  };
+  assert.equal(capture(true, 1).modalOpen, false);
+  assert.equal(capture(false, 0).modalOpen, false);
+  assert.equal(capture(false, 1, 'hidden').modalOpen, false);
+  assert.equal(capture(false, 1).modalOpen, true);
 });
