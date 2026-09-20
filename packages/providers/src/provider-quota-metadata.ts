@@ -182,7 +182,7 @@ const explicitBindings: ProviderQuotaBinding[] = [
   // TokenHub balance: a missing/stale/unknown amount keeps coverage incomplete
   // rather than fabricating a balance.
   binding('deepseek', 'deepseek-flash', [balancePool('deepseek/balance', DEEPSEEK_PARSER)]),
-  binding('deepseek', 'deepseek', [balancePool('deepseek/balance', DEEPSEEK_PARSER)]),
+  binding('deepseek', 'deepseek-pro', [balancePool('deepseek/balance', DEEPSEEK_PARSER)]),
   // OpenCode Zen free models draw on the shared free pool; paid models draw on
   // the account balance pool. No balance endpoint is invented: the balance pool
   // is evidence-free and resolves incomplete until a real row exists.

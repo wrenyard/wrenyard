@@ -280,9 +280,12 @@ const builtinProviders: readonly RawProviderDefinition[] = [
   },
   {
     id: 'deepseek', displayName: 'DeepSeek', credentialResolver: 'forge-managed', defaultModel: 'deepseek-flash',
+    // The official open platform publishes exactly two models: V4.1 Flash and
+    // V4 Pro. Pro was scheduled to fold into Flash on 2026-09-14 but DeepSeek
+    // reversed that and kept it billable, so it is a live route again.
     models: [
       model('deepseek-flash', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
-      model('deepseek', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
+      model('deepseek-pro', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
     ],
     protocols: [openAI('https://api.deepseek.com/chat/completions')],
   },
@@ -311,8 +314,16 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     protocols: [openAI('https://ark.cn-beijing.volces.com/api/v3/chat/completions')],
   },
   {
-    id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'forge-managed', defaultModel: 'glm-5-turbo',
-    models: [model('glm-5-turbo', 202_752, 32_768), model('glm-4.7-flash', 202_752, 32_768)],
+    id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'forge-managed', defaultModel: 'glm-5.3',
+    // The open platform's current lineup, matching the vendor's own "Latest
+    // Models" price table. GLM-5.2 stays because the open platform still sells
+    // it after the Coding plan dropped it; GLM-5.3-FlashX is deliberately absent
+    // until its throughput is measured rather than vendor-claimed.
+    models: [
+      model('glm-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']),
+      model('glm-5.3-flash', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3-flash']),
+      model('glm-5.2', 1_048_576, 32_768),
+    ],
     protocols: [openAI('https://open.bigmodel.cn/api/paas/v4/chat/completions')],
   },
   {
@@ -497,8 +508,6 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'gemini-3.8-flash': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
   'claude-fable-5-1': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
   'doubao-seed-2-0-lite-260215': speedDefault(35.1, 'https://aihubmix.com/compare/doubao-seed-2-0-lite-260215/qwen3.8-max-preview', 'AIHubMix public rolling output-throughput measurement for the exact dated Doubao model.'),
-  'glm-4.7-flash': speedDefault(102.5, 'https://artificialanalysis.ai/models/glm-4-7-flash/', 'Artificial Analysis output-speed measurement for GLM-4.7 Flash.'),
-  'glm-5-turbo': speedDefault(42, 'https://openrouter.ai/z-ai/glm-5-turbo/pricing', 'OpenRouter public output-throughput snapshot for exact GLM-5 Turbo.'),
   'glm-5.2': speedDefault(62.8, 'https://artificialanalysis.ai/models/glm-5-2/', 'Artificial Analysis output-speed measurement for GLM-5.2.'),
   'glm-5.3': speedDefault(63.7, 'https://artificialanalysis.ai/models/glm-5-3/', 'Artificial Analysis output-speed measurement for GLM-5.3.'),
   'glm-5.3-flash': speedDefault(73.1, SRC_AA_GLMF, 'Artificial Analysis output-speed measurement for GLM-5.3 Flash.'),
@@ -554,7 +563,7 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
   'nemotron-3-ultra-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
   'nemotron-3.5-lightning-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
   'deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). OpenCode Go endpoint is unmeasured; never represented as a local agent_turn_v1 sample.' },
-  deepseek: { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official DeepSeek 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). Official endpoint is unmeasured per model; never represented as a local agent_turn_v1 sample.' },
+  'deepseek-pro': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-20', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any throughput measurement. The Flash baseline is not transferable: V4 Pro is the previous-generation dense flagship on a 500-request concurrency limit against Flash\'s 2500. Local exact-profile samples supersede it.' },
 };
 
 type ModelMeta = {
@@ -583,6 +592,16 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
+  },
+  // Previous-generation flagship, still billed at its own tariff. No vision,
+  // and DeepSeek's own V4.1 Flash announcement puts Flash ahead of it on
+  // benchmarks, so it does not claim a higher intelligence tier than Flash.
+  // Peak rates, matching the peak convention used for every DeepSeek row here.
+  'deepseek-pro': {
+    thinkingLevels: THINKING_LOW_HIGH_MAX,
+    intelligence: 'mid',
+    capabilities: ['text'],
+    pricing: { inputUsdPerMillion: 1.32, cachedInputUsdPerMillion: 0.044, outputUsdPerMillion: 3.96, source: SRC_DEEPSEEK, checkedAt: '2026-09-20' },
   },
   'hy4-preview': {
     intelligence: 'mid',
@@ -731,20 +750,10 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text'],
     pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 0.1, outputUsdPerMillion: 5, source: 'https://platform.claude.com/docs/en/about-claude/pricing', checkedAt: '2026-09-17' },
   },
-  'glm-4.7-flash': {
-    intelligence: 'low',
-    capabilities: ['text'],
-    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
-  },
-  'glm-5-turbo': {
-    intelligence: 'low',
-    capabilities: ['text'],
-    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
-  },
   'glm-5.2': {
     intelligence: 'mid',
     capabilities: ['text'],
-    pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
+    pricing: { inputUsdPerMillion: 1.4, cachedInputUsdPerMillion: 0.26, outputUsdPerMillion: 4.4, source: SRC_ZAI, checkedAt: '2026-09-20' },
   },
   'gpt-5.4': {
     intelligence: 'mid',
@@ -920,12 +929,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'low',
     capabilities: ['text'],
     pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
-  },
-  deepseek: {
-    thinkingLevels: THINKING_LOW_HIGH_MAX,
-    intelligence: 'mid',
-    capabilities: ['text', 'image'],
-    pricing: { inputUsdPerMillion: 0.3, cachedInputUsdPerMillion: 0.006, outputUsdPerMillion: 1.2, source: SRC_DEEPSEEK, checkedAt: '2026-09-10' },
   },
 };
 
