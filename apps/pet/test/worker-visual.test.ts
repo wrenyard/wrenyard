@@ -383,18 +383,9 @@ describe('worker skin, hit region and badge helpers', () => {
 });
 
 describe('worker activityPulseOffset fallback (FU-002 production helper)', () => {
-  it('uses lastActivityTs when explicit activity is present', async () => {
-    const { activityPulseOffset } = await import('../src/features/worker/scene/timing');
-    // Both present: explicit activity wins, fallback lastToolTs is ignored.
-    const withActivity = activityPulseOffset(10_000, 9_500 ?? 8_000);
-    const withoutFallback = activityPulseOffset(10_000, 9_500);
-    expect(withActivity).toBe(withoutFallback);
-  });
-
   it('falls back to lastToolTs when activity is absent', async () => {
     const { activityPulseOffset } = await import('../src/features/worker/scene/timing');
-    // No lastActivityTs — fallback to lastToolTs.
-    const offset = activityPulseOffset(10_000, undefined ?? 9_500);
+    const offset = activityPulseOffset(10_000, 9_500);
     expect(offset).toBeLessThan(0);
     // Absent without any fallback would return 0.
     const noActivity = activityPulseOffset(10_000);

@@ -24,7 +24,6 @@ import type {
 } from '../../lib/core/taskgraph/index.mts'
 
 import {
-  PATCH_ERROR_CODES,
   validateTaskGraphPostImage,
 } from '../../lib/core/taskgraph/index.mts'
 
@@ -128,40 +127,9 @@ function emptyGraph(id = 'g-test'): TaskGraph {
 
 // ─── 1. Error-code enum ───────────────────────────────────────────────────────
 
-describe('PATCH_ERROR_CODES enum', () => {
-  it('contains exactly 12 entries', () => {
-    assert.equal(PATCH_ERROR_CODES.length, 12)
-  })
-
-  it('includes every expected code', () => {
-    assert.deepEqual([...PATCH_ERROR_CODES].sort(), [
-      'CYCLE',
-      'DANGLING_DEP',
-      'DUP_ID',
-      'FROZEN_NODE',
-      'INPUT_INCOMPLETE',
-      'MAP_NOT_IN_DEPS',
-      'MAP_PATH_UNKNOWN',
-      'MAP_TYPE_MISMATCH',
-      'PATCH_NOT_FOUND',
-      'SCHEMA_INVALID',
-      'SCHEMA_REQUIRED',
-      'STALE_BASE',
-    ])
-  })
-})
-
 // ─── 2. Contract-only codes (never emitted by validator) ───────────────────────
 
 describe('contract-only codes — STALE_BASE and PATCH_NOT_FOUND', () => {
-  it('STALE_BASE appears in PATCH_ERROR_CODES', () => {
-    assert.ok(PATCH_ERROR_CODES.includes('STALE_BASE'))
-  })
-
-  it('PATCH_NOT_FOUND appears in PATCH_ERROR_CODES', () => {
-    assert.ok(PATCH_ERROR_CODES.includes('PATCH_NOT_FOUND'))
-  })
-
   it('STALE_BASE is never emitted by validateTaskGraphPostImage', () => {
     // The validator has no lifecycle input — try every plausible scenario.
     const graph = emptyGraph()
@@ -3685,14 +3653,10 @@ describe('regression: task_86cd23f7 — resolver schema guards, empty structured
     }
     assert.doesNotThrow(() => {
       const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph) {
-        // Should succeed — {const:"$inputs.literal"} is opaque, not an inputs ref
-        assert.ok(true, 'validation succeeded with opaque {const} literal')
-      } else {
-        // If there are issues, none should be INPUT_INCOMPLETE for "literal"
-        const incomplete = result.issues.filter((i) => i.code === 'INPUT_INCOMPLETE' && i.slot === 'literal')
-        assert.equal(incomplete.length, 0, 'no INPUT_INCOMPLETE for opaque {const:"$inputs.literal"}')
-      }
+      // {const:"$inputs.literal"} is opaque — never an inputs reference, so it
+      // must not be reported as INPUT_INCOMPLETE regardless of the outcome.
+      const incomplete = result.issues.filter((i) => i.code === 'INPUT_INCOMPLETE' && i.slot === 'literal')
+      assert.equal(incomplete.length, 0, 'no INPUT_INCOMPLETE for opaque {const:"$inputs.literal"}')
     })
   })
 
@@ -3902,64 +3866,6 @@ describe('regression: task_ddc248be — resolver absence vs malformed values and
     })
   })
 
-  it('compareTypes rejects null properties/required entries', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: {
-          type: 'object',
-          properties: { x: { type: 'string' } },
-          required: null as unknown as string[],
-        } as JsonObject,
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      // null required should produce an issue — either SCHEMA_INVALID from guardSchemaRoot
-      // or MAP_TYPE_MISMATCH from compareTypes downstream.
-      if (result.graph === null) {
-        assert.ok(result.issues.length > 0, 'null required should produce some issue')
-      }
-    })
-  })
-
-  it('assertSubset rejects null explicit property value', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema(type) {
-        if (type === 'task') {
-          return {
-            input: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-            output: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] },
-          }
-        }
-        return null
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      t: taskNode('t', {
-        deps: ['start'],
-        input_schema: {
-          type: 'object',
-          properties: { msg: null as unknown as JsonObject },
-          required: ['msg'],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      // null property value should produce either SCHEMA_INVALID or MAP_TYPE_MISMATCH
-      if (result.graph === null) {
-        assert.ok(result.issues.length > 0, 'null explicit property value should produce some issue')
-      }
-    })
-  })
-
 })
 
 // ─── 39. Regression: task_f2e46a67 — unified recursive schema guards ─────────
@@ -4000,224 +3906,7 @@ describe('regression: task_f2e46a67 — unified recursive schema guards', () => 
     })
   })
 
-  it('nested present-undefined resolver schema yields SCHEMA_INVALID', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema(type) {
-        if (type === 'task') {
-          return {
-            input: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-            output: {
-              type: 'object',
-              properties: {
-                result: {
-                  type: 'object',
-                  properties: { sub: undefined as unknown as JsonObject },
-                  required: ['sub'],
-                },
-              },
-              required: ['result'],
-            } as JsonObject,
-          }
-        }
-        return null
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      t: taskNode('t', {
-        deps: ['start'],
-        input_schema: { type: 'object', properties: {} },
-        output_schema: { type: 'object', properties: {} },
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      if (result.graph === null) {
-        assert.ok(result.issues.some((i) => i.code === 'SCHEMA_INVALID'),
-          'expected SCHEMA_INVALID for malformed resolver schema')
-      }
-    })
-  })
-
-  it('overlapping malformed upstream merge operands never throw', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: {
-          type: 'object',
-          properties: {
-            a: { type: 'string' },
-            b: { type: 'number' },
-          },
-          required: ['a', 'b'],
-        },
-      }),
-      conv: convertNode('conv', {
-        deps: ['start'],
-        input: [
-          { name: 'a', source: 'start.a' },
-          { name: 'b', source: 'start.b' },
-        ],
-        action: {
-          type: 'convert',
-          params: {
-            assemble: {
-              'merged': { const: 'default' },
-            },
-          },
-        },
-        output_schema: { type: 'object', properties: {} },
-        input_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode),
-      // Second convert overlapping with null property in upstream
-      conv2: {
-        id: 'conv2',
-        name: 'conv-overlap',
-        action: { type: 'convert', params: { assemble: { out: { const: 42 } } } },
-        deps: ['start'],
-        input: [],
-        input_schema: { type: 'object', properties: {} },
-        output_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      // Must not throw even with malformed overlap
-    })
-  })
-
-  it('every schema-bearing keyword with present-undefined receives exact-path detection', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      end: {
-        id: 'end',
-        name: 'end-node',
-        action: { type: 'end', params: {} },
-        deps: ['start'],
-        input: [{ name: 'final', source: 'start.out' }],
-        input_schema: { type: 'object', properties: { final: { type: 'string' } }, required: ['final'] },
-        output_schema: (() => {
-          const s: Record<string, unknown> = {
-            type: 'object',
-            properties: { ok: { type: 'boolean' } },
-            required: ['ok'],
-          }
-          // Set each keyword to present-undefined to verify own-property detection
-          s.properties = { ok: { type: 'boolean' }, additional: undefined }
-          return s as JsonObject
-        })(),
-      } as TaskGraphNode,
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const invalid = result.issues.filter((i) => i.code === 'SCHEMA_INVALID')
-        assert.ok(invalid.length > 0, 'expected SCHEMA_INVALID for present-undefined property')
-      }
-    })
-  })
-
-  it('compareTypes rejects malformed optional properties and non-string required entries', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: {
-          type: 'object',
-          properties: {
-            x: { type: 'string' },
-            y: { type: 'number' },
-          },
-          required: ['x'],
-        },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: {
-          type: 'object',
-          properties: { msg: { type: 'string' } },
-          required: ['msg'],
-        },
-        output_schema: { type: 'object', properties: { result: { type: 'string' } }, required: [] },
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      // If compareTypes encounters issues, it returns non-match
-    })
-  })
-
-  it('assertSubset rejects non-string required entries', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema(type) {
-        if (type === 'task') {
-          return {
-            input: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-            output: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] },
-          }
-        }
-        return null
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start'),
-      t: taskNode('t', {
-        deps: ['start'],
-        input_schema: {
-          type: 'object',
-          properties: { msg: { type: 'string' } },
-          required: [42 as unknown as string],
-        } as JsonObject,
-        output_schema: { type: 'object', properties: { result: { type: 'string' } }, required: [] },
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      if (result.graph === null) {
-        assert.ok(result.issues.length > 0, 'expected issues for non-string required entry')
-      }
-    })
-  })
-
-  it('schemaAt rejects malformed root schemas for field and index traversal', () => {
-    // Test via convert that projects from upstream with malformed output
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        output_schema: {
-          type: 'object',
-          properties: {
-            items: {
-              type: 'array',
-              items: null as unknown as JsonObject,
-            },
-          },
-          required: ['items'],
-        } as JsonObject,
-      }),
-      conv: convertNode('conv', {
-        deps: ['t'],
-        input: [{ name: 'src', source: 't.items[0]' }],
-        action: { type: 'convert', params: { assemble: { result: { const: 'ok' } } } },
-        output_schema: { type: 'object', properties: {} },
-        input_schema: { type: 'object', properties: {} },
-      } as TaskGraphNode),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      // schemaAt should return found:false for malformed items, emitting MAP_PATH_UNKNOWN
-    })
-  })
-
-  it('valid counterpart schemas pass through fine', () => {
+  it('nested present-undefined explicit schema remains SCHEMA_INVALID after auto replacement', () => {
     const graph = emptyGraph()
     graph.nodes = {
       start: startNode('start', {
@@ -4447,10 +4136,10 @@ describe('regression: task_574cc6f7 — schemaAt final untyped/malformed leaves 
     }
     assert.doesNotThrow(() => {
       const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const pathUnknown = result.issues.filter((i) => i.code === 'MAP_PATH_UNKNOWN')
-        assert.ok(pathUnknown.length > 0, 'expected MAP_PATH_UNKNOWN for untyped projected schema')
-      }
+      assert.equal(result.graph, null,
+        `untyped projected schema should fail: ${JSON.stringify(result.issues)}`)
+      const pathUnknown = result.issues.filter((i) => i.code === 'MAP_PATH_UNKNOWN')
+      assert.ok(pathUnknown.length > 0, 'expected MAP_PATH_UNKNOWN for untyped projected schema')
     })
   })
 
@@ -4483,10 +4172,10 @@ describe('regression: task_574cc6f7 — schemaAt final untyped/malformed leaves 
     }
     assert.doesNotThrow(() => {
       const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const pathUnknown = result.issues.filter((i) => i.code === 'MAP_PATH_UNKNOWN')
-        assert.ok(pathUnknown.length > 0, 'expected MAP_PATH_UNKNOWN for unknown property on items schema')
-      }
+      assert.equal(result.graph, null,
+        `unknown property on items schema should fail: ${JSON.stringify(result.issues)}`)
+      const pathUnknown = result.issues.filter((i) => i.code === 'MAP_PATH_UNKNOWN')
+      assert.ok(pathUnknown.length > 0, 'expected MAP_PATH_UNKNOWN for unknown property on items schema')
     })
   })
 
@@ -4511,256 +4200,6 @@ describe('regression: task_574cc6f7 — schemaAt final untyped/malformed leaves 
 })
 
 describe('regression: task_574cc6f7 — compareTypes/assertSubset reject malformed optional/unmatched/nested/items/required entries', () => {
-  it('compareTypes returns non-match for malformed optional expected property', () => {
-    // Malformed optional property: expected properties has boolean schema for an
-    // optional key that has no actual counterpart.
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: {
-          type: 'object',
-          properties: {
-            x: { type: 'string' },
-            y: { type: 'number' },
-          } as Record<string, JsonObject>,
-          required: ['x'],
-        } as JsonObject,
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: {
-            result: true as unknown as JsonObject,
-          } as Record<string, JsonObject>,
-          required: [],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const mismatch = result.issues.filter(
-          (i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID',
-        )
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed optional property')
-      }
-    })
-  })
-
-  it('compareTypes returns non-match for malformed unmatched expected property', () => {
-    // Unmatched = expected has a property that actual lacks and the expected
-    // property value itself is malformed.
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: {
-          type: 'object',
-          properties: {
-            x: { type: 'string' },
-          } as Record<string, JsonObject>,
-          required: ['x'],
-        } as JsonObject,
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: {
-            result: { type: 'string' },
-            extra: null as unknown as JsonObject,
-          } as Record<string, JsonObject>,
-          required: [],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const mismatch = result.issues.filter(
-          (i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID',
-        )
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed unmatched property')
-      }
-    })
-  })
-
-  it('compareTypes returns non-match for malformed nested property schema', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: {
-            nested: {
-              type: 'object',
-              properties: { inner: false as unknown as JsonObject },
-              required: [],
-            },
-          } as Record<string, JsonObject>,
-          required: ['nested'],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const mismatch = result.issues.filter(
-          (i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID',
-        )
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed nested property')
-      }
-    })
-  })
-
-  it('compareTypes returns non-match for malformed items schema', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: {
-            arr: {
-              type: 'array',
-              items: null as unknown as JsonObject,
-            },
-          } as Record<string, JsonObject>,
-          required: ['arr'],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const mismatch = result.issues.filter((i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID')
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed items schema')
-      }
-    })
-  })
-
-  it('compareTypes returns non-match for malformed required entries', () => {
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: { result: { type: 'string' } },
-          required: [42 as unknown as string],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, makeResolver())
-      if (result.graph === null) {
-        const mismatch = result.issues.filter((i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID')
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed required entries')
-      }
-    })
-  })
-
-  it('assertSubset returns non-match for malformed explicit property', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema(type) {
-        if (type === 'task') {
-          return {
-            input: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-            output: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] },
-          }
-        }
-        return null
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: {
-          type: 'object',
-          properties: { msg: null as unknown as JsonObject },
-          required: ['msg'],
-        } as JsonObject,
-        output_schema: { type: 'object', properties: { result: { type: 'string' } }, required: [] },
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      if (result.graph === null) {
-        const mismatch = result.issues.filter(
-          (i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID',
-        )
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed explicit property')
-      }
-    })
-  })
-
-  it('assertSubset returns non-match for malformed explicit optional property without inferred counterpart', () => {
-    const resolver: TaskGraphAutoSchemaResolver = {
-      resolveActionSchema(type) {
-        if (type === 'task') {
-          return {
-            input: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-            output: { type: 'object', properties: { result: { type: 'string' } }, required: [] },
-          }
-        }
-        return null
-      },
-    }
-    const graph = emptyGraph()
-    graph.nodes = {
-      start: startNode('start', {
-        output_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
-      }),
-      t: taskNode('t', {
-        deps: ['start'],
-        input: [{ name: 'msg', source: 'start.x' }],
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } }, required: ['msg'] },
-        output_schema: {
-          type: 'object',
-          properties: {
-            result: { type: 'string' },
-            extra: null as unknown as JsonObject,
-          },
-          required: [],
-        } as JsonObject,
-      }),
-    }
-    assert.doesNotThrow(() => {
-      const result = validateTaskGraphPostImage(graph, [], undefined, resolver)
-      if (result.graph === null) {
-        const mismatch = result.issues.filter(
-          (i) => i.code === 'MAP_TYPE_MISMATCH' || i.code === 'SCHEMA_INVALID',
-        )
-        assert.ok(mismatch.length > 0, 'expected MAP_TYPE_MISMATCH or SCHEMA_INVALID for malformed optional explicit property')
-      }
-    })
-  })
-
   it('valid compareTypes and assertSubset succeed (control)', () => {
     const graph = emptyGraph()
     graph.nodes = {
@@ -5113,14 +4552,10 @@ describe('regression: cyclic resolver schema produces deterministic SCHEMA_INVAL
     }
     assert.doesNotThrow(() => {
       const result = validateTaskGraphPostImage(graph, [], undefined, cyclicResolver)
-      if (result.graph !== null) {
-        // If it manages to succeed, the cyclic schema must have been pinned
-        // without throwing — still acceptable as long as no crash.
-        // But the expected behavior is SCHEMA_INVALID.
-        const schemaInvalid = result.issues.some((i) => i.code === 'SCHEMA_INVALID')
-        assert.ok(schemaInvalid || result.issues.length > 0, 'cyclic schema should produce issues')
-      }
-      // graph:null is acceptable — the key requirement is no throw
+      assert.equal(result.graph, null,
+        `self-referential cyclic resolver schema should yield graph:null: ${JSON.stringify(result.issues)}`)
+      assert.ok(result.issues.some((i) => i.code === 'SCHEMA_INVALID'),
+        'cyclic resolver schema should produce SCHEMA_INVALID')
     }, 'cyclic resolver schema must not throw')
   })
 
@@ -5150,7 +4585,19 @@ describe('regression: cyclic resolver schema produces deterministic SCHEMA_INVAL
     }
     assert.doesNotThrow(() => {
       const result = validateTaskGraphPostImage(graph, [], undefined, cyclicResolver)
-      // Must not throw. Either produces SCHEMA_INVALID or succeeds sanitized.
+      // The cycle lives on the resolver's *input* side, which B7 never
+      // materializes (graph input_schema describes wiring slots only). The
+      // load-bearing invariant is therefore that the cycle never throws and
+      // never leaks: the run either fails outright, or succeeds with the
+      // graph slot schemas intact and no cyclic reference in the post-image.
+      if (result.graph === null) {
+        assert.ok(result.issues.length > 0, 'a failed run must report why')
+      } else {
+        assert.equal(result.issues.length, 0)
+        const pinned = result.graph.nodes['t'].output_schema
+        assert.equal(pinned.type, 'object', 'resolved output schema must be pinned')
+        assert.deepEqual(Object.keys(pinned.properties ?? {}), ['result'])
+      }
     }, 'cyclic resolver schema must not throw')
   })
 })

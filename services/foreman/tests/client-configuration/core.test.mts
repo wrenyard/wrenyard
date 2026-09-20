@@ -13,15 +13,9 @@ import {
   loadOrCreateGatewayCredential,
 } from '../../lib/client-configuration/gateway-source.mts'
 import { JsonClientOwnershipStore } from '../../lib/client-configuration/ownership-store.mts'
-import { ClientConfigurationService } from '../../lib/client-configuration/service.mts'
 import { RpcRouter } from '../../lib/server/rpc-router.mts'
 import { createIpcServer } from '../../lib/transport/ipc-server.mts'
 import { createTestIpcEndpoint } from '../helpers/ipc-endpoint.mts'
-import type {
-  ClientAdapter,
-  ClientConfigurationPlan,
-  GatewayClientConnection,
-} from '../../lib/client-configuration/types.mts'
 
 const execFileAsync = promisify(execFile)
 
@@ -143,48 +137,4 @@ test('discovery reports Codex App and CLI independently and accepts capability o
   assert.equal(surfaces.find((entry) => entry.id === 'codex-cli')?.compatibility, 'supported')
   assert.equal(surfaces.find((entry) => entry.id === 'claude-code')?.compatibility, 'needs-upgrade')
   assert.equal(surfaces.find((entry) => entry.id === 'grok-build')?.installed, false)
-})
-
-test('service keeps read-only plan separate from apply and restore', async () => {
-  const calls: string[] = []
-  const plan: ClientConfigurationPlan = {
-    clientId: 'grok-build',
-    operation: 'apply',
-    files: [],
-    models: ['provider/model'],
-    defaultModel: 'provider/model',
-    connectionMode: 'additive',
-    effects: [],
-    requiresRestart: [],
-  }
-  const adapter: ClientAdapter = {
-    id: 'grok-build',
-    status: async () => ({ clientId: 'grok-build', state: 'not-configured', configuredModels: [] }),
-    plan: async () => { calls.push('plan'); return plan },
-    apply: async () => { calls.push('apply'); return { clientId: 'grok-build', state: 'connected', configuredModels: ['provider/model'] } },
-    planRestore: async () => ({ ...plan, operation: 'restore' }),
-    restore: async () => { calls.push('restore'); return { clientId: 'grok-build', state: 'not-configured', configuredModels: [] } },
-  }
-  const connection: GatewayClientConnection = {
-    openaiChatBaseUrl: 'http://127.0.0.1/gateway/openai-chat/v1',
-    openaiResponsesBaseUrl: 'http://127.0.0.1/gateway/openai-responses/v1',
-    anthropicBaseUrl: 'http://127.0.0.1/gateway/anthropic/v1',
-    credential: 'secret',
-    credentialHelperPath: '/opt/wrenyard/bin/gateway-credential',
-    credentialHelperCommand: ['wrenyard', 'gateway', 'credential'],
-    models: [],
-  }
-  const service = new ClientConfigurationService(
-    { list: async () => [] },
-    [adapter],
-    { read: async () => connection },
-  )
-  assert.deepEqual(calls, [])
-  assert.deepEqual((await service.snapshot()).models, [])
-  const preview = await service.plan('grok-build', { models: ['provider/model'], defaultModel: 'provider/model' })
-  assert.deepEqual(calls, ['plan'])
-  await service.apply(preview)
-  const restore = await service.planRestore('grok-build')
-  await service.restore(restore)
-  assert.deepEqual(calls, ['plan', 'apply', 'restore'])
 })

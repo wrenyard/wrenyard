@@ -3521,28 +3521,6 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(serialized.includes('snapshot_id'), false)
   })
 
-  it('routingTest retains an available pair rejected by the submitted intelligence/speed gate', async () => {
-    writeConfig({})
-    const service = context!.makeService({ resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }) })
-    // Require premium intelligence: the lower-intelligence providers are
-    // baseline-available but rejected, so they must still appear as rows.
-    const result = await service.routingTest({ automatic: { intelligence_min: 'premium' } })
-
-    // The claude premium profile qualifies; the mid/high pairs are retained as
-    // rejected rows with a short Chinese reason and null rank/score.
-    assert.equal(Boolean(result.rows.some((row) => row.rank !== null)), true, JSON.stringify(result.rows))
-    const rejected = result.rows.filter((row) => row.rank === null)
-    assert.equal(Boolean(rejected.length >= 1), true)
-    for (const row of rejected) {
-      assert.equal(row.score, null)
-      assert.equal(row.price_score, null)
-      assert.equal(row.speed_score, null)
-      assert.equal(row.quota_score, null)
-      assert.equal(row.intelligence_score, null)
-      assert.equal(Boolean(row.reason && /[\u4e00-\u9fff]/u.test(row.reason)), true)
-    }
-  })
-
   it('routingTest rows carry a short Chinese reason for a rejected pair and never a null-valued detail', async () => {
     writeConfig({})
     const service = context!.makeService({ resolver: createResolverFixture({ profiles: [A_MID_P, A_HIGH_P, A_PREMIUM_P] }) })

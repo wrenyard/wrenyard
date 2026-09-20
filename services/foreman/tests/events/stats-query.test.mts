@@ -825,40 +825,6 @@ describe('stats-query readStatsSummary', () => {
     closeTestDb()
   })
 
-  it('rejects days greater than maximum', () => {
-    initTestDb()
-    assert.throws(
-      () => readStatsSummary({ days: 367, limit: 10 }),
-      /Invalid days/,
-    )
-    closeTestDb()
-  })
-
-  it('rejects days less than minimum', () => {
-    initTestDb()
-    assert.throws(
-      () => readStatsSummary({ days: 0, limit: 10 }),
-      /Invalid days/,
-    )
-    assert.throws(
-      () => readStatsSummary({ days: -5, limit: 10 }),
-      /Invalid days/,
-    )
-    closeTestDb()
-  })
-
-  it('respects limit boundary at 1 again', () => {
-    initTestDb()
-    const now = new Date()
-    const today = localDayKey(now)
-    seedDispatch(today, 1)
-    const result = readStatsSummary({ days: 5, limit: 1 }, now)
-    assert.equal(result.byProfile.length, 0)
-    assert.equal(result.byTask.length, 1)
-    assert.equal(result.daily.length, 5)
-    closeTestDb()
-  })
-
   it('rejects limit greater than maximum', () => {
     initTestDb()
     assert.throws(

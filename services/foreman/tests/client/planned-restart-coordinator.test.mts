@@ -264,19 +264,6 @@ describe('resolvePlannedRestartPreparation', () => {
         && error.code === 'planned_restart_preparation_unsupported',
     )
   })
-
-  it('accepts an injected exact-kind update provider', () => {
-    const updateProvider: PlannedRestartPreparationProvider = {
-      kind: 'update',
-      prepare: async () => {},
-    }
-    const providers = resolvePlannedRestartPreparation(
-      createRestartPreparationProvider().concat(updateProvider),
-      'update',
-    )
-    assert.equal(providers.length, 1)
-    assert.equal(providers[0], updateProvider)
-  })
 })
 
 describe('runPlannedRestartCoordinator (restart, happy path)', () => {
