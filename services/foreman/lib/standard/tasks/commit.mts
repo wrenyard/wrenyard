@@ -7,7 +7,7 @@ import {
 import type { GateContext, GateFail, GatePass } from '../../core/task/types.mts'
 import commitRules from '../instructions/commit-rules.mts'
 import shellUsage from '../instructions/shell-usage.mts'
-import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
+import { COMMIT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are a **Structured Commit Agent**. Stage only the declared changes, create verified git commits, and output machine-readable commit metadata.
@@ -224,7 +224,7 @@ const definition = {
   config: {
     description:
       'Structured git commit agent. Stages only declared file changes and creates verified local commits. NEVER pushes — outbound push happens only via `wrenyard project push <project>`.',
-    dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
+    dispatch: COMMIT_DISPATCH_REQUIREMENTS,
     // A declared empty target set means this mutation-capable task requires a
     // conservative repo-wide coordination lock.
     writeTargets: () => [],

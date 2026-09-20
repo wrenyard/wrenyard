@@ -456,12 +456,20 @@ async function startForemanDaemonWithRuntime(
           }
         }
         const freeSupply = activeSnapshot.freeSupply(model)
+        // An iOA login exposes no observable quota pool, so the generic
+        // unknown-quota outcome would rank it as if it were exhausted. The
+        // environment classification stays inside this branch; only a derived
+        // provenance-bearing fact leaves it.
+        const quotaFloor = activeSnapshot.environment === 'ioa'
+          ? { source: 'codebuddy.credential_environment', ruleId: 'codebuddy.ioa_unknown_quota_floor' }
+          : undefined
         return {
           providerCredential: 'available',
           providerLive: 'available',
           quota: 'unknown',
           available: true,
           ...(freeSupply ? { freeSupply } : {}),
+          ...(quotaFloor ? { quotaFloor } : {}),
           codeBuddyExecution: {
             expectedScope: activeSnapshot.stableScope,
             expectedEnvironment: activeSnapshot.environment,

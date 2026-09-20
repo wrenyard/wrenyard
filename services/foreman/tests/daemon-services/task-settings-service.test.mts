@@ -386,12 +386,28 @@ interface TestContext {
 }
 
 const defaultDaemonAvailability: TaskSettingsDaemonAvailabilityCallback = () => ({ accepting: true, known: true })
-const defaultRuntimeAvailability: TaskSettingsRuntimeAvailabilityCallback = () => ({
-  providerCredential: 'available',
-  providerLive: 'unknown',
-  quota: 'unknown',
-  available: true,
-})
+const defaultRuntimeAvailability: TaskSettingsRuntimeAvailabilityCallback = (_runtime, context) => {
+  // The CodeBuddy branch of the daemon availability callback attaches a
+  // privacy-safe unknown-quota floor fact when the active snapshot's
+  // environment is iOA; the fixture mirrors that producer contract from the
+  // probe context. Only probes that carry a modeled iOA CodeBuddy snapshot get
+  // the floor, so generic fixture probes stay plain unknown-quota candidates.
+  const codeBuddySnapshot = context?.codeBuddySnapshot
+  return {
+    providerCredential: 'available',
+    providerLive: 'unknown',
+    quota: 'unknown',
+    available: true,
+    ...(codeBuddySnapshot !== undefined && codeBuddySnapshot.environment === 'ioa'
+      ? {
+          quotaFloor: {
+            source: 'codebuddy.credential_environment',
+            ruleId: 'codebuddy.ioa_unknown_quota_floor',
+          },
+        }
+      : {}),
+  }
+}
 
 /** All-unknown immutable quota snapshot service (empty raw report). */
 function unknownQuotaSnapshotService(now: () => number = () => Date.now()): AutoRoutingQuotaSnapshotService {
@@ -3119,7 +3135,11 @@ describe('daemon task-settings-service (no-model)', () => {
               timeoutMs: 120_000,
               maxAutoOutputUsdPerMillion: 2,
               routingWeights: { price: 0.5, speed: 0.2, quota: 0.2, intelligence: 0.1 },
-              dispatch: { expectedTps: 1, minimumTps: 1 },
+              // The two candidates differ in both price and speed, so the
+              // expectation is declared to hold the speed saturation point
+              // fixed and leave the horizon marginal price as the factor that
+              // moves between the two timestamps below.
+              dispatch: { expectedTps: 100, minimumTps: 1 },
             },
           },
         },
