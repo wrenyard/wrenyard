@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -56,6 +56,63 @@ export function electronInvocation(checkout, nodeExecutable = process.execPath, 
     args: [electronCli, join(checkout, 'apps', 'desktop')],
     cwd: join(checkout, 'apps', 'desktop'),
   };
+}
+
+/**
+ * Resolve the real Electron executable (not the `node cli.js` wrapper) so the
+ * spawned Desktop main process is the PID we actually own. Falls back to null
+ * when the platform binary is not installed; callers must handle that.
+ */
+export function resolveElectronExecutable(checkout, platform = process.platform, exists = existsSync, readText = (path) => readFileSync(path, 'utf8')) {
+  // path.txt lists the platform-relative binary inside the package dist dir;
+  // macOS keeps the real binary inside the app bundle.
+  const pathFileName = platform === 'darwin' ? 'path.txt' : 'path.txt';
+  const packageDirs = [
+    join(checkout, 'apps', 'desktop', 'node_modules', 'electron'),
+    join(checkout, 'node_modules', 'electron'),
+  ];
+  const binaryName = platform === 'win32' ? 'electron.exe' : 'electron';
+  const distCandidates = platform === 'darwin'
+    ? ['Electron.app/Contents/MacOS/Electron', binaryName]
+    : [binaryName];
+  for (const packageDir of packageDirs) {
+    const pathTxt = join(packageDir, 'dist', pathFileName);
+    for (const candidate of exists(pathTxt) ? [pathTxt] : []) {
+      try {
+        const relative = String(readText(candidate) ?? '').trim();
+        if (relative) {
+          const binary = join(packageDir, 'dist', relative);
+          if (exists(binary)) return binary;
+        }
+      } catch {
+        // Fall through to the conventional dist paths.
+      }
+    }
+    for (const name of distCandidates) {
+      const binary = join(packageDir, 'dist', name);
+      if (exists(binary)) return binary;
+    }
+  }
+  return null;
+}
+
+/**
+ * Desktop invocation for source development. Ownership must track the real
+ * Electron main process, so a resolvable platform Electron binary is required:
+ * the `node cli.js` wrapper spawns Electron as a grandchild and would leave the
+ * supervisor owning the wrong PID. Missing executables fail with install
+ * guidance instead of silently falling back.
+ */
+export function electronDesktopInvocation(checkout, nodeExecutable = process.execPath, exists = existsSync, platform = process.platform) {
+  const appPath = join(checkout, 'apps', 'desktop');
+  const cwd = appPath;
+  const binary = resolveElectronExecutable(checkout, platform, exists);
+  if (!binary) {
+    throw new Error(
+      `Electron executable was not found for ${platform}. Run pnpm install --frozen-lockfile in the checkout root so apps/desktop/node_modules/electron/dist is populated.`,
+    );
+  }
+  return { command: binary, args: [appPath], cwd, direct: true };
 }
 
 export function pnpmInvocation(checkout, pnpmArgs, nodeExecutable = process.execPath, exists = existsSync) {
