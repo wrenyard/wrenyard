@@ -103,9 +103,22 @@ pnpm stop
 
 Source-development and an installed release share the same user config,
 state, Desktop `userData`, and DSH session location. Only one Wrenyard
-instance may use that data domain at a time. `pnpm dev` will wait for the
-installed service to drain and then take over; it does not copy or reset
-user data. After `pnpm stop`, you can start the installed release again.
+instance may use that data domain at a time. `pnpm dev` first checks for a
+running installed Wrenyard Desktop, including a tray-only instance. If it
+is still open, the command prints a reminder to fully quit from the tray and
+exits without freezing the service or starting source components. Closing
+the window is not enough:
+
+```powershell
+pnpm dev --kill-desktop
+```
+
+That flag applies only to that invocation. It terminates the verified
+installed Desktop process tree, waits for it to exit, then continues the
+existing daemon drain. It does not become the default, does not apply to
+`restart`/`stop`, and does not skip a busy daemon or kill unrelated
+Electron/Node processes. After `pnpm stop`, you can start the installed
+release again.
 
 If `package.json` or `pnpm-lock.yaml` change, stop the stack, re-run
 `pnpm install --frozen-lockfile`, then `pnpm build` and `pnpm dev`. The

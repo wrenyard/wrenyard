@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs';
 import {
   COMPONENT_RETRY_BACKOFF_MS,
   COMPONENT_RETRY_LIMIT,
+  DESKTOP_KILL_WAIT_MS,
   DRAIN_TIMEOUT_MS,
   HEALTH_WAIT_MS,
 } from './constants.mjs';
@@ -31,6 +32,11 @@ import {
 } from './paths.mjs';
 import { checkBuildArtifacts, checkToolchain } from './prepare.mjs';
 import { ERRORS } from './protocol.mjs';
+import {
+  createInspectReleaseDesktop,
+  createTerminateReleaseDesktop,
+  gateReleaseDesktop,
+} from './release-desktop.mjs';
 import { createGenerationQueue } from './queue.mjs';
 import { createRequestQueue } from './requests.mjs';
 import { sourceIdentityFromHealth, withDaemon } from './rpc.mjs';
@@ -67,6 +73,20 @@ export function createSupervisor(options = {}) {
   const queue = createGenerationQueue();
   const requests = createRequestQueue();
   const exists = options.exists;
+  const killDesktop = options.killDesktop === true;
+  const inspectReleaseDesktop = options.inspectReleaseDesktop ?? createInspectReleaseDesktop({
+    platform,
+    env,
+    home,
+    checkout,
+    currentPid: process.pid,
+    run: options.runCommand,
+  });
+  const terminateReleaseDesktop = options.terminateReleaseDesktop ?? createTerminateReleaseDesktop({
+    platform,
+    env,
+    run: options.runCommand,
+  });
 
   let status = 'preparing';
   let instanceId = newInstanceId();
@@ -438,6 +458,24 @@ export function createSupervisor(options = {}) {
     }, delay).unref?.();
   }
 
+  async function ensureReleaseDesktopCleared() {
+    const gate = await gateReleaseDesktop({
+      killDesktop,
+      inspect: inspectReleaseDesktop,
+      terminate: terminateReleaseDesktop,
+      stdout: (line) => {
+        logger.info('release-desktop', line);
+        options.stdout?.(line);
+      },
+      sleep: options.sleep,
+      now: options.now,
+      timeoutMs: options.desktopKillWaitMs ?? DESKTOP_KILL_WAIT_MS,
+    });
+    if (gate.action !== 'continue') {
+      throw fail(ERRORS.desktopRunning, gate.message);
+    }
+  }
+
   async function handoverInstalled() {
     let health;
     try {
@@ -725,6 +763,13 @@ export function createSupervisor(options = {}) {
     }
     if (claimed.role === 'other') {
       throw fail(ERRORS.wrongCheckout, `A source-development instance already owns this user-data domain from ${claimed.peer.checkout}. Stop it there with pnpm dev:stop.`);
+    }
+
+    try {
+      await ensureReleaseDesktopCleared();
+    } catch (error) {
+      server?.close();
+      throw error;
     }
 
     persist();

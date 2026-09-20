@@ -18,6 +18,8 @@ export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const LOG_MAX_FILES = 3;
 
 export const GRACEFUL_STOP_MS = 8_000;
+/** Wait for an explicit --kill-desktop tree to actually exit. */
+export const DESKTOP_KILL_WAIT_MS = 10_000;
 export const HEALTH_WAIT_MS = 20_000;
 export const CONTROL_CONNECT_MS = 2_000;
 export const DESKTOP_READY_MS = 45_000;
