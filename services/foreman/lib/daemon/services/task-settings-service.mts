@@ -182,6 +182,12 @@ export interface TaskSettingsProviderAvailability {
    *  separately for domestic providers; neither rewrites the listed reference
    *  price or any marginal USD price. */
   freeSupply?: { confirmedFree: true; source: string; ruleId: string }
+  /** Privacy-safe provider-verified unknown-quota floor fact for the already-read
+   *  credential (currently the CodeBuddy iOA login only). It states that quota is
+   *  unobservable rather than exhausted, and never carries a token, domain,
+   *  account identity, or the environment string itself. Absent means the generic
+   *  unknown-quota outcome applies. */
+  quotaFloor?: { source: string; ruleId: string }
   /** Private execution admission tuple derived from the same current
    * CodeBuddy snapshot as readiness/free supply. Never serialized into task
    * settings previews, routing decisions, or persisted dispatch metadata. */
@@ -2024,6 +2030,7 @@ export class TaskSettingsService {
       snapshot,
       capUsdPerM,
       minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
+      expectedTps: finiteOrDefault(params.requirements.expectedTps, 0),
       intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
       intelligenceExpectedRank: (() => {
         const expectedTier = params.requirements.intelligenceExpected
@@ -2367,6 +2374,7 @@ interface AutomaticSelectionContext {
   snapshot: AutoRoutingQuotaSnapshot | null
   capUsdPerM: number
   minimumTps: number
+  expectedTps: number
   intelligenceMinRank: number
   intelligenceExpectedRank: number | undefined
 }
@@ -2586,6 +2594,7 @@ function toAutomaticCandidateInput(
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,
     effectiveTps: choice.speed.effective_tps,
+    expectedTps: context.expectedTps,
     intelligenceRank,
     intelligenceMinRank: context.intelligenceMinRank,
     intelligenceExpectedRank: context.intelligenceExpectedRank,
@@ -2599,6 +2608,16 @@ function toAutomaticCandidateInput(
           appliesUntilMs: context.nowMs + context.timeoutMs,
           source: freeFact.source,
           ruleId: freeFact.ruleId,
+        }
+      : null,
+    unknownQuotaFloor: entry.availability?.quotaFloor
+      ? {
+          kind: 'unknown_quota_floor' as const,
+          appliesFromMs: context.nowMs,
+          appliesUntilMs: context.nowMs + context.timeoutMs,
+          source: entry.availability.quotaFloor.source,
+          ruleId: entry.availability.quotaFloor.ruleId,
+          worst_applicable: 'worst_applicable' as const,
         }
       : null,
   }

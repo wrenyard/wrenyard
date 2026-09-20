@@ -26,6 +26,7 @@ import {
 } from '../lib/workspace/task-loader.mts'
 import { invalidateProjectCache } from '../lib/core/project/loader.mts'
 import {
+  COMMIT_DISPATCH_REQUIREMENTS,
   FREQUENT_DISPATCH_REQUIREMENTS,
   GENERAL_DISPATCH_REQUIREMENTS,
   REVIEW_DISPATCH_REQUIREMENTS,
@@ -672,41 +673,50 @@ describe('standard-library code-review outcome boundary', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library dispatch preset contracts', () => {
-  it('FREQUENT stays low-minimum with current TPS and price cap', () => {
+  it('FREQUENT stays low-minimum with the raised TPS expectations and price cap', () => {
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
-    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 80)
+    assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.expectedTps, 200)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.minimumTps, 60)
     assert.equal(FREQUENT_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 6)
+  })
+
+  it('COMMIT keeps the frequent class with a lower speed expectation', () => {
+    assert.equal(COMMIT_DISPATCH_REQUIREMENTS.intelligenceMin, 'low')
+    assert.equal(COMMIT_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
+    assert.equal(COMMIT_DISPATCH_REQUIREMENTS.expectedTps, 100)
+    assert.equal(COMMIT_DISPATCH_REQUIREMENTS.minimumTps, 60)
+    assert.equal(COMMIT_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 6)
   })
 
   it('GENERAL stays mid-minimum with current economics', () => {
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceMin, 'mid')
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.intelligenceExpected, 'mid')
-    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.expectedTps, 40)
-    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.minimumTps, 20)
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.expectedTps, 100)
+    assert.equal(GENERAL_DISPATCH_REQUIREMENTS.minimumTps, 30)
     assert.equal(GENERAL_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 18)
   })
 
   it('REVIEW is high-minimum with the review TPS/price and no unrelated exclusions', () => {
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.intelligenceExpected, 'high')
-    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.expectedTps, 40)
-    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.minimumTps, 20)
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.expectedTps, 100)
+    assert.equal(REVIEW_DISPATCH_REQUIREMENTS.minimumTps, 30)
     assert.equal(REVIEW_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
   })
 
   it('ULTRA is high-minimum preserving TPS/price', () => {
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceMin, 'high')
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.intelligenceExpected, 'premium')
-    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.expectedTps, 20)
-    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.minimumTps, 8)
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.expectedTps, 60)
+    assert.equal(ULTRA_DISPATCH_REQUIREMENTS.minimumTps, 20)
     assert.equal(ULTRA_DISPATCH_REQUIREMENTS.maxOutputUsdPerMillion, 60)
   })
 
   it('no builtin preset carries a configurable maximum intelligence ceiling', () => {
     for (const preset of [
       FREQUENT_DISPATCH_REQUIREMENTS,
+      COMMIT_DISPATCH_REQUIREMENTS,
       GENERAL_DISPATCH_REQUIREMENTS,
       REVIEW_DISPATCH_REQUIREMENTS,
       ULTRA_DISPATCH_REQUIREMENTS,
@@ -730,5 +740,11 @@ describe('standard-library dispatch preset contracts', () => {
     const entry = BUILTIN_TASKS.find((e) => e.name === 'code-review')
     assert.ok(entry, 'code-review should be a builtin')
     assert.deepEqual(entry.definition.config.dispatch, REVIEW_DISPATCH_REQUIREMENTS)
+  })
+
+  it('the commit builtin uses COMMIT_DISPATCH_REQUIREMENTS', () => {
+    const entry = BUILTIN_TASKS.find((e) => e.name === 'commit')
+    assert.ok(entry, 'commit should be a builtin')
+    assert.deepEqual(entry.definition.config.dispatch, COMMIT_DISPATCH_REQUIREMENTS)
   })
 })
