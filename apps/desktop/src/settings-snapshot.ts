@@ -26,6 +26,7 @@ export interface SettingsSnapshotOptions {
   readSummaryModel?: () => string;
   readPet(): Promise<PetCompanionSnapshot>;
   readUpdate(): UpdateSnapshot;
+  sourceDevelopment?: boolean;
 }
 
 /**
@@ -111,6 +112,7 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       dshVersion: options.dshVersion,
       ...(options.buildTime ? { buildTime: options.buildTime } : {}),
       channel: update.channel,
+      ...(options.sourceDevelopment ? { sourceDevelopment: true } : {}),
     },
   };
 }

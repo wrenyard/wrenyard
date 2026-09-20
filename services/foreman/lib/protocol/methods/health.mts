@@ -7,6 +7,13 @@ export interface HealthPingResult {
   gateway?: { status: 'ready' }
   version?: string
   uptimeMs?: number
+  identity?: {
+    mode: 'source' | 'installed'
+    checkout?: string
+    instanceId?: string
+    node?: string
+    runtimeBin?: string
+  }
   dispatch?: {
     mode: 'accepting' | 'frozen' | 'planned_restart'
     frozen: boolean
@@ -37,6 +44,18 @@ export const healthPingResultSchema = {
     ok: { const: true },
     version: { type: 'string' },
     uptimeMs: { type: 'number', minimum: 0 },
+    identity: {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['source', 'installed'] },
+        checkout: { type: 'string' },
+        instanceId: { type: 'string' },
+        node: { type: 'string' },
+        runtimeBin: { type: 'string' },
+      },
+      additionalProperties: true,
+    },
     gateway: {
       type: 'object', required: ['status'], properties: { status: { const: 'ready' } }, additionalProperties: false,
     },

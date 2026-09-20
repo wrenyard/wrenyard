@@ -1001,3 +1001,32 @@ test('stop clears the pending idle timer and install intent', async () => {
 
   rmSync(root, { recursive: true, force: true });
 });
+
+test('source-development disables polling, download and install without changing release updater defaults', async () => {
+  const requests: string[] = [];
+  const controller = new DesktopUpdateController(baseOptions({
+    sourceDevelopment: true,
+    helperPath: '/suite/update-helper.cjs',
+    helperRuntimePath: '/suite/node',
+    cliPath: '/suite/wrenyard',
+    fetcher: async (input: string | URL | Request) => {
+      requests.push(String(input));
+      return metadataResponse(manifestJson('1.0.0-dev.26'));
+    },
+    spawnDetached: () => {
+      throw new Error('must not launch the update helper in source-development');
+    },
+  }));
+
+  controller.start();
+  const snapshot = controller.snapshot();
+  assert.equal(snapshot.installSupported, false);
+  assert.equal(snapshot.installReason, 'source-development');
+  assert.match(snapshot.message ?? '', /源码开发/);
+  const checked = await controller.check(true);
+  assert.equal(checked.state, 'idle');
+  assert.equal(requests.length, 0);
+  const install = await controller.requestInstall();
+  assert.equal(install.installSupported, false);
+  assert.equal(requests.length, 0);
+});

@@ -58,9 +58,66 @@ automatically.
 - Node.js 22.19 or newer
 - pnpm 11.19.0 (frozen via the repository lockfile)
 - Go 1.26 — only needed for contributors and release builders working on the
-  Forge runtime; not required to consume the built artifacts
+  Forge runtime; not required to consume the built artifacts. A full
+  source-development environment (`pnpm build` then `pnpm dev`) does need Go
+  so the daemon can resolve a real platform binary (`.exe` on Windows).
+
+## Develop from source
+
+After a clone, from the repository root (not an installed suite):
+
+```powershell
+cd D:\GitHub\wrenyard
+pnpm install --frozen-lockfile
+pnpm build
+pnpm dev
+```
+
+macOS uses the same last three commands; only the checkout path changes.
+Toolchain versions come from the root `package.json`, the lockfile, and
+`runtime/forge/go.mod` (Node >=22.19.0, pnpm 11.19.0, Go 1.26). The install
+is allowed to run the Electron native build script (`pnpm-workspace.yaml`
+`allowBuilds.electron`). Do not skip that: an install that leaves Electron
+missing cannot start Desktop.
+
+`pnpm build` prepares development artifacts only. It does not produce a
+release archive, install anything, or start the app. `pnpm dev` does not
+silently download dependencies or a Wrenyard release.
+
+Daily loop, still from the checkout root:
+
+```powershell
+# Terminal A: stays running and shows build/runtime status
+pnpm dev
+
+# Terminal B: same checkout, request a full dev-stack restart
+pnpm dev:restart
+# Equivalent shorthand (same implementation)
+pnpm restart
+
+# Terminal B: stop the dev stack and its supervisor
+pnpm dev:stop
+# Equivalent shorthand (same implementation)
+pnpm stop
+```
+
+Source-development and an installed release share the same user config,
+state, Desktop `userData`, and DSH session location. Only one Wrenyard
+instance may use that data domain at a time. `pnpm dev` will wait for the
+installed service to drain and then take over; it does not copy or reset
+user data. After `pnpm stop`, you can start the installed release again.
+
+If `package.json` or `pnpm-lock.yaml` change, stop the stack, re-run
+`pnpm install --frozen-lockfile`, then `pnpm build` and `pnpm dev`. The
+watcher will tell you to do that; it will not modify `node_modules` in the
+background.
+
+Unexpected component-exit retries are capped at 3 attempts with 1s/2s/4s
+backoff and can be interrupted by `pnpm stop`. Supervisor/tooling source
+changes require `pnpm dev:stop` then `pnpm dev`.
 
 ## Install (latest-dev)
+
 
 The latest public development build installs directly from GitHub Releases:
 

@@ -139,6 +139,8 @@ export interface DesktopUpdateControllerOptions {
   homePath?: string;
   spawnDetached?: (command: string, args: string[], options: SpawnOptions) => void;
   scheduler?: UpdateScheduler;
+  /** Source-development (`pnpm dev`) disables release polling, download, and install. */
+  sourceDevelopment?: boolean;
 }
 
 const defaultUpdateScheduler: UpdateScheduler = {
@@ -431,6 +433,7 @@ export class DesktopUpdateController {
   private readonly homePath: string;
   private readonly spawnDetached: (command: string, args: string[], options: SpawnOptions) => void;
   private readonly scheduler: UpdateScheduler;
+  private readonly sourceDevelopment: boolean;
   private readonly prepareCandidate: (candidate: UpdateCandidate) => Promise<PreparedUpdate>;
   private readonly onInstall: () => void;
   private installIntent = false;
@@ -472,6 +475,7 @@ export class DesktopUpdateController {
     this.homePath = options.homePath ?? homedir();
     this.spawnDetached = options.spawnDetached ?? defaultSpawnDetached;
     this.scheduler = options.scheduler ?? defaultUpdateScheduler;
+    this.sourceDevelopment = options.sourceDevelopment === true;
     this.prepareCandidate = options.prepareCandidate ?? this.prepareDesktop.bind(this);
     this.onInstall = options.onInstall ?? (() => undefined);
     this.target = releaseTarget(this.platform, this.arch);
@@ -488,6 +492,7 @@ export class DesktopUpdateController {
       currentVersion: this.currentVersion,
       installSupported: capability.installSupported,
       ...(capability.reason !== undefined ? { installReason: capability.reason } : {}),
+      ...(this.sourceDevelopment ? { message: installUnavailableMessage('source-development') } : {}),
     };
     // The durable attempt record outlives the transient result file: it is read
     // once here and only ever replaced by a NEW install attempt, so a failed
@@ -543,6 +548,9 @@ export class DesktopUpdateController {
    * installable. A `platform`-level reason always wins over a missing path.
    */
   private installationCapability(): { installSupported: boolean; reason?: UpdateInstallReason } {
+    if (this.sourceDevelopment) {
+      return { installSupported: false, reason: 'source-development' };
+    }
     if (this.platform !== 'darwin' && this.platform !== 'win32') {
       return { installSupported: false, reason: 'unsupported-platform' };
     }
@@ -589,6 +597,7 @@ export class DesktopUpdateController {
   }
 
   start(): void {
+    if (this.sourceDevelopment) return;
     if (this.delayTimer || this.intervalTimer) return;
     this.delayTimer = this.scheduler.setTimeout(() => {
       this.delayTimer = undefined;
@@ -640,6 +649,18 @@ export class DesktopUpdateController {
   }
 
   private async performCheck(manual: boolean): Promise<UpdateSnapshot> {
+    if (this.sourceDevelopment) {
+      const capability = this.installationCapability();
+      this.setSnapshot({
+        ...this.snapshotValue,
+        state: 'idle',
+        installSupported: false,
+        installReason: 'source-development',
+        message: installUnavailableMessage('source-development'),
+        checkedAt: this.now(),
+      });
+      return this.snapshot();
+    }
     if (this.installIntent && this.prepared) return this.snapshot();
     if (this.snapshotValue.state === 'preparing' || this.snapshotValue.state === 'waiting' || this.snapshotValue.state === 'installing') {
       return this.snapshot();
@@ -1112,6 +1133,8 @@ export function installUnavailableMessage(reason: UpdateInstallReason | undefine
       return '未找到更新助手组件，无法应用内安装。请重新安装 Desktop 后重试。';
     case 'unsupported-platform':
       return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
+    case 'source-development':
+      return '当前为源码开发模式，不会检查、下载或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。';
     default:
       return '当前无法应用内安装，请检查本机安装后重试。';
   }

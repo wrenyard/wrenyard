@@ -1,0 +1,106 @@
+import { existsSync } from 'node:fs';
+import { homedir as osHomedir } from 'node:os';
+import { join, resolve, sep, win32, posix } from 'node:path';
+import { PRODUCT_NAME, WINDOWS_BUSINESS_PIPE, WINDOWS_DEV_PIPE, POSIX_BUSINESS_SOCK } from './constants.mjs';
+
+/**
+ * @param {string} value
+ * @param {{ platform?: NodeJS.Platform, realpath?: (path: string) => string, exists?: (path: string) => boolean }} [options]
+ */
+export function normalizeCheckout(value, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const exists = options.exists ?? existsSync;
+  let resolved = resolve(value);
+  if (exists(resolved) && typeof options.realpath === 'function') {
+    try {
+      resolved = options.realpath(resolved);
+    } catch {
+      // Keep the resolved path when the realpath probe fails.
+    }
+  }
+  if (platform === 'win32') {
+    return win32.normalize(resolved).replace(/[/\\]+$/u, '').toLowerCase();
+  }
+  return posix.normalize(resolved).replace(/\/+$/u, '') || '/';
+}
+
+/** Compare two checkouts with Windows case/alias folding. */
+export function sameCheckout(left, right, platform = process.platform, options = {}) {
+  return normalizeCheckout(left, { ...options, platform }) === normalizeCheckout(right, { ...options, platform });
+}
+
+export function stateRoot(env = process.env, home = osHomedir()) {
+  const wrenyardStateHome = env.WRENYARD_STATE_HOME?.trim();
+  if (wrenyardStateHome) return resolve(wrenyardStateHome);
+  const xdgStateHome = env.XDG_STATE_HOME?.trim();
+  const stateHome = xdgStateHome ? resolve(xdgStateHome) : join(home, '.local', 'state');
+  return join(stateHome, 'wrenyard');
+}
+
+export function configDir(env = process.env, home = osHomedir()) {
+  const wrenyardConfigHome = env.WRENYARD_CONFIG_HOME?.trim();
+  if (wrenyardConfigHome) return resolve(wrenyardConfigHome);
+  const xdgConfig = env.XDG_CONFIG_HOME?.trim();
+  return join(xdgConfig ? resolve(xdgConfig) : join(home, '.config'), 'wrenyard');
+}
+
+export function devDir(root) {
+  return join(root, 'dev');
+}
+
+export function instancePath(root) {
+  return join(devDir(root), 'instance.json');
+}
+
+export function logDir(root) {
+  return join(devDir(root), 'logs');
+}
+
+export function controlEndpoint(platform = process.platform, root) {
+  if (platform === 'win32') return WINDOWS_DEV_PIPE;
+  return join(devDir(root), 'control.sock');
+}
+
+export function businessIpcPath(platform = process.platform, env = process.env) {
+  for (const candidate of [env.WRENYARD_IPC_PATH, env.FOREMAN_IPC_PATH, env.FOREMAN_PET_FOREMAN_IPC]) {
+    const path = candidate?.trim();
+    if (path) return path;
+  }
+  return platform === 'win32' ? WINDOWS_BUSINESS_PIPE : POSIX_BUSINESS_SOCK;
+}
+
+export function desktopUserData(platform = process.platform, env = process.env, home = osHomedir()) {
+  const override = env.WRENYARD_DESKTOP_USER_DATA?.trim();
+  if (override) return resolve(override);
+  if (platform === 'win32') {
+    const appData = env.APPDATA?.trim() || join(home, 'AppData', 'Roaming');
+    return join(appData, PRODUCT_NAME);
+  }
+  if (platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', PRODUCT_NAME);
+  }
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  return join(xdg ? resolve(xdg) : join(home, '.config'), PRODUCT_NAME);
+}
+
+export function runtimeGenerationDir(checkout, generation) {
+  return join(checkout, 'runtime', 'forge', '.dev-gen', generation);
+}
+
+export function runtimeGenerationBin(checkout, generation, platform = process.platform) {
+  const name = platform === 'win32' ? 'forge.exe' : 'forge';
+  return join(runtimeGenerationDir(checkout, generation), name);
+}
+
+export function defaultRuntimeBin(checkout, platform = process.platform, exists = existsSync) {
+  const name = platform === 'win32' ? 'forge.exe' : 'forge';
+  const candidates = [
+    join(checkout, 'runtime', 'forge', 'bin', name),
+    join(checkout, 'runtime', 'forge', 'bin', 'forge'),
+    join(checkout, 'bin', name),
+    join(checkout, 'bin', 'forge'),
+  ];
+  return candidates.find((candidate) => exists(candidate));
+}
+
+export { sep };

@@ -10,13 +10,40 @@ the public policies in this repository.
 - pnpm 11.19.0
 - Go 1.26 -- only needed for runtime work
 
-Install dependencies with the frozen lockfile:
+Install dependencies with the frozen lockfile, then build once before the
+long-running source environment:
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm build
+pnpm dev
 ```
 
+`pnpm-workspace.yaml` allows the Electron install script; if Electron is
+missing after install, re-run the frozen install rather than assuming a
+global Wrenyard/Electron binary. Go 1.26 is required for `pnpm build` so the
+daemon can resolve this platform's runtime (`.exe` on Windows).
+
+Daily commands from the same checkout root (aliases share one client):
+
+```sh
+pnpm dev              # Terminal A, stays running
+pnpm dev:restart      # or: pnpm restart
+pnpm dev:stop         # or: pnpm stop
+```
+
+Source-development reuses the installed user data domain and will switch
+away from a running installed instance after drain. It does not install a
+release, change `current`, or start at login. After stop, open the installed
+app yourself if you want it back.
+
+If a lockfile or package manifest changes, stop, reinstall with
+`--frozen-lockfile`, rebuild, then `pnpm dev`. Watcher/supervisor source
+changes need `dev:stop` then `dev`. Component crash retries: 3 attempts,
+1s/2s/4s backoff, interruptible by stop.
+
 ## Working in the workspace
+
 
 Most work happens in a single package. Change into it first and use its
 focused commands:

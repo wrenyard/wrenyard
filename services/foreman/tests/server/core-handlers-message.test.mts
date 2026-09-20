@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { RpcRouter } from '../../lib/server/rpc-router.mts'
-import { registerCoreHandlers } from '../../lib/server/handlers/core.mts'
+import { readProcessIdentity, registerCoreHandlers } from '../../lib/server/handlers/core.mts'
 import { INVALID_PARAMS } from '../../lib/protocol/errors.mts'
 import type { MessageService } from '../../lib/message/message-service.mts'
 
@@ -100,4 +100,45 @@ describe('message.send sender binding', () => {
     assert.equal(err.code, INVALID_PARAMS.code)
   })
 
+})
+
+describe('health.ping process identity', () => {
+  it('reports installed by default and source fields from the source-dev env', () => {
+    assert.equal(readProcessIdentity({}).mode, 'installed')
+    assert.deepEqual(readProcessIdentity({
+      WRENYARD_SOURCE_DEV: '1',
+      WRENYARD_SOURCE_CHECKOUT: '/src',
+      WRENYARD_DEV_INSTANCE_ID: 'id-1',
+      WRENYARD_RUNTIME_BIN: '/gen/forge.exe',
+    }), {
+      mode: 'source',
+      checkout: '/src',
+      instanceId: 'id-1',
+      node: process.execPath,
+      runtimeBin: '/gen/forge.exe',
+    })
+  })
+
+  it('includes identity on health.ping', async () => {
+    const router = new RpcRouter()
+    registerCoreHandlers(router, {
+      startedAt: Date.now() - 25,
+      workspaceRoot: '/tmp',
+    })
+    const previousFlag = process.env.WRENYARD_SOURCE_DEV
+    const previousId = process.env.WRENYARD_DEV_INSTANCE_ID
+    process.env.WRENYARD_SOURCE_DEV = '1'
+    process.env.WRENYARD_DEV_INSTANCE_ID = 'live-id'
+    try {
+      const response = await router.handleMessage(makeJsonRpcRequest('health.ping', {}, 9), {})
+      const result = (response as { result: { identity: { mode: string; instanceId?: string } } }).result
+      assert.equal(result.identity.mode, 'source')
+      assert.equal(result.identity.instanceId, 'live-id')
+    } finally {
+      if (previousFlag === undefined) delete process.env.WRENYARD_SOURCE_DEV
+      else process.env.WRENYARD_SOURCE_DEV = previousFlag
+      if (previousId === undefined) delete process.env.WRENYARD_DEV_INSTANCE_ID
+      else process.env.WRENYARD_DEV_INSTANCE_ID = previousId
+    }
+  })
 })
