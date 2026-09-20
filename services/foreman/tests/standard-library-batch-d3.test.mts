@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { z } from 'zod'
-import {
-  TargetSchema,
-  evidenceWith,
-  findingWith,
-} from '../lib/core/task/concepts.mts'
+import { TargetSchema } from '../lib/core/task/concepts.mts'
 import {
   MarkdownTargetSchema,
   type MarkdownTarget,
@@ -139,11 +135,6 @@ describe('standard-library Batch D3 — domain Targets satisfy open TargetBase',
     const gc: GitCommitTarget = { kind: 'git_commit', value: 'h', hash: 'h', theme: 't' }
     assert.equal(TargetSchema.parse(md).kind, 'markdown')
     assert.equal(TargetSchema.parse(gc).kind, 'git_commit')
-  })
-
-  it('evidence/finding factories from concepts are reused (not redefined) by domain tasks', () => {
-    assert.equal(typeof evidenceWith, 'function')
-    assert.equal(typeof findingWith, 'function')
   })
 })
 

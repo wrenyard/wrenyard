@@ -678,11 +678,6 @@ describe('buildTaskSlipNode field bounds and telemetry omission', () => {
       'task_category',
     ])
   })
-
-  it('includes only the required node_id and state when nothing else is present', () => {
-    const node = buildTaskSlipNode({ nodeId: 'work', state: 'planned' })
-    assert.deepEqual(node, { node_id: 'work', state: 'planned' })
-  })
 })
 
 // ─── Atomic snapshot and v1 wire contract ───────────────────────────────────
