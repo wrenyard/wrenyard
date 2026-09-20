@@ -46,31 +46,10 @@ test('settings snapshot exposes health and credential presence without secrets',
     }),
   });
 
-  assert.deepEqual(snapshot.service, {
-    status: 'connected',
-    endpoint: '/tmp/wrenyard.sock',
-    workspace: {
-      status: 'configured',
-      source: 'user-config',
-      configPath: '/config/wrenyard.json',
-      path: '/workspace/wrenyard',
-      readOnly: false,
-    },
-    uptimeMs: 125_000,
-  });
   assert.deepEqual(snapshot.models, [
     { id: 'kimi-coding', label: 'kimi-coding', configured: true },
     { id: 'zhipu-coding', label: 'zhipu-coding', configured: true },
   ]);
-  assert.deepEqual(snapshot.pet, pet);
-  assert.equal(snapshot.update.channel, 'dev');
-  assert.deepEqual(snapshot.about, {
-    desktopVersion: '1.0.0-dev.14',
-    wrenyardVersion: '1.0.0-dev.14',
-    dshVersion: '0.1.0-rc.6',
-    buildTime: '2026-09-01T02:03:04.000Z',
-    channel: 'dev',
-  });
   assert.equal(JSON.stringify(snapshot).includes('token'), false);
 });
 

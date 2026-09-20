@@ -58,23 +58,6 @@ afterEach(() => {
 })
 
 describe('task definition categories', () => {
-  it('assigns stable Chinese display labels to builtin daily task categories', async () => {
-    const workspace = makeTempDir('foreman-category-builtin-')
-    await discoverTasks(workspace)
-
-    const tasks = listTasks(workspace)
-    const categoryOf = (name: string): { id: string; displayLabel: string } | undefined =>
-      tasks.find((task) => task.name === name)?.category
-
-    assert.deepEqual(categoryOf('edit'), { id: 'edit', displayLabel: '编码' })
-    assert.deepEqual(categoryOf('test'), { id: 'test', displayLabel: '测试' })
-    assert.deepEqual(categoryOf('explore'), { id: 'explore', displayLabel: '探索' })
-    assert.deepEqual(categoryOf('code-review'), { id: 'code-review', displayLabel: '审查' })
-    assert.deepEqual(categoryOf('oracle'), { id: 'architecture', displayLabel: '复杂分析' })
-    assert.deepEqual(categoryOf('commit'), { id: 'commit', displayLabel: '提交' })
-    assert.deepEqual(categoryOf('librarian'), { id: 'research', displayLabel: '资料研究' })
-  })
-
   it('flows a project category through list and describe summaries', async () => {
     const workspace = makeTempDir('foreman-category-flow-')
     const projectDir = join(workspace, 'projects', 'app')

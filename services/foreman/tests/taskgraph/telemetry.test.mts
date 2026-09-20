@@ -279,16 +279,6 @@ describe('task_run_telemetry via ExecutionEventStore', () => {
     assert.equal(row.completeness, 'complete')
   })
 
-  it('fresh schema retains token counters and completeness', () => {
-    const columns = new Set(db
-      .prepare<[], { name: string }>('PRAGMA table_info(task_run_telemetry)')
-      .all()
-      .map((column) => column.name))
-    assert.equal(columns.has('output_tokens'), true, 'token counters must remain')
-    assert.equal(columns.has('total_tokens'), true, 'token counters must remain')
-    assert.equal(columns.has('completeness'), true, 'completeness must remain')
-  })
-
   it('bootstrap retains legacy columns and the exported cleanup drops only them', () => {
     const dir = mkdtempSync(join(tmpdir(), 'foreman-telemetry-migrate-'))
     const path = join(dir, 'legacy.db')

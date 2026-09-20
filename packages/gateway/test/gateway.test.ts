@@ -659,7 +659,6 @@ test('codebuddy requests without an installed CLI keep round headers and no iden
   const address = server.address();
   assert.ok(address && typeof address === 'object');
   await codeBuddyRequest(address.port, 'exec_missing', [{ role: 'user', content: 'hi' }]);
-  assert.equal(seen!.get('x-conversation-id'), seen!.get('x-conversation-id'));
   assert.match(seen!.get('x-conversation-id')!, /^[0-9a-f]{32}$/u);
   assert.match(seen!.get('x-conversation-request-id')!, /^[0-9a-f]{32}$/u);
   assert.match(seen!.get('x-conversation-message-id')!, /^[0-9a-f]{32}$/u);

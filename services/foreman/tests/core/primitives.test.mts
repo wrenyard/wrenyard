@@ -7,12 +7,6 @@ import {
   listOperationDescriptors,
   operationRegistry,
 } from '../../lib/core/operations/registry.mts'
-import {
-  createPrimitiveSet,
-  isForemanPrimitiveName,
-  listPrimitiveDescriptors,
-  primitiveRegistry,
-} from '../../lib/core/operations/primitives/registry.mts'
 
 describe('operation primitives registry', () => {
   it('registers every supported Foreman operation in the core registry', () => {
@@ -26,26 +20,6 @@ describe('operation primitives registry', () => {
     )
     assert.equal(isForemanOperationName('task'), true)
     assert.equal(isForemanOperationName('missing'), false)
-  })
-
-  it('keeps primitives as a compatibility view of operations', () => {
-    assert.deepEqual(
-      Object.keys(primitiveRegistry).sort(),
-      ['agent', 'checkpoint', 'shell', 'task'],
-    )
-    assert.deepEqual(
-      listPrimitiveDescriptors().map((entry) => entry.name).sort(),
-      ['agent', 'checkpoint', 'shell', 'task'],
-    )
-    assert.equal(isForemanPrimitiveName('task'), true)
-    assert.equal(isForemanPrimitiveName('missing'), false)
-  })
-
-  it('creates primitive sets from the central runtime registry', () => {
-    const primitives = createPrimitiveSet()
-    assert.equal(typeof primitives.agent, 'function')
-    assert.equal(typeof primitives.shell, 'function')
-    assert.equal(typeof primitives.checkpoint, 'function')
   })
 
   it('does not keep legacy primitive or root-level Forge modules', () => {

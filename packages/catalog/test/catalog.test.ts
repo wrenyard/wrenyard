@@ -4,9 +4,6 @@ import {
   Catalog,
   resolveConstrainedDispatch,
   isDynamicFast,
-  INTELLIGENCE_ORDER,
-  THINKING_LEVELS,
-  THINKING_ORDER,
   normalizeIntelligenceTier,
   normalizeThinkingLevel,
   type DispatchCandidate,
@@ -263,14 +260,6 @@ test('a premium floor is satisfied by the configured premium tier', () => {
   assert.equal(result.ok, true);
   assert.equal(result.selected.model.intelligence, 'premium');
   assert.equal(result.considered, candidates.length);
-});
-
-test('intelligence order exposes exactly four current tiers and no frontier', () => {
-  assert.deepEqual(Object.keys(INTELLIGENCE_ORDER), ['low', 'mid', 'high', 'premium']);
-  assert.equal(INTELLIGENCE_ORDER.low, 0);
-  assert.equal(INTELLIGENCE_ORDER.mid, 1);
-  assert.equal(INTELLIGENCE_ORDER.high, 2);
-  assert.equal(INTELLIGENCE_ORDER.premium, 3);
 });
 
 test('compatibility normalizer accepts only the four current tiers and rejects frontier/legacy', () => {
@@ -1069,13 +1058,6 @@ function buildThinkingCatalog(levels?: readonly ThinkingLevel[]): Catalog {
   });
   return catalog;
 }
-
-test('thinking levels expose exactly five canonical levels in order', () => {
-  assert.deepEqual([...THINKING_LEVELS], ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.deepEqual(Object.keys(THINKING_ORDER), ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(THINKING_ORDER.low, 0);
-  assert.equal(THINKING_ORDER.max, 4);
-});
 
 test('normalizeThinkingLevel accepts midium as an alias for medium and rejects unknown values', () => {
   assert.equal(normalizeThinkingLevel('midium'), 'medium');

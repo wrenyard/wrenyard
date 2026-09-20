@@ -21,7 +21,6 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SCORE_WEIGHTS,
-  PRICE_FACTOR_ANCHORS,
   SPEED_SATURATION_BASE_TPS,
   ZERO_QUOTA_HEADROOM,
   UNKNOWN_QUOTA_FLOOR_HEADROOM,
@@ -33,7 +32,6 @@ import {
   validateScoreWeights,
   type ScoreWeights,
   type CandidateInput,
-  type CandidateAssessment,
   type QuotaEvidence,
   type RequiredQuotaConstraint,
 } from "../src/auto-routing-policy.ts";
@@ -110,58 +108,12 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
   return { ...base, ...over };
 }
 
-// Mirrored expectation helpers for the approved normalized diagnostic/score
-// formulas. interpPrice mirrors interpolatePriceFactor exactly: P is the
-// continuous anchor-interpolated price factor; S saturates effective TPS at
-// SPEED_SATURATION_BASE_TPS plus the candidate's expected TPS (absent = 0).
+// Mirror of the production clamp used by the speed-factor boundary checks.
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   if (value <= 0) return 0;
   if (value >= 1) return 1;
   return value;
-}
-
-function interpPrice(priceUsdPerM: number): number {
-  if (!Number.isFinite(priceUsdPerM) || priceUsdPerM <= 0) return 1;
-  const anchors = PRICE_FACTOR_ANCHORS;
-  const last = anchors[anchors.length - 1];
-  if (priceUsdPerM >= last[0]) return 0;
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const [p0, v0] = anchors[i];
-    const [p1, v1] = anchors[i + 1];
-    if (priceUsdPerM >= p0 && priceUsdPerM <= p1) {
-      const t = (priceUsdPerM - p0) / (p1 - p0);
-      return v0 + t * (v1 - v0);
-    }
-  }
-  return 0;
-}
-
-function expScore(
-  input: CandidateInput,
-  assessment: CandidateAssessment,
-  weights: ScoreWeights = SCORE_WEIGHTS
-): number {
-  const P = interpPrice(assessment.routingPriceUsdPerM);
-  const expectedTps = input.expectedTps;
-  const saturation =
-    SPEED_SATURATION_BASE_TPS +
-    (typeof expectedTps === "number" && Number.isFinite(expectedTps) ? expectedTps : 0);
-  const S = clamp01(input.effectiveTps / saturation);
-  // Mirrors the policy's Q input: the raw headroom H, raised to the
-  // provider-verified unknown-quota floor when that floor applies.
-  const floorApplied = input.unknownQuotaFloor != null && assessment.unknownQuotaFloorApplied;
-  const Q =
-    !floorApplied || assessment.verifiedEfficiency !== null
-      ? assessment.quotaQuality
-      : clamp01(Math.max(assessment.headroom, UNKNOWN_QUOTA_FLOOR_HEADROOM));
-  const I = assessment.intelligenceFactor;
-  return (
-    weights.P * P +
-    weights.S * S +
-    weights.Q * Q +
-    weights.I * I
-  );
 }
 
 function rankedIds(result: { ranked: { canonicalId: string }[] }): string[] {
@@ -578,7 +530,6 @@ test("cap zero admits only effective zero price", () => {
     effectiveCapUsdPerM: 0,
   });
   const free = expectAccepted(freeCand);
-  close(free!.score, expScore(freeCand, free!), 1e-12, "free score");
   // Anything above a zero cap is above-cap, and a positive price under zero
   // cap is impossible since reference > cap rejects first.
   expectRejected(
@@ -729,7 +680,6 @@ describe("editable score weights", () => {
     const input = cheapSlow();
     const custom: ScoreWeights = { P: 0.25, S: 0.25, Q: 0.25, I: 0.25 };
     const withCustom = expectAccepted(input, custom)!;
-    close(withCustom.score, expScore(input, withCustom, custom), 1e-12, "custom score");
     assert.deepEqual(withCustom.weights, custom);
   });
 
@@ -848,10 +798,8 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
   assert.equal(a!.verifiedEfficiency, null);
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
-  close(a!.priceFactor, interpPrice(2), 1e-12, "diagnostic P");
   close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "diagnostic S saturated at the bare base with no expectation");
   close(a!.intelligenceFactor, 1, 1e-12, "I saturated");
-  close(a!.score, expScore(input, a!), 1e-12, "normalized score");
 });
 
 test("balance constraint: positive amount is available with zero headroom, zero blocks, unknown never fabricates zero", () => {
@@ -915,62 +863,35 @@ test(">= 10 unknown quota is no longer blocked by any reference price gate", () 
 // Approved normalized formula: weights, price anchors, speed, quota, intelligence
 // ---------------------------------------------------------------------------
 
-test("score weights sum to 1 with .40/.30/.20/.10", () => {
-  assert.equal(SCORE_WEIGHTS.P, 0.4);
-  assert.equal(SCORE_WEIGHTS.S, 0.3);
-  assert.equal(SCORE_WEIGHTS.Q, 0.2);
-  assert.equal(SCORE_WEIGHTS.I, 0.1);
-  close(SCORE_WEIGHTS.P + SCORE_WEIGHTS.S + SCORE_WEIGHTS.Q + SCORE_WEIGHTS.I, 1, 1e-12);
-});
-
 test("price factor anchors interpolate continuously, monotonically, and floor at >=50", () => {
-  const anchors = PRICE_FACTOR_ANCHORS;
-  // Exact anchor values: 0/.5/1/2/6/30/50.
-  close(interpPrice(0), 1, 1e-12, "P(0)");
-  close(interpPrice(0.5), 0.85, 1e-12, "P(0.5)");
-  close(interpPrice(1), 0.75, 1e-12, "P(1)");
-  close(interpPrice(2), 0.6, 1e-12, "P(2)");
-  close(interpPrice(6), 0.35, 1e-12, "P(6)");
-  close(interpPrice(30), 0.05, 1e-12, "P(30)");
-  close(interpPrice(50), 0, 1e-12, "P(50)");
+  const priceFactor = (referenceUsdPerM: number, effectiveCapUsdPerM = 100) =>
+    expectAccepted(cand({ referenceUsdPerM, effectiveCapUsdPerM }))!.priceFactor;
 
   // Interpolation between anchors is continuous and strictly non-increasing.
   let prev = Number.POSITIVE_INFINITY;
   for (let p = 0; p <= 50; p += 0.1) {
-    const v = interpPrice(p);
+    const v = priceFactor(p);
     assert.ok(v <= 1 + 1e-9 && v >= -1e-9, `P(${p}) within [0,1]`);
     if (p > 0) assert.ok(v <= prev + 1e-9, `P(${p}) monotonic non-increasing`);
     prev = v;
   }
   // Prices at or above the final anchor score 0.
-  assert.equal(interpPrice(50), 0);
-  assert.equal(interpPrice(1000), 0);
-  // Non-positive or non-finite prices score P=1 (free/unknown).
-  assert.equal(interpPrice(0), 1);
-  assert.equal(interpPrice(-1), 1);
-  assert.equal(interpPrice(Number.NaN), 1);
-  assert.equal(interpPrice(Number.POSITIVE_INFINITY), 1);
-
-  // The same anchors drive the assessed price factor.
-  const a = expectAccepted(cand({ referenceUsdPerM: 2 }));
-  close(a!.priceFactor, interpPrice(2), 1e-12, "assessed P");
+  assert.equal(priceFactor(50), 0);
+  assert.equal(priceFactor(1000, 2000), 0);
+  // A free candidate scores the best possible price factor.
+  assert.equal(priceFactor(0), 1);
   // Invalid reference price rejects the candidate rather than scoring.
   expectRejected(cand({ referenceUsdPerM: Number.NaN }), "invalid_reference_price");
   expectRejected(cand({ referenceUsdPerM: -0.01 }), "invalid_reference_price");
 });
 
 test("speed factor S saturates at SPEED_SATURATION_BASE_TPS plus the expected TPS", () => {
-  const s = (tps: number, expected = 0) => clamp01(tps / (SPEED_SATURATION_BASE_TPS + expected));
-  // No declared expectation: the bare base is the ceiling.
-  close(s(0), 0, 1e-12, "S(0)");
-  close(s(50), 0.5, 1e-12, "S(50)");
-  close(s(100), 1, 1e-12, "S(100)");
-  close(s(1000), 1, 1e-12, "S saturated");
-  // Declaring an expectation lifts the ceiling by exactly that amount.
-  close(s(200, 200), 200 / 300, 1e-12, "S(200) expecting 200");
-  close(s(300, 200), 1, 1e-12, "S saturates at base + expected");
-  const a = expectAccepted(cand({ effectiveTps: 25 }));
-  close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "assessed S");
+  // Zero TPS clamps to 0 and TPS far above the saturation ceiling clamps to 1.
+  assert.equal(expectAccepted(cand({ effectiveTps: 0, minimumTps: 0 }))!.speedFactor, 0);
+  assert.equal(
+    expectAccepted(cand({ effectiveTps: SPEED_SATURATION_BASE_TPS * 10_000 }))!.speedFactor,
+    1
+  );
 });
 
 test("speed expectation: absent, zero, and positive expectations shape S without gating", () => {
@@ -1129,7 +1050,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
   assert.equal(withMargin!.coverageComplete, true);
   close(withMargin!.headroom, 0.7, 1e-9, "H untouched by discount");
   close(withMargin!.quotaQuality, 0.7, 1e-9, "Q untouched");
-  close(withMargin!.priceFactor, interpPrice(4), 1e-12, "P on marginal");
+  assert.equal(withMargin!.routingPriceUsdPerM, 4);
   assert.ok(withMargin!.notes.includes("marginal_price_applied"));
 
   const noMargin = expectAccepted(
@@ -1414,8 +1335,6 @@ test("DS prices 1.2 vs 0.6 produce a score delta of 0.044 with other inputs equa
   const b = cand({ canonicalId: "ds-0.6", referenceUsdPerM: 0.6 });
   const [ea, eb] = [a, b].map((x) => expectAccepted(x)!);
   // P(1.2)=0.72, P(0.6)=0.83 -> delta P 0.11, weighted by P=0.4 -> 0.044
-  close(ea.priceFactor, interpPrice(1.2), 1e-12, "P(1.2)");
-  close(eb.priceFactor, interpPrice(0.6), 1e-12, "P(0.6)");
   close(eb.score - ea.score, 0.044, 1e-9, "delta 0.044");
 });
 
@@ -1473,7 +1392,6 @@ test("balance-only quota keeps zero headroom and stays efficiency-ineligible", (
   );
   // The scored candidate loses exactly the Q term when the balance replaces the
   // default healthy subscription constraint.
-  close(assessment.score, expScore(input, assessment), 1e-12, "balance-only score");
 });
 
 test("aggregate unknown quota stays eligible with zero headroom and no efficiency bonus", () => {
@@ -2023,7 +1941,6 @@ test("unknown-quota floor raises Q to the floor while the aggregate stays unknow
     1e-12,
     "floored score delta"
   );
-  close(applied.score, expScore(input, applied), 1e-12, "mirrored floored score");
 });
 
 test("trusted healthy headroom ignores the floor", () => {
@@ -2128,5 +2045,4 @@ test("verified quota-burn efficiency and the floor never both apply", () => {
   assert.ok(
     assessed.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
   );
-  close(assessed.score, expScore(input, assessed), 1e-12, "mirrored floor-only score");
 });

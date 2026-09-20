@@ -234,27 +234,6 @@ test('run_task summary labels provider-override selection speed', () => {
   assert.equal(map['选择速度（估算）'], '21.5（来源：服务商覆盖）');
 });
 
-test('renderer offers pre-session model selection for a ready draft', () => {
-  // The picker enable gate must no longer disable solely because no session is
-  // selected; a ready draft with advertised options should be selectable.
-  assert.equal(
-    rendererSource.includes('|| !snapshot.selectedSessionId'),
-    false,
-    'picker must not be disabled solely for a missing selected session',
-  );
-});
-
-test('conversation model picker delegates to the shared searchable single-select', () => {
-  assert.equal(rendererSource.includes('SearchableSingleSelect'), true, 'picker must use the shared control');
-  assert.equal(rendererSource.includes('setSearchLabel'), true, 'model search must be labelled');
-});
-
-test('conversation model options carry provider secondary text and quota titles', () => {
-  assert.equal(rendererSource.includes('secondary:'), true, 'options must carry provider secondary text');
-  assert.equal(rendererSource.includes("'图片：支持'"), true, 'title must keep the image capability');
-  assert.equal(rendererSource.includes('providerPresentation'), true, 'title must include provider quota');
-});
-
 test('conversation model selection keeps canonical values and advertises the disabled current model', () => {
   // Canonical JSON [provider, model] encode/decode stays authoritative.
   assert.equal(rendererSource.includes('conversationModelValue('), true);

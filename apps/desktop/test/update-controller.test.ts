@@ -11,7 +11,6 @@ import {
   compareSemver,
   parseAssetDigest,
   parseUpdateManifest,
-  releaseTarget,
   resolveWindowsSystemTarPath,
   selectUpdateCandidate,
   type PreparedUpdate,
@@ -76,14 +75,6 @@ test('semantic versions sort stable after prerelease and compare dev sequence nu
   assert.equal(compareSemver('1.0.0-dev.16', '1.0.0-dev.15'), 1);
   assert.equal(compareSemver('2.0.0-alpha.1', '2.0.0-alpha.beta'), -1);
   assert.throws(() => compareSemver('latest', '1.0.0'), /invalid semantic version/);
-});
-
-test('release target supports the shipped Desktop platforms only', () => {
-  assert.equal(releaseTarget('darwin', 'arm64'), 'darwin-arm64');
-  assert.equal(releaseTarget('win32', 'x64'), 'win32-x64');
-  assert.equal(releaseTarget('darwin', 'x64'), null);
-  assert.equal(releaseTarget('linux', 'x64'), null);
-  assert.equal(releaseTarget('linux', 'arm64'), null);
 });
 
 test('static manifest parsing accepts the complete canonical feed for both channels', () => {

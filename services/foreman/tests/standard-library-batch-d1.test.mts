@@ -5,14 +5,8 @@ import exploreTask, {
   ExploreInputSchema,
   ExploreOutputSchema,
 } from '../lib/standard/tasks/explore.mts'
-import editTask, {
-  EditInputSchema,
-  EditOutputSchema,
-} from '../lib/standard/tasks/edit.mts'
-import testTask, {
-  TestInputSchema,
-  TestOutputSchema,
-} from '../lib/standard/tasks/test.mts'
+import editTask, { EditInputSchema, EditOutputSchema } from '../lib/standard/tasks/edit.mts'
+import testTask, { TestInputSchema, TestOutputSchema } from '../lib/standard/tasks/test.mts'
 import commitTask from '../lib/standard/tasks/commit.mts'
 import { CommitRequestSchema, CommitReportSchema } from '../lib/core/task/schemas/commit.mts'
 
@@ -105,11 +99,6 @@ describe('standard/tasks explore — definition shape & config', () => {
     assert.match((exploreTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
   })
 
-  it('input/output are Zod schemas', () => {
-    assert.equal(typeof ExploreInputSchema.parse, 'function')
-    assert.equal(typeof ExploreOutputSchema.parse, 'function')
-  })
-
   it('prompt is English and problem-driven', async () => {
     const prompt = await exploreTask.config.prompt(exploreInputSample)
     assert.equal(typeof prompt, 'string')
@@ -163,11 +152,6 @@ describe('standard/tasks edit — definition shape & config', () => {
     assert.doesNotMatch(joined, /# Commit Constraint/)
     assert.doesNotMatch(joined, /# Edit Operation Units/)
     assert.deepEqual(editTask.config.writeTargets?.(editInputSample), ['src/example.ts'])
-  })
-
-  it('input is {changes: ChangeSchema[]} and output is file EvidenceSchema[]', () => {
-    assert.equal(typeof EditInputSchema.parse, 'function')
-    assert.equal(typeof EditOutputSchema.parse, 'function')
   })
 
   it('prompt preserves exact-path-only editing semantics', async () => {

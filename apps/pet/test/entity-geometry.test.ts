@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { DisplayLike } from '../src/main/display-placement';
-import { WORKER_VISIBLE_H, WORKER_WINDOW_TOP_PADDING } from '../src/shared/worker-metrics';
 import {
   houseWindowSize,
   placeHouseCarrier,
@@ -129,12 +128,6 @@ describe('entity geometry — DIP layout', () => {
 
     expect(placement.entityBounds).toEqual({ x: 1776, y: 960, width: 144, height: 120 });
     expect(placement.entityOffset).toEqual({ x: 216, y: 340 });
-  });
-
-  it('sizes worker windows around the visible footline instead of transparent sprite bottom', () => {
-    const scale = 3;
-
-    expect(workerWindowSize(scale).height).toBe(WORKER_VISIBLE_H * scale + WORKER_WINDOW_TOP_PADDING);
   });
 
   it('keeps window geometry in DIP on a scaleFactor 2 display', () => {

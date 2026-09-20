@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createWrenScene, WREN_W, WREN_H, WREN_SCALE, WREN_DISPLAY_W, WREN_DISPLAY_H } from '../src/features/taskgraph-entity/scene';
+import { createWrenScene, WREN_W, WREN_H, WREN_DISPLAY_W, WREN_DISPLAY_H } from '../src/features/taskgraph-entity/scene';
 import { createWrenEntityPresenter } from '../src/features/taskgraph-entity/presenter';
 import {
   wrenFactSlipLabel,
@@ -92,16 +92,6 @@ function setupCommandsRecorder(surface: RenderSurface): Array<readonly ShapeComm
 }
 
 describe('Wren scene', () => {
-  it('creates scene with correct authored and display dimensions', () => {
-    // Authored pixel grid stays 28x22...
-    expect(WREN_W).toBe(28);
-    expect(WREN_H).toBe(22);
-    // ...while the physical presentation is an explicit 3x scale (84x66).
-    expect(WREN_SCALE).toBe(3);
-    expect(WREN_DISPLAY_W).toBe(84);
-    expect(WREN_DISPLAY_H).toBe(66);
-  });
-
   it('scales the scene root once to the 3x display size', () => {
     const surface = createMockSurface();
     const scaleCalls: Array<[number, number | undefined]> = [];

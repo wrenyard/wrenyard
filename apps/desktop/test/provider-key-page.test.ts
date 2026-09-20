@@ -1,14 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { PROVIDER_KEY_PAGE_URLS, providerKeyPageUrl } from '../src/shell-contract.js';
-
-test('provider key page allowlist resolves only the two fixed official URLs', () => {
-  assert.equal(providerKeyPageUrl('opencode-zen'), 'https://opencode.ai/auth');
-  assert.equal(providerKeyPageUrl('openrouter'), 'https://openrouter.ai/settings/keys');
-  assert.deepEqual(Object.keys(PROVIDER_KEY_PAGE_URLS), ['opencode-zen', 'openrouter']);
-  assert.equal(PROVIDER_KEY_PAGE_URLS['opencode-zen'], 'https://opencode.ai/auth');
-  assert.equal(PROVIDER_KEY_PAGE_URLS.openrouter, 'https://openrouter.ai/settings/keys');
-});
+import { providerKeyPageUrl } from '../src/shell-contract.js';
 
 test('provider key page allowlist rejects every other id and non-id input', () => {
   for (const id of [

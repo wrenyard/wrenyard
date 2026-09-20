@@ -41,9 +41,8 @@ import { z } from 'zod'
 describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
   it('re-exports every task-domain type from the new SSOT location', () => {
     // Compile-time-only assertions — each `type` import above would fail to
-    // resolve if the re-export shim dropped an entry. Reference each type
-    // at runtime via a small factory to keep TypeScript honest.
-    const samples: Array<unknown> = []
+    // resolve if the re-export shim dropped an entry. Every value below is
+    // annotated with its imported type, so `tsc` is the assertion here.
     const taskConfig: TaskConfig = {
       scheduling: 'legacy',
       input: z.object({}),
@@ -83,8 +82,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
     }
     const gate: TaskGate = { id: 'g', run: () => ({ ok: true }) }
 
-    samples.push(taskConfig, taskDef, registered, exec, run, list, pass, fail, ctx, gate)
-    assert.ok(samples.length === 10)
+    void [taskConfig, taskDef, registered, exec, run, list, pass, fail, ctx, gate]
   })
 
   it('RegisteredTask requires explicit source provenance', () => {
@@ -115,7 +113,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
     const perm: PermissionMode = 'edit'
     const agentResult: AgentResult = { output: '', status: 'done' }
 
-    assert.ok(schema && field && perm && agentResult)
+    void [schema, field, perm, agentResult]
   })
 
   it('retains execution primitives and ExecutionOptions', () => {
@@ -138,7 +136,7 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
       sourcePath: '/x',
     }
 
-    assert.ok(opts && shellOpts && shellResult && execOpts && primitives && resolved)
+    void [opts, shellOpts, shellResult, execOpts, primitives, resolved]
   })
 })
 
@@ -146,7 +144,7 @@ describe('TaskConfig accepts ZodType only (AC-5)', () => {
   it('TaskSchemaInput is ZodType', () => {
     const zodSchema: ZodType = z.object({ a: z.string() })
     const input: TaskSchemaInput = zodSchema
-    assert.ok(input)
+    void input
   })
 
   it('TaskConfig.input/output accept a zod schema', () => {
@@ -157,8 +155,7 @@ describe('TaskConfig accepts ZodType only (AC-5)', () => {
       output: zodOutput,
       prompt: () => '',
     }
-    assert.equal(typeof config.input, 'object')
-    assert.equal(typeof config.output, 'object')
+    void config
   })
 })
 

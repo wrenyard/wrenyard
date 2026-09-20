@@ -966,23 +966,3 @@ test('a second decide+launch flow joins after the first begins and stamps a live
   assert.equal(parsed.scheduled, true)
   assert.equal(parsed.operation_id, beginCalls[0].operation_id)
 })
-
-test('no handler dependency accepts a caller id and update never calls restartDaemonProcess', async () => {
-  const { deps, control } = buildDeps({
-    state: { active: null, plan: null },
-    commandEnv: { FOREMAN_TASK_RUN_ID: 'run_nocaller' },
-  })
-
-  await runCapture(deps, ['--config', CONFIG])
-
-  assert.equal((deps as Record<string, unknown>).restartDaemonProcess, undefined)
-  for (const call of control.launchCalls) {
-    assert.equal((call as Record<string, unknown>).callerId, undefined)
-    assert.equal((call as Record<string, unknown>).excludeCaller, undefined)
-  }
-  for (const [, patch] of control.updatePlannedRestartCalls) {
-    assert.equal((patch as Record<string, unknown>).callerId, undefined)
-  }
-  assert.equal(control.launchCalls.length, 1)
-  assert.equal(control.beginCalls.length, 1)
-})

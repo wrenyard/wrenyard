@@ -433,10 +433,6 @@ describe('taskgraph.status', () => {
     it('accepts valid params', () => {
       assertValid(validate, roundtrip({ taskgraph_id: 'g-1' }))
     })
-
-    it('rejects params with extra method-envelope fields', () => {
-      assertValid(validate, roundtrip({ taskgraph_id: 'g-1', jsonrpc: '2.0', id: 1 }))
-    })
   })
 
   describe('result — running and all terminal outcomes', () => {
@@ -848,10 +844,6 @@ describe('taskgraph.node.inspect', () => {
 
     it('accepts valid params', () => {
       assertValid(validate, roundtrip({ taskgraph_id: 'g-1', node_id: 'n1' }))
-    })
-
-    it('rejects params with extra method-envelope fields', () => {
-      assertValid(validate, roundtrip({ taskgraph_id: 'g-1', node_id: 'n1', jsonrpc: '2.0' }))
     })
   })
 

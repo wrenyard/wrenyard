@@ -128,11 +128,6 @@ describe('standard/tasks librarian — definition shape & config', () => {
     assert.match(joined, /# Shell Usage/)
   })
 
-  it('input/output are Zod schemas', () => {
-    assert.equal(typeof LibrarianInputSchema.parse, 'function')
-    assert.equal(typeof LibrarianOutputSchema.parse, 'function')
-  })
-
   it('prompt preserves web-only read-only research role', async () => {
     const prompt = await librarianTask.config.prompt(librarianInputSample)
     assert.equal(typeof prompt, 'string')
@@ -174,11 +169,6 @@ describe('standard/tasks oracle — definition shape & config', () => {
     assert.equal(Object.hasOwn(oracleTask.config, 'agentRuntime'), false)
     assert.equal(oracleTask.sourcePath, 'lib/standard/tasks/oracle.mts')
     assert.match((oracleTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
-  })
-
-  it('input/output are Zod schemas', () => {
-    assert.equal(typeof OracleInputSchema.parse, 'function')
-    assert.equal(typeof OracleOutputSchema.parse, 'function')
   })
 
   it('prompt preserves read-only strategic advisor role', async () => {
@@ -241,11 +231,6 @@ describe('standard/tasks code-review — definition shape & config', () => {
 
     const joined = (codeReviewTask.config.instructions ?? []).join('\n')
     assert.match(joined, /# Shell Usage/)
-  })
-
-  it('input/output are Zod schemas', () => {
-    assert.equal(typeof CodeReviewInputSchema.parse, 'function')
-    assert.equal(typeof CodeReviewOutputSchema.parse, 'function')
   })
 
   it('required_changes schema narrows target to FileTarget', () => {

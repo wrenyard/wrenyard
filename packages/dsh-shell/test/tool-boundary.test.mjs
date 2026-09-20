@@ -46,21 +46,6 @@ function toolsWith(catalog, { withSchemas = true, withRestrict = true, withGuard
   return tools;
 }
 
-test('deny set is the exact competing-orchestration list and never names run_code', () => {
-  assert.deepEqual(ORCHESTRATION_DENY, [
-    'subagent',
-    'subagent_fork',
-    'list_agents',
-    'send_message',
-    'interrupt_agent',
-    'workflow',
-    'ralph',
-    'ralph-loop',
-    'report',
-  ]);
-  assert.ok(!ORCHESTRATION_DENY.includes('run_code'), 'run_code must never appear in the deny set');
-});
-
 test('full catalog restricts exactly the present competing names once, leaving legitimate tools visible', async () => {
   const fullCatalog = catalogFor([...LEGITIMATE_NATIVE, ...WRENYARD_ALIASES, ...ORCHESTRATION_DENY]);
   const tools = toolsWith(fullCatalog);

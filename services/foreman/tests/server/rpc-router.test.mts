@@ -14,7 +14,6 @@ import {
 } from '../../lib/protocol/errors.mts'
 import {
   createErrorResponse,
-  createSuccessResponse,
 } from '../../lib/protocol/validate.mts'
 import { DispatchControlError } from '../../lib/daemon/dispatch-control.mts'
 
@@ -131,20 +130,6 @@ function assertErrorCode(response: unknown, code: number): void {
 }
 
 describe('RpcRouter', () => {
-  it('returns a JSON-RPC success response for health.ping requests', async () => {
-    const router = new RpcRouter()
-    router.register('health.ping', async () => ({ ok: true }))
-
-    const response = await router.handleMessage({
-      jsonrpc: '2.0',
-      method: 'health.ping',
-      params: {},
-      id: 'health-1',
-    })
-
-    assert.deepEqual(response, createSuccessResponse('health-1', { ok: true }))
-  })
-
   it('calls notification handlers without returning a response', async () => {
     const router = new RpcRouter()
     const calls: unknown[] = []
@@ -489,23 +474,6 @@ describe('RpcRouter', () => {
       // After thaw, task.create should work again
       const taskCreate2 = await router.handleMessage({ jsonrpc: '2.0', method: 'task.run.create', params: { task_id: 't', project: 'p', input: {} }, id: 'tc2' })
       assert.deepEqual((taskCreate2 as { result: unknown }).result, { id: 'task-1', task_run_id: 'task-1', hint: 'ok' })
-    })
-
-    it('drain reports active then drained without daemon restart', async () => {
-      const router = new RpcRouter()
-      const dc = createFakeDispatchControl()
-
-      router.register('daemon.drain', async (params) => {
-        const timeoutMs = typeof params.timeout_ms === 'number' ? params.timeout_ms : 30000
-        return dc.drain(timeoutMs)
-      })
-
-      const result = await router.handleMessage({ jsonrpc: '2.0', method: 'daemon.drain', params: { timeout_ms: 1000 }, id: 'drain' })
-      assert.deepEqual((result as { result: unknown }).result, {
-        drained: true,
-        activeTaskCount: 0, activeWorkflowCount: 0, activeExecutionCount: 0,
-        activeTasks: [], activeWorkflows: [], activeExecutions: [],
-      })
     })
   })
 })

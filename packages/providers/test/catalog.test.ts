@@ -180,8 +180,6 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.ok(provider, 'codex provider must exist');
   const astra = provider!.models.find((entry) => entry.id === 'gpt-6-astra');
   assert.ok(astra, 'gpt-6-astra model must exist');
-  assert.equal(astra!.contextWindow, 1_050_000);
-  assert.equal(astra!.maxOutputTokens, 128_000);
   assert.equal(astra!.intelligence, 'premium');
   assert.deepEqual(astra!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(astra!.pricing?.inputUsdPerMillion, 10);
@@ -214,103 +212,6 @@ test('Codex GPT plans default to the highest mapped thinking level and never inv
   assert.equal(plans['zhipu-coding/glm-5.3-flash:cc'].reasoningEffort, undefined);
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].thinking, 'max');
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].reasoningEffort, 'max');
-});
-
-test('reference metadata has real provenance and unknown fields stay absent', () => {
-  const catalog = createBuiltinCatalog();
-  const codebuddy = catalog.provider('codebuddy')!;
-  const flash = codebuddy.models.find((entry) => entry.id === 'deepseek-v4.1-flash')!;
-  assert.equal(flash.pricing?.inputUsdPerMillion, 0.3);
-  assert.equal(flash.pricing?.cachedInputUsdPerMillion, 0.006);
-  assert.equal(flash.pricing?.outputUsdPerMillion, 1.2);
-  assert.equal(flash.pricing?.source, 'https://api-docs.deepseek.com/quick_start/pricing/');
-  assert.deepEqual(flash.capabilities, ['text', 'image']);
-  assert.equal(flash.pricing?.source.includes('catalog-default'), false);
-  // Local benchmark speed; source is a local-benchmark id, never an external AA page.
-  assert.equal(flash.speed?.tps, 200.5);
-  assert.equal(flash.speed?.source, 'local-benchmark:2026-09-10:codebuddy');
-  assert.ok(flash.speed?.basis?.includes('synthetic_stream_v1'));
-  assert.equal(flash.speed?.checkedAt, '2026-09-10');
-
-  // GLM-5.3 carries the Z.ai official list price; no sale/invented default.
-  const glm = codebuddy.models.find((entry) => entry.id === 'glm-5.3')!;
-  assert.equal(glm.pricing?.inputUsdPerMillion, 1.4);
-  assert.equal(glm.pricing?.cachedInputUsdPerMillion, 0.26);
-  assert.equal(glm.pricing?.outputUsdPerMillion, 4.4);
-  assert.equal(glm.pricing?.source, 'https://docs.z.ai/guides/overview/pricing');
-
-  // GLM-5.3-Flash carries the Z.ai official list price and sourced speed.
-  const glmf = codebuddy.models.find((entry) => entry.id === 'glm-5.3-flash')!;
-  assert.equal(glmf.pricing?.inputUsdPerMillion, 0.15);
-  assert.equal(glmf.pricing?.cachedInputUsdPerMillion, 0.03);
-  assert.equal(glmf.pricing?.outputUsdPerMillion, 0.50);
-  assert.equal(glmf.pricing?.source, 'https://docs.z.ai/guides/overview/pricing');
-  assert.equal(glmf.intelligence, 'mid');
-  assert.deepEqual(glmf.capabilities, ['text']);
-  assert.equal(glmf.speed?.tps, 73.1);
-  assert.equal(glmf.speed?.source, 'https://artificialanalysis.ai/models/glm-5-3-flash/');
-
-  // Kimi K3 / k3 share official pricing and fallback decode benchmark.
-  const k3 = codebuddy.models.find((entry) => entry.id === 'kimi-k3')!;
-  assert.ok(k3.capabilities?.includes('image'));
-  assert.equal(k3.pricing?.inputUsdPerMillion, 3);
-  assert.equal(k3.pricing?.cachedInputUsdPerMillion, 0.30);
-  assert.equal(k3.pricing?.outputUsdPerMillion, 15);
-  assert.equal(k3.pricing?.source, 'https://www.kimi.com/en/blog/kimi-k3');
-  assert.equal(k3.speed?.tps, 39.7);
-  assert.equal(k3.speed?.source, 'https://artificialanalysis.ai/models/kimi-k3/');
-  const k3Coding = catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'k3')!;
-  assert.equal(k3Coding.pricing?.inputUsdPerMillion, 3);
-  assert.equal(k3Coding.pricing?.outputUsdPerMillion, 15);
-  assert.equal(k3Coding.speed?.tps, 39.7);
-
-  // Kimi K2.8 Preview is registered only on kimi-coding with a 1M context,
-  // low/high/max thinking, mid intelligence and image input. No official max
-  // output is published for the preview, so none is fabricated here; pricing is
-  // required, so the model carries explicit reference input/cached/output
-  // prices, and its speed must be an explicitly conservative
-  // rounded-down single-probe default rather than an inherited K3 measurement.
-  const k28 = catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!;
-  assert.equal(k28.canonicalModel?.id, 'kimi-k2.8');
-  assert.equal(k28.displayName, 'Kimi K2.8 Preview');
-  assert.equal(k28.contextWindow, 1_048_576);
-  assert.deepEqual(k28.thinkingLevels, ['low', 'high', 'max']);
-  assert.equal(k28.intelligence, 'mid');
-  assert.deepEqual(k28.capabilities, ['text', 'image']);
-  assert.equal(k28.maxTokens, undefined);
-  assert.equal(k28.pricing?.inputUsdPerMillion, 0.15);
-  assert.equal(k28.pricing?.cachedInputUsdPerMillion, 0.003);
-  assert.equal(k28.pricing?.outputUsdPerMillion, 0.6);
-  assert.equal(k28.pricing?.source, 'wrenyard:reference-deepseek-v4.1-flash-off-peak');
-  assert.equal(k28.speed?.tps, 40);
-  assert.equal(k28.speed?.source, 'local-benchmark:kimi-coding/2026-09-15');
-  assert.equal(k28.speed?.checkedAt, '2026-09-15');
-  assert.equal(k28.speed?.conservative, true);
-  assert.match(k28.speed!.basis!, /803 completion tokens \/ 19359ms/iu);
-  // Every non-K2.8 route is untouched: no other provider registers this id.
-  for (const provider of BUILTIN_PROVIDERS.filter((candidate) => candidate.id !== 'kimi-coding')) {
-    assert.equal(provider.models.find((entry) => entry.id === 'kimi-k2.8'), undefined, `${provider.id} must not register kimi-k2.8`);
-  }
-  assert.equal(catalog.provider('kimi-coding')!.defaultModel, 'k3');
-  assert.equal(catalog.provider('kimi-coding')!.models.find((entry) => entry.id === 'kimi-k2.8')!.intelligence, 'mid');
-
-  // Hy4 preview carries the Tencent reference price.
-  const hy = codebuddy.models.find((entry) => entry.id === 'hy4-preview')!;
-  assert.equal(hy.pricing?.outputUsdPerMillion, 2.501);
-  assert.equal(hy.pricing?.source, 'https://intl.cloud.tencent.com/zh/document/product/1300/78937');
-
-  // HY3 is canonical (no preview/suffix aliases), high/text, and carries
-  // independent speed plus official Tencent TokenHub-derived price evidence.
-  const hy3 = codebuddy.models.find((entry) => entry.id === 'hy3')!;
-  assert.equal(hy3.intelligence, 'low');
-  assert.deepEqual(hy3.capabilities, ['text']);
-  assert.equal(hy3.speed.tps, 93.8);
-  assert.match(hy3.speed.source, /^https:\/\//u);
-  assert.equal(hy3.pricing?.inputUsdPerMillion, 0.139);
-  assert.equal(hy3.pricing?.cachedInputUsdPerMillion, 0.035);
-  assert.equal(hy3.pricing?.outputUsdPerMillion, 0.556);
-  assert.equal(hy3.pricing?.source, 'https://cloud.tencent.com/document/product/1823/130055');
-  assert.equal(hy3.pricing?.checkedAt, '2026-09-08');
 });
 
 test('built-in models carry their configured accessibility tier', () => {

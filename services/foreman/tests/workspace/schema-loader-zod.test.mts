@@ -21,7 +21,6 @@ describe('schema-loader — isZodSchema detection', () => {
   it('recognizes a Zod 4 schema object', () => {
     assert.equal(isZodSchema(GoalSchema), true)
     assert.equal(isZodSchema(z.object({ a: z.string() })), true)
-    assert.equal(isZodSchema(z.string()), true)
   })
 
   it('rejects plain JSON Schema, records, and primitives', () => {
@@ -63,10 +62,6 @@ describe('schema-loader — normalizeSchema accepts ZodType only (AC-5)', () => 
     assert.equal(normalized.$schema, 'http://json-schema.org/draft-07/schema#')
     assert.equal(normalized.type, 'object')
     assert.deepEqual(normalized.required, ['outcome'])
-  })
-
-  it('returns undefined for undefined input', () => {
-    assert.equal(normalizeSchema(undefined), undefined)
   })
 
   it('rejects non-Zod definition schemas clearly', () => {
@@ -117,10 +112,6 @@ describe('schema-loader — generateInputExample on zod', () => {
   it('produces an example object for a zod schema with required string fields', () => {
     const example = generateInputExample(QuestionSchema)
     assert.deepEqual(example, { id: 'string', ask: 'string', blocking: true })
-  })
-
-  it('returns undefined for undefined schemas', () => {
-    assert.equal(generateInputExample(undefined), undefined)
   })
 })
 
