@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { classifyPath, classifyPaths, expandDependents, isRendererOnly, shouldIgnore, COMPONENTS } from './lib/graph.mjs';
 import { createGenerationQueue } from './lib/queue.mjs';
 import { createRequestQueue } from './lib/requests.mjs';
-import { spawnArgv, quoteCmdArg, windowsCmdInvocation, electronInvocation, sourceCliInvocation } from './lib/spawn.mjs';
+import { spawnArgv, quoteCmdArg, windowsCmdInvocation, electronInvocation, electronDesktopInvocation, resolveElectronExecutable, sourceCliInvocation } from './lib/spawn.mjs';
+import { stopOwnedTree, stopOwnedDesktopTree, stopChild, childHasExited, waitForChildExit } from './lib/children.mjs';
+import { healthyComponentStatus, restoredStatus } from './lib/supervisor.mjs';
 import { normalizeCheckout, sameCheckout, pathInside, desktopUserData, controlEndpoint, businessIpcPath, defaultRuntimeBin } from './lib/paths.mjs';
 import { sourceChildEnv, isSourceDevelopment } from './lib/env.mjs';
 import { combineActivity } from './lib/activity.mjs';
@@ -56,14 +58,14 @@ test('control and business IPC stay on distinct endpoints', () => {
   assert.notEqual(controlEndpoint('linux', '/state'), businessIpcPath('linux', {}));
 });
 
-test('desktop userData follows the installed product name, not Electron defaults', () => {
+test('desktop userData follows the installed package identity, not the display brand', () => {
   assert.equal(
     desktopUserData('win32', { APPDATA: 'C:\\\\Users\\\\me\\\\AppData\\\\Roaming' }, 'C:\\\\Users\\\\me'),
-    join('C:\\\\Users\\\\me\\\\AppData\\\\Roaming', '啾啾工坊'),
+    join('C:\\\\Users\\\\me\\\\AppData\\\\Roaming', '@wrenyard/desktop'),
   );
   assert.equal(
     desktopUserData('darwin', {}, '/Users/me'),
-    join('/Users/me', 'Library', 'Application Support', '啾啾工坊'),
+    join('/Users/me', 'Library', 'Application Support', '@wrenyard/desktop'),
   );
 });
 
@@ -78,7 +80,6 @@ test('Windows .cmd is wrapped through ComSpec and never uses shell:true argv', (
 });
 
 test('electron and CLI invocations never point at dist or .cmd shims', () => {
-  const exists = (path) => path.endsWith('cli.js') || path.endsWith('index.ts') || path.endsWith('cli.mjs') || path.endsWith('tsx');
   const electron = electronInvocation('D:/src', 'C:/node.exe', (path) => path.replaceAll('\\', '/').endsWith('apps/desktop/node_modules/electron/cli.js'));
   assert.equal(electron.command, 'C:/node.exe');
   assert.equal(electron.args[0].includes('cli.js'), true);
@@ -723,4 +724,293 @@ test('Windows process query reports success even when no Desktop is matched', { 
   assert.equal(result.ok, true, result.error);
   assert.equal(Array.isArray(result.processes), true);
 });
+
+test('blocked stop restores a truthful status instead of a stale stopping state', () => {
+  // Healthy supervisor: daemon + desktop alive, neither frozen nor stopped.
+  const healthy = { daemon: { exitCode: null }, desktop: { exitCode: null }, desktopStoppedByUser: false };
+  assert.equal(healthyComponentStatus(healthy), 'ready');
+  // A busy/blocked stop aborted before touching components: prior `ready` wins.
+  assert.equal(restoredStatus('ready', healthy), 'ready');
+  // A snapshot that is itself transient must not leak into the reported status.
+  assert.equal(restoredStatus('stopping', healthy), 'ready');
+  assert.equal(restoredStatus('waiting-for-idle', healthy), 'ready');
+  assert.equal(restoredStatus('restarting', healthy), 'ready');
+  assert.equal(restoredStatus(undefined, healthy), 'ready');
+
+  // Originally frozen/degraded admission stays degraded, and a lost component
+  // is reported as degraded rather than a false ready.
+  assert.equal(restoredStatus('stopping', { daemon: { exitCode: null }, desktop: { exitCode: 1 }, desktopStoppedByUser: false }), 'degraded');
+  assert.equal(restoredStatus('waiting-for-idle', { daemon: null, desktop: { exitCode: null }, desktopStoppedByUser: false }), 'degraded');
+  assert.equal(healthyComponentStatus({ daemon: { exitCode: 0 }, desktop: null, desktopStoppedByUser: false }), 'degraded');
+  // Desktop quit by the user keeps the supervisor ready even with no desktop.
+  assert.equal(healthyComponentStatus({ daemon: { exitCode: null }, desktop: null, desktopStoppedByUser: true }), 'ready');
+});
+
+test('Windows owned Desktop teardown prefers the resolved Electron executable', () => {
+  const full = (path) => path.replaceAll('\\', '/');
+  const checkout = 'D:/src';
+  const appPath = 'D:/src/apps/desktop';
+  const binary = `${appPath}/node_modules/electron/dist/electron.exe`;
+  const exists = (path) => {
+    const normalized = full(path);
+    return normalized === binary
+      || normalized.endsWith('apps/desktop/node_modules/electron/path.txt')
+      || normalized.endsWith('apps/desktop/node_modules/electron/dist/electron.exe');
+  };
+  const readText = () => 'electron.exe';
+  const resolved = resolveElectronExecutable(checkout, 'win32', exists, readText);
+  assert.equal(full(resolved), binary);
+
+  const invocation = electronDesktopInvocation(checkout, 'C:/node.exe', exists, 'win32');
+  assert.equal(invocation.direct, true);
+  assert.equal(full(invocation.command), binary);
+  assert.equal(full(invocation.args[0]), appPath);
+  // Ownership tracks the real Electron main PID, not a node CLI wrapper.
+  assert.equal(invocation.command.includes('node.exe'), false);
+  assert.equal(invocation.args.some((arg) => arg.includes('cli.js')), false);
+});
+
+test('Desktop invocation requires a resolvable Electron binary and never uses the CLI wrapper', () => {
+  const onlyCli = (path) => path.replaceAll('\\', '/').endsWith('apps/desktop/node_modules/electron/cli.js');
+  assert.throws(
+    () => electronDesktopInvocation('D:/src', 'C:/node.exe', onlyCli, 'win32'),
+    /Electron executable was not found/,
+  );
+
+  // macOS resolves the binary inside the .app bundle via dist/path.txt.
+  const full = (path) => path.replaceAll('\\', '/');
+  const macRel = 'Electron.app/Contents/MacOS/Electron';
+  const macBinary = `D:/src/apps/desktop/node_modules/electron/dist/${macRel}`;
+  const macExists = (path) => {
+    const normalized = full(path);
+    return normalized.endsWith('apps/desktop/node_modules/electron/dist/path.txt')
+      || normalized === macBinary;
+  };
+  const resolved = resolveElectronExecutable('D:/src', 'darwin', macExists, () => macRel);
+  assert.equal(full(resolved), macBinary);
+  const invocation = electronDesktopInvocation('D:/src', 'C:/node.exe', macExists, 'darwin');
+  assert.equal(invocation.direct, true);
+  assert.equal(full(invocation.command), macBinary);
+  assert.equal(invocation.args.some((arg) => arg.includes('cli.js')), false);
+});
+
+test('owned tree stop terminates the child tree before signalling the root', async () => {
+  const order = [];
+  const child = fakeChild(4242, { exitCode: null, label: 'child' });
+  const originalOnce = child.once;
+  child.once = (event, handler) => {
+    if (event === 'exit') order.push('child-exit-listener');
+    return originalOnce.call(child, event, handler);
+  };
+  const result = await stopOwnedDesktopTree(child, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async (command, args) => {
+      order.push(`run:${command}`);
+      assert.deepEqual(args, ['/PID', '4242', '/T', '/F']);
+      child.exitCode = 0;
+      child.emitExit();
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0);
+  // The exit confirmed by the tree kill is proven by a listener registered up
+  // front; the root child is never signalled separately on Windows.
+  assert.equal(order[0], 'child-exit-listener');
+  assert.equal(order[1], 'run:taskkill.exe');
+  assert.deepEqual(child.signals, []);
+});
+
+test('owned tree stop is not success when taskkill succeeds but the child never exits', async () => {
+  const child = fakeChild(7, { exitCode: null, confirmExit: false });
+  const result = await stopOwnedTree(child, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /did not exit|7/);
+});
+
+test('owned tree stop treats a not-found taskkill as unconfirmed, not success', async () => {
+  const child = fakeChild(9001, { exitCode: null, confirmExit: false });
+  const result = await stopOwnedTree(child, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async () => ({ status: 128, stdout: '', stderr: 'not found' }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /9001|did not exit/);
+});
+
+test('stopChild reports failure when a signal is sent but no exit is confirmed', async () => {
+  const child = fakeChild(5, { exitCode: null, confirmExit: false });
+  const result = await stopChild(child, { timeoutMs: 5 });
+  assert.equal(result.ok, false);
+});
+
+test('owned tree stop on POSIX does not invoke Windows taskkill', async () => {
+  const calls = [];
+  const child = fakeChild(55, { exitCode: null });
+  const result = await stopOwnedTree(child, {
+    platform: 'linux',
+    timeoutMs: 5,
+    run: async (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(calls.length, 0);
+  assert.equal(typeof result.ok, 'boolean');
+});
+
+test('stopOwnedDesktopTree itself never runs taskkill on darwin', async () => {
+  const calls = [];
+  const child = fakeChild(1234, { exitCode: null, confirmExit: true });
+  const result = await stopOwnedDesktopTree(child, {
+    platform: 'darwin',
+    timeoutMs: 5,
+    run: async (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(calls.length, 0);
+  assert.equal(result.ok, true);
+  // The root child was signalled directly on POSIX, never tree-killed.
+  assert.deepEqual(child.signals, ['SIGTERM']);
+});
+
+test('Windows taskkill failure with a still-live child must not signal the root', async () => {
+  const child = fakeChild(4242, { exitCode: null, confirmExit: false });
+  const result = await stopOwnedDesktopTree(child, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async () => ({ status: 1, stdout: '', stderr: 'Access is denied.' }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.forced, true);
+  // A failed tree kill must not fall back to signalling only the root, which
+  // would orphan the renderer/gpu/helper processes.
+  assert.deepEqual(child.signals, []);
+});
+
+test('Windows taskkill not-found without a confirmed exit is unconfirmed, not success', async () => {
+  const child = fakeChild(9001, { exitCode: null, confirmExit: false });
+  const result = await stopOwnedDesktopTree(child, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async () => ({ status: 128, stdout: '', stderr: 'not found' }),
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(child.signals, []);
+});
+
+test('graceful RPC quit waits for an async exit without sending any signal', async () => {
+  const child = fakeChild(77, { exitCode: null, confirmExit: false });
+  // The Desktop acknowledges the quit RPC, then exits asynchronously.
+  setTimeout(() => {
+    child.exitCode = 0;
+    child.emitExit();
+  }, 10);
+  const result = await stopOwnedDesktopTree(child, {
+    platform: 'win32',
+    timeoutMs: 50,
+    afterGraceful: true,
+    run: async () => {
+      throw new Error('taskkill must not run after a graceful exit');
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0);
+  assert.deepEqual(child.signals, []);
+});
+
+test('signalCode-only exits are treated as exited and never signalled again', async () => {
+  const signalled = fakeChild(31, { exitCode: null, signalCode: 'SIGTERM', confirmExit: false });
+  assert.equal(childHasExited(signalled), true);
+  const result = await stopOwnedDesktopTree(signalled, {
+    platform: 'win32',
+    timeoutMs: 5,
+    run: async () => {
+      throw new Error('a signalled child must not be taskkilled again');
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.signal, 'SIGTERM');
+  assert.deepEqual(signalled.signals, []);
+});
+
+test('an already-exited or missing child stops as a safe no-op', async () => {
+  assert.equal(childHasExited(null), true);
+  assert.equal(await waitForChildExit(null, 5), true);
+  const exited = fakeChild(9, { exitCode: 0 });
+  assert.equal(childHasExited(exited), true);
+  const result = await stopOwnedDesktopTree(exited, { platform: 'win32', timeoutMs: 5 });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0);
+  assert.deepEqual(exited.signals, []);
+});
+
+test('a ready status snapshot cannot hide a missing child', () => {
+  // Stopping a healthy stack, then one component dies: a stale `ready`
+  // snapshot must not mask the missing child.
+  assert.equal(
+    restoredStatus('ready', { daemon: { exitCode: null, signalCode: null }, desktop: null, desktopStoppedByUser: false }),
+    'degraded',
+  );
+  // A signal-killed component is dead even with a null exitCode.
+  assert.equal(
+    healthyComponentStatus({ daemon: { exitCode: null, signalCode: 'SIGKILL' }, desktop: { exitCode: null, signalCode: null }, desktopStoppedByUser: false }),
+    'degraded',
+  );
+  assert.equal(
+    healthyComponentStatus({ daemon: { exitCode: null, signalCode: null }, desktop: { exitCode: null, signalCode: 'SIGTERM' }, desktopStoppedByUser: false }),
+    'degraded',
+  );
+  // All live, nothing signalled: ready stays ready.
+  assert.equal(
+    healthyComponentStatus({ daemon: { exitCode: null, signalCode: null }, desktop: { exitCode: null, signalCode: null }, desktopStoppedByUser: false }),
+    'ready',
+  );
+});
+
+/** Minimal ChildProcess stand-in: tracked kills emit `exit`; a signal exit can be simulated. */
+function fakeChild(pid, { exitCode = null, signalCode = null, confirmExit = true, label = null, record = null } = {}) {
+  const listeners = new Map();
+  const child = {
+    pid,
+    label,
+    killed: false,
+    exitCode,
+    signalCode,
+    signals: [],
+    once(event, handler) {
+      listeners.set(event, handler);
+      return child;
+    },
+    removeListener(event, handler) {
+      if (listeners.get(event) === handler) listeners.delete(event);
+      return child;
+    },
+    kill(signal) {
+      child.signals.push(signal);
+      record?.signals?.push(signal);
+      if (confirmExit) {
+        child.killed = true;
+        if (signal === 'SIGKILL') child.exitCode = 1;
+        else child.signalCode = signal;
+        child.emitExit();
+      }
+      return true;
+    },
+    emitExit() {
+      const handler = listeners.get('exit');
+      listeners.delete('exit');
+      handler?.();
+    },
+  };
+  return child;
+}
 
