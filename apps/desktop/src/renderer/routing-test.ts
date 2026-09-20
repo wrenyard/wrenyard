@@ -136,10 +136,12 @@ export function serializeRoutingTestRequest(form: RoutingTestFormState): TaskRou
 }
 
 /**
- * Copies a task's raw automatic configuration and timeout into editable form
- * state. Imported capability requirements and exclusions are preserved: the
- * form only surfaces image/search checkboxes plus model/provider exclusions,
- * so profile/client exclusions are carried through unchanged.
+ * Copies a task's effective automatic configuration and timeout into editable
+ * form state. The daemon resolves the user's global and per-task layers before
+ * this point, so a locally excluded provider arrives already selected.
+ * Imported capability requirements and exclusions are preserved: the form only
+ * surfaces image/search checkboxes plus model/provider exclusions, so
+ * profile/client exclusions are carried through unchanged.
  */
 export function formFromTask(task: TaskRoutingTestTask): RoutingTestFormState {
   const automatic = task.automatic;

@@ -3648,18 +3648,18 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(tempResidue().length, 0)
   })
 
-  it('routingTestTasks imports the raw definition configuration of every valid task', async () => {
+  it('routingTestTasks imports the effective configuration of every valid task', async () => {
     writeConfig({})
     const service = context!.makeService()
     const result = await service.routingTestTasks({})
     const byIdentity = new Map(result.tasks.map((task) => [task.identity, task]))
 
-    // Builtin rows expose the RAW definition dispatch/timeout, never a layer.
+    // With no stored settings the definition itself is the effective answer.
     const commit = byIdentity.get('builtin:commit')
     assert.ok(commit, 'Expected commit')
     assert.equal(commit.name, 'commit')
     assert.equal(commit.display_name, 'Commit helper')
-    assert.deepEqual(commit.automatic, { expected_tps: 80, minimum_tps: 60 })
+    assert.deepEqual(commit.automatic, { expected_tps: 80, minimum_tps: 60, intelligence_expected: 'mid' })
     assert.equal(commit.timeout_ms, 120_000)
     assert.equal('project' in commit, false)
 
@@ -3686,12 +3686,45 @@ describe('daemon task-settings-service (no-model)', () => {
     const projectReview = projectResult.tasks.find((task) => task.identity === 'project:alpha:review')
     assert.ok(projectReview, 'Expected projectReview')
     assert.equal(projectReview.project, 'alpha')
-    assert.deepEqual(projectReview.automatic, { max_output_usd_per_million: 15 })
+    assert.deepEqual(projectReview.automatic, { max_output_usd_per_million: 15, intelligence_expected: 'mid' })
 
-    // No effective-settings or resolved-snapshot field is exposed.
+    // The import carries the per-field source nowhere: it is a plain dispatch
+    // object, not the snapshot's layered effective projection.
     const serialized = JSON.stringify(result)
     assert.equal(serialized.includes('effective'), false)
     assert.equal(serialized.includes('user_task'), false)
+  })
+
+  it('routingTestTasks layers stored global and per-task settings over the definition', async () => {
+    // The routing form is a preview of what this machine would really dispatch,
+    // so a locally excluded provider must reach the imported task instead of
+    // being dropped with the rest of the user layer.
+    writeConfig({
+      tasks: {
+        settings: {
+          global: { dispatch: { expectedTps: 130 } },
+          byTask: {
+            'builtin:commit': { timeoutMs: 300_000, dispatch: { excludeProviderIds: ['codebuddy'] } },
+          },
+        },
+      },
+    })
+    const service = context!.makeService()
+    const result = await service.routingTestTasks({})
+    const commit = result.tasks.find((task) => task.identity === 'builtin:commit')
+    assert.ok(commit, 'Expected commit')
+
+    assert.deepEqual(commit.automatic.exclude_provider_ids, ['codebuddy'])
+    // User-global overrides the definition; the definition still wins where no
+    // layer speaks.
+    assert.equal(commit.automatic.expected_tps, 130)
+    assert.equal(commit.automatic.minimum_tps, 60)
+    assert.equal(commit.timeout_ms, 300_000)
+
+    // A task with no stored layer is untouched by another task's exclusion.
+    const review = result.tasks.find((task) => task.identity === 'builtin:review')
+    assert.ok(review, 'Expected review')
+    assert.equal(review.automatic.exclude_provider_ids, undefined)
   })
 
   // -------------------------------------------------------------------------
