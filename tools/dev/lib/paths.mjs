@@ -29,6 +29,17 @@ export function sameCheckout(left, right, platform = process.platform, options =
   return normalizeCheckout(left, { ...options, platform }) === normalizeCheckout(right, { ...options, platform });
 }
 
+/** True when `child` is `parent` or a path under it. */
+export function pathInside(child, parent, platform = process.platform, options = {}) {
+  if (!child || !parent) return false;
+  const left = normalizeCheckout(child, { ...options, platform });
+  const right = normalizeCheckout(parent, { ...options, platform });
+  if (left === right) return true;
+  const glue = platform === 'win32' ? '\\' : '/';
+  const prefix = right.endsWith(glue) ? right : `${right}${glue}`;
+  return left.startsWith(prefix);
+}
+
 export function stateRoot(env = process.env, home = osHomedir()) {
   const wrenyardStateHome = env.WRENYARD_STATE_HOME?.trim();
   if (wrenyardStateHome) return resolve(wrenyardStateHome);

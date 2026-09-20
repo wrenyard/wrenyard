@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { classifyPath, classifyPaths, expandDependents, isRendererOnly, shouldIgnore, COMPONENTS } from './lib/graph.mjs';
 import { createGenerationQueue } from './lib/queue.mjs';
 import { createRequestQueue } from './lib/requests.mjs';
 import { spawnArgv, quoteCmdArg, windowsCmdInvocation, electronInvocation, sourceCliInvocation } from './lib/spawn.mjs';
-import { normalizeCheckout, sameCheckout, desktopUserData, controlEndpoint, businessIpcPath, defaultRuntimeBin } from './lib/paths.mjs';
+import { normalizeCheckout, sameCheckout, pathInside, desktopUserData, controlEndpoint, businessIpcPath, defaultRuntimeBin } from './lib/paths.mjs';
 import { sourceChildEnv, isSourceDevelopment } from './lib/env.mjs';
 import { combineActivity } from './lib/activity.mjs';
 import { daemonBusy, sourceIdentityFromHealth } from './lib/rpc.mjs';
@@ -21,6 +23,21 @@ import { buildGeneration, desktopTargetsFor } from './lib/builder.mjs';
 import { leftoverControlDecision } from './lib/leftover.mjs';
 import { createWatcher } from './lib/watcher.mjs';
 import { EXIT } from './lib/constants.mjs';
+import {
+  RELEASE_DESKTOP_KILL_WARNING,
+  RELEASE_DESKTOP_RUNNING_MESSAGE,
+  createInspectReleaseDesktop,
+  createTerminateReleaseDesktop,
+  gateReleaseDesktop,
+  matchReleaseDesktopProcesses,
+  parseCimProcessJson,
+  parseDevArgs,
+  parsePsProcesses,
+  resolveInstalledDesktopRoots,
+  sameProcessIdentity,
+  taskkillAlreadyGone,
+  treeRoots,
+} from './lib/release-desktop.mjs';
 
 test('Windows checkout comparison folds case and separators', () => {
   assert.equal(
@@ -425,3 +442,285 @@ test('generation queue merges burst files under the newest id', () => {
   assert.equal(gen.id, 'g2');
   assert.deepEqual(gen.files.sort(), ['a.css', 'b.css']);
 });
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const winOpts = { platform: 'win32', exists: () => false };
+const installRoot = 'C:\\Users\\me\\AppData\\Local\\Programs\\Wrenyard Desktop';
+const installExe = `${installRoot}\\wrenyard-desktop.exe`;
+const checkoutRoot = 'D:\\GitHub\\wrenyard';
+
+test('pathInside matches install trees with spaces and ignores source checkout files', () => {
+  assert.equal(pathInside(installExe, installRoot, 'win32', winOpts), true);
+  assert.equal(pathInside(`${installRoot}\\resources\\app.asar`, installRoot, 'win32', winOpts), true);
+  assert.equal(
+    pathInside(`${checkoutRoot}\\node_modules\\electron\\dist\\electron.exe`, installRoot, 'win32', winOpts),
+    false,
+  );
+  assert.equal(pathInside(installExe, checkoutRoot, 'win32', winOpts), false);
+});
+
+test('installed Desktop roots follow LOCALAPPDATA/Applications and skip checkout overrides', () => {
+  const windows = resolveInstalledDesktopRoots({
+    platform: 'win32',
+    home: 'C:\\Users\\me',
+    checkout: checkoutRoot,
+    env: { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' },
+  });
+  assert.deepEqual(windows, [installRoot]);
+
+  const custom = resolveInstalledDesktopRoots({
+    platform: 'win32',
+    home: 'C:\\Users\\me',
+    checkout: checkoutRoot,
+    env: {
+      LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
+      WRENYARD_DESKTOP_BIN: 'E:\\Custom Apps\\Wrenyard Desktop\\wrenyard-desktop.exe',
+    },
+  });
+  assert.equal(custom.includes('E:\\Custom Apps\\Wrenyard Desktop'), true);
+
+  const sourceOverride = resolveInstalledDesktopRoots({
+    platform: 'win32',
+    home: 'C:\\Users\\me',
+    checkout: checkoutRoot,
+    env: {
+      LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
+      WRENYARD_DESKTOP_BIN: `${checkoutRoot}\\apps\\desktop\\node_modules\\electron\\dist\\electron.exe`,
+    },
+  });
+  assert.equal(sourceOverride.some((root) => pathInside(root, checkoutRoot, 'win32', winOpts)), false);
+});
+
+test('release Desktop matching uses install path, not process name alone', () => {
+  const processes = [
+    { pid: 10, ppid: 1, exe: installExe, name: 'wrenyard-desktop.exe', sessionId: 1 },
+    { pid: 11, ppid: 10, exe: installExe, name: 'wrenyard-desktop.exe', sessionId: 1 },
+    { pid: 20, ppid: 1, exe: `${checkoutRoot}\\node_modules\\electron\\dist\\electron.exe`, name: 'electron.exe', sessionId: 1 },
+    { pid: 30, ppid: 1, exe: 'C:\\Other\\electron.exe', name: 'electron.exe', sessionId: 1 },
+    { pid: 40, ppid: 1, exe: `${installRoot}\\Uninstall 啾啾工坊.exe`, name: 'Uninstall 啾啾工坊.exe', sessionId: 1 },
+  ];
+  const matched = matchReleaseDesktopProcesses(processes, {
+    platform: 'win32',
+    roots: [installRoot],
+    checkout: checkoutRoot,
+    sessionId: 1,
+  });
+  assert.equal(matched.ok, true);
+  assert.deepEqual(matched.processes.map((proc) => proc.pid).sort(), [10, 11]);
+  assert.deepEqual(treeRoots(matched.processes).map((proc) => proc.pid), [10]);
+});
+
+test('a Desktop-named process without an executable path is a query failure', () => {
+  const matched = matchReleaseDesktopProcesses([
+    { pid: 10, ppid: 1, exe: '', name: 'wrenyard-desktop.exe', sessionId: 1 },
+  ], {
+    platform: 'win32',
+    roots: [installRoot],
+    checkout: checkoutRoot,
+  });
+  assert.equal(matched.ok, false);
+  assert.match(matched.error, /no executable path/);
+});
+
+test('parseDevArgs only enables --kill-desktop and rejects unknown flags', () => {
+  assert.deepEqual(parseDevArgs([]), { killDesktop: false, unknown: [] });
+  assert.deepEqual(parseDevArgs(['--kill-desktop']), { killDesktop: true, unknown: [] });
+  assert.deepEqual(parseDevArgs(['--', '--kill-desktop']), { killDesktop: true, unknown: [] });
+  assert.equal(parseDevArgs(['--kill-desktop', '--bogus']).unknown[0], '--bogus');
+});
+
+test('package.json dev script forwards extra args to the supervisor entry', () => {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  assert.equal(pkg.scripts.dev, 'node ./tools/dev/run.mjs');
+  assert.equal(pkg.scripts['dev:restart'].includes('--kill-desktop'), false);
+  assert.equal(pkg.scripts['dev:stop'].includes('--kill-desktop'), false);
+});
+
+test('run.mjs parses --kill-desktop and rejects unknown flags without starting', () => {
+  const result = spawnSync(process.execPath, [join(repoRoot, 'tools', 'dev', 'run.mjs'), '--kill-desktop', '--bogus'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(result.status, EXIT.failed);
+  assert.match(result.stderr, /Unknown argument: --bogus/);
+});
+
+test('default Desktop gate reminds the caller and does not terminate or freeze', async () => {
+  let terminated = 0;
+  const result = await gateReleaseDesktop({
+    killDesktop: false,
+    inspect: async () => ({ ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] }),
+    terminate: async () => {
+      terminated += 1;
+      return { ok: true };
+    },
+  });
+  assert.equal(result.action, 'fail');
+  assert.equal(terminated, 0);
+  assert.equal(result.message.startsWith(RELEASE_DESKTOP_RUNNING_MESSAGE), true);
+  assert.match(result.message, /pid 44/);
+  assert.match(result.message, /pnpm dev --kill-desktop/);
+});
+
+test('Desktop gate continues when nothing is running, including with --kill-desktop', async () => {
+  let terminated = 0;
+  for (const killDesktop of [false, true]) {
+    const result = await gateReleaseDesktop({
+      killDesktop,
+      inspect: async () => ({ ok: true, processes: [] }),
+      terminate: async () => {
+        terminated += 1;
+        return { ok: true };
+      },
+    });
+    assert.equal(result.action, 'continue');
+  }
+  assert.equal(terminated, 0);
+});
+
+test('Desktop query failure is not treated as not running', async () => {
+  const result = await gateReleaseDesktop({
+    killDesktop: true,
+    inspect: async () => ({ ok: false, error: 'access denied' }),
+    terminate: async () => ({ ok: true }),
+  });
+  assert.equal(result.action, 'fail');
+  assert.match(result.message, /无法确认/);
+  assert.match(result.message, /access denied/);
+});
+
+test('--kill-desktop warns, terminates the verified tree, and waits for exit', async () => {
+  const inspects = [
+    { ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] },
+    { ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] },
+    { ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] },
+    { ok: true, processes: [] },
+  ];
+  const lines = [];
+  let terminated = null;
+  let t = 0;
+  const result = await gateReleaseDesktop({
+    killDesktop: true,
+    inspect: async () => inspects.shift() ?? { ok: true, processes: [] },
+    terminate: async (processes) => {
+      terminated = processes;
+      return { ok: true };
+    },
+    stdout: (line) => lines.push(line),
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+    timeoutMs: 1000,
+  });
+  assert.equal(result.action, 'continue');
+  assert.equal(result.killed, true);
+  assert.equal(terminated[0].pid, 44);
+  assert.equal(lines[0].startsWith(RELEASE_DESKTOP_KILL_WARNING), true);
+  assert.match(lines[0], /pid 44/);
+});
+
+test('--kill-desktop fails closed on terminate identity errors and exit timeout', async () => {
+  const identity = await gateReleaseDesktop({
+    killDesktop: true,
+    inspect: async () => ({ ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] }),
+    terminate: async () => ({ ok: false, message: '无法确认进程身份（pid 44），已停止。请从托盘选择“退出”后重试。' }),
+    stdout: () => {},
+  });
+  assert.equal(identity.action, 'fail');
+  assert.match(identity.message, /无法确认进程身份/);
+
+  let t = 0;
+  const timeout = await gateReleaseDesktop({
+    killDesktop: true,
+    inspect: async () => ({ ok: true, processes: [{ pid: 44, ppid: 1, exe: installExe }] }),
+    terminate: async () => ({ ok: true }),
+    stdout: () => {},
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms + 1000;
+    },
+    timeoutMs: 1000,
+  });
+  assert.equal(timeout.action, 'fail');
+  assert.match(timeout.message, /未能在 1 秒内退出/);
+});
+
+test('Windows terminate uses taskkill PID tree and refuses a reused PID', async () => {
+  const calls = [];
+  const terminate = createTerminateReleaseDesktop({
+    platform: 'win32',
+    run: async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'powershell.exe') {
+        return {
+          status: 0,
+          stdout: Buffer.from(JSON.stringify({
+            ProcessId: 99,
+            ParentProcessId: 1,
+            ExecutablePath: 'C:\\Windows\\notepad.exe',
+            SessionId: 1,
+            Name: 'notepad.exe',
+          }), 'utf8'),
+          stderr: Buffer.alloc(0),
+        };
+      }
+      return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+    },
+  });
+  const reused = await terminate([{ pid: 99, ppid: 1, exe: installExe, name: 'wrenyard-desktop.exe' }]);
+  assert.equal(reused.ok, false);
+  assert.match(reused.message, /无法确认进程身份/);
+  assert.equal(calls.some((call) => call.command === 'taskkill.exe'), false);
+
+  const killCalls = [];
+  const killer = createTerminateReleaseDesktop({
+    platform: 'win32',
+    run: async (command, args) => {
+      killCalls.push({ command, args });
+      if (command === 'powershell.exe') {
+        return {
+          status: 0,
+          stdout: Buffer.from(JSON.stringify({
+            ProcessId: 44,
+            ParentProcessId: 1,
+            ExecutablePath: installExe,
+            SessionId: 1,
+            Name: 'wrenyard-desktop.exe',
+          }), 'utf8'),
+          stderr: Buffer.alloc(0),
+        };
+      }
+      return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+    },
+  });
+  const killed = await killer([{ pid: 44, ppid: 1, exe: installExe, name: 'wrenyard-desktop.exe' }]);
+  assert.equal(killed.ok, true);
+  const taskkill = killCalls.find((call) => call.command === 'taskkill.exe');
+  assert.deepEqual(taskkill.args, ['/PID', '44', '/T', '/F']);
+  assert.equal(taskkill.args.includes('/IM'), false);
+});
+
+test('process query parsers and identity helpers keep query failure distinct from empty', () => {
+  assert.deepEqual(parseCimProcessJson(''), []);
+  assert.equal(parseCimProcessJson('{"ProcessId":8,"ParentProcessId":1,"ExecutablePath":"C:\\\\a.exe","Name":"a.exe"}')[0].pid, 8);
+  assert.equal(parsePsProcesses('  12  1 me /Applications/啾啾工坊.app/Contents/MacOS/啾啾工坊 --hidden')[0].pid, 12);
+  assert.equal(sameProcessIdentity({ pid: 1, exe: installExe }, { pid: 1, exe: installExe }, 'win32'), true);
+  assert.equal(sameProcessIdentity({ pid: 1, exe: installExe }, { pid: 1, exe: 'C:\\Windows\\notepad.exe' }, 'win32'), false);
+  assert.equal(taskkillAlreadyGone({ status: 128, stdout: Buffer.from(''), stderr: Buffer.from('not found') }), true);
+});
+
+test('Windows process query reports success even when no Desktop is matched', { timeout: 30_000 }, async () => {
+  if (process.platform !== 'win32') return;
+  const inspect = createInspectReleaseDesktop({
+    platform: 'win32',
+    env: process.env,
+    home: process.env.USERPROFILE,
+    checkout: repoRoot,
+    currentPid: process.pid,
+  });
+  const result = await inspect();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(Array.isArray(result.processes), true);
+});
+
