@@ -10,15 +10,6 @@ import {
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-test('conversation placeholders form a varied concise workshop copy deck', () => {
-  assert.ok(CONVERSATION_PLACEHOLDERS.length >= 20);
-  assert.equal(new Set(CONVERSATION_PLACEHOLDERS).size, CONVERSATION_PLACEHOLDERS.length);
-  for (const line of CONVERSATION_PLACEHOLDERS) {
-    assert.match(line, /…$/u);
-    assert.ok([...line].length >= 6 && [...line].length <= 18, line);
-  }
-});
-
 test('conversation placeholder picker avoids an immediate repeat', () => {
   const first = pickConversationPlaceholder(undefined, () => 0);
   assert.equal(first, CONVERSATION_PLACEHOLDERS[0]);

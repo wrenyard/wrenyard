@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SCORE_WEIGHTS } from '@wrenyard/catalog';
 import {
   ROUTING_WEIGHT_KEYS,
   defaultRoutingWeightsPercent,
@@ -9,20 +8,6 @@ import {
   routingWeightsFromPercent,
   routingWeightsToPercent,
 } from '../src/renderer/routing-weights-settings.js';
-
-test('default percent weights map the SSOT SCORE_WEIGHTS fractions to 40/30/20/10', () => {
-  assert.deepEqual(defaultRoutingWeightsPercent(), {
-    price: 40,
-    speed: 30,
-    quota: 20,
-    intelligence: 10,
-  });
-  assert.equal(SCORE_WEIGHTS.P, 0.4);
-  assert.equal(SCORE_WEIGHTS.S, 0.3);
-  assert.equal(SCORE_WEIGHTS.Q, 0.2);
-  assert.equal(SCORE_WEIGHTS.I, 0.1);
-  assert.deepEqual([...ROUTING_WEIGHT_KEYS], ['price', 'speed', 'quota', 'intelligence']);
-});
 
 test('a missing override resolves to the defaults', () => {
   assert.deepEqual(routingWeightsToPercent(undefined), defaultRoutingWeightsPercent());

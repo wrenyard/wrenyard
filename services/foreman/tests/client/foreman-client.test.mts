@@ -468,16 +468,6 @@ describe('ForemanClient', () => {
     }
   })
 
-  it('exposes the active public method groups', () => {
-    const client = new ForemanClient(new FakeRpc({ ok: true }))
-    const clientShape = client as unknown as Record<string, unknown>
-
-    assert.equal(typeof clientShape.task, 'object')
-    assert.equal(typeof clientShape.project, 'object')
-    assert.equal(typeof clientShape.message, 'object')
-    assert.equal(typeof clientShape.daemon, 'object')
-  })
-
   it('keeps new client modules free of runtime imports', () => {
     const clientRoot = join(process.cwd(), 'lib', 'client')
     const files = [

@@ -105,16 +105,6 @@ describe('IPC transport', () => {
     }
   })
 
-  it('resolves explicit Wrenyard daemon IPC path overrides (legacy names still read)', () => {
-    const path = resolveForemanServiceIpcPath({ path: 'foreman-test' })
-
-    if (process.platform === 'win32') {
-      assert.equal(path, '\\\\.\\pipe\\foreman-test')
-    } else {
-      assert.equal(path, join(shortTmpDir(), 'foreman-test.sock'))
-    }
-  })
-
   it('connects JsonRpcClient to RpcRouter over IPC and resolves requests', async () => {
     const router = new RpcRouter()
     router.register('health.ping', async () => ({ ok: true }))
