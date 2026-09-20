@@ -13,12 +13,10 @@ const BUILTIN_MODEL_DISPLAY_NAMES = {
   'claude-opus-5': 'Claude Opus 5',
   'claude-sonnet-5': 'Claude Sonnet 5',
   'composer-2.5': 'Composer 2.5',
+  'deepseek-pro': 'DeepSeek V4 Pro',
   'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
-  'deepseek-official': 'DeepSeek Chat',
   'doubao-seed-2-0-lite': 'Doubao Seed 2.0 Lite',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
-  'glm-4.7-flash': 'GLM 4.7 Flash',
-  'glm-5-turbo': 'GLM 5 Turbo',
   'glm-5.2': 'GLM 5.2',
   'glm-5.3': 'GLM 5.3',
   'glm-5.3-flash': 'GLM 5.3 Flash',
@@ -117,7 +115,6 @@ const BUILTIN_MODEL_NAME_ALIASES = {
   'union-alpha': 'union-alpha',
   'nemotron-3-ultra-free': 'nemotron-3-ultra',
   'nemotron-3.5-lightning-free': 'nemotron-3.5-lightning',
-  'deepseek': 'deepseek-official',
 } as const satisfies Readonly<Record<string, BuiltinModelName>>;
 
 /**
