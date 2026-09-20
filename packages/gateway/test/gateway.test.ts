@@ -470,3 +470,207 @@ test('openrouter free request strips models and route without changing free id',
   server.close();
   await once(server, 'close');
 });
+
+// Registers CodeBuddy alongside the plain vendor provider and stubs the client
+// identity loader, so product identity and conversation round headers can be
+// asserted without a real installation. An undefined identity models an absent
+// installed CLI.
+function codeBuddyFixture(fetchImpl: typeof fetch, identity?: { platform: string; productName: string; version: string; deploymentType: string }) {
+  const catalog = new Catalog();
+  const register = (id: string, model: string, endpoint: string) => {
+    catalog.registerProvider({
+      id, displayName: id, credentialResolver: id === 'codebuddy' ? 'codebuddy' : 'forge-managed',
+      models: [{
+        id: model,
+        displayName: model,
+        intelligence: 'mid',
+        speed: { tps: 40, source: 'gateway-test', checkedAt: '2026-09-09' },
+        pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
+      }],
+      protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
+    });
+  };
+  register('codebuddy', 'cb-public', 'https://codebuddy.test/v1/chat/completions');
+  register('vendor', 'public', 'https://upstream.test/v1/chat/completions');
+  return createModelGateway({
+    catalog,
+    fetch: fetchImpl,
+    providers: {
+      credential: async () => ({ value: 'upstream-secret' }),
+      resolveUpstreamModel: (_provider, model) => model === 'public' ? 'private' : model,
+      publicResponseModel: (provider, model, upstreamModel, publicModel) => {
+        const logicalModel = publicModel.slice(provider.id.length + 1);
+        return model === upstreamModel || model === logicalModel ? publicModel : model;
+      },
+      configureApiKey: async () => undefined,
+      codeBuddyClientIdentity: async () => identity,
+    },
+  });
+}
+
+function codeBuddyRequest(port: number, scope: string | undefined, messages: unknown[]): Promise<Response> {
+  const path = scope ? `/gateway/openai-chat/execution/${scope}/v1/chat/completions` : '/gateway/openai-chat/v1/chat/completions';
+  return fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'user-agent': 'wrenyard/1.0' },
+    body: JSON.stringify({ model: 'codebuddy/cb-public', messages }),
+  });
+}
+
+test('codebuddy requests carry the official product identity headers', async (t) => {
+  let seen: Headers | undefined;
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen = new Headers(init?.headers);
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  }, { platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS' });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await codeBuddyRequest(address.port, 'exec_identity', [{ role: 'user', content: 'hi' }]);
+  assert.equal(seen!.get('user-agent'), 'CLI/2.117.2 CodeBuddy/2.117.2 wrenyard/1.0');
+  assert.equal(seen!.get('x-product'), 'SaaS');
+  assert.equal(seen!.get('x-ide-type'), 'CLI');
+  assert.equal(seen!.get('x-ide-name'), 'CLI');
+  assert.equal(seen!.get('x-ide-version'), '2.117.2');
+  assert.equal(seen!.get('x-requested-with'), 'XMLHttpRequest');
+  assert.equal(seen!.get('x-agent-intent'), 'craft');
+  server.close();
+  await once(server, 'close');
+});
+
+test('codebuddy reuses the conversation request id across a tool hop and rotates it on a new turn', async (t) => {
+  const seen: Headers[] = [];
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen.push(new Headers(init?.headers));
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  }, { platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS' });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await codeBuddyRequest(address.port, 'exec_round', [{ role: 'user', content: 'hi' }]);
+  await codeBuddyRequest(address.port, 'exec_round', [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: 'file' },
+  ]);
+  await codeBuddyRequest(address.port, 'exec_round', [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: 'file' },
+    { role: 'user', content: 'again' },
+  ]);
+  assert.equal(seen.length, 3);
+  const [first, second, third] = seen as [Headers, Headers, Headers];
+  assert.equal(second.get('x-conversation-request-id'), first.get('x-conversation-request-id'));
+  assert.notEqual(third.get('x-conversation-request-id'), first.get('x-conversation-request-id'));
+  assert.notEqual(second.get('x-conversation-message-id'), first.get('x-conversation-message-id'));
+  assert.notEqual(second.get('x-request-id'), first.get('x-request-id'));
+  assert.equal(seen.every((headers) => headers.get('x-conversation-id') === first.get('x-conversation-id')), true);
+  server.close();
+  await once(server, 'close');
+});
+
+test('different codebuddy execution scopes never share conversation identity', async (t) => {
+  const seen: Headers[] = [];
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen.push(new Headers(init?.headers));
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  }, { platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS' });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const messages = [{ role: 'user', content: 'hi' }];
+  await codeBuddyRequest(address.port, 'exec_one', messages);
+  await codeBuddyRequest(address.port, 'exec_two', messages);
+  const [first, second] = seen as [Headers, Headers];
+  assert.notEqual(second.get('x-conversation-id'), first.get('x-conversation-id'));
+  assert.notEqual(second.get('x-conversation-request-id'), first.get('x-conversation-request-id'));
+  server.close();
+  await once(server, 'close');
+});
+
+test('unscoped codebuddy requests group by their opening message prefix', async (t) => {
+  const seen: Headers[] = [];
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen.push(new Headers(init?.headers));
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  }, { platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS' });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const opening = { role: 'user', content: 'hi' };
+  const toolTurn = [
+    opening,
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: 'file' },
+  ];
+  await codeBuddyRequest(address.port, undefined, [opening]);
+  await codeBuddyRequest(address.port, undefined, toolTurn);
+  await codeBuddyRequest(address.port, undefined, [{ role: 'user', content: 'different' }]);
+  const [first, second, third] = seen as [Headers, Headers, Headers];
+  assert.equal(second.get('x-conversation-id'), first.get('x-conversation-id'));
+  assert.equal(second.get('x-conversation-request-id'), first.get('x-conversation-request-id'));
+  assert.notEqual(third.get('x-conversation-id'), first.get('x-conversation-id'));
+  server.close();
+  await once(server, 'close');
+});
+
+test('non-codebuddy providers receive no codebuddy headers and keep their user agent', async (t) => {
+  let seen: Headers | undefined;
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen = new Headers(init?.headers);
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  }, { platform: 'CLI', productName: 'CodeBuddy', version: '2.117.2', deploymentType: 'SaaS' });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fetch(`http://127.0.0.1:${address.port}/gateway/openai-chat/execution/exec_other/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'user-agent': 'wrenyard/1.0' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [{ role: 'user', content: 'hi' }] }),
+  });
+  assert.equal(seen!.get('user-agent'), 'wrenyard/1.0');
+  for (const name of ['x-product', 'x-ide-type', 'x-ide-name', 'x-ide-version', 'x-requested-with', 'x-agent-intent', 'x-conversation-id', 'x-conversation-request-id', 'x-conversation-message-id']) {
+    assert.equal(seen!.get(name), null, `${name} leaked to a non-CodeBuddy provider`);
+  }
+  server.close();
+  await once(server, 'close');
+});
+
+test('codebuddy requests without an installed CLI keep round headers and no identity', async (t) => {
+  let seen: Headers | undefined;
+  const gateway = codeBuddyFixture(async (_url, init) => {
+    seen = new Headers(init?.headers);
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const server = listen(gateway);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await codeBuddyRequest(address.port, 'exec_missing', [{ role: 'user', content: 'hi' }]);
+  assert.equal(seen!.get('x-conversation-id'), seen!.get('x-conversation-id'));
+  assert.match(seen!.get('x-conversation-id')!, /^[0-9a-f]{32}$/u);
+  assert.match(seen!.get('x-conversation-request-id')!, /^[0-9a-f]{32}$/u);
+  assert.match(seen!.get('x-conversation-message-id')!, /^[0-9a-f]{32}$/u);
+  assert.equal(seen!.get('x-conversation-message-id'), seen!.get('x-request-id'));
+  assert.equal(seen!.get('x-requested-with'), 'XMLHttpRequest');
+  assert.equal(seen!.get('x-agent-intent'), 'craft');
+  assert.equal(seen!.get('x-product'), null);
+  assert.equal(seen!.get('x-ide-type'), null);
+  assert.equal(seen!.get('x-ide-name'), null);
+  assert.equal(seen!.get('x-ide-version'), null);
+  assert.equal(seen!.get('user-agent'), 'wrenyard/1.0');
+  server.close();
+  await once(server, 'close');
+});
