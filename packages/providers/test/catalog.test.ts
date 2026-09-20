@@ -38,15 +38,16 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
       BUILTIN_PROVIDERS.flatMap((p) => p.models.map((m) => m.id)).filter((id) => id.includes('deepseek')),
     ),
   ].sort();
-  assert.deepEqual(deepseekIds, ['deepseek', 'deepseek-flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
+  assert.deepEqual(deepseekIds, ['deepseek-flash', 'deepseek-pro', 'deepseek-v4.1-flash', 'deepseek/deepseek-flash']);
   // The official DeepSeek provider carries both official endpoint models.
   assert.deepEqual(
     BUILTIN_PROVIDERS.find((p) => p.id === 'deepseek')!.models.map((m) => m.id),
-    ['deepseek-flash', 'deepseek'],
+    ['deepseek-flash', 'deepseek-pro'],
   );
   // Retired CodeBuddy/TokenHub deepseek ids are gone from the builtin catalog.
   for (const oldId of [
     'deepseek-v4-flash',
+    'deepseek',
     'deepseek-v4-pro',
     'deepseek-v4-flash-202605',
     'deepseek-v4-pro-202606',
@@ -250,8 +251,8 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('anthropic', 'claude-fable-5'), 'premium');
   assert.equal(tier('anthropic', 'claude-opus-5'), 'premium');
   assert.equal(tier('anthropic', 'claude-haiku-4-5-20251001'), 'low');
-  assert.equal(tier('zhipu', 'glm-4.7-flash'), 'low');
-  assert.equal(tier('zhipu', 'glm-5-turbo'), 'low');
+  assert.equal(tier('zhipu', 'glm-5.3'), 'high');
+  assert.equal(tier('zhipu', 'glm-5.2'), 'mid');
   assert.equal(tier('chatgpt', 'gpt-5.4'), 'mid');
   assert.equal(tier('moonshot', 'kimi-k3'), 'high');
   assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
@@ -372,7 +373,7 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   assert.equal(route('codebuddy', 'deepseek-v4.1-flash').canonicalModel, undefined);
   assert.equal(route('tokenhub', 'deepseek/deepseek-flash').canonicalModel, undefined);
   assert.equal(route('deepseek', 'deepseek-flash').canonicalModel, undefined);
-  assert.equal(route('deepseek', 'deepseek').canonicalModel, undefined);
+  assert.equal(route('deepseek', 'deepseek-pro').canonicalModel, undefined);
 
   const groups = new Map<string, Set<string>>();
   for (const provider of BUILTIN_PROVIDERS) {

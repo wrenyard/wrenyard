@@ -195,7 +195,7 @@ test('paid Zen models bind the account balance pool while free models share the 
 });
 
 test('official DeepSeek routes bind one own-provider balance resource', () => {
-  for (const modelId of ['deepseek-flash', 'deepseek']) {
+  for (const modelId of ['deepseek-flash', 'deepseek-pro']) {
     const binding = expectBinding('deepseek', modelId);
     assert.equal(binding.pools.length, 1);
     assert.equal(binding.pools[0]!.kind, 'balance');
