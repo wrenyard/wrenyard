@@ -11,14 +11,28 @@ import type { IntelligenceTier, TaskDispatchRequirements } from '@wrenyard/catal
  *
  * Class mapping:
  *   - FREQUENT  — frequent mechanical / fast / explore tasks
+ *   - COMMIT    — frequent mechanical git work with a lower speed expectation
  *   - GENERAL   — general tasks
  *   - REVIEW    — explicit review / judgment tasks
  *   - ULTRA     — ultra tasks
  */
 
-/** Frequent tasks use speed, intelligence, and price requirements. */
+/** Frequent explore / edit / test tasks use speed, intelligence, and price requirements. */
 export const FREQUENT_DISPATCH_REQUIREMENTS = {
-  expectedTps: 80,
+  expectedTps: 200,
+  minimumTps: 60,
+  intelligenceMin: 'low' as IntelligenceTier,
+  intelligenceExpected: 'mid' as IntelligenceTier,
+  maxOutputUsdPerMillion: 6,
+} satisfies TaskDispatchRequirements
+
+/**
+ * Commit tasks: frequent mechanical git work whose wall time is dominated by
+ * staging and verification rather than generation, so it keeps the frequent
+ * price and intelligence class with a lower speed expectation.
+ */
+export const COMMIT_DISPATCH_REQUIREMENTS = {
+  expectedTps: 100,
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
@@ -30,8 +44,8 @@ export const FREQUENT_DISPATCH_REQUIREMENTS = {
  * bounded values (mid intelligence minimum, moderate output cost ceiling).
  */
 export const GENERAL_DISPATCH_REQUIREMENTS = {
-  expectedTps: 40,
-  minimumTps: 20,
+  expectedTps: 100,
+  minimumTps: 30,
   intelligenceMin: 'mid' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 18,
@@ -43,8 +57,8 @@ export const GENERAL_DISPATCH_REQUIREMENTS = {
  * (maxOutputUsdPerMillion 60) and no unrelated model/profile exclusions.
  */
 export const REVIEW_DISPATCH_REQUIREMENTS = {
-  expectedTps: 40,
-  minimumTps: 20,
+  expectedTps: 100,
+  minimumTps: 30,
   intelligenceMin: 'high' as IntelligenceTier,
   intelligenceExpected: 'high' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,
@@ -55,8 +69,8 @@ export const REVIEW_DISPATCH_REQUIREMENTS = {
  * bounded values (high intelligence minimum, permissive output cost ceiling).
  */
 export const ULTRA_DISPATCH_REQUIREMENTS = {
-  expectedTps: 20,
-  minimumTps: 8,
+  expectedTps: 60,
+  minimumTps: 20,
   intelligenceMin: 'high' as IntelligenceTier,
   intelligenceExpected: 'premium' as IntelligenceTier,
   maxOutputUsdPerMillion: 60,

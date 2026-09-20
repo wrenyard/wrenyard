@@ -6,7 +6,8 @@
  * verified quota-burn efficiency economic evidence, and the approved normalized
  * ranking score:
  *   score = .40*P + .30*S + .20*Q + .10*I
- * where P is the continuous price-factor from fixed anchors, S = min(TPS/200,1),
+ * where P is the continuous price-factor from fixed anchors,
+ * S = min(TPS / (SPEED_SATURATION_BASE_TPS + expectedTps), 1),
  * Q is quota headroom quality, and I is the intelligence factor. Every factor is
  * bounded in [0, 1], so the score is always within [0, 1]. Ranking is one global
  * deterministic descending-score pass; supply class and quota tier are retained
@@ -21,7 +22,9 @@ import assert from "node:assert/strict";
 import {
   SCORE_WEIGHTS,
   PRICE_FACTOR_ANCHORS,
+  SPEED_SATURATION_BASE_TPS,
   ZERO_QUOTA_HEADROOM,
+  UNKNOWN_QUOTA_FLOOR_HEADROOM,
   EFFICIENCY_HEADROOM_WEIGHT,
   EFFICIENCY_EVIDENCE_WEIGHT,
   assessRequiredQuota,
@@ -109,7 +112,8 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
 
 // Mirrored expectation helpers for the approved normalized diagnostic/score
 // formulas. interpPrice mirrors interpolatePriceFactor exactly: P is the
-// continuous anchor-interpolated price factor; S saturates effective TPS at 200.
+// continuous anchor-interpolated price factor; S saturates effective TPS at
+// SPEED_SATURATION_BASE_TPS plus the candidate's expected TPS (absent = 0).
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   if (value <= 0) return 0;
@@ -139,8 +143,18 @@ function expScore(
   weights: ScoreWeights = SCORE_WEIGHTS
 ): number {
   const P = interpPrice(assessment.routingPriceUsdPerM);
-  const S = clamp01(input.effectiveTps / 200);
-  const Q = assessment.quotaQuality;
+  const expectedTps = input.expectedTps;
+  const saturation =
+    SPEED_SATURATION_BASE_TPS +
+    (typeof expectedTps === "number" && Number.isFinite(expectedTps) ? expectedTps : 0);
+  const S = clamp01(input.effectiveTps / saturation);
+  // Mirrors the policy's Q input: the raw headroom H, raised to the
+  // provider-verified unknown-quota floor when that floor applies.
+  const floorApplied = input.unknownQuotaFloor != null && assessment.unknownQuotaFloorApplied;
+  const Q =
+    !floorApplied || assessment.verifiedEfficiency !== null
+      ? assessment.quotaQuality
+      : clamp01(Math.max(assessment.headroom, UNKNOWN_QUOTA_FLOOR_HEADROOM));
   const I = assessment.intelligenceFactor;
   return (
     weights.P * P +
@@ -687,7 +701,7 @@ describe("editable score weights", () => {
     const inputs = [cheapSlow(), fastPricey()];
     const [cs, fp] = inputs.map((input) => expectAccepted(input)!);
     close(cs.priceFactor, 0.85, 1e-12, "cheap P(0.5)");
-    close(cs.speedFactor, 0.05, 1e-12, "cheap S");
+    close(cs.speedFactor, 0.1, 1e-12, "cheap S");
     close(fp.priceFactor, 0.05, 1e-12, "pricey P(30)");
     close(fp.speedFactor, 1, 1e-12, "pricey S");
 
@@ -835,7 +849,7 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
   close(a!.priceFactor, interpPrice(2), 1e-12, "diagnostic P");
-  close(a!.speedFactor, clamp01(25 / 200), 1e-12, "diagnostic S saturated at 200");
+  close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "diagnostic S saturated at the bare base with no expectation");
   close(a!.intelligenceFactor, 1, 1e-12, "I saturated");
   close(a!.score, expScore(input, a!), 1e-12, "normalized score");
 });
@@ -945,14 +959,61 @@ test("price factor anchors interpolate continuously, monotonically, and floor at
   expectRejected(cand({ referenceUsdPerM: -0.01 }), "invalid_reference_price");
 });
 
-test("speed factor S is effective TPS saturated at 200", () => {
-  const s = (tps: number) => clamp01(tps / 200);
+test("speed factor S saturates at SPEED_SATURATION_BASE_TPS plus the expected TPS", () => {
+  const s = (tps: number, expected = 0) => clamp01(tps / (SPEED_SATURATION_BASE_TPS + expected));
+  // No declared expectation: the bare base is the ceiling.
   close(s(0), 0, 1e-12, "S(0)");
-  close(s(100), 0.5, 1e-12, "S(100)");
-  close(s(200), 1, 1e-12, "S(200)");
+  close(s(50), 0.5, 1e-12, "S(50)");
+  close(s(100), 1, 1e-12, "S(100)");
   close(s(1000), 1, 1e-12, "S saturated");
+  // Declaring an expectation lifts the ceiling by exactly that amount.
+  close(s(200, 200), 200 / 300, 1e-12, "S(200) expecting 200");
+  close(s(300, 200), 1, 1e-12, "S saturates at base + expected");
   const a = expectAccepted(cand({ effectiveTps: 25 }));
-  close(a!.speedFactor, clamp01(25 / 200), 1e-12, "assessed S");
+  close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "assessed S");
+});
+
+test("speed expectation: absent, zero, and positive expectations shape S without gating", () => {
+  // Absent expectation saturates at the bare base.
+  const absent = expectAccepted(cand({ effectiveTps: 150 }));
+  close(absent!.speedFactor, clamp01(150 / SPEED_SATURATION_BASE_TPS), 1e-12, "S without expectation");
+  // expectedTps 0 behaves exactly like an absent expectation.
+  const zero = expectAccepted(cand({ effectiveTps: 150, expectedTps: 0 }));
+  close(zero!.speedFactor, absent!.speedFactor, 1e-12, "S with expectedTps 0 matches absent");
+  // expectedTps 200 raises the ceiling to 300: 150 scores 0.5, 300 saturates.
+  const below = expectAccepted(cand({ effectiveTps: 150, expectedTps: 200 }));
+  close(below!.speedFactor, 0.5, 1e-12, "S(150) expecting 200");
+  const atCeiling = expectAccepted(cand({ effectiveTps: 300, expectedTps: 200 }));
+  close(atCeiling!.speedFactor, 1, 1e-12, "S(300) expecting 200");
+  const above = expectAccepted(cand({ effectiveTps: 900, expectedTps: 200 }));
+  close(above!.speedFactor, 1, 1e-12, "S saturated above 300");
+  // The same absolute TPS is worth less to a task that expects a fast model.
+  assert.ok(absent!.speedFactor > below!.speedFactor);
+});
+
+test("expected TPS never bypasses the minimumTps hard gate", () => {
+  for (const expectedTps of [undefined, 0, 200, 1000]) {
+    expectRejected(
+      cand({ minimumTps: 100, effectiveTps: 50, expectedTps }),
+      "speed_below_minimum"
+    );
+  }
+  // At exactly the gate the candidate is admitted and scored with the expectation.
+  const met = expectAccepted(cand({ minimumTps: 5, effectiveTps: 5, expectedTps: 200 }));
+  close(met!.speedFactor, 5 / 300, 1e-12, "S at the gate with an expectation");
+});
+
+test("a present but invalid expectedTps rejects the candidate as invalid_speed", () => {
+  for (const expectedTps of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+    expectRejected(cand({ expectedTps }), "invalid_speed");
+  }
+});
+
+test("candidates differing only in effectiveTps keep their relative order", () => {
+  const slower = cand({ canonicalId: "slower", effectiveTps: 60, expectedTps: 200 });
+  const faster = cand({ canonicalId: "faster", effectiveTps: 240, expectedTps: 200 });
+  const result = rankAutoRoutingCandidates([slower, faster]);
+  assert.deepEqual(rankedIds(result), ["faster", "slower"]);
 });
 
 test("unknown tier uses zero headroom for Q; verified efficiency is ignored without trusted headroom", () => {
@@ -1033,7 +1094,7 @@ test("minimum TPS gate rejects regardless of other strengths", () => {
   const accepted = expectAccepted(
     cand({ minimumTps: 5, effectiveTps: 5, referenceUsdPerM: 0 })
   );
-  close(accepted!.speedFactor, clamp01(5 / 200), 1e-12, "min met S");
+  close(accepted!.speedFactor, clamp01(5 / SPEED_SATURATION_BASE_TPS), 1e-12, "min met S");
 });
 
 // ---------------------------------------------------------------------------
@@ -1910,4 +1971,162 @@ test("confirmed-free uses zero routing price while preserving list price and oth
     }),
     "invalid_reference_price"
   );
+});
+
+// ---------------------------------------------------------------------------
+// Provider-verified unknown-quota floor
+// ---------------------------------------------------------------------------
+
+function unknownQuotaFloor() {
+  return {
+    kind: "unknown_quota_floor" as const,
+    appliesFromMs: NOW - MINUTE_MS,
+    appliesUntilMs: NOW + HOUR_MS,
+    source: "codebuddy.credential_environment",
+    ruleId: "codebuddy.ioa_unknown_quota_floor",
+    worst_applicable: "worst_applicable" as const,
+  };
+}
+
+/** A candidate whose aggregate quota is genuinely unobservable. */
+function unknownQuotaCandidate(over: Partial<CandidateInput> = {}): CandidateInput {
+  return cand({
+    canonicalId: "unknown-quota",
+    requiredQuota: [q("monthly", rollingEv(50))],
+    ...over,
+  });
+}
+
+test("unknown-quota floor raises Q to the floor while the aggregate stays unknown", () => {
+  const without = expectAccepted(unknownQuotaCandidate({ canonicalId: "no-floor" }))!;
+  assert.equal(without.headroom, ZERO_QUOTA_HEADROOM);
+  assert.equal(without.quotaQuality, ZERO_QUOTA_HEADROOM);
+  assert.equal(without.unknownQuotaFloorApplied, false);
+
+  const input = unknownQuotaCandidate({ unknownQuotaFloor: unknownQuotaFloor() });
+  const applied = expectAccepted(input)!;
+  assert.equal(applied.unknownQuotaFloorApplied, true);
+  close(applied.quotaQuality, UNKNOWN_QUOTA_FLOOR_HEADROOM, 1e-12, "floored Q");
+  assert.ok(applied.notes.includes("unknown_quota_floor_applied"));
+
+  // The floor touches Q only: H, the tier, coverage and headroom trust are
+  // unchanged, and the score moves by exactly weights.Q * floor over the same
+  // candidate without the evidence.
+  assert.equal(applied.headroom, ZERO_QUOTA_HEADROOM);
+  assert.equal(applied.tier, "unknown");
+  assert.equal(applied.tier, without.tier);
+  assert.equal(applied.coverageComplete, without.coverageComplete);
+  assert.equal(applied.headroomTrusted, without.headroomTrusted);
+  close(
+    applied.score - without.score,
+    SCORE_WEIGHTS.Q * UNKNOWN_QUOTA_FLOOR_HEADROOM,
+    1e-12,
+    "floored score delta"
+  );
+  close(applied.score, expScore(input, applied), 1e-12, "mirrored floored score");
+});
+
+test("trusted healthy headroom ignores the floor", () => {
+  const input = cand({
+    canonicalId: "trusted-headroom",
+    requiredQuota: [q("monthly", hQ(0.9))],
+    unknownQuotaFloor: unknownQuotaFloor(),
+  });
+  const assessed = expectAccepted(input)!;
+  assert.equal(assessed.unknownQuotaFloorApplied, false);
+  assert.equal(assessed.headroomTrusted, true);
+  assert.equal(assessed.tier, "healthy");
+  close(assessed.quotaQuality, assessed.headroom, 1e-12, "raw trusted Q");
+  assert.ok(
+    assessed.notes.includes("unknown_quota_floor_with_trusted_headroom_ignored")
+  );
+  assert.equal(assessed.notes.includes("unknown_quota_floor_applied"), false);
+});
+
+test("a blocked quota still rejects with quota_blocked under floor evidence", () => {
+  const result = rankAutoRoutingCandidates([
+    unknownQuotaCandidate({
+      canonicalId: "floor-blocked",
+      requiredQuota: [q("rolling", rollingEv(0))],
+      unknownQuotaFloor: unknownQuotaFloor(),
+    }),
+  ]);
+  assert.deepEqual(rankedIds(result), []);
+  assert.deepEqual(
+    result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
+    [["floor-blocked", "quota_blocked"]]
+  );
+});
+
+test("malformed or stale floor evidence is ignored", () => {
+  const wrongKind = expectAccepted(
+    unknownQuotaCandidate({
+      unknownQuotaFloor: { ...unknownQuotaFloor(), kind: "confirmed_free" as never },
+    })
+  )!;
+  assert.equal(wrongKind.unknownQuotaFloorApplied, false);
+  assert.equal(wrongKind.quotaQuality, ZERO_QUOTA_HEADROOM);
+  assert.ok(wrongKind.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
+
+  const missingSource = expectAccepted(
+    unknownQuotaCandidate({
+      unknownQuotaFloor: { ...unknownQuotaFloor(), source: "" },
+    })
+  )!;
+  assert.equal(missingSource.unknownQuotaFloorApplied, false);
+  assert.ok(missingSource.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
+
+  const missingRule = expectAccepted(
+    unknownQuotaCandidate({
+      unknownQuotaFloor: { ...unknownQuotaFloor(), ruleId: "" },
+    })
+  )!;
+  assert.equal(missingRule.unknownQuotaFloorApplied, false);
+  assert.ok(missingRule.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
+
+  const missingMarker = expectAccepted(
+    unknownQuotaCandidate({
+      unknownQuotaFloor: { ...unknownQuotaFloor(), worst_applicable: "best" as never },
+    })
+  )!;
+  assert.equal(missingMarker.unknownQuotaFloorApplied, false);
+  assert.ok(missingMarker.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
+
+  const stale = expectAccepted(
+    unknownQuotaCandidate({
+      unknownQuotaFloor: { ...unknownQuotaFloor(), appliesUntilMs: NOW + 1 },
+    })
+  )!;
+  assert.equal(stale.unknownQuotaFloorApplied, false);
+  assert.equal(stale.quotaQuality, ZERO_QUOTA_HEADROOM);
+  assert.ok(
+    stale.notes.includes("unknown_quota_floor_interval_does_not_cover_timeout_horizon")
+  );
+});
+
+test("verified quota-burn efficiency and the floor never both apply", () => {
+  // Efficiency requires a trusted positive headroom, so a floor-applicable
+  // unknown aggregate can never carry the blend: the floor alone sets Q.
+  const efficiency = {
+    efficiencyScore: 0.5,
+    appliesFromMs: NOW - MINUTE_MS,
+    appliesUntilMs: NOW + HOUR_MS,
+    source: "quota-burn",
+    ruleId: "efficiency-fixture",
+    domain: "quota_burn_efficiency" as const,
+    worst_applicable: "worst_applicable" as const,
+  };
+  const input = unknownQuotaCandidate({
+    canonicalId: "floor-and-efficiency",
+    verifiedEfficiency: efficiency,
+    unknownQuotaFloor: unknownQuotaFloor(),
+  });
+  const assessed = expectAccepted(input)!;
+  assert.equal(assessed.verifiedEfficiency, null);
+  assert.equal(assessed.unknownQuotaFloorApplied, true);
+  close(assessed.quotaQuality, UNKNOWN_QUOTA_FLOOR_HEADROOM, 1e-12, "floor-only Q");
+  assert.ok(
+    assessed.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
+  );
+  close(assessed.score, expScore(input, assessed), 1e-12, "mirrored floor-only score");
 });
