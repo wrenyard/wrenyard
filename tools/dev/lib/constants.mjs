@@ -1,6 +1,14 @@
 /** Source-development supervisor constants. Retry policy is also documented in CONTRIBUTING.md. */
 
 export const PRODUCT_NAME = '啾啾工坊';
+/**
+ * Stable data identity of the installed Desktop package (`package.json` `name`).
+ * Electron derives `userData` from this when no explicit override exists, so the
+ * supervisor and source Electron must both resolve the installed identity here.
+ * Keep it decoupled from PRODUCT_NAME: that value is localized display branding
+ * used for window/tray labels and must never name a data directory.
+ */
+export const DESKTOP_DATA_IDENTITY = '@wrenyard/desktop';
 export const INSTANCE_VERSION = 1;
 export const SOURCE_DEV_FLAG = '1';
 
