@@ -1124,13 +1124,18 @@ export class TaskSettingsService {
     return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver, requirements) }
   }
 
-  /** Lists the raw definition configuration of ALL valid builtin and project
-   *  tasks for the routing form import combobox. This is a separate, lazy,
-   *  read-only endpoint: it enumerates definitions through the same
-   *  `collectSnapshotSummaries` path the snapshot uses, exposes ONLY the raw
-   *  definition `dispatch`/`timeout_ms` (never the effective user settings or a
-   *  resolved snapshot), and performs no inference, save, or reserve. */
+  /** Lists the EFFECTIVE automatic configuration of ALL valid builtin and
+   *  project tasks for the routing form import combobox. This is a separate,
+   *  lazy, read-only endpoint: it enumerates definitions through the same
+   *  `collectSnapshotSummaries` path the snapshot uses and layers this
+   *  machine's user-global and per-task settings over each definition, so an
+   *  imported task carries the constraints it would really dispatch under —
+   *  a locally excluded provider reaches the form instead of being silently
+   *  dropped. It resolves no runtime and performs no inference, save, or
+   *  reserve. */
   async routingTestTasks(_params: TaskRoutingTestTasksParams = {}): Promise<TaskRoutingTestTasksResult> {
+    const settings = tasksSectionOf(this.readConfigRecord().record)
+    const userGlobal = readGlobalTaskSettings(settings) ?? undefined
     const summaries = await this.collectSnapshotSummaries({})
     const tasks: TaskRoutingTestTask[] = summaries.map((summary) => {
       const kind: 'builtin' | 'project' = summary.kind
@@ -1140,14 +1145,30 @@ export class TaskSettingsService {
         name: summary.name,
         ...(kind === 'project' && summary.project !== undefined ? { project: summary.project } : {}),
       })
-      const dispatch = toSnakeDispatch(rawDefinitionDispatch(summary.dispatch))
+      const builtin = taskDefaultsToSettingsLayer(this.summaryDefaults(summary))
+      // One unreadable stored layer must not fail the whole import list; that
+      // task falls back to its definition and the snapshot reports the issue.
+      let effective: ReturnType<typeof resolveEffectiveTaskSettings>
+      try {
+        effective = resolveEffectiveTaskSettings({
+          builtin,
+          userGlobal,
+          userTask: readPerTaskSettings(settings, identity),
+        })
+      } catch {
+        effective = resolveEffectiveTaskSettings({ builtin })
+      }
       return {
         identity,
         name: summary.name,
         display_name: summary.displayName ?? summary.name,
         ...(summary.project !== undefined ? { project: summary.project } : {}),
-        automatic: dispatch,
-        ...(summary.timeoutMs !== undefined ? { timeout_ms: summary.timeoutMs } : {}),
+        automatic: toSnakeDispatch(effective.dispatch),
+        // The system fallback timeout is not a declared constraint, so it stays
+        // out of the form and leaves the field blank.
+        ...(effective.sources.timeoutMs !== undefined && effective.sources.timeoutMs !== 'system_global'
+          ? { timeout_ms: effective.timeoutMs }
+          : {}),
       }
     })
     return { tasks }
