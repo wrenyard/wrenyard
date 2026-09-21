@@ -1,7 +1,8 @@
+export { normalizeChatGPTQuota } from './normalize-quota.ts';
 import type { Provider } from '../base/provider.ts';
 import { quotaWindow, quotaPool } from '../base/quota-helpers.ts';
 
-const CODEX_PARSER = 'runtime/forge/internal/usage/quota/codex.go';
+const CODEX_PARSER = 'packages/providers/src/chatgpt/normalize-quota.ts';
 
 const CHATGPT_7D_POOL = quotaPool('chatgpt/7d', [
   quotaWindow('7d', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
