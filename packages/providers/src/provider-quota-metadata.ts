@@ -33,6 +33,7 @@
  */
 
 import { BUILTIN_PROVIDERS } from './catalog.js';
+import { codeBuddyDefaultPools, codeBuddyQuotaBindings } from './codebuddy/quota.ts';
 
 export type QuotaResetKind = 'full_cycle' | 'rolling_partial' | 'unproven';
 
@@ -164,15 +165,8 @@ const explicitBindings: ProviderQuotaBinding[] = [
   // K2.8 Preview draws on the same Kimi Coding subscription as K3.
   binding('kimi-coding', 'kimi-k2.8', [KIMI_5H_POOL, KIMI_7D_POOL]),
   // HY models draw jointly on the HY family allowance and the account monthly allowance.
-  // No raw window evidence has been reviewed: both pools stay empty/unknown.
-  binding('codebuddy', 'hy3', [quotaPool('codebuddy/hy-family', []), quotaPool('codebuddy/monthly', [])]),
-  binding('codebuddy', 'hy4-preview', [quotaPool('codebuddy/hy-family', []), quotaPool('codebuddy/monthly', [])]),
   // Remaining CodeBuddy models use the account monthly allowance only.
-  ...BUILTIN_PROVIDERS.filter((provider) => provider.id === 'codebuddy').flatMap((provider) =>
-    provider.models
-      .filter((modelDefinition) => modelDefinition.id !== 'hy3' && modelDefinition.id !== 'hy4-preview')
-      .map((modelDefinition) => binding('codebuddy', modelDefinition.id, [quotaPool('codebuddy/monthly', [])])),
-  ),
+  ...codeBuddyQuotaBindings(),
   // Zhipu coding preserves the proven 5h rolling / 7d full-cycle resets.
   binding('zhipu-coding', 'glm-5.3', [ZHIPU_5H_POOL, ZHIPU_7D_POOL]),
   binding('zhipu-coding', 'glm-5.3-flash', [ZHIPU_5H_POOL, ZHIPU_7D_POOL]),
@@ -201,7 +195,7 @@ function defaultPoolsFor(providerId: string): readonly ProviderQuotaPool[] {
   if (providerId === 'chatgpt') return [CHATGPT_5H_POOL, CHATGPT_7D_POOL];
   if (providerId === 'kimi-coding') return [KIMI_5H_POOL, KIMI_7D_POOL];
   if (providerId === 'zhipu-coding') return [ZHIPU_5H_POOL, ZHIPU_7D_POOL];
-  if (providerId === 'codebuddy') return [quotaPool('codebuddy/monthly', [])];
+  if (providerId === 'codebuddy') return codeBuddyDefaultPools();
   if (providerId === 'opencode-zen') return [ZEN_FREE_POOL];
   if (providerId === 'openrouter') return [OPENROUTER_FREE_POOL];
   if (['deepseek', 'anthropic', 'minimax', 'moonshot', 'openai', 'qwen', 'tokenhub', 'volcengine', 'zhipu'].includes(providerId)) {
