@@ -21,7 +21,7 @@ const FIRST_PARTY_MANIFESTS = [
   'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
-  'packages/gateway/package.json',
+  'packages/features/gateway/package.json',
   'packages/providers/package.json',
   'packages/runtime-resolver/package.json',
   'packages/runtime-darwin-arm64/package.json',
@@ -94,7 +94,7 @@ test('version-sync --check passes when every first-party location matches the ro
 test('version-sync --check reports drift without modifying any file', async () => {
   const dir = await buildFixture();
   await writeJson(dir, 'packages/catalog/package.json', { name: '@wrenyard/catalog', version: '0.1.1' });
-  await writeJson(dir, 'packages/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
+  await writeJson(dir, 'packages/features/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
   try {
     let threw = false;
@@ -104,14 +104,14 @@ test('version-sync --check reports drift without modifying any file', async () =
       threw = true;
       const out = String(error.stdout) + String(error.stderr);
       assert.match(out, /packages\/catalog\/package\.json/);
-      assert.match(out, /packages\/gateway\/package\.json/);
+      assert.match(out, /packages\/features\/gateway\/package\.json/);
       assert.match(out, /embed\.go/);
     }
     assert.equal(threw, true, '--check must exit non-zero on drift');
     // No file was mutated by --check.
     const catalog = JSON.parse(await readFile(join(dir, 'packages/catalog/package.json'), 'utf8'));
     assert.equal(catalog.version, '0.1.1');
-    const gateway = JSON.parse(await readFile(join(dir, 'packages/gateway/package.json'), 'utf8'));
+    const gateway = JSON.parse(await readFile(join(dir, 'packages/features/gateway/package.json'), 'utf8'));
     assert.equal(gateway.version, '0.1.1');
     const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
     assert.match(embed, /const version = "0\.7\.18"/);
