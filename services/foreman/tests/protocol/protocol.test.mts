@@ -684,13 +684,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         maxOutputTokens: 8192,
         capabilities: ['text', 'image'],
         thinkingLevels: ['low', 'high', 'max'],
-        speed: {
-          tps: 40,
-          source: 'catalog',
-          checkedAt: '2026-09-05T00:00:00.000Z',
-          conservative: true,
-          basis: 'rolling benchmark',
-        },
+        speed: 40,
         pricing: {
           inputUsdPerMillion: 3,
           cachedInputUsdPerMillion: 0.3,
