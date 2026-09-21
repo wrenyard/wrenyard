@@ -27,13 +27,7 @@ export interface GatewayConnectionResult {
      * choice can be validated against this exact ladder.
      */
     thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[]
-    speed?: {
-      tps: number
-      source: string
-      checkedAt: string
-      conservative?: boolean
-      basis?: string
-    }
+    speed?: number
     pricing?: {
       inputUsdPerMillion: number
       cachedInputUsdPerMillion: number
@@ -73,15 +67,7 @@ export const gatewayConnectionResultSchema = {
             type: 'array',
             items: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
           },
-          speed: {
-            type: 'object',
-            required: ['tps', 'source', 'checkedAt'],
-            properties: {
-              tps: { type: 'number', minimum: 0 }, source: { type: 'string', minLength: 1 }, checkedAt: { type: 'string', minLength: 1 },
-              conservative: { type: 'boolean' }, basis: { type: 'string', minLength: 1 },
-            },
-            additionalProperties: false,
-          },
+          speed: { type: 'number', exclusiveMinimum: 0 },
           pricing: {
             type: 'object',
             required: ['inputUsdPerMillion', 'cachedInputUsdPerMillion', 'outputUsdPerMillion', 'source', 'checkedAt'],

@@ -46,14 +46,6 @@ export interface WrenyardIpcRequestOptions {
   timeoutMs?: number | null;
 }
 
-export interface WrenyardGatewayModelSpeed {
-  tps: number;
-  source: string;
-  checkedAt: string;
-  conservative?: boolean;
-  basis?: string;
-}
-
 export interface WrenyardGatewayModelPricing {
   inputUsdPerMillion: number;
   cachedInputUsdPerMillion: number;
@@ -82,7 +74,7 @@ export interface WrenyardGatewayModel {
    * contract; absent for models that do not expose thinking controls.
    */
   thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
-  speed?: WrenyardGatewayModelSpeed;
+  speed?: number;
   pricing?: WrenyardGatewayModelPricing;
 }
 

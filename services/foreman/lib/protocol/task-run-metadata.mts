@@ -103,7 +103,7 @@ export const taskResolvedDispatchSchema = {
     auto_routing: taskAutoRoutingDecisionSchema,
     speed: {
       type: 'object',
-      required: ['effective_tps', 'source', 'sample_count', 'checked_at', 'expected_tps_met'],
+      required: ['effective_tps', 'source', 'sample_count', 'expected_tps_met'],
       properties: {
         effective_tps: { type: 'number' },
         source: { enum: ['local_31d', 'provider_override', 'catalog_default'] },

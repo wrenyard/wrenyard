@@ -275,35 +275,17 @@ test('every registered built-in model has a valid authoritative speed default', 
 
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
   for (const { provider, model } of entries) {
-    assert.ok(Number.isFinite(model.speed.tps) && model.speed.tps > 0, `${provider}/${model.id} needs positive finite tps`);
-    assert.ok(model.speed.source.trim(), `${provider}/${model.id} needs speed provenance`);
-    assert.ok(model.speed.checkedAt.trim(), `${provider}/${model.id} needs speed checkedAt`);
-    assert.ok(model.speed.basis?.trim(), `${provider}/${model.id} needs a reviewable speed basis`);
-    if (provider === 'cursor' && model.id === 'composer-2.5') {
-      assert.equal(model.speed.tps, 40);
-      assert.equal(model.speed.source, 'user-specified');
-      assert.match(model.speed.basis!, /exact standard cursor\/composer-2\.5/u);
-      assert.doesNotMatch(model.speed.basis!, /external benchmark/u);
-      assert.match(model.speed.basis!, /not composer-2\.5-fast/u);
-    } else if (model.speed.source === 'bootstrap') {
-      // Unmeasured bootstrap baselines stay conservative; the newest free
-      // routes use an explicitly low placeholder rather than a measured value.
-      assert.equal(model.speed.conservative, true);
-      assert.ok(model.speed.tps > 0, `${provider}/${model.id} bootstrap tps must be positive`);
-      assert.match(model.speed.basis!, /unmeasured|not derived from an external/iu);
-    } else if (!model.speed.source.startsWith('local-benchmark')) {
-      assert.match(model.speed.source, /^https:\/\//u, `${provider}/${model.id} needs a public evidence URL`);
-    }
+    assert.ok(Number.isFinite(model.speed) && model.speed > 0, `${provider}/${model.id} needs positive finite tps`);
   }
 
   // A repeated exact id must resolve to the same model default on every provider;
   // provider-specific differences belong in modelSpeedOverrides instead.
   for (const id of uniqueIds) {
     const speeds = entries.filter(({ model }) => model.id === id).map(({ model }) => model.speed);
-    for (const candidate of speeds.slice(1)) assert.deepEqual(candidate, speeds[0], `${id} defaults diverged`);
+    for (const candidate of speeds.slice(1)) assert.equal(candidate, speeds[0], `${id} defaults diverged`);
   }
 
-  const representative = new Map(entries.map(({ model }) => [model.id, model.speed.tps]));
+  const representative = new Map(entries.map(({ model }) => [model.id, model.speed]));
   assert.equal(representative.get('gpt-6-astra'), 50.6);
   assert.equal(representative.get('gpt-5.6-terra'), 98.4);
   assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
@@ -466,7 +448,7 @@ test('renamed providers expose their exact ids, labels, and client bindings', ()
 });
 
 
-test('new Flash ignores retired model speed history and TokenHub baseline is marked unmeasured', () => {
+test('new Flash ignores retired model speed history', () => {
   const catalog = createBuiltinCatalog();
   const provider = catalog.provider('codebuddy')!;
   const flash = provider.models.find(model => model.id === 'deepseek-v4.1-flash')!;
@@ -476,9 +458,7 @@ test('new Flash ignores retired model speed history and TokenHub baseline is mar
   assert.equal(speed.source, 'catalog_default');
   assert.equal(speed.tps, 200.5);
   const tokenhub = catalog.provider('tokenhub')!.models.find(model => model.id === 'deepseek/deepseek-flash')!;
-  assert.equal(tokenhub.speed?.tps, 207);
-  assert.equal(tokenhub.speed?.conservative, true);
-  assert.match(tokenhub.speed?.basis ?? '', /TokenHub endpoint is unmeasured/);
+  assert.equal(tokenhub.speed, 207);
 });
 
 test('Cursor registers twelve multi-vendor models with intelligence, images, and known pricing', () => {

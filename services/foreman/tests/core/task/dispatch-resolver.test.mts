@@ -13,10 +13,9 @@ import {
   type TaskDispatchResolver,
 } from '../../../lib/core/task/dispatch-resolver.mts'
 
-// Catalog-default speed samples are stamped checked_at (from the builtin
-// provider fixture); speed assertions use this truthful date. Catalog pricing
-// rows keep their own truthful checked_at dates, asserted inline per model.
-const SPEED_CHECKED_AT = '2026-09-09'
+// Catalog-default and provider-override speeds are TPS numbers with no
+// checked_at. Local 31-day samples keep their own truthful checked_at dates.
+// Catalog pricing rows keep their own truthful checked_at dates, asserted inline per model.
 // Real, injected local sample timestamp — must appear verbatim in the snapshot,
 // never a fabricated `new Date()` value. Derived from the current clock so the
 // sample stays within the 31-day freshness window regardless of run time.
@@ -61,7 +60,7 @@ async function createSpeedOverrideResolver(
       id: 'm',
       displayName: 'M',
       intelligence: 'mid',
-      speed: { tps: defaultTps, source: 'default-bench', checkedAt: '2026-09-01' },
+      speed: defaultTps,
       pricing: {
         inputUsdPerMillion: 1,
         cachedInputUsdPerMillion: 0.5,
@@ -71,7 +70,7 @@ async function createSpeedOverrideResolver(
       },
     }],
     modelSpeedOverrides: {
-      m: { tps: overrideTps, source: 'override-bench', checkedAt: '2026-09-02' },
+      m: overrideTps,
     },
     protocols: [{
       protocol: 'openai_chat',
@@ -126,7 +125,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 93.8)
     assert.equal(resolved.speed.sample_count, 0)
-    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
+    assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.speed.expected_tps_met, true)
     // Per-million reference pricing from the catalog, with a real source stamp.
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.139)
@@ -178,7 +177,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.intelligence, 'mid')
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 73.1)
-    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
+    assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.15)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 0.5)
   })
@@ -403,7 +402,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(resolved.intelligence, 'high')
     assert.equal(resolved.speed.source, 'catalog_default')
     assert.equal(resolved.speed.effective_tps, 39.7)
-    assert.equal(resolved.speed.checked_at, SPEED_CHECKED_AT)
+    assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 15)
   })
 

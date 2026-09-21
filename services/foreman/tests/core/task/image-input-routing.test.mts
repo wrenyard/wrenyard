@@ -25,7 +25,7 @@ async function fixture(includeImage: boolean) {
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://fixture.invalid/chat/completions', authScheme: 'bearer' }],
     models: definitions.map(({ id, capabilities, tps, price }) => ({
       id, displayName: id, capabilities, intelligence: 'mid',
-      speed: { tps, source: 'fixture', checkedAt: '2026-09-10' },
+      speed: tps,
       pricing: { inputUsdPerMillion: price, cachedInputUsdPerMillion: price, outputUsdPerMillion: price, source: 'fixture', checkedAt: '2026-09-10' },
     })),
   })

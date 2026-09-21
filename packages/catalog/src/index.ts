@@ -175,14 +175,6 @@ function validateModelPricing(pricing: ModelPricing | undefined, label: string):
 
 export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
 
-export interface ModelSpeedMeta {
-  tps: number;
-  source: string;
-  checkedAt: string;
-  conservative?: boolean;
-  basis?: string;
-}
-
 export interface SpeedEvidence {
   source: SpeedSource;
   tps: number;
@@ -224,7 +216,7 @@ export interface ModelDefinition {
    * OpenCode Zen tiers); restricted models are never published through the
    * public gateway model directory. */
   supportedClients?: readonly string[];
-  speed: ModelSpeedMeta;
+  speed: number;
   pricing: ModelPricing;
   /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
   free?: boolean;
@@ -299,7 +291,7 @@ export interface ProviderDefinition {
   modelAliases?: Readonly<Record<string, string>>;
   // Canonical model speed overrides keyed by exact declared model id; alias keys
   // and unknown model keys are rejected at registration.
-  modelSpeedOverrides?: Readonly<Record<string, ModelSpeedMeta>>;
+  modelSpeedOverrides?: Readonly<Record<string, number>>;
   // Per-runtime thinking materializations, keyed model id then client id then
   // thinking level. The presence of an entry is the only claim that a runtime
   // explicitly supports realizing that level; absent means capability unknown,
@@ -372,21 +364,11 @@ function requireID(kind: string, value: string): void {
   }
 }
 
-// Every speed evidence entry that registers into the catalog must carry a finite
-// positive tps and non-empty source/checkedAt strings, whether it is a model's
-// required default speed or a canonical modelSpeedOverride.
-function validateSpeedMeta(speed: ModelSpeedMeta | undefined, label: string): void {
-  if (!speed) {
-    throw new Error(`${label} is missing required speed metadata`);
-  }
-  if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
-    throw new Error(`${label} speed tps must be finite and greater than zero`);
-  }
-  if (typeof speed.source !== 'string' || speed.source.trim().length === 0) {
-    throw new Error(`${label} speed source must be a non-empty string`);
-  }
-  if (typeof speed.checkedAt !== 'string' || speed.checkedAt.trim().length === 0) {
-    throw new Error(`${label} speed checkedAt must be a non-empty string`);
+// Every catalog speed must be a finite positive TPS number, whether it is a
+// model's required default or a canonical modelSpeedOverride.
+function validateSpeed(speed: number | undefined, label: string): void {
+  if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0) {
+    throw new Error(`${label} speed must be a finite number greater than zero`);
   }
 }
 
@@ -436,17 +418,15 @@ export function resolveModelSpeed(
     }
   }
   const override = provider.modelSpeedOverrides?.[modelDef.id]
-  if (override) {
+  if (override !== undefined) {
     return {
       source: 'provider_override',
-      tps: override.tps,
-      checkedAt: override.checkedAt,
+      tps: override,
     }
   }
   return {
     source: 'catalog_default',
-    tps: modelDef.speed.tps,
-    checkedAt: modelDef.speed.checkedAt,
+    tps: modelDef.speed,
   }
 }
 
@@ -473,7 +453,7 @@ export class Catalog {
       }
       // A model's default speed is required: a registration without one is
       // rejected up front, before any further validation.
-      validateSpeedMeta(model.speed, `provider ${provider.id} model ${model.id}`);
+      validateSpeed(model.speed, `provider ${provider.id} model ${model.id}`);
       validateModelPricing(model.pricing, `provider ${provider.id} model ${model.id}`);
       if (model.free !== undefined && typeof model.free !== 'boolean') {
         throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
@@ -519,15 +499,15 @@ export class Catalog {
       if (!modelIDs.has(target)) throw new Error(`provider ${provider.id} model alias ${alias} targets unknown model ${target}`);
     }
     // Canonical speed overrides may only reference exact declared model ids. Alias
-    // keys and unknown model keys are rejected, and every override must satisfy the
-    // same evidence requirements as a model's required default speed.
+    // keys and unknown model keys are rejected, and every override must be a
+    // finite positive TPS like a model's required default speed.
     for (const [modelID, override] of Object.entries(provider.modelSpeedOverrides ?? {})) {
       if (!modelIDs.has(modelID)) {
         throw new Error(
           `provider ${provider.id} model speed override ${JSON.stringify(modelID)} must reference an exact canonical model id`,
         );
       }
-      validateSpeedMeta(override, `provider ${provider.id} model speed override ${modelID}`);
+      validateSpeed(override, `provider ${provider.id} model speed override ${modelID}`);
     }
     // Thinking mappings may only reference exact declared model ids and legal
     // levels, and every mapping entry must be an object. References/values are

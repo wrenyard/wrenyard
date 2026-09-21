@@ -10,7 +10,6 @@ import {
   type IntelligenceTier,
   type ModelCapability,
   type ModelDefinition,
-  type ModelSpeedMeta,
   type TaskDispatchRequirements,
   type ThinkingLevel,
   formatRunSyntax,
@@ -35,8 +34,8 @@ test('registration rejects missing or invalid model list prices', () => {
   }
 });
 
-function speedFixture(tps = 40, source = 'benchmark-fixture', checkedAt = '2026-09-05'): ModelSpeedMeta {
-  return { tps, source, checkedAt };
+function speedFixture(tps = 40): number {
+  return tps;
 }
 
 // A freshly-minted ISO timestamp a few days before the current clock, used so
@@ -130,7 +129,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     capabilities: readonly ModelCapability[] = ['text'] as readonly ModelCapability[],
   ) => ({ pricing: pricingFixture(),
     id, displayName: id, intelligence, capabilities,
-    speed: { tps, source: `benchmark-${id}`, checkedAt: '2026-09-05' },
+    speed: tps,
     ...(outUsd !== undefined
       ? { pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: outUsd, source: 'spec', checkedAt: '2026-09-05' } }
       : {}),
@@ -346,19 +345,10 @@ test('registerProvider rejects a model missing its required speed default', () =
   );
 });
 
-test('registerProvider rejects non-positive, non-finite, and empty-evidence default speeds', () => {
+test('registerProvider rejects non-positive and non-finite default speeds', () => {
   const catalog = new Catalog();
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
-  const invalid: ModelSpeedMeta[] = [
-    { tps: 0, source: 'bench', checkedAt: '2026-09-05' },
-    { tps: -1, source: 'bench', checkedAt: '2026-09-05' },
-    { tps: Number.NaN, source: 'bench', checkedAt: '2026-09-05' },
-    { tps: Number.POSITIVE_INFINITY, source: 'bench', checkedAt: '2026-09-05' },
-    { tps: 40, source: '', checkedAt: '2026-09-05' },
-    { tps: 40, source: 'bench', checkedAt: '' },
-    { tps: 40, source: '   ', checkedAt: '2026-09-05' },
-    { tps: 40, source: 'bench', checkedAt: '   ' },
-  ];
+  const invalid = [0, -1, Number.NaN, Number.POSITIVE_INFINITY];
   for (const speed of invalid) {
     assert.throws(
       () => catalog.registerProvider({
@@ -428,7 +418,7 @@ test('registerProvider validates shared canonical model identity atomically', ()
   assert.ok(catalog.provider('valid'));
 });
 
-test('registerProvider validates modelSpeedOverrides evidence and exact canonical keys only', () => {
+test('registerProvider validates modelSpeedOverrides and exact canonical keys only', () => {
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
   const canonicalModel = { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid' as const, speed: speedFixture(40) };
   const register = (extra: object) => new Catalog().registerProvider({
@@ -439,25 +429,21 @@ test('registerProvider validates modelSpeedOverrides evidence and exact canonica
   });
 
   // A valid override for the exact canonical model id is accepted.
-  register({ modelSpeedOverrides: { 'glm-5.3': { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } });
+  register({ modelSpeedOverrides: { 'glm-5.3': 90 } });
 
   // An alias key is not a canonical model id and is rejected.
   assert.throws(
-    () => register({ modelAliases: { 'legacy-glm': 'glm-5.3' }, modelSpeedOverrides: { 'legacy-glm': { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } }),
+    () => register({ modelAliases: { 'legacy-glm': 'glm-5.3' }, modelSpeedOverrides: { 'legacy-glm': 90 } }),
     /exact canonical model/,
   );
   // An unknown model key is rejected.
   assert.throws(
-    () => register({ modelSpeedOverrides: { nope: { tps: 90, source: 'override-bench', checkedAt: '2026-09-06' } } }),
+    () => register({ modelSpeedOverrides: { nope: 90 } }),
     /exact canonical model/,
   );
-  // Override evidence must satisfy the same rules as a model default speed.
+  // Override TPS must satisfy the same rules as a model default speed.
   assert.throws(
-    () => register({ modelSpeedOverrides: { 'glm-5.3': { tps: 0, source: 'override-bench', checkedAt: '2026-09-06' } } }),
-    /speed/,
-  );
-  assert.throws(
-    () => register({ modelSpeedOverrides: { 'glm-5.3': { tps: 90, source: '', checkedAt: '2026-09-06' } } }),
+    () => register({ modelSpeedOverrides: { 'glm-5.3': 0 } }),
     /speed/,
   );
 });
@@ -496,7 +482,7 @@ function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCan
       { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
       { pricing: pricingFixture(), id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
     ],
-    modelSpeedOverrides: { m: { tps: 60, source: 'override-bench', checkedAt: '2026-09-06' } },
+    modelSpeedOverrides: { m: 60 },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return {
@@ -520,7 +506,6 @@ test('exact speed precedence is local_31d over provider_override over catalog_de
   assert.equal(providerOverride.ok, true);
   assert.equal(providerOverride.selected.speed.source, 'provider_override');
   assert.equal(providerOverride.selected.speed.tps, 60);
-  assert.equal(providerOverride.selected.speed.checkedAt, '2026-09-06');
 
   // A usable exact-profile local sample outranks the provider override.
   const localSample = resolveConstrainedDispatch(catalog, [overrideModel], {}, [
@@ -658,8 +643,8 @@ test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flas
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     modelAliases: { 'legacy-glm': 'glm-5.3' },
     models: [
-      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: { tps: 50, source: 'b', checkedAt: '2026-09-05' }, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 1, source: 'spec', checkedAt: '2026-09-05' } },
-      { id: 'GLM-5.3-Flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: { tps: 50, source: 'b', checkedAt: '2026-09-05' }, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' } },
+      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: 50, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 1, source: 'spec', checkedAt: '2026-09-05' } },
+      { id: 'GLM-5.3-Flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: 50, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' } },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -689,7 +674,7 @@ function buildDualRouteCatalog(): {
     nativeClients: ['claude'],
     models: [{
       id: 'm', displayName: 'M', intelligence: 'mid',
-      speed: { tps: 30, source: 'bench', checkedAt: '2026-09-05' },
+      speed: 30,
       pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
     }],
     protocols: [
@@ -748,7 +733,7 @@ test('with no native route the grok client beats claude for the same provider/mo
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
     models: [{
       id: 'm', displayName: 'M', intelligence: 'mid',
-      speed: { tps: 30, source: 'bench', checkedAt: '2026-09-05' },
+      speed: 30,
       pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
     }],
     protocols: [

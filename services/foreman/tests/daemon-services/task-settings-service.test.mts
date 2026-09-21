@@ -2299,7 +2299,7 @@ describe('daemon task-settings-service (no-model)', () => {
       const profile: ProfileFixture = {
         exactAgentRuntime, profile: exactAgentRuntime, client: 'opencode',
         provider: providerId, model: modelId, intelligence: model.intelligence!,
-        tps: model.speed!.tps, inputUsd: model.pricing!.inputUsdPerMillion!,
+        tps: model.speed, inputUsd: model.pricing!.inputUsdPerMillion!,
         outputUsd: model.pricing!.outputUsdPerMillion!, mode: 'gateway',
       }
       const freeSupply = runtime.freeSupply!(provider, modelId, { value: 'mock-authenticated-key' })
