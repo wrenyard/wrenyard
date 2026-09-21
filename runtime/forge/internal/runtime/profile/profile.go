@@ -1,7 +1,7 @@
 // Package profile owns the profile boundary types and resolution from the
 // already-dispatch-gated root manifest profile into a self-contained
 // ResolvedProfile. It depends only on the catalog package and must not import
-// the root forge package, driver, quota, or statusline. Command/env/stdin
+// the root forge package or driver. Command/env/stdin
 // planning, binary resolution, model validation, and filesystem side effects
 // remain in the caller.
 package profile

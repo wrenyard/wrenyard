@@ -25,6 +25,12 @@ func LoadForgeConfig(path string, embeddedData []byte, w io.Writer) (Config, []s
 		return Config{}, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
+	// Ignore the retired quota/statusline section in existing local configs.
+	var legacy map[string]json.RawMessage
+	if json.Unmarshal(data, &legacy) == nil {
+		delete(legacy, "quota")
+		data, _ = json.Marshal(legacy)
+	}
 	// Strict JSON decoding with DisallowUnknownFields.
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()

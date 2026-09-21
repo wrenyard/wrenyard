@@ -1,6 +1,6 @@
 //go:build darwin
 
-package quota
+package claude
 
 import (
 	"context"

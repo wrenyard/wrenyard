@@ -27,21 +27,6 @@ func FillDefaults(cfg *Config, data []byte) {
 	if cfg.CustomProviders == nil {
 		cfg.CustomProviders = map[string]CustomProvider{}
 	}
-	if cfg.Quota.StatuslineTTLSec == 0 {
-		cfg.Quota.StatuslineTTLSec = 600
-	}
-	if cfg.Quota.UsageTTLMin == 0 {
-		cfg.Quota.UsageTTLMin = 10
-	}
-	if cfg.Quota.SnapshotStaleMin == 0 {
-		cfg.Quota.SnapshotStaleMin = 15
-	}
-	if cfg.Quota.StatuslineRenderMs == 0 {
-		cfg.Quota.StatuslineRenderMs = 250
-	}
-	if cfg.Quota.StatuslineFetchSec == 0 {
-		cfg.Quota.StatuslineFetchSec = 2
-	}
 }
 
 // Default returns a fully-defaulted Config.

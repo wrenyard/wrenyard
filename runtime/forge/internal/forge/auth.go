@@ -2,21 +2,20 @@ package forge
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/clients/claude"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 	"golang.org/x/term"
 )
 
 type AuthEntry = auth.Entry
 
 func init() {
-	auth.SafeAtomicWrite = quota.SafeAtomicWrite
+	auth.SafeAtomicWrite = claude.SafeAtomicWrite
 }
 
 func authPath() string { return auth.Path(forgeDataDir()) }
@@ -93,13 +92,12 @@ func wiredAuthDeps() auth.CommandDeps {
 			pc, ok := providerConfigForAuth(id)
 			return pc, ok
 		},
-		DataDir:     forgeDataDir(),
-		Stdin:       os.Stdin,
-		Stdout:      os.Stdout,
-		Stderr:      os.Stderr,
-		IsTerminal:  term.IsTerminal,
-		StdinFd:     int(os.Stdin.Fd()),
-		QuotaVerify: func(w io.Writer, key string) { auth.VerifyQuota(w, key) },
+		DataDir:    forgeDataDir(),
+		Stdin:      os.Stdin,
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		IsTerminal: term.IsTerminal,
+		StdinFd:    int(os.Stdin.Fd()),
 	}
 }
 

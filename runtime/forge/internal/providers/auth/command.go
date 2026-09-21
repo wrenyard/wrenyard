@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -9,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/clients/claude"
 	"golang.org/x/term"
 )
 
@@ -26,7 +25,6 @@ type CommandDeps struct {
 	Stderr           io.Writer
 	IsTerminal       func(fd int) bool
 	StdinFd          int
-	QuotaVerify      func(stderr io.Writer, key string)
 }
 
 type ProviderCfg struct {
@@ -70,14 +68,6 @@ func Login(deps CommandDeps, providerID string) error {
 	}
 
 	fmt.Fprintf(deps.Stdout, "Saved credential for %s (key: %s)\n", providerID, MaskKey(key))
-
-	if deps.QuotaVerify != nil {
-		if pc, ok := deps.ProviderConfig(providerID); ok {
-			if pc.APIKind == "anthropic" && strings.HasPrefix(pc.BaseURL, "https://open.bigmodel.cn") {
-				deps.QuotaVerify(deps.Stderr, key)
-			}
-		}
-	}
 
 	return nil
 }
@@ -256,7 +246,7 @@ func ClaudeToken(deps CommandDeps, args []string) int {
 	var accessToken, refreshToken string
 	var expiresAt time.Time
 	if strings.HasPrefix(token, "{") {
-		if cred := quota.ParseClaudeCredentialJSON([]byte(token)); cred.AccessToken != "" {
+		if cred := claude.ParseClaudeCredentialJSON([]byte(token)); cred.AccessToken != "" {
 			accessToken = cred.AccessToken
 			refreshToken = cred.RefreshToken
 			expiresAt = cred.ExpiresAt
@@ -266,7 +256,7 @@ func ClaudeToken(deps CommandDeps, args []string) int {
 		accessToken = token
 	}
 	cachePath := filepath.Join(deps.DataDir, "quota", "claude-credential.json")
-	if err := quota.WriteClaudeCredentialCache(cachePath, accessToken, refreshToken, expiresAt); err != nil {
+	if err := claude.WriteClaudeCredentialCache(cachePath, accessToken, refreshToken, expiresAt); err != nil {
 		fmt.Fprintf(deps.Stderr, "forge auth claude-token: write credential: %v\n", err)
 		return 1
 	}
@@ -283,16 +273,3 @@ func MaskKey(key string) string {
 }
 
 // VerifyQuota validates a BigModel key via a short-lived fetch.
-func VerifyQuota(stderr io.Writer, key string) {
-	fmt.Fprint(stderr, "Verifying API key... ")
-	provider := quota.BigModelProvider{Token: key}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	q, err := provider.Fetch(ctx)
-	if err != nil {
-		fmt.Fprintf(stderr, "failed: %v\n", err)
-	} else {
-		fmt.Fprintf(stderr, "ok (quota available)\n")
-		_ = q
-	}
-}

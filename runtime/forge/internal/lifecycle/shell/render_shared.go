@@ -166,16 +166,12 @@ func claudeSettingsJSON(p Profile, env map[string]string) string {
 		modelOverrides = map[string]string{}
 	}
 	settings := struct {
-		Env             map[string]string `json:"env"`
-		Model           string            `json:"model,omitempty"`
-		AvailableModels []string          `json:"availableModels,omitempty"`
-		ModelOverrides  map[string]string `json:"modelOverrides"`
-		StatusLine      struct {
-			Type    string `json:"type"`
-			Command string `json:"command"`
-		} `json:"statusLine"`
-		SkipDangerousModePermissionPrompt bool `json:"skipDangerousModePermissionPrompt,omitempty"`
-		IncludeCoAuthoredBy               bool `json:"includeCoAuthoredBy"`
+		Env                               map[string]string `json:"env"`
+		Model                             string            `json:"model,omitempty"`
+		AvailableModels                   []string          `json:"availableModels,omitempty"`
+		ModelOverrides                    map[string]string `json:"modelOverrides"`
+		SkipDangerousModePermissionPrompt bool              `json:"skipDangerousModePermissionPrompt,omitempty"`
+		IncludeCoAuthoredBy               bool              `json:"includeCoAuthoredBy"`
 	}{
 		Env:                               env,
 		Model:                             claudeDefaultModel(p),
@@ -184,11 +180,9 @@ func claudeSettingsJSON(p Profile, env map[string]string) string {
 		SkipDangerousModePermissionPrompt: true,
 		IncludeCoAuthoredBy:               false,
 	}
-	settings.StatusLine.Type = "command"
-	settings.StatusLine.Command = "wrenyard runtime statusline --claude-code"
 	content, err := json.Marshal(settings)
 	if err != nil {
-		return `{"env":{},"model":"opus","statusLine":{"type":"command","command":"wrenyard runtime statusline --claude-code"}}`
+		return `{"env":{},"model":"opus"}`
 	}
 	return string(content)
 }
@@ -202,6 +196,7 @@ func claudeSettingsMergeScript() string {
 		`try{current=JSON.parse(fs.readFileSync(path,"utf8"));}catch{}`,
 		`if(!current||typeof current!=="object"||Array.isArray(current))current={};`,
 		`const next={...current,...patch};`,
+		`if(/^(?:wrenyard runtime|forge) statusline(?:\s|$)/.test(next.statusLine?.command||""))delete next.statusLine;`,
 		`fs.writeFileSync(path,JSON.stringify(next,null,2)+"\n");`,
 	}, "")
 }

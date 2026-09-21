@@ -17,7 +17,6 @@ import (
 
 type profileManifest = manifest.Manifest
 type profile = manifest.Profile
-type statuslineConfig = manifest.StatuslineConfig
 
 // --- Type aliases ---
 
@@ -42,7 +41,6 @@ const (
 type ForgeConfig = config.Config
 type ClientConfig = config.Client
 type ProviderOverride = config.ProviderOverride
-type QuotaConfig = config.Quota
 
 // --- CLI helpers ---
 

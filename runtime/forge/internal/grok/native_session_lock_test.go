@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/usage/quota"
 )
 
 func TestNativeSessionLiveOldLockCannotBeStolenAndIgnoresQuotaTimeout(t *testing.T) {
@@ -25,8 +23,6 @@ func TestNativeSessionLiveOldLockCannotBeStolenAndIgnoresQuotaTimeout(t *testing
 	if err := os.Chtimes(lockPath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	quota.SetRefreshLockStaleTimeout(time.Nanosecond)
-	defer quota.SetRefreshLockStaleTimeout(2 * time.Minute)
 
 	if stolen, err := acquireNativeSessionLockOnce(lockPath); err == nil {
 		stolen.Release()

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
-	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
 )
 
 const sourceBlockStart = "# >>> wrenyard shell shortcuts >>>"
@@ -25,7 +24,6 @@ const legacySourceBlockEnd = "# <<< forge shell shortcuts <<<"
 const legacyPowershellSourceBlockStart = "# >>> forge managed >>>"
 const legacyPowershellSourceBlockEnd = "# <<< forge managed <<<"
 const redactionPlaceholder = auth.RedactionPlaceholder
-const openCodeProviderNotFound = sl.OpenCodeProviderNotFound
 
 type ioDiscard struct{}
 

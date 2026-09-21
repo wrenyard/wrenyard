@@ -1,16 +1,15 @@
 //go:build windows
 
-package quota
+package rpcstdio
 
 import (
 	"os/exec"
 	"syscall"
 )
 
-// applyCodexHiddenProcess configures the exec.Cmd to create the codex
-// app-server subprocess with a hidden window and no visible console on
+// applyHiddenProcess configures the exec.Cmd to create client subprocesses with a hidden window and no visible console on
 // Windows, preventing console flashing during JSON-RPC stdio communication.
-func applyCodexHiddenProcess(cmd *exec.Cmd) {
+func applyHiddenProcess(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
