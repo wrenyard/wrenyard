@@ -619,11 +619,6 @@ async function startForemanDaemonWithRuntime(
             const status = modelStatus.get(key)
             // The shared resolver owns effectiveTps for every model, active or not.
             const speed = resolveModelSpeed(provider, model, localSpeed)
-            const pricing = model.pricing === undefined ? undefined : {
-              ...(model.pricing.inputUsdPerMillion === undefined ? {} : { inputUsdPerMillion: model.pricing.inputUsdPerMillion }),
-              ...(model.pricing.outputUsdPerMillion === undefined ? {} : { outputUsdPerMillion: model.pricing.outputUsdPerMillion }),
-              ...(model.pricing.cachedInputUsdPerMillion === undefined ? {} : { cachedInputUsdPerMillion: model.pricing.cachedInputUsdPerMillion }),
-            }
             return {
               id: model.id,
               displayName: model.displayName,
@@ -636,7 +631,7 @@ async function startForemanDaemonWithRuntime(
               speedSource: speed.source,
               canonicalId: model.canonicalModel?.id ?? builtinModelDisplayId(model.id),
               intelligence: model.intelligence,
-              ...(pricing === undefined ? {} : { pricing }),
+              pricing: model.pricing,
               // Availability is a fact about the current credential AND the
               // resolver's admitted provider/model set; no model is hardcoded.
               available: configured && modelStatus.has(key),

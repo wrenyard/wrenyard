@@ -2299,8 +2299,8 @@ describe('daemon task-settings-service (no-model)', () => {
       const profile: ProfileFixture = {
         exactAgentRuntime, profile: exactAgentRuntime, client: 'opencode',
         provider: providerId, model: modelId, intelligence: model.intelligence!,
-        tps: model.speed, inputUsd: model.pricing!.inputUsdPerMillion!,
-        outputUsd: model.pricing!.outputUsdPerMillion!, mode: 'gateway',
+        tps: model.speed, inputUsd: model.pricing[1],
+        outputUsd: model.pricing[2], mode: 'gateway',
       }
       const freeSupply = runtime.freeSupply!(provider, modelId, { value: 'mock-authenticated-key' })
       assert.ok(freeSupply)
@@ -3194,7 +3194,7 @@ describe('daemon task-settings-service (no-model)', () => {
     assert.equal(run.mode, 'explicit')
     assert.ok(run.dispatch)
     assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(run.dispatch.reference_pricing.source, /api-docs\.deepseek\.com/)
+    assert.match(run.dispatch.reference_pricing.source ?? '', /api-docs\.deepseek\.com/)
     assert.equal(run.dispatch.auto_routing, undefined)
   })
 
