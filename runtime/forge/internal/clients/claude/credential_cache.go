@@ -1,4 +1,4 @@
-package quota
+package claude
 
 import (
 	"encoding/json"

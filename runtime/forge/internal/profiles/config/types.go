@@ -21,7 +21,6 @@ const (
 type Config struct {
 	Clients           map[string]Client           `json:"clients"`
 	Providers         map[string]ProviderOverride `json:"providers,omitempty"`
-	Quota             Quota                       `json:"quota"`
 	CustomProviders   map[string]CustomProvider   `json:"custom_providers,omitempty"`
 	GeneratedFrom     string                      `json:"_generated_from,omitempty"`
 	PolicyMaxUsagePct map[string]int              `json:"policy_max_usage_pct,omitempty"`
@@ -45,15 +44,6 @@ type Client struct {
 type CustomProvider struct {
 	Client string   `json:"client"`
 	Models []string `json:"models"`
-}
-
-// Quota holds quota cache TTL configuration.
-type Quota struct {
-	StatuslineTTLSec   int `json:"statusline_ttl_sec"`
-	UsageTTLMin        int `json:"usage_ttl_min"`
-	SnapshotStaleMin   int `json:"snapshot_stale_min"`
-	StatuslineRenderMs int `json:"statusline_render_ms,omitempty"`
-	StatuslineFetchSec int `json:"statusline_fetch_sec,omitempty"`
 }
 
 // IsClientEnabled reports whether a client is enabled (default true when the

@@ -11,7 +11,6 @@ type Profile struct {
 	Launcher        map[string]any    `json:"launcher"`
 	Env             map[string]string `json:"env"`
 	Settings        map[string]any    `json:"settings"`
-	Statusline      *StatuslineConfig `json:"statusline,omitempty"`
 	Supports1M      bool              `json:"supports_1m,omitempty"`
 	Deprecated      bool              `json:"deprecated,omitempty"`
 	Reason          string            `json:"reason,omitempty"`
@@ -27,12 +26,4 @@ type Manifest struct {
 	SchemaVersion int                `json:"schema_version"`
 	Profiles      map[string]Profile `json:"profiles"`
 	OrderedIDs    []string           `json:"-"`
-}
-
-// StatuslineConfig holds per-profile statusline rendering settings.
-type StatuslineConfig struct {
-	Segments      []string `json:"segments,omitempty"`
-	QuotaProvider string   `json:"quota_provider,omitempty"`
-	Billing       string   `json:"billing,omitempty"`
-	MaxWidth      int      `json:"max_width,omitempty"`
 }
