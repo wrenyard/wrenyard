@@ -1,10 +1,10 @@
-import type { SupplyAssessment } from './types.ts';
+import type { SupplyAssessment, CandidateEvaluation } from './types.ts';
 import { type CandidateInput, type QuotaAssessment, type SupplyClass } from './types.ts';
 import { isFiniteNumber } from './numeric.ts';
 import { ZERO_QUOTA_HEADROOM } from './constants.ts';
 /** Interprets time-bounded free supply, marginal pricing and efficiency evidence. */
 export class SupplyEvidencePolicy {
-  assess(candidate: CandidateInput, quota: QuotaAssessment): SupplyAssessment {
+  assess(candidate: CandidateInput, quota: QuotaAssessment): SupplyAssessment | Extract<CandidateEvaluation, { kind: 'rejected' }> {
     const notes: string[] = [];
     let supplyClass: SupplyClass = "standard";
     let confirmedFreeSupplyApplied = false;
@@ -78,7 +78,7 @@ export class SupplyEvidencePolicy {
         notes.push("marginal_interval_does_not_cover_timeout_horizon");
       }
       else if (usdPerM > candidate.referenceUsdPerM) {
-        return rejected(snapshotId, canonicalId, "marginal_above_reference", `marginal usdPerM=${usdPerM} exceeds the reference ${candidate.referenceUsdPerM}`);
+        return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "marginal_above_reference", detail: `marginal usdPerM=${usdPerM} exceeds the reference ${candidate.referenceUsdPerM}` };
       }
       else {
         routingPriceUsdPerM = usdPerM;
@@ -87,7 +87,7 @@ export class SupplyEvidencePolicy {
       }
     }
     if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM > candidate.effectiveCapUsdPerM) {
-      return rejected(snapshotId, canonicalId, "reference_above_cap", "effective routing price exceeds the effective cap");
+      return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "reference_above_cap", detail: "effective routing price exceeds the effective cap" };
     }
     // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,
     // or any eligibility gate. It is applied only while every field is valid and
