@@ -1,7 +1,5 @@
 import { codeBuddyProvider } from './models.ts';
 
-const CODEBUDDY_HY_FAMILY_MODEL_IDS: ReadonlySet<string> = new Set(['hy3', 'hy4-preview']);
-
 function quotaPool(quotaPoolId: string) {
   return Object.freeze({
     quotaPoolId,
@@ -17,6 +15,11 @@ function binding(providerId: string, modelId: string, pools: readonly ReturnType
 const HY_FAMILY_POOL = quotaPool('codebuddy/hy-family');
 const MONTHLY_POOL = quotaPool('codebuddy/monthly');
 
+function isHyFamilyModel(modelId: string): boolean {
+  const canonical = modelId.endsWith('-ioa') ? modelId.slice(0, -4) : modelId;
+  return canonical === 'hy3' || canonical === 'hy4-preview';
+}
+
 /**
  * Exact CodeBuddy quota applicability. HY models draw jointly on the family
  * allowance and the account monthly allowance; remaining models use monthly
@@ -24,7 +27,7 @@ const MONTHLY_POOL = quotaPool('codebuddy/monthly');
  */
 export function codeBuddyQuotaBindings() {
   return codeBuddyProvider.models.map((model) => (
-    CODEBUDDY_HY_FAMILY_MODEL_IDS.has(model.id)
+    isHyFamilyModel(model.id)
       ? binding('codebuddy', model.id, [HY_FAMILY_POOL, MONTHLY_POOL])
       : binding('codebuddy', model.id, [MONTHLY_POOL])
   ));
