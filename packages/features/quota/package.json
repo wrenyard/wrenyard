@@ -1,25 +1,24 @@
 {
-  "name": "@wrenyard/providers",
+  "name": "@wrenyard/quota",
   "version": "1.0.0-dev.35",
   "private": true,
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./base": "./src/base/index.ts",
-    "./model-display-names": "./src/model-display-names.ts",
-    "./catalog": "./src/base/catalog.ts",
-    "./codebuddy": "./src/codebuddy/index.ts",
-    "./chatgpt": "./src/chatgpt/index.ts",
-    "./quota-normalizers": "./src/quota-normalizers.ts"
+    "./runtime": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts src/**/tests/*.test.ts",
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
   },
   "dependencies": {
-    "@wrenyard/models": "workspace:*"
+    "@wrenyard/clients": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "@wrenyard/execution": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -29,5 +28,14 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "runtime": [
+        "dist/index.d.ts"
+      ]
+    }
   }
 }

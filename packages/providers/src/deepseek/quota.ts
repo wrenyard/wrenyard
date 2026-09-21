@@ -1,7 +1,7 @@
 import type { Provider } from '../base/provider.ts';
 import { binding, balancePool } from '../base/quota-helpers.ts';
 
-const DEEPSEEK_PARSER = 'runtime/forge/internal/usage/quota/deepseek.go';
+const DEEPSEEK_PARSER = 'packages/providers/src/deepseek/normalize-quota.ts';
 
 export const quota = {
   bindings: [
