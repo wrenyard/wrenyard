@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { once } from 'node:events';
-import { Catalog } from '@wrenyard/catalog';
+import { Catalog } from '@wrenyard/providers/catalog';
 import { createModelGateway, type GatewayRequestCompletedEvent } from '../src/index.ts';
 
 function fixture(

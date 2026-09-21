@@ -1,6 +1,7 @@
+import type { ProviderDefinition } from '@wrenyard/providers/base';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Catalog, GatewayProtocol, ProviderDefinition, PublicGatewayModel } from '@wrenyard/catalog';
+import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderRuntime } from '@wrenyard/providers';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 

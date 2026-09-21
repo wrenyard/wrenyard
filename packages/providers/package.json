@@ -6,7 +6,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-display-names": "./src/model-display-names.ts"
+    "./base": "./src/base/index.ts",
+    "./model-display-names": "./src/model-display-names.ts",
+    "./catalog": "./src/base/catalog.ts",
+    "./codebuddy": "./src/codebuddy/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -14,7 +17,6 @@
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
   },
   "dependencies": {
-    "@wrenyard/catalog": "workspace:*",
     "@wrenyard/models": "workspace:*"
   },
   "devDependencies": {

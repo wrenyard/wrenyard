@@ -1,6 +1,6 @@
 import { getDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
-import type { LocalSpeedSample } from '@wrenyard/catalog'
+import type { LocalSpeedSample } from '@wrenyard/providers/catalog'
 import { canonicalizeObservedProviderModelId } from '@wrenyard/providers'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 

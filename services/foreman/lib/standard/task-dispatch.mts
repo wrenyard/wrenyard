@@ -1,4 +1,4 @@
-import type { IntelligenceTier } from '@wrenyard/catalog';
+import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 
 /**

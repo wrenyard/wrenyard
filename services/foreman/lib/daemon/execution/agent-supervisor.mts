@@ -15,7 +15,7 @@ import { redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { RepoWriteLocks, requiresRepoWriteLock } from './repo-write-locks.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
-import { parseRunSyntax } from '@wrenyard/catalog'
+import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,

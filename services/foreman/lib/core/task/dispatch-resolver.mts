@@ -1,6 +1,6 @@
-import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelDefinition, ModelPricing, SpeedEvidence } from '@wrenyard/catalog';
+import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelDefinition, ModelPricing, SpeedEvidence } from '@wrenyard/providers/catalog';
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
-import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed } from '@wrenyard/catalog';
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed } from '@wrenyard/providers/catalog';
 import { resolveConstrainedDispatch } from '@wrenyard/auto-routing';
 import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { parseAgentRuntime } from '../agent-runtime.mts'
@@ -15,7 +15,7 @@ import {
 /**
  * Canonical daemon-side task dispatch resolver.
  *
- * The resolver is a thin adapter over `@wrenyard/catalog`: it derives the
+ * The resolver is a thin adapter over `@wrenyard/providers/catalog`: it derives the
  * trusted dispatch plans and resolves the runtime task plans through the
  * catalog/provider runtime, supplies per-provider/model measured TPS
  * evidence through a lazy injected source, and returns exactly one eligible

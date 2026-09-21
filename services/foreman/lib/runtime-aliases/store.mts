@@ -21,14 +21,14 @@
  *
  * This module never reads credentials, the Go ProfileRecipe, source presets,
  * or shell shortcuts. Values are validated and canonicalized through the
- * shared @wrenyard/catalog parseRunSyntax/formatRunSyntax functions.
+ * shared @wrenyard/providers/catalog parseRunSyntax/formatRunSyntax functions.
  */
 
 import { promises as defaultFs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join as joinPath } from 'node:path';
-import { formatRunSyntax, parseRunSyntax } from '@wrenyard/catalog';
+import { formatRunSyntax, parseRunSyntax } from '@wrenyard/providers/catalog';
 import {
   hasRuntimeProviderMigrationMarker,
   markRuntimeProviderMigration,

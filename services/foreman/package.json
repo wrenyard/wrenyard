@@ -24,7 +24,6 @@
     "node": ">=18.3.0"
   },
   "dependencies": {
-    "@wrenyard/catalog": "workspace:*",
     "@wrenyard/gateway": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "@langchain/core": "1.2.5",

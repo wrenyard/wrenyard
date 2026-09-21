@@ -11,9 +11,9 @@ import { AutoRouter } from './auto-router.ts';
 import { QuotaPolicy } from './quota-policy.ts';
 import { CandidateEvaluator } from './candidate-evaluator.ts';
 import { ConstrainedDispatcher } from './constrained-dispatcher.ts';
-import type { Catalog } from '@wrenyard/catalog';
+import type { Catalog } from '@wrenyard/providers/catalog';
 import type { CandidateInput, ScoreWeights, RequiredQuotaConstraint } from './types.ts';
-import type { DispatchCandidate, LocalSpeedSample } from '@wrenyard/catalog';
+import type { DispatchCandidate, LocalSpeedSample } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements } from './types.ts';
 export function assessRequiredQuota(nowMs: number, constraints: readonly RequiredQuotaConstraint[]) {
   return new QuotaPolicy().assess(nowMs, constraints);

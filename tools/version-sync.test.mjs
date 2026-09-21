@@ -16,7 +16,6 @@ const FIRST_PARTY_MANIFESTS = [
   'apps/desktop/package.json',
   'apps/pet/package.json',
   'services/foreman/package.json',
-  'packages/catalog/package.json',
   'packages/models/package.json',
   'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
@@ -93,7 +92,7 @@ test('version-sync --check passes when every first-party location matches the ro
 
 test('version-sync --check reports drift without modifying any file', async () => {
   const dir = await buildFixture();
-  await writeJson(dir, 'packages/catalog/package.json', { name: '@wrenyard/catalog', version: '0.1.1' });
+  await writeJson(dir, 'packages/models/package.json', { name: '@wrenyard/models', version: '0.1.1' });
   await writeJson(dir, 'packages/features/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
   await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
   try {
@@ -103,14 +102,14 @@ test('version-sync --check reports drift without modifying any file', async () =
     } catch (error) {
       threw = true;
       const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, /packages\/catalog\/package\.json/);
+      assert.match(out, /packages\/models\/package\.json/);
       assert.match(out, /packages\/features\/gateway\/package\.json/);
       assert.match(out, /embed\.go/);
     }
     assert.equal(threw, true, '--check must exit non-zero on drift');
     // No file was mutated by --check.
-    const catalog = JSON.parse(await readFile(join(dir, 'packages/catalog/package.json'), 'utf8'));
-    assert.equal(catalog.version, '0.1.1');
+    const models = JSON.parse(await readFile(join(dir, 'packages/models/package.json'), 'utf8'));
+    assert.equal(models.version, '0.1.1');
     const gateway = JSON.parse(await readFile(join(dir, 'packages/features/gateway/package.json'), 'utf8'));
     assert.equal(gateway.version, '0.1.1');
     const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');

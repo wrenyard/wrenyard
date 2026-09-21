@@ -320,7 +320,6 @@ function stripForemanDeployMetadata(deploy) {
 // exact packaged versions before portability checks and staging.
 function normalizeForemanWorkspaceDependencySpecs(deploy) {
   const internalNames = [
-    '@wrenyard/catalog',
     '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
@@ -367,11 +366,10 @@ function assertPhysicalForemanDependencies(deploy) {
     'zod',
     'better-sqlite3',
     '@langchain/core',
-    '@wrenyard/catalog',
     '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
-    '@wrenyard/auto-routing',
+      '@wrenyard/auto-routing',
   ];
   const violations = [];
   for (const dep of direct) {
