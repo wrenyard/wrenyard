@@ -1,26 +1,17 @@
 {
-  "name": "@wrenyard/providers",
+  "name": "@wrenyard/models",
   "version": "1.0.0-dev.35",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./model-display-names": "./src/model-display-names.ts"
-  },
+  "exports": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts src/**/tests/*.test.ts",
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
-  },
-  "dependencies": {
-    "@wrenyard/catalog": "workspace:*",
-    "@wrenyard/models": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
-    "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   },
   "engines": {

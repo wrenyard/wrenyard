@@ -31,6 +31,7 @@ const FIRST_PARTY_MANIFESTS = [
   'apps/pet/package.json',
   'services/foreman/package.json',
   'packages/catalog/package.json',
+  'packages/models/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
   'packages/gateway/package.json',
