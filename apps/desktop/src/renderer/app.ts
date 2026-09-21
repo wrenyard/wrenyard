@@ -381,7 +381,7 @@ function updateInstallReasonText(reason: UpdateInstallReason | undefined): strin
     case 'unsupported-platform':
       return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
     case 'source-development':
-      return '当前为源码开发模式，不会检查、下载或安装发行版更新。使用 `pnpm dev:stop` 后再打开已安装的啾啾工坊。';
+      return '当前为源码开发模式，不会检查、下载或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。';
     default:
       return '当前无法应用内安装，请检查本机安装后点“重新检测”。';
   }

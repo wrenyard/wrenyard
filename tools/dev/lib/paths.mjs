@@ -1,7 +1,11 @@
 import { existsSync } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { join, resolve, sep, win32, posix } from 'node:path';
-import { DESKTOP_DATA_IDENTITY, WINDOWS_BUSINESS_PIPE, WINDOWS_DEV_PIPE, POSIX_BUSINESS_SOCK } from './constants.mjs';
+
+const DESKTOP_DATA_IDENTITY = '@wrenyard/desktop';
+const WINDOWS_DEV_PIPE = '\\\\.\\pipe\\wrenyard-dev';
+const WINDOWS_BUSINESS_PIPE = '\\\\.\\pipe\\wrenyard';
+const POSIX_BUSINESS_SOCK = '/tmp/wrenyard.sock';
 
 /**
  * @param {string} value
