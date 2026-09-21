@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,10 +11,11 @@ import { createGenerationQueue } from './lib/queue.mjs';
 import { createRequestQueue } from './lib/requests.mjs';
 import { spawnArgv, quoteCmdArg, windowsCmdInvocation, electronInvocation, electronDesktopInvocation, resolveElectronExecutable, sourceCliInvocation } from './lib/spawn.mjs';
 import { stopOwnedTree, stopOwnedDesktopTree, stopChild, childHasExited, waitForChildExit } from './lib/children.mjs';
-import { healthyComponentStatus, restoredStatus } from './lib/supervisor.mjs';
+import { healthyComponentStatus, restoredStatus, createSupervisor } from './lib/supervisor.mjs';
 import { normalizeCheckout, sameCheckout, pathInside, desktopUserData, controlEndpoint, businessIpcPath, defaultRuntimeBin } from './lib/paths.mjs';
 import { sourceChildEnv, isSourceDevelopment } from './lib/env.mjs';
-import { combineActivity } from './lib/activity.mjs';
+import { combineActivity, identityMatchesSource } from './lib/activity.mjs';
+import { DISPATCH_THAW_HINT, dispatchBlocksNewWork, dispatchIsAccepting, shouldAutoThaw } from './lib/admission.mjs';
 import { daemonBusy, sourceIdentityFromHealth } from './lib/rpc.mjs';
 import { checkBuildArtifacts, checkToolchain } from './lib/prepare.mjs';
 import { processAlive, parseInstanceRecord, createInstanceRecord } from './lib/identity.mjs';
@@ -162,6 +164,7 @@ test('source child env overwrites inherited install paths but keeps user data ho
     PATH: 'C:\\\\installed',
   }, {
     instanceId: 'abc',
+    launchId: 'launch-xyz',
     checkout: 'D:\\\\GitHub\\\\wrenyard',
     cli: 'node tsx apps/cli/src/index.ts',
     nodeBin: 'C:\\\\nodejs\\\\node.exe',
@@ -172,6 +175,7 @@ test('source child env overwrites inherited install paths but keeps user data ho
     ipcPath: '\\\\.\\pipe\\wrenyard',
   });
   assert.equal(env.WRENYARD_SOURCE_DEV, '1');
+  assert.equal(env.WRENYARD_DEV_LAUNCH_ID, 'launch-xyz');
   assert.equal(env.WRENYARD_CLI.includes('apps/cli/src/index.ts'), true);
   assert.equal(env.WRENYARD_RUNTIME_BIN.includes('.dev-gen'), true);
   assert.equal(env.WRENYARD_DESKTOP_BIN.includes('wrenyard-desktop.exe'), false);
@@ -199,10 +203,30 @@ test('health identity distinguishes source from installed even when a service is
   assert.deepEqual(sourceIdentityFromHealth({ ok: true, uptimeMs: 12 }), { mode: 'installed', verified: false });
   const source = sourceIdentityFromHealth({
     ok: true,
-    identity: { mode: 'source', checkout: '/src', instanceId: '1', node: '/node' },
+    identity: { mode: 'source', checkout: '/src', instanceId: '1', launchId: 'L1', node: '/node' },
   });
   assert.equal(source.mode, 'source');
   assert.equal(source.instanceId, '1');
+  assert.equal(source.launchId, 'L1');
+  assert.equal(identityMatchesSource({
+    ok: true,
+    identity: { mode: 'source', instanceId: '1', launchId: 'L1' },
+  }, { instanceId: '1', launchId: 'L1' }), true);
+  assert.equal(identityMatchesSource({
+    ok: true,
+    identity: { mode: 'source', instanceId: '1', launchId: 'old' },
+  }, { instanceId: '1', launchId: 'L1' }), false);
+});
+
+test('dispatch admission helpers only auto-thaw a freeze this flow created', () => {
+  assert.equal(shouldAutoThaw({ froze: true, originalMode: 'accepting' }), true);
+  assert.equal(shouldAutoThaw({ froze: false, originalMode: 'frozen' }), false);
+  assert.equal(shouldAutoThaw({ froze: true, originalMode: 'frozen' }), false);
+  const frozen = dispatchBlocksNewWork({ dispatch: { mode: 'frozen', frozen: true, accepting: false } });
+  assert.equal(frozen.blocked, true);
+  assert.equal(dispatchIsAccepting({ dispatch: { mode: 'accepting', frozen: false, accepting: true } }), true);
+  assert.equal(dispatchIsAccepting({ dispatch: { mode: 'planned_restart', accepting: false } }), false);
+  assert.match(DISPATCH_THAW_HINT, /wrenyard daemon thaw/);
 });
 
 test('PID liveness is not treated as ownership by itself', () => {
@@ -1013,4 +1037,440 @@ function fakeChild(pid, { exitCode = null, signalCode = null, confirmExit = true
   };
   return child;
 }
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntil(predicate, timeoutMs = 400) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await delay(10);
+  }
+  throw new Error('timed out waiting for condition');
+}
+
+function trackedChild(pid, label) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.label = label;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (signal) => {
+    if (child.exitCode != null || child.signalCode != null) return true;
+    if (signal && signal !== 'SIGTERM') child.exit(null, signal);
+    else child.exit(0, null);
+    return true;
+  };
+  child.exit = (code = 0, signal = null) => {
+    if (child.exitCode != null || child.signalCode != null) return;
+    child.exitCode = signal ? null : code;
+    child.signalCode = signal;
+    child.emit('exit', child.exitCode, child.signalCode);
+  };
+  return child;
+}
+
+function createLifecycleHarness(overrides = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-admit-'));
+  mkdirSync(join(root, 'logs'), { recursive: true });
+  const stdout = [];
+  const fake = {
+    serving: true,
+    drainError: null,
+    thawError: null,
+    drainBusy: false,
+    stopFail: false,
+    newChildExits: false,
+    keepOldIdentity: false,
+    identity: { mode: 'installed' },
+    dispatch: { mode: 'accepting', recovery_required: false },
+    daemonSpawns: 0,
+    desktopSpawns: 0,
+    daemonChild: null,
+    desktopChild: null,
+    previousDaemon: null,
+    previousDesktop: null,
+    shutdowns: 0,
+    freezes: 0,
+    thaws: 0,
+  };
+  let nowMs = 1_000;
+  let launchSeq = 0;
+  let pidSeq = 4000;
+  const box = { supervisor: null };
+
+  function currentHealth() {
+    return {
+      ok: true,
+      identity: fake.identity,
+      dispatch: {
+        mode: fake.dispatch.mode,
+        frozen: fake.dispatch.mode === 'frozen',
+        accepting: fake.dispatch.mode === 'accepting',
+        recovery_required: fake.dispatch.recovery_required === true,
+        activeTaskCount: 0,
+        activeWorkflowCount: 0,
+        activeExecutionCount: 0,
+      },
+    };
+  }
+
+  async function rpc(method) {
+    if (!fake.serving) throw new Error('daemon IPC closed');
+    if (method === 'health.ping') return currentHealth();
+    if (method === 'daemon.freeze') {
+      fake.freezes += 1;
+      fake.dispatch.mode = 'frozen';
+      return { ok: true };
+    }
+    if (method === 'daemon.thaw') {
+      fake.thaws += 1;
+      if (fake.thawError) throw fake.thawError;
+      fake.dispatch.mode = 'accepting';
+      return { ok: true };
+    }
+    if (method === 'daemon.drain') {
+      if (fake.drainError) throw fake.drainError;
+      if (fake.drainBusy) return { drained: false, activeTasks: ['t1'], activeWorkflows: [], activeExecutions: [] };
+      return { drained: true, activeTasks: [], activeWorkflows: [], activeExecutions: [] };
+    }
+    if (method === 'daemon.shutdown') {
+      fake.shutdowns += 1;
+      fake.serving = false;
+      return { ok: true };
+    }
+    return { ok: true };
+  }
+
+  const supervisor = createSupervisor({
+    checkout: root,
+    platform: 'linux',
+    home: root,
+    env: {},
+    stateRoot: join(root, 'state'),
+    instanceFile: join(root, 'state', 'instance.json'),
+    logDir: join(root, 'logs'),
+    controlEndpoint: join(root, 'control.sock'),
+    ipcPath: join(root, 'business.sock'),
+    runtimeBin: join(root, 'forge'),
+    nodeExecutable: '/node',
+    exists: () => true,
+    realpath: (value) => value,
+    git: (args) => (args.includes('HEAD') ? { status: 0, stdout: 'deadbeef' } : { status: 0, stdout: '' }),
+    now: () => nowMs,
+    sleep: async (ms) => {
+      nowMs += ms;
+    },
+    healthWaitMs: 800,
+    ipcDownMs: 200,
+    desktopReadyMs: 800,
+    retryStableMs: overrides.retryStableMs ?? 50,
+    retryBackoffMs: overrides.retryBackoffMs ?? [15, 15, 15],
+    newLaunchId: () => `launch-${++launchSeq}`,
+    stdout: (line) => stdout.push(String(line)),
+    logger: { info() {}, warn() {}, error() {}, path: join(root, 'logs', 'supervisor.log') },
+    withDaemon: async (fn) => fn({ request: rpc }),
+    stopChild: async (child) => {
+      if (fake.stopFail) return { ok: false, error: 'child still running' };
+      if (child.exitCode == null && child.signalCode == null) child.exit(0);
+      return { ok: true };
+    },
+    spawnDaemon: (options) => {
+      fake.daemonSpawns += 1;
+      fake.previousDaemon = fake.daemonChild;
+      const child = trackedChild(++pidSeq, options.resolved.launchId);
+      fake.daemonChild = child;
+      if (!fake.keepOldIdentity) {
+        fake.serving = true;
+        fake.identity = {
+          mode: 'source',
+          checkout: options.resolved.checkout,
+          instanceId: options.resolved.instanceId,
+          launchId: options.resolved.launchId,
+          node: '/node',
+        };
+      }
+      if (fake.newChildExits) queueMicrotask(() => child.exit(0));
+      return child;
+    },
+    spawnDesktop: (options) => {
+      fake.desktopSpawns += 1;
+      fake.previousDesktop = fake.desktopChild;
+      const child = trackedChild(++pidSeq, options.resolved.launchId);
+      fake.desktopChild = child;
+      queueMicrotask(() => {
+        box.supervisor.helloDesktop({
+          async request(method) {
+            if (method === 'desktop.quit') {
+              child.exit(0);
+              return { ok: true };
+            }
+            if (method === 'desktop.activity') {
+              return { known: true, streaming: false, running: false, busy: false, modalOpen: false };
+            }
+            return { ok: true };
+          },
+        });
+      });
+      return child;
+    },
+    inspectReleaseDesktop: async () => ({ ok: true, matches: [] }),
+    ...overrides,
+  });
+  box.supervisor = supervisor;
+
+  return {
+    root,
+    fake,
+    stdout,
+    supervisor,
+    advance(ms) {
+      nowMs += ms;
+    },
+    async cleanup() {
+      await supervisor.explicitStop().catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test('accepting installed daemon is frozen, replaced, and thawed before ready', async () => {
+  const harness = createLifecycleHarness();
+  try {
+    const handover = await harness.supervisor.handoverInstalled();
+    assert.equal(handover.switched, true);
+    assert.equal(handover.token.froze, true);
+    assert.equal(handover.token.originalMode, 'accepting');
+    assert.equal(harness.fake.freezes, 1);
+    assert.equal(harness.fake.serving, false);
+    await harness.supervisor.startDaemon();
+    const admission = await harness.supervisor.finalizeAdmission(handover);
+    assert.equal(admission.blocked, false);
+    assert.equal(harness.fake.thaws, 1);
+    assert.equal(harness.fake.dispatch.mode, 'accepting');
+    assert.equal(dispatchIsAccepting(admission.health), true);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test('pre-existing frozen or planned restart is not auto-thawed', async () => {
+  const frozen = createLifecycleHarness();
+  try {
+    frozen.fake.dispatch.mode = 'frozen';
+    const handover = await frozen.supervisor.handoverInstalled();
+    assert.equal(handover.token.froze, false);
+    await frozen.supervisor.startDaemon();
+    const admission = await frozen.supervisor.finalizeAdmission(handover);
+    assert.equal(admission.blocked, true);
+    assert.equal(frozen.fake.thaws, 0);
+    assert.equal(frozen.stdout.join('\n').includes('wrenyard daemon thaw'), true);
+  } finally {
+    await frozen.cleanup();
+  }
+
+  const planned = createLifecycleHarness();
+  try {
+    planned.fake.dispatch.mode = 'planned_restart';
+    await assert.rejects(() => planned.supervisor.handoverInstalled(), /planned restart/);
+    assert.equal(planned.fake.freezes, 0);
+    assert.equal(planned.fake.shutdowns, 0);
+  } finally {
+    await planned.cleanup();
+  }
+});
+
+test('drain and thaw failures keep admission responsibility visible', async () => {
+  const drain = createLifecycleHarness();
+  try {
+    drain.fake.drainError = new Error('drain rpc down');
+    await assert.rejects(() => drain.supervisor.freezeAndDrain(50), /drain rpc down/);
+    assert.equal(drain.fake.thaws, 1);
+    assert.equal(drain.fake.dispatch.mode, 'accepting');
+  } finally {
+    await drain.cleanup();
+  }
+
+  const thaw = createLifecycleHarness();
+  try {
+    thaw.fake.dispatch.mode = 'frozen';
+    await thaw.supervisor.startDaemon();
+    thaw.fake.thawError = new Error('thaw timeout');
+    await assert.rejects(
+      () => thaw.supervisor.finalizeAdmission({ token: { froze: true, originalMode: 'accepting' } }),
+      /failed to restore dispatch admission/,
+    );
+    assert.equal(thaw.supervisor.status, 'degraded');
+  } finally {
+    await thaw.cleanup();
+  }
+});
+
+test('watcher switch and explicit restart spawn each component once without retry', async () => {
+  const harness = createLifecycleHarness();
+  try {
+    await harness.supervisor.startDaemon();
+    await harness.supervisor.startDesktop();
+    assert.equal(harness.fake.daemonSpawns, 1);
+    assert.equal(harness.fake.desktopSpawns, 1);
+    const firstDaemon = harness.fake.daemonChild;
+    const firstDesktop = harness.fake.desktopChild;
+    await harness.supervisor.applyGeneration({
+      id: 'g-watch',
+      seq: 1,
+      components: [COMPONENTS.daemon, COMPONENTS.desktopMain],
+      files: ['services/foreman/lib/daemon/daemon.mts'],
+    }, 'auto');
+    assert.equal(harness.fake.daemonSpawns, 2);
+    assert.equal(harness.fake.desktopSpawns, 2);
+    assert.notEqual(harness.fake.daemonChild, firstDaemon);
+    assert.notEqual(harness.fake.desktopChild, firstDesktop);
+    assert.equal(harness.supervisor.retries.daemon, 0);
+    await harness.supervisor.explicitRestart();
+    assert.equal(harness.fake.daemonSpawns, 3);
+    assert.equal(harness.fake.desktopSpawns, 3);
+    assert.equal(harness.supervisor.retries.daemon, 0);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test('old daemon health is not accepted when the new child exits 0', async () => {
+  const harness = createLifecycleHarness();
+  try {
+    await harness.supervisor.startDaemon();
+    const oldLaunch = harness.supervisor.daemonSlot.launchId;
+    harness.fake.keepOldIdentity = true;
+    harness.fake.newChildExits = true;
+    await assert.rejects(() => harness.supervisor.startDaemon(), /exited before becoming healthy|did not become healthy|not launch /);
+    assert.equal(harness.fake.identity.launchId, oldLaunch);
+    assert.equal(harness.supervisor.retries.daemon, 1);
+    await delay(40);
+    await harness.supervisor.explicitStop();
+    const spawnsAfterStop = harness.fake.daemonSpawns;
+    await delay(50);
+    assert.equal(harness.fake.daemonSpawns, spawnsAfterStop);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test('retry budget is consecutive, resets after a stable window, and stops at the limit', async () => {
+  const harness = createLifecycleHarness({ retryStableMs: 80, retryBackoffMs: [15, 15, 15] });
+  try {
+    await harness.supervisor.startDaemon();
+    harness.fake.daemonChild.exit(1);
+    await waitUntil(() => harness.fake.daemonSpawns === 2);
+    assert.equal(harness.supervisor.retries.daemon, 1);
+    harness.fake.daemonChild.exit(1);
+    await waitUntil(() => harness.fake.daemonSpawns === 3);
+    assert.equal(harness.supervisor.retries.daemon, 2);
+
+    const stable = createLifecycleHarness({ retryStableMs: 80, retryBackoffMs: [15, 15, 15] });
+    try {
+      await stable.supervisor.startDaemon();
+      stable.advance(80);
+      stable.fake.daemonChild.exit(1);
+      await waitUntil(() => stable.fake.daemonSpawns === 2);
+      assert.equal(stable.supervisor.retries.daemon, 1);
+    } finally {
+      await stable.cleanup();
+    }
+
+    const exhaust = createLifecycleHarness({ retryBackoffMs: [10, 10, 10] });
+    try {
+      exhaust.fake.keepOldIdentity = true;
+      exhaust.fake.newChildExits = true;
+      await assert.rejects(() => exhaust.supervisor.startDaemon());
+      await waitUntil(() => exhaust.supervisor.status === 'degraded' && exhaust.fake.daemonSpawns >= 4, 800);
+      const spawns = exhaust.fake.daemonSpawns;
+      await delay(80);
+      assert.equal(exhaust.fake.daemonSpawns, spawns);
+      assert.match(String(exhaust.supervisor.snapshot().status), /degraded/);
+    } finally {
+      await exhaust.cleanup();
+    }
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test('stale child and desktop session events do not replace the current slot', async () => {
+  const harness = createLifecycleHarness();
+  try {
+    await harness.supervisor.startDaemon();
+    await harness.supervisor.startDesktop();
+    const oldDaemon = harness.fake.daemonChild;
+    const oldDesktop = harness.fake.desktopChild;
+    const oldSession = { launchId: 'launch-old', request: async () => ({}) };
+    await harness.supervisor.applyGeneration({
+      id: 'g-stale',
+      seq: 2,
+      components: [COMPONENTS.daemon, COMPONENTS.desktopMain],
+      files: ['x.ts'],
+    }, 'restart');
+    const currentDaemon = harness.supervisor.daemonSlot;
+    const currentDesktop = harness.supervisor.desktopSlot;
+    oldDaemon.exit(1);
+    oldDesktop.exit(1);
+    const ignored = await harness.supervisor.desktopEvent({ type: 'ping' }, oldSession);
+    assert.equal(ignored.ignored, 'stale');
+    assert.equal(harness.supervisor.daemonSlot, currentDaemon);
+    assert.equal(harness.supervisor.desktopSlot, currentDesktop);
+    assert.equal(harness.supervisor.retries.daemon, 0);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test('user Desktop exit leaves the daemon running; planned quit does not', async () => {
+  const user = createLifecycleHarness();
+  try {
+    await user.supervisor.startDaemon();
+    await user.supervisor.startDesktop();
+    user.fake.desktopChild.exit(0);
+    assert.equal(user.supervisor.snapshot().pids.daemon != null, true);
+    assert.equal(user.supervisor.desktopSlot, null);
+    assert.equal(user.fake.daemonChild.exitCode, null);
+  } finally {
+    await user.cleanup();
+  }
+
+  const planned = createLifecycleHarness();
+  try {
+    await planned.supervisor.startDaemon();
+    await planned.supervisor.startDesktop();
+    await planned.supervisor.applyGeneration({
+      id: 'g-plan',
+      seq: 3,
+      components: [COMPONENTS.desktopMain],
+      files: ['apps/desktop/src/main.ts'],
+    }, 'restart');
+    assert.equal(planned.fake.desktopSpawns, 2);
+    assert.equal(planned.supervisor.desktopSlot != null, true);
+  } finally {
+    await planned.cleanup();
+  }
+});
+
+test('a failed component stop keeps ownership and later unexpected exits are still watched', async () => {
+  const harness = createLifecycleHarness();
+  try {
+    await harness.supervisor.startDaemon();
+    const slot = harness.supervisor.daemonSlot;
+    harness.fake.stopFail = true;
+    await assert.rejects(() => harness.supervisor.stopDaemon(), /still running/);
+    assert.equal(harness.supervisor.daemonSlot, slot);
+    assert.equal(slot.expectedExit, false);
+    harness.fake.stopFail = false;
+    slot.child.exit(1);
+    await waitUntil(() => harness.fake.daemonSpawns === 2);
+    assert.equal(harness.supervisor.retries.daemon, 1);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
 
