@@ -5,7 +5,7 @@
  * output into policy-shaped quota evidence for auto-routing. It deliberately
  * does NOT own any provider/model/pool/applicability mapping: binding
  * metadata is imported as PROVIDER_QUOTA_BINDINGS (@wrenyard/providers) and the
- * policy constraints/evidence shapes come from @wrenyard/catalog, so there is
+ * policy constraints/evidence shapes come from @wrenyard/auto-routing, so there is
  * exactly one canonical binding table and no duplicated policy types.
  *
  * Raw parsing is fail-closed against the real `forge quota --json` list DTO
@@ -81,7 +81,7 @@ import { randomUUID } from 'node:crypto';
 
 import { queryForgeQuotaJson, type CodeBuddyQueryContext } from '../execution/forge-quota-query.mts';
 
-import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/catalog';
+import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
 /** Evidence freshness window for a direct raw observation (ms). */
 const QUOTA_SNAPSHOT_VALID_FOR_MS = 60_000;

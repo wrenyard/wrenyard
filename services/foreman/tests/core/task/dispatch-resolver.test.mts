@@ -1,13 +1,8 @@
 import assert from 'node:assert/strict'
 import { beforeEach, describe, it } from 'node:test'
 import { Catalog } from '@wrenyard/catalog'
-import {
-  createBuiltinCatalog,
-  createBuiltinProviderRuntime,
-  type LocalSpeedSample,
-  type ProviderRuntime,
-  type TaskDispatchRequirements,
-} from '@wrenyard/providers'
+import { createBuiltinCatalog, createBuiltinProviderRuntime, type LocalSpeedSample, type ProviderRuntime } from '@wrenyard/providers';
+import { type TaskDispatchRequirements } from '@wrenyard/auto-routing';
 import {
   createTaskDispatchResolver,
   type TaskDispatchResolver,

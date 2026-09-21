@@ -65,6 +65,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../../packages/features/auto-routing
       '@deepseek-ai/cordis-plugin-group':
         specifier: 1.0.1
         version: 1.0.1(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)
@@ -220,6 +223,32 @@ importers:
 
   packages/dsh-shell: {}
 
+  packages/features/auto-routing:
+    dependencies:
+      '@wrenyard/catalog':
+        specifier: workspace:*
+        version: link:../../catalog
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../models
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../providers
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+
   packages/gateway:
     dependencies:
       '@wrenyard/catalog':
@@ -304,6 +333,9 @@ importers:
 
   services/foreman:
     dependencies:
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../../packages/features/auto-routing
       '@langchain/core':
         specifier: 1.2.5
         version: 1.2.5(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)

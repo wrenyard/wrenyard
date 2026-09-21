@@ -1,4 +1,4 @@
-import { SCORE_WEIGHTS } from '@wrenyard/catalog';
+import { SCORE_WEIGHTS } from '@wrenyard/auto-routing';
 import type {
   TaskSettingsRoutingWeights,
   TaskSettingsSaveRequest,

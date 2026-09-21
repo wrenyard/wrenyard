@@ -605,6 +605,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
       '@wrenyard/catalog',
       '@wrenyard/gateway',
       '@wrenyard/providers',
+      '@wrenyard/auto-routing',
     ]) {
       assertPhysicalInsideTree(extractDir, path.join('services', 'foreman', 'node_modules', dep));
     }
@@ -739,6 +740,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
       '@wrenyard/catalog',
       '@wrenyard/gateway',
       '@wrenyard/providers',
+      '@wrenyard/auto-routing',
     ]) {
       assertPhysicalInsideTree(cliPkgDir, path.join('services', 'foreman', 'node_modules', dep));
     }

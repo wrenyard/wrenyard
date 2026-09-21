@@ -1,7 +1,8 @@
-import { assessRequiredQuota } from '@wrenyard/catalog'
+import { assessRequiredQuota } from '@wrenyard/auto-routing';
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, rankAutoRoutingCandidates, type IntelligenceTier, type RankedCandidate } from '@wrenyard/catalog'
-import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/catalog';
+import { rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
+import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/auto-routing';
 import {
   findProviderQuotaBinding,
   resolveDeepSeekReferencePricing,

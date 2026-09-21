@@ -1,23 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  Catalog,
-  resolveConstrainedDispatch,
-  isDynamicFast,
-  normalizeIntelligenceTier,
-  normalizeThinkingLevel,
-  type DispatchCandidate,
-  type IntelligenceTier,
-  type ModelCapability,
-  type ModelDefinition,
-  type ModelPricing,
-  type TaskDispatchRequirements,
-  type ThinkingLevel,
-  formatRunSyntax,
-  parseRunSyntax,
-  PUBLIC_CLIENT_KEYS,
-  resolveRunSyntax,
-} from '../src/index.ts';
+import { Catalog, normalizeIntelligenceTier, normalizeThinkingLevel, type DispatchCandidate, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ThinkingLevel, formatRunSyntax, parseRunSyntax, PUBLIC_CLIENT_KEYS, resolveRunSyntax } from '@wrenyard/catalog';
+import { resolveConstrainedDispatch, isDynamicFast, type TaskDispatchRequirements } from '../src/index.ts';
 
 function pricingFixture(): ModelPricing {
   return [0.1, 1, 2];

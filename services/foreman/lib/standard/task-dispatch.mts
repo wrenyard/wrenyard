@@ -1,10 +1,11 @@
-import type { IntelligenceTier, TaskDispatchRequirements } from '@wrenyard/catalog'
+import type { IntelligenceTier } from '@wrenyard/catalog';
+import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 
 /**
  * Immutable typed dispatch requirement presets.
  *
  * Single source of truth for builtin task dispatch requirements, expressed with
- * the `@wrenyard/catalog` `TaskDispatchRequirements` contract. Every builtin
+ * the `@wrenyard/auto-routing` `TaskDispatchRequirements` contract. Every builtin
  * task references exactly one of these presets via `config.dispatch`, matching
  * its historical `agentRuntime` cost/intelligence class, so no task duplicates
  * the requirement logic.

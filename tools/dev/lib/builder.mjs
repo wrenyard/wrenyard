@@ -100,7 +100,7 @@ export async function buildGeneration(options) {
   }
 
   if (needsSharedBuild(generation.components)) {
-    const pnpm = pnpmInvocation(checkout, ['-r', '--filter', './packages/*', '--if-present', 'run', 'build'], nodeExecutable, exists);
+    const pnpm = pnpmInvocation(checkout, ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--if-present', 'run', 'build'], nodeExecutable, exists);
     const result = await run(pnpm.command, pnpm.args, { cwd: checkout, env: options.env, signal: options.signal, platform });
     logs.push(result.stderr || result.stdout);
     if (result.status !== 0) {
