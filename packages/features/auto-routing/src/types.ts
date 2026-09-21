@@ -1,5 +1,5 @@
 import type { IntelligenceTier, ModelCapability, ThinkingLevel } from '@wrenyard/models';
-import type { DispatchPlan, ModelDefinition, SpeedEvidence } from '@wrenyard/catalog';
+import type { DispatchPlan, ModelDefinition, SpeedEvidence } from '@wrenyard/providers/base';
 /**
  * Pure, deterministic, quota-aware conservative auto-routing policy.
  *

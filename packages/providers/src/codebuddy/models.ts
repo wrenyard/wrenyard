@@ -1,3 +1,4 @@
+import type { ProviderDefinition } from '../base/index.ts';
 import type {
   CanonicalModelDefinition,
   ClientDefinition,
@@ -5,9 +6,8 @@ import type {
   ModelCapability,
   ModelDefinition,
   ModelPricing,
-  ProviderDefinition,
   ThinkingLevel,
-} from '@wrenyard/catalog';
+} from '../base/index.ts';
 import {
   isMainstreamModelId,
   models,
@@ -18,7 +18,6 @@ import {
 import { builtinModelDisplayNameIfKnown } from '../model-display-names.ts';
 import {
   codeBuddyCanonicalModelId,
-  loadInstalledCodeBuddyProductModels,
   productCreditsAreFree,
   type CodeBuddyProductModelEntry,
 } from './product.ts';
@@ -252,26 +251,25 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   return { models: [...byOfferingId.values()], upstreamByCanonical };
 }
 
-const installedProduct = loadInstalledCodeBuddyProductModels();
-const built = buildCodeBuddyOfferings(installedProduct.entries);
+export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[]) {
+  const built = buildCodeBuddyOfferings(entries);
+  const upstreamModels: Readonly<Record<string, string>> = Object.freeze(built.upstreamByCanonical);
+  const definition: Omit<ProviderDefinition, 'models'> & { models: readonly CodeBuddyModel[] } = {
+    id: 'codebuddy',
+    displayName: 'CodeBuddy',
+    description: 'CodeBuddy 提供的 DeepSeek、混元与 Kimi 模型。',
+    setupHint: '请在 CodeBuddy 客户端完成登录，返回啾啾工坊后刷新状态。',
+    credentialResolver: 'codebuddy',
+    nativeClients: ['codebuddy'],
+    defaultModel: 'deepseek-v4.1-flash',
+    useClientBinary: true,
+    models: built.models,
+    modelAliases: aliasesFor(built.models, upstreamModels),
+    thinkingMappings: thinkingMappingsFor(built.models),
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
+  };
 
-export const CODEBUDDY_IOA_UPSTREAM_MODELS: Readonly<Record<string, string>> = Object.freeze(
-  built.upstreamByCanonical,
-);
+  return { definition, upstreamModels };
+}
 
-export const codeBuddyProvider: Omit<ProviderDefinition, 'models'> & { models: readonly CodeBuddyModel[] } = {
-  id: 'codebuddy',
-  displayName: 'CodeBuddy',
-  credentialResolver: 'codebuddy',
-  nativeClients: ['codebuddy'],
-  defaultModel: 'deepseek-v4.1-flash',
-  useClientBinary: true,
-  models: built.models,
-  modelAliases: aliasesFor(built.models, CODEBUDDY_IOA_UPSTREAM_MODELS),
-  thinkingMappings: thinkingMappingsFor(built.models),
-  protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
-};
-
-export const CODEBUDDY_FREE_MODEL_IDS: ReadonlySet<string> = new Set(
-  codeBuddyProvider.models.filter((entry) => entry.free === true).map((entry) => entry.id),
-);
+export type CodeBuddyModels = ReturnType<typeof createCodeBuddyModels>;

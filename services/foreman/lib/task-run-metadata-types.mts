@@ -7,9 +7,9 @@
 
 export type TaskUsageCompleteness = 'complete' | 'partial' | 'unavailable'
 
-import { THINKING_LEVELS, type ThinkingLevel } from '@wrenyard/catalog'
-export type { ThinkingLevel } from '@wrenyard/catalog'
-export { THINKING_LEVELS } from '@wrenyard/catalog'
+import { THINKING_LEVELS, type ThinkingLevel } from '@wrenyard/providers/catalog'
+export type { ThinkingLevel } from '@wrenyard/providers/catalog'
+export { THINKING_LEVELS } from '@wrenyard/providers/catalog'
 
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
   return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value)

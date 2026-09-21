@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { PUBLIC_CLIENT_KEYS } from '@wrenyard/catalog';
+import { PUBLIC_CLIENT_KEYS } from '@wrenyard/providers/catalog';
 
 import RuntimeAliasStore, {
   AliasValidationError,
