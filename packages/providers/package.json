@@ -14,7 +14,8 @@
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
   },
   "dependencies": {
-    "@wrenyard/catalog": "workspace:*"
+    "@wrenyard/catalog": "workspace:*",
+    "@wrenyard/models": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

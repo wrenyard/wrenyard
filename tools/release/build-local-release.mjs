@@ -321,6 +321,7 @@ function stripForemanDeployMetadata(deploy) {
 function normalizeForemanWorkspaceDependencySpecs(deploy) {
   const internalNames = [
     '@wrenyard/catalog',
+    '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
   ];
@@ -366,6 +367,7 @@ function assertPhysicalForemanDependencies(deploy) {
     'better-sqlite3',
     '@langchain/core',
     '@wrenyard/catalog',
+    '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
   ];
