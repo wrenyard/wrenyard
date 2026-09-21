@@ -29,8 +29,8 @@ export interface TaskReferencePricing {
   output_usd_per_million?: number
   cached_input_usd_per_million?: number
   cache_write_input_usd_per_million?: number
-  source: string
-  checked_at: string
+  source?: string
+  checked_at?: string
 }
 
 /**

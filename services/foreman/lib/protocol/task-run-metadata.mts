@@ -117,7 +117,6 @@ export const taskResolvedDispatchSchema = {
     intelligence: { type: 'string' },
     reference_pricing: {
       type: 'object',
-      required: ['source', 'checked_at'],
       properties: {
         input_usd_per_million: { type: 'number' },
         output_usd_per_million: { type: 'number' },

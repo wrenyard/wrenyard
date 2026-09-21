@@ -26,7 +26,7 @@ async function fixture(includeImage: boolean) {
     models: definitions.map(({ id, capabilities, tps, price }) => ({
       id, displayName: id, capabilities, intelligence: 'mid',
       speed: tps,
-      pricing: { inputUsdPerMillion: price, cachedInputUsdPerMillion: price, outputUsdPerMillion: price, source: 'fixture', checkedAt: '2026-09-10' },
+      pricing: [price, price, price],
     })),
   })
   return createTaskDispatchResolver({ catalog, runtime })

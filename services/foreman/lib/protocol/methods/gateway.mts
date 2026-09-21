@@ -28,13 +28,8 @@ export interface GatewayConnectionResult {
      */
     thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[]
     speed?: number
-    pricing?: {
-      inputUsdPerMillion: number
-      cachedInputUsdPerMillion: number
-      outputUsdPerMillion: number
-      source: string
-      checkedAt: string
-    }
+    /** USD per million tokens: [cached, input, output]. */
+    pricing?: readonly [number, number, number]
   }>
 }
 
@@ -69,13 +64,10 @@ export const gatewayConnectionResultSchema = {
           },
           speed: { type: 'number', exclusiveMinimum: 0 },
           pricing: {
-            type: 'object',
-            required: ['inputUsdPerMillion', 'cachedInputUsdPerMillion', 'outputUsdPerMillion', 'source', 'checkedAt'],
-            properties: {
-              inputUsdPerMillion: { type: 'number', minimum: 0 }, cachedInputUsdPerMillion: { type: 'number', minimum: 0 },
-              outputUsdPerMillion: { type: 'number', minimum: 0 }, source: { type: 'string', minLength: 1 }, checkedAt: { type: 'string', minLength: 1 },
-            },
-            additionalProperties: false,
+            type: 'array',
+            minItems: 3,
+            maxItems: 3,
+            items: { type: 'number', minimum: 0 },
           },
         },
         additionalProperties: false,

@@ -20,8 +20,8 @@ class FakeClient implements ProviderControlClient {
           displayName: 'HY4 Preview',
           secret: 'must-not-leak',
           free: true,
-          pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 },
-        } as { id: string; displayName: string; pricing: { inputUsdPerMillion: number; outputUsdPerMillion: number; cachedInputUsdPerMillion: number } }],
+          pricing: [0.1, 1, 2] as const,
+        } as { id: string; displayName: string; pricing: readonly [number, number, number] }],
       },
       {
         id: 'kimi-coding',
@@ -31,7 +31,7 @@ class FakeClient implements ProviderControlClient {
         configured: false,
         authMode: 'api-key' as const,
         protocols: ['anthropic_messages' as const],
-        models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } }],
+        models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', pricing: [0.2, 3, 4] as const }],
       },
     ] };
   }
@@ -53,7 +53,7 @@ test('provider list comes only from daemon IPC', async () => {
       setupHint: 'Sign in through CodeBuddy.',
       configured: true,
       authMode: 'native',
-      models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }],
+      models: [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: [0.1, 1, 2] as const }],
     },
     {
       id: 'kimi-coding',
@@ -62,7 +62,7 @@ test('provider list comes only from daemon IPC', async () => {
       setupHint: 'Configure an API key.',
       configured: false,
       authMode: 'api-key',
-      models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 4, cachedInputUsdPerMillion: 0.2 } }],
+        models: [{ id: 'kimi-k2.5', displayName: 'Kimi K2.5', pricing: [0.2, 3, 4] as const }],
     },
   ]);
   assert.equal(client.closed, true);
@@ -72,7 +72,7 @@ test('provider list projects only sanitized model id, displayName, and pricing',
   const client = new FakeClient();
   const service = new ProviderService({ ipcPath: '/tmp/wrenyard.sock', clientFactory: () => client });
   const listed = await service.listProviders();
-  assert.deepEqual(listed[0]?.models, [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]);
+  assert.deepEqual(listed[0]?.models, [{ id: 'hy4-preview-ioa', displayName: 'HY4 Preview', free: true, pricing: [0.1, 1, 2] as const }]);
   assert.equal(JSON.stringify(listed).includes('must-not-leak'), false);
   assert.equal(JSON.stringify(listed).includes('secret'), false);
 });

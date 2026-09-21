@@ -10,6 +10,7 @@ import {
   type IntelligenceTier,
   type ModelCapability,
   type ModelDefinition,
+  type ModelPricing,
   type TaskDispatchRequirements,
   type ThinkingLevel,
   formatRunSyntax,
@@ -18,18 +19,16 @@ import {
   resolveRunSyntax,
 } from '../src/index.ts';
 
-function pricingFixture() {
-  return { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 0.1, outputUsdPerMillion: 2, source: 'test-fixture', checkedAt: '2026-09-17' };
+function pricingFixture(): ModelPricing {
+  return [0.1, 1, 2];
 }
 
 test('registration rejects missing or invalid model list prices', () => {
-  for (const pricing of [undefined, { ...pricingFixture(), outputUsdPerMillion: NaN },
-    { ...pricingFixture(), inputUsdPerMillion: -1 }, { ...pricingFixture(), cachedInputUsdPerMillion: undefined },
-    { ...pricingFixture(), source: '' }]) {
+  for (const pricing of [undefined, [0.1, 1, Number.NaN], [0.1, -1, 2], [0.1, 1]]) {
     const catalog = new Catalog();
     assert.throws(() => catalog.registerProvider({
       id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
-      models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing } as ModelDefinition],
+      models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing } as unknown as ModelDefinition],
     }), /pricing/);
   }
 });
@@ -131,7 +130,7 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
     id, displayName: id, intelligence, capabilities,
     speed: tps,
     ...(outUsd !== undefined
-      ? { pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: outUsd, source: 'spec', checkedAt: '2026-09-05' } }
+      ? { pricing: [1, 1, outUsd] as const }
       : {}),
   });
   catalog.registerProvider({
@@ -172,7 +171,7 @@ test('hard max output price excludes over-budget candidates', () => {
   assert.equal(result.ok, true);
   assert.notEqual(result.selected.plan.model, 'mpremium');
   assert.notEqual(result.selected.plan.model, 'mmid');
-  assert.ok((result.selected.model.pricing?.outputUsdPerMillion ?? Infinity) <= 4);
+  assert.ok((result.selected.model.pricing?.[2] ?? Infinity) <= 4);
   const none = resolveConstrainedDispatch(catalog, candidates, { maxOutputUsdPerMillion: 0.5 });
   assert.equal(none.ok, false);
   assert.equal(none.reason, 'no-eligible-candidate');
@@ -345,10 +344,10 @@ test('registerProvider rejects a model missing its required speed default', () =
   );
 });
 
-test('registerProvider rejects non-positive and non-finite default speeds', () => {
+test('registerProvider rejects non-positive, non-finite, and non-integer default speeds', () => {
   const catalog = new Catalog();
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
-  const invalid = [0, -1, Number.NaN, Number.POSITIVE_INFINITY];
+  const invalid = [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5];
   for (const speed of invalid) {
     assert.throws(
       () => catalog.registerProvider({
@@ -633,7 +632,7 @@ test('combined capability and price constraints admit only compliant candidates'
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.model, 'mvision');
   assert.ok(result.selected.model.capabilities?.includes('image'));
-  assert.ok((result.selected.model.pricing?.outputUsdPerMillion ?? Infinity) <= 10);
+  assert.ok((result.selected.model.pricing?.[2] ?? Infinity) <= 10);
 });
 
 test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flash stays eligible', () => {
@@ -643,8 +642,8 @@ test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flas
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     modelAliases: { 'legacy-glm': 'glm-5.3' },
     models: [
-      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: 50, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 1, source: 'spec', checkedAt: '2026-09-05' } },
-      { id: 'GLM-5.3-Flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: 50, pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' } },
+      { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: 50, pricing: [1, 1, 1] },
+      { id: 'GLM-5.3-Flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: 50, pricing: [1, 1, 2] },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -675,7 +674,7 @@ function buildDualRouteCatalog(): {
     models: [{
       id: 'm', displayName: 'M', intelligence: 'mid',
       speed: 30,
-      pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
+      pricing: [1, 1, 2],
     }],
     protocols: [
       { protocol: 'anthropic_messages', endpoint: 'https://api.vendor.example/v1/messages', authScheme: 'x-api-key' },
@@ -734,7 +733,7 @@ test('with no native route the grok client beats claude for the same provider/mo
     models: [{
       id: 'm', displayName: 'M', intelligence: 'mid',
       speed: 30,
-      pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 2, source: 'spec', checkedAt: '2026-09-05' },
+      pricing: [1, 1, 2],
     }],
     protocols: [
       { protocol: 'anthropic_messages', endpoint: 'https://api.vendor.example/v1/messages', authScheme: 'x-api-key' },
@@ -991,7 +990,7 @@ test('requiresWebSearch filters unsupported combinations but keeps supported dis
   catalog.registerProvider({
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
     nativeClients: ['nsearch'],
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing: { inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 1, source: 'spec', checkedAt: '2026-09-05' } }],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing: [1, 1, 1] }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const nativeCand: DispatchCandidate = { profileId: 'vendor/m:nsearch', client: 'nsearch', provider: 'vendor', model: 'm' };
@@ -1216,7 +1215,7 @@ test('registerProvider rejects invalid and duplicate thinking levels and bad map
 });
 
 test('resolveConstrainedDispatch adapts requirements.thinking into the selected plan parameters', () => {
-  const pricing = (out: number) => ({ inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: out, source: 'spec', checkedAt: '2026-09-05' });
+  const pricing = (out: number): ModelPricing => [1, 1, out];
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true });
   catalog.registerClient({ id: 'c2', gatewayProtocols: ['openai_chat'], taskCapable: true });
@@ -1267,7 +1266,7 @@ test('thinking never changes candidate ranking or admission', () => {
   // mapping must remain its own.
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true });
-  const pricing = (out: number) => ({ inputUsdPerMillion: 1, cachedInputUsdPerMillion: 1, outputUsdPerMillion: out, source: 'spec', checkedAt: '2026-09-05' });
+  const pricing = (out: number): ModelPricing => [1, 1, out];
   catalog.registerProvider({
     id: 'p', displayName: 'P', credentialResolver: 'forge-managed',
     models: [

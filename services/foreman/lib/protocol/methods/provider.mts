@@ -1,11 +1,8 @@
 import type { JsonSchema } from '../jsonrpc.mts'
 
 export interface ProviderListParams {}
-export interface ProviderListModelPricing {
-  inputUsdPerMillion?: number
-  outputUsdPerMillion?: number
-  cachedInputUsdPerMillion?: number
-}
+/** USD per million tokens: [cached, input, output]. */
+export type ProviderListModelPricing = readonly [number, number, number]
 
 export interface ProviderListModel {
   id: string
@@ -20,7 +17,7 @@ export interface ProviderListModel {
   canonicalId?: string
   /** Catalog intelligence tier for the model. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
-  /** Catalog pricing subset; only the USD-per-million input/output/cached numbers. */
+  /** Catalog list price as [cached, input, output] USD per million tokens. */
   pricing?: ProviderListModelPricing
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default'
@@ -71,11 +68,10 @@ export const providerListResultSchema = {
             canonicalId: { type: 'string', minLength: 1, maxLength: 200 },
             intelligence: { type: 'string', enum: ['low', 'mid', 'high', 'premium'] },
             pricing: {
-              type: 'object', properties: {
-                inputUsdPerMillion: { type: 'number', minimum: 0 },
-                outputUsdPerMillion: { type: 'number', minimum: 0 },
-                cachedInputUsdPerMillion: { type: 'number', minimum: 0 },
-              }, additionalProperties: false,
+              type: 'array',
+              minItems: 3,
+              maxItems: 3,
+              items: { type: 'number', minimum: 0 },
             },
             speedSource: { type: 'string', enum: ['local_31d', 'provider_override', 'catalog_default'] },
             available: { type: 'boolean' },

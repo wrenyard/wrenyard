@@ -685,13 +685,7 @@ describe('lib/protocol JSON-RPC contract', () => {
         capabilities: ['text', 'image'],
         thinkingLevels: ['low', 'high', 'max'],
         speed: 40,
-        pricing: {
-          inputUsdPerMillion: 3,
-          cachedInputUsdPerMillion: 0.3,
-          outputUsdPerMillion: 15,
-          source: 'catalog',
-          checkedAt: '2026-09-05T00:00:00.000Z',
-        },
+        pricing: [0.3, 3, 15],
       }],
     }
     assert.deepEqual(parseMethodResult('gateway.connection', enrichedGatewayResult), enrichedGatewayResult)

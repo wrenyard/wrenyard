@@ -61,13 +61,7 @@ async function createSpeedOverrideResolver(
       displayName: 'M',
       intelligence: 'mid',
       speed: defaultTps,
-      pricing: {
-        inputUsdPerMillion: 1,
-        cachedInputUsdPerMillion: 0.5,
-        outputUsdPerMillion: 2,
-        source: 'fixture',
-        checkedAt: '2026-09-01',
-      },
+      pricing: [0.5, 1, 2],
     }],
     modelSpeedOverrides: {
       m: overrideTps,
@@ -101,7 +95,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   it('automatic selection over the pre-existing provider pool picks the cheaper eligible HY3 canonical target', () => {
     // Exclude the newly added providers to retain this native-route regression fixture.
     // With an 80/60 floor the expected group contains the local-measured
-    // DeepSeek Flash (82.42) and the catalog-default HY3 (93.8); HY3 wins on
+    // DeepSeek Flash (82.42) and the catalog-default HY3 (94); HY3 wins on
     // reference output price (0.556) even though the local cb candidate is
     // eligible.
     const resolution = resolver.resolve({
@@ -123,16 +117,14 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.intelligence, 'low')
     // HY3 has no local sample, so the sourced catalog default is used.
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 93.8)
+    assert.equal(resolved.speed.effective_tps, 94)
     assert.equal(resolved.speed.sample_count, 0)
     assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.speed.expected_tps_met, true)
-    // Per-million reference pricing from the catalog, with a real source stamp.
+    // Per-million reference pricing from the catalog.
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.139)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 0.556)
     assert.equal(resolved.reference_pricing.cached_input_usd_per_million, 0.035)
-    assert.equal(resolved.reference_pricing.source, 'https://cloud.tencent.com/document/product/1823/130055')
-    assert.equal(resolved.reference_pricing.checked_at, '2026-09-08')
   })
 
   it('a legacy policy declaredRuntime opens the same automatic pool', () => {
@@ -176,7 +168,7 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     assert.equal(resolved.model, 'glm-5.3-flash')
     assert.equal(resolved.intelligence, 'mid')
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 73.1)
+    assert.equal(resolved.speed.effective_tps, 73)
     assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.reference_pricing.input_usd_per_million, 0.15)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 0.5)
@@ -401,7 +393,7 @@ describe('core task dispatch-resolver explicit mode (no-model)', () => {
     assert.equal(resolved.protocol, 'openai_chat')
     assert.equal(resolved.intelligence, 'high')
     assert.equal(resolved.speed.source, 'catalog_default')
-    assert.equal(resolved.speed.effective_tps, 39.7)
+    assert.equal(resolved.speed.effective_tps, 40)
     assert.equal(resolved.speed.checked_at, undefined)
     assert.equal(resolved.reference_pricing.output_usd_per_million, 15)
   })

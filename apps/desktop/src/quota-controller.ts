@@ -270,11 +270,7 @@ function projectCatalog(
           .map((key) => [key, model[key as keyof typeof model]])),
         // Pricing is projected explicitly from the required catalog value:
         // only the three USD-per-million numbers, never a default.
-        pricing: {
-          inputUsdPerMillion: model.pricing.inputUsdPerMillion,
-          outputUsdPerMillion: model.pricing.outputUsdPerMillion,
-          cachedInputUsdPerMillion: model.pricing.cachedInputUsdPerMillion,
-        },
+        pricing: model.pricing,
       })),
     };
   });

@@ -98,7 +98,7 @@ test('Zen and OpenRouter free models carry the free entitlement and a reference 
     // `free` is a provider-scoped entitlement; the list tariff stays a
     // reference constant rather than a fabricated zero.
     assert.equal(model.free, true, `${provider}/${modelId} must be flagged free`);
-    assert.ok(model.pricing.inputUsdPerMillion > 0, `${provider}/${modelId} keeps a reference list tariff`);
+    assert.ok(model.pricing[1] > 0, `${provider}/${modelId} keeps a reference list tariff`);
     assert.ok(model.intelligence, `${provider}/${modelId} must still carry a configured tier`);
   };
   assertFree('opencode-zen', 'mimo-v2.5-free');
@@ -130,25 +130,19 @@ test('Zen and OpenRouter free models carry the free entitlement and a reference 
   // Paid Zen models are priced by the shared catalog metadata.
   const zen = catalog.provider('opencode-zen')!;
   const zenPrices = Object.fromEntries(zen.models.map((entry) => [entry.id, entry.pricing]));
-  assert.equal(zenPrices['glm-5.3'].inputUsdPerMillion, 1.4);
-  assert.equal(zenPrices['glm-5.3'].outputUsdPerMillion, 4.4);
-  assert.equal(zenPrices['kimi-k3'].inputUsdPerMillion, 3);
-  assert.equal(zenPrices['kimi-k3'].outputUsdPerMillion, 15);
+  assert.deepEqual(zenPrices['glm-5.3'], [0.26, 1.4, 4.4]);
+  assert.deepEqual(zenPrices['kimi-k3'], [0.30, 3, 15]);
 
   const go = catalog.provider('opencode-go')!;
   const prices = Object.fromEntries(go.models.map((entry) => [entry.id, entry.pricing!]));
-  assert.equal(prices['glm-5.3-flash'].inputUsdPerMillion, 0.15);
-  assert.equal(prices['glm-5.3-flash'].outputUsdPerMillion, 0.50);
-  assert.equal(prices['glm-5.3'].inputUsdPerMillion, 1.4);
-  assert.equal(prices['glm-5.3'].outputUsdPerMillion, 4.4);
-  assert.equal(prices['deepseek-flash'].inputUsdPerMillion, 0.3);
-  assert.equal(prices['deepseek-flash'].outputUsdPerMillion, 1.2);
-  assert.equal(prices['hy3'].inputUsdPerMillion, 0.14);
-  assert.equal(prices['hy3'].outputUsdPerMillion, 0.58);
+  assert.deepEqual(prices['glm-5.3-flash'], [0.03, 0.15, 0.50]);
+  assert.deepEqual(prices['glm-5.3'], [0.26, 1.4, 4.4]);
+  assert.deepEqual(prices['deepseek-flash'], [0.006, 0.3, 1.2]);
+  assert.deepEqual(prices['hy3'], [0.035, 0.14, 0.58]);
   for (const id of Object.keys(prices)) {
     assert.ok(
-      (prices[id].inputUsdPerMillion > 0 || prices[id].outputUsdPerMillion > 0) && prices[id].source === 'https://opencode.ai/docs/go/',
-      `${id} Go price must be nonzero and sourced from the official Go docs`,
+      prices[id][1] > 0 || prices[id][2] > 0,
+      `${id} Go price must be nonzero`,
     );
   }
 });

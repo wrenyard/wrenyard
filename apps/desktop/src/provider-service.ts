@@ -47,11 +47,7 @@ export class ProviderService {
           ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
           ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),
           ...(model.available === undefined ? {} : { available: model.available }),
-          pricing: {
-            inputUsdPerMillion: model.pricing.inputUsdPerMillion,
-            outputUsdPerMillion: model.pricing.outputUsdPerMillion,
-            cachedInputUsdPerMillion: model.pricing.cachedInputUsdPerMillion,
-          },
+          pricing: model.pricing,
         })),
       }));
     } finally {

@@ -18,7 +18,7 @@ function fixture(
       displayName: 'Public',
       intelligence: 'mid',
       speed: 40,
-      pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
+      pricing: [1.5, 3, 15],
     }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://upstream.test/v1/chat/completions', authScheme: 'bearer' }],
   });
@@ -310,7 +310,7 @@ function headerFixture(fetchImpl: typeof fetch) {
         displayName: model,
         intelligence: 'mid',
         speed: 40,
-        pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
+        pricing: [1.5, 3, 15],
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
     });
@@ -485,7 +485,7 @@ function codeBuddyFixture(fetchImpl: typeof fetch, identity?: { platform: string
         displayName: model,
         intelligence: 'mid',
         speed: 40,
-        pricing: { inputUsdPerMillion: 3, cachedInputUsdPerMillion: 1.5, outputUsdPerMillion: 15, source: 'gateway-test', checkedAt: '2026-09-09' },
+        pricing: [1.5, 3, 15],
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
     });
