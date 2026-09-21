@@ -30,7 +30,6 @@ const FIRST_PARTY_MANIFESTS = [
   'apps/desktop/package.json',
   'apps/pet/package.json',
   'services/foreman/package.json',
-  'packages/catalog/package.json',
   'packages/models/package.json',
   'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',

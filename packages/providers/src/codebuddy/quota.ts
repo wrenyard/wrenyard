@@ -1,4 +1,4 @@
-import { codeBuddyProvider } from './models.ts';
+import type { ProviderDefinition } from '../base/index.ts';
 
 function quotaPool(quotaPoolId: string) {
   return Object.freeze({
@@ -25,8 +25,8 @@ function isHyFamilyModel(modelId: string): boolean {
  * allowance and the account monthly allowance; remaining models use monthly
  * only. No raw window evidence has been reviewed, so every pool stays empty.
  */
-export function codeBuddyQuotaBindings() {
-  return codeBuddyProvider.models.map((model) => (
+export function codeBuddyQuotaBindings(definition: ProviderDefinition) {
+  return definition.models.map((model) => (
     isHyFamilyModel(model.id)
       ? binding('codebuddy', model.id, [HY_FAMILY_POOL, MONTHLY_POOL])
       : binding('codebuddy', model.id, [MONTHLY_POOL])

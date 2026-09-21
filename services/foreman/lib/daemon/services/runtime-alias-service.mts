@@ -5,7 +5,7 @@
  * and resolve(). It never caches alias targets: every snapshot/put/remove
  * re-reads the store at call time and resolve({kind:'alias'}) reloads the live
  * store so a concurrent update is observed on the next resolve. Inline target
- * references are parsed and canonicalized through the shared @wrenyard/catalog
+ * references are parsed and canonicalized through the shared @wrenyard/providers/catalog
  * parseRunSyntax/formatRunSyntax utilities.
  *
  * This module never constructs catalogs/resolvers, reads credentials, or
@@ -13,7 +13,7 @@
  */
 
 import RuntimeAliasStore from '../../runtime-aliases/store.mts'
-import { formatRunSyntax, parseRunSyntax } from '@wrenyard/catalog'
+import { formatRunSyntax, parseRunSyntax } from '@wrenyard/providers/catalog'
 import type {
   RuntimeAliasPutParams,
   RuntimeAliasRemoveParams,
@@ -131,7 +131,7 @@ export class RuntimeAliasService {
   /**
    * Resolve a live reference at call time. Alias references reload the store so
    * the most recent target is used (never a stale copy); inline targets are
-   * canonicalized through the shared @wrenyard/catalog parser.
+   * canonicalized through the shared @wrenyard/providers/catalog parser.
    */
   async resolve(reference: AliasResolveReference): Promise<ResolvedAliasReference> {
     if (reference.kind === 'alias') {

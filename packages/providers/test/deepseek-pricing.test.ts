@@ -5,7 +5,7 @@ import {
   DEEPSEEK_REFERENCE_PRICE_CHECKED_AT,
   DEEPSEEK_REFERENCE_PRICE_SOURCE_URL,
   resolveDeepSeekReferencePricing,
-} from '../src/deepseek-pricing.js';
+} from '../src/deepseek/pricing.js';
 import type {
   DeepSeekPricingBasis,
   DeepSeekPricingCurrency,
@@ -13,7 +13,7 @@ import type {
   DeepSeekPricingModel,
   DeepSeekPricingTier,
   DeepSeekReferencePricing,
-} from '../src/deepseek-pricing.js';
+} from '../src/deepseek/pricing.js';
 
 const CURRENT_DOCS = DEEPSEEK_REFERENCE_PRICE_SOURCE_URL;
 
