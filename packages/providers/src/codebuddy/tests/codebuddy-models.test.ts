@@ -28,6 +28,11 @@ test('CodeBuddy product ids match the mainstream registry or are ignored', () =>
   assert.equal(resolveCodeBuddyProductModelId('glm-5.2-internal-ioa'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('kimi-k2.6'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('kimi-k2.6-ioa'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('gpt-5.4'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('gpt-5.4-ioa'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('gpt-5.5'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('gpt-5.5-ioa'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('claude-fable-5'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-flash-ioa'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro-ioa'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m'), undefined);
@@ -51,6 +56,9 @@ test('CodeBuddy offerings are mainstream JSON matches plus CUSTOM leftovers', ()
     'glm-4.7',
     'glm-5.2',
     'kimi-k2.6',
+    'gpt-5.4',
+    'gpt-5.5',
+    'claude-fable-5',
     'deepseek-v4-flash',
     'deepseek-v4-pro',
     'default-model',
