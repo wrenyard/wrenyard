@@ -19,7 +19,7 @@ export interface TaskResolvedSpeed {
   effective_tps: number
   source: 'local_31d' | 'provider_override' | 'catalog_default'
   sample_count: number
-  checked_at: string
+  checked_at?: string
   expected_tps_met: boolean
   degradation_reason?: string
 }

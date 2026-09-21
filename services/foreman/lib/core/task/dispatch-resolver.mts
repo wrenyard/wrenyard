@@ -303,7 +303,7 @@ function toResolvedDispatch(
   profileId: string,
   plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; thinking?: TaskResolvedDispatch['thinking'] },
   model: ModelDefinition,
-  speed: SpeedEvidence & { checkedAt: string },
+  speed: SpeedEvidence,
   pricing: ModelPricing,
   requirements: TaskDispatchRequirements,
 ): TaskResolvedDispatch {
@@ -321,8 +321,8 @@ function toResolvedDispatch(
       effective_tps: speed.tps,
       source: speed.source,
       sample_count: speed.sampleCount ?? 0,
-      checked_at: speed.checkedAt,
       expected_tps_met: expectedTpsMet,
+      ...(speed.checkedAt === undefined ? {} : { checked_at: speed.checkedAt }),
     },
     intelligence: model.intelligence as string,
     reference_pricing: toReferencePricing(pricing),
@@ -532,13 +532,14 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     // Fail-closed. Constrained tasks always set speed, intelligence, and
-    // max-price, so a selected result must carry real evidence for each.
-    // Fabricating any of these is never allowed.
+    // max-price, so a selected result must carry a finite positive TPS.
+    // Fabricating a speed is never allowed. Catalog defaults and provider
+    // overrides are TPS-only; checkedAt is required only for local samples.
     const speed = selected.speed
-    if (!speed.checkedAt) {
+    if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'speed_requirement') }
     }
-    const verifiedSpeed = { ...speed, checkedAt: speed.checkedAt }
+    const verifiedSpeed = speed
     const model = selected.model
     if (!model.intelligence) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }

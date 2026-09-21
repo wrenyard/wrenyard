@@ -305,8 +305,6 @@ function toSpeed(row: AttemptDispatchRow): TaskResolvedSpeed | undefined {
     || row.speed_sample_count == null
     || !Number.isInteger(row.speed_sample_count)
     || row.speed_sample_count < 0
-    || row.speed_checked_at == null
-    || row.speed_checked_at === ''
     || row.speed_expected_tps_met == null
     || (row.speed_expected_tps_met !== 0 && row.speed_expected_tps_met !== 1)
   ) return undefined
@@ -314,9 +312,9 @@ function toSpeed(row: AttemptDispatchRow): TaskResolvedSpeed | undefined {
     effective_tps: row.speed_effective_tps,
     source: row.speed_source,
     sample_count: row.speed_sample_count,
-    checked_at: row.speed_checked_at,
     expected_tps_met: row.speed_expected_tps_met === 1,
   }
+  if (row.speed_checked_at) speed.checked_at = row.speed_checked_at
   if (row.speed_degradation_reason) speed.degradation_reason = row.speed_degradation_reason
   return speed
 }
