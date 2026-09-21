@@ -21,6 +21,8 @@ export const DRAIN_TIMEOUT_MS = 60_000;
 /** Unexpected component-exit retries. stop() aborts the sequence. */
 export const COMPONENT_RETRY_LIMIT = 3;
 export const COMPONENT_RETRY_BACKOFF_MS = [1_000, 2_000, 4_000];
+/** Consecutive-failure retry budget resets only after a child stays healthy this long. */
+export const COMPONENT_RETRY_STABLE_MS = 30_000;
 
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const LOG_MAX_FILES = 3;

@@ -9,6 +9,7 @@ export function sourceChildEnv(baseEnv, resolved) {
   env.WRENYARD_SOURCE_DEV = SOURCE_DEV_FLAG;
   env.WRENYARD_DEV_SUPERVISED = SOURCE_DEV_FLAG;
   env.WRENYARD_DEV_INSTANCE_ID = resolved.instanceId;
+  if (resolved.launchId) env.WRENYARD_DEV_LAUNCH_ID = resolved.launchId;
   env.WRENYARD_SOURCE_CHECKOUT = resolved.checkout;
   env.WRENYARD_ROOT = resolved.checkout;
   env.WRENYARD_CLI = resolved.cli;
