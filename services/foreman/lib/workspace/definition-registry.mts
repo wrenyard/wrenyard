@@ -201,7 +201,7 @@ function normalizeLegacyTaskPermission(config: TaskConfig): TaskConfig {
 
 /**
  * Validate the optional explicit dispatch requirements against the catalog-shaped
- * contract (single SSOT, `@wrenyard/catalog` TaskDispatchRequirements). Every
+ * contract (single SSOT, `@wrenyard/auto-routing` TaskDispatchRequirements). Every
  * field is individually optional, but a dispatch block must declare at least one
  * recognized hard requirement or it is meaningless. Malformed TPS, price,
  * intelligence tiers, per-axis exclusions, or required capabilities fail

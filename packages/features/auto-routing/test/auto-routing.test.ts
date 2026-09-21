@@ -1,5 +1,5 @@
 /**
- * Focused node:test coverage for packages/catalog/src/auto-routing-policy.ts.
+ * Focused node:test coverage for packages/features/auto-routing/src/index.ts.
  *
  * Covers the pure two-file (source + test) contract: quota evidence
  * semantics, full-cycle/rolling aggregation, hard guards, marginal price and
@@ -34,7 +34,7 @@ import {
   type CandidateInput,
   type QuotaEvidence,
   type RequiredQuotaConstraint,
-} from "../src/auto-routing-policy.ts";
+} from "../src/index.ts";
 
 // ---------------------------------------------------------------------------
 // Deterministic clock and evidence builders
