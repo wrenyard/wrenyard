@@ -1,7 +1,7 @@
 import type { Provider } from '../base/provider.ts';
 import { binding, quotaWindow, quotaPool } from '../base/quota-helpers.ts';
 
-const CURSOR_PARSER = 'runtime/forge/internal/usage/quota/cursor.go';
+const CURSOR_PARSER = 'packages/providers/src/cursor/normalize-quota.ts';
 
 const CURSOR_DOCS = 'https://cursor.com/docs/models-and-pricing';
 
