@@ -1,3 +1,4 @@
+import {handleQuota} from './commands/quota.mts'
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +33,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
     }
 
     switch (command) {
+      case 'quota':
+        return handleQuota(args.slice(1))
       case 'daemon':
       case 'deamon':
         if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -77,6 +80,7 @@ export function printUsage(): void {
   console.log(`Wrenyard v2 - TypeScript task and TaskGraph runtime
 
 Usage:
+  wrenyard quota [provider] [--json] [--refresh]
   wrenyard task run <task_id> -p <project> [--config path] [--worktree id] <json-input>
   wrenyard task cancel <task_run_id> [--config path]
   wrenyard task list [project_id] [--config path] [--json]

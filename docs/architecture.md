@@ -26,7 +26,7 @@ shell are internal components of that single product.
   conversation to the configured Wrenyard workspace. Desktop also owns Pet
   configuration and lifecycle through an in-process runtime module. It reads
   `stats.summary` / `stats.today` directly from the public control protocol and
-  owns the Runtime quota refresh shared by its quota page, tray submenu and Pet
+  owns the quota feature refresh shared by its quota page, tray submenu and Pet
   Tips rather than routing product data through Pet.
 - **packages/dsh-shell** -- the dsh profile/bundle shell reused by the desktop
   host.
@@ -43,6 +43,23 @@ shell are internal components of that single product.
 - Pet -> Foreman (read-only current activity / today observer protocol)
 - Desktop -> DSH public session API, dsh-shell, public statistics/quota, Pet runtime + config contract
 - Forge has no dependency on Node
+
+## Quota feature
+
+- `wrenyard quota [provider] [--json]` and daemon routing use
+  `packages/features/quota`; Desktop uses the same service through its quota UI adapter.
+- Providers own pure normalization into quota snapshots. The feature selects
+  acquisition sources and isolates provider failures; routing and UI keep their caches.
+- DeepSeek, Kimi Coding and Zhipu Coding use direct HTTP in TypeScript.
+  CodeBuddy reads account-scoped exhaustion observations locally.
+- Codex app-server, Grok ACP, Cursor local credentials and Claude native
+  credentials/OAuth use `clients -> execution -> forge client`. The Go client
+  operations return raw observations. They do not normalize or cache quota.
+- `execution` owns generic Forge invocation, limits, cancellation and process
+  cleanup. It does not depend on providers or quota.
+- The old `forge quota` and statusline commands are retired. Old quota config
+  is ignored, and generated Claude settings remove Wrenyard's retired statusline
+  command while preserving custom user commands.
 
 ## Execution and distribution
 

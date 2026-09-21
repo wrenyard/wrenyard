@@ -1,8 +1,8 @@
 /**
  * Focused node:test coverage for AutoRoutingQuotaSnapshotService.
  *
- * Fixtures mirror the REAL `forge quota --json` list DTO proven in
- * runtime/forge/internal/usage/quota: provider entries use `provider`/
+ * Fixtures mirror the normalized quota list DTO exposed by
+ * @wrenyard/quota: provider entries use `provider`/
  * `status`/`stale`/`fetched_at` (RFC3339 ISO string) plus `windows`; windows
  * use `name`/`pct`/`resets_at` (ISO string)/`window_minutes` (and the
  * Go-emitted, never-read `remaining_pct`). Provider-declared not-applicable
@@ -27,7 +27,7 @@ import { test } from 'node:test';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
 import { assessRequiredQuota } from '@wrenyard/auto-routing';
 
-import type { CodeBuddyQueryContext } from '../../lib/daemon/execution/forge-quota-query.mts';
+import type { CodeBuddyQueryContext } from '../../lib/daemon/execution/quota-query.mts';
 import {
   AutoRoutingQuotaSnapshotService,
   type AutoRoutingQuotaSnapshot,
@@ -624,7 +624,7 @@ test('codebuddy/hy3 direct snapshot requires both empty pools as null constraint
 
 test('codebuddy/hy3 unknown snapshot keeps both empty pools required with null evidence', async () => {
   const rejecting = new AutoRoutingQuotaSnapshotService({
-    queryJson: () => Promise.reject(new Error('forge quota unreachable')),
+    queryJson: () => Promise.reject(new Error('quota source unavailable')),
     now: () => T0,
   });
   const snapshot = await rejecting.snapshot();
@@ -1141,7 +1141,7 @@ test('a failed refresh never serves expired old evidence and returns a short-liv
   const constraintId = bindingRequiredConstraintIds(binding)[0]!;
   const queryJson = () => {
     calls += 1;
-    if (current > T0 + 60_000) return Promise.reject(new Error('forge quota unreachable'));
+    if (current > T0 + 60_000) return Promise.reject(new Error('quota source unavailable'));
     return Promise.resolve(reportJson(rowsForBinding(binding, { pct: 20, fetchedAtMs: T0 })));
   };
   const service = new AutoRoutingQuotaSnapshotService({ queryJson, now: () => current });

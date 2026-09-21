@@ -1,11 +1,10 @@
-import { spawn } from 'node:child_process';
+import { QuotaService as ProductQuotaService, currentCodeBuddyContext } from '@wrenyard/quota/runtime';
 import os from 'node:os';
 import path from 'node:path';
 import type { DiagnosticLogger } from './diagnostic-logger';
 import type { QuotaProviderState, QuotaWindowRow } from '../shared/entities';
-/** Timeout for the forge quota --json child process. Exported so tests
- *  and callers can verify the budget without real-time waiting. */
-export const FORGE_QUOTA_TIMEOUT_MS = 30_000;
+/** Timeout for native client operations used by the quota feature. */
+export const QUOTA_TIMEOUT_MS = 30_000;
 
 export interface QuotaServiceOptions {
   logger?: DiagnosticLogger;
@@ -46,7 +45,7 @@ export class QuotaService {
 
   private async fetchProviders(): Promise<QuotaProviderState[]> {
     try {
-      const output = await runForgeQuotaJson(this.runtimeCommand);
+      const output = await runQuotaJson(this.runtimeCommand);
       const providers = parseQuotaJson(output);
       this.cache = { providers, fetchedAt: Date.now() };
       return providers;
@@ -57,23 +56,6 @@ export class QuotaService {
       return [];
     }
   }
-}
-
-/**
- * Resolve the runtime command used to query quota. Order:
- *  1. non-empty WRENYARD_RUNTIME_BIN;
- *  2. non-empty legacy WRENYARD_FORGE_BIN;
- *  3. `forge` as an unmanaged-development fallback.
- * Keeps the Pet provider-agnostic and independent of PATH/legacy launchers.
- */
-export function resolveQuotaRuntimeCommand(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const runtimeBin = env.WRENYARD_RUNTIME_BIN?.trim()
-  if (runtimeBin) return runtimeBin
-  const forgeBin = env.WRENYARD_FORGE_BIN?.trim()
-  if (forgeBin) return forgeBin
-  return 'forge'
 }
 
 /**
@@ -107,34 +89,12 @@ function isNpmNodeModulesBin(entry: string): boolean {
   return normalized === '/node_modules/.bin' || normalized.endsWith('/node_modules/.bin');
 }
 
-function runForgeQuotaJson(runtimeCommand?: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(runtimeCommand ?? resolveQuotaRuntimeCommand(), ['quota', '--json'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false,
-      windowsHide: true,
-      timeout: FORGE_QUOTA_TIMEOUT_MS,
-      env: sanitizeQuotaChildEnv(),
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout);
-      } else {
-        reject(new Error(`forge quota --json exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
-      }
-    });
-
-    child.on('error', (err) => {
-      reject(new Error(`Failed to spawn forge quota --json: ${err.message}`));
-    });
-  });
+const productQuota = new ProductQuotaService();
+async function runQuotaJson(runtimeCommand?: string): Promise<string> {
+  const env = sanitizeQuotaChildEnv();
+  if (runtimeCommand) env.WRENYARD_RUNTIME_BIN = runtimeCommand;
+  else if (!env.WRENYARD_RUNTIME_BIN && env.WRENYARD_FORGE_BIN) env.WRENYARD_RUNTIME_BIN = env.WRENYARD_FORGE_BIN;
+  return productQuota.queryJson(await currentCodeBuddyContext({env}), {env, timeoutMs:QUOTA_TIMEOUT_MS});
 }
 
 interface RawQuotaEntry {
@@ -158,7 +118,7 @@ interface RawQuotaEntry {
     remaining_pct?: number;
     expected_remaining_pct?: number;
   }>;
-  /** Monetary balances from forge quota JSON */
+  /** Monetary balances from quota feature snapshots */
   balances?: Array<{
     currency?: unknown;
     amount?: unknown;
@@ -239,7 +199,7 @@ function currencySymbol(currency: string): string | null {
 }
 
 /**
- * Parse the forge quota `balances` array defensively into structured monetary
+ * Parse the quota feature `balances` array defensively into structured monetary
  * rows distinct from percentage windows. Each row validates an uppercase
  * three-letter currency and a non-negative decimal-string amount. A malformed
  * array entry is dropped rather than becoming an ok zero balance; an entirely
@@ -266,7 +226,7 @@ function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
 export function parseQuotaJson(raw: string): QuotaProviderState[] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
-    throw new TypeError('forge quota --json output must be a JSON array');
+    throw new TypeError('quota feature output must be a JSON array');
   }
 
   const results: QuotaProviderState[] = [];
