@@ -109,11 +109,13 @@ describe('health.ping process identity', () => {
       WRENYARD_SOURCE_DEV: '1',
       WRENYARD_SOURCE_CHECKOUT: '/src',
       WRENYARD_DEV_INSTANCE_ID: 'id-1',
+      WRENYARD_DEV_LAUNCH_ID: 'launch-1',
       WRENYARD_RUNTIME_BIN: '/gen/forge.exe',
     }), {
       mode: 'source',
       checkout: '/src',
       instanceId: 'id-1',
+      launchId: 'launch-1',
       node: process.execPath,
       runtimeBin: '/gen/forge.exe',
     })
@@ -127,18 +129,23 @@ describe('health.ping process identity', () => {
     })
     const previousFlag = process.env.WRENYARD_SOURCE_DEV
     const previousId = process.env.WRENYARD_DEV_INSTANCE_ID
+    const previousLaunch = process.env.WRENYARD_DEV_LAUNCH_ID
     process.env.WRENYARD_SOURCE_DEV = '1'
     process.env.WRENYARD_DEV_INSTANCE_ID = 'live-id'
+    process.env.WRENYARD_DEV_LAUNCH_ID = 'live-launch'
     try {
       const response = await router.handleMessage(makeJsonRpcRequest('health.ping', {}, 9), {})
-      const result = (response as { result: { identity: { mode: string; instanceId?: string } } }).result
+      const result = (response as { result: { identity: { mode: string; instanceId?: string; launchId?: string } } }).result
       assert.equal(result.identity.mode, 'source')
       assert.equal(result.identity.instanceId, 'live-id')
+      assert.equal(result.identity.launchId, 'live-launch')
     } finally {
       if (previousFlag === undefined) delete process.env.WRENYARD_SOURCE_DEV
       else process.env.WRENYARD_SOURCE_DEV = previousFlag
       if (previousId === undefined) delete process.env.WRENYARD_DEV_INSTANCE_ID
       else process.env.WRENYARD_DEV_INSTANCE_ID = previousId
+      if (previousLaunch === undefined) delete process.env.WRENYARD_DEV_LAUNCH_ID
+      else process.env.WRENYARD_DEV_LAUNCH_ID = previousLaunch
     }
   })
 })
