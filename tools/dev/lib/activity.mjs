@@ -34,6 +34,7 @@ export function identityMatchesSource(health, expected) {
   if (!identity.verified) return false;
   if (identity.mode !== 'source') return false;
   if (expected.instanceId && identity.instanceId !== expected.instanceId) return false;
+  if (expected.launchId && identity.launchId !== expected.launchId) return false;
   if (expected.checkout && identity.checkout && identity.checkout !== expected.checkout) {
     // Windows checkout compares are done by the caller with sameCheckout.
     return false;

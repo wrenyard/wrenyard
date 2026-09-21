@@ -5,17 +5,19 @@ import { realpathSync } from 'node:fs';
 import {
   COMPONENT_RETRY_BACKOFF_MS,
   COMPONENT_RETRY_LIMIT,
+  COMPONENT_RETRY_STABLE_MS,
   DESKTOP_KILL_WAIT_MS,
   DRAIN_TIMEOUT_MS,
   HEALTH_WAIT_MS,
 } from './constants.mjs';
+import { DISPATCH_THAW_HINT, dispatchBlocksNewWork, dispatchIsAccepting, shouldAutoThaw } from './admission.mjs';
 import { combineActivity, identityMatchesSource } from './activity.mjs';
 import { buildGeneration } from './builder.mjs';
 import { spawnDaemonProcess, spawnDesktopProcess, stopChild, stopOwnedDesktopTree, componentLogPath, childHasExited } from './children.mjs';
 import { attachHandler, connectControl, isAddrInUse, listenControl } from './control.mjs';
 import { sourceChildEnv } from './env.mjs';
 import { COMPONENTS, expandDependents, isRendererOnly } from './graph.mjs';
-import { createInstanceRecord, formatGitRevision, newInstanceId, processAlive, readGitRevision, startIdentity } from './identity.mjs';
+import { createInstanceRecord, formatGitRevision, newInstanceId, newLaunchId, processAlive, readGitRevision, startIdentity } from './identity.mjs';
 import { readInstanceFile, writeInstanceFile } from './instance.mjs';
 import { createLogger } from './log.mjs';
 import {
@@ -110,6 +112,14 @@ export function createSupervisor(options = {}) {
   const queue = createGenerationQueue();
   const requests = createRequestQueue();
   const exists = options.exists;
+  const now = options.now ?? Date.now;
+  const wait = options.sleep ?? sleep;
+  const spawnDaemon = options.spawnDaemon ?? spawnDaemonProcess;
+  const spawnDesktop = options.spawnDesktop ?? spawnDesktopProcess;
+  const stopChildFn = options.stopChild ?? stopChild;
+  const retryStableMs = options.retryStableMs ?? COMPONENT_RETRY_STABLE_MS;
+  const retryBackoffMs = options.retryBackoffMs ?? COMPONENT_RETRY_BACKOFF_MS;
+  const makeLaunchId = options.newLaunchId ?? newLaunchId;
   const killDesktop = options.killDesktop === true;
   const inspectReleaseDesktop = options.inspectReleaseDesktop ?? createInspectReleaseDesktop({
     platform,
@@ -132,11 +142,16 @@ export function createSupervisor(options = {}) {
   let watcher = null;
   let daemon = null;
   let desktop = null;
+  let daemonSlot = null;
+  let desktopSlot = null;
+  let daemonStart = null;
+  let desktopStart = null;
   let desktopSession = null;
   let desktopStoppedByUser = false;
   let currentRuntimeBin = options.runtimeBin ?? defaultRuntimeBin(checkout, platform, exists);
   let stopping = false;
   let retries = { daemon: 0, desktop: 0 };
+  let retryTimers = { daemon: null, desktop: null };
   let buildAbort = null;
   let buildLock = Promise.resolve();
   const usedRuntimeGens = new Set();
@@ -148,10 +163,11 @@ export function createSupervisor(options = {}) {
     return run;
   }
 
-  function resolvedPaths() {
+  function resolvedPaths(launchId) {
     const cli = sourceCliInvocation(checkout, [], nodeExecutable, exists);
     return {
       instanceId,
+      launchId,
       checkout,
       cli: [cli.command, ...cli.args].join(' '),
       nodeBin: nodeExecutable,
@@ -257,15 +273,16 @@ export function createSupervisor(options = {}) {
     };
   }
 
-  function printReady() {
+  function printReady(admission) {
     const snap = snapshot();
-    options.stdout?.([
-      'ready',
+    const lines = [
+      admission?.blocked ? 'ready (dispatch blocked)' : 'ready',
       `checkout: ${snap.checkout}`,
       `revision: ${snap.git}`,
       'mode: source-development',
       `supervisor pid: ${snap.pids.supervisor}`,
       `daemon pid: ${snap.pids.daemon ?? '—'}`,
+      `daemon launchId: ${daemonSlot?.launchId ?? '—'}`,
       `desktop pid: ${snap.pids.desktop ?? '—'}`,
       `cli: source apps/cli/src/index.ts via tsx`,
       `node: ${snap.sources.node}`,
@@ -276,53 +293,181 @@ export function createSupervisor(options = {}) {
       `ipc: ${snap.paths.ipc}`,
       `logs: ${snap.paths.logs}`,
       `generation: ${snap.generation ?? 'initial'}`,
-    ].join('\n'));
+    ];
+    if (admission?.blocked) lines.push(DISPATCH_THAW_HINT);
+    options.stdout?.(lines.join('\n'));
+  }
+
+  async function withRpc(fn, timeoutMs) {
+    if (typeof options.withDaemon === 'function') return options.withDaemon(fn, timeoutMs);
+    return withDaemon(ipcPath, fn, timeoutMs);
   }
 
   async function pingDaemon() {
-    return withDaemon(ipcPath, (client) => client.request('health.ping', {}), 1500);
+    return withRpc((client) => client.request('health.ping', {}), 1500);
   }
 
-  async function waitForSourceDaemon(timeoutMs = HEALTH_WAIT_MS) {
-    const deadline = Date.now() + timeoutMs;
-    let lastError = 'daemon did not become healthy';
-    while (Date.now() < deadline) {
-      try {
-        const health = await pingDaemon();
-        if (health?.ok !== true) {
-          lastError = 'health.ping did not return ok';
-        } else if (!identityMatchesSource(health, { instanceId })) {
-          const identity = sourceIdentityFromHealth(health);
-          lastError = `daemon identity is ${identity.mode ?? 'unknown'}, not this source instance`;
-        } else {
-          return health;
-        }
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-      }
-      await sleep(250);
+  function currentDesktopSession() {
+    if (!desktopSession) return null;
+    if (desktopSession.launchId && desktopSlot?.launchId && desktopSession.launchId !== desktopSlot.launchId) {
+      return null;
     }
-    throw fail(ERRORS.internal, lastError);
+    return desktopSession;
+  }
+
+  function cancelRetry(kind) {
+    if (retryTimers[kind]) {
+      clearTimeout(retryTimers[kind]);
+      retryTimers[kind] = null;
+    }
+  }
+
+  function bindSlot(kind, child, launchId) {
+    const slot = {
+      kind,
+      child,
+      launchId,
+      expectedExit: false,
+      startInFlight: true,
+      failureCounted: false,
+      healthySince: null,
+    };
+    child.once('exit', (code, signal) => {
+      onTrackedChildExit(slot, code, signal);
+    });
+    if (kind === 'daemon') {
+      daemonSlot = slot;
+      daemon = child;
+    } else {
+      desktopSlot = slot;
+      desktop = child;
+    }
+    return slot;
+  }
+
+  function scheduleRetry(kind, slot, error) {
+    if (stopping || requests.pendingStop) return;
+    cancelRetry(kind);
+    const survived = slot.healthySince != null && (now() - slot.healthySince) >= retryStableMs;
+    if (survived) {
+      retries[kind] = 0;
+      logger.info('retry-reset', `${kind} launchId=${slot.launchId} stayed healthy for ${retryStableMs}ms; starting a new recovery budget`);
+    }
+    if (retries[kind] >= COMPONENT_RETRY_LIMIT) {
+      const detail = `${kind} exceeded ${COMPONENT_RETRY_LIMIT} restarts (launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'})`;
+      logger.error('retry-exhausted', `${detail}${error ? `: ${error instanceof Error ? error.message : String(error)}` : ''}`);
+      setStatus('degraded', detail);
+      return;
+    }
+    const attempt = retries[kind] + 1;
+    retries[kind] = attempt;
+    const delay = retryBackoffMs[Math.min(attempt - 1, retryBackoffMs.length - 1)];
+    logger.warn('retry', `${kind} restart in ${delay}ms (attempt ${attempt}/${COMPONENT_RETRY_LIMIT}) launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} planned=${slot.expectedExit}`);
+    retryTimers[kind] = setTimeout(() => {
+      retryTimers[kind] = null;
+      if (stopping || requests.pendingStop) return;
+      const current = kind === 'daemon' ? daemonSlot : desktopSlot;
+      if (current?.child && !childHasExited(current.child) && !current.expectedExit) return;
+      if (kind === 'daemon' && daemonStart) return;
+      if (kind === 'desktop' && desktopStart) return;
+      void withBuildLock(() => (kind === 'daemon' ? startDaemon() : startDesktop())).then(() => {
+        if (daemon && (desktop || desktopStoppedByUser) && status !== 'stopping') {
+          setStatus(status === 'degraded' ? 'ready' : status);
+        }
+      }).catch((retryError) => {
+        logger.error('retry-failed', retryError instanceof Error ? retryError.message : String(retryError));
+      });
+    }, delay);
+    retryTimers[kind]?.unref?.();
+  }
+
+  function onTrackedChildExit(slot, code, signal) {
+    if (stopping) return;
+    const current = slot.kind === 'daemon' ? daemonSlot : desktopSlot;
+    if (current !== slot) {
+      logger.info('stale-exit', `${slot.kind} launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} ignored`);
+      return;
+    }
+    if (slot.expectedExit) {
+      logger.info('expected-exit', `${slot.kind} launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} code=${code ?? 'none'} signal=${signal ?? 'none'}`);
+      return;
+    }
+    if (slot.kind === 'desktop' && code === 0 && !signal) {
+      desktopStoppedByUser = true;
+      desktopSession = null;
+      desktopSlot = null;
+      desktop = null;
+      persist({ desktopPid: null });
+      logger.info('desktop-stopped', `Desktop exited cleanly (pid was ${slot.child?.pid ?? 'unknown'} launchId=${slot.launchId}). Supervisor and daemon stay running. Use pnpm dev:restart to restore the window.`);
+      return;
+    }
+    setStatus('degraded', `${slot.kind} exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}) launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'}`);
+    if (slot.startInFlight || slot.failureCounted) return;
+    slot.failureCounted = true;
+    scheduleRetry(slot.kind, slot);
+  }
+
+  async function waitForSourceDaemon(slot, timeoutMs = HEALTH_WAIT_MS) {
+    const child = slot.child;
+    const launchId = slot.launchId;
+    let lastError = childHasExited(child)
+      ? `daemon exited before becoming healthy (launchId ${launchId}, code ${child.exitCode ?? 'none'}, signal ${child.signalCode ?? 'none'})`
+      : 'daemon did not become healthy';
+    let exited = childHasExited(child);
+    const onExit = (code, signal) => {
+      exited = true;
+      lastError = `daemon exited before becoming healthy (launchId ${launchId}, code ${code ?? 'none'}, signal ${signal ?? 'none'})`;
+    };
+    child.once('exit', onExit);
+    const deadline = now() + timeoutMs;
+    try {
+      while (now() < deadline && !exited && !childHasExited(child)) {
+        try {
+          const health = await pingDaemon();
+          if (exited || childHasExited(child)) break;
+          if (health?.ok !== true) {
+            lastError = 'health.ping did not return ok';
+          } else if (!identityMatchesSource(health, { instanceId, launchId })) {
+            const identity = sourceIdentityFromHealth(health);
+            lastError = `daemon identity is ${identity.mode ?? 'unknown'} launchId=${identity.launchId ?? 'none'}, not launch ${launchId}`;
+          } else {
+            const identity = sourceIdentityFromHealth(health);
+            if (identity.checkout && !sameCheckout(identity.checkout, checkout, platform)) {
+              lastError = `daemon checkout ${identity.checkout} does not match ${checkout}`;
+            } else {
+              return health;
+            }
+          }
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+        await wait(250);
+      }
+      throw fail(ERRORS.internal, lastError);
+    } finally {
+      child.removeListener('exit', onExit);
+    }
   }
 
   async function waitForIpcDown(timeoutMs = HEALTH_WAIT_MS) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    const deadline = now() + timeoutMs;
+    while (now() < deadline) {
       try {
         await pingDaemon();
       } catch {
         return;
       }
-      await sleep(200);
+      await wait(200);
     }
     throw fail(ERRORS.internal, `business IPC still reachable at ${ipcPath}`);
   }
 
   async function readDesktopActivity() {
-    if (!desktop || desktop.exitCode != null) return { known: true, busy: false, running: false };
-    if (!desktopSession) return { known: false, busy: true };
+    if (!desktop || childHasExited(desktop)) return { known: true, busy: false, running: false };
+    const session = currentDesktopSession();
+    if (!session) return { known: false, busy: true };
     try {
-      const activity = await desktopSession.request('desktop.activity', {});
+      const activity = await session.request('desktop.activity', {});
       return { known: true, ...activity };
     } catch {
       return { known: false, busy: true };
@@ -330,205 +475,328 @@ export function createSupervisor(options = {}) {
   }
 
   async function captureDesktopUi() {
-    if (!desktopSession) return null;
+    const session = currentDesktopSession();
+    if (!session) return null;
     try {
-      return await desktopSession.request('desktop.snapshotUi', {});
+      return await session.request('desktop.snapshotUi', {});
     } catch {
       return null;
     }
   }
 
   async function restoreDesktopUi(ui) {
-    if (!desktopSession || !ui) return;
+    const session = currentDesktopSession();
+    if (!session || !ui) return;
     try {
-      await desktopSession.request('desktop.restoreUi', ui);
+      await session.request('desktop.restoreUi', ui);
     } catch {
       // Restoration is best-effort UI state only.
     }
   }
 
   async function reloadDesktopRenderer() {
-    if (!desktopSession) return;
-    await desktopSession.request('desktop.reload', {});
+    const session = currentDesktopSession();
+    if (!session) return;
+    await session.request('desktop.reload', {});
   }
 
   async function quitDesktop() {
-    if (!desktop) return;
-    const target = desktop;
+    cancelRetry('desktop');
+    const slot = desktopSlot;
+    if (!slot?.child) return;
+    slot.expectedExit = true;
     let graceful = false;
-    if (desktopSession) {
+    const session = currentDesktopSession();
+    if (session) {
       try {
-        await desktopSession.request('desktop.quit', {});
+        await session.request('desktop.quit', {});
         graceful = true;
       } catch {
         // Not a graceful success: fall through to owned-tree termination.
       }
     }
-    // Acknowledged RPC quit still needs time to finish; the owned-tree stop
-    // below waits for that window before any forced platform kill.
-    const stopped = await stopOwnedDesktopTree(target, {
+    const stopped = await stopOwnedDesktopTree(slot.child, {
       platform,
       run: options.runCommand ?? runExecFile,
       timeoutMs: options.desktopStopMs,
       afterGraceful: graceful,
     });
     if (!stopped.ok) {
-      // Keep ownership so the failure stays visible and controllable rather
-      // than reporting a successful stop for a still-live Desktop.
+      slot.expectedExit = false;
       logger.error('desktop-stop-failed', stopped.error ?? 'Desktop did not exit cleanly');
-      throw fail(ERRORS.internal, stopped.error ?? `Desktop pid ${target.pid ?? 'unknown'} did not exit`);
+      throw fail(ERRORS.internal, stopped.error ?? `Desktop pid ${slot.child.pid ?? 'unknown'} did not exit`);
     }
-    desktop = null;
-    desktopSession = null;
+    if (desktopSlot === slot) {
+      desktopSlot = null;
+      desktop = null;
+      if (desktopSession?.launchId === slot.launchId) desktopSession = null;
+    }
   }
 
-  async function freezeAndDrain(timeoutMs = DRAIN_TIMEOUT_MS, options = {}) {
+  async function freezeAndDrain(timeoutMs = DRAIN_TIMEOUT_MS, drainOptions = {}) {
     let originalMode = 'accepting';
     let froze = false;
+    const token = () => ({ froze, originalMode });
     setStatus('waiting-for-idle');
     try {
-      await withDaemon(ipcPath, async (client) => {
+      await withRpc(async (client) => {
         const health = await client.request('health.ping', {});
-        originalMode = health?.dispatch?.mode ?? 'accepting';
+        const dispatch = health?.dispatch;
+        originalMode = dispatch?.mode;
+        if (dispatch?.recovery_required === true || originalMode === 'planned_restart') {
+          throw fail(ERRORS.busy, `cannot drain: ${dispatchBlocksNewWork(health).reason}`);
+        }
+        if (originalMode !== 'accepting' && originalMode !== 'frozen') {
+          throw fail(ERRORS.internal, `cannot confirm dispatch admission (${originalMode ?? 'unknown'})`);
+        }
         if (originalMode === 'accepting') {
           await client.request('daemon.freeze', {});
           froze = true;
         }
-        const drain = await client.request('daemon.drain', { timeout_ms: timeoutMs }, timeoutMs + 5_000);
-        if (!drain?.drained) {
-          if (froze) await client.request('daemon.thaw', {});
-          throw Object.assign(fail(ERRORS.busy, `still busy after ${timeoutMs}ms`), {
-            blocking: {
-              tasks: drain?.activeTasks ?? [],
-              workflows: drain?.activeWorkflows ?? [],
-              executions: drain?.activeExecutions ?? [],
-            },
-          });
+        try {
+          const drain = await client.request('daemon.drain', { timeout_ms: timeoutMs }, timeoutMs + 5_000);
+          if (!drain?.drained) {
+            if (froze) {
+              await client.request('daemon.thaw', {});
+              froze = false;
+            }
+            throw Object.assign(fail(ERRORS.busy, `still busy after ${timeoutMs}ms`), {
+              blocking: {
+                tasks: drain?.activeTasks ?? [],
+                workflows: drain?.activeWorkflows ?? [],
+                executions: drain?.activeExecutions ?? [],
+              },
+              admissionToken: token(),
+            });
+          }
+        } catch (error) {
+          if (error.code === ERRORS.busy) throw error;
+          if (froze) {
+            try {
+              await client.request('daemon.thaw', {});
+              froze = false;
+            } catch (thawError) {
+              throw Object.assign(fail(
+                ERRORS.internal,
+                `cannot confirm daemon activity: ${error instanceof Error ? error.message : String(error)}; dispatch admission was not restored (${thawError instanceof Error ? thawError.message : String(thawError)}). ${DISPATCH_THAW_HINT}`,
+              ), { admissionToken: { froze: true, originalMode: 'accepting' } });
+            }
+          }
+          throw error;
         }
       }, 2000);
     } catch (error) {
-      if (error.code === ERRORS.busy) throw error;
-      throw fail(ERRORS.internal, `cannot confirm daemon activity: ${error instanceof Error ? error.message : String(error)}`);
+      error.admissionToken = error.admissionToken ?? token();
+      if (error.code === ERRORS.busy || error.code === ERRORS.internal) throw error;
+      throw Object.assign(fail(ERRORS.internal, `cannot confirm daemon activity: ${error instanceof Error ? error.message : String(error)}`), {
+        admissionToken: token(),
+      });
     }
-    if (options.ignoreDesktop !== true) {
+    if (drainOptions.ignoreDesktop !== true) {
       const desktopActivity = await readDesktopActivity();
       if (desktopActivity.known === false || desktopActivity.busy) {
         if (froze && originalMode === 'accepting') {
-          try {
-            await withDaemon(ipcPath, (client) => client.request('daemon.thaw', {}), 2000);
-          } catch {
-            // Admission restoration is best-effort after a desktop busy timeout.
+          const thawError = await restoreAdmissionSafe(token());
+          if (thawError) {
+            throw fail(ERRORS.busy, `${desktopActivity.known === false ? 'cannot confirm Desktop activity; treating as busy' : 'Desktop still has an active conversation or tool call'}; ${thawError}`);
           }
         }
-        throw fail(ERRORS.busy, desktopActivity.known === false
+        throw Object.assign(fail(ERRORS.busy, desktopActivity.known === false
           ? 'cannot confirm Desktop activity; treating as busy'
-          : 'Desktop still has an active conversation or tool call');
+          : 'Desktop still has an active conversation or tool call'), { admissionToken: token() });
       }
     }
-    return { froze, originalMode };
+    return token();
+  }
+
+  async function restoreAdmissionSafe(token) {
+    if (!shouldAutoThaw(token)) return null;
+    try {
+      await withRpc((client) => client.request('daemon.thaw', {}), 2000);
+      return null;
+    } catch (error) {
+      return `dispatch admission was not restored (${error instanceof Error ? error.message : String(error)}). ${DISPATCH_THAW_HINT}`;
+    }
   }
 
   async function restoreAdmission(token) {
-    if (!token?.froze || token.originalMode !== 'accepting') return;
-    try {
-      await withDaemon(ipcPath, (client) => client.request('daemon.thaw', {}), 2000);
-    } catch {
-      // New daemon starts accepting by default.
+    const unrestored = await restoreAdmissionSafe(token);
+    if (unrestored) {
+      logger.error('admission-unrestored', unrestored);
+      throw fail(ERRORS.internal, unrestored);
     }
+  }
+
+  async function finalizeAdmission(handover) {
+    const token = handover?.token;
+    if (shouldAutoThaw(token)) {
+      try {
+        await withRpc((client) => client.request('daemon.thaw', {}), 2000);
+      } catch (error) {
+        const message = `failed to restore dispatch admission: ${error instanceof Error ? error.message : String(error)}. ${DISPATCH_THAW_HINT}`;
+        setStatus('degraded', message);
+        throw fail(ERRORS.internal, message);
+      }
+      const health = await pingCurrentDaemon();
+      if (!dispatchIsAccepting(health)) {
+        const message = `daemon thaw did not restore accepting dispatch. ${DISPATCH_THAW_HINT}`;
+        setStatus('degraded', message);
+        throw fail(ERRORS.internal, message);
+      }
+      return { blocked: false, health };
+    }
+    let health;
+    try {
+      health = await pingCurrentDaemon();
+    } catch (error) {
+      throw fail(ERRORS.internal, `cannot confirm dispatch admission: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const block = dispatchBlocksNewWork(health);
+    if (block.blocked) {
+      if (health?.dispatch?.mode === 'planned_restart' || health?.dispatch?.recovery_required) {
+        throw fail(ERRORS.busy, `${block.reason}. Source-development will not bypass an active planned restart.`);
+      }
+      logger.warn('dispatch-blocked', block.reason);
+      options.stdout?.(DISPATCH_THAW_HINT);
+      return { blocked: true, health };
+    }
+    return { blocked: false, health };
+  }
+
+  async function pingCurrentDaemon() {
+    const health = await pingDaemon();
+    if (daemonSlot && !identityMatchesSource(health, { instanceId, launchId: daemonSlot.launchId })) {
+      throw fail(ERRORS.internal, `health.ping did not match this daemon launch (${daemonSlot.launchId})`);
+    }
+    return health;
   }
 
   async function stopDaemon() {
+    cancelRetry('daemon');
+    const slot = daemonSlot;
+    if (slot) slot.expectedExit = true;
     try {
-      await withDaemon(ipcPath, (client) => client.request('daemon.shutdown', { reason: 'source development supervisor' }), 2000);
+      await withRpc((client) => client.request('daemon.shutdown', { reason: 'source development supervisor' }), 2000);
     } catch {
       // Process stop below is the fallback.
     }
-    if (daemon) {
-      const stopped = await stopChild(daemon);
+    if (slot?.child) {
+      const stopped = await stopChildFn(slot.child);
       if (!stopped.ok) {
-        // Keep ownership so a still-live daemon stays visible and controllable.
-        throw fail(ERRORS.internal, stopped.error ?? `Daemon pid ${daemon.pid ?? 'unknown'} did not exit`);
+        slot.expectedExit = false;
+        throw fail(ERRORS.internal, stopped.error ?? `Daemon pid ${slot.child.pid ?? 'unknown'} did not exit`);
       }
-      daemon = null;
+      if (daemonSlot === slot) {
+        daemonSlot = null;
+        daemon = null;
+      }
     }
-    await waitForIpcDown(8_000);
+    await waitForIpcDown(options.ipcDownMs ?? 8_000);
   }
 
   async function startDaemon() {
+    if (daemonStart) return daemonStart;
+    daemonStart = startDaemonOnce().finally(() => {
+      daemonStart = null;
+    });
+    return daemonStart;
+  }
+
+  async function startDaemonOnce() {
+    cancelRetry('daemon');
     mkdirSync(logs, { recursive: true });
-    daemon = spawnDaemonProcess({
+    const launchId = makeLaunchId();
+    const child = spawnDaemon({
       checkout,
       configPath,
       nodeExecutable,
       exists,
       platform,
       env,
-      resolved: resolvedPaths(),
+      resolved: resolvedPaths(launchId),
       logPath: componentLogPath(logs, 'daemon'),
     });
-    daemon.on('exit', (code, signal) => {
-      if (stopping) return;
-      onComponentExit('daemon', code, signal);
-    });
+    const slot = bindSlot('daemon', child, launchId);
     persist();
-    await waitForSourceDaemon();
+    logger.info('daemon-spawn', `launchId=${launchId} pid=${child.pid ?? 'unknown'}`);
+    try {
+      const health = await waitForSourceDaemon(slot, options.healthWaitMs ?? HEALTH_WAIT_MS);
+      slot.startInFlight = false;
+      slot.healthySince = now();
+      return health;
+    } catch (error) {
+      slot.startInFlight = false;
+      if (!slot.expectedExit && daemonSlot === slot && !slot.failureCounted) {
+        slot.failureCounted = true;
+        if (!childHasExited(child)) {
+          slot.expectedExit = true;
+          try { await stopChildFn(child); } catch { /* owned child cleanup */ }
+          if (daemonSlot === slot) {
+            daemonSlot = null;
+            daemon = null;
+          }
+        }
+        scheduleRetry('daemon', slot, error);
+      }
+      throw error;
+    }
   }
 
   async function startDesktop() {
+    if (desktopStart) return desktopStart;
+    desktopStart = startDesktopOnce().finally(() => {
+      desktopStart = null;
+    });
+    return desktopStart;
+  }
+
+  async function startDesktopOnce() {
+    cancelRetry('desktop');
     desktopStoppedByUser = false;
-    desktop = spawnDesktopProcess({
+    mkdirSync(logs, { recursive: true });
+    const launchId = makeLaunchId();
+    const child = spawnDesktop({
       checkout,
       nodeExecutable,
       exists,
       platform,
       env,
-      resolved: resolvedPaths(),
+      resolved: resolvedPaths(launchId),
       logPath: componentLogPath(logs, 'desktop'),
     });
-    desktop.on('exit', (code, signal) => {
-      desktopSession = null;
-      if (stopping) return;
-      if (code === 0 && !signal) {
-        desktopStoppedByUser = true;
-        logger.info('desktop-stopped', `Desktop exited cleanly (pid was ${desktop?.pid ?? 'unknown'}). Supervisor and daemon stay running. Use pnpm dev:restart to restore the window.`);
-        desktop = null;
-        persist({ desktopPid: null });
-        return;
-      }
-      onComponentExit('desktop', code, signal);
-    });
+    const slot = bindSlot('desktop', child, launchId);
     persist();
-    const deadline = Date.now() + (options.desktopReadyMs ?? 45_000);
-    while (Date.now() < deadline) {
-      if (desktopSession) return;
-      if (!desktop || desktop.exitCode != null) {
-        throw fail(ERRORS.internal, `Desktop exited before registering with the supervisor (code ${desktop?.exitCode ?? 'unknown'})`);
+    logger.info('desktop-spawn', `launchId=${launchId} pid=${child.pid ?? 'unknown'}`);
+    const deadline = now() + (options.desktopReadyMs ?? 45_000);
+    try {
+      while (now() < deadline) {
+        if (currentDesktopSession()?.launchId === launchId) {
+          slot.startInFlight = false;
+          slot.healthySince = now();
+          return;
+        }
+        if (childHasExited(child) || desktopSlot !== slot) {
+          throw fail(ERRORS.internal, `Desktop exited before registering with the supervisor (launchId ${launchId}, code ${child.exitCode ?? 'unknown'})`);
+        }
+        await wait(200);
       }
-      await sleep(200);
+      throw fail(ERRORS.internal, `Desktop did not register with the supervisor (launchId ${launchId})`);
+    } catch (error) {
+      slot.startInFlight = false;
+      if (!slot.expectedExit && desktopSlot === slot && !slot.failureCounted) {
+        slot.failureCounted = true;
+        if (!childHasExited(child)) {
+          slot.expectedExit = true;
+          try { await stopChildFn(child); } catch { /* owned child cleanup */ }
+          if (desktopSlot === slot) {
+            desktopSlot = null;
+            desktop = null;
+          }
+        }
+        scheduleRetry('desktop', slot, error);
+      }
+      throw error;
     }
-    throw fail(ERRORS.internal, 'Desktop did not register with the supervisor');
-  }
-
-  function onComponentExit(name, code, signal) {
-    if (stopping) return;
-    setStatus('degraded', `${name} exited (code ${code ?? 'none'}, signal ${signal ?? 'none'})`);
-    const count = retries[name] ?? 0;
-    if (count >= COMPONENT_RETRY_LIMIT) {
-      logger.error('retry-exhausted', `${name} exceeded ${COMPONENT_RETRY_LIMIT} restarts`);
-      return;
-    }
-    const delay = COMPONENT_RETRY_BACKOFF_MS[Math.min(count, COMPONENT_RETRY_BACKOFF_MS.length - 1)];
-    retries[name] = count + 1;
-    logger.warn('retry', `${name} restart in ${delay}ms (attempt ${count + 1}/${COMPONENT_RETRY_LIMIT})`);
-    setTimeout(() => {
-      if (stopping || requests.pendingStop) return;
-      void (name === 'daemon' ? startDaemon() : startDesktop()).then(() => {
-        retries[name] = 0;
-        if (daemon && (desktop || desktopStoppedByUser)) setStatus('ready');
-      }).catch((error) => {
-        logger.error('retry-failed', error instanceof Error ? error.message : String(error));
-      });
-    }, delay).unref?.();
   }
 
   async function ensureReleaseDesktopCleared() {
@@ -554,16 +822,31 @@ export function createSupervisor(options = {}) {
     try {
       health = await pingDaemon();
     } catch {
-      return { switched: false };
+      return { switched: false, token: null };
     }
     const identity = sourceIdentityFromHealth(health);
     if (identity.mode === 'source') {
-      if (identity.instanceId === instanceId) return { switched: false, self: true };
+      if (identity.instanceId === instanceId) return { switched: false, self: true, token: null };
       throw fail(ERRORS.wrongCheckout, `A source-development instance is already running for ${identity.checkout ?? 'another checkout'}`);
     }
+    const block = dispatchBlocksNewWork(health);
+    if (health?.dispatch?.mode === 'planned_restart' || health?.dispatch?.recovery_required) {
+      throw fail(ERRORS.busy, `cannot take over installed Wrenyard: ${block.reason}`);
+    }
     logger.info('switching', 'Installed Wrenyard is running; switching to the source environment');
-    const token = await freezeAndDrain(DRAIN_TIMEOUT_MS, { ignoreDesktop: true });
-    await stopDaemon();
+    let token;
+    try {
+      token = await freezeAndDrain(DRAIN_TIMEOUT_MS, { ignoreDesktop: true });
+    } catch (error) {
+      throw error;
+    }
+    try {
+      await stopDaemon();
+    } catch (error) {
+      const unrestored = await restoreAdmissionSafe(token);
+      if (unrestored) error.message = `${error.message}; ${unrestored}`;
+      throw error;
+    }
     try {
       const again = await pingDaemon();
       throw fail(
@@ -571,7 +854,11 @@ export function createSupervisor(options = {}) {
         `Installed Desktop appears to have restarted the daemon (${sourceIdentityFromHealth(again).mode}). Quit 啾啾工坊 from the tray (full quit, not hide) and run pnpm dev again. Processes were not killed by name.`,
       );
     } catch (error) {
-      if (error.code === ERRORS.internal && String(error.message).includes('restarted the daemon')) throw error;
+      if (error.code === ERRORS.internal && String(error.message).includes('restarted the daemon')) {
+        const unrestored = await restoreAdmissionSafe(token);
+        if (unrestored) error.message = `${error.message}; ${unrestored}`;
+        throw error;
+      }
     }
     return { switched: true, token };
   }
@@ -655,9 +942,10 @@ export function createSupervisor(options = {}) {
             await startDesktop();
             await restoreDesktopUi(ui);
           }
-          await restoreAdmission(token);
+          await finalizeAdmission({ token });
         } catch (error) {
-          await restoreAdmission(token);
+          const unrestored = await restoreAdmissionSafe(token);
+          if (unrestored) error.message = `${error.message}; ${unrestored}`;
           restoreStatusAfterFailure(priorStatus, 'component switch failed');
           throw error;
         }
@@ -670,7 +958,7 @@ export function createSupervisor(options = {}) {
     }
   }
 
-  async function runBuildAndApply(reason) {
+  async function runBuildAndApply(reason, applyOptions = {}) {
     const generation = queue.takeBuild();
     if (!generation) return;
     logger.info('building', `${generation.id} components=${generation.components.join(',')}`);
@@ -696,8 +984,12 @@ export function createSupervisor(options = {}) {
       return;
     }
     generation.artifacts = result.artifacts;
-    if (queue.isStale(generation)) {
+    if (queue.isStale(generation) && applyOptions.apply !== false) {
       logger.info('stale-generation', `${generation.id} skipped because a newer generation exists`);
+      return;
+    }
+    if (applyOptions.apply === false) {
+      logger.info('built', `${generation.id} apply deferred to restart`);
       return;
     }
     try {
@@ -719,11 +1011,14 @@ export function createSupervisor(options = {}) {
     const priorStatus = status;
     setStatus('restarting');
     return withBuildLock(async () => {
-      const pending = queue.pending ?? queue.building;
+      retries.daemon = 0;
+      retries.desktop = 0;
+      cancelRetry('daemon');
+      cancelRetry('desktop');
       if (queue.pending || queue.building) {
-        await runBuildAndApply('restart');
+        await runBuildAndApply('restart', { apply: false });
       }
-      const generation = queue.current ?? pending ?? { id: 'explicit', components: [COMPONENTS.daemon, COMPONENTS.desktopMain], files: [] };
+      const generation = queue.current ?? { id: 'explicit', components: [COMPONENTS.daemon, COMPONENTS.desktopMain], files: [] };
       desktopStoppedByUser = false;
       let applied;
       try {
@@ -751,6 +1046,8 @@ export function createSupervisor(options = {}) {
   async function explicitStop() {
     const priorStatus = status;
     stopping = true;
+    cancelRetry('daemon');
+    cancelRetry('desktop');
     setStatus('stopping');
     buildAbort?.abort();
     await buildLock.catch(() => undefined);
@@ -766,9 +1063,10 @@ export function createSupervisor(options = {}) {
     } catch (error) {
       // Nothing is reported as stopped: restore admission so the still-running
       // stack is controllable, clear `stopping`, and publish the real status.
-      await restoreAdmission(token);
+      const unrestored = await restoreAdmissionSafe(token);
       stopping = false;
       restoreStatusAfterFailure(priorStatus, 'stop aborted; supervisor remains usable');
+      if (unrestored) error.message = `${error.message}; ${unrestored}`;
       throw error;
     }
     try {
@@ -798,11 +1096,15 @@ export function createSupervisor(options = {}) {
     },
     async 'component.hello'(params, session) {
       if (params?.role === 'desktop') {
-        desktopSession = session;
+        session.launchId = desktopSlot?.launchId;
+        if (desktopSlot) desktopSession = session;
       }
       return { ok: true, instanceId, status };
     },
-    async 'component.event'(params) {
+    async 'component.event'(params, session) {
+      if (session?.launchId && desktopSlot?.launchId && session.launchId !== desktopSlot.launchId) {
+        return { ok: true, ignored: 'stale' };
+      }
       return { ok: true, received: params?.type };
     },
   };
@@ -883,15 +1185,29 @@ export function createSupervisor(options = {}) {
     }
 
     persist();
+    let handover = { switched: false, token: null };
     try {
-      await handoverInstalled();
+      handover = await handoverInstalled();
     } catch (error) {
       server?.close();
       throw error;
     }
 
     setStatus('starting');
-    await startDaemon();
+    try {
+      await startDaemon();
+    } catch (error) {
+      const unrestored = await restoreAdmissionSafe(handover?.token);
+      if (unrestored) {
+        logger.error('admission-unrestored', unrestored);
+        error.message = `${error.message}; ${unrestored}`;
+      } else if (shouldAutoThaw(handover?.token)) {
+        logger.error('admission-unrestored', `source daemon did not start; dispatch may remain frozen. ${DISPATCH_THAW_HINT}`);
+        options.stdout?.(`source daemon did not start. ${DISPATCH_THAW_HINT}`);
+      }
+      throw error;
+    }
+    const admission = await finalizeAdmission(handover);
     await startDesktop();
     watcher = createWatcher({
       checkout,
@@ -905,7 +1221,7 @@ export function createSupervisor(options = {}) {
       },
     });
     setStatus('ready');
-    printReady();
+    printReady(admission);
     return { alreadyRunning: false, snapshot: snapshot() };
   }
 
@@ -925,6 +1241,35 @@ export function createSupervisor(options = {}) {
     handleSignal,
     get status() {
       return status;
+    },
+    get instanceId() {
+      return instanceId;
+    },
+    get daemonSlot() {
+      return daemonSlot;
+    },
+    get desktopSlot() {
+      return desktopSlot;
+    },
+    get retries() {
+      return { daemon: retries.daemon, desktop: retries.desktop };
+    },
+    handoverInstalled,
+    startDaemon,
+    startDesktop,
+    stopDaemon,
+    quitDesktop,
+    freezeAndDrain,
+    finalizeAdmission,
+    restoreAdmission,
+    applyGeneration,
+    explicitRestart,
+    explicitStop,
+    helloDesktop(session) {
+      return handlers['component.hello']({ role: 'desktop' }, session);
+    },
+    desktopEvent(params, session) {
+      return handlers['component.event'](params, session);
     },
   };
 }

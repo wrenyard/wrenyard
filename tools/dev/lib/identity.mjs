@@ -7,6 +7,10 @@ export function newInstanceId() {
   return randomBytes(12).toString('hex');
 }
 
+export function newLaunchId() {
+  return randomBytes(8).toString('hex');
+}
+
 export function startIdentity(now = () => new Date().toISOString()) {
   return {
     pid: process.pid,

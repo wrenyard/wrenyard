@@ -118,6 +118,7 @@ export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
   mode: 'source' | 'installed'
   checkout?: string
   instanceId?: string
+  launchId?: string
   node: string
   runtimeBin?: string
 } {
@@ -126,6 +127,7 @@ export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
     mode: source ? 'source' : 'installed',
     ...(source && env.WRENYARD_SOURCE_CHECKOUT ? { checkout: env.WRENYARD_SOURCE_CHECKOUT } : {}),
     ...(source && env.WRENYARD_DEV_INSTANCE_ID ? { instanceId: env.WRENYARD_DEV_INSTANCE_ID } : {}),
+    ...(source && env.WRENYARD_DEV_LAUNCH_ID ? { launchId: env.WRENYARD_DEV_LAUNCH_ID } : {}),
     node: process.execPath,
     ...(env.WRENYARD_RUNTIME_BIN?.trim() ? { runtimeBin: env.WRENYARD_RUNTIME_BIN.trim() } : {}),
   }
