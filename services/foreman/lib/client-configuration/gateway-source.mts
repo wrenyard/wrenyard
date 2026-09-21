@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { Catalog, GatewayProtocol } from '@wrenyard/catalog'
+import type { Catalog, GatewayProtocol } from '@wrenyard/providers/catalog'
 import type { ProviderRuntime } from '@wrenyard/providers'
 import type { ClientGatewayModel, GatewayClientConnection } from './types.mts'
 

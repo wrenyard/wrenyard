@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { parseRunSyntax } from '@wrenyard/catalog'
+import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import { spawnForge as spawnResolvedForge } from './exec.mts'
 import { parseAgentRuntime } from '../../core/agent-runtime.mts'
 

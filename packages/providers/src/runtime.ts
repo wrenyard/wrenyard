@@ -1,31 +1,24 @@
+import { kimiCodingUpstreamWireModel } from './kimi-coding/runtime.ts';
+import { deepSeekEnvApiKey } from './deepseek/runtime.ts';
+import { legacyCredentialStoreIds as LEGACY_CREDENTIAL_STORE_IDS } from './anthropic/runtime.ts';
+import type { ProviderDefinition } from './base/index.ts';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Catalog, DispatchPlan, ProviderDefinition } from '@wrenyard/catalog';
+import type { Catalog, DispatchPlan } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
-import {
-  applyCodeBuddyNativeHeaders,
-  canonicalizeCodeBuddyObservedModelId,
-  createCodeBuddyRuntime,
-} from './codebuddy/runtime.ts';
-import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyCredential } from './codebuddy/runtime.ts';
+import { codeBuddy, providerImplementations } from './builtins.ts';
+import { createCodeBuddy } from './codebuddy/index.ts';
+import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity } from './codebuddy/index.ts';
+import type { Provider } from './base/index.ts';
 
 export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyEnvironment } from './codebuddy/runtime.ts';
 
-export interface ProviderCredential {
-  value: string;
-}
+import type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
+export type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
 
-/** Privacy-safe free-supply evidence for an exact model and loaded credential.
- * CodeBuddy environment rules and verified managed free-model rules are separate.
- * No credential or account identity is exposed in this fact. */
-export interface RoutingFreeSupplyFact {
-  readonly confirmedFree: true
-  /** Stable source label for the classification evidence. */
-  readonly source: string
-  /** Stable policy rule id granting the confirmed-free classification. */
-  readonly ruleId: string
-}
+// Bind request customization to the instance that supplied this credential.
+const credentialProviders = new WeakMap<ProviderCredential, Provider>();
 
 export interface ProviderRuntime {
   credential(provider: ProviderDefinition): Promise<ProviderCredential | undefined>;
@@ -43,6 +36,7 @@ export interface ProviderRuntime {
    * Non-CodeBuddy providers and absent credentials resolve to undefined.
    * Optional so existing non-CodeBuddy runtime callers remain compatible.
    */
+  /** @deprecated Use the CodeBuddy instance snapshot() method. */
   codeBuddySnapshot?(provider: ProviderDefinition): Promise<CodeBuddyActiveSnapshot | undefined>;
   /**
    * Installed CodeBuddy client product identity, resolved from the same
@@ -50,10 +44,12 @@ export interface ProviderRuntime {
    * attributes. Non-CodeBuddy providers and an absent installation resolve to
    * undefined. Carries no credential, account identity or domain.
    */
+  /** @deprecated Use the CodeBuddy instance clientIdentity() method. */
   codeBuddyClientIdentity?(provider: ProviderDefinition): Promise<CodeBuddyClientIdentity | undefined>;
 }
 
 export interface BuiltinProviderRuntimeOptions {
+  providers?: readonly Provider[];
   env?: NodeJS.ProcessEnv;
   home?: string;
   platform?: NodeJS.Platform;
@@ -65,24 +61,10 @@ export interface BuiltinProviderRuntimeOptions {
   mkdir?: (path: string, options: { recursive: true; mode: number }) => Promise<unknown>;
 }
 
-/**
- * Kimi Coding canonical-to-wire model ids. The official Kimi Coding route
- * only recognizes the wire id `kimi-for-coding`, so the canonical identity
- * `kimi-k2.8` must be translated before dispatch. Unlike CodeBuddy this is a
- * static, credential-independent translation: the same wire id is correct for
- * every Kimi credential, so no environment classification is involved.
- */
-const KIMI_CODING_UPSTREAM_MODELS: Readonly<Record<string, string>> = {
-  'kimi-k2.8': 'kimi-for-coding',
-};
-
-function kimiCodingUpstreamWireModel(model: string): string {
-  return KIMI_CODING_UPSTREAM_MODELS[model] ?? model;
-}
-
 /** Reverse only explicit, unambiguous wire identities from the provider SSOT. */
 export function canonicalizeObservedProviderModelId(provider: string, model: string): string {
-  if (provider === 'codebuddy') return canonicalizeCodeBuddyObservedModelId(model);
+  const implementation = providerImplementations.get(provider);
+  if (implementation) return implementation.canonicalizeModel(model);
   const definition = BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
   if (!definition) return model;
   const matches = new Set<string>();
@@ -124,17 +106,6 @@ function runtimeAuthPath(env: NodeJS.ProcessEnv, home: string): string {
   return join(dataHome, 'wrenyard', 'runtime', 'auth.json');
 }
 
-/**
- * Provider id renames whose persisted credential-store entries must keep
- * resolving after the rename. Only the exact legacy id is rewritten, and only
- * for a store entry that is an API key (`type: 'api'`): a subscription OAuth
- * entry is never promoted to an API key, and the modern `anthropic` provider
- * means the API provider on every read. New writes always use the canonical id.
- */
-const LEGACY_CREDENTIAL_STORE_IDS: Readonly<Record<string, string>> = {
-  'anthropic-api': 'anthropic',
-};
-
 function canonicalCredentialStoreId(providerId: string): string {
   return LEGACY_CREDENTIAL_STORE_IDS[providerId] ?? providerId;
 }
@@ -174,23 +145,6 @@ function resolveManagedApiKey(entries: Record<string, unknown>, providerId: stri
   return undefined;
 }
 
-/**
- * DeepSeek environment compatibility keys, in precedence order. DeepSeek
- * inference is a forge-managed provider whose configured key lives in
- * auth.json, but a key exported through these names by an existing setup must
- * keep working. Read-only: this resolver never writes auth.json, so a managed
- * configure always wins over a pre-existing environment key.
- */
-const DEEPSEEK_ENV_API_KEYS = ['FORGE_DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'] as const;
-
-function deepSeekEnvApiKey(env: NodeJS.ProcessEnv): string | undefined {
-  for (const name of DEEPSEEK_ENV_API_KEYS) {
-    const value = nonEmptyString(env[name]);
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -204,16 +158,28 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   const writeFile = options.writeFile ?? ((path, data, fileOptions) => fs.writeFile(path, data, fileOptions));
   const rename = options.rename ?? ((oldPath, newPath) => fs.rename(oldPath, newPath));
   const mkdir = options.mkdir ?? ((path, directoryOptions) => fs.mkdir(path, directoryOptions));
-  const codeBuddy = createCodeBuddyRuntime({
+  const customEnvironment = options.env !== undefined || options.home !== undefined
+    || options.platform !== undefined || options.codeBuddyProductPath !== undefined
+    || options.readFile !== undefined || options.realpath !== undefined;
+  const activeCodeBuddy = customEnvironment ? createCodeBuddy({
     env,
     home,
     platform,
-    codeBuddyProductPath: options.codeBuddyProductPath,
+    productPath: options.codeBuddyProductPath,
     readFile,
     realpath,
-  });
+  }) : codeBuddy;
+  const implementations = new Map(providerImplementations);
+  implementations.set(activeCodeBuddy.id, activeCodeBuddy);
+  for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
   return {
     async credential(provider) {
+      const implementation = implementations.get(provider.id);
+      if (implementation) {
+        const credential = await implementation.credential();
+        if (credential) credentialProviders.set(credential, implementation);
+        return credential;
+      }
       if (provider.credentialResolver === 'forge-managed') {
         const path = runtimeAuthPath(env, home);
         let managed: string | undefined;
@@ -234,14 +200,14 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         }
         return undefined;
       }
-      return codeBuddy.credential(provider);
+      return undefined;
     },
     resolveUpstreamModel(provider, model, credential) {
       // Kimi Coding canonical ids translate to their official wire ids
       // unconditionally: the mapping depends only on the model, never on which
       // credential is active, so it must not be gated on a credential.
       if (provider.id === 'kimi-coding') return kimiCodingUpstreamWireModel(model);
-      return codeBuddy.resolveUpstreamModel(provider, model, credential) ?? model;
+      return implementations.get(provider.id)?.resolveModel(model, credential) ?? model;
     },
     publicResponseModel(provider, model, upstreamModel, publicModel) {
       const logicalModel = publicModel.startsWith(`${provider.id}/`)
@@ -250,10 +216,13 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       return model === upstreamModel || model === logicalModel ? publicModel : model;
     },
     freeSupply(provider, model, credential) {
-      if (provider.id === 'codebuddy') return codeBuddy.freeSupply(provider, model, credential);
+      const implementation = implementations.get(provider.id);
+      if (implementation) return implementation.freeSupply(model, credential);
       return evaluateManagedFreeSupply(provider, model, credential);
     },
     async configureApiKey(provider, key) {
+      const implementation = implementations.get(provider.id);
+      if (implementation?.configureApiKey) return implementation.configureApiKey(key);
       if (provider.credentialResolver !== 'forge-managed') {
         throw new Error(`provider ${provider.id} does not accept a managed API key`);
       }
@@ -283,11 +252,19 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       await writeFile(temporary, `${JSON.stringify(entries, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, path);
     },
-    codeBuddySnapshot(provider) {
-      return codeBuddy.codeBuddySnapshot(provider);
+    async codeBuddySnapshot(provider) {
+      if (provider.id !== activeCodeBuddy.id || provider.credentialResolver !== 'codebuddy') return undefined;
+      const implementation = implementations.get(provider.id);
+      if (!implementation || !('snapshot' in implementation) || typeof implementation.snapshot !== 'function') return undefined;
+      const snapshot: CodeBuddyActiveSnapshot | undefined = await implementation.snapshot();
+      if (snapshot) credentialProviders.set(snapshot.credential, implementation);
+      return snapshot;
     },
-    codeBuddyClientIdentity(provider) {
-      return codeBuddy.codeBuddyClientIdentity(provider);
+    async codeBuddyClientIdentity(provider) {
+      if (provider.id !== activeCodeBuddy.id || provider.credentialResolver !== 'codebuddy') return undefined;
+      const implementation = implementations.get(provider.id);
+      if (!implementation || !('clientIdentity' in implementation) || typeof implementation.clientIdentity !== 'function') return undefined;
+      return implementation.clientIdentity();
     },
   };
 }
@@ -330,6 +307,7 @@ export function upstreamAuthHeaders(provider: ProviderDefinition, credential: Pr
   const headers = new Headers();
   if (capability.authScheme === 'x-api-key') headers.set('x-api-key', credential.value);
   else headers.set('authorization', `Bearer ${credential.value}`);
-  applyCodeBuddyNativeHeaders(headers, provider, credential as CodeBuddyCredential, protocol);
+  const implementation = credentialProviders.get(credential) ?? providerImplementations.get(provider.id);
+  if (implementation?.id === provider.id) implementation.applyHeaders(headers, credential, capability.protocol);
   return headers;
 }

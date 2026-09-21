@@ -1,5 +1,5 @@
-import { type Catalog, resolveModelSpeed } from '@wrenyard/catalog';
-import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/catalog';
+import { type Catalog, resolveModelSpeed } from '@wrenyard/providers/catalog';
+import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
 import { INTELLIGENCE_TIERS, type IntelligenceTier } from '@wrenyard/models';
 const INTELLIGENCE_ORDER = Object.fromEntries(INTELLIGENCE_TIERS.map((tier, rank) => [tier, rank])) as Record<IntelligenceTier, number>;

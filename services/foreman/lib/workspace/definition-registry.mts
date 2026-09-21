@@ -20,7 +20,7 @@ import {
 } from '../task-timeouts.mts'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
-import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/providers/catalog'
 import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,

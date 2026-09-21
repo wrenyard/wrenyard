@@ -948,7 +948,7 @@ type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & {
 
 function installGatewayEnvironment(
   connection: DaemonGatewayConnection,
-  dispatchPlans: Readonly<Record<string, import('@wrenyard/catalog').DispatchPlan>>,
+  dispatchPlans: Readonly<Record<string, import('@wrenyard/providers/catalog').DispatchPlan>>,
 ): () => void {
   const values: Record<string, string> = {
     WRENYARD_GATEWAY_OPENAI_CHAT_URL: connection.openaiChatBaseUrl,
@@ -1016,10 +1016,10 @@ interface ForemanDaemonRuntime {
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
   dispatchControl: DispatchControl
-  catalog: import('@wrenyard/catalog').Catalog
+  catalog: import('@wrenyard/providers/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
-  dispatchPlans: Readonly<Record<string, import('@wrenyard/catalog').DispatchPlan>>
+  dispatchPlans: Readonly<Record<string, import('@wrenyard/providers/catalog').DispatchPlan>>
   taskDispatchResolver: TaskDispatchResolver
 }
 

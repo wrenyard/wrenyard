@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { Catalog } from '@wrenyard/catalog'
+import { Catalog } from '@wrenyard/providers/catalog'
 import { type ProviderRuntime } from '@wrenyard/providers'
 import { resolveEffectiveTaskSettings } from '../../../lib/config/task-settings.mts'
 import { createTaskDispatchResolver } from '../../../lib/core/task/dispatch-resolver.mts'

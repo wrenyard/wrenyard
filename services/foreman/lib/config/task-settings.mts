@@ -1,4 +1,4 @@
-import { INTELLIGENCE_ORDER, type IntelligenceTier, type ThinkingLevel, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/catalog';
+import { INTELLIGENCE_ORDER, type IntelligenceTier, type ThinkingLevel, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/providers/catalog';
 import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, validateScoreWeights } from '@wrenyard/auto-routing';
 
 /**
