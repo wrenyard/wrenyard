@@ -1,15 +1,15 @@
 /**
  * Daemon-owned immutable quota snapshot service for automatic routing.
  *
- * This service is the single runtime place that turns raw `forge quota --json`
+ * This service is the single runtime place that turns serialized quota-service
  * output into policy-shaped quota evidence for auto-routing. It deliberately
  * does NOT own any provider/model/pool/applicability mapping: binding
  * metadata is imported as PROVIDER_QUOTA_BINDINGS (@wrenyard/providers) and the
  * policy constraints/evidence shapes come from @wrenyard/auto-routing, so there is
  * exactly one canonical binding table and no duplicated policy types.
  *
- * Raw parsing is fail-closed against the real `forge quota --json` list DTO
- * emitted by runtime/forge/internal/usage/quota: each pool entry carries
+ * Raw parsing is fail-closed against the compatible quota-service list DTO
+ * emitted by @wrenyard/quota: each pool entry carries
  * `pool`, `status`, `stale`, a per-entry RFC3339 `fetched_at` and `windows`;
  * each window carries `name`, the raw USED `pct`, an ISO-string `resets_at`
  * and `window_minutes`. The raw output has NO `reset_kind`, `window_ms`,
@@ -71,15 +71,15 @@
  *    scope/environment never appear in any serialized snapshot/DTO field.
  *
  * Out of scope by construction: prices, tariffs, credits, fallback routing and
- * credentials. No network logic lives in TypeScript; the default query spawns
+ * credentials. Provider acquisition is coordinated by @wrenyard/quota; the default query uses
  * the existing Foreman Forge helper (no shell, bounded timeout, capped
- * stdout/stderr) to run exactly `forge quota --json`. Output that exceeds the
+ * stdout/stderr) for raw account data and client-protocol requests. Output that exceeds the
  * caps terminates the child and is rejected, never parsed as truncated data.
  */
 
 import { randomUUID } from 'node:crypto';
 
-import { queryForgeQuotaJson, type CodeBuddyQueryContext } from '../execution/forge-quota-query.mts';
+import { queryQuotaJson, type CodeBuddyQueryContext } from '../execution/quota-query.mts';
 
 import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
@@ -166,7 +166,7 @@ export interface AutoRoutingBoundQuotaSnapshot {
 }
 
 export interface AutoRoutingQuotaSnapshotServiceOptions {
-  /** Query source for the raw `forge quota --json` text (defaults to the daemon
+  /** Query source for the serialized quota-service text (defaults to the daemon
    *  spawn). Receives the current complete CodeBuddy expected scope/environment
    *  context when one exists, and undefined otherwise. */
   queryJson?: (context?: CodeBuddyQueryContext) => Promise<string>;
@@ -622,7 +622,7 @@ export class AutoRoutingQuotaSnapshotService {
   private readonly inFlightByContext = new Map<string, Promise<AutoRoutingQuotaSnapshot>>();
 
   constructor(options: AutoRoutingQuotaSnapshotServiceOptions = {}) {
-    this.queryJson = options.queryJson ?? queryForgeQuotaJson;
+    this.queryJson = options.queryJson ?? queryQuotaJson;
     this.now = options.now ?? (() => Date.now());
     this.codeBuddySnapshot = options.codeBuddySnapshot;
   }
