@@ -252,11 +252,11 @@ function assertWorkspaceInstallStateUnchanged(root, snapshot) {
 }
 
 // Absolute workspace member directories (root plus the apps/*, services/* and
-// packages/* projects) used to prove the install state still covers the full
+// packages/* and packages/features/* projects) used to prove the install state still covers the full
 // dev set after the deploy.
 function workspacePackageDirs(root) {
   const dirs = [root];
-  for (const rel of ['apps', 'services', 'packages']) {
+  for (const rel of ['apps', 'services', 'packages', 'packages/features']) {
     const dir = path.join(root, rel);
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -324,6 +324,7 @@ function normalizeForemanWorkspaceDependencySpecs(deploy) {
     '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
+    '@wrenyard/auto-routing',
   ];
   const versions = new Map(internalNames.map((name) => {
     const manifest = readJson(path.join(deploy, 'node_modules', ...name.split('/'), 'package.json'));
@@ -370,6 +371,7 @@ function assertPhysicalForemanDependencies(deploy) {
     '@wrenyard/models',
     '@wrenyard/gateway',
     '@wrenyard/providers',
+    '@wrenyard/auto-routing',
   ];
   const violations = [];
   for (const dep of direct) {

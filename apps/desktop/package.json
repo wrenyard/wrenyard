@@ -46,7 +46,8 @@
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/dsh-shell": "workspace:*",
     "@wrenyard/providers": "workspace:*",
-    "js-tiktoken": "1.0.21"
+    "js-tiktoken": "1.0.21",
+    "@wrenyard/auto-routing": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

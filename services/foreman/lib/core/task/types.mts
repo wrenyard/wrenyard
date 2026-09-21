@@ -19,7 +19,7 @@ export interface TaskCapabilityConfig {
 
 /**
  * TaskDispatchRequirements is the single source of truth (SSOT) for a task's
- * hard dispatch constraints. It is owned by `@wrenyard/catalog` and re-exported
+ * hard dispatch constraints. It is owned by `@wrenyard/auto-routing` and re-exported
  * here so the task domain shares exactly one definition with the daemon-side
  * resolver and with list/describe surfaces. Do NOT redefine it locally — the
  * catalog shape (expectedTps, minimumTps, ordered closed intelligence tiers
@@ -32,7 +32,7 @@ export interface TaskCapabilityConfig {
  * Required model capabilities live in the dispatch requirements themselves —
  * distinct from the Forge capability packs declared on `TaskConfig.capabilities`.
  */
-import type { TaskDispatchRequirements } from '@wrenyard/catalog'
+import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 export type { TaskDispatchRequirements }
 
 export interface TaskConfigBase {

@@ -18,6 +18,7 @@ const FIRST_PARTY_MANIFESTS = [
   'services/foreman/package.json',
   'packages/catalog/package.json',
   'packages/models/package.json',
+  'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
   'packages/gateway/package.json',

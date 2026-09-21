@@ -1,12 +1,5 @@
-import {
-  INTELLIGENCE_ORDER,
-  type IntelligenceTier,
-  type TaskDispatchRequirements as CatalogTaskDispatchRequirements,
-  type ThinkingLevel,
-  normalizeIntelligenceTier,
-  normalizeThinkingLevel,
-  validateScoreWeights,
-} from '@wrenyard/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier, type ThinkingLevel, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/catalog';
+import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, validateScoreWeights } from '@wrenyard/auto-routing';
 
 /**
  * Canonical Task settings model and effective-settings resolver.
@@ -101,7 +94,7 @@ export const TASK_DISPATCH_FIELDS = [
 
 export type TaskDispatchField = (typeof TASK_DISPATCH_FIELDS)[number]
 
-export type TaskDispatchRequirements = Partial<CatalogTaskDispatchRequirements>
+export type TaskDispatchRequirements = Partial<AutoRoutingTaskDispatchRequirements>
 
 const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   expectedTps: ['expectedTps', 'expected_tps'],

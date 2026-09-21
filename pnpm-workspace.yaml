@@ -2,6 +2,7 @@ packages:
   - "apps/*"
   - "services/*"
   - "packages/*"
+  - "packages/features/*"
 
 # Build-tool tar 6.x still appears via node-gyp/cacache; force the patched 7.5 line.
 # Vitest 3.2 still resolves Vite 5; the open advisories are fixed in 6.4.3.

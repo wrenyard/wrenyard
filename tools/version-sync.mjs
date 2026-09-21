@@ -3,7 +3,7 @@
 //
 // The root package.json "version" field is the single source of truth (SSOT)
 // for the first-party version contract. This tool propagates that version to:
-//   - every first-party package manifest (apps/*, services/*, packages/*)
+//   - every first-party package manifest (apps/*, services/*, packages/*, packages/features/*)
 //   - release-manifest.json (suite_version + each component version)
 //   - contracts/versions.json (first-party desktop and dsh_shell entries)
 //   - the embedded Forge version constant (runtime/forge/internal/forge/embed.go)
@@ -32,6 +32,7 @@ const FIRST_PARTY_MANIFESTS = [
   'services/foreman/package.json',
   'packages/catalog/package.json',
   'packages/models/package.json',
+  'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
   'packages/gateway/package.json',
