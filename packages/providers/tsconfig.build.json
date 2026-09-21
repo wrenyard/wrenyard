@@ -8,5 +8,5 @@
     "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["test", "test/**/*.ts", "scripts"]
+  "exclude": ["test", "test/**/*.ts", "scripts", "src/**/tests/**"]
 }

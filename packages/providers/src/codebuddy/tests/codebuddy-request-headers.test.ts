@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltinCatalog, createBuiltinProviderRuntime, upstreamAuthHeaders } from '../src/index.ts';
+import { createBuiltinCatalog, createBuiltinProviderRuntime, upstreamAuthHeaders } from '../../index.ts';
 
 const provider = createBuiltinCatalog().provider('codebuddy')!;
 function fixture(initial: Record<string, unknown>) {

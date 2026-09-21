@@ -1,4 +1,5 @@
-import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ProviderDefinition, type ThinkingLevel } from '@wrenyard/catalog';
+import { type CanonicalModelDefinition, type Catalog, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ProviderDefinition, type ThinkingLevel } from '@wrenyard/catalog';
+import { codeBuddyClient, codeBuddyProvider } from './codebuddy/models.ts';
 import { builtinModelDisplayName, type BuiltinModelId } from './model-display-names.ts';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
@@ -13,11 +14,11 @@ const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
 const SRC_CURSOR = 'https://cursor.com/docs/models-and-pricing';
 
-const clients: readonly ClientDefinition[] = [
+export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   // Native WebSearch is documented at https://code.claude.com/docs/en/tools-reference
   // (checked 2026-09-10); native-capable only against its exact nativeProvider.
   { id: 'claude', nativeProvider: 'claude-coding', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true },
-  { id: 'codebuddy', nativeProvider: 'codebuddy', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true },
+  codeBuddyClient,
   // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
   // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
   { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
@@ -44,7 +45,7 @@ const clients: readonly ClientDefinition[] = [
  * execution restrictions that protocol metadata cannot express.
  */
 export function isBuiltinClientGatewayProviderSupported(clientID: string, providerID: string): boolean {
-  const client = clients.find((candidate) => candidate.id === clientID);
+  const client = BUILTIN_CLIENTS.find((candidate) => candidate.id === clientID);
   return client !== undefined && !client.unsupportedGatewayProviders?.includes(providerID);
 }
 
@@ -141,27 +142,7 @@ const builtinProviders: readonly RawProviderDefinition[] = [
     ],
     protocols: [anthropic('https://api.anthropic.com/v1/messages', 'x-api-key')],
   },
-  {
-    id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
-    nativeClients: ['codebuddy'], defaultModel: 'deepseek-v4.1-flash', useClientBinary: true,
-    models: [
-      model('deepseek-v4.1-flash', 1_000_000, 50_000, undefined, THINKING_LOW_HIGH_MAX),
-      { ...model('hy4-preview', undefined, undefined, CANONICAL_MODELS['hunyuan-hy4-preview']), free: true },
-      { ...model('hy3'), free: true },
-      model('minimax-m3', undefined, undefined, CANONICAL_MODELS['minimax-m3']),
-      model('kimi-k3', undefined, undefined, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
-      model('glm-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']),
-      model('glm-5.3-flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']),
-    ],
-    modelAliases: { 'hy4-preview-ioa': 'hy4-preview' },
-    // Native CodeBuddy CLI `--effort` accepts low/medium/high/xhigh/max, so the
-    // confirmed Flash + K3 families map each declared level to its exact wire alias.
-    thinkingMappings: {
-      'deepseek-v4.1-flash': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
-      'kimi-k3': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
-    },
-    protocols: [openAI('https://copilot.tencent.com/v2/chat/completions')],
-  },
+  codeBuddyProvider,
   {
     id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
     nativeClients: ['codex'], defaultModel: 'gpt-5.6-sol', quotaProvider: 'chatgpt',
@@ -948,13 +929,6 @@ export const BUILTIN_PROVIDERS: readonly ProviderDefinition[] = builtinProviders
   ...PROVIDER_PRESENTATION[provider.id],
   models: provider.models.map(withMeta),
 }));
-
-export function createBuiltinCatalog(): Catalog {
-  const catalog = new Catalog();
-  for (const client of clients) catalog.registerClient(client);
-  for (const provider of BUILTIN_PROVIDERS) catalog.registerProvider(provider);
-  return catalog;
-}
 
 export function canonicalizeBuiltinPublicModelId(publicId: string): string {
   const separator = publicId.indexOf('/');
