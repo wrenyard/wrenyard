@@ -336,12 +336,8 @@ export interface QuotaProviderSnapshot {
 
 export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
-/** Catalog pricing subset surfaced for the Model List tab (USD per million tokens). */
-export interface ProviderModelPricingSnapshot {
-  inputUsdPerMillion: number;
-  outputUsdPerMillion: number;
-  cachedInputUsdPerMillion: number;
-}
+/** USD per million tokens: [cached, input, output]. */
+export type ProviderModelPricingSnapshot = readonly [number, number, number];
 
 /** Shared provider-model row for the Provider and Model List surfaces. */
 export interface ProviderModelSnapshot {
@@ -359,7 +355,7 @@ export interface ProviderModelSnapshot {
   canonicalId?: string;
   /** Catalog intelligence tier for the model. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
-  /** Catalog pricing subset; only the required USD-per-million input/output/cached numbers. */
+  /** Catalog list price as [cached, input, output] USD per million tokens. */
   pricing: ProviderModelPricingSnapshot;
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';

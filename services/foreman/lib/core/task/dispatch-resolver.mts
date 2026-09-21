@@ -286,16 +286,11 @@ export interface TaskDispatchResolver {
 }
 
 function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['reference_pricing'] {
-  const reference: TaskResolvedDispatch['reference_pricing'] = {
-    input_usd_per_million: pricing.inputUsdPerMillion,
-    output_usd_per_million: pricing.outputUsdPerMillion,
-    source: pricing.source,
-    checked_at: pricing.checkedAt,
+  return {
+    cached_input_usd_per_million: pricing[0],
+    input_usd_per_million: pricing[1],
+    output_usd_per_million: pricing[2],
   }
-  if (pricing.cachedInputUsdPerMillion !== undefined) {
-    reference.cached_input_usd_per_million = pricing.cachedInputUsdPerMillion
-  }
-  return reference
 }
 
 function toResolvedDispatch(
@@ -420,7 +415,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
-    const priceUsdPerMillion = modelDef.pricing.outputUsdPerMillion
+    const priceUsdPerMillion = modelDef.pricing[2]
     const atGate = (
       code: TaskResolutionFailureCode,
       detail?: TaskResolutionFailureDetail,
@@ -477,7 +472,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
     const provider = catalog.provider(candidate.provider)
     const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
-    return modelDef?.pricing.outputUsdPerMillion
+    return modelDef?.pricing[2]
   }
 
   // Single authoritative evaluation. `resolve` selection and the `eligible`

@@ -46,13 +46,8 @@ export interface WrenyardIpcRequestOptions {
   timeoutMs?: number | null;
 }
 
-export interface WrenyardGatewayModelPricing {
-  inputUsdPerMillion: number;
-  cachedInputUsdPerMillion: number;
-  outputUsdPerMillion: number;
-  source: string;
-  checkedAt: string;
-}
+/** USD per million tokens: [cached, input, output]. */
+export type WrenyardGatewayModelPricing = readonly [number, number, number];
 
 export interface WrenyardGatewayModel {
   id: string;
@@ -124,8 +119,8 @@ export interface WrenyardTaskReferencePricing {
   output_usd_per_million?: number;
   cached_input_usd_per_million?: number;
   cache_write_input_usd_per_million?: number;
-  source: string;
-  checked_at: string;
+  source?: string;
+  checked_at?: string;
 }
 
 /** Mirrors the frozen snake_case wire DTO `TaskResolvedSpeed`. */
@@ -261,11 +256,8 @@ export interface WrenyardProviderStatus {
      * numbers. Required and finite, mirroring the required Catalog
      * ModelDefinition.pricing.
      */
-    pricing: {
-      inputUsdPerMillion: number;
-      outputUsdPerMillion: number;
-      cachedInputUsdPerMillion: number;
-    };
+    /** USD per million tokens: [cached, input, output]. */
+    pricing: readonly [number, number, number];
     /** Which evidence tier produced `effectiveTps`. */
     speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
     /** True when a credential is configured AND the resolver admits provider/model. */

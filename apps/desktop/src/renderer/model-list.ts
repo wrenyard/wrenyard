@@ -278,9 +278,9 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       providers: group.providers,
       active,
       tps: averageMeasuredTps(preferred),
-      inputLabel: formatPriceRange(group.models.map((model) => model.pricing.inputUsdPerMillion)),
-      outputLabel: formatPriceRange(group.models.map((model) => model.pricing.outputUsdPerMillion)),
-      cacheLabel: formatPriceRange(group.models.map((model) => model.pricing.cachedInputUsdPerMillion)),
+      inputLabel: formatPriceRange(group.models.map((model) => model.pricing[1])),
+      outputLabel: formatPriceRange(group.models.map((model) => model.pricing[2])),
+      cacheLabel: formatPriceRange(group.models.map((model) => model.pricing[0])),
     });
   }
 
