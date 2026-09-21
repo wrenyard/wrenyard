@@ -36,12 +36,9 @@ import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import {
   applySourceDevelopmentIdentity,
-  CAPTURE_UI_SCRIPT,
   connectSourceSupervisor,
   isSourceDevelopment,
   isSupervised,
-  restoreUiScript,
-  type DesktopUiState,
 } from './source-dev.js';
 import {
   createMacQuitConfirmationGate,
@@ -1101,55 +1098,6 @@ async function bootstrap(): Promise<void> {
 
   if (isSourceDevelopment() && process.env.WRENYARD_DEV_CONTROL) {
     sourceDevBridge = connectSourceSupervisor(process.env.WRENYARD_DEV_CONTROL, {
-      async activity() {
-        const snapshot = conversationController?.snapshot();
-        const running = snapshot?.selectedRunning === true
-          || (snapshot?.sessions.some((session) => session.running) ?? false);
-        let modalOpen = false;
-        try {
-          const ui = await shellWindow?.window.webContents.executeJavaScript(CAPTURE_UI_SCRIPT) as DesktopUiState | undefined;
-          modalOpen = ui?.modalOpen === true;
-        } catch {
-          modalOpen = false;
-        }
-        return { running, streaming: running, modalOpen, busy: running || modalOpen };
-      },
-      async snapshotUi() {
-        const snapshot = conversationController?.snapshot();
-        let ui: DesktopUiState = {};
-        try {
-          ui = await shellWindow?.window.webContents.executeJavaScript(CAPTURE_UI_SCRIPT) as DesktopUiState;
-        } catch {
-          ui = {};
-        }
-        return {
-          ...ui,
-          selectedSessionId: snapshot?.selectedSessionId,
-          streaming: snapshot?.selectedRunning === true,
-        };
-      },
-      async restoreUi(state) {
-        if (state.selectedSessionId) {
-          await conversationController?.select(state.selectedSessionId).catch(() => undefined);
-        }
-        if (state.page && state.page !== 'workbench') {
-          shellWindow?.setPage(state.page as ShellPage, false);
-        }
-        try {
-          await shellWindow?.window.webContents.executeJavaScript(restoreUiScript(state));
-        } catch {
-          // Draft restoration is best-effort UI state only.
-        }
-      },
-      async reload() {
-        const window = shellWindow?.window;
-        if (!window || window.isDestroyed()) return;
-        await window.webContents.reload();
-        await new Promise<void>((resolveReload) => {
-          window.webContents.once('did-finish-load', () => resolveReload());
-          setTimeout(resolveReload, 5_000);
-        });
-      },
       async quit() {
         sourceDevQuit = true;
         app.quit();

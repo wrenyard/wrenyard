@@ -81,25 +81,20 @@ is allowed to run the Electron native build script (`pnpm-workspace.yaml`
 missing cannot start Desktop.
 
 `pnpm build` prepares development artifacts only. It does not produce a
-release archive, install anything, or start the app. `pnpm dev` does not
-silently download dependencies or a Wrenyard release.
+release archive, install anything, or start the app.
 
 Daily loop, still from the checkout root:
 
 ```powershell
-# Terminal A: stays running and shows build/runtime status
+# Keep this terminal running. Save source files to rebuild and restart.
 pnpm dev
-
-# Terminal B: same checkout, request a full dev-stack restart
-pnpm dev:restart
-# Equivalent shorthand (same implementation)
-pnpm restart
-
-# Terminal B: stop the dev stack and its supervisor
-pnpm dev:stop
-# Equivalent shorthand (same implementation)
-pnpm stop
 ```
+
+Running `pnpm dev` again from the same checkout replaces the existing dev
+stack and loads current code. Source changes rebuild the affected artifacts
+and restart both daemon and Desktop. Changes to dev tooling replace the
+worker process as well. Ctrl+C stops the stack. In-flight tasks and
+conversations may be interrupted; this development loop does not wait for idle.
 
 Source-development and an installed release share the same user config,
 state, Desktop `userData`, and DSH session location. The Desktop `userData`
@@ -121,20 +116,15 @@ pnpm dev --kill-desktop
 ```
 
 That flag applies only to that invocation. It terminates the verified
-installed Desktop process tree, waits for it to exit, then continues the
-existing daemon drain. It does not become the default, does not apply to
-`restart`/`stop`, and does not skip a busy daemon or kill unrelated
-Electron/Node processes. After `pnpm stop`, you can start the installed
-release again.
+installed Desktop process tree, waits for it to exit, then replaces the
+installed daemon. It does not become the default and never kills unrelated
+Electron/Node processes. After exiting dev, you can start the installed release.
 
-If `package.json` or `pnpm-lock.yaml` change, stop the stack, re-run
-`pnpm install --frozen-lockfile`, then `pnpm build` and `pnpm dev`. The
-watcher will tell you to do that; it will not modify `node_modules` in the
-background.
-
-Unexpected component-exit retries are capped at 3 attempts with 1s/2s/4s
-backoff and can be interrupted by `pnpm stop`. Supervisor/tooling source
-changes require `pnpm dev:stop` then `pnpm dev`.
+Manifest or lockfile changes run `pnpm install --frozen-lockfile` before
+rebuilding. Install/build errors remain visible and the watcher waits for
+the next save; no release installer is involved. Unexpected component exits
+are reported without an automatic crash-restart loop. Save a source file or
+run `pnpm dev` again to retry.
 
 ## Install (latest-dev)
 

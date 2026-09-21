@@ -1,25 +1,22 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { spawn as spawnProcess } from 'node:child_process';
+import { buildGeneration, checkBuildArtifacts, checkToolchain, COMPONENT_BUILD_TARGETS, desktopBuildArgs } from './builder.mjs';
+import { childHasExited, componentLogPath, spawnDaemonProcess, spawnDesktopProcess, stopChild, stopOwnedDesktopTree } from './children.mjs';
+import { attachHandler, connectControl, ERRORS, isAddrInUse, listenControl } from './control.mjs';
+import { COMPONENTS, createWatcher, expandDependents, significantComponents } from './graph.mjs';
 import {
-  COMPONENT_RETRY_BACKOFF_MS,
-  COMPONENT_RETRY_LIMIT,
-  COMPONENT_RETRY_STABLE_MS,
-  DESKTOP_KILL_WAIT_MS,
-  DRAIN_TIMEOUT_MS,
-  HEALTH_WAIT_MS,
-} from './constants.mjs';
-import { DISPATCH_THAW_HINT, dispatchBlocksNewWork, dispatchIsAccepting, shouldAutoThaw } from './admission.mjs';
-import { combineActivity, identityMatchesSource } from './activity.mjs';
-import { buildGeneration } from './builder.mjs';
-import { spawnDaemonProcess, spawnDesktopProcess, stopChild, stopOwnedDesktopTree, componentLogPath, childHasExited } from './children.mjs';
-import { attachHandler, connectControl, isAddrInUse, listenControl } from './control.mjs';
-import { sourceChildEnv } from './env.mjs';
-import { COMPONENTS, expandDependents, isRendererOnly } from './graph.mjs';
-import { createInstanceRecord, formatGitRevision, newInstanceId, newLaunchId, processAlive, readGitRevision, startIdentity } from './identity.mjs';
-import { readInstanceFile, writeInstanceFile } from './instance.mjs';
-import { createLogger } from './log.mjs';
+  createInstanceRecord,
+  formatGitRevision,
+  newInstanceId,
+  newLaunchId,
+  processAlive,
+  readGitRevision,
+  readInstanceFile,
+  startIdentity,
+  writeInstanceFile,
+} from './identity.mjs';
 import {
   businessIpcPath,
   configDir,
@@ -28,23 +25,30 @@ import {
   desktopUserData,
   instancePath as resolveInstancePath,
   logDir as resolveLogDir,
+  normalizeCheckout,
   sameCheckout,
   stateRoot,
-  normalizeCheckout,
 } from './paths.mjs';
-import { checkBuildArtifacts, checkToolchain } from './prepare.mjs';
-import { ERRORS } from './protocol.mjs';
 import {
   createInspectReleaseDesktop,
   createTerminateReleaseDesktop,
+  DESKTOP_KILL_WAIT_MS,
   gateReleaseDesktop,
   runExecFile,
 } from './release-desktop.mjs';
-import { createGenerationQueue } from './queue.mjs';
-import { createRequestQueue } from './requests.mjs';
-import { sourceIdentityFromHealth, withDaemon } from './rpc.mjs';
-import { sourceCliInvocation } from './spawn.mjs';
-import { createWatcher } from './watcher.mjs';
+import {
+  DISPATCH_THAW_HINT,
+  dispatchBlocksNewWork,
+  identityMatchesSource,
+  sourceIdentityFromHealth,
+  withDaemon,
+} from './rpc.mjs';
+import { pnpmInvocation, sourceCliInvocation, spawnArgv } from './spawn.mjs';
+
+const HEALTH_WAIT_MS = 20_000;
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const LOG_MAX_FILES = 3;
+const SECRET_LINE = /(token|secret|password|authorization|api[_-]?key|bearer\s+[a-z0-9._-]+)/iu;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,41 +58,164 @@ function fail(code, message) {
   return Object.assign(new Error(message), { code, ok: false, message });
 }
 
-const TRANSIENT_STATUSES = new Set([
-  'preparing',
-  'starting',
-  'waiting-for-idle',
-  'restarting',
-  'stopping',
-]);
+function createLogger(options) {
+  const dir = options.dir;
+  const fileName = options.fileName ?? 'supervisor.log';
+  const stdout = options.stdout ?? ((line) => process.stdout.write(`${line}\n`));
+  const now = options.now ?? (() => new Date().toISOString());
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, fileName);
 
-/**
- * Status measured from the live components, ignoring transient operation status.
- * @param {{ daemon: unknown, desktop: unknown, desktopStoppedByUser: boolean }} components
- */
-export function healthyComponentStatus(components) {
-  const alive = (child) => Boolean(child) && !childHasExited(child);
-  if (!alive(components?.daemon)) return 'degraded';
-  if (components.desktopStoppedByUser) return 'ready';
-  if (!alive(components?.desktop)) return 'degraded';
-  return 'ready';
-}
-
-/**
- * Pick the status to publish after a failed lifecycle operation. A snapshot that
- * is itself transient (or missing) is replaced by the live component truth, so a
- * blocked stop never leaves `stopping` / `waiting-for-idle` behind.
- * @param {string|null|undefined} snapshotStatus
- * @param {{ daemon: unknown, desktop: unknown, desktopStoppedByUser: boolean }} components
- */
-export function restoredStatus(snapshotStatus, components) {
-  const live = healthyComponentStatus(components);
-  if (live === 'degraded') return 'degraded';
-  if (!snapshotStatus || TRANSIENT_STATUSES.has(snapshotStatus)) {
-    return live;
+  function rotateIfNeeded() {
+    try {
+      if (statSync(path).size < (options.maxBytes ?? LOG_MAX_BYTES)) return;
+    } catch {
+      return;
+    }
+    const max = options.maxFiles ?? LOG_MAX_FILES;
+    for (let index = max - 1; index >= 1; index -= 1) {
+      const from = index === 1 ? path : `${path}.${index - 1}`;
+      const to = `${path}.${index}`;
+      try {
+        renameSync(from, to);
+      } catch {
+        // Missing older files are expected.
+      }
+    }
   }
-  return snapshotStatus;
+
+  function write(level, event, detail = '') {
+    const raw = detail ? `${event} ${detail}` : event;
+    const safe = SECRET_LINE.test(raw) ? `${event} [redacted]` : raw;
+    const line = `${now()} ${level} ${safe}`;
+    rotateIfNeeded();
+    try {
+      writeFileSync(path, `${line}\n`, { flag: 'a' });
+    } catch {
+      // Logging must never crash the supervisor.
+    }
+    if (level !== 'debug') stdout(line);
+    return line;
+  }
+
+  return {
+    path,
+    info: (event, detail) => write('info', event, detail),
+    warn: (event, detail) => write('warn', event, detail),
+    error: (event, detail) => write('error', event, detail),
+    debug: (event, detail) => write('debug', event, detail),
+  };
 }
+
+function createGenerationQueue(options = {}) {
+  let seq = options.initialSeq ?? 0;
+  let pending = null;
+  let active = null;
+
+  function merge(base, next) {
+    return {
+      id: next.id,
+      seq: next.seq,
+      components: [...new Set([...base.components, ...next.components])],
+      files: [...new Set([...base.files, ...next.files])],
+      reason: next.reason,
+      superseded: base.id,
+    };
+  }
+
+  return {
+    get pending() {
+      return pending;
+    },
+    get active() {
+      return active;
+    },
+    enqueue(reason, components, files) {
+      seq += 1;
+      const generation = {
+        id: `g${seq}`,
+        seq,
+        components: [...new Set(components ?? [])],
+        files: [...new Set(files ?? [])],
+        reason: reason ?? 'watch',
+      };
+      pending = pending ? merge(pending, generation) : generation;
+      return pending;
+    },
+    takeRestart() {
+      if (!pending) return null;
+      active = pending;
+      pending = null;
+      return active;
+    },
+    completeBuild(generation) {
+      if (active?.id === generation?.id) active = null;
+    },
+    failBuild(generation) {
+      if (active?.id === generation?.id) active = null;
+    },
+    isStale(generation) {
+      return Boolean(pending && generation && pending.seq > generation.seq);
+    },
+  };
+}
+
+function createRequestQueue() {
+  let current = null;
+  const stopWaiters = [];
+  const replaceWaiters = [];
+
+  function settle(list, result) {
+    const waiters = list.splice(0, list.length);
+    for (const waiter of waiters) waiter(result);
+  }
+
+  return {
+    submit(kind) {
+      if (kind !== 'stop' && kind !== 'replace') {
+        throw new Error(`unsupported control kind: ${kind}`);
+      }
+      return new Promise((resolve, reject) => {
+        const waiter = (result) => {
+          if (result.ok) resolve(result);
+          else reject(Object.assign(new Error(result.message), result));
+        };
+        if (kind === 'stop') stopWaiters.push(waiter);
+        else replaceWaiters.push(waiter);
+      });
+    },
+    take() {
+      if (current) return null;
+      if (replaceWaiters.length > 0) {
+        settle(stopWaiters, {
+          ok: false,
+          code: ERRORS.cancelled,
+          message: 'stop cancelled because a launcher replacement took priority',
+        });
+        current = 'replace';
+        return 'replace';
+      }
+      if (stopWaiters.length > 0) {
+        current = 'stop';
+        return 'stop';
+      }
+      return null;
+    },
+    finish(result) {
+      const kind = current;
+      current = null;
+      if (kind === 'stop') settle(stopWaiters, result);
+      else if (kind === 'replace') settle(replaceWaiters, result);
+    },
+  };
+}
+
+/**
+ * Components that only change how the stack is *served*, not what it serves.
+ * Those are produced by `pnpm build`, never by the watcher, and a change to
+ * them is applied by replacing this supervisor process.
+ */
+const SUPERVISOR_COMPONENTS = new Set([COMPONENTS.supervisor, COMPONENTS.manifest]);
 
 export function createSupervisor(options = {}) {
   const platform = options.platform ?? process.platform;
@@ -111,16 +238,18 @@ export function createSupervisor(options = {}) {
   const git = readGitRevision({ checkout, git: options.git });
   const queue = createGenerationQueue();
   const requests = createRequestQueue();
-  const exists = options.exists;
+  const exists = options.exists ?? existsSync;
   const now = options.now ?? Date.now;
   const wait = options.sleep ?? sleep;
   const spawnDaemon = options.spawnDaemon ?? spawnDaemonProcess;
   const spawnDesktop = options.spawnDesktop ?? spawnDesktopProcess;
   const stopChildFn = options.stopChild ?? stopChild;
-  const retryStableMs = options.retryStableMs ?? COMPONENT_RETRY_STABLE_MS;
-  const retryBackoffMs = options.retryBackoffMs ?? COMPONENT_RETRY_BACKOFF_MS;
+  const runCommand = options.runCommand ?? runExecFile;
+  const spawnBuild = options.spawnProcess ?? spawnProcess;
   const makeLaunchId = options.newLaunchId ?? newLaunchId;
   const killDesktop = options.killDesktop === true;
+  const installTimeoutMs = options.installTimeoutMs ?? 600_000;
+  const buildTimeoutMs = options.buildTimeoutMs ?? 900_000;
   const inspectReleaseDesktop = options.inspectReleaseDesktop ?? createInspectReleaseDesktop({
     platform,
     env,
@@ -150,17 +279,30 @@ export function createSupervisor(options = {}) {
   let desktopStoppedByUser = false;
   let currentRuntimeBin = options.runtimeBin ?? defaultRuntimeBin(checkout, platform, exists);
   let stopping = false;
-  let retries = { daemon: 0, desktop: 0 };
-  let retryTimers = { daemon: null, desktop: null };
+  let replacing = false;
   let buildAbort = null;
-  let buildLock = Promise.resolve();
-  const usedRuntimeGens = new Set();
+  let pumpPromise = null;
+  let reloadPromise = null;
+  let buildFailure = null;
+  let bootComplete = false;
   const sessions = new Set();
 
-  function withBuildLock(fn) {
-    const run = buildLock.then(fn, fn);
-    buildLock = run.then(() => undefined, () => undefined);
-    return run;
+  function updateRuntimeBin(next) {
+    if (!next) return;
+    currentRuntimeBin = next;
+  }
+
+  /**
+   * pnpm install/build invocations are resolved against the checkout the way
+   * the source loop resolves child commands: never through a shell.
+   */
+  function resolveCommand(command, args, mode) {
+    if (mode === 'pnpm') {
+      const invocation = pnpmInvocation(checkout, args, nodeExecutable, exists);
+      return { command: invocation.command, args: invocation.args, cwd: checkout };
+    }
+    const resolved = spawnArgv(command, args, platform, env);
+    return { command: resolved.command, args: resolved.args, cwd: checkout };
   }
 
   function resolvedPaths(launchId) {
@@ -227,20 +369,13 @@ export function createSupervisor(options = {}) {
 
   /**
    * Status that truthfully reflects the live components, independent of any
-   * transient operation status (stopping / waiting-for-idle / restarting).
+   * transient operation status (starting / stopping / restarting).
    */
   function healthyStatus() {
-    return healthyComponentStatus({ daemon, desktop, desktopStoppedByUser });
-  }
-
-  /**
-   * Restore the pre-operation status after a failed lifecycle operation.
-   * Falls back to the live component truth when the snapshot is itself a
-   * transient operation status, so a failed stop never leaves the supervisor
-   * stuck in `stopping` / `waiting-for-idle`.
-   */
-  function restoreStatusAfterFailure(snapshotStatus, detail) {
-    setStatus(restoredStatus(snapshotStatus, { daemon, desktop, desktopStoppedByUser }), detail);
+    const alive = (child) => Boolean(child) && !childHasExited(child);
+    if (!alive(daemon)) return 'degraded';
+    if (desktopStoppedByUser) return 'ready';
+    return alive(desktop) ? 'ready' : 'degraded';
   }
 
   function snapshot() {
@@ -270,6 +405,7 @@ export function createSupervisor(options = {}) {
       },
       generation: queue.current?.id ?? null,
       pendingGeneration: queue.pending?.id ?? queue.building?.id ?? null,
+      replacing,
     };
   }
 
@@ -293,6 +429,7 @@ export function createSupervisor(options = {}) {
       `ipc: ${snap.paths.ipc}`,
       `logs: ${snap.paths.logs}`,
       `generation: ${snap.generation ?? 'initial'}`,
+      `edits reload the whole stack; stop with Ctrl+C`,
     ];
     if (admission?.blocked) lines.push(DISPATCH_THAW_HINT);
     options.stdout?.(lines.join('\n'));
@@ -313,13 +450,6 @@ export function createSupervisor(options = {}) {
       return null;
     }
     return desktopSession;
-  }
-
-  function cancelRetry(kind) {
-    if (retryTimers[kind]) {
-      clearTimeout(retryTimers[kind]);
-      retryTimers[kind] = null;
-    }
   }
 
   function bindSlot(kind, child, launchId) {
@@ -345,44 +475,13 @@ export function createSupervisor(options = {}) {
     return slot;
   }
 
-  function scheduleRetry(kind, slot, error) {
-    if (stopping || requests.pendingStop) return;
-    cancelRetry(kind);
-    const survived = slot.healthySince != null && (now() - slot.healthySince) >= retryStableMs;
-    if (survived) {
-      retries[kind] = 0;
-      logger.info('retry-reset', `${kind} launchId=${slot.launchId} stayed healthy for ${retryStableMs}ms; starting a new recovery budget`);
-    }
-    if (retries[kind] >= COMPONENT_RETRY_LIMIT) {
-      const detail = `${kind} exceeded ${COMPONENT_RETRY_LIMIT} restarts (launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'})`;
-      logger.error('retry-exhausted', `${detail}${error ? `: ${error instanceof Error ? error.message : String(error)}` : ''}`);
-      setStatus('degraded', detail);
-      return;
-    }
-    const attempt = retries[kind] + 1;
-    retries[kind] = attempt;
-    const delay = retryBackoffMs[Math.min(attempt - 1, retryBackoffMs.length - 1)];
-    logger.warn('retry', `${kind} restart in ${delay}ms (attempt ${attempt}/${COMPONENT_RETRY_LIMIT}) launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} planned=${slot.expectedExit}`);
-    retryTimers[kind] = setTimeout(() => {
-      retryTimers[kind] = null;
-      if (stopping || requests.pendingStop) return;
-      const current = kind === 'daemon' ? daemonSlot : desktopSlot;
-      if (current?.child && !childHasExited(current.child) && !current.expectedExit) return;
-      if (kind === 'daemon' && daemonStart) return;
-      if (kind === 'desktop' && desktopStart) return;
-      void withBuildLock(() => (kind === 'daemon' ? startDaemon() : startDesktop())).then(() => {
-        if (daemon && (desktop || desktopStoppedByUser) && status !== 'stopping') {
-          setStatus(status === 'degraded' ? 'ready' : status);
-        }
-      }).catch((retryError) => {
-        logger.error('retry-failed', retryError instanceof Error ? retryError.message : String(retryError));
-      });
-    }, delay);
-    retryTimers[kind]?.unref?.();
-  }
-
+  /**
+   * A local dev loop does not restart crashed components on its own: an
+   * unexpected exit is reported as `degraded` and the next file save or
+   * running `pnpm dev` again brings the stack back.
+   */
   function onTrackedChildExit(slot, code, signal) {
-    if (stopping) return;
+    if (stopping || replacing) return;
     const current = slot.kind === 'daemon' ? daemonSlot : desktopSlot;
     if (current !== slot) {
       logger.info('stale-exit', `${slot.kind} launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} ignored`);
@@ -392,19 +491,19 @@ export function createSupervisor(options = {}) {
       logger.info('expected-exit', `${slot.kind} launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'} code=${code ?? 'none'} signal=${signal ?? 'none'}`);
       return;
     }
+    const detail = `${slot.kind} exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}) launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'}`;
     if (slot.kind === 'desktop' && code === 0 && !signal) {
       desktopStoppedByUser = true;
       desktopSession = null;
       desktopSlot = null;
       desktop = null;
       persist({ desktopPid: null });
-      logger.info('desktop-stopped', `Desktop exited cleanly (pid was ${slot.child?.pid ?? 'unknown'} launchId=${slot.launchId}). Supervisor and daemon stay running. Use pnpm dev:restart to restore the window.`);
+      logger.info('desktop-stopped', `${detail}. Supervisor and daemon stay running; save a file or run pnpm dev again to restore the window.`);
+      setStatus('ready', 'desktop stopped by the user');
       return;
     }
-    setStatus('degraded', `${slot.kind} exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}) launchId=${slot.launchId} pid=${slot.child?.pid ?? 'unknown'}`);
-    if (slot.startInFlight || slot.failureCounted) return;
-    slot.failureCounted = true;
-    scheduleRetry(slot.kind, slot);
+    logger.error('component-exited', `${detail}; no automatic restart`);
+    setStatus('degraded', detail);
   }
 
   async function waitForSourceDaemon(slot, timeoutMs = HEALTH_WAIT_MS) {
@@ -462,46 +561,7 @@ export function createSupervisor(options = {}) {
     throw fail(ERRORS.internal, `business IPC still reachable at ${ipcPath}`);
   }
 
-  async function readDesktopActivity() {
-    if (!desktop || childHasExited(desktop)) return { known: true, busy: false, running: false };
-    const session = currentDesktopSession();
-    if (!session) return { known: false, busy: true };
-    try {
-      const activity = await session.request('desktop.activity', {});
-      return { known: true, ...activity };
-    } catch {
-      return { known: false, busy: true };
-    }
-  }
-
-  async function captureDesktopUi() {
-    const session = currentDesktopSession();
-    if (!session) return null;
-    try {
-      return await session.request('desktop.snapshotUi', {});
-    } catch {
-      return null;
-    }
-  }
-
-  async function restoreDesktopUi(ui) {
-    const session = currentDesktopSession();
-    if (!session || !ui) return;
-    try {
-      await session.request('desktop.restoreUi', ui);
-    } catch {
-      // Restoration is best-effort UI state only.
-    }
-  }
-
-  async function reloadDesktopRenderer() {
-    const session = currentDesktopSession();
-    if (!session) return;
-    await session.request('desktop.reload', {});
-  }
-
   async function quitDesktop() {
-    cancelRetry('desktop');
     const slot = desktopSlot;
     if (!slot?.child) return;
     slot.expectedExit = true;
@@ -517,7 +577,7 @@ export function createSupervisor(options = {}) {
     }
     const stopped = await stopOwnedDesktopTree(slot.child, {
       platform,
-      run: options.runCommand ?? runExecFile,
+      run: runCommand,
       timeoutMs: options.desktopStopMs,
       afterGraceful: graceful,
     });
@@ -533,118 +593,13 @@ export function createSupervisor(options = {}) {
     }
   }
 
-  async function freezeAndDrain(timeoutMs = DRAIN_TIMEOUT_MS, drainOptions = {}) {
-    let originalMode = 'accepting';
-    let froze = false;
-    const token = () => ({ froze, originalMode });
-    setStatus('waiting-for-idle');
-    try {
-      await withRpc(async (client) => {
-        const health = await client.request('health.ping', {});
-        const dispatch = health?.dispatch;
-        originalMode = dispatch?.mode;
-        if (dispatch?.recovery_required === true || originalMode === 'planned_restart') {
-          throw fail(ERRORS.busy, `cannot drain: ${dispatchBlocksNewWork(health).reason}`);
-        }
-        if (originalMode !== 'accepting' && originalMode !== 'frozen') {
-          throw fail(ERRORS.internal, `cannot confirm dispatch admission (${originalMode ?? 'unknown'})`);
-        }
-        if (originalMode === 'accepting') {
-          await client.request('daemon.freeze', {});
-          froze = true;
-        }
-        try {
-          const drain = await client.request('daemon.drain', { timeout_ms: timeoutMs }, timeoutMs + 5_000);
-          if (!drain?.drained) {
-            if (froze) {
-              await client.request('daemon.thaw', {});
-              froze = false;
-            }
-            throw Object.assign(fail(ERRORS.busy, `still busy after ${timeoutMs}ms`), {
-              blocking: {
-                tasks: drain?.activeTasks ?? [],
-                workflows: drain?.activeWorkflows ?? [],
-                executions: drain?.activeExecutions ?? [],
-              },
-              admissionToken: token(),
-            });
-          }
-        } catch (error) {
-          if (error.code === ERRORS.busy) throw error;
-          if (froze) {
-            try {
-              await client.request('daemon.thaw', {});
-              froze = false;
-            } catch (thawError) {
-              throw Object.assign(fail(
-                ERRORS.internal,
-                `cannot confirm daemon activity: ${error instanceof Error ? error.message : String(error)}; dispatch admission was not restored (${thawError instanceof Error ? thawError.message : String(thawError)}). ${DISPATCH_THAW_HINT}`,
-              ), { admissionToken: { froze: true, originalMode: 'accepting' } });
-            }
-          }
-          throw error;
-        }
-      }, 2000);
-    } catch (error) {
-      error.admissionToken = error.admissionToken ?? token();
-      if (error.code === ERRORS.busy || error.code === ERRORS.internal) throw error;
-      throw Object.assign(fail(ERRORS.internal, `cannot confirm daemon activity: ${error instanceof Error ? error.message : String(error)}`), {
-        admissionToken: token(),
-      });
-    }
-    if (drainOptions.ignoreDesktop !== true) {
-      const desktopActivity = await readDesktopActivity();
-      if (desktopActivity.known === false || desktopActivity.busy) {
-        if (froze && originalMode === 'accepting') {
-          const thawError = await restoreAdmissionSafe(token());
-          if (thawError) {
-            throw fail(ERRORS.busy, `${desktopActivity.known === false ? 'cannot confirm Desktop activity; treating as busy' : 'Desktop still has an active conversation or tool call'}; ${thawError}`);
-          }
-        }
-        throw Object.assign(fail(ERRORS.busy, desktopActivity.known === false
-          ? 'cannot confirm Desktop activity; treating as busy'
-          : 'Desktop still has an active conversation or tool call'), { admissionToken: token() });
-      }
-    }
-    return token();
-  }
-
-  async function restoreAdmissionSafe(token) {
-    if (!shouldAutoThaw(token)) return null;
-    try {
-      await withRpc((client) => client.request('daemon.thaw', {}), 2000);
-      return null;
-    } catch (error) {
-      return `dispatch admission was not restored (${error instanceof Error ? error.message : String(error)}). ${DISPATCH_THAW_HINT}`;
-    }
-  }
-
-  async function restoreAdmission(token) {
-    const unrestored = await restoreAdmissionSafe(token);
-    if (unrestored) {
-      logger.error('admission-unrestored', unrestored);
-      throw fail(ERRORS.internal, unrestored);
-    }
-  }
-
-  async function finalizeAdmission(handover) {
-    const token = handover?.token;
-    if (shouldAutoThaw(token)) {
-      try {
-        await withRpc((client) => client.request('daemon.thaw', {}), 2000);
-      } catch (error) {
-        const message = `failed to restore dispatch admission: ${error instanceof Error ? error.message : String(error)}. ${DISPATCH_THAW_HINT}`;
-        setStatus('degraded', message);
-        throw fail(ERRORS.internal, message);
-      }
-      const health = await pingCurrentDaemon();
-      if (!dispatchIsAccepting(health)) {
-        const message = `daemon thaw did not restore accepting dispatch. ${DISPATCH_THAW_HINT}`;
-        setStatus('degraded', message);
-        throw fail(ERRORS.internal, message);
-      }
-      return { blocked: false, health };
-    }
+  /**
+   * Report the live dispatch state without changing it.
+   *
+   * Source development no longer freezes anything: an operator freeze is left
+   * exactly as it was found, and it is surfaced rather than silently thawed.
+   */
+  async function finalizeAdmission() {
     let health;
     try {
       health = await pingCurrentDaemon();
@@ -672,7 +627,6 @@ export function createSupervisor(options = {}) {
   }
 
   async function stopDaemon() {
-    cancelRetry('daemon');
     const slot = daemonSlot;
     if (slot) slot.expectedExit = true;
     try {
@@ -703,7 +657,6 @@ export function createSupervisor(options = {}) {
   }
 
   async function startDaemonOnce() {
-    cancelRetry('daemon');
     mkdirSync(logs, { recursive: true });
     const launchId = makeLaunchId();
     const child = spawnDaemon({
@@ -726,17 +679,14 @@ export function createSupervisor(options = {}) {
       return health;
     } catch (error) {
       slot.startInFlight = false;
-      if (!slot.expectedExit && daemonSlot === slot && !slot.failureCounted) {
+      if (!slot.expectedExit && daemonSlot === slot && !slot.failureCounted && !childHasExited(child)) {
         slot.failureCounted = true;
-        if (!childHasExited(child)) {
-          slot.expectedExit = true;
-          try { await stopChildFn(child); } catch { /* owned child cleanup */ }
-          if (daemonSlot === slot) {
-            daemonSlot = null;
-            daemon = null;
-          }
+        slot.expectedExit = true;
+        try { await stopChildFn(child); } catch { /* owned child cleanup */ }
+        if (daemonSlot === slot) {
+          daemonSlot = null;
+          daemon = null;
         }
-        scheduleRetry('daemon', slot, error);
       }
       throw error;
     }
@@ -751,7 +701,6 @@ export function createSupervisor(options = {}) {
   }
 
   async function startDesktopOnce() {
-    cancelRetry('desktop');
     desktopStoppedByUser = false;
     mkdirSync(logs, { recursive: true });
     const launchId = makeLaunchId();
@@ -767,33 +716,34 @@ export function createSupervisor(options = {}) {
     const slot = bindSlot('desktop', child, launchId);
     persist();
     logger.info('desktop-spawn', `launchId=${launchId} pid=${child.pid ?? 'unknown'}`);
-    const deadline = now() + (options.desktopReadyMs ?? 45_000);
     try {
-      while (now() < deadline) {
-        if (currentDesktopSession()?.launchId === launchId) {
-          slot.startInFlight = false;
-          slot.healthySince = now();
-          return;
-        }
-        if (childHasExited(child) || desktopSlot !== slot) {
-          throw fail(ERRORS.internal, `Desktop exited before registering with the supervisor (launchId ${launchId}, code ${child.exitCode ?? 'unknown'})`);
-        }
-        await wait(200);
+      // Desktop readiness only means the OS launched the process. Its UI and
+      // supervisor bridge may initialize later; neither gates source dev.
+      await new Promise((resolve, reject) => {
+        const onSpawn = () => { cleanup(); resolve(); };
+        const onError = (error) => { cleanup(); reject(error); };
+        const cleanup = () => {
+          child.off('spawn', onSpawn);
+          child.off('error', onError);
+        };
+        child.once('spawn', onSpawn);
+        child.once('error', onError);
+      });
+      if (childHasExited(child) || desktopSlot !== slot) {
+        throw fail(ERRORS.internal, `Desktop exited during launch (launchId ${launchId}, code ${child.exitCode ?? 'unknown'})`);
       }
-      throw fail(ERRORS.internal, `Desktop did not register with the supervisor (launchId ${launchId})`);
+      slot.startInFlight = false;
+      slot.healthySince = now();
     } catch (error) {
       slot.startInFlight = false;
-      if (!slot.expectedExit && desktopSlot === slot && !slot.failureCounted) {
+      if (!slot.expectedExit && desktopSlot === slot && !slot.failureCounted && !childHasExited(child)) {
         slot.failureCounted = true;
-        if (!childHasExited(child)) {
-          slot.expectedExit = true;
-          try { await stopChildFn(child); } catch { /* owned child cleanup */ }
-          if (desktopSlot === slot) {
-            desktopSlot = null;
-            desktop = null;
-          }
+        slot.expectedExit = true;
+        try { await stopChildFn(child); } catch { /* owned child cleanup */ }
+        if (desktopSlot === slot) {
+          desktopSlot = null;
+          desktop = null;
         }
-        scheduleRetry('desktop', slot, error);
       }
       throw error;
     }
@@ -822,11 +772,11 @@ export function createSupervisor(options = {}) {
     try {
       health = await pingDaemon();
     } catch {
-      return { switched: false, token: null };
+      return { switched: false };
     }
     const identity = sourceIdentityFromHealth(health);
     if (identity.mode === 'source') {
-      if (identity.instanceId === instanceId) return { switched: false, self: true, token: null };
+      if (identity.instanceId === instanceId) return { switched: false, self: true };
       throw fail(ERRORS.wrongCheckout, `A source-development instance is already running for ${identity.checkout ?? 'another checkout'}`);
     }
     const block = dispatchBlocksNewWork(health);
@@ -834,19 +784,10 @@ export function createSupervisor(options = {}) {
       throw fail(ERRORS.busy, `cannot take over installed Wrenyard: ${block.reason}`);
     }
     logger.info('switching', 'Installed Wrenyard is running; switching to the source environment');
-    let token;
-    try {
-      token = await freezeAndDrain(DRAIN_TIMEOUT_MS, { ignoreDesktop: true });
-    } catch (error) {
-      throw error;
-    }
-    try {
-      await stopDaemon();
-    } catch (error) {
-      const unrestored = await restoreAdmissionSafe(token);
-      if (unrestored) error.message = `${error.message}; ${unrestored}`;
-      throw error;
-    }
+    // The source stack replaces the installed daemon outright, so no drain wait
+    // is involved and no freeze is installed: an operator freeze belongs to the
+    // operator and is never created or cleared here.
+    await stopDaemon();
     try {
       const again = await pingDaemon();
       throw fail(
@@ -854,219 +795,146 @@ export function createSupervisor(options = {}) {
         `Installed Desktop appears to have restarted the daemon (${sourceIdentityFromHealth(again).mode}). Quit 啾啾工坊 from the tray (full quit, not hide) and run pnpm dev again. Processes were not killed by name.`,
       );
     } catch (error) {
-      if (error.code === ERRORS.internal && String(error.message).includes('restarted the daemon')) {
-        const unrestored = await restoreAdmissionSafe(token);
-        if (unrestored) error.message = `${error.message}; ${unrestored}`;
-        throw error;
-      }
+      if (error.code === ERRORS.internal && String(error.message).includes('restarted the daemon')) throw error;
     }
-    return { switched: true, token };
+    return { switched: true };
   }
 
-  async function applyGeneration(generation, mode) {
+  /**
+   * Queue a whole-stack restart. There is exactly one in flight at a time and
+   * exactly one waiting behind it, so a burst of saves costs at most two
+   * restarts instead of one per edit.
+   */
+  function requestRestart(reason, components, files) {
+    if (stopping || replacing) return Promise.resolve();
+    queue.enqueue(reason, components, files);
+    if (!bootComplete) return Promise.resolve();
+    return pump();
+  }
+
+  function releaseBoot() {
+    bootComplete = true;
+    return pump();
+  }
+
+  /**
+   * The single source-change path: build the affected targets, then restart the
+   * complete daemon + Desktop stack. There is no renderer-only reload, no idle
+   * wait (the user accepts interrupting in-flight work), and no crash retry.
+   *
+   * The claimed generation is passed in by `pump`; it is the *only* consumer, so
+   * the generation is never taken twice (a second `takeRestart` returns null and
+   * would silently turn every build into a no-op).
+   */
+  async function applyGeneration(generation) {
+    if (!generation) return { applied: false, reason: 'coalesced' };
     const components = expandDependents(generation.components);
-    if (components.includes(COMPONENTS.manifest)) {
-      logger.warn('manifest-changed', 'package manifest or lockfile changed. Stop the stack, run pnpm install --frozen-lockfile, then pnpm build && pnpm dev. node_modules was not modified.');
-      return { applied: false, reason: 'manifest' };
-    }
-    if (components.includes(COMPONENTS.supervisor)) {
-      logger.warn('supervisor-changed', 'dev supervisor/build tooling changed. Run pnpm dev:stop then pnpm dev to load it.');
-      return { applied: false, reason: 'supervisor' };
-    }
+    const isManifest = components.includes(COMPONENTS.manifest);
+    const started = now();
 
-    if (!queue.beginApply(generation)) {
-      logger.info('stale-generation', `${generation.id} is no longer the latest successful generation`);
-      return { applied: false, reason: 'stale' };
-    }
-
-    try {
-      if (generation.artifacts?.runtimeBin) {
-        currentRuntimeBin = generation.artifacts.runtimeBin;
-        if (generation.artifacts.runtimeGeneration) usedRuntimeGens.add(generation.artifacts.runtimeGeneration);
-      }
-
-      const needsDaemon = components.includes(COMPONENTS.daemon)
-        || components.includes(COMPONENTS.runtime)
-        || components.includes(COMPONENTS.cli)
-        || mode === 'restart';
-      const needsDesktop = components.includes(COMPONENTS.desktopMain)
-        || components.includes(COMPONENTS.desktopPreload)
-        || components.includes(COMPONENTS.pet)
-        || mode === 'restart';
-      const rendererOnly = mode !== 'restart' && isRendererOnly(components);
-
-      if (rendererOnly && desktop && !desktopStoppedByUser) {
-        const activity = await readDesktopActivity();
-        if (activity.busy || activity.modalOpen) {
-          logger.info('pending', 'renderer update waiting because a conversation or modal is active');
-          queue.finishApply(generation, false);
-          return { applied: false, reason: 'busy' };
-        }
-        const ui = await captureDesktopUi();
-        await reloadDesktopRenderer();
-        await restoreDesktopUi(ui);
-        queue.finishApply(generation, true);
-        return { applied: true, action: 'reload' };
-      }
-
-      if (needsDaemon || needsDesktop) {
-        if (mode === 'auto') {
-          const health = await pingDaemon().catch(() => null);
-          const activity = combineActivity({
-            daemonHealth: health,
-            desktopActivity: await readDesktopActivity(),
-            desktopRequired: Boolean(desktop) && !desktopStoppedByUser,
-          });
-          if (activity.busy) {
-            logger.info('pending', 'update waiting for idle work');
-            queue.finishApply(generation, false);
-            return { applied: false, reason: 'busy' };
-          }
-        }
-        const ui = needsDesktop ? await captureDesktopUi() : null;
-        // Snapshot the pre-switch status so a busy/blocked drain restores the
-        // real status instead of leaving `waiting-for-idle` behind.
-        const priorStatus = status;
-        let token;
-        try {
-          token = await freezeAndDrain();
-        } catch (error) {
-          restoreStatusAfterFailure(priorStatus, 'update aborted before stopping components');
-          throw error;
-        }
-        try {
-          if (needsDesktop) await quitDesktop();
-          if (needsDaemon) await stopDaemon();
-          if (needsDaemon) await startDaemon();
-          if (needsDesktop && !desktopStoppedByUser) {
-            await startDesktop();
-            await restoreDesktopUi(ui);
-          }
-          await finalizeAdmission({ token });
-        } catch (error) {
-          const unrestored = await restoreAdmissionSafe(token);
-          if (unrestored) error.message = `${error.message}; ${unrestored}`;
-          restoreStatusAfterFailure(priorStatus, 'component switch failed');
-          throw error;
-        }
-      }
-      queue.finishApply(generation, true);
-      return { applied: true, action: needsDaemon ? 'restart-stack' : needsDesktop ? 'restart-desktop' : 'noop' };
-    } catch (error) {
-      queue.finishApply(generation, false);
-      throw error;
-    }
-  }
-
-  async function runBuildAndApply(reason, applyOptions = {}) {
-    const generation = queue.takeBuild();
-    if (!generation) return;
-    logger.info('building', `${generation.id} components=${generation.components.join(',')}`);
     buildAbort = new AbortController();
-    let result;
     try {
-      result = await buildGeneration({
-        checkout,
-        generation,
-        nodeExecutable,
-        platform,
-        env,
-        exists,
-        currentRuntimeBin,
-        signal: buildAbort.signal,
-      });
+      if (isManifest) {
+        // A manifest edit cannot be applied through the watcher's target list:
+        // it needs a frozen install and a full build of everything.
+        await buildManifest();
+      } else {
+        const build = options.buildGeneration ?? buildGeneration;
+        const result = await build({
+          checkout,
+          generation: { ...generation, components },
+          nodeExecutable,
+          platform,
+          env,
+          exists,
+          currentRuntimeBin,
+          signal: buildAbort.signal,
+        });
+        if (result.ok !== true) {
+          queue.failBuild(generation, result.error);
+          throw fail(ERRORS.internal, result.error ?? 'build failed');
+        }
+        updateRuntimeBin(result.artifacts?.runtimeBin);
+      }
+    } catch (error) {
+      queue.failBuild(generation, error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       buildAbort = null;
     }
-    const completed = queue.completeBuild(generation, result);
-    if (completed.stale || completed.failed) {
-      if (completed.failed) logger.error('build-failed', result.error ?? 'build failed');
-      return;
-    }
-    generation.artifacts = result.artifacts;
-    if (queue.isStale(generation) && applyOptions.apply !== false) {
-      logger.info('stale-generation', `${generation.id} skipped because a newer generation exists`);
-      return;
-    }
-    if (applyOptions.apply === false) {
-      logger.info('built', `${generation.id} apply deferred to restart`);
-      return;
-    }
-    try {
-      const applied = await applyGeneration(generation, reason === 'restart' ? 'restart' : 'auto');
-      if (applied.applied) {
-        logger.info('applied', `${generation.id} ${applied.action}`);
-        setStatus('ready');
-      } else if (applied.reason === 'busy') {
-        setStatus('pending', generation.id);
-        queue.enqueue(generation.components, generation.files);
-      }
-    } catch (error) {
-      setStatus('degraded', error instanceof Error ? error.message : String(error));
-      throw error;
-    }
+    queue.completeBuild(generation);
+
+    // Every generation replaces the whole owned stack. A renderer change also
+    // restarts the daemon, and a component that is already gone (crashed, or
+    // quit by the user) is started here rather than left missing.
+    await restartStack();
+    logger.info('applied', `${generation.id} restart ${Math.max(0, now() - started)}ms`);
+    return { applied: true, action: 'restart-stack' };
   }
 
-  async function explicitRestart() {
-    const priorStatus = status;
-    setStatus('restarting');
-    return withBuildLock(async () => {
-      retries.daemon = 0;
-      retries.desktop = 0;
-      cancelRetry('daemon');
-      cancelRetry('desktop');
-      if (queue.pending || queue.building) {
-        await runBuildAndApply('restart', { apply: false });
-      }
-      const generation = queue.current ?? { id: 'explicit', components: [COMPONENTS.daemon, COMPONENTS.desktopMain], files: [] };
-      desktopStoppedByUser = false;
-      let applied;
+  /**
+   * Stop the owned daemon and Desktop, then start both again. This is a whole
+   * stack restart: it runs for every component change, including renderer-only
+   * edits, and it starts a component that is currently absent. There is no
+   * automatic freeze: an operator freeze is preserved because this flow never
+   * creates one.
+   */
+  async function restartStack() {
+    await quitDesktop();
+    await stopDaemon();
+    await startDaemon();
+    await startDesktop();
+    return { swapped: true, daemon: daemonSlot?.launchId ?? null, desktop: desktopSlot?.launchId ?? null };
+  }
+
+  /**
+   * Serialized lifecycle loop. One build/restart runs at a time; a change that
+   * arrives while one is running queues exactly one follow-up generation
+   * (hidden-test: changes during a build serialize into a single next restart).
+   */
+  function pump() {
+    if (stopping || replacing) return Promise.resolve();
+    if (pumpPromise) return pumpPromise;
+    pumpPromise = (async () => {
       try {
-        applied = await applyGeneration({
-          ...generation,
-          components: [COMPONENTS.daemon, COMPONENTS.desktopMain, COMPONENTS.desktopPreload, COMPONENTS.renderer],
-          artifacts: { runtimeBin: currentRuntimeBin },
-        }, 'restart');
-      } catch (error) {
-        restoreStatusAfterFailure(priorStatus, 'restart aborted before stopping components');
-        throw error;
+        for (;;) {
+          if (stopping || replacing) return;
+          const generation = queue.takeRestart();
+          if (!generation) return;
+          setStatus('restarting', 'source change');
+          try {
+            await applyGeneration(generation);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            buildFailure = message;
+            setStatus('degraded', message);
+            logger.error('restart-failed', `${message}; still watching for the next save`);
+            continue;
+          }
+          buildFailure = null;
+          if (stopping) return;
+          setStatus(healthyStatus());
+        }
+      } finally {
+        pumpPromise = null;
       }
-      if (!applied.applied && applied.reason === 'busy') {
-        // Idle wait timed out with components untouched: keep truthful status
-        // and preserve the still-pending generation instead of claiming ready.
-        if (queue.pending || queue.building) setStatus('pending', queue.pending?.id ?? queue.building?.id);
-        else restoreStatusAfterFailure(priorStatus, 'restart waiting for idle work timed out');
-        throw fail(ERRORS.busy, 'restart waiting for idle work timed out');
-      }
-      setStatus('ready');
-      return snapshot();
-    });
+    })();
+    return pumpPromise;
   }
 
   async function explicitStop() {
-    const priorStatus = status;
     stopping = true;
-    cancelRetry('daemon');
-    cancelRetry('desktop');
     setStatus('stopping');
     buildAbort?.abort();
-    await buildLock.catch(() => undefined);
-    // The watcher stays alive until the stop fully succeeds: a failed drain or
-    // component stop must leave a usable supervisor, not a dead one. The
-    // `stopping` flag keeps new file changes from being applied meanwhile.
-    let token;
+    await (pumpPromise ?? Promise.resolve()).catch(() => undefined);
+    // The watcher stays alive until the stop fully succeeds: a failed component
+    // stop must leave a usable supervisor, not a dead one.
     try {
-      const health = await pingDaemon().catch(() => null);
-      if (health) token = await freezeAndDrain();
       await quitDesktop();
       await stopDaemon();
     } catch (error) {
-      // Nothing is reported as stopped: restore admission so the still-running
-      // stack is controllable, clear `stopping`, and publish the real status.
-      const unrestored = await restoreAdmissionSafe(token);
       stopping = false;
-      restoreStatusAfterFailure(priorStatus, 'stop aborted; supervisor remains usable');
-      if (unrestored) error.message = `${error.message}; ${unrestored}`;
+      setStatus(healthyStatus(), 'stop aborted; supervisor remains usable');
       throw error;
     }
     try {
@@ -1084,13 +952,13 @@ export function createSupervisor(options = {}) {
     async status() {
       return snapshot();
     },
-    async restart() {
-      const result = requests.submit('restart');
+    async stop() {
+      const result = requests.submit('stop');
       pumpRequests();
       return result;
     },
-    async stop() {
-      const result = requests.submit('stop');
+    async replace() {
+      const result = requests.submit('replace');
       pumpRequests();
       return result;
     },
@@ -1112,14 +980,24 @@ export function createSupervisor(options = {}) {
   function pumpRequests() {
     const kind = requests.take();
     if (!kind) return;
-    const work = kind === 'stop' ? explicitStop() : explicitRestart();
-    work.then((value) => {
-      requests.finish({ ok: true, result: value });
-      if (kind === 'stop') {
-        options.onStopped?.();
-      } else {
+    if (kind === 'replace') {
+      explicitReplace().catch((error) => {
+        requests.finish({
+          ok: false,
+          code: error.code ?? ERRORS.internal,
+          message: error instanceof Error ? error.message : String(error),
+          data: error.data ?? error.blocking,
+        });
+        replacing = false;
+        stopping = false;
+        setStatus('degraded', error instanceof Error ? error.message : String(error));
         pumpRequests();
-      }
+      });
+      return;
+    }
+    explicitStop().then((value) => {
+      requests.finish({ ok: true, result: value });
+      options.onStopped?.();
     }).catch((error) => {
       requests.finish({
         ok: false,
@@ -1127,8 +1005,7 @@ export function createSupervisor(options = {}) {
         message: error instanceof Error ? error.message : String(error),
         data: error.data ?? error.blocking,
       });
-      if (kind !== 'stop') setStatus('degraded', error instanceof Error ? error.message : String(error));
-      else stopping = false;
+      stopping = false;
       pumpRequests();
     });
   }
@@ -1162,19 +1039,17 @@ export function createSupervisor(options = {}) {
   async function start() {
     setStatus('preparing');
     const toolErrors = checkToolchain({ checkout, platform, exists });
-    const artifacts = checkBuildArtifacts({ checkout, platform, exists });
-    if (toolErrors.length > 0 || artifacts.errors.length > 0) {
-      throw fail(ERRORS.internal, [...toolErrors, ...artifacts.errors].join('\n'));
+    if (toolErrors.length > 0) {
+      throw fail(ERRORS.internal, toolErrors.join('\n'));
     }
-    currentRuntimeBin = artifacts.runtimeBin;
+
+    // Claim the control endpoint and clear an installed Desktop *before*
+    // building: a second `pnpm dev` must not sit through a full build only to
+    // discover that this checkout is already owned, and a build must never run
+    // over a live stack this process does not own.
     const claimed = await claim();
-    if (claimed.role === 'same') {
-      logger.info('already-running', `source-development already ready for this checkout. logs: ${claimed.peer.paths?.logs ?? logger.path}`);
-      options.stdout?.(`already running\n${JSON.stringify(claimed.peer, null, 2)}`);
-      return { alreadyRunning: true, snapshot: claimed.peer };
-    }
     if (claimed.role === 'other') {
-      throw fail(ERRORS.wrongCheckout, `A source-development instance already owns this user-data domain from ${claimed.peer.checkout}. Stop it there with pnpm dev:stop.`);
+      throw fail(ERRORS.wrongCheckout, `A source-development instance already owns this user-data domain from ${claimed.peer.checkout}. Run pnpm dev from that checkout.`);
     }
 
     try {
@@ -1185,6 +1060,25 @@ export function createSupervisor(options = {}) {
     }
 
     persist();
+
+    // The watcher starts before the first build so a failed first build can be
+    // retried by saving. Restart apply waits until boot finishes so a delayed
+    // artifact event cannot SIGTERM the daemon that start() is still waiting on.
+    startWatcher();
+    try {
+      await installIfNeeded();
+      const artifacts = checkBuildArtifacts({ checkout, platform, exists });
+      await buildInitialArtifacts(artifacts.errors);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus('degraded', message);
+      await releaseBoot();
+      return { alreadyRunning: false, degraded: true, snapshot: snapshot() };
+    }
+
+    updateRuntimeBin(checkBuildArtifacts({ checkout, platform, exists }).runtimeBin);
+    persist();
+
     let handover = { switched: false, token: null };
     try {
       handover = await handoverInstalled();
@@ -1194,35 +1088,216 @@ export function createSupervisor(options = {}) {
     }
 
     setStatus('starting');
+    let admission = { blocked: false };
     try {
       await startDaemon();
+      admission = await finalizeAdmission(handover);
+      await startDesktop();
     } catch (error) {
-      const unrestored = await restoreAdmissionSafe(handover?.token);
-      if (unrestored) {
-        logger.error('admission-unrestored', unrestored);
-        error.message = `${error.message}; ${unrestored}`;
-      } else if (shouldAutoThaw(handover?.token)) {
-        logger.error('admission-unrestored', `source daemon did not start; dispatch may remain frozen. ${DISPATCH_THAW_HINT}`);
-        options.stdout?.(`source daemon did not start. ${DISPATCH_THAW_HINT}`);
-      }
-      throw error;
+      // The watcher still stays up: a failed component must remain fixable by
+      // editing and saving, not only by stopping everything by hand.
+      logger.error('start-degraded', error instanceof Error ? error.message : String(error));
+      setStatus('degraded', error instanceof Error ? error.message : String(error));
+      await releaseBoot();
+      return { alreadyRunning: false, degraded: true, snapshot: snapshot() };
     }
-    const admission = await finalizeAdmission(handover);
-    await startDesktop();
+    setStatus('ready');
+    printReady(admission);
+    await releaseBoot();
+    return { alreadyRunning: false, snapshot: snapshot() };
+  }
+
+  /**
+   * `pnpm install --frozen-lockfile` before a build when node_modules has never
+   * been populated. Never runs for manifest edits (that would silently mutate a
+   * pinned install); those are reported and await a deliberate edit.
+   */
+  async function installIfNeeded() {
+    if (exists(join(checkout, 'node_modules'))) return;
+    setStatus('preparing', 'installing dependencies');
+    const result = await runExternalSteps('packages', [{
+      label: 'pnpm install --frozen-lockfile',
+      command: 'node',
+      args: ['--version'],
+      mode: 'pnpm',
+      pnpmArgs: ['install', '--frozen-lockfile'],
+    }]);
+    if (result.ok !== true) {
+      throw fail(ERRORS.internal, `pnpm install --frozen-lockfile failed before the first build:\n${result.error}`);
+    }
+  }
+
+  /** Frozen install for a manifest edit; never mutates the pinned lockfile. */
+  async function runFrozenInstall() {
+    const result = await runExternalSteps('install', [{
+      label: 'pnpm install --frozen-lockfile',
+      command: 'node',
+      args: ['--version'],
+      mode: 'pnpm',
+      pnpmArgs: ['install', '--frozen-lockfile'],
+    }]);
+    if (result.ok !== true) {
+      throw fail(ERRORS.internal, `pnpm install --frozen-lockfile failed:\n${result.error}`);
+    }
+  }
+
+  /**
+   * A manifest edit (`package.json`, lockfile) is applied by a frozen install
+   * followed by a full build of every target, all through the same injected run
+   * seam the rest of the loop uses.
+   */
+  async function buildManifest() {
+    await runFrozenInstall();
+    await buildInitialArtifacts([]);
+    updateRuntimeBin(checkBuildArtifacts({ checkout, platform, exists }).runtimeBin);
+  }
+
+  /**
+   * First-startup build. Any artifact `pnpm build` produces (`shared`, `pet`,
+   * `forge`) is always rebuilt because those are owned by the repository build
+   * script, not by the watcher; Desktop targets are only built when missing.
+   */
+  async function buildInitialArtifacts(missingErrors) {
+    setStatus('preparing', 'building artifacts');
+    const steps = [
+      { label: 'shared packages', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('packages') },
+      { label: 'pet', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('pet') },
+      { label: 'desktop', command: nodeExecutable, args: desktopBuildArgs(COMPONENT_BUILD_TARGETS, true) },
+      { label: 'forge runtime', command: 'go', args: forgeBuildArgs() },
+    ];
+    const result = await runExternalSteps('build', steps);
+    if (result.ok !== true) {
+      throw fail(ERRORS.internal, `Initial build failed:\n${result.error}${missingErrors.length > 0 ? `\n${missingErrors.join('\n')}` : ''}`);
+    }
+  }
+
+  function buildPackageArgs(filter) {
+    if (filter === 'packages') return ['-r', '--filter', './packages/*', '--if-present', 'run', 'build'];
+    return ['--filter', '@wrenyard/pet', 'run', 'build'];
+  }
+
+  function forgeBuildArgs() {
+    return ['-C', join(checkout, 'runtime', 'forge'), 'build', '-o', join(checkout, 'runtime', 'forge', 'bin', platform === 'win32' ? 'forge.exe' : 'forge'), './cmd/forge'];
+  }
+
+  async function runExternalSteps(kind, steps) {
+    const logs = [];
+    for (const step of steps) {
+      const args = step.pnpmArgs ?? step.args;
+      const resolved = resolveCommand(step.command, args, step.mode);
+      logger.info('external-step', `${kind}: ${step.label}`);
+      let result;
+      try {
+        result = options.runStep
+          ? await options.runStep(step, { kind, checkout, env, platform, nodeExecutable })
+          : await runExternalCommand(resolved.command, resolved.args, resolved.cwd, step.mode === 'pnpm' ? installTimeoutMs : buildTimeoutMs);
+      } catch (error) {
+        return { ok: false, error: `${step.label}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      logs.push(result.stderr || result.stdout || '');
+      if (result.status !== 0) {
+        return { ok: false, error: `${step.label} exited ${result.status}\n${(result.stderr || result.stdout || '').trim()}` };
+      }
+    }
+    return { ok: true, logs };
+  }
+
+  function runExternalCommand(command, args, cwd, timeoutMs) {
+    return new Promise((resolve) => {
+      const child = spawnBuild(command, args, {
+        cwd,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        shell: false,
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk) => { stdout += chunk; });
+      child.stderr?.on('data', (chunk) => { stderr += chunk; });
+      const timer = setTimeout(() => {
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      }, timeoutMs);
+      timer.unref?.();
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        resolve({ status: 1, stdout, stderr: `${stderr}${error.message}`, error });
+      });
+      child.on('close', (status) => {
+        clearTimeout(timer);
+        resolve({ status: status ?? 1, stdout, stderr });
+      });
+    });
+  }
+
+  function startWatcher() {
+    if (watcher) return;
     watcher = createWatcher({
       checkout,
       onChange: ({ files, components }) => {
         if (components.length === 0) return;
-        logger.info('changed', `files=${files.join(', ')} components=${expandDependents(components).join(',')}`);
-        queue.enqueue(expandDependents(components), files);
-        void withBuildLock(() => runBuildAndApply('watch')).catch((error) => {
-          logger.error('apply-failed', error instanceof Error ? error.message : String(error));
-        });
+        const affected = expandDependents(components);
+        const significant = significantComponents(affected);
+        if (significant.length > 0) {
+          logger.warn('significant-changed', `${significant.join(', ')} changed. Those artifacts come from pnpm build; this restart rebuilds and reloads the whole stack.`);
+        }
+        if (affected.some((component) => SUPERVISOR_COMPONENTS.has(component))) {
+          // A supervisor/tooling change cannot be applied by an in-process
+          // restart, because the modules are already loaded. The owned stack is
+          // stopped first, then `onReload` (which owns the fresh process) takes
+          // over. There is no cache-busted in-process re-import.
+          logger.info('reload-requested', `${files.join(', ')} changed: stopping the owned stack for a fresh process.`);
+          requestReload(files);
+          return;
+        }
+        if (components.includes(COMPONENTS.manifest)) {
+          // A manifest edit is not a source build: run a frozen install followed
+          // by a full build, then restart the whole stack.
+          logger.info('manifest-changed', `files=${files.join(', ')}: frozen install then full build.`);
+          requestRestart('manifest', affected, files);
+          return;
+        }
+        logger.info('changed', `files=${files.join(', ')} components=${affected.join(',')}`);
+        requestRestart('watch', affected, files);
       },
     });
-    setStatus('ready');
-    printReady(admission);
-    return { alreadyRunning: false, snapshot: snapshot() };
+  }
+
+  /**
+   * Tooling/supervisor edit: only a brand-new process can load current modules.
+   * The owned stack is stopped first, then `onReload` runs the replacement.
+   * Without a callback there is nothing safe to do but report it.
+   */
+  function requestReload(files) {
+    if (stopping || replacing) return Promise.resolve();
+    if (typeof options.onReload !== 'function') {
+      logger.warn('reload-unavailable', `${files.join(', ')} changed: no reload callback is wired, so the running modules stay stale.`);
+      return Promise.resolve();
+    }
+    if (reloadPromise) return reloadPromise;
+    reloadPromise = (async () => {
+      try {
+        replacing = true;
+        setStatus('stopping', 'reloading dev tooling');
+        buildAbort?.abort();
+        await (pumpPromise ?? Promise.resolve()).catch(() => undefined);
+        await quitDesktop().catch(() => undefined);
+        await stopDaemon().catch(() => undefined);
+        try {
+          watcher?.close();
+          watcher = null;
+        } catch {
+          // ignore
+        }
+        setStatus('stopped', 'reloading dev tooling');
+        options.onReload?.();
+      } finally {
+        reloadPromise = null;
+      }
+    })();
+    return reloadPromise;
   }
 
   async function handleSignal() {
@@ -1231,8 +1306,50 @@ export function createSupervisor(options = {}) {
       options.onStopped?.();
     } catch (error) {
       logger.error('signal-stop-blocked', error instanceof Error ? error.message : String(error));
-      options.stdout?.(`Cannot stop while work is active: ${error instanceof Error ? error.message : String(error)}\nSupervisor remains running. Finish or cancel the work, then pnpm dev:stop.`);
+      options.stdout?.(`Cannot stop while work is active: ${error instanceof Error ? error.message : String(error)}\nSupervisor remains running. Finish or cancel the work, then stop it again.`);
     }
+  }
+
+  function settleRestartWaiters() {
+    requests.finish({ ok: true, result: { role: 'replace', supervisorPid: process.pid, instanceId, checkout } });
+  }
+
+  /**
+   * Launcher takeover: `pnpm dev` running again for this checkout replaces this
+   * stack so the newest supervisor and tooling modules are loaded.
+   *
+   * The acknowledgement is sent from *this* process, so it necessarily comes
+   * from current protocol code; an older supervisor therefore only needs the
+   * `replace` method to exist. The launcher owns the wait for this process to
+   * exit and for the control endpoint to be free.
+   */
+  async function explicitReplace() {
+    replacing = true;
+    setStatus('stopping', 'replaced by a newer pnpm dev');
+    // Settle the control request on the next turn: the socket closes as soon as
+    // the launcher has its answer, and the launcher then waits for our exit.
+    setImmediate(settleRestartWaiters);
+    buildAbort?.abort();
+    quitDesktop()
+      .catch((error) => logger.warn('replace-desktop', error instanceof Error ? error.message : String(error)))
+      .then(() => stopDaemon())
+      .catch((error) => logger.warn('replace-daemon', error instanceof Error ? error.message : String(error)))
+      .finally(() => {
+        try {
+          watcher?.close();
+          watcher = null;
+        } catch {
+          // ignore
+        }
+        try {
+          server?.close();
+        } catch {
+          // ignore
+        }
+        setStatus('stopped');
+        options.onReplaced?.();
+      });
+    return { accepted: true };
   }
 
   return {
@@ -1251,20 +1368,21 @@ export function createSupervisor(options = {}) {
     get desktopSlot() {
       return desktopSlot;
     },
-    get retries() {
-      return { daemon: retries.daemon, desktop: retries.desktop };
+    get buildFailure() {
+      return buildFailure;
     },
     handoverInstalled,
     startDaemon,
     startDesktop,
     stopDaemon,
     quitDesktop,
-    freezeAndDrain,
     finalizeAdmission,
-    restoreAdmission,
+    requestRestart,
+    requestReload,
     applyGeneration,
-    explicitRestart,
+    restartStack,
     explicitStop,
+    explicitReplace,
     helloDesktop(session) {
       return handlers['component.hello']({ role: 'desktop' }, session);
     },
@@ -1273,5 +1391,3 @@ export function createSupervisor(options = {}) {
     },
   };
 }
-
-export { sourceChildEnv };

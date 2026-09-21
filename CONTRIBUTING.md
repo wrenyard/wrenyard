@@ -24,25 +24,25 @@ missing after install, re-run the frozen install rather than assuming a
 global Wrenyard/Electron binary. Go 1.26 is required for `pnpm build` so the
 daemon can resolve this platform's runtime (`.exe` on Windows).
 
-Daily commands from the same checkout root (aliases share one client):
+Daily commands from the same checkout root:
 
 ```sh
 pnpm dev              # Terminal A, stays running
 pnpm dev --kill-desktop   # same start; terminate a stuck installed Desktop first
-pnpm dev:restart      # or: pnpm restart
-pnpm dev:stop         # or: pnpm stop
 ```
 
 Source-development reuses the installed user data domain. `pnpm dev` will
 not freeze the service while an installed Desktop is still running; quit
 from the tray, or pass `--kill-desktop` once to terminate that Desktop tree.
 It does not install a release, change `current`, or start at login. After
-stop, open the installed app yourself if you want it back.
+Ctrl+C in the `pnpm dev` terminal, open the installed app yourself if you
+want it back.
 
-If a lockfile or package manifest changes, stop, reinstall with
-`--frozen-lockfile`, rebuild, then `pnpm dev`. Watcher/supervisor source
-changes need `dev:stop` then `dev`. Component crash retries: 3 attempts,
-1s/2s/4s backoff, interruptible by stop.
+If a lockfile or package manifest changes, interrupt `pnpm dev` (Ctrl+C),
+reinstall with `--frozen-lockfile`, rebuild, then `pnpm dev`. Saving
+watcher/supervisor source while `pnpm dev` is running replaces that worker;
+otherwise interrupt and run `pnpm dev` again. Unexpected component exits are
+reported as degraded; save a file or run `pnpm dev` again to restore.
 
 ## Working in the workspace
 
