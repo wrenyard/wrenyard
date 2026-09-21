@@ -1,4 +1,4 @@
-import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ModelSpeedMeta, type ProviderDefinition, type ThinkingLevel } from '@wrenyard/catalog';
+import { Catalog, type CanonicalModelDefinition, type ClientDefinition, type DispatchPlan, type IntelligenceTier, type ModelCapability, type ModelDefinition, type ModelPricing, type ProviderDefinition, type ThinkingLevel } from '@wrenyard/catalog';
 import { builtinModelDisplayName, type BuiltinModelId } from './model-display-names.ts';
 
 const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
@@ -6,13 +6,8 @@ const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/
 const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
 const SRC_OPENAI = 'https://developers.openai.com';
 const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
-const SRC_AA_KIMI = 'https://artificialanalysis.ai/models/kimi-k3/';
 const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
-const SRC_AA_GLMF = 'https://artificialanalysis.ai/models/glm-5-3-flash/';
-const SRC_AA_LUNA = 'https://artificialanalysis.ai/models/gpt-5-6-luna-xhigh/';
-const SRC_AA_SOL = 'https://artificialanalysis.ai/models/gpt-5-6-sol-xhigh/';
 const DEFAULT_CHECKED_AT = '2026-09-05';
-const SPEED_CHECKED_AT = '2026-09-09';
 const SRC_OPENCODE_ZEN = 'https://opencode.ai/docs/zen/';
 const SRC_OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const SRC_OPENCODE_GO = 'https://opencode.ai/docs/go/';
@@ -54,7 +49,7 @@ export function isBuiltinClientGatewayProviderSupported(clientID: string, provid
 }
 
 type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing'> & {
-  speed?: ModelSpeedMeta;
+  speed?: number;
   intelligence?: IntelligenceTier;
   pricing?: ModelPricing;
 };
@@ -474,96 +469,78 @@ const PROVIDER_PRESENTATION: Readonly<Record<string, { description: string; setu
   },
 };
 
-function speedDefault(
-  tps: number,
-  source: string,
-  basis: string,
-  conservative = false,
-): ModelSpeedMeta {
-  return {
-    tps,
-    source,
-    checkedAt: SPEED_CHECKED_AT,
-    basis,
-    ...(conservative ? { conservative: true } : {}),
-  };
-}
-
-// External/public throughput is a catalog baseline only. A valid exact-profile
-// local agent_turn_v1 sample supersedes it, as does an exact provider override.
+// Catalog TPS baselines. A valid exact-profile local agent_turn_v1 sample
+// supersedes these, as does an exact provider override.
 // Keys are exact registered model ids; aliases are never used for lookup.
-const MODEL_SPEED_DEFAULTS: Readonly<Record<string, ModelSpeedMeta>> = {
-  'deepseek/deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). TokenHub endpoint is unmeasured; never represented as a TokenHub local agent_turn_v1 sample.' },
-  'deepseek-v4.1-flash': { tps: 200.5, source: 'local-benchmark:2026-09-10:codebuddy', checkedAt: '2026-09-10', conservative: true, basis: 'synthetic_stream_v1: six sequential 2048-token iOA requests, three non-thinking and three high-thinking; 12288 output tokens / 61.285s including first-token wait. Not agent_turn_v1; exact local Task samples supersede this baseline.' },
-  'MiniMax-M2.7': speedDefault(60, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7.'),
-  'MiniMax-M2.7-highspeed': speedDefault(100, 'https://platform.minimaxi.com/docs/api-reference/api-overview', 'MiniMax official documented output speed for exact MiniMax-M2.7-highspeed.'),
-  'MiniMax-M3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis median output speed for MiniMax M3; exact registered case-preserving API id.'),
-  'claude-fable-5': speedDefault(63.3, 'https://artificialanalysis.ai/models/claude-fable-5/', 'Artificial Analysis output-speed measurement for Claude Fable 5.'),
-  'claude-haiku-4-5-20251001': speedDefault(80.6, 'https://artificialanalysis.ai/models/claude-4-5-haiku/', 'Artificial Analysis output-speed measurement for Claude Haiku 4.5; registered id is the dated Anthropic API id.'),
-  'claude-opus-5': speedDefault(50, 'https://artificialanalysis.ai/models/claude-opus-5-xhigh/', 'Artificial Analysis output-speed baseline for Claude Opus 5 xhigh.'),
-  'claude-sonnet-5': speedDefault(60, 'https://artificialanalysis.ai/models/claude-sonnet-5-non-reasoning/', 'Artificial Analysis output-speed baseline for Claude Sonnet 5 non-reasoning.'),
-  'composer-2.5': speedDefault(40, 'user-specified', 'User-selected Wrenyard baseline for exact standard cursor/composer-2.5; no measured source and not composer-2.5-fast.'),
-  'grok-4.6': speedDefault(58.5, 'https://artificialanalysis.ai/models/releases/grok-4-6', 'Artificial Analysis output-speed measurement for the same Grok 4.6 high model and effort exposed by Cursor.'),
-  'muse-spark-1.3': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
-  'gemini-3.8-flash': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
-  'claude-fable-5-1': { tps: 40, source: 'bootstrap', checkedAt: '2026-09-11', conservative: true, basis: 'Unmeasured fallback bootstrap baseline; not derived from an external throughput measurement.' },
-  'doubao-seed-2-0-lite-260215': speedDefault(35.1, 'https://aihubmix.com/compare/doubao-seed-2-0-lite-260215/qwen3.8-max-preview', 'AIHubMix public rolling output-throughput measurement for the exact dated Doubao model.'),
-  'glm-5.2': speedDefault(62.8, 'https://artificialanalysis.ai/models/glm-5-2/', 'Artificial Analysis output-speed measurement for GLM-5.2.'),
-  'glm-5.3': speedDefault(63.7, 'https://artificialanalysis.ai/models/glm-5-3/', 'Artificial Analysis output-speed measurement for GLM-5.3.'),
-  'glm-5.3-flash': speedDefault(73.1, SRC_AA_GLMF, 'Artificial Analysis output-speed measurement for GLM-5.3 Flash.'),
-  'gpt-5.4': speedDefault(139.6, 'https://artificialanalysis.ai/models/gpt-5-4/', 'Artificial Analysis output-speed measurement for GPT-5.4.'),
-  'gpt-5.5': speedDefault(88.9, 'https://artificialanalysis.ai/models/gpt-5-5/', 'Artificial Analysis output-speed measurement for GPT-5.5.'),
-  'gpt-5.6-luna': speedDefault(107, SRC_AA_LUNA, 'Artificial Analysis output-speed measurement for GPT-5.6 Luna xhigh, matching the registered effort.'),
-  'gpt-5.6-sol': speedDefault(63.2, SRC_AA_SOL, 'Artificial Analysis output-speed measurement for GPT-5.6 Sol xhigh, matching the registered effort.'),
-  'gpt-5.6-terra': speedDefault(98.4, 'https://artificialanalysis.ai/models/gpt-5-6-terra-xhigh/', 'Artificial Analysis output-speed measurement for GPT-5.6 Terra xhigh, matching the registered effort.'),
-  'gpt-6-astra': speedDefault(50.6, 'https://artificialanalysis.ai/models/gpt-6-astra-xhigh/', 'Artificial Analysis output-speed measurement for GPT-6 Astra xhigh, matching the registered effort.'),
-  'grok-4.5': speedDefault(57.5, 'https://artificialanalysis.ai/models/grok-4-5/', 'Artificial Analysis output-speed measurement for Grok 4.5.'),
-  hy3: speedDefault(93.8, 'https://artificialanalysis.ai/models/hy3/', 'Artificial Analysis output-speed measurement for Tencent Hunyuan HY3.'),
-  'hy4-preview': speedDefault(38, 'https://openrouter.ai/tencent/hy4-preview', 'OpenRouter public provider throughput for exact Tencent HY4 Preview.'),
-  k3: speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis Kimi K3 output speed; k3 is the exact registered Kimi Coding route id for that documented model.'),
-  'kimi-k2.5': speedDefault(39.9, 'https://artificialanalysis.ai/models/kimi-k2-5/providers', 'Artificial Analysis minimum current provider output speed for Kimi K2.5; retained for the registered decommissioned model.'),
-  'kimi-k2.6': speedDefault(56.3, 'https://artificialanalysis.ai/models/kimi-k2-6/', 'Artificial Analysis output-speed measurement for Kimi K2.6.'),
-  'kimi-k2.8': { tps: 40, source: 'local-benchmark:kimi-coding/2026-09-15', checkedAt: '2026-09-15', conservative: true, basis: 'Conservative rounded-down default from one Kimi Coding streaming probe at low thinking: 803 completion tokens / 19359ms = 41.48 TPS. Not a cross-workload benchmark; local valid execution samples supersede it.' },
-  'kimi-k3': speedDefault(39.7, SRC_AA_KIMI, 'Artificial Analysis output-speed measurement for Kimi K3.'),
-  'minimax-m2.7': speedDefault(71.3, 'https://artificialanalysis.ai/models/minimax-m2-7/', 'Artificial Analysis output-speed measurement for MiniMax M2.7.'),
-  'minimax-m3': speedDefault(155.5, 'https://artificialanalysis.ai/models/minimax-m3/', 'Artificial Analysis output-speed measurement for MiniMax M3.'),
-  'qwen3-coder-next': speedDefault(128, 'https://artificialanalysis.ai/models/qwen3-coder-next/', 'Artificial Analysis output-speed measurement for Qwen3 Coder Next.'),
-  'qwen3-coder-plus': speedDefault(29, 'https://openrouter.ai/qwen/qwen3-coder-plus/providers', 'OpenRouter public one-week P50 average output throughput for exact Qwen3 Coder Plus.'),
-  'qwen3.5-plus': speedDefault(54, 'https://openrouter.ai/qwen/qwen3.5-plus-02-15/providers', 'OpenRouter output throughput for the dated Qwen3.5 Plus release used by the current Qwen3.5 Plus alias.'),
-  'qwen3.6-plus': speedDefault(56.1, 'https://artificialanalysis.ai/models/qwen3-6-plus/', 'Artificial Analysis output-speed measurement for Qwen3.6 Plus.'),
-  'qwen3.7-flash': speedDefault(111.12, 'https://www.respan.ai/models/openrouter/qwen/qwen3.7-flash', 'Respan public real-traffic output-throughput measurement for exact Qwen3.7 Flash.'),
-  'qwen3.7-plus': speedDefault(56.2, 'https://artificialanalysis.ai/models/qwen3-7-plus/', 'Artificial Analysis output-speed measurement for Qwen3.7 Plus.'),
-  'qwen3.8-max': speedDefault(39.4, 'https://artificialanalysis.ai/models/qwen3-8-max/', 'Artificial Analysis output-speed measurement for Qwen3.8 Max.'),
-  // Public bootstrap baselines; real local Task samples take precedence.
-  'mimo-v2.5-free': { tps: 29, source: 'https://openrouter.ai/xiaomi/mimo-v2.5', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer route public P50 baseline; Zen endpoint unmeasured.' },
-  'ling-3.0-flash-fin-free': { tps: 119, source: 'https://openrouter.ai/inclusionai/ling-3.0-flash-fin:free', checkedAt: '2026-09-10', conservative: true, basis: 'Same-model Novita public P50 baseline; Zen endpoint unmeasured.' },
-  'nex-agi/nex-n2.5-mini:free': { tps: 119, source: 'https://openrouter.ai/nex-agi/nex-n2.5-mini:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
-  'nex-agi/nex-n2.5-pro:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'cohere/north-mini-code:free': { tps: 78, source: 'https://openrouter.ai/cohere/north-mini-code:free', checkedAt: '2026-09-10', conservative: true, basis: 'Exact free route public P50 throughput; local Task unmeasured.' },
-  // Newly registered free routes have no measured throughput; 20 TPS is an
-  // explicit conservative placeholder, not an external measurement.
-  'inclusionai/ling-3.0-flash-vl:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'inclusionai/ling-3.0-flash-sante:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'inclusionai/ling-3.0-flash-fin:free': { tps: 119, source: 'https://openrouter.ai/inclusionai/ling-3.0-flash-fin:free', checkedAt: '2026-09-18', conservative: true, basis: 'Same-model inclusionAI route public P50 baseline; local exact-profile samples supersede it.' },
-  'qwen/qwen3.8-27b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'dots-studio/dots-3-note-preview:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'liquid/lfm-2.5-2.6b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'nvidia/nemotron-3.5-lightning:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'thinkingmachines/inkling-small:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'thinkingmachines/inkling:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'poolside/laguna-s-2.1:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'poolside/laguna-xs-2.1:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'nvidia/nemotron-3-ultra-550b-a55b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'google/gemma-4-26b-a4b-it:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'google/gemma-4-31b-it:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'nvidia/nemotron-3-super-120b-a12b:free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Local exact-profile samples supersede it.' },
-  'big-pickle': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
-  'union-alpha': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
-  'nemotron-3-ultra-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
-  'nemotron-3.5-lightning-free': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-18', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any external throughput measurement. Zen endpoint unmeasured.' },
-  'deepseek-flash': { tps: 207, source: 'local-benchmark:2026-09-10:deepseek-official', checkedAt: '2026-09-10', conservative: true, basis: 'Manufacturer baseline only: floor of the slowest of six official deepseek-flash 2048-token synthetic_stream_v1 requests (207.07 TPS including first-token wait). OpenCode Go endpoint is unmeasured; never represented as a local agent_turn_v1 sample.' },
-  'deepseek-pro': { tps: 20, source: 'bootstrap', checkedAt: '2026-09-20', conservative: true, basis: 'Unmeasured conservative placeholder; not derived from any throughput measurement. The Flash baseline is not transferable: V4 Pro is the previous-generation dense flagship on a 500-request concurrency limit against Flash\'s 2500. Local exact-profile samples supersede it.' },
+const MODEL_SPEED_DEFAULTS: Readonly<Record<string, number>> = {
+  'deepseek/deepseek-flash': 207,
+  'deepseek-v4.1-flash': 200.5,
+  'MiniMax-M2.7': 60,
+  'MiniMax-M2.7-highspeed': 100,
+  'MiniMax-M3': 155.5,
+  'claude-fable-5': 63.3,
+  'claude-haiku-4-5-20251001': 80.6,
+  'claude-opus-5': 50,
+  'claude-sonnet-5': 60,
+  'composer-2.5': 40,
+  'grok-4.6': 58.5,
+  'muse-spark-1.3': 40,
+  'gemini-3.8-flash': 40,
+  'claude-fable-5-1': 40,
+  'doubao-seed-2-0-lite-260215': 35.1,
+  'glm-5.2': 62.8,
+  'glm-5.3': 63.7,
+  'glm-5.3-flash': 73.1,
+  'gpt-5.4': 139.6,
+  'gpt-5.5': 88.9,
+  'gpt-5.6-luna': 107,
+  'gpt-5.6-sol': 63.2,
+  'gpt-5.6-terra': 98.4,
+  'gpt-6-astra': 50.6,
+  'grok-4.5': 57.5,
+  hy3: 93.8,
+  'hy4-preview': 38,
+  k3: 39.7,
+  'kimi-k2.5': 39.9,
+  'kimi-k2.6': 56.3,
+  'kimi-k2.8': 40,
+  'kimi-k3': 39.7,
+  'minimax-m2.7': 71.3,
+  'minimax-m3': 155.5,
+  'qwen3-coder-next': 128,
+  'qwen3-coder-plus': 29,
+  'qwen3.5-plus': 54,
+  'qwen3.6-plus': 56.1,
+  'qwen3.7-flash': 111.12,
+  'qwen3.7-plus': 56.2,
+  'qwen3.8-max': 39.4,
+  'mimo-v2.5-free': 29,
+  'ling-3.0-flash-fin-free': 119,
+  'nex-agi/nex-n2.5-mini:free': 119,
+  'nex-agi/nex-n2.5-pro:free': 20,
+  'cohere/north-mini-code:free': 78,
+  'inclusionai/ling-3.0-flash-vl:free': 20,
+  'inclusionai/ling-3.0-flash-sante:free': 20,
+  'inclusionai/ling-3.0-flash-fin:free': 119,
+  'qwen/qwen3.8-27b:free': 20,
+  'dots-studio/dots-3-note-preview:free': 20,
+  'liquid/lfm-2.5-2.6b:free': 20,
+  'nvidia/nemotron-3.5-lightning:free': 20,
+  'thinkingmachines/inkling-small:free': 20,
+  'thinkingmachines/inkling:free': 20,
+  'poolside/laguna-s-2.1:free': 20,
+  'poolside/laguna-xs-2.1:free': 20,
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 20,
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 20,
+  'google/gemma-4-26b-a4b-it:free': 20,
+  'google/gemma-4-31b-it:free': 20,
+  'nvidia/nemotron-3-super-120b-a12b:free': 20,
+  'big-pickle': 20,
+  'union-alpha': 20,
+  'nemotron-3-ultra-free': 20,
+  'nemotron-3.5-lightning-free': 20,
+  'deepseek-flash': 207,
+  'deepseek-pro': 20,
 };
 
 type ModelMeta = {
@@ -934,8 +911,8 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
 
 function withMeta(def: RawModelDefinition): ModelDefinition {
   const speed = def.speed ?? MODEL_SPEED_DEFAULTS[def.id];
-  if (!speed) {
-    throw new Error(`built-in model ${def.id} is missing required default speed metadata`);
+  if (speed === undefined) {
+    throw new Error(`built-in model ${def.id} is missing required default speed`);
   }
   const meta = MODEL_METADATA[def.id];
   const pricing = def.pricing ?? meta?.pricing;
