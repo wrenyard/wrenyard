@@ -103,10 +103,10 @@ function snapshot(catalog: ProviderCatalogSnapshot[]): QuotaSnapshot {
 test('rows group by canonicalId and never unify distinct models that share a label', () => {
   const rows = buildModelListRows(snapshot([
     catalogEntry('openai', 'OpenAI', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', canonicalId: 'gpt-5.6', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', canonicalId: 'gpt-5.6', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('chatgpt', 'ChatGPT', [
-      { id: 'gpt-5.6-sol-codex', displayName: 'GPT-5.6 Sol', canonicalId: 'gpt-5.6', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol-codex', displayName: 'GPT-5.6 Sol', canonicalId: 'gpt-5.6', available: true, pricing: [0.1, 1, 2] as const },
     ]),
   ]));
 
@@ -116,8 +116,8 @@ test('rows group by canonicalId and never unify distinct models that share a lab
 
   // Identical labels without a shared canonicalId stay separate rows.
   const split = buildModelListRows(snapshot([
-    catalogEntry('a', 'A', [{ id: 'model-a', displayName: 'Same Label', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
-    catalogEntry('b', 'B', [{ id: 'model-b', displayName: 'Same Label', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
+    catalogEntry('a', 'A', [{ id: 'model-a', displayName: 'Same Label', available: true, pricing: [0.1, 1, 2] as const }]),
+    catalogEntry('b', 'B', [{ id: 'model-b', displayName: 'Same Label', available: true, pricing: [0.1, 1, 2] as const }]),
   ]));
   assert.equal(split.length, 2, 'a label is never treated as equivalence proof');
 });
@@ -153,16 +153,16 @@ test('provider ids map onto the supplying brand keys', () => {
 
 test('active families sort first, then by series and descending version', () => {
   const rows = buildModelListRows(snapshot([
-    catalogEntry('inactive', 'Inactive', [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', available: false, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
+    catalogEntry('inactive', 'Inactive', [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', available: false, pricing: [0.1, 1, 2] as const }]),
     catalogEntry('spacex-ai', 'SpaceX AI', [
-      { id: 'grok-4.5', displayName: 'Grok 4.5', intelligence: 'premium', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'grok-4.5', displayName: 'Grok 4.5', intelligence: 'premium', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('openai', 'OpenAI', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'mid', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna', intelligence: 'premium', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'mid', available: true, pricing: [0.1, 1, 2] as const },
+      { id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna', intelligence: 'premium', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('anthropic', 'Anthropic', [
-      { id: 'claude-opus-5', displayName: 'Claude Opus 5', intelligence: 'high', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'claude-opus-5', displayName: 'Claude Opus 5', intelligence: 'high', available: true, pricing: [0.1, 1, 2] as const },
     ]),
   ]));
 
@@ -178,15 +178,15 @@ test('active families sort first, then by series and descending version', () => 
 test('keeps Claude series contiguous and sorts versions before variants', () => {
   const rows = buildModelListRows(snapshot([
     catalogEntry('anthropic', 'Anthropic', [
-      { id: 'claude-opus-5', displayName: 'Claude Opus 5', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'claude-fable-5', displayName: 'Claude Fable 5', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'claude-fable-5.1', displayName: 'Claude Fable 5.1', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'claude-opus-5', displayName: 'Claude Opus 5', available: true, pricing: [0.1, 1, 2] as const },
+      { id: 'claude-fable-5', displayName: 'Claude Fable 5', available: true, pricing: [0.1, 1, 2] as const },
+      { id: 'claude-fable-5.1', displayName: 'Claude Fable 5.1', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('google', 'Google', [
-      { id: 'gemini-3', displayName: 'Gemini 3', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gemini-3', displayName: 'Gemini 3', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('spacex-ai', 'SpaceX AI', [
-      { id: 'grok-4', displayName: 'Grok 4', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'grok-4', displayName: 'Grok 4', available: true, pricing: [0.1, 1, 2] as const },
     ]),
   ]));
   assert.deepEqual(rows.map((row) => row.key), [
@@ -201,18 +201,18 @@ test('keeps Claude series contiguous and sorts versions before variants', () => 
 test('TPS averages providers equally even when measurements match and prefers measured sources over catalog defaults', () => {
   // Equal measurements from different providers still count independently.
   assert.equal(averageMeasuredTps([
-    { id: 'a', displayName: 'A', effectiveTps: 40, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-    { id: 'b', displayName: 'B', effectiveTps: 40, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-    { id: 'c', displayName: 'C', effectiveTps: 60, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+    { id: 'a', displayName: 'A', effectiveTps: 40, pricing: [0.1, 1, 2] as const },
+    { id: 'b', displayName: 'B', effectiveTps: 40, pricing: [0.1, 1, 2] as const },
+    { id: 'c', displayName: 'C', effectiveTps: 60, pricing: [0.1, 1, 2] as const },
   ]), 140 / 3);
-  assert.equal(averageMeasuredTps([{ id: 'a', displayName: 'A', effectiveTps: null, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]), null);
+  assert.equal(averageMeasuredTps([{ id: 'a', displayName: 'A', effectiveTps: null, pricing: [0.1, 1, 2] as const }]), null);
 
   const rows = buildModelListRows(snapshot([
     catalogEntry('openai', 'OpenAI', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', effectiveTps: 100, speedSource: 'catalog_default', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', effectiveTps: 100, speedSource: 'catalog_default', available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('chatgpt', 'ChatGPT', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', effectiveTps: 42, speedSource: 'local_31d', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', effectiveTps: 42, speedSource: 'local_31d', available: true, pricing: [0.1, 1, 2] as const },
     ]),
   ]));
   assert.equal(rows[0].tps, 42, 'a measured source outranks the catalog default globally');
@@ -228,13 +228,13 @@ test('pricing shows per-component min–max of the actual list prices', () => {
       id: 'gpt-5.6-sol',
       displayName: 'GPT-5.6 Sol',
       available: true,
-      pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 12, cachedInputUsdPerMillion: 0.3 },
+      pricing: [0.3, 3, 12] as const,
     }]),
     catalogEntry('chatgpt', 'ChatGPT', [{
       id: 'gpt-5.6-sol',
       displayName: 'GPT-5.6 Sol',
       available: true,
-      pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 12, cachedInputUsdPerMillion: 0.6 },
+      pricing: [0.6, 5, 12] as const,
     }]),
   ]));
 
@@ -247,10 +247,10 @@ test('rendering exposes the uniform columns, units, and muted unavailable names'
   const host = fakeElement('div');
   renderModelList(host as unknown as HTMLElement, snapshot([
     catalogEntry('openai', 'OpenAI API', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'premium', effectiveTps: 50, available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'premium', effectiveTps: 50, available: true, pricing: [0.1, 1, 2] as const },
     ]),
     catalogEntry('spacex-ai', 'SpaceX AI', [
-      { id: 'grok-4.5', displayName: 'Grok 4.5', available: false, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'grok-4.5', displayName: 'Grok 4.5', available: false, pricing: [0.1, 1, 2] as const },
     ]),
   ]));
 
@@ -285,15 +285,15 @@ test('an empty catalog renders one bounded empty row instead of throwing', () =>
 test('family activation keeps inactive siblings grouped and TPS counts each provider once', () => {
   const rows = buildModelListRows(snapshot([
     catalogEntry('a', 'A', [
-      { id: 'gpt-a', displayName: 'GPT A', intelligence: 'premium', available: false, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'gpt-b', displayName: 'GPT B', intelligence: 'mid', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
-      { id: 'glm-alias', canonicalId: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } },
+      { id: 'gpt-a', displayName: 'GPT A', intelligence: 'premium', available: false, pricing: [0.1, 1, 2] as const },
+      { id: 'gpt-b', displayName: 'GPT B', intelligence: 'mid', available: true, pricing: [0.1, 1, 2] as const },
+      { id: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: [0.1, 1, 2] as const },
+      { id: 'glm-alias', canonicalId: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: [0.1, 1, 2] as const },
     ]),
-    catalogEntry('b', 'B', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
-    catalogEntry('c', 'C', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 60, speedSource: 'provider_override', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
-    catalogEntry('d', 'D', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 999, speedSource: 'catalog_default', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
-    catalogEntry('e', 'E', [{ id: 'claude-a', displayName: 'Claude A', intelligence: 'high', available: true, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.1 } }]),
+    catalogEntry('b', 'B', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 40, speedSource: 'local_31d', pricing: [0.1, 1, 2] as const }]),
+    catalogEntry('c', 'C', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 60, speedSource: 'provider_override', pricing: [0.1, 1, 2] as const }]),
+    catalogEntry('d', 'D', [{ id: 'glm-5.3', displayName: 'GLM', effectiveTps: 999, speedSource: 'catalog_default', pricing: [0.1, 1, 2] as const }]),
+    catalogEntry('e', 'E', [{ id: 'claude-a', displayName: 'Claude A', intelligence: 'high', available: true, pricing: [0.1, 1, 2] as const }]),
   ]));
   assert.deepEqual(rows.map(row => row.key), ['gpt-a', 'gpt-b', 'claude-a', 'glm-5.3']);
   assert.equal(rows[3].tps, 140 / 3);

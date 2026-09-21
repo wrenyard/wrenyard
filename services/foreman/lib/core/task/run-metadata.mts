@@ -320,24 +320,25 @@ function toSpeed(row: AttemptDispatchRow): TaskResolvedSpeed | undefined {
 }
 
 function toPricing(row: AttemptDispatchRow): TaskReferencePricing | undefined {
-  if (row.reference_pricing_source == null || row.reference_pricing_checked_at == null || row.reference_pricing_checked_at === '') return undefined
   const prices: (number | null)[] = [
     row.reference_pricing_input,
     row.reference_pricing_output,
     row.reference_pricing_cache,
     row.reference_pricing_cache_write,
   ]
+  const hasPrice = prices.some((value) => value != null)
+  const hasSource = Boolean(row.reference_pricing_source || row.reference_pricing_checked_at)
+  if (!hasPrice && !hasSource) return undefined
   for (const v of prices) {
     if (v != null && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) return undefined
   }
-  const pricing: TaskReferencePricing = {
-    source: row.reference_pricing_source,
-    checked_at: row.reference_pricing_checked_at,
-  }
+  const pricing: TaskReferencePricing = {}
   if (row.reference_pricing_input != null) pricing.input_usd_per_million = row.reference_pricing_input
   if (row.reference_pricing_output != null) pricing.output_usd_per_million = row.reference_pricing_output
   if (row.reference_pricing_cache != null) pricing.cached_input_usd_per_million = row.reference_pricing_cache
   if (row.reference_pricing_cache_write != null) pricing.cache_write_input_usd_per_million = row.reference_pricing_cache_write
+  if (row.reference_pricing_source) pricing.source = row.reference_pricing_source
+  if (row.reference_pricing_checked_at) pricing.checked_at = row.reference_pricing_checked_at
   return pricing
 }
 

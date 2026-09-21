@@ -201,10 +201,7 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   assert.ok(astra, 'gpt-6-astra model must exist');
   assert.equal(astra!.intelligence, 'premium');
   assert.deepEqual(astra!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(astra!.pricing?.inputUsdPerMillion, 10);
-  assert.equal(astra!.pricing?.cachedInputUsdPerMillion, 1);
-  assert.equal(astra!.pricing?.outputUsdPerMillion, 50);
-  assert.equal(astra!.pricing?.source, 'https://developers.openai.com');
+  assert.deepEqual(astra!.pricing, [1, 10, 50]);
   assert.deepEqual(astra!.capabilities, ['text', 'image']);
   const plans = deriveTaskDispatchPlans(catalog);
   assert.equal(plans['chatgpt/gpt-6-astra:codex'].model, 'gpt-6-astra');
@@ -255,10 +252,7 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('chatgpt', 'gpt-5.6-terra'), 'mid');
   assert.equal(tier('chatgpt', 'gpt-5.6-luna'), 'mid');
   assert.equal(tier('cursor', 'grok-4.6'), 'high');
-  assert.deepEqual(find('cursor', 'grok-4.6').pricing, {
-    inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 6,
-    source: 'https://docs.x.ai/developers/pricing', checkedAt: '2026-09-10',
-  });
+  assert.deepEqual(find('cursor', 'grok-4.6').pricing, [0.5, 2, 6]);
   assert.equal(tier('chatgpt', 'gpt-6-astra'), 'premium');
   assert.equal(tier('codebuddy', 'kimi-k3'), 'high');
   assert.equal(tier('kimi-coding', 'k3'), 'high');
@@ -293,7 +287,7 @@ test('every registered built-in model has a valid authoritative speed default', 
 
   const uniqueIds = new Set(entries.map(({ model }) => model.id));
   for (const { provider, model } of entries) {
-    assert.ok(Number.isFinite(model.speed) && model.speed > 0, `${provider}/${model.id} needs positive finite tps`);
+    assert.ok(Number.isInteger(model.speed) && model.speed > 0, `${provider}/${model.id} needs a positive integer tps`);
   }
 
   // A repeated exact id must resolve to the same model default on every provider;
@@ -304,11 +298,11 @@ test('every registered built-in model has a valid authoritative speed default', 
   }
 
   const representative = new Map(entries.map(({ model }) => [model.id, model.speed]));
-  assert.equal(representative.get('gpt-6-astra'), 50.6);
-  assert.equal(representative.get('gpt-5.6-terra'), 98.4);
+  assert.equal(representative.get('gpt-6-astra'), 51);
+  assert.equal(representative.get('gpt-5.6-terra'), 98);
   assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
-  assert.equal(representative.get('qwen3.7-flash'), 111.12);
-  assert.equal(representative.get('doubao-seed-2-0-lite-260215'), 35.1);
+  assert.equal(representative.get('qwen3.7-flash'), 111);
+  assert.equal(representative.get('doubao-seed-2-0-lite-260215'), 35);
 });
 
 test('GLM-5.3, K3/Kimi, and Sol stay identifiable under canonical target keys', () => {
@@ -474,7 +468,7 @@ test('new Flash ignores retired model speed history', () => {
     provider: 'codebuddy', model, tps: 999, sampleCount: 30, checkedAt: new Date().toISOString(),
   })));
   assert.equal(speed.source, 'catalog_default');
-  assert.equal(speed.tps, 200.5);
+  assert.equal(speed.tps, 201);
   const tokenhub = catalog.provider('tokenhub')!.models.find(model => model.id === 'deepseek/deepseek-flash')!;
   assert.equal(tokenhub.speed, 207);
 });
@@ -518,27 +512,19 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['claude-sonnet-5']!.contextWindow, 300_000);
   assert.equal(byId['muse-spark-1.3']!.contextWindow, 300_000);
   assert.equal(byId['gemini-3.8-flash']!.contextWindow, 1_000_000);
-  const cursorPrice = (id: string, input: number, cached: number, output: number) => {
-    const pricing = byId[id]!.pricing!;
-    assert.equal(pricing.inputUsdPerMillion, input);
-    assert.equal(pricing.cachedInputUsdPerMillion, cached);
-    assert.equal(pricing.outputUsdPerMillion, output);
-    assert.equal(pricing.source, 'https://cursor.com/docs/models-and-pricing');
-    assert.equal(pricing.checkedAt, '2026-09-11');
+  const cursorPrice = (id: string, cached: number, input: number, output: number) => {
+    assert.deepEqual(byId[id]!.pricing, [cached, input, output]);
   };
-  cursorPrice('gpt-5.6-luna', 0.2, 0.02, 1.2);
-  cursorPrice('gpt-5.6-terra', 2, 0.2, 12);
-  cursorPrice('gpt-5.6-sol', 4, 0.4, 20);
-  cursorPrice('claude-sonnet-5', 2, 0.2, 10);
-  cursorPrice('claude-opus-5', 5, 0.5, 25);
-  cursorPrice('muse-spark-1.3', 1.25, 0.15, 4.25);
-  cursorPrice('gemini-3.8-flash', 0.75, 0.075, 3.5);
-  cursorPrice('composer-2.5', 0.5, 0.2, 2.5);
-  cursorPrice('claude-fable-5-1', 10, 0.25, 50);
-  assert.deepEqual(byId['claude-fable-5']!.pricing, {
-    inputUsdPerMillion: 10, cachedInputUsdPerMillion: 1, outputUsdPerMillion: 50,
-    source: 'https://cursor.com/docs/models/claude-fable-5', checkedAt: '2026-09-11',
-  });
+  cursorPrice('gpt-5.6-luna', 0.02, 0.2, 1.2);
+  cursorPrice('gpt-5.6-terra', 0.2, 2, 12);
+  cursorPrice('gpt-5.6-sol', 0.4, 4, 20);
+  cursorPrice('claude-sonnet-5', 0.2, 2, 10);
+  cursorPrice('claude-opus-5', 0.5, 5, 25);
+  cursorPrice('muse-spark-1.3', 0.15, 1.25, 4.25);
+  cursorPrice('gemini-3.8-flash', 0.075, 0.75, 3.5);
+  cursorPrice('composer-2.5', 0.2, 0.5, 2.5);
+  cursorPrice('claude-fable-5-1', 0.25, 10, 50);
+  assert.deepEqual(byId['claude-fable-5']!.pricing, [1, 10, 50]);
   assert.ok(!('unavailable' in byId['claude-fable-5']!));
   assert.ok(!('unavailable' in byId['claude-fable-5-1']!));
 });

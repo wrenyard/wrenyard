@@ -146,30 +146,16 @@ export function normalizeIntelligenceTier(tier: string | undefined): Intelligenc
 
 export type ModelCapability = 'text' | 'image';
 
-export interface ModelPricing {
-  inputUsdPerMillion: number;
-  cachedInputUsdPerMillion: number;
-  outputUsdPerMillion: number;
-  source: string;
-  checkedAt: string;
-}
+/** USD per million tokens: [cached, input, output]. */
+export type ModelPricing = readonly [number, number, number];
 
 function validateModelPricing(pricing: ModelPricing | undefined, label: string): void {
   if (!pricing) throw new Error(`${label} is missing required pricing metadata`);
-  for (const [name, value] of Object.entries({
-    inputUsdPerMillion: pricing.inputUsdPerMillion,
-    cachedInputUsdPerMillion: pricing.cachedInputUsdPerMillion,
-    outputUsdPerMillion: pricing.outputUsdPerMillion,
-  })) {
+  if (pricing.length !== 3) throw new Error(`${label} pricing must be [cached, input, output]`);
+  for (const [index, value] of pricing.entries()) {
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`${label} pricing ${name} must be finite and non-negative`);
+      throw new Error(`${label} pricing[${index}] must be finite and non-negative`);
     }
-  }
-  if (typeof pricing.source !== 'string' || pricing.source.trim() === '') {
-    throw new Error(`${label} pricing source must be a non-empty string`);
-  }
-  if (typeof pricing.checkedAt !== 'string' || pricing.checkedAt.trim() === '') {
-    throw new Error(`${label} pricing checkedAt must be a non-empty string`);
   }
 }
 
@@ -364,11 +350,11 @@ function requireID(kind: string, value: string): void {
   }
 }
 
-// Every catalog speed must be a finite positive TPS number, whether it is a
+// Every catalog speed must be a positive integer TPS, whether it is a
 // model's required default or a canonical modelSpeedOverride.
 function validateSpeed(speed: number | undefined, label: string): void {
-  if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0) {
-    throw new Error(`${label} speed must be a finite number greater than zero`);
+  if (typeof speed !== 'number' || !Number.isInteger(speed) || speed <= 0) {
+    throw new Error(`${label} speed must be a positive integer`);
   }
 }
 
@@ -810,7 +796,7 @@ export function resolveConstrainedDispatch(
 
     // List-price constraint; account-specific free routing is evaluated by the routing policy.
     if (requirements.maxOutputUsdPerMillion !== undefined) {
-      if (modelDef.pricing.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) continue;
+      if (modelDef.pricing[2] > requirements.maxOutputUsdPerMillion) continue;
     }
 
     // Speed evidence tiers in exact precedence order via the shared resolver:
@@ -873,8 +859,8 @@ export function resolveConstrainedDispatch(
     const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
     const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
     if (aMeets !== bMeets) return aMeets ? -1 : 1;
-    const pa = a.model.pricing.outputUsdPerMillion;
-    const pb = b.model.pricing.outputUsdPerMillion;
+    const pa = a.model.pricing[2];
+    const pb = b.model.pricing[2];
     if (pa !== pb) return pa - pb;
     const idA = `${a.plan.provider}/${a.plan.model}`;
     const idB = `${b.plan.provider}/${b.plan.model}`;
