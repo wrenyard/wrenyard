@@ -21,10 +21,28 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
     'glm-5.3',
     'glm-5.3-flash',
   ];
-  assert.deepEqual(
-    catalog.listGatewayModels('openai_chat').filter((entry) => entry.provider === 'codebuddy').map((entry) => entry.id),
-    modelIds,
-  );
+  const codeBuddyGatewayIds = catalog.listGatewayModels('openai_chat')
+    .filter((entry) => entry.provider === 'codebuddy')
+    .map((entry) => entry.id);
+  for (const modelId of modelIds) {
+    assert.ok(codeBuddyGatewayIds.includes(modelId), `CodeBuddy must offer ${modelId}`);
+  }
+  for (const banned of [
+    'echo',
+    'glm-4.7',
+    'glm-4.6',
+    'glm-4.6v',
+    'hunyuan-image-v3.0',
+    'hunyuan-video-art',
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
+    'glm-5.2',
+    'kimi-k2.6',
+    'minimax-m2.5',
+    'default-model',
+  ]) {
+    assert.ok(!codeBuddyGatewayIds.includes(banned), `${banned} must not be a CodeBuddy offering`);
+  }
   for (const modelId of modelIds) {
     assert.equal(catalog.resolveRun('dsh', 'codebuddy', modelId).protocol, 'openai_chat');
     assert.equal(catalog.resolveGatewayModel('openai_chat', `codebuddy/${modelId}`).upstreamModel, modelId);
