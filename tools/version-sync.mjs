@@ -35,7 +35,7 @@ const FIRST_PARTY_MANIFESTS = [
   'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
-  'packages/gateway/package.json',
+  'packages/features/gateway/package.json',
   'packages/providers/package.json',
   'packages/runtime-resolver/package.json',
   'packages/runtime-darwin-arm64/package.json',

@@ -249,14 +249,14 @@ importers:
         version: 5.9.3
 
 
-  packages/gateway:
+  packages/features/gateway:
     dependencies:
       '@wrenyard/catalog':
         specifier: workspace:*
-        version: link:../catalog
+        version: link:../../catalog
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../providers
+        version: link:../../providers
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
@@ -344,7 +344,7 @@ importers:
         version: link:../../packages/catalog
       '@wrenyard/gateway':
         specifier: workspace:*
-        version: link:../../packages/gateway
+        version: link:../../packages/features/gateway
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../packages/providers
