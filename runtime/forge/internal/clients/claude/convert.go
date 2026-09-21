@@ -1,4 +1,4 @@
-package quota
+package claude
 
 import (
 	"encoding/json"
@@ -64,11 +64,4 @@ func toString(v any) string {
 		b, _ := json.Marshal(t)
 		return string(b)
 	}
-}
-
-// jsonString marshals v as a JSON literal, escaping any characters that
-// require escaping.
-func jsonString(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }
