@@ -87,6 +87,7 @@ export class CandidateEvaluator {
     }
     const tier: QuotaTier = quota.state;
     const supply = this.supply.assess(candidate, quota);
+    if ("kind" in supply) return supply;
     const { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, verifiedEfficiency, headroom, unknownQuotaFloorApplied } = supply;
     const { quotaQuality, priceFactor, speedFactor, intelligenceFactor, intelligenceShortfall, score } = this.scorer.score(candidate, supply, effectiveWeights);
     const assessment: CandidateAssessment = {
