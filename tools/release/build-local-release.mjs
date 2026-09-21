@@ -324,6 +324,9 @@ function normalizeForemanWorkspaceDependencySpecs(deploy) {
     '@wrenyard/gateway',
     '@wrenyard/providers',
     '@wrenyard/auto-routing',
+    '@wrenyard/clients',
+    '@wrenyard/execution',
+    '@wrenyard/quota',
   ];
   const versions = new Map(internalNames.map((name) => {
     const manifest = readJson(path.join(deploy, 'node_modules', ...name.split('/'), 'package.json'));
@@ -370,6 +373,9 @@ function assertPhysicalForemanDependencies(deploy) {
     '@wrenyard/gateway',
     '@wrenyard/providers',
       '@wrenyard/auto-routing',
+    '@wrenyard/clients',
+    '@wrenyard/execution',
+    '@wrenyard/quota',
   ];
   const violations = [];
   for (const dep of direct) {
@@ -849,7 +855,7 @@ async function main() {
       path.join(ROOT, 'services', 'foreman'),
       path.join(deployWorkspace, 'services', 'foreman'),
     );
-    for (const name of ['catalog', 'gateway', 'providers']) {
+    for (const name of ['models', 'providers', 'clients', 'execution', 'features/auto-routing', 'features/gateway', 'features/quota']) {
       copyDirWithoutNodeModules(
         path.join(ROOT, 'packages', name),
         path.join(deployWorkspace, 'packages', name),

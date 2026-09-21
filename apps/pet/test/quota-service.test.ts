@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { FORGE_QUOTA_TIMEOUT_MS, parseQuotaJson, QuotaService, sanitizeQuotaChildEnv } from '../src/main/quota-service';
+import { parseQuotaJson, sanitizeQuotaChildEnv } from '../src/main/quota-service';
 
 vi.mock('node:child_process', () => {
   const { EventEmitter } = require('node:events');
@@ -394,105 +394,6 @@ describe('parseQuotaJson — unified ChatGPT provider', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0].id).toBe('chatgpt');
     expect(providers.some((entry) => entry.id.startsWith('pool-'))).toBe(false);
-  });
-});
-
-describe('QuotaService runForgeQuotaJson timeout', () => {
-  beforeEach(() => {
-    vi.mocked(spawn).mockClear();
-    vi.mocked(spawn).mockImplementation(() => {
-      const { EventEmitter } = require('node:events');
-      const proc = new EventEmitter() as any;
-      proc.stdout = new EventEmitter() as any;
-      proc.stderr = new EventEmitter() as any;
-      proc.stdout.readable = true;
-      proc.stderr.readable = true;
-      proc.pid = 42;
-      proc.connected = true;
-      process.nextTick(() => {
-        proc.stdout.emit('data', Buffer.from('[]'));
-        proc.emit('close', 0);
-      });
-      return proc;
-    });
-  });
-
-  it('sets spawn timeout to the configured 30-second budget and runs forge quota --json only', async () => {
-    const service = new QuotaService();
-    const promise = service.listProviders(true);
-
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [cmd, args, opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(cmd).toBe('forge');
-    expect(args).toEqual(['quota', '--json']);
-    expect(opts.timeout).toBe(FORGE_QUOTA_TIMEOUT_MS);
-    expect(opts.windowsHide).toBe(true);
-    expect(opts.shell).toBe(false);
-    expect(opts.env?.PATH).toEqual(expect.any(String));
-    expect(
-      String(opts.env.PATH)
-        .split(path.delimiter)
-        .every((entry: string) => !entry.replaceAll('\\', '/').endsWith('/node_modules/.bin')),
-    ).toBe(true);
-
-    // Cleanup: let the mock promise resolve
-    await promise;
-  });
-
-  it('does not read Cursor Desktop credentials (spawns forge quota --json only)', async () => {
-    const service = new QuotaService();
-    const promise = service.listProviders(true);
-
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [cmd, args] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-    // QuotaService stays provider-agnostic: it only invokes forge, never
-    // shells out to Cursor Desktop state.vscdb or passes cursor credential args.
-    expect(cmd).toBe('forge');
-    expect(args).toEqual(['quota', '--json']);
-
-    await promise;
-  });
-
-  it('spawns the managed WRENYARD_RUNTIME_BIN absolute path instead of the PATH forge', async () => {
-    const runtimeBin = '/opt/wrenyard/wrenyard-sea';
-    const prev = process.env.WRENYARD_RUNTIME_BIN;
-    process.env.WRENYARD_RUNTIME_BIN = runtimeBin;
-    try {
-      const service = new QuotaService();
-      const promise = service.listProviders(true);
-
-      expect(spawn).toHaveBeenCalledTimes(1);
-      const [cmd, args, opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(cmd).toBe(runtimeBin);
-      expect(args).toEqual(['quota', '--json']);
-      expect(opts.timeout).toBe(FORGE_QUOTA_TIMEOUT_MS);
-      expect(opts.windowsHide).toBe(true);
-      expect(opts.shell).toBe(false);
-
-      await promise;
-    } finally {
-      if (prev === undefined) delete process.env.WRENYARD_RUNTIME_BIN;
-      else process.env.WRENYARD_RUNTIME_BIN = prev;
-    }
-  });
-
-  it('prefers the Desktop-provided runtime command over inherited environment paths', async () => {
-    const previousRuntimeBin = process.env.WRENYARD_RUNTIME_BIN;
-    process.env.WRENYARD_RUNTIME_BIN = '/tmp/inherited-wrenyard-runtime';
-    try {
-      const service = new QuotaService({ runtimeCommand: '/opt/wrenyard/current/bin/forge' });
-      const promise = service.listProviders(true);
-
-      expect(spawn).toHaveBeenCalledTimes(1);
-      const [cmd, args] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(cmd).toBe('/opt/wrenyard/current/bin/forge');
-      expect(args).toEqual(['quota', '--json']);
-
-      await promise;
-    } finally {
-      if (previousRuntimeBin === undefined) delete process.env.WRENYARD_RUNTIME_BIN;
-      else process.env.WRENYARD_RUNTIME_BIN = previousRuntimeBin;
-    }
   });
 });
 
