@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ProviderDefinition } from '@wrenyard/catalog';
 import {
   codeBuddyAuthPath,
@@ -9,9 +9,17 @@ import {
   type CodeBuddyStableIdentity,
   type ParsedCodeBuddyAuth,
 } from './auth.ts';
-import { codeBuddyProvider } from './models.ts';
+import { codeBuddyProvider, CODEBUDDY_IOA_UPSTREAM_MODELS } from './models.ts';
+import {
+  authenticationAttributes,
+  classifyCodeBuddyEnvironment,
+  codeBuddyProductCandidates,
+  resolveCodeBuddyProductPaths,
+  type CodeBuddyAuthenticationAttributes,
+  type CodeBuddyEnvironment,
+} from './product.ts';
 
-export type CodeBuddyEnvironment = 'internal' | 'ioa' | 'cloudhosted' | 'external' | 'unknown';
+export type { CodeBuddyEnvironment };
 
 export interface CodeBuddyClientIdentity {
   /** product.json `platform`, e.g. `CLI`. */
@@ -64,20 +72,6 @@ export interface CodeBuddyRuntimeOptions {
   realpath: (path: string) => Promise<string>;
 }
 
-interface CodeBuddyAuthenticationAttributes {
-  internalDomain?: unknown;
-  iOADomain?: unknown;
-  cloudHostedDomain?: unknown;
-  externalDomain?: unknown;
-}
-
-const CODEBUDDY_IOA_UPSTREAM_MODELS: Readonly<Record<string, string>> = {
-  'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
-  'hy4-preview': 'hy4-preview-ioa',
-  'hy3': 'hy3-ioa',
-  'minimax-m3': 'minimax-m3-ioa',
-};
-
 /**
  * Shared exact mapping lookup used both for upstream remapping and for
  * confirmed-free eligibility: a canonical model maps to its wire model and an
@@ -117,30 +111,6 @@ function evaluateCodeBuddyFreeSupply(
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function codeBuddyDomainMatches(pattern: string, domain: string): boolean {
-  if (pattern === domain) return true;
-  if (!pattern.includes('*')) return false;
-  const expression = pattern.replace(/\./gu, '\\.').replace(/\*/gu, '[^.]*');
-  return new RegExp(`^${expression}$`, 'u').test(domain);
-}
-
-function codeBuddyDomainListMatches(value: unknown, domain: string): boolean {
-  const patterns = Array.isArray(value) ? value : [value];
-  return patterns.some((pattern) => typeof pattern === 'string' && codeBuddyDomainMatches(pattern, domain));
-}
-
-function classifyCodeBuddyEnvironment(
-  attributes: CodeBuddyAuthenticationAttributes | undefined,
-  domain: string | undefined,
-): CodeBuddyEnvironment {
-  if (!attributes || !domain) return 'unknown';
-  if (codeBuddyDomainListMatches(attributes.internalDomain, domain)) return 'internal';
-  if (codeBuddyDomainListMatches(attributes.iOADomain, domain)) return 'ioa';
-  if (codeBuddyDomainListMatches(attributes.cloudHostedDomain, domain)) return 'cloudhosted';
-  if (codeBuddyDomainListMatches(attributes.externalDomain, domain)) return 'external';
-  return 'unknown';
 }
 
 const CODEBUDDY_STABLE_SCOPE_VERSION = 'cbv1';
@@ -214,47 +184,6 @@ function freezeCodeBuddyActiveSnapshot(
   });
 }
 
-function codeBuddyProductCandidates(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-  explicitPath: string | undefined,
-): string[] {
-  const candidates: string[] = [];
-  const add = (path: string | undefined): void => {
-    const normalized = path?.trim();
-    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
-  };
-  add(explicitPath);
-  add(env.ACC_PRODUCT_CONFIG_PATH);
-  for (const directory of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
-    if (platform === 'win32') {
-      add(join(directory, 'node_modules', '@tencent-ai', 'codebuddy-code', 'product.json'));
-    }
-    add(join(directory, platform === 'win32' ? 'codebuddy.cmd' : 'codebuddy'));
-  }
-  return candidates;
-}
-
-async function resolveCodeBuddyProductPaths(
-  candidates: readonly string[],
-  realpath: (path: string) => Promise<string>,
-): Promise<string[]> {
-  const productPaths: string[] = [];
-  const addProductPath = (path: string): void => {
-    if (!productPaths.includes(path)) productPaths.push(path);
-  };
-  for (const candidate of candidates) {
-    if (candidate.endsWith('.json')) {
-      addProductPath(candidate);
-      continue;
-    }
-    try {
-      addProductPath(join(dirname(await realpath(candidate)), '..', 'product.json'));
-    } catch { /* unavailable PATH entry */ }
-  }
-  return productPaths;
-}
-
 async function loadCodeBuddyAuthenticationAttributes(
   candidates: readonly string[],
   readFile: (path: string, encoding: 'utf8') => Promise<string>,
@@ -263,11 +192,8 @@ async function loadCodeBuddyAuthenticationAttributes(
   for (const path of await resolveCodeBuddyProductPaths(candidates, realpath)) {
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-      const authentication = parsed.authentication;
-      if (!authentication || typeof authentication !== 'object' || Array.isArray(authentication)) continue;
-      const attributes = (authentication as Record<string, unknown>).attributes;
-      if (!attributes || typeof attributes !== 'object' || Array.isArray(attributes)) continue;
-      return attributes as CodeBuddyAuthenticationAttributes;
+      const attributes = authenticationAttributes(parsed);
+      if (attributes) return attributes;
     } catch { /* try the next installed product candidate */ }
   }
   return undefined;

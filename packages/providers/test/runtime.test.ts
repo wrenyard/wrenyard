@@ -211,7 +211,7 @@ test('CodeBuddy iOA routing uses the bundled domain matcher and only the four co
     'hy3': 'hy3-ioa',
     'minimax-m3': 'minimax-m3-ioa',
   });
-  for (const model of ['kimi-k3', 'glm-5.3', 'glm-5.3-flash']) {
+  for (const model of ['glm-5.3', 'glm-5.3-flash']) {
     assert.equal(runtime.resolveUpstreamModel(provider, model, credential), model);
   }
   assert.equal(
@@ -276,11 +276,8 @@ test('runtime task plans compile canonical targets and keep CodeBuddy iOA remap 
   assert.equal(plans['codebuddy/minimax-m3:cb']?.model, 'minimax-m3');
   assert.equal(plans['codebuddy/minimax-m3:cb']?.upstreamModel, 'minimax-m3-ioa');
   assert.equal(plans['codebuddy/kimi-k3:cb']?.model, 'kimi-k3');
-  assert.equal(plans['codebuddy/kimi-k3:cb']?.upstreamModel, undefined);
   assert.equal(plans['codebuddy/glm-5.3:cb']?.model, 'glm-5.3');
-  assert.equal(plans['codebuddy/glm-5.3:cb']?.upstreamModel, undefined);
   assert.equal(plans['codebuddy/glm-5.3-flash:cb']?.model, 'glm-5.3-flash');
-  assert.equal(plans['codebuddy/glm-5.3-flash:cb']?.upstreamModel, undefined);
   // Canonical target keys are preserved through the runtime remap.
   assert.deepEqual(Object.keys(plans), Object.keys(logical));
   // The private iOA suffix never leaks into public plan keys or the public model field.

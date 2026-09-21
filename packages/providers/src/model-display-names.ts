@@ -79,6 +79,7 @@ export type BuiltinModelName = keyof typeof BUILTIN_MODEL_DISPLAY_NAMES;
  */
 const BUILTIN_MODEL_NAME_ALIASES = {
   'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+  'claude-haiku-4.5': 'claude-haiku-4-5',
   'cursor-grok-4.6-high': 'grok-4.6',
   'deepseek-flash': 'deepseek-v4.1-flash',
   'deepseek/deepseek-flash': 'deepseek-v4.1-flash',
@@ -138,6 +139,11 @@ const BUILTIN_MODEL_DISPLAY_NAME_BY_ID: Readonly<Record<BuiltinModelId, string>>
  */
 export function builtinModelDisplayName(id: BuiltinModelId): string {
   return BUILTIN_MODEL_DISPLAY_NAME_BY_ID[id];
+}
+
+/** Display name only when `id` is a registered built-in model or alias. */
+export function builtinModelDisplayNameIfKnown(id: string): string | undefined {
+  return BUILTIN_MODEL_DISPLAY_NAME_BY_ID[id as BuiltinModelId];
 }
 
 /** Current display identity only; never used to regroup historical usage or dispatch. */

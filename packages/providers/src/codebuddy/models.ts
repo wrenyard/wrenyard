@@ -8,32 +8,20 @@ import type {
   ProviderDefinition,
   ThinkingLevel,
 } from '@wrenyard/catalog';
-import { builtinModelDisplayName, type BuiltinModelId } from '../model-display-names.ts';
-
-const SRC_DEEPSEEK = 'https://api-docs.deepseek.com/quick_start/pricing/';
-const SRC_TENCENT_HY = 'https://intl.cloud.tencent.com/zh/document/product/1300/78937';
-const SRC_TENCENT_TOKENHUB = 'https://cloud.tencent.com/document/product/1823/130055';
-const SRC_KIMI = 'https://www.kimi.com/en/blog/kimi-k3';
-const SRC_ZAI = 'https://docs.z.ai/guides/overview/pricing';
-const DEFAULT_CHECKED_AT = '2026-09-05';
-
-const THINKING_LOW_HIGH_MAX: readonly ThinkingLevel[] = ['low', 'high', 'max'];
-
-const REFERENCE_DEEPSEEK_FLASH_OFF_PEAK: ModelPricing = {
-  inputUsdPerMillion: 0.15,
-  cachedInputUsdPerMillion: 0.003,
-  outputUsdPerMillion: 0.6,
-  source: 'wrenyard:reference-deepseek-v4.1-flash-off-peak',
-  checkedAt: '2026-09-17',
-};
-
-const effortLadder = (levels: readonly ThinkingLevel[]): Readonly<Record<string, { effort: string }>> =>
-  Object.fromEntries(levels.map((level) => [level, { effort: level }]));
-
-const canonical = (id: BuiltinModelId): CanonicalModelDefinition => ({
-  id,
-  displayName: builtinModelDisplayName(id),
-});
+import {
+  isMainstreamModelId,
+  models,
+  THINKING_LOW_HIGH_MAX,
+  type ModelDefaults,
+  type RegisteredModel,
+} from '@wrenyard/models';
+import { builtinModelDisplayNameIfKnown } from '../model-display-names.ts';
+import {
+  codeBuddyCanonicalModelId,
+  loadInstalledCodeBuddyProductModels,
+  productCreditsAreFree,
+  type CodeBuddyProductModelEntry,
+} from './product.ts';
 
 type CodeBuddyModel = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing'> & {
   speed: number;
@@ -42,34 +30,108 @@ type CodeBuddyModel = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing'
   pricing: ModelPricing;
 };
 
-function model(
-  id: BuiltinModelId,
-  options: {
-    contextWindow?: number;
-    maxTokens?: number;
-    canonicalModel?: CanonicalModelDefinition;
-    thinkingLevels?: readonly ThinkingLevel[];
-    free?: boolean;
-    intelligence: IntelligenceTier;
-    capabilities: readonly ModelCapability[];
-    pricing: ModelPricing;
-    speed: number;
-  },
-): CodeBuddyModel {
-  return {
-    id,
-    displayName: builtinModelDisplayName(id),
-    intelligence: options.intelligence,
-    capabilities: options.capabilities,
-    pricing: options.pricing,
-    speed: options.speed,
-    ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
-    ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
-    ...(options.canonicalModel ? { canonicalModel: options.canonicalModel } : {}),
-    ...(options.thinkingLevels ? { thinkingLevels: options.thinkingLevels } : {}),
-    ...(options.free ? { free: true } : {}),
-  };
+interface ModelOverrides {
+  intelligence?: IntelligenceTier;
+  capabilities?: readonly ModelCapability[];
+  thinkingLevels?: readonly ThinkingLevel[];
+  contextWindow?: number;
+  maxTokens?: number;
+  pricing?: ModelPricing;
+  speed?: number;
 }
+
+interface CodeBuddyCustomModel {
+  id: string;
+  modelId: string;
+  free?: boolean;
+  projectCanonical?: boolean;
+  overrides?: ModelOverrides;
+}
+
+/**
+ * Product-file ids whose WY identity differs from the id (or the id with
+ * `-ioa` stripped). Direct registry lookup remains the membership test;
+ * similar names are never inferred.
+ */
+const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
+  'hy3': 'hunyuan-hy3',
+  'hy3-ioa': 'hunyuan-hy3',
+  'hy4-preview': 'hunyuan-hy4-preview',
+  'hy4-preview-ioa': 'hunyuan-hy4-preview',
+  'MiniMax-M3': 'minimax-m3',
+  'MiniMax-M2.7': 'minimax-m2.7',
+  'claude-haiku-4.5': 'claude-haiku-4-5',
+};
+
+/**
+ * Channel overlay after the mainstream JSON match. Used as overrides when the
+ * product file lists the same model, and as extra offerings when it does not.
+ */
+const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
+  {
+    id: 'deepseek-v4.1-flash',
+    modelId: 'deepseek-v4.1-flash',
+    overrides: {
+      contextWindow: 1_000_000,
+      maxTokens: 50_000,
+      thinkingLevels: THINKING_LOW_HIGH_MAX,
+      capabilities: ['text', 'image'],
+      speed: 201,
+    },
+  },
+  {
+    id: 'hy4-preview',
+    modelId: 'hunyuan-hy4-preview',
+    free: true,
+    projectCanonical: true,
+    overrides: { speed: 38, intelligence: 'mid', capabilities: ['text'] },
+  },
+  {
+    id: 'hy3',
+    modelId: 'hunyuan-hy3',
+    free: true,
+    overrides: { speed: 94, intelligence: 'low', capabilities: ['text'] },
+  },
+  {
+    id: 'minimax-m3',
+    modelId: 'minimax-m3',
+    projectCanonical: true,
+    overrides: { speed: 156, intelligence: 'low', capabilities: ['text'] },
+  },
+  {
+    id: 'kimi-k3',
+    modelId: 'kimi-k3',
+    projectCanonical: true,
+    overrides: {
+      thinkingLevels: THINKING_LOW_HIGH_MAX,
+      capabilities: ['text', 'image'],
+      intelligence: 'high',
+      speed: 40,
+    },
+  },
+  {
+    id: 'glm-5.3',
+    modelId: 'glm-5.3',
+    projectCanonical: true,
+    overrides: { intelligence: 'high', capabilities: ['text'], speed: 64 },
+  },
+  {
+    id: 'glm-5.3-flash',
+    modelId: 'glm-5.3-flash',
+    projectCanonical: true,
+    overrides: { intelligence: 'mid', capabilities: ['text'], speed: 73 },
+  },
+];
+
+const CUSTOM_IOA_UPSTREAM: Readonly<Record<string, string>> = {
+  'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
+  'hy4-preview': 'hy4-preview-ioa',
+  'hy3': 'hy3-ioa',
+  'minimax-m3': 'minimax-m3-ioa',
+};
+
+const effortLadder = (levels: readonly ThinkingLevel[]): Readonly<Record<string, { effort: string }>> =>
+  Object.fromEntries(levels.map((level) => [level, { effort: level }]));
 
 export const codeBuddyClient: ClientDefinition = {
   id: 'codebuddy',
@@ -79,6 +141,124 @@ export const codeBuddyClient: ClientDefinition = {
   taskCapable: true,
 };
 
+function lookupUnifiedModelId(productId: string): string | undefined {
+  const mapped = CODEBUDDY_PRODUCT_MODEL_IDS[productId];
+  if (mapped && models.get(mapped)) return mapped;
+  const stripped = codeBuddyCanonicalModelId(productId);
+  const strippedMapped = CODEBUDDY_PRODUCT_MODEL_IDS[stripped];
+  if (strippedMapped && models.get(strippedMapped)) return strippedMapped;
+  if (models.get(productId)) return productId;
+  if (stripped !== productId && models.get(stripped)) return stripped;
+  return undefined;
+}
+
+/** Map a product-file id onto a mainstream unified model, or ignore it. */
+export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
+  const modelId = lookupUnifiedModelId(productId);
+  if (!modelId || !isMainstreamModelId(modelId)) return undefined;
+  return modelId;
+}
+
+function customForModelId(modelId: string): CodeBuddyCustomModel | undefined {
+  return CODEBUDDY_CUSTOM_MODELS.find((entry) => entry.modelId === modelId);
+}
+
+function pickDefault<T>(override: T | undefined, fallback: T | undefined): T | undefined {
+  return override !== undefined ? override : fallback;
+}
+
+function offeringFromRegistered(
+  offeringId: string,
+  registered: RegisteredModel,
+  custom: CodeBuddyCustomModel | undefined,
+  product?: CodeBuddyProductModelEntry,
+): CodeBuddyModel {
+  const defaults: ModelDefaults = registered.defaults;
+  const overrides = custom?.overrides;
+  const thinkingLevels = pickDefault(overrides?.thinkingLevels, defaults.thinkingLevels);
+  const contextWindow = pickDefault(overrides?.contextWindow, defaults.contextWindow);
+  const maxTokens = pickDefault(overrides?.maxTokens, defaults.maxOutputTokens);
+  const canonicalModel: CanonicalModelDefinition | undefined = custom?.projectCanonical === true
+    ? {
+        id: registered.id,
+        displayName: builtinModelDisplayNameIfKnown(registered.id) ?? registered.displayName,
+      }
+    : undefined;
+  return {
+    id: offeringId,
+    displayName: builtinModelDisplayNameIfKnown(offeringId) ?? registered.displayName,
+    intelligence: overrides?.intelligence ?? defaults.intelligence,
+    capabilities: overrides?.capabilities ?? defaults.capabilities,
+    pricing: overrides?.pricing ?? defaults.pricing,
+    speed: overrides?.speed ?? defaults.speed,
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxTokens ? { maxTokens } : {}),
+    ...(thinkingLevels ? { thinkingLevels } : {}),
+    ...(canonicalModel ? { canonicalModel } : {}),
+    ...(custom?.free === true || productCreditsAreFree(product?.credits) ? { free: true } : {}),
+  };
+}
+
+function thinkingMappingsFor(offerings: readonly CodeBuddyModel[]): NonNullable<ProviderDefinition['thinkingMappings']> {
+  const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder> }> = {};
+  for (const entry of offerings) {
+    if (!entry.thinkingLevels?.length) continue;
+    mappings[entry.id] = { codebuddy: effortLadder(entry.thinkingLevels) };
+  }
+  return mappings;
+}
+
+function aliasesFor(
+  offerings: readonly CodeBuddyModel[],
+  upstreamByCanonical: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const modelIds = new Set(offerings.map((entry) => entry.id));
+  const aliases: Record<string, string> = {};
+  for (const [canonicalId, upstreamId] of Object.entries(upstreamByCanonical)) {
+    if (canonicalId === upstreamId) continue;
+    if (!modelIds.has(canonicalId) || modelIds.has(upstreamId)) continue;
+    aliases[upstreamId] = canonicalId;
+  }
+  return aliases;
+}
+
+function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelEntry[]): {
+  models: CodeBuddyModel[];
+  upstreamByCanonical: Record<string, string>;
+} {
+  const byOfferingId = new Map<string, CodeBuddyModel>();
+  const matchedModelIds = new Set<string>();
+  const upstreamByCanonical: Record<string, string> = { ...CUSTOM_IOA_UPSTREAM };
+
+  for (const entry of productEntries) {
+    const modelId = resolveCodeBuddyProductModelId(entry.id);
+    if (!modelId) continue;
+    const registered = models.get(modelId);
+    if (!registered) continue;
+    const custom = customForModelId(modelId);
+    const offeringId = custom?.id ?? codeBuddyCanonicalModelId(entry.id);
+    if (byOfferingId.has(offeringId)) continue;
+    byOfferingId.set(offeringId, offeringFromRegistered(offeringId, registered, custom, entry));
+    matchedModelIds.add(modelId);
+    if (entry.id !== offeringId) upstreamByCanonical[offeringId] = entry.id;
+  }
+
+  for (const custom of CODEBUDDY_CUSTOM_MODELS) {
+    if (matchedModelIds.has(custom.modelId) || byOfferingId.has(custom.id)) continue;
+    const registered = models.require(custom.modelId);
+    byOfferingId.set(custom.id, offeringFromRegistered(custom.id, registered, custom));
+  }
+
+  return { models: [...byOfferingId.values()], upstreamByCanonical };
+}
+
+const installedProduct = loadInstalledCodeBuddyProductModels();
+const built = buildCodeBuddyOfferings(installedProduct.entries);
+
+export const CODEBUDDY_IOA_UPSTREAM_MODELS: Readonly<Record<string, string>> = Object.freeze(
+  built.upstreamByCanonical,
+);
+
 export const codeBuddyProvider: Omit<ProviderDefinition, 'models'> & { models: readonly CodeBuddyModel[] } = {
   id: 'codebuddy',
   displayName: 'CodeBuddy',
@@ -86,104 +266,9 @@ export const codeBuddyProvider: Omit<ProviderDefinition, 'models'> & { models: r
   nativeClients: ['codebuddy'],
   defaultModel: 'deepseek-v4.1-flash',
   useClientBinary: true,
-  models: [
-    model('deepseek-v4.1-flash', {
-      contextWindow: 1_000_000,
-      maxTokens: 50_000,
-      thinkingLevels: THINKING_LOW_HIGH_MAX,
-      intelligence: 'mid',
-      capabilities: ['text', 'image'],
-      pricing: {
-        inputUsdPerMillion: 0.3,
-        cachedInputUsdPerMillion: 0.006,
-        outputUsdPerMillion: 1.2,
-        source: SRC_DEEPSEEK,
-        checkedAt: '2026-09-10',
-      },
-      speed: 200.5,
-    }),
-    model('hy4-preview', {
-      canonicalModel: canonical('hunyuan-hy4-preview'),
-      free: true,
-      intelligence: 'mid',
-      capabilities: ['text'],
-      pricing: {
-        inputUsdPerMillion: 0.834,
-        cachedInputUsdPerMillion: 0.042,
-        outputUsdPerMillion: 2.501,
-        source: SRC_TENCENT_HY,
-        checkedAt: DEFAULT_CHECKED_AT,
-      },
-      speed: 38,
-    }),
-    model('hy3', {
-      free: true,
-      intelligence: 'low',
-      capabilities: ['text'],
-      pricing: {
-        inputUsdPerMillion: 0.139,
-        cachedInputUsdPerMillion: 0.035,
-        outputUsdPerMillion: 0.556,
-        source: SRC_TENCENT_TOKENHUB,
-        checkedAt: '2026-09-08',
-      },
-      speed: 93.8,
-    }),
-    model('minimax-m3', {
-      canonicalModel: canonical('minimax-m3'),
-      intelligence: 'low',
-      capabilities: ['text'],
-      pricing: REFERENCE_DEEPSEEK_FLASH_OFF_PEAK,
-      speed: 155.5,
-    }),
-    model('kimi-k3', {
-      canonicalModel: canonical('kimi-k3'),
-      thinkingLevels: THINKING_LOW_HIGH_MAX,
-      intelligence: 'high',
-      capabilities: ['text', 'image'],
-      pricing: {
-        inputUsdPerMillion: 3,
-        cachedInputUsdPerMillion: 0.30,
-        outputUsdPerMillion: 15,
-        source: SRC_KIMI,
-        checkedAt: DEFAULT_CHECKED_AT,
-      },
-      speed: 39.7,
-    }),
-    model('glm-5.3', {
-      canonicalModel: canonical('glm-5.3'),
-      intelligence: 'high',
-      capabilities: ['text'],
-      pricing: {
-        inputUsdPerMillion: 1.4,
-        cachedInputUsdPerMillion: 0.26,
-        outputUsdPerMillion: 4.4,
-        source: SRC_ZAI,
-        checkedAt: DEFAULT_CHECKED_AT,
-      },
-      speed: 63.7,
-    }),
-    model('glm-5.3-flash', {
-      canonicalModel: canonical('glm-5.3-flash'),
-      intelligence: 'mid',
-      capabilities: ['text'],
-      pricing: {
-        inputUsdPerMillion: 0.15,
-        cachedInputUsdPerMillion: 0.03,
-        outputUsdPerMillion: 0.50,
-        source: SRC_ZAI,
-        checkedAt: DEFAULT_CHECKED_AT,
-      },
-      speed: 73.1,
-    }),
-  ],
-  modelAliases: { 'hy4-preview-ioa': 'hy4-preview' },
-  // Native CodeBuddy CLI `--effort` accepts low/medium/high/xhigh/max, so the
-  // confirmed Flash + K3 families map each declared level to its exact wire alias.
-  thinkingMappings: {
-    'deepseek-v4.1-flash': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
-    'kimi-k3': { codebuddy: effortLadder(THINKING_LOW_HIGH_MAX) },
-  },
+  models: built.models,
+  modelAliases: aliasesFor(built.models, CODEBUDDY_IOA_UPSTREAM_MODELS),
+  thinkingMappings: thinkingMappingsFor(built.models),
   protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
 };
 
