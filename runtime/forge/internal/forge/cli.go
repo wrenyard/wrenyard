@@ -81,6 +81,8 @@ func Run(args []string, prog string) int {
 	}
 
 	switch command {
+	case "client":
+		return clientCommand(args[1:])
 	case "providers":
 		return providersCommand(args[1:])
 	case "auth":
@@ -93,24 +95,19 @@ func Run(args []string, prog string) int {
 		return setupCommand(args[1:])
 	case "update":
 		return updateCommand(args[1:])
-	case "statusline":
-		return statuslineCommand(args[1:])
-	case "quota":
-		return quotaCommand(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "forge: unknown command %q\n", args[0])
 	return 2
 }
 
 var topLevelCommands = []string{
+	"client",
 	"providers",
 	"auth",
 	"shell",
 	"doctor",
 	"setup",
 	"update",
-	"statusline",
-	"quota",
 }
 
 func resolveTopLevelCommand(input string) (string, bool, bool) {
@@ -153,11 +150,7 @@ COMMANDS
   auth list                     List configured credentials
   auth logout <name>            Remove a configured credential
 
-  quota [name] [--json] [--refresh]
-                           Report quota for a canonical provider/pool; with no name report all canonical pools
 
-  statusline [--claude-code|--opencode]
-                           Render statusline from stdin JSON
 
   doctor [target]          Run Forge health checks
     --json                 Output JSON
@@ -166,6 +159,9 @@ COMMANDS
   setup                    Retire legacy Agent shell aliases and run doctor
 
   update                   Update Forge, run setup, retire legacy aliases, and run doctor
+
+CLIENT EXECUTION (INTERNAL)
+  client <client> <operation>  Read native client protocol data
 
 SHELL (INTERNAL)
   shell dsh plan                Print the resolved fdsh/DSH launch plan

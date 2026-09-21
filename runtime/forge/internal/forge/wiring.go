@@ -22,7 +22,6 @@ import (
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/driver"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/execution"
 	profilepkg "github.com/wrenyard/wrenyard/runtime/forge/internal/runtime/profile"
-	sl "github.com/wrenyard/wrenyard/runtime/forge/internal/usage/statusline"
 )
 
 // --- capabilities.go ---
@@ -59,9 +58,8 @@ func selectionDeps() selection.Dependencies {
 			}
 			return out, nil
 		},
-		ForgeDataDir:        forgeDataDir,
-		ClientInstalled:     clientInstalled,
-		QuotaDisplayEnabled: sl.QuotaDisplayEnabled,
+		ForgeDataDir:    forgeDataDir,
+		ClientInstalled: clientInstalled,
 	}
 }
 
@@ -128,16 +126,8 @@ func IsClientEnabled(client string) bool { return selection.IsClientEnabled(clie
 
 // --- policy.go ---
 
-func profileQuotaAvailable(p profile, floorPct int) bool {
-	return selection.ProfileQuotaAvailable(selection.ProfileFrom(p), floorPct, selectionDeps())
-}
-
 func profileCredentialAvailable(p profile) bool {
 	return selection.ProfileCredentialAvailable(selection.ProfileFrom(p), selectionDeps())
-}
-
-func profileQuotaProviderName(p profile) string {
-	return selection.ProfileQuotaProviderName(selection.ProfileFrom(p), selectionDeps())
 }
 
 func providersCommand(args []string) int {
