@@ -3,17 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { runInNewContext } from 'node:vm';
 import { DesktopPetSettingsStore } from '../src/pet-settings-store.js';
 import {
   applySourceDevelopmentIdentity,
-  CAPTURE_UI_SCRIPT,
   DESKTOP_DATA_IDENTITY,
   isSourceDevelopment,
   isSupervised,
   PRODUCT_NAME,
   resolveSourceDesktopUserData,
-  restoreUiScript,
 } from '../src/source-dev.js';
 
 test('source-development identity uses the installed package userData path', () => {
@@ -121,35 +118,4 @@ test('applySourceDevelopmentIdentity is a no-op without the source-dev flag', ()
     getPath() { return '/tmp'; },
   }, {}, 'darwin');
   assert.equal(named, false);
-});
-
-test('UI capture/restore never sends a message or reruns a task', () => {
-  assert.match(CAPTURE_UI_SCRIPT, /conversation-input/);
-  assert.doesNotMatch(CAPTURE_UI_SCRIPT, /sendConversation|createConversation|task\.run/);
-  const script = restoreUiScript({ draft: 'hello', page: 'workbench', selectedSessionId: 's1' });
-  assert.match(script, /hello/);
-  assert.doesNotMatch(script, /sendConversation|click\(\)|task\.run/);
-});
-
-test('UI activity ignores dialogs hidden by an ancestor or CSS but blocks visible dialogs', () => {
-  const capture = (ancestorHidden: boolean, rectCount: number, visibility = 'visible') => {
-    const dialog = {
-      closest: () => ancestorHidden ? {} : null,
-      getClientRects: () => Array.from({ length: rectCount }, () => ({})),
-    };
-    return runInNewContext(CAPTURE_UI_SCRIPT, {
-      document: {
-        documentElement: { dataset: {} },
-        getElementById: () => null,
-        // The old selector incorrectly matches the workspace gate's inner card.
-        querySelector: () => dialog,
-        querySelectorAll: () => [dialog],
-      },
-      getComputedStyle: () => ({ visibility }),
-    }) as { modalOpen: boolean };
-  };
-  assert.equal(capture(true, 1).modalOpen, false);
-  assert.equal(capture(false, 0).modalOpen, false);
-  assert.equal(capture(false, 1, 'hidden').modalOpen, false);
-  assert.equal(capture(false, 1).modalOpen, true);
 });

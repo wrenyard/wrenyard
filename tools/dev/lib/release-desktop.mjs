@@ -1,20 +1,20 @@
 import { execFile } from 'node:child_process';
 import { homedir as osHomedir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { DESKTOP_KILL_WAIT_MS } from './constants.mjs';
 import { pathInside } from './paths.mjs';
+
+export const DESKTOP_KILL_WAIT_MS = 10_000;
 
 export const WINDOWS_DESKTOP_DIR = 'Wrenyard Desktop';
 export const WINDOWS_DESKTOP_EXE = 'wrenyard-desktop.exe';
 export const MAC_APP_NAME = '啾啾工坊.app';
 
 export const RELEASE_DESKTOP_RUNNING_MESSAGE = [
-  '检测到安装版 Wrenyard Desktop 正在运行。',
-  '请从托盘选择“退出”后重新执行 pnpm dev；关闭窗口可能不会退出应用。',
-  '如需强制终止桌面端，可执行 pnpm dev --kill-desktop。',
+  'Installed Desktop is running. Quit from the tray, then retry pnpm dev.',
+  'Closing the window may not exit. Force-quit with pnpm dev --kill-desktop.',
 ].join('\n');
 
-export const RELEASE_DESKTOP_KILL_WARNING = '将强制终止安装版 Desktop，可能中断对话并丢失未保存状态。';
+export const RELEASE_DESKTOP_KILL_WARNING = 'Force-quitting installed Desktop; in-flight conversations may be lost.';
 
 const LIST_PROCESSES_PS = [
   '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false',
@@ -44,7 +44,7 @@ export function formatProcessLines(processes) {
 }
 
 export function formatQueryFailed(error) {
-  return `无法确认安装版 Wrenyard Desktop 是否在运行（${error}）。请从托盘选择“退出”后重试。`;
+  return `Could not confirm whether installed Desktop is running (${error}). Quit from the tray and retry.`;
 }
 
 export function desktopRootFromBin(bin, platform = 'win32') {
@@ -278,7 +278,7 @@ export async function gateReleaseDesktop(input) {
   if (verified.processes.length === 0) return { action: 'continue', processes: [], killed: false };
 
   const terminated = await input.terminate(verified.processes);
-  if (!terminated?.ok) return failGate(terminated?.message || '终止安装版 Desktop 失败。');
+  if (!terminated?.ok) return failGate(terminated?.message || 'Failed to terminate installed Desktop.');
 
   const deadline = now() + timeoutMs;
   const maxPasses = Math.max(2, Math.ceil(timeoutMs / 200) + 2);
@@ -287,11 +287,11 @@ export async function gateReleaseDesktop(input) {
     if (!current.ok) return failGate(formatQueryFailed(current.error));
     if (current.processes.length === 0) return { action: 'continue', killed: true, processes: [] };
     if (now() >= deadline) {
-      return failGate(`安装版 Desktop 未能在 ${Math.round(timeoutMs / 1000)} 秒内退出。请从托盘选择“退出”后重试。\n${formatProcessLines(current.processes)}`);
+      return failGate(`Installed Desktop did not exit within ${Math.round(timeoutMs / 1000)}s. Quit from the tray and retry.\n${formatProcessLines(current.processes)}`);
     }
     const remaining = deadline - now();
     if (remaining <= 0) {
-      return failGate(`安装版 Desktop 未能在 ${Math.round(timeoutMs / 1000)} 秒内退出。请从托盘选择“退出”后重试。\n${formatProcessLines(current.processes)}`);
+      return failGate(`Installed Desktop did not exit within ${Math.round(timeoutMs / 1000)}s. Quit from the tray and retry.\n${formatProcessLines(current.processes)}`);
     }
     await sleep(Math.min(200, remaining));
   }
@@ -299,7 +299,7 @@ export async function gateReleaseDesktop(input) {
   const leftover = await inspect();
   if (!leftover.ok) return failGate(formatQueryFailed(leftover.error));
   if (leftover.processes.length === 0) return { action: 'continue', killed: true, processes: [] };
-  return failGate(`安装版 Desktop 未能在 ${Math.round(timeoutMs / 1000)} 秒内退出。请从托盘选择“退出”后重试。\n${formatProcessLines(leftover.processes)}`);
+  return failGate(`Installed Desktop did not exit within ${Math.round(timeoutMs / 1000)}s. Quit from the tray and retry.\n${formatProcessLines(leftover.processes)}`);
 }
 
 export async function listPlatformProcesses(options) {
@@ -353,7 +353,7 @@ export function createTerminateReleaseDesktop(options) {
       const live = liveByPid.get(proc.pid);
       if (!live) continue;
       if (!sameProcessIdentity(live, proc, platform)) {
-        return { ok: false, message: `无法确认进程身份（pid ${proc.pid}），已停止。请从托盘选择“退出”后重试。` };
+        return { ok: false, message: `Could not verify process identity (pid ${proc.pid}); stopped. Quit from the tray and retry.` };
       }
       stillLive.push(live);
     }
@@ -415,24 +415,24 @@ async function listDarwinProcesses(run, env) {
 
 async function killWindowsTree(run, pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
-    return { ok: false, message: `无法确认进程身份（pid ${pid}），已停止。请从托盘选择“退出”后重试。` };
+    return { ok: false, message: `Could not verify process identity (pid ${pid}); stopped. Quit from the tray and retry.` };
   }
   const result = await run('taskkill.exe', ['/PID', String(pid), '/T', '/F']);
   if (result.status === 0 || taskkillAlreadyGone(result)) return { ok: true };
   const detail = decodeProcessQueryOutput(result.stderr).trim() || decodeProcessQueryOutput(result.stdout).trim() || `exit ${result.status}`;
-  return { ok: false, message: `终止 Desktop 失败（pid ${pid}）：${detail}` };
+  return { ok: false, message: `Failed to terminate Desktop (pid ${pid}): ${detail}` };
 }
 
 async function killPosixTree(run, root, processes) {
   const pids = [root.pid, ...descendants(root.pid, processes).map((proc) => proc.pid)];
   for (const pid of [...pids].reverse()) {
     if (!Number.isInteger(pid) || pid <= 0) {
-      return { ok: false, message: `无法确认进程身份（pid ${pid}），已停止。请从托盘选择“退出”后重试。` };
+      return { ok: false, message: `Could not verify process identity (pid ${pid}); stopped. Quit from the tray and retry.` };
     }
     const result = await run('kill', ['-KILL', String(pid)]);
     if (result.status !== 0 && !/no such process/i.test(decodeProcessQueryOutput(result.stderr))) {
       const detail = decodeProcessQueryOutput(result.stderr).trim() || `exit ${result.status}`;
-      return { ok: false, message: `终止 Desktop 失败（pid ${pid}）：${detail}` };
+      return { ok: false, message: `Failed to terminate Desktop (pid ${pid}): ${detail}` };
     }
   }
   return { ok: true };
