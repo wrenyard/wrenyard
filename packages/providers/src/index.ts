@@ -1,10 +1,10 @@
 export {
   BUILTIN_PROVIDERS,
   canonicalizeBuiltinPublicModelId,
-  createBuiltinCatalog,
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
 } from './catalog.ts';
+export { createBuiltinCatalog } from './registry.ts';
 export { builtinModelDisplayName, builtinModelDisplayId } from './model-display-names.ts';
 export type { BuiltinModelId } from './model-display-names.ts';
 export { resolveConstrainedDispatch, resolveModelSpeed } from '@wrenyard/catalog';
