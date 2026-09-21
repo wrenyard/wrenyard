@@ -1172,7 +1172,7 @@ export function createSupervisor(options = {}) {
   }
 
   function buildPackageArgs(filter) {
-    if (filter === 'packages') return ['-r', '--filter', './packages/*', '--if-present', 'run', 'build'];
+    if (filter === 'packages') return ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--if-present', 'run', 'build'];
     return ['--filter', '@wrenyard/pet', 'run', 'build'];
   }
 

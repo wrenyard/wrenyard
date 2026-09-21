@@ -25,7 +25,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
-import { assessRequiredQuota } from '@wrenyard/catalog';
+import { assessRequiredQuota } from '@wrenyard/auto-routing';
 
 import type { CodeBuddyQueryContext } from '../../lib/daemon/execution/forge-quota-query.mts';
 import {
