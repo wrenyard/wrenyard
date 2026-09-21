@@ -14,6 +14,7 @@ export type ForemanCommand =
   | 'taskgraph'
   | 'project'
   | 'message'
+  | 'quota'
   | 'status'
   | 'update';
 
@@ -87,6 +88,7 @@ Commands:
   task, taskgraph,        Development suite commands
   project, message,
   status
+  quota [provider] [--json]  Query provider quotas
   update [--version V]    Update from the latest release; --json for machine output
   runtime <command>       Control the wrenyard runtime
   desktop                 Launch the wrenyard Desktop application
@@ -115,6 +117,7 @@ export function routeCommand(argv: string[]): Route {
     case 'taskgraph':
     case 'project':
     case 'message':
+    case 'quota':
     case 'status':
       return { kind: 'foreman', args: [command, ...rest] };
     case 'update':

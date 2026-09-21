@@ -32,7 +32,9 @@
     "tsx": "^4.22.4",
     "yaml": "^2.7.0",
     "zod": "^4.4.3",
-    "@wrenyard/auto-routing": "workspace:*"
+    "@wrenyard/auto-routing": "workspace:*",
+    "@wrenyard/quota": "workspace:*",
+    "@wrenyard/clients": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
