@@ -1,7 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { INSTANCE_VERSION } from './constants.mjs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { normalizeCheckout } from './paths.mjs';
+
+const INSTANCE_VERSION = 1;
 
 export function newInstanceId() {
   return randomBytes(12).toString('hex');
@@ -84,4 +87,17 @@ export function processAlive(pid, kill = process.kill.bind(process)) {
   } catch (error) {
     return error && error.code === 'EPERM';
   }
+}
+
+export function readInstanceFile(path, read = readFileSync) {
+  try {
+    return parseInstanceRecord(JSON.parse(read(path, 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+export function writeInstanceFile(path, record, write = writeFileSync, mkdir = mkdirSync) {
+  mkdir(dirname(path), { recursive: true });
+  write(path, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
 }

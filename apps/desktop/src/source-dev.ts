@@ -59,39 +59,7 @@ export function applySourceDevelopmentIdentity(
   return userData;
 }
 
-export interface DesktopUiState {
-  page?: string;
-  selectedSessionId?: string;
-  draft?: string;
-  modalOpen?: boolean;
-  streaming?: boolean;
-}
-
-export const CAPTURE_UI_SCRIPT = `(() => ({
-  page: document.documentElement.dataset.page ?? 'workbench',
-  draft: document.getElementById('conversation-input')?.value ?? '',
-  modalOpen: Array.from(document.querySelectorAll('[aria-modal="true"]')).some((element) =>
-    !element.closest('[hidden], [aria-hidden="true"]')
-    && element.getClientRects().length > 0
-    && getComputedStyle(element).visibility !== 'hidden'),
-}))()`;
-
-export function restoreUiScript(state: DesktopUiState): string {
-  const draft = JSON.stringify(state.draft ?? '');
-  const page = JSON.stringify(state.page ?? '');
-  return `(() => {
-    const input = document.getElementById('conversation-input');
-    if (input instanceof HTMLTextAreaElement) input.value = ${draft};
-    if (${page}) document.documentElement.dataset.page = ${page};
-    return true;
-  })()`;
-}
-
 export interface SourceDevHost {
-  activity(): Promise<{ running: boolean; streaming: boolean; modalOpen: boolean; busy: boolean }>;
-  snapshotUi(): Promise<DesktopUiState>;
-  restoreUi(state: DesktopUiState): Promise<void>;
-  reload(): Promise<void>;
   quit(): Promise<void>;
 }
 
@@ -131,7 +99,7 @@ export function connectSourceSupervisor(
       let message: {
         id?: number | string;
         method?: string;
-        params?: DesktopUiState;
+        params?: unknown;
         result?: unknown;
         error?: { message?: string };
       };
@@ -143,7 +111,7 @@ export function connectSourceSupervisor(
       if (message.method && message.id != null) {
         void (async () => {
           try {
-            const result = await dispatchHost(host, message.method!, message.params);
+            const result = await dispatchHost(host, message.method!);
             send({ jsonrpc: '2.0', id: message.id, result: result ?? { ok: true } });
           } catch (error) {
             send({
@@ -171,18 +139,8 @@ export function connectSourceSupervisor(
   };
 }
 
-async function dispatchHost(host: SourceDevHost, method: string, params?: DesktopUiState): Promise<unknown> {
+async function dispatchHost(host: SourceDevHost, method: string): Promise<unknown> {
   switch (method) {
-    case 'desktop.activity':
-      return host.activity();
-    case 'desktop.snapshotUi':
-      return host.snapshotUi();
-    case 'desktop.restoreUi':
-      await host.restoreUi(params ?? {});
-      return { ok: true };
-    case 'desktop.reload':
-      await host.reload();
-      return { ok: true };
     case 'desktop.quit':
       await host.quit();
       return { ok: true };
