@@ -45,7 +45,7 @@ import { renderModelList } from './model-list.js';
 import { formatBuildTime, formatCompactTokenCount, formatTaskCompletionTime, formatTaskCompletionTimeTooltip, formatTaskDuration } from './format.js';
 import { CLIENT_TABS, buildClientPageModel, renderClientPageMarkup, renderClientPlanPreview } from './client-page.js';
 import { renderInstructionTemplatePreview } from './prompt-template-preview.js';
-import { builtinModelDisplayName } from '@wrenyard/providers/model-display-names';
+import { builtinModelDisplayName } from '@wrenyard/models';
 import { createAgentTaskStatusIcon } from './agent-task-icon.js';
 import { brandIcon } from './brand-icons.js';
 import { providerBrand, classifyFamily, familyBrand } from './model-list.js';
@@ -1040,8 +1040,8 @@ function appendProviderPlanBilling(id: string, base: string): string {
   if (id === 'opencode-go') {
     extra =
       '套餐计费说明（仅为估算，非实际单次收费）：' +
-      `$10/月付费订阅；${builtinModelDisplayName('glm-5.3-flash')}/${builtinModelDisplayName('hy3')} 对应 $60 月用量，` +
-      `${builtinModelDisplayName('glm-5.3')}/${builtinModelDisplayName('deepseek-flash')} 对应 $15；` +
+      `$10/月付费订阅；${builtinModelDisplayName('glm-5.3-flash')}/${builtinModelDisplayName('hunyuan-hy3')} 对应 $60 月用量，` +
+      `${builtinModelDisplayName('glm-5.3')}/${builtinModelDisplayName('deepseek-v4.1-flash')} 对应 $15；` +
       `按月额度用满时摊销系数分别约 1/6 与 2/3，${builtinModelDisplayName('glm-5.3-flash')} 输出约 $0.0833/百万 Token；` +
       '5h/周/月是同一套餐的 20%/50%/100% 限制；如需避免超额扣余额，可在控制台按需关闭 Use balance。';
   } else if (id === 'zhipu-coding') {
