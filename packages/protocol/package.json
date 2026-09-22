@@ -1,0 +1,24 @@
+{
+  "name": "@wrenyard/protocol",
+  "version": "1.0.0-dev.35",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Type-only IDL for the Wrenyard IPC conversation protocol. Types describe the wire shape; they do not validate it.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./common": "./src/common/index.ts",
+    "./session": "./src/session/index.ts",
+    "./exec": "./src/exec/index.ts",
+    "./provider": "./src/provider/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
