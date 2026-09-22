@@ -74,7 +74,7 @@ test('workflow permissions and artifact transport remain minimal', () => {
   assert.ok(workflow.includes('actions/download-artifact@v4'));
   assert.ok(workflow.includes('cancel-in-progress: false'));
   assert.ok(!workflow.includes('cache: pnpm'));
-  assert.ok(workflow.includes('cache: false'));
+  assert.ok(!workflow.includes('actions/setup-go'));
 });
 
 test('root publication commands point directly at bounded release scripts', () => {
@@ -91,9 +91,10 @@ test('release:local stays build-only while retaining production build stages', (
   assert.ok(!localBuilder.includes('release:e2e'));
   assert.ok(!localBuilder.includes('desktop:smoke'));
   assert.ok(localBuilder.includes("run('pnpm', ['--filter', '@wrenyard/cli', 'build'])"));
-  assert.ok(localBuilder.includes("'build-runtime-package.mjs'"));
   assert.ok(localBuilder.includes("'build-sea.mjs'"));
   assert.ok(localBuilder.includes("'generate-license-report.mjs'"));
+  assert.ok(!localBuilder.includes('build-runtime-package.mjs'));
+  assert.ok(!localBuilder.includes('runtimeStage'));
   assert.ok(localBuilder.includes('assertSafeReleasePayload'));
   assert.ok(localBuilder.includes('assertNoBuildPathsInStagedForeman'));
 });

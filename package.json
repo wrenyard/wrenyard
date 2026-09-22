@@ -20,15 +20,11 @@
     "wrenyard": "./bin/wrenyard.mjs"
   },
   "scripts": {
-    "build": "pnpm -r --if-present run build && pnpm run forge:build",
+    "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test:tools": "node --test tools/*.test.mjs tools/**/*.test.mjs",
     "test:workspace": "pnpm --filter @wrenyard/pet run build && pnpm run test:tools && pnpm -r --if-present run test",
-    "test:forge": "go -C runtime/forge test ./...",
-    "test": "pnpm run test:workspace && pnpm run test:forge",
-    "forge:build": "go -C runtime/forge build -o bin/forge ./cmd/forge",
-    "forge:test": "pnpm run test:forge",
-    "forge:vet": "go -C runtime/forge vet ./...",
+    "test": "pnpm run test:workspace",
     "product": "node ./bin/wrenyard.mjs",
     "cli": "pnpm run product",
     "dev": "node ./tools/dev/run.mjs",
@@ -44,7 +40,6 @@
     "check:secrets": "node tools/check-secrets.mjs",
     "release:legal": "node tools/release/verify-legal.mjs",
     "release:licenses": "node tools/release/generate-license-report.mjs",
-    "release:runtime": "node tools/release/build-runtime-package.mjs",
     "release:sea": "node tools/release/build-sea.mjs",
     "release:local": "node tools/release/build-local-release.mjs",
     "release:validate": "node tools/release/validate-release.mjs",
@@ -55,7 +50,7 @@
     "release:e2e": "node --test tests/install/packed-install.test.mjs",
     "release:check": "node tools/release/verify-manifest.mjs && node tools/release/verify-legal.mjs",
     "desktop:smoke": "node tools/release/smoke-desktop.mjs",
-    "check": "pnpm run check:identifiers && pnpm run check:secrets && pnpm run release:check && pnpm run check:workspace && pnpm run forge:vet && pnpm run forge:test"
+    "check": "pnpm run check:identifiers && pnpm run check:secrets && pnpm run release:check && pnpm run check:workspace"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

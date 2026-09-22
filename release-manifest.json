@@ -6,11 +6,6 @@
   "publishable": false,
   "platform_artifacts": {},
   "components": {
-    "forge": {
-      "source": "runtime/forge",
-      "version": "1.0.0-dev.35",
-      "source_sha": "15d9c3f71edac4866e23fd8441cdef1edec3b4e9"
-    },
     "foreman": {
       "source": "services/foreman",
       "version": "1.0.0-dev.35",

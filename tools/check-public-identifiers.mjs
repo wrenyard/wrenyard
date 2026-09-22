@@ -10,17 +10,6 @@ import { fileURLToPath } from 'node:url';
 
 const suiteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// release:check forbids the transitional github.com/dluck/forge namespace for
-// publishable manifests, so only a development, non-publishable manifest may
-// defer it here; any other dluck occurrence still fails the scan.
-let devManifest = false;
-try {
-  const manifest = JSON.parse(readFileSync(join(suiteRoot, 'release-manifest.json'), 'utf8'));
-  devManifest = manifest.release_status === 'development' && manifest.publishable === false;
-} catch {
-  // unreadable manifest -> fall back to strict scanning
-}
-
 // Paths never scanned: generated artifacts, lockfiles, binary payloads, the
 // exact provenance snapshot document, and this scanner itself. Tests and
 // fixtures are scanned so leaks cannot hide in them.
@@ -83,13 +72,7 @@ for (const file of files) {
   scanned += 1;
   const lines = content.split('\n');
   for (let i = 0; i < lines.length; i += 1) {
-    // Only in development, non-publishable mode drop the exact legacy module
-    // literal from every runtime/forge candidate file, including _test.go;
-    // do not touch anything else.
-    let line = lines[i];
-    if (devManifest && file.startsWith('runtime/forge/')) {
-      line = line.replaceAll('github.com/dluck/forge', '');
-    }
+    const line = lines[i];
     for (const pattern of PATTERNS) {
       if (pattern.paths && !pattern.paths.test(file)) continue;
       if (pattern.re.test(line)) {

@@ -1,99 +1,59 @@
-# Wrenyard Architecture
+# Architecture
 
-Wrenyard is one public product in one monorepo: TypeScript control and UX
-surfaces plus a precompiled Go runtime. Foreman, Forge, Pet, and the Desktop
-shell are internal components of that single product.
+Wrenyard is one TypeScript product with CLI and Desktop surfaces and a daemon
+control plane. Installation and updates belong to the Wrenyard release tools.
+There is no separate agent runtime binary or Go build.
 
-## Components
+## Package boundaries
 
-- **apps/cli** -- the unified `wrenyard` command surface. Depends on
-  `packages/control-client` and `packages/runtime-resolver` to talk to the
-  control plane and locate the runtime.
-- **services/foreman** -- the control plane. Schedules and tracks task graph
-  work. Launches the `forge` executable; it has no Desktop/Pet lifecycle role.
-- **runtime/forge** -- the Go runtime that executes agent work and streams
-  activity. It has no dependency on Node.
-- **apps/pet** -- the headless Desktop companion renderer. Reads task and
-  taskgraph progress from Foreman over a read-only control protocol and owns
-  only passive companion overlay windows. It has no product tray, settings or
-  statistics window, quota lifecycle or hover action buttons. Its bounded
-  `stats.today` poll enriches the observational house Tips surface, while the
-  Desktop host pushes quota display data into it.
-- **apps/desktop** -- the 啾啾工坊 product shell. Owns the application window,
-  notification-area icon/menu, product-owned conversation UI, statistics,
-  quota and settings. DSH is an isolated loopback backend rather than an embedded Web UI;
-  Desktop projects its public session API through bounded IPC and fixes every
-  conversation to the configured Wrenyard workspace. Desktop also owns Pet
-  configuration and lifecycle through an in-process runtime module. It reads
-  `stats.summary` / `stats.today` directly from the public control protocol and
-  owns the quota feature refresh shared by its quota page, tray submenu and Pet
-  Tips rather than routing product data through Pet.
-- **packages/dsh-shell** -- the dsh profile/bundle shell reused by the desktop
-  host.
-- **packages/control-client** -- the typed client for the control-plane
-  protocol.
-- **packages/runtime-resolver** -- resolves which runtime binary to use.
-- **packages/runtime-*** -- auditable staging manifests for the CI-built
-  precompiled Forge runtime payloads.
+- `apps/cli` exposes commands and consumes daemon IPC.
+- `apps/desktop` owns UI, communication and its passive Pet renderer.
+- `services/foreman` owns durable tasks, scheduling and service lifecycle,
+  and composes feature services behind IPC handlers.
+- `packages/protocol` contains type-only IPC definitions grouped by feature.
+  The session contract remains a scaffold; exec and provider have daemon handlers.
+- `packages/features/exec` runs raw prompts, owns bounded event replay and
+  cancellation. Structured tasks translate their input into this execution API.
+- `packages/features/provider` implements provider listing, configuration and
+  quota queries. `features/quota` composes HTTP and native client account reads;
+  providers interpret the returned observations.
+- `packages/providers` and `packages/models` own provider and model definitions.
+- `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh}` implement
+  the common agent client interface: installation, arguments, native protocol,
+  account reads and token/TPS statistics.
+- `packages/execution` owns subprocess lifetime, stdio RPC and native credential
+  primitives (read-only SQLite and macOS keychain), without provider knowledge.
+- Browser/computer feature packages provide MCP descriptors and instructions;
+  clients encode those descriptors in their native configuration.
+- `packages/dsh-shell` provides the Desktop conversation integration.
 
-## Dependency direction
+## Execution
 
-- CLI -> control-client, runtime-resolver
-- Foreman -> quota feature / agent clients -> execution -> Forge executable
-- Pet -> Foreman (read-only current activity / today observer protocol)
-- Desktop -> DSH public session API, dsh-shell, public statistics/quota, Pet runtime + config contract
-- Forge has no dependency on Node
+```text
+CLI / Desktop -> protocol -> daemon -> feature
+structured task -> exec -> clients -> execution -> native client
+provider -> quota -> provider interpretation + clients / HTTP
+```
 
-## Quota feature
+Client events are normalized records. The daemon consumes their session IDs,
+terminal status, usage and generation samples directly. Execution targets use
+`provider/model:client`; automatic routing uses task requirements. There are no
+runtime profile prefixes or legacy policy-tier selectors.
 
-- `wrenyard quota [provider] [--json]` and daemon routing use
-  `packages/features/quota`; Desktop uses the same service through its quota UI adapter.
-- Each provider exposes `quota.read(source)` alongside its pool definitions.
-  The feature injects sources and isolates failures; providers own interpretation
-  and fallback. Routing and UI keep their caches.
-- DeepSeek, Kimi Coding and Zhipu Coding use direct HTTP in TypeScript.
-  CodeBuddy reads account-scoped exhaustion observations locally.
-- Independent `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh}`
-  packages implement `AgentClient` from `packages/clients/base`. The root clients
-  package composes them; daemon execution uses `start()` and quota uses
-  `readAccount()`. Command lines are private to client implementations.
-- Codex app-server and Grok ACP sequencing, plus Cursor/Claude usage HTTP,
-  live in their TypeScript clients. `execution -> forge client` carries bounded
-  RPC sequences or native credential requests. Forge retains SQLite/Keychain
-  credential access, refresh and generic subprocess transport, not quota logic.
-- Task execution still uses Forge native runtime drivers behind `AgentClient`;
-  those runtime drivers are separate from the migrated account-query clients.
-- `execution` owns generic Forge invocation, limits, cancellation and process
-  cleanup. It does not depend on providers or quota.
-- The old `forge quota` and statusline commands are retired. Old quota config
-  is ignored, and generated Claude settings remove Wrenyard's retired statusline
-  command while preserving custom user commands.
+The application permission system is retired. Native unattended-client settings,
+request cancellation, repository write coordination and credential redaction
+remain separate responsibilities. Retry/backoff/circuit policy is deferred.
 
-## Execution and distribution
+## State and distribution
 
-In development execution, the CLI, control plane, and runtime all run from
-the repository. Release artifacts are assembled locally: the Forge Go runtime
-is precompiled for the maintained public targets (`darwin-arm64` and
-`win32-x64`), and the packed CLI and portable suite zip bundle the pinned Node
-runtime that built them. Preview builds are installable from GitHub Releases'
-latest-dev channel; nothing is published to npm.
+Managed provider keys live in `<XDG_CONFIG_HOME or ~/.config>/wrenyard/providers/auth.json`.
+Dispatch aliases live in that config root under `wrenyard/dispatch/config.json`.
+Managed client data lives in `<XDG_DATA_HOME or ~/.local/share>/wrenyard/clients`.
+Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
+Official native client credential stores remain owned by those clients.
+No runtime migration, dual-read fallback or old installer is shipped.
 
-## Unified release, state, and paths
-
-Release artifacts, local state, and install paths are consolidated under the
-unified `wrenyard` identity. Components declare versions through the
-cross-component release-manifest contract under `contracts/`. `pnpm
-release:check` validates that the manifest is consistent.
-
-## Signing
-
-Preview builds are signed ad-hoc on macOS and unsigned by default on Windows.
-Trusted release signing is future work and never runs in this repository. See
-[docs/release/signing.md](release/signing.md).
-
-## Why pnpm is the single user entry
-
-Even though the runtime builds separately in Go, pnpm remains the single
-entry point for users and developers: workspace installs, builds, tests, and
-the unified `wrenyard` command all run through pnpm. Go tooling is exercised
-from the workspace when needed.
+Release assembly bundles the CLI/daemon Node environment and Desktop for the
+maintained macOS and Windows targets. Manifest/schema/version tooling describes
+only current product components. pnpm owns the source install and build workflow.
+Signing details remain in [release/signing.md](release/signing.md).
