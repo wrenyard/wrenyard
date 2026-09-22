@@ -15,7 +15,6 @@ import {
   type ModelDefaults,
   type RegisteredModel,
 } from '@wrenyard/models';
-import { builtinModelDisplayNameIfKnown } from '../model-display-names.ts';
 import {
   codeBuddyCanonicalModelId,
   productCreditsAreFree,
@@ -60,13 +59,16 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M2.7': 'minimax-m2.7',
   'claude-haiku-4.5': 'claude-haiku-4-5',
+  // CodeBuddy's unsuffixed Claude 5 ids are the 200K windows. The 1M rows are
+  // the same models as the official Sonnet 5 and Opus 5 definitions.
+  'claude-sonnet-5-1m': 'claude-sonnet-5',
+  'claude-opus-5-1m': 'claude-opus-5',
   // DeepSeek V4 ships as `deepseek-v4-<tier>` in the plain/internal product
   // files and as `deepseek-v4-<tier>-ioa` in the iOA one; both channel forms
   // collapse onto the two unified registry identities.
   'deepseek-v4-flash': 'deepseek-v4.1-flash',
   'deepseek-v4-flash-ioa': 'deepseek-v4.1-flash',
-  'deepseek-v4-pro': 'deepseek-pro',
-  'deepseek-v4-pro-ioa': 'deepseek-pro',
+  'deepseek-v4-pro-ioa': 'deepseek-v4-pro',
 };
 
 /**
@@ -89,8 +91,8 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
     // The unified registry already supplies Pro's tier, capability set, thinking
     // ladder, pricing and speed; only the product-file context/output metadata
     // is carried across as an override.
-    id: 'deepseek-pro',
-    modelId: 'deepseek-pro',
+    id: 'deepseek-v4-pro',
+    modelId: 'deepseek-v4-pro',
     overrides: {
       contextWindow: 1_000_000,
       maxTokens: 50_000,
@@ -107,6 +109,7 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
     id: 'hy3',
     modelId: 'hunyuan-hy3',
     free: true,
+    projectCanonical: true,
     overrides: { speed: 94, intelligence: 'low', capabilities: ['text'] },
   },
   {
@@ -138,12 +141,24 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
     projectCanonical: true,
     overrides: { intelligence: 'mid', capabilities: ['text'], speed: 73 },
   },
+  {
+    id: 'claude-sonnet-5-1m',
+    modelId: 'claude-sonnet-5',
+    projectCanonical: true,
+    overrides: { contextWindow: 1_000_000, maxTokens: 128_000, capabilities: ['text', 'image'] },
+  },
+  {
+    id: 'claude-opus-5-1m',
+    modelId: 'claude-opus-5',
+    projectCanonical: true,
+    overrides: { contextWindow: 1_000_000, capabilities: ['text', 'image'] },
+  },
 ];
 
-/** Confirmed iOA wire ids; `deepseek-pro` is the one DeepSeek entry added for Pro. */
+/** Confirmed iOA wire ids. */
 const CUSTOM_IOA_UPSTREAM: Readonly<Record<string, string>> = {
   'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
-  'deepseek-pro': 'deepseek-v4-pro-ioa',
+  'deepseek-v4-pro': 'deepseek-v4-pro-ioa',
   'hy4-preview': 'hy4-preview-ioa',
   'hy3': 'hy3-ioa',
   'minimax-m3': 'minimax-m3-ioa',
@@ -160,12 +175,17 @@ export const codeBuddyClient: ClientDefinition = {
   taskCapable: true,
 };
 
+// CodeBuddy publishes these exact ids as 200K models. They share a spelling
+// with the official 1M definitions and must not be treated as the same model.
+const SHORT_CONTEXT_CLAUDE_5 = new Set(['claude-sonnet-5', 'claude-opus-5']);
+
 function lookupUnifiedModelId(productId: string): string | undefined {
   const mapped = CODEBUDDY_PRODUCT_MODEL_IDS[productId];
   if (mapped && models.get(mapped)) return mapped;
   const stripped = codeBuddyCanonicalModelId(productId);
   const strippedMapped = CODEBUDDY_PRODUCT_MODEL_IDS[stripped];
   if (strippedMapped && models.get(strippedMapped)) return strippedMapped;
+  if (SHORT_CONTEXT_CLAUDE_5.has(productId) || SHORT_CONTEXT_CLAUDE_5.has(stripped)) return undefined;
   if (models.get(productId)) return productId;
   if (stripped !== productId && models.get(stripped)) return stripped;
   return undefined;
@@ -200,12 +220,12 @@ function offeringFromRegistered(
   const canonicalModel: CanonicalModelDefinition | undefined = custom?.projectCanonical === true
     ? {
         id: registered.id,
-        displayName: builtinModelDisplayNameIfKnown(registered.id) ?? registered.displayName,
+        displayName: registered.displayName,
       }
     : undefined;
   return {
     id: offeringId,
-    displayName: builtinModelDisplayNameIfKnown(offeringId) ?? registered.displayName,
+    displayName: registered.displayName,
     intelligence: overrides?.intelligence ?? defaults.intelligence,
     capabilities: overrides?.capabilities ?? defaults.capabilities,
     pricing: overrides?.pricing ?? defaults.pricing,
