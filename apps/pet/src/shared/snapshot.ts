@@ -1,8 +1,8 @@
 // Application-layer snapshot types.
 // Per final review: Phase, WorkerSnapshot, SessionMetaData are the single source
-// in forge-types.ts. This file re-exports them and adds rendering-specific types.
+// in agent-types.ts. This file re-exports them and adds rendering-specific types.
 
-export type { Phase, WorkerSnapshot, SessionMetaData } from '../main/forge-types';
+export type { Phase, WorkerSnapshot, SessionMetaData } from '../main/agent-types';
 export type { BroadcastInput, BroadcastIntensity, BroadcastSnapshot } from './broadcast';
 
 export type WorkerSkinId =
@@ -50,7 +50,7 @@ export interface Appearance {
 export type WorkerClient = 'claude' | 'codebuddy' | 'codex' | 'unknown';
 
 export interface SiteSnapshot {
-  workers: import('../main/forge-types').WorkerSnapshot[];
+  workers: import('../main/agent-types').WorkerSnapshot[];
   queuedCount: number;
   broadcast?: import('./broadcast').BroadcastSnapshot;
   dailyStats?: DailyStatsSnapshot;
@@ -85,7 +85,7 @@ export interface WorkerView {
   workerIdentityKey: string;
   profile: string;
   client: WorkerClient;
-  phase: import('../main/forge-types').Phase;
+  phase: import('../main/agent-types').Phase;
   appearance: Appearance;
   sinceMs: number;
   toolCount: number;

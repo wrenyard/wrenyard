@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
-import { createBuiltinCatalog } from '@wrenyard/providers';
+import { desktopCatalog } from './builtin-catalog.js';
 
 /**
  * Canonical (provider-independent) model identity used for the conversation
@@ -206,7 +206,7 @@ export function summaryGatewayCandidates(connection: WrenyardGatewayConnection):
  * label guess, and never inferred equivalence from another provider's id).
  */
 export function canonicalSummaryModelId(publicId: string): string {
-  const catalog = createBuiltinCatalog();
+  const catalog = desktopCatalog();
   const separator = publicId.indexOf('/');
   if (separator <= 0 || separator === publicId.length - 1) return publicId;
   const providerId = publicId.slice(0, separator);
