@@ -1,7 +1,7 @@
 /**
  * Daemon-owned runtime alias store.
  *
- * Persists <XDG_CONFIG_HOME or ~/.config>/wrenyard/runtime/config.json as a
+ * Persists <XDG_CONFIG_HOME or ~/.config>/wrenyard/dispatch/config.json as a
  * JSON document whose top-level contract is a non-negative integer `revision`
  * and an `aliases` object mapping a user alias name to a canonical
  * "provider/model:client" run string. Any unrelated top-level fields are
@@ -29,12 +29,6 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { formatRunSyntax, parseRunSyntax } from '@wrenyard/providers/catalog';
-import {
-  hasRuntimeProviderMigrationMarker,
-  markRuntimeProviderMigration,
-  migrateRuntimeChatGPTReferences,
-  RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY,
-} from '../config/chatgpt-migration.mts';
 
 export type StoreFileSystem = Pick<
   typeof defaultFs,
@@ -159,7 +153,7 @@ export function resolveConfigDir(
 ): string {
   const xdg = env.XDG_CONFIG_HOME;
   const base = typeof xdg === 'string' && xdg.trim().length > 0 ? xdg : joinFn(homeDir, '.config');
-  return joinFn(base, 'wrenyard', 'runtime');
+  return joinFn(base, 'wrenyard', 'dispatch');
 }
 
 type CanonicalResult = { canonical: string } | { error: string };
@@ -309,7 +303,6 @@ export class RuntimeAliasStore {
 
   /** Load the current revision, usable (canonical) aliases, and per-entry issues. */
   async load(): Promise<AliasStoreSnapshot> {
-    await this.migratePersistedChatGPTReferences();
     const state = await this.readState();
     return {
       revision: state.revision,
@@ -321,7 +314,6 @@ export class RuntimeAliasStore {
 
   /** Convenience: only the usable aliases, keyed by raw name with canonical values. */
   async list(): Promise<Record<string, string>> {
-    await this.migratePersistedChatGPTReferences();
     const state = await this.readState();
     return { ...state.validAliases };
   }
@@ -344,7 +336,7 @@ export class RuntimeAliasStore {
     const canonical = canonicalResult.canonical;
 
     return this.enqueueMutation(async () => {
-      const state = await this.migrateStateInsideQueue();
+      const state = await this.readState();
       this.assertRevision(state.revision, expectedRevision);
       const revision = state.revision + 1;
       const aliases: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
@@ -352,10 +344,7 @@ export class RuntimeAliasStore {
         aliases[name] = value;
       }
       aliases[alias] = canonical;
-      // put() writes canonical data, so the document is marked as migrated:
-      // a later load must not reinterpret the caller's canonical target as a
-      // legacy id (an API `anthropic` alias must never become `claude-coding`).
-      await this.writeJson({ ...state.extra, ...RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY, revision, aliases });
+      await this.writeJson({ ...state.extra, revision, aliases });
       return { alias, canonical, revision };
     });
   }
@@ -368,7 +357,7 @@ export class RuntimeAliasStore {
   async remove(alias: string, expectedRevision?: number): Promise<AliasRemovalResult> {
     validateAliasName(alias);
     return this.enqueueMutation(async () => {
-      const state = await this.migrateStateInsideQueue();
+      const state = await this.readState();
       this.assertRevision(state.revision, expectedRevision);
       if (!Object.prototype.hasOwnProperty.call(state.rawAliases, alias)) {
         return { alias, removed: false, revision: state.revision };
@@ -379,7 +368,7 @@ export class RuntimeAliasStore {
       }
       delete aliases[alias];
       const revision = state.revision + 1;
-      await this.writeJson({ ...state.extra, ...RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY, revision, aliases });
+      await this.writeJson({ ...state.extra, revision, aliases });
       return { alias, removed: true, revision };
     });
   }
@@ -390,56 +379,6 @@ export class RuntimeAliasStore {
     }
   }
 
-  /**
-   * Re-read state from inside the mutation queue and apply the one-time
-   * provider identity migration. An unmarked persisted document may contain
-   * legacy provider references (for example the legacy subscription `anthropic`
-   * now canonicalized as `claude-coding`, or `anthropic-api` as `anthropic`);
-   * those are rewritten, the migration marker is written in the same atomic
-   * update, the revision is bumped exactly once, and the result is persisted
-   * before the caller's own mutation proceeds. A document that already carries
-   * the marker — or one that contains no legacy provider reference at all — is
-   * returned untouched, so canonical `anthropic` API references written by an
-   * earlier pass are never re-aliased and unrelated mutations never observe a
-   * phantom revision bump. This runs inside the queue (never re-enqueues) so it
-   * cannot deadlock and the caller's CAS uses the migrated revision.
-   */
-  private async migrateStateInsideQueue(): Promise<ReadState> {
-    const state = await this.readState();
-    if (!state.exists) return state;
-    if (hasRuntimeProviderMigrationMarker(state.extra)) return state;
-
-    const migrated = migrateRuntimeChatGPTReferences({
-      aliases: state.rawAliases,
-      ...state.extra,
-    });
-    if (!migrated.changed) return state;
-
-    const record = markRuntimeProviderMigration(migrated.record).record as Record<string, unknown>;
-    const { aliases, ...extra } = record;
-    const rawAliases =
-      typeof aliases === 'object' && aliases !== null && !Array.isArray(aliases)
-        ? (aliases as Record<string, unknown>)
-        : state.rawAliases;
-    const revision = state.revision + 1;
-    await this.writeJson({ ...extra, revision, aliases: rawAliases });
-    return this.readState();
-  }
-
-  /**
-   * Ensure the persisted document is migrated to canonical ChatGPT identity
-   * references exactly once, preserving unknown/unrelated runtime config
-   * fields. Serialized through the mutation queue so concurrent load/list
-   * calls cannot race the rewrite or double-bump the revision.
-   */
-  private async migratePersistedChatGPTReferences(): Promise<void> {
-    await this.enqueueMutation(() => this.migrateStateInsideQueue().then(() => undefined));
-  }
-  /**
-   * Append a mutation onto the per-store queue. The returned promise adopts
-   * the mutation outcome (success or rejection); the queue tail itself always
-   * settles so one rejected mutation never blocks later ones.
-   */
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = this.mutationQueue.then(operation);
     this.mutationQueue = run.then(

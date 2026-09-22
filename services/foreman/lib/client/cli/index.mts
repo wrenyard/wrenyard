@@ -9,6 +9,7 @@ import { handleProject } from './commands/project.mts'
 import { handleStatus } from './commands/status.mts'
 import { handleUpdate } from './commands/update.mts'
 import { handleTask } from './commands/task.mts'
+import { handleExec } from './commands/exec.mts'
 import { handleTaskgraph } from './commands/taskgraph.mts'
 import { launchTui } from './tui-launcher.mts'
 import { resolveCliArgs } from './args.mts'
@@ -53,6 +54,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return 1
       case 'task':
         return handleTask(args.slice(1))
+      case 'exec':
+        return handleExec(args.slice(1))
       case 'project':
         return handleProject(args.slice(1))
       case 'status':
@@ -88,6 +91,7 @@ Usage:
   wrenyard task status <task_run_id> [--config path]
   wrenyard task output <task_run_id> [--config path]
   wrenyard task doctor [--config path] [--json]
+  wrenyard exec <prompt> --target <provider/model:client> [--cwd path] [--resume <session-id>] [--thinking <level>] [--features a,b] [--config path] [--json] [--no-stream]
   wrenyard daemon <start|stop|restart|status|freeze|thaw|drain|dispatch-status> [--config path] [--host 0.0.0.0] [--port 8787] [--no-wait] [--json]
   wrenyard -v | --version
   wrenyard status [--config path] [--json]

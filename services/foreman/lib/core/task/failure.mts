@@ -48,16 +48,16 @@ export function extractGateFailure(error: unknown): GateFailurePayload | undefin
   return undefined
 }
 
-// ── Forge FailureClass mapping ──────────────────────────────────────────
+// ── Agent-runtime failure classification ────────────────────────────────
 //
-// Canonical Forge failure classification surfaced on `forge.agent.stream` v1
-// `run_finished` events. The union matches the closed classifier values the Go
-// runtime emits; `none` means the run succeeded / no failure class applies.
-// Only these five values are legal — task-domain code must never synthesize a
-// different value, and must not collapse a classified runtime failure into the
-// generic `agent_failed` bucket.
+// Canonical failure classification surfaced by the native clients on
+// `run_finished` records. The union matches the closed classifier values the
+// native agent runtime may emit; `none` means the run succeeded / no failure
+// class applies. Only these five values are legal — task-domain code must
+// never synthesize a different value, and must not collapse a classified
+// runtime failure into the generic `agent_failed` bucket.
 
-export type ForgeFailureClass =
+export type AgentFailureClass =
   | 'none'
   | 'profile_specific_limit'
   | 'transient_provider'
@@ -66,10 +66,11 @@ export type ForgeFailureClass =
 
 /**
  * Distinct task failure categories that must stay separable in reporting. The
- * structured-output collector and supervisor map Forge failures onto these
- * without inferring from error text; the categories below are deliberately
- * kept apart from `agent_failed` so a capacity/policy exhaustion is observable
- * as a runtime/transport problem rather than a generic agent failure.
+ * structured-output collector and supervisor map classified agent-runtime
+ * failures onto these without inferring from error text; the categories below
+ * are deliberately kept apart from `agent_failed` so a capacity/policy
+ * exhaustion is observable as a runtime/transport problem rather than a
+ * generic agent failure.
  */
 export type TaskFailureCategory =
   | 'input_validation_failed'
@@ -84,7 +85,7 @@ export type TaskFailureCategory =
   | 'transport'
 
 /**
- * Map a canonical Forge FailureClass to a stable task failure category.
+ * Map a canonical agent-runtime FailureClass to a stable task failure category.
  *
  * - `profile_specific_limit` / `policy_exhausted` -> `runtime_status`
  * - `transient_provider` -> `transport`
@@ -95,8 +96,8 @@ export type TaskFailureCategory =
  * Returns undefined for unknown values so callers can decide; the structured
  * collector treats a missing/unknown class as `agent_failed`.
  */
-export function mapForgeFailureClass(
-  failureClass: ForgeFailureClass | string | null | undefined,
+export function mapAgentFailureClass(
+  failureClass: AgentFailureClass | string | null | undefined,
 ): TaskFailureCategory | undefined {
   switch (failureClass) {
     case 'profile_specific_limit':
@@ -116,13 +117,13 @@ export function mapForgeFailureClass(
   }
 }
 
-/** Stable structured payload builder for a Forge-classified failure. */
-export function forgeFailurePayload(
-  failureClass: ForgeFailureClass | string | null | undefined,
+/** Stable structured payload builder for a classified agent-runtime failure. */
+export function agentFailurePayload(
+  failureClass: AgentFailureClass | string | null | undefined,
   executionId: string,
   detail?: string | null,
 ): { type: TaskFailureCategory; execution_id: string; status: 'failed'; detail?: string } {
-  const category = mapForgeFailureClass(failureClass) ?? 'agent_failed'
+  const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
   return {
     type: category,
     execution_id: executionId,

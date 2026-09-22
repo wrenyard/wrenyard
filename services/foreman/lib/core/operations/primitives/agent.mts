@@ -6,8 +6,7 @@ import type {
   ExecutionResult,
   ExecutionStatus,
 } from '../types.mts'
-import type { PermissionMode } from '../../../types.mts'
-import type { AgentRuntimePermission, TaskDispatchSnapshot } from '../types.mts'
+import type { TaskDispatchSnapshot } from '../types.mts'
 
 export type AgentStatus = 'done' | 'failed' | 'cancelled'
 
@@ -15,22 +14,24 @@ export interface AgentOpts {
   cwd?: string
   workingDirectory?: string
   timeoutMs?: number
-  permission?: PermissionMode
-  /** Repository coordination only; runtime permission is always YOLO. */
+  /** Repository coordination only. Defaults to true: an omitted repoWriteLock
+   *  keeps the conservative repo-wide write lock. An observational task may set
+   *  it explicitly to false to stay concurrent. */
   repoWriteLock?: boolean
   resume?: string
   taskId?: string
   clientFamily?: ClientFamily
-  capabilities?: readonly string[]
+  /** Selected execution-feature ids (MCP feature bundles). */
+  features?: readonly string[]
   writePaths?: readonly string[]
   /** Original requested agent runtime, carried separately from the exact
-   *  approved execution profile chosen by the daemon dispatch resolver. */
+   *  approved execution target chosen by the daemon dispatch resolver. */
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('../types.mts').TaskDispatchSnapshot | null
   /** Private non-persistent CodeBuddy admission binding. */
   codeBuddyExecution?: import('../types.mts').CodeBuddyExecutionBinding
-  /** Canonical Forge failure class supplied by the resolver. */
+  /** Canonical agent-runtime failure class supplied by the resolver. */
   failureClass?: string | null
 }
 
@@ -50,7 +51,7 @@ export interface AgentResult {
   requestedAgentRuntime?: string
   /** Per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: TaskDispatchSnapshot | null
-  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: string | null
 }
 
@@ -95,11 +96,13 @@ async function runAgentWithHost(
   // resolver); the original requested runtime is carried separately so it is
   // never confused with the approved plan.
   const requestedAgentRuntime = opts.requestedAgentRuntime ?? profile
-  const repoWriteLock = opts.repoWriteLock ?? legacyPermissionRequiresWriteLock(opts.permission)
+  // Repository coordination only. An omitted repoWriteLock keeps the historical
+  // conservative default (repo-wide write lock); observational callers opt out
+  // explicitly with `false`.
+  const repoWriteLock = opts.repoWriteLock ?? true
   const handle = await host.startExecution({
     taskId: opts.taskId,
     profile,
-    permission: normalizePermission(opts.permission),
     repoWriteLock,
     cwd: resolve(opts.cwd ?? opts.workingDirectory ?? process.cwd()),
     prompt,
@@ -107,7 +110,7 @@ async function runAgentWithHost(
     timeoutMs: opts.timeoutMs,
     clientFamily: opts.clientFamily,
     requestedAgentRuntime,
-    capabilities: opts.capabilities,
+    features: opts.features,
     writePaths: opts.writePaths,
     dispatchSnapshot: opts.dispatchSnapshot ?? null,
     codeBuddyExecution: opts.codeBuddyExecution,
@@ -124,17 +127,6 @@ async function runAgentWithHost(
     dispatchSnapshot: opts.dispatchSnapshot ?? null,
     failureClass: result.failureClass ?? null,
   }
-}
-
-function normalizePermission(permission: AgentOpts['permission']): AgentRuntimePermission {
-  void permission
-  return 'yolo'
-}
-
-function legacyPermissionRequiresWriteLock(permission: AgentOpts['permission']): boolean {
-  // Preserve coordination for callers that have not adopted repoWriteLock.
-  // Historically an omitted mode defaulted to edit.
-  return permission === undefined || permission === 'edit' || permission === 'yolo'
 }
 
 function toAgentResult(result: ExecutionResult, record: ExecutionRecord | undefined): AgentResult {

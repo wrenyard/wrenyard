@@ -31,10 +31,14 @@ import { TaskGraphService } from '../core/taskgraph/index.mts'
 import { TaskSettingsService } from './services/task-settings-service.mts'
 import { AutoRoutingQuotaSnapshotService } from './services/auto-routing-snapshot-service.mts'
 import {
-  evaluateForgeNativeRouteReadiness,
-  queryForgeProviderReadiness,
-} from './execution/forge-provider-readiness-query.mts'
-import { queryForgeClientReadiness } from './execution/forge-client-readiness-query.mts'
+  evaluateNativeRouteReadiness,
+  projectModelAvailability,
+  type NativeProviderReadinessSnapshot,
+} from './execution/native-provider-readiness.mts'
+import { createAgentClients, CodeBuddyClient, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
+import { ExecService } from '@wrenyard/exec'
+import { ProviderService } from '@wrenyard/provider-service'
+import { createExecFeatureRegistry } from './execution/exec-features.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
@@ -44,7 +48,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { MessageService, type ExternalDeliveryPort } from '../message/message-service.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
-import { createBuiltinCatalog, createBuiltinProviderRuntime, deriveTaskDispatchPlans, builtinModelDisplayId, resolveModelSpeed } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy } from '@wrenyard/providers'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
@@ -289,7 +293,7 @@ async function startForemanDaemonWithRuntime(
   const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
   // One daemon-owned RuntimeAliasStore + RuntimeAliasService back the
   // runtime.alias.* IPC surface. The store resolves the
-  // XDG_CONFIG_HOME/~/.config/wrenyard/runtime/config.json path itself, and no
+  // XDG_CONFIG_HOME/~/.config/wrenyard/dispatch/config.json path itself, and no
   // alias target is cached: every snapshot/put/remove/resolve reloads at call
   // time so the service never serves a stale copied triple. This single alias
   // owner is constructed before TaskSettingsService and shared with it — task
@@ -321,17 +325,40 @@ async function startForemanDaemonWithRuntime(
   const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService({
     codeBuddySnapshot: loadCurrentCodeBuddySnapshot,
   })
-  // Authoritative, non-inference native auth/readiness comes from Forge's
-  // existing provider resolver. The safe projection carries only id/auth_ok;
-  // TaskSettings invokes it once per relevant evaluation and never receives a
-  // native credential or promotes native auth into Gateway support.
-  const loadNativeProviderReadiness = () => queryForgeProviderReadiness()
-  // Authoritative, non-inference client readiness comes from `forge doctor
-  // clients --json`: ALL catalog/config clients with their enabled/installed
-  // facts, using Forge's own clientInstalled/IsClientEnabled authority rather
-  // than the partial UI surface discovery, which only supports a subset of
-  // clients and probes expensive app capabilities.
-  const loadClientReadiness = () => queryForgeClientReadiness()
+  // Authoritative, non-inference native auth/model readiness now comes from the
+  // clients' own native observations (AgentClient.readReadiness), not a Wrenyard
+  // subprocess. The daemon boundary only maps each native client to its known
+  // canonical provider binding and canonicalizes public model ids; no native
+  // credential crosses this boundary and native auth is never promoted into
+  // Gateway support. Auth unknown stays an absent entry (never false).
+  const loadNativeProviderReadiness = async (): Promise<NativeProviderReadinessSnapshot> => {
+    const authByProvider: Record<string, boolean> = {}
+    const clients = createAgentClients()
+    const codexReadiness = await readClientReadiness(clients.get('codex'))
+    if (codexReadiness?.authentication === 'ready') authByProvider.chatgpt = true
+    else if (codexReadiness?.authentication === 'missing') authByProvider.chatgpt = false
+    const cursorReadiness = await readClientReadiness(clients.get('cursor'))
+    if (cursorReadiness?.authentication === 'ready') authByProvider.cursor = true
+    else if (cursorReadiness?.authentication === 'missing') authByProvider.cursor = false
+    const cursorModelAvailability = cursorReadiness?.authentication === 'ready'
+      ? projectModelAvailability(cursorReadiness.modelAvailability, 'cursor')
+      : undefined
+    return Object.freeze({
+      sampledAtMs: Date.now(),
+      authByProvider: Object.freeze(authByProvider),
+      ...(cursorModelAvailability === undefined ? {} : { cursorModelAvailability }),
+    })
+  }
+  // Client installation comes from each AgentClient.inspect. Enabled follows
+  // the registered client; installed is the inspect result.
+  const loadClientReadiness = async () => {
+    const clientsById: Record<string, { enabled: boolean; installed: boolean }> = {}
+    for (const [id, client] of createAgentClients()) {
+      const status = await client.inspect()
+      clientsById[id] = { enabled: true, installed: status.installation.state === 'installed' }
+    }
+    return { sampledAtMs: Date.now(), clientsById }
+  }
   // One daemon-owned TaskSettingsService shares the already-created resolver,
   // the single alias owner, the shared quota snapshot service, and the
   // authoritative config path; no second catalog/resolver/alias store is
@@ -344,8 +371,8 @@ async function startForemanDaemonWithRuntime(
     aliases: runtimeAliasService,
     quotaSnapshots: autoRoutingQuotaSnapshots,
     nativeProviderReadiness: loadNativeProviderReadiness,
-    // The production gate uses Forge's authoritative per-client state for ALL
-    // clients; a client must be enabled AND installed to be admitted.
+    // The production gate uses each registered client's own inspect state for
+    // ALL clients; a client must be enabled AND installed to be admitted.
     clientReadiness: loadClientReadiness,
     // Non-billable readiness: real daemon admission status (never a paid probe)
     // plus the current provider credential/route availability. Unknown quota is
@@ -384,7 +411,7 @@ async function startForemanDaemonWithRuntime(
             readiness = undefined
           }
         }
-        const state = evaluateForgeNativeRouteReadiness(readiness, {
+        const state = evaluateNativeRouteReadiness(readiness, {
           providerId: providerDef.id,
           client,
           mode,
@@ -515,7 +542,7 @@ async function startForemanDaemonWithRuntime(
   })
   // Recovered tasks can dispatch during startup reconciliation, before the
   // HTTP listener and IPC transport are exposed. Install the exact canonical
-  // task plans and provisional loopback connection first so Forge never falls
+  // task plans and provisional loopback connection first so Wrenyard never falls
   // back to resolving provider/model/protocol data itself.
   let restoreGatewayEnvironment = installGatewayEnvironment({
     ...await gateway.connection(gatewayOrigin(config.service.host, config.service.port)),
@@ -581,6 +608,11 @@ async function startForemanDaemonWithRuntime(
     ],
     clientGateway,
   )
+  const providerService = new ProviderService({
+    catalog, runtime: providerRuntime,
+    modelStatus: () => taskSettingsService.modelStatus(),
+    localSpeed: readLocalSpeedSamples,
+  })
   const rpcRouter = createDaemonRpcRouter({
     startedAt,
     workspaceRoot: config.workspaceRoot,
@@ -593,59 +625,9 @@ async function startForemanDaemonWithRuntime(
       ...await gateway.connection(gatewayOrigin(config.service.host, boundPort)),
       token: gatewayToken,
     }),
-    providerList: async () => {
-      let modelStatus = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
-      try { modelStatus = await taskSettingsService.modelStatus() } catch { /* fail closed */ }
-      // One trailing-31-day local sample read per request, shared by every model
-      // so the resolver never re-reads the event store per provider/model.
-      const localSpeed = readLocalSpeedSamples()
-      return { providers: await Promise.all(catalog.providers().map(async (provider) => {
-        const credential = await providerRuntime.credential(provider)
-        const nativeConfigured = provider.credentialResolver !== 'forge-managed'
-          && provider.credentialResolver !== 'codebuddy'
-          && provider.models.some((model) => modelStatus.has(`${provider.id}/${model.id}`))
-        const configured = credential !== undefined || nativeConfigured
-        return {
-          id: provider.id,
-          displayName: provider.displayName,
-          description: provider.description ?? '',
-          setupHint: provider.setupHint ?? '',
-          configured,
-          authMode: provider.credentialResolver === 'forge-managed' ? 'api-key' as const
-            : provider.credentialResolver ? 'native' as const : 'none' as const,
-          protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
-          models: provider.models.map((model) => {
-            const key = `${provider.id}/${model.id}`
-            const status = modelStatus.get(key)
-            // The shared resolver owns effectiveTps for every model, active or not.
-            const speed = resolveModelSpeed(provider, model, localSpeed)
-            return {
-              id: model.id,
-              displayName: model.displayName,
-              ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-              ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
-              ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
-              ...(model.free === undefined ? {} : { free: model.free }),
-              ...(status === undefined ? {} : status),
-              effectiveTps: speed.tps,
-              speedSource: speed.source,
-              canonicalId: model.canonicalModel?.id ?? builtinModelDisplayId(model.id),
-              intelligence: model.intelligence,
-              pricing: model.pricing,
-              // Availability is a fact about the current credential AND the
-              // resolver's admitted provider/model set; no model is hardcoded.
-              available: configured && modelStatus.has(key),
-            }
-          }),
-        }
-      })) }
-    },
-    providerConfigure: async ({ providerId, key }) => {
-      const provider = catalog.provider(providerId)
-      if (!provider) throw new Error(`unknown provider: ${providerId}`)
-      await providerRuntime.configureApiKey(provider, key)
-      return { ok: true as const }
-    },
+    providerList: () => providerService.list(),
+    providerConfigure: (params) => providerService.configure(params),
+    providerQuota: (params) => providerService.quotaSnapshot(params),
     clientConfiguration: {
       snapshot: () => clientConfigurationService.snapshot(),
       plan: ({ clientId, selection }) => clientConfigurationService.plan(clientId, selection),
@@ -655,29 +637,60 @@ async function startForemanDaemonWithRuntime(
     },
     taskSettings: taskSettingsService,
     runtimeAlias: runtimeAliasService,
-    // Exact current-Catalog display-name lookup for stats recent-run rows: only
-    // the builtin Catalog definitions for the exact persisted provider/model ids
-    // feed the paired labels, and only when both definitions exist with nonempty
-    // display names. Aliases, run syntax, and client/upstream identifiers are
-    // never consulted.
-    resolveTaskRunDisplayNames: (providerId, modelId) => {
-      const provider = catalog.provider(providerId)
-      if (!provider) return undefined
-      const model = provider.models.find((candidate) => candidate.id === modelId)
-      if (!model) return undefined
-      const providerDisplayName = provider.displayName
-      const modelDisplayName = model.displayName
-      if (typeof providerDisplayName !== 'string' || providerDisplayName.trim() === '') return undefined
-      if (typeof modelDisplayName !== 'string' || modelDisplayName.trim() === '') return undefined
-      const canonicalModel = model.canonicalModel
-      const statsModelId = canonicalModel?.id ?? `${providerId}/${modelId}`
-      const statsModelDisplayName = canonicalModel?.displayName ?? modelDisplayName
+    execService: runtime.execService,
+    resolveExecRequest: (params) => {
+      const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
+      if (!provider) throw new Error('Execution requires a provider')
+      if (params.thinking && !['low', 'medium', 'high', 'xhigh', 'max'].includes(params.thinking)) throw new Error('Invalid thinking level')
+      const plan = catalog.resolveRun(params.client, provider, params.model, params.thinking as Parameters<typeof catalog.resolveRun>[3])
+      if (params.mode && params.mode !== plan.mode) throw new Error('Requested mode does not match the selected client/provider')
       return {
-        provider_display_name: providerDisplayName.trim(),
-        model_display_name: modelDisplayName.trim(),
-        stats_model_key: canonicalModel ? `canonical:${statsModelId}` : `provider-local:${statsModelId}`,
+        ...params, provider, canonicalModel: plan.model,
+        model: plan.upstreamModel ?? plan.model, mode: plan.mode, protocol: plan.protocol,
+        thinking: plan.reasoningEffort ?? plan.thinking,
+      }
+    },
+    // Display-name lookup for stats rows. The persisted provider id arrives
+    // already normalized by the stats source; the persisted model id is first
+    // normalized through the provider's own registry alias map (the same map the
+    // Catalog uses to build public ids) so a recognized historical alias still
+    // resolves to its current definition when offerings move. When the current
+    // offerings no longer list the exact recorded route — for example a provider
+    // that dropped an alias — the exact recorded provider/model ids are returned
+    // with the best available provider label, so a historical row is never left
+    // blank, a missing provider/model identity is never invented, and no client
+    // or upstream identifier is consulted.
+    resolveTaskRunDisplayNames: (providerId, modelId) => {
+      const recordedProvider = typeof providerId === 'string' ? providerId.trim() : ''
+      const recordedModel = typeof modelId === 'string' ? modelId.trim() : ''
+      if (recordedProvider === '' || recordedModel === '') return undefined
+      const provider = catalog.provider(recordedProvider)
+      const normalizedModelId = provider?.modelAliases?.[recordedModel] ?? recordedModel
+      const model = provider?.models.find((candidate) => candidate.id === normalizedModelId)
+      const providerDisplayName = provider?.displayName?.trim()
+      const modelDisplayName = model?.displayName?.trim()
+      if (model && providerDisplayName && modelDisplayName) {
+        const canonicalModel = model.canonicalModel
+        const statsModelId = canonicalModel?.id ?? `${recordedProvider}/${normalizedModelId}`
+        const statsModelDisplayName = canonicalModel?.displayName ?? modelDisplayName
+        return {
+          provider_display_name: providerDisplayName,
+          model_display_name: modelDisplayName,
+          stats_model_key: canonicalModel ? `canonical:${statsModelId}` : `provider-local:${statsModelId}`,
+          stats_model_id: statsModelId,
+          stats_model_display_name: statsModelDisplayName.trim(),
+        }
+      }
+      // Truthful, exact recorded fallback: the identity is known, only the
+      // current definition is not. Keep it provider-local so equal raw model
+      // strings from unrelated providers can never collide.
+      const statsModelId = `${recordedProvider}/${recordedModel}`
+      return {
+        provider_display_name: providerDisplayName || recordedProvider,
+        model_display_name: recordedModel,
+        stats_model_key: `provider-local:${statsModelId}`,
         stats_model_id: statsModelId,
-        stats_model_display_name: statsModelDisplayName.trim(),
+        stats_model_display_name: recordedModel,
       }
     },
     shutdown: async (reason) => {
@@ -842,6 +855,7 @@ async function startForemanDaemonWithRuntime(
       stopped = true
       let ipcError: unknown
       let supervisorError: unknown
+      let execError: unknown
       const httpClose = closeHttpServerIfListening(httpServer)
       await gateway.close()
       restoreGatewayEnvironment()
@@ -857,6 +871,15 @@ async function startForemanDaemonWithRuntime(
         supervisorError = error
         writeDaemonLog('warn', 'supervisor shutdown failed', error)
       }
+      // Cancel every live raw prompt execution so no agent child outlives the
+      // daemon. The task supervisor's children are already settled above; this
+      // covers executions started through the exec RPC/CLI surface.
+      try {
+        await runtime.execService.close()
+      } catch (error) {
+        execError = error
+        writeDaemonLog('warn', 'exec service shutdown failed', error)
+      }
 
       try {
         mcpServer.close()
@@ -868,6 +891,7 @@ async function startForemanDaemonWithRuntime(
       }
 
       if (ipcError) throw ipcError
+      if (execError) throw execError
       if (supervisorError) throw supervisorError
     },
   }
@@ -986,6 +1010,20 @@ function gatewayRequestAuthorized(request: IncomingMessage, expectedToken: strin
   return providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf)
 }
 
+/**
+ * One bounded native client observation for the daemon-boundary readiness
+ * snapshot. A client without readReadiness, or any failed observation, yields
+ * undefined so the caller records it as unknown rather than ready.
+ */
+async function readClientReadiness(client: AgentClient | undefined): Promise<NativeClientReadiness | undefined> {
+  if (client?.readReadiness === undefined) return undefined
+  try {
+    return await client.readReadiness()
+  } catch {
+    return undefined
+  }
+}
+
 interface DaemonRpcRouterOptions {
   startedAt: number
   workspaceRoot: string
@@ -998,9 +1036,12 @@ interface DaemonRpcRouterOptions {
   gatewayConnection?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['gatewayConnection']
   providerList?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerList']
   providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
+  providerQuota?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerQuota']
   clientConfiguration?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['clientConfiguration']
   taskSettings?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskSettings']
   runtimeAlias?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['runtimeAlias']
+  execService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['execService']
+  resolveExecRequest?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveExecRequest']
   resolveTaskRunDisplayNames?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveTaskRunDisplayNames']
 }
 
@@ -1016,6 +1057,8 @@ interface ForemanDaemonRuntime {
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
   dispatchControl: DispatchControl
+  /** Shared raw prompt-execution service consumed by the RPC surface and tasks. */
+  execService: ExecService
   catalog: import('@wrenyard/providers/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
@@ -1042,8 +1085,21 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   // installed WRENYARD_DISPATCH_PLANS_JSON stay canonical and never freeze a
   // CodeBuddy login/environment wire remap at startup — the current login is
   // bound afresh when a CodeBuddy dispatch plan is actually used.
-  const catalog = createBuiltinCatalog()
-  const providerRuntime = createBuiltinProviderRuntime()
+  //
+  // One CodeBuddy install read supplies both the public product facts and the
+  // private account context the provider binds to its credential.
+  const install = await new CodeBuddyClient().readInstall()
+  const codeBuddy = createCodeBuddy({
+    product: {
+      status: install.product.status,
+      environment: install.product.environment,
+      entries: install.product.entries,
+      ...(install.product.identity ? { identity: install.product.identity } : {}),
+      ...(install.account ? { account: install.account } : {}),
+    },
+  })
+  const catalog = createBuiltinCatalog([codeBuddy])
+  const providerRuntime = createBuiltinProviderRuntime({ providers: [codeBuddy] })
   const dispatchPlans = deriveTaskDispatchPlans(catalog)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
@@ -1055,10 +1111,23 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
   try {
     new WorkflowRunStore(db).markAllNonTerminalCancelled(new Date().toISOString())
     const repoWriteLocks = new RepoWriteLocks()
+    // One daemon-owned raw prompt-execution service shared by the RPC surface,
+    // the CLI, and the task supervisor. It owns a single client map and a single
+    // configured feature registry, so a structured task attempt and an explicit
+    // `wrenyard exec` share the exact same launch path and shutdown handling.
+    // Its features are explicit environment MCP descriptors (see
+    // exec-features.mts); no credential or environment value crosses the public
+    // IPC surface.
+    const execService = new ExecService({
+      clients: createAgentClients(),
+      features: createExecFeatureRegistry(),
+    })
     const supervisor = new AgentExecutionSupervisor({
       db,
       repoWriteLocks,
       logger: createDaemonSupervisorLogger(),
+      catalog,
+      execService,
     })
     const runner = new TaskWorkflowRunner({
       db,
@@ -1071,7 +1140,7 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, dispatchControl, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, dispatchControl, execService, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error
@@ -1084,6 +1153,11 @@ async function cleanupFailedDaemonStart(runtime: ForemanDaemonRuntime): Promise<
     await runtime.supervisor.shutdown()
   } catch (error) {
     writeDaemonLog('warn', 'supervisor startup cleanup failed', error)
+  }
+  try {
+    await runtime.execService.close()
+  } catch (error) {
+    writeDaemonLog('warn', 'exec service startup cleanup failed', error)
   } finally {
     releaseDaemonDb()
   }
