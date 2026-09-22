@@ -39,7 +39,7 @@ shell are internal components of that single product.
 ## Dependency direction
 
 - CLI -> control-client, runtime-resolver
-- Foreman -> Forge executable
+- Foreman -> quota feature / agent clients -> execution -> Forge executable
 - Pet -> Foreman (read-only current activity / today observer protocol)
 - Desktop -> DSH public session API, dsh-shell, public statistics/quota, Pet runtime + config contract
 - Forge has no dependency on Node
@@ -48,13 +48,21 @@ shell are internal components of that single product.
 
 - `wrenyard quota [provider] [--json]` and daemon routing use
   `packages/features/quota`; Desktop uses the same service through its quota UI adapter.
-- Providers own pure normalization into quota snapshots. The feature selects
-  acquisition sources and isolates provider failures; routing and UI keep their caches.
+- Each provider exposes `quota.read(source)` alongside its pool definitions.
+  The feature injects sources and isolates failures; providers own interpretation
+  and fallback. Routing and UI keep their caches.
 - DeepSeek, Kimi Coding and Zhipu Coding use direct HTTP in TypeScript.
   CodeBuddy reads account-scoped exhaustion observations locally.
-- Codex app-server, Grok ACP, Cursor local credentials and Claude native
-  credentials/OAuth use `clients -> execution -> forge client`. The Go client
-  operations return raw observations. They do not normalize or cache quota.
+- Independent `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh}`
+  packages implement `AgentClient` from `packages/clients/base`. The root clients
+  package composes them; daemon execution uses `start()` and quota uses
+  `readAccount()`. Command lines are private to client implementations.
+- Codex app-server and Grok ACP sequencing, plus Cursor/Claude usage HTTP,
+  live in their TypeScript clients. `execution -> forge client` carries bounded
+  RPC sequences or native credential requests. Forge retains SQLite/Keychain
+  credential access, refresh and generic subprocess transport, not quota logic.
+- Task execution still uses Forge native runtime drivers behind `AgentClient`;
+  those runtime drivers are separate from the migrated account-query clients.
 - `execution` owns generic Forge invocation, limits, cancellation and process
   cleanup. It does not depend on providers or quota.
 - The old `forge quota` and statusline commands are retired. Old quota config

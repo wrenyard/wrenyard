@@ -1,4 +1,7 @@
+import type { ProviderQuota } from '../base/provider-quota.ts';
 import type { ProviderDefinition } from '../base/index.ts';
+import { object, observation, time } from '../base/quota-parsing.ts';
+import type { QuotaSnapshot } from '../base/quota-snapshot.ts';
 
 function quotaPool(quotaPoolId: string) {
   return Object.freeze({
@@ -36,4 +39,17 @@ export function codeBuddyQuotaBindings(definition: ProviderDefinition) {
 /** Provider-default pools covering discovered CodeBuddy models not listed above. */
 export function codeBuddyDefaultPools() {
   return [MONTHLY_POOL];
+}
+
+export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQuota {
+    return { bindings: codeBuddyQuotaBindings(definition), defaultPools: codeBuddyDefaultPools(),
+      read: async source => normalizeCodeBuddyQuota(await source.read()) };
+  }
+
+/** The quota feature validates the active account scope before exposing this observation. */
+function normalizeCodeBuddyQuota(raw: unknown, now = Date.now()): QuotaSnapshot | undefined {
+    const row = object(observation(raw).data), reset = time(row.resets_at);
+    if (row.exhausted !== true || row.reason_code !== 'quota_exhausted' || !reset || Date.parse(reset) <= now)
+        return undefined;
+    return { provider: 'codebuddy', status: 'ok', stale: false, source: 'observed', windows: [{ name: 'observed', pct: 100, window_minutes: 0, resets_at: reset }], message: 'CodeBuddy 额度已耗尽，重置后将自动恢复。' };
 }

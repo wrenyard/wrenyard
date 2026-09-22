@@ -29,3 +29,5 @@ export type {
   DeepSeekReferencePricing,
   ResolveDeepSeekReferencePricingInput,
 } from './deepseek/pricing.js';
+export { providerQuotas } from './builtins.ts';
+export type { ProviderQuota, QuotaSource } from './base/provider-quota.ts';

@@ -10,7 +10,14 @@
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
   },
   "dependencies": {
-    "@wrenyard/execution": "workspace:*"
+    "@wrenyard/agent-client": "workspace:*",
+    "@wrenyard/client-codex": "workspace:*",
+    "@wrenyard/client-claude": "workspace:*",
+    "@wrenyard/client-cursor": "workspace:*",
+    "@wrenyard/client-grok": "workspace:*",
+    "@wrenyard/client-codebuddy": "workspace:*",
+    "@wrenyard/client-opencode": "workspace:*",
+    "@wrenyard/client-dsh": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
