@@ -7,9 +7,10 @@ There is no separate agent runtime binary or Go build.
 ## Package boundaries
 
 - `apps/cli` exposes commands and consumes daemon IPC.
-- `apps/desktop` owns UI, communication and its passive Pet renderer.
-- `services/foreman` owns durable tasks, scheduling and service lifecycle,
-  and composes feature services behind IPC handlers.
+- `apps/desktop` owns UI, communication and its in-tree Pet module (windows,
+  renderer and resource layout are all Desktop-owned).
+- `apps/daemon` owns durable tasks, scheduling and service lifecycle, and
+  composes feature services behind IPC handlers.
 - `packages/protocol` contains type-only IPC definitions grouped by feature.
   The session contract remains a scaffold; exec and provider have daemon handlers.
 - `packages/features/exec` runs raw prompts, owns bounded event replay and

@@ -23,7 +23,7 @@
     "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test:tools": "node --test tools/*.test.mjs tools/**/*.test.mjs",
-    "test:workspace": "pnpm --filter @wrenyard/pet run build && pnpm run test:tools && pnpm -r --if-present run test",
+    "test:workspace": "pnpm run test:tools && pnpm -r --if-present run test",
     "test": "pnpm run test:workspace",
     "product": "node ./bin/wrenyard.mjs",
     "cli": "pnpm run product",

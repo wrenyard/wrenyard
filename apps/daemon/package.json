@@ -1,0 +1,71 @@
+{
+  "name": "@wrenyard/daemon",
+  "version": "1.0.0-dev.35",
+  "description": "Wrenyard — AI task and TaskGraph orchestration daemon",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@11.19.0",
+  "type": "module",
+  "bin": {
+    "wrenyard-daemon": "./bin/daemon.mts"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "config.example.json"
+  ],
+  "exports": {
+    ".": "./lib/index.mts",
+    "./bootstrap": "./lib/server-bootstrap/service.mts",
+    "./protocol/registry": "./lib/protocol/registry.mts",
+    "./protocol/errors": "./lib/protocol/errors.mts",
+    "./protocol/methods/exec": "./lib/protocol/methods/exec.mts",
+    "./protocol/methods/task": "./lib/protocol/methods/task.mts",
+    "./protocol/methods/taskgraph": "./lib/protocol/methods/taskgraph.mts",
+    "./config": "./lib/config/index.mts",
+    "./config/state": "./lib/config/state.mts",
+    "./layout/suite-root": "./lib/layout/suite-root.mts",
+    "./control/client": "./lib/control/client.mts",
+    "./control/ipc-client": "./lib/control/ipc-client.mts",
+    "./control/ipc-server": "./lib/control/ipc-server.mts",
+    "./daemon/dispatch-control": "./lib/daemon/dispatch-control.mts",
+    "./daemon/planned-restart-store": "./lib/daemon/planned-restart-store.mts",
+    "./db/connection": "./lib/db/connection.mts",
+    "./core/project/foreman-update": "./lib/core/project/foreman-update.mts",
+    "./core/taskgraph": "./lib/core/taskgraph/index.mts",
+    "./workspace/task-loader": "./lib/workspace/task-loader.mts"
+  },
+  "scripts": {
+    "start": "tsx bin/daemon.mts",
+    "build": "pnpm run typecheck",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.3.0"
+  },
+  "dependencies": {
+    "@wrenyard/gateway": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "@wrenyard/control-client": "workspace:*",
+    "@langchain/core": "1.2.5",
+    "ajv": "^8.20.0",
+    "better-sqlite3": "11.10.0",
+    "tsx": "^4.22.4",
+    "yaml": "^2.7.0",
+    "zod": "^4.4.3",
+    "@wrenyard/auto-routing": "workspace:*",
+    "@wrenyard/quota": "workspace:*",
+    "@wrenyard/clients": "workspace:*",
+    "@wrenyard/exec": "workspace:*",
+    "@wrenyard/browser-use": "workspace:*",
+    "@wrenyard/computer-use": "workspace:*",
+    "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/provider-service": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

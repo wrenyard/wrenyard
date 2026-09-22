@@ -22,5 +22,5 @@ worktrees/
 
 # Track the canonical Zod source-of-truth schemas (not generated/legacy dirs).
 schemas/
-!services/foreman/lib/core/task/schemas/
-!services/foreman/lib/core/task/schemas/*.mts
+!apps/daemon/lib/core/task/schemas/
+!apps/daemon/lib/core/task/schemas/*.mts

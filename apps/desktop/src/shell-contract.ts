@@ -1,4 +1,4 @@
-import type { PetSettingsPayload } from '@wrenyard/pet/config';
+import type { PetSettingsPayload } from './pet/main/config';
 import type { UpdateAttemptRecord } from './update-attempt.js';
 import type {
   ClientConfigurationDto,

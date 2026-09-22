@@ -27,12 +27,13 @@ const SKIP_PATH = [
 const PATTERNS = [
   { name: 'woa token', re: /\bwoa\b/i },
   // Upstream ioa-suffixed model IDs are permitted in Runtime code, manifests,
-  // and tests, but must never surface in shipped Desktop/Pet product source or
-  // the public Desktop architecture document.
+  // and tests, but must never surface in shipped Desktop product source
+  // (including the in-tree Pet module) or the public Desktop architecture
+  // document.
   {
     name: 'ioa-suffixed identifier (product source)',
     re: /\b[\w.-]*ioa\b/i,
-    paths: /^apps\/(?:desktop|pet)\/src\/|^apps\/desktop\/README\.md$/,
+    paths: /^apps\/desktop\/src\/|^apps\/desktop\/README\.md$/,
   },
   { name: 'internal endpoint fragment', re: /\.(internal|corp|intranet)\b|\.svc\.cluster\.local\b/i },
   { name: 'personal username', re: /\bdluck\b/i },

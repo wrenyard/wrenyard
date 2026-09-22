@@ -3,18 +3,18 @@
   "assets": [
     {
       "id": "pet-procedural-artwork",
-      "paths": ["apps/pet"],
+      "paths": ["apps/desktop/src/pet"],
       "package": null,
       "origin": "first-party",
       "owner": "Dluckxx",
       "license": "MIT",
-      "distribution": "separately buildable; not included in the current suite zip",
+      "distribution": "packaged into the Desktop application; not a standalone artifact",
       "evidence": "Procedural artwork and code authored in this repository.",
-      "notes": "Generated from first-party source; shipped as part of the suite."
+      "notes": "Generated from first-party source; shipped inside Desktop."
     },
     {
       "id": "pet-visual-png-baselines",
-      "paths": ["apps/pet/test/visual/reference"],
+      "paths": ["apps/desktop/test/pet/visual/reference"],
       "package": null,
       "origin": "first-party generated (test-only)",
       "owner": "Dluckxx",

@@ -1137,17 +1137,17 @@ export function createSupervisor(options = {}) {
   }
 
   /**
-   * First-startup build. Any artifact `pnpm build` produces for the workspace
-   * (`shared`, `pet`) is always rebuilt because those are owned by the
+   * First-startup build. Every artifact `pnpm build` produces for the workspace
+   * packages (`shared`) is always rebuilt because those are owned by the
    * repository build script, not by the watcher; Desktop targets are only built
-   * when missing. The runtime is native TypeScript in `@wrenyard/execution`, so
-   * there is no separate runtime binary to build here.
+   * when missing. Pet resources are produced by the Desktop build itself, so
+   * there is no separate Pet build. The runtime is native TypeScript in
+   * `@wrenyard/execution`, so there is no separate runtime binary to build here.
    */
   async function buildInitialArtifacts(missingErrors) {
     setStatus('preparing', 'building artifacts');
     const steps = [
-      { label: 'shared packages', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('packages') },
-      { label: 'pet', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('pet') },
+      { label: 'shared packages', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs() },
       { label: 'desktop', command: nodeExecutable, args: desktopBuildArgs(COMPONENT_BUILD_TARGETS, true) },
     ];
     const result = await runExternalSteps('build', steps);
@@ -1156,9 +1156,8 @@ export function createSupervisor(options = {}) {
     }
   }
 
-  function buildPackageArgs(filter) {
-    if (filter === 'packages') return ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--filter', './packages/clients/*', '--if-present', 'run', 'build'];
-    return ['--filter', '@wrenyard/pet', 'run', 'build'];
+  function buildPackageArgs() {
+    return ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--filter', './packages/clients/*', '--if-present', 'run', 'build'];
   }
 
   async function runExternalSteps(kind, steps) {

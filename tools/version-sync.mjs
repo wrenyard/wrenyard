@@ -3,7 +3,7 @@
 //
 // The root package.json "version" field is the single source of truth (SSOT)
 // for the first-party version contract. This tool propagates that version to:
-//   - every first-party package manifest (apps/*, services/*, packages/*, packages/features/*)
+//   - every first-party package manifest (apps/*, packages/*, packages/features/*)
 //   - release-manifest.json (suite_version + each component version)
 //   - contracts/versions.json (first-party desktop and dsh_shell entries)
 //   - the Desktop profile manifest version (apps/desktop/src/profile.ts)
@@ -26,9 +26,8 @@ const defaultRoot = join(scriptDir, '..');
 
 const FIRST_PARTY_MANIFESTS = [
   'apps/cli/package.json',
+  'apps/daemon/package.json',
   'apps/desktop/package.json',
-  'apps/pet/package.json',
-  'services/foreman/package.json',
   'packages/models/package.json',
   'packages/features/auto-routing/package.json',
   'packages/features/quota/package.json',

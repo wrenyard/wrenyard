@@ -84,9 +84,12 @@ Electron product shell
   conversation page remains gated. There is no per-conversation workspace picker. It
   also owns the former Pet settings:
   companion appearance, scale, placement offset, bubble duration, entity
-  visibility and quota-provider order. Desktop persists the bounded Pet config
-  in its own settings store and applies it by restarting its in-process Pet
-  runtime; Pet no longer creates a tray, settings window or settings action.
+  visibility and quota-provider order. Desktop persists them in one partitioned
+  `DesktopSettingsStore` document; visibility is applied in place, and only a
+  structural change (scale, skin, display) rebuilds the in-process Pet runtime.
+  Pet no longer creates a tray, settings window, settings action or config file,
+  and older documents are converted once by `tools/convert-settings.mjs`
+  instead of being migrated at startup.
   Credential values are reduced to booleans in the main process and never sent
   to the renderer.
 - **Desktop-owned updates** — settings exposes a quiet `stable` / `dev` channel
@@ -251,5 +254,5 @@ unsigned unless a signtool identity is supplied.
 - A Wrenyard daemon (the startup health gate starts it on demand via the
   installed CLI; see `tools/desktop/install-dev.mjs`)
 - `npm install` at the monorepo root (workspace deps: `@wrenyard/control-client`,
-  `@wrenyard/dsh-shell`, `@wrenyard/pet`; runtime:
+  `@wrenyard/dsh-shell`; runtime:
   `@deepseek-ai/dsh@0.1.1-rc.2` pinned exactly)

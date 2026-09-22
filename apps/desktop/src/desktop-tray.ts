@@ -5,7 +5,7 @@ import {
   screen,
   type MenuItemConstructorOptions,
 } from 'electron';
-import type { AppConfig, EntityVisibilityConfig } from '@wrenyard/pet/config';
+import type { AppConfig, EntityVisibilityConfig } from './pet/main/config';
 import { createDesktopTrayIcon } from './tray-icon.js';
 import { trayPrimaryClickOpensDesktop } from './desktop-interaction-policy.js';
 import { createQuotaMenuProviderIcon } from './quota-menu-icon.js';

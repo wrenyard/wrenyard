@@ -1,5 +1,5 @@
 import { WrenyardIpcClient } from '@wrenyard/control-client';
-import { parseQuotaJson, type QuotaProviderState } from '@wrenyard/pet/runtime';
+import { parseQuotaJson, type QuotaProviderState } from './main/projections/quota-runtime';
 
 /**
  * Desktop quota source: reads the daemon-owned provider quota projection over

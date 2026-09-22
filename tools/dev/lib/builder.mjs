@@ -57,7 +57,8 @@ export function desktopBuildArgs(targets, noClean = true) {
 /**
  * Every target `pnpm build` produces for the Desktop app. First startup uses
  * this list instead of depending on whatever a previous build happened to
- * leave behind.
+ * leave behind. `pet` is a Desktop-internal resource target: Pet is an
+ * in-tree Desktop module, not a separately built application.
  */
 export const COMPONENT_BUILD_TARGETS = Object.freeze(['renderer', 'main', 'preload', 'pet']);
 
@@ -66,12 +67,8 @@ export function desktopTargetsFor(components) {
   if (components.includes(COMPONENTS.renderer)) targets.push('renderer');
   if (components.includes(COMPONENTS.desktopMain)) targets.push('main');
   if (components.includes(COMPONENTS.desktopPreload)) targets.push('preload');
-  if (components.includes(COMPONENTS.pet) || components.includes(COMPONENTS.desktopMain)) targets.push('pet');
+  if (components.includes(COMPONENTS.desktopMain)) targets.push('pet');
   return [...new Set(targets)];
-}
-
-export function needsPetBuild(components) {
-  return components.includes(COMPONENTS.pet) || components.includes(COMPONENTS.shared);
 }
 
 export function needsSharedBuild(components) {
@@ -100,15 +97,6 @@ export async function buildGeneration(options) {
     logs.push(result.stderr || result.stdout);
     if (result.status !== 0) {
       return { ok: false, logs, error: `shared package build failed:\n${result.stderr || result.stdout}` };
-    }
-  }
-
-  if (needsPetBuild(generation.components)) {
-    const pnpm = pnpmInvocation(checkout, ['--filter', '@wrenyard/pet', 'run', 'build'], nodeExecutable, exists);
-    const result = await run(pnpm.command, pnpm.args, { cwd: checkout, env: options.env, signal: options.signal, platform });
-    logs.push(result.stderr || result.stdout);
-    if (result.status !== 0) {
-      return { ok: false, logs, error: `pet build failed:\n${result.stderr || result.stdout}` };
     }
   }
 

@@ -28,7 +28,6 @@ export const COMPONENTS = Object.freeze({
   renderer: 'renderer',
   desktopMain: 'desktop-main',
   desktopPreload: 'desktop-preload',
-  pet: 'pet',
   daemon: 'daemon',
   cli: 'cli',
   shared: 'shared',
@@ -81,12 +80,8 @@ export function classifyPath(relativePath) {
     return [COMPONENTS.cli];
   }
 
-  if (posixPath.startsWith('services/foreman/')) {
+  if (posixPath.startsWith('apps/daemon/')) {
     return [COMPONENTS.daemon];
-  }
-
-  if (posixPath.startsWith('apps/pet/')) {
-    return [COMPONENTS.pet];
   }
 
   if (posixPath.startsWith('packages/')) {
@@ -99,6 +94,9 @@ export function classifyPath(relativePath) {
   if (posixPath === 'apps/desktop/src/preload.ts') {
     return [COMPONENTS.desktopPreload];
   }
+  // Pet is a Desktop-owned module (`apps/desktop/src/pet`); any change under
+  // `apps/desktop/src` rebuilds the Desktop main bundle, which produces the
+  // in-tree Pet resources itself.
   if (posixPath.startsWith('apps/desktop/src/') || posixPath.startsWith('apps/desktop/resources/')) {
     if (posixPath.endsWith('preload.ts')) return [COMPONENTS.desktopPreload];
     return [COMPONENTS.desktopMain];
@@ -120,7 +118,7 @@ export function classifyPaths(relativePaths) {
   return [...affected];
 }
 
-/** Expand shared/pet changes to the Desktop consumers that copy or bundle them. */
+/** Expand shared changes to the Desktop and daemon consumers that bundle them. */
 export function expandDependents(components) {
   const next = new Set(components);
   if (next.has(COMPONENTS.shared)) {
@@ -128,9 +126,6 @@ export function expandDependents(components) {
     next.add(COMPONENTS.desktopMain);
     next.add(COMPONENTS.desktopPreload);
     next.add(COMPONENTS.daemon);
-  }
-  if (next.has(COMPONENTS.pet)) {
-    next.add(COMPONENTS.desktopMain);
   }
   return [...next];
 }
@@ -141,7 +136,7 @@ export function expandDependents(components) {
  * produces those artifacts, and the supervisor reloads them by replacing
  * itself.
  */
-const SIGNIFICANT_COMPONENTS = new Set([COMPONENTS.shared, COMPONENTS.pet]);
+const SIGNIFICANT_COMPONENTS = new Set([COMPONENTS.shared]);
 
 export function significantComponents(components) {
   return [...new Set(components)].filter((component) => SIGNIFICANT_COMPONENTS.has(component));
@@ -150,7 +145,6 @@ export function significantComponents(components) {
 const WATCH_ROOTS = [
   'apps',
   'packages',
-  'services',
   'tools/dev',
   'package.json',
   'pnpm-lock.yaml',

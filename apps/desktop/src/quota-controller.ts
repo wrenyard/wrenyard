@@ -1,4 +1,4 @@
-import type { QuotaProviderState } from '@wrenyard/pet/runtime';
+import type { QuotaProviderState } from './main/projections/quota-runtime';
 import type {
   ProviderAuthMode,
   ProviderAuthStatus,

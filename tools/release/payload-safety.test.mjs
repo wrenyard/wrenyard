@@ -129,7 +129,7 @@ test('accepts a dependency binary embedding the current generic home under an up
     // macOS CI host). That is a public upstream build path, not a local leak,
     // so a dependency file must not trip the developer-path rule.
     const home = os.homedir();
-    writeFile(stage, 'services/foreman/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${home}/runner/work/fsevents\n`));
+    writeFile(stage, 'apps/cli/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${home}/runner/work/fsevents\n`));
     const result = runGate(stage);
     assert.equal(result.ok, true, result.message);
   } finally {
@@ -157,7 +157,7 @@ test('rejects an explicit buildTmp path inside a dependency binary including Win
   try {
     const buildTmp = path.join(buildRoot, 'wrenyard-release-abc123');
     const jsonEscaped = buildTmp.replace(/\//gu, '\\').replace(/\\/gu, '\\\\');
-    writeFile(stage, 'services/foreman/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${jsonEscaped}/foreman\n`));
+    writeFile(stage, 'apps/cli/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${jsonEscaped}/daemon\n`));
     try {
       assertSafeReleasePayload(stage, 'test', buildTmp, path.join(buildRoot, 'worktree'));
       assert.fail('expected the escaped buildTmp path in a dependency to be rejected');
@@ -176,7 +176,7 @@ test('rejects an explicit worktree path inside a dependency binary', () => {
   const buildRoot = makeStage();
   try {
     const worktree = path.join(buildRoot, 'worktrees', 'dev24nat');
-    writeFile(stage, 'services/foreman/node_modules/tsx/dist/loader.js', `// built at ${worktree}\n`);
+    writeFile(stage, 'apps/cli/node_modules/tsx/dist/loader.js', `// built at ${worktree}\n`);
     try {
       assertSafeReleasePayload(stage, 'test', path.join(buildRoot, 'tmp'), worktree);
       assert.fail('expected the worktree path in a dependency to be rejected');
@@ -246,8 +246,8 @@ test('still rejects a bundled credential container inside a dependency', () => {
 test('rejects forbidden user database/config files and private workspace payloads', () => {
   const stage = makeStage();
   try {
-    writeFile(stage, 'services/foreman/data/app.db', 'not-a-real-db');
-    writeFile(stage, 'services/foreman/.npmrc', '//registry.npmjs.org/:_authToken=placeholder\n');
+    writeFile(stage, 'apps/cli/data/app.db', 'not-a-real-db');
+    writeFile(stage, 'apps/cli/.npmrc', '//registry.npmjs.org/:_authToken=placeholder\n');
     writeFile(stage, '.git/config', '[core]\n\trepositoryformatversion = 0\n');
     const result = runGate(stage);
     assert.equal(result.ok, false);

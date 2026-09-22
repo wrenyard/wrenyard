@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { QuotaProviderState } from '@wrenyard/pet/runtime';
+import type { QuotaProviderState } from '../src/main/projections/quota-runtime.js';
 import type { ProviderAuthStatus } from '../src/shell-contract.js';
 import { DesktopQuotaController, projectQuotaSnapshot } from '../src/quota-controller.js';
 

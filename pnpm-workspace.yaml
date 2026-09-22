@@ -1,6 +1,5 @@
 packages:
   - "apps/*"
-  - "services/*"
   - "packages/*"
   - "packages/features/*"
   - "packages/clients/*"
@@ -25,7 +24,7 @@ overrides:
 injectWorkspacePackages: true
 
 # Pinned workspace dependencies whose install scripts are required for
-# native SQLite, Electron Pet and TS/Vite tooling.
+# native SQLite, the Electron Desktop runtime and TS/Vite tooling.
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   '@google/genai': true

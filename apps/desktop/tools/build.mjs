@@ -5,7 +5,6 @@ import { build } from 'esbuild';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
-const petRoot = join(root, '..', 'pet');
 const desktopBuildTime = new Date().toISOString();
 const args = process.argv.slice(2);
 const noClean = args.includes('--no-clean');
@@ -95,35 +94,69 @@ if (want('renderer')) {
 }
 
 if (want('pet')) {
-  // Pet is a Desktop-owned renderer module. Copy only its runtime assets into
-  // the Desktop bundle; there is no separately packaged Pet application.
+  // Pet is a Desktop-owned renderer module: its renderers, preloads and HTML
+  // assets are built from this checkout in the same build graph as the rest of
+  // Desktop. There is no separately packaged Pet application and no
+  // cross-application dist copy.
+  const petSrc = join(root, 'src', 'pet');
   const petRendererDist = join(dist, 'pet', 'renderer');
   const petPreloadDist = join(dist, 'pet', 'preloads');
   await Promise.all([
     mkdir(petRendererDist, { recursive: true }),
     mkdir(petPreloadDist, { recursive: true }),
   ]);
-  const petRendererFiles = [
-    'house.html', 'house.js',
-    'worker.html', 'worker.js',
-    'entity.html', 'entity.js',
-    'graph-slip.html', 'graph-slip.js',
-    'transcript.html', 'transcript.js',
+
+  // Renderer assets retired by an earlier Pet build must not survive an
+  // incremental (--no-clean) Desktop build.
+  await Promise.all(
+    ['settings.html', 'settings.js', 'stats.html', 'stats.js', 'panel.css']
+      .map((file) => rm(join(petRendererDist, file), { force: true })),
+  );
+
+  const petRenderers = [
+    ['overlay/house/index.ts', 'house.js'],
+    ['overlay/worker/index.ts', 'worker.js'],
+    ['overlay/taskgraph-entity/index.ts', 'entity.js'],
+    ['panels/transcript/index.ts', 'transcript.js'],
+    ['panels/observatory/index.ts', 'graph-slip.js'],
   ];
-  const petPreloadFiles = [
-    'preload.js',
-    'entity-preload.js',
-    'graph-slip-preload.js',
-    'transcript-preload.js',
+  const petHtml = [
+    ['overlay/house/index.html', 'house.html'],
+    ['overlay/worker/index.html', 'worker.html'],
+    ['overlay/taskgraph-entity/index.html', 'entity.html'],
+    ['panels/transcript/index.html', 'transcript.html'],
+    ['panels/observatory/index.html', 'graph-slip.html'],
   ];
+  const petPreloads = [
+    ['main/preload.ts', 'preload.js'],
+    ['preloads/entity-preload.ts', 'entity-preload.js'],
+    ['preloads/graph-slip-preload.ts', 'graph-slip-preload.js'],
+    ['preloads/transcript-preload.ts', 'transcript-preload.js'],
+  ];
+
   await Promise.all([
-    ...petRendererFiles.map((file) => copyFile(
-      join(petRoot, 'dist', 'renderer', file),
-      join(petRendererDist, file),
-    )),
-    ...petPreloadFiles.map((file) => copyFile(
-      join(petRoot, 'dist', 'main', 'main', file),
-      join(petPreloadDist, file),
+    ...petRenderers.map(([entry, outfile]) => build({
+      entryPoints: [join(petSrc, entry)],
+      outfile: join(petRendererDist, outfile),
+      bundle: true,
+      platform: 'browser',
+      format: 'iife',
+      target: 'chrome140',
+      logLevel: 'info',
+    })),
+    ...petPreloads.map(([entry, outfile]) => build({
+      entryPoints: [join(petSrc, entry)],
+      outfile: join(petPreloadDist, outfile),
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'node22',
+      external: ['electron'],
+      logLevel: 'info',
+    })),
+    ...petHtml.map(([entry, outfile]) => copyFile(
+      join(petSrc, entry),
+      join(petRendererDist, outfile),
     )),
   ]);
 }
