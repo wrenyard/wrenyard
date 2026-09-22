@@ -8,7 +8,7 @@ import type {
   QuotaSnapshot,
   QuotaWindowSnapshot,
 } from './shell-contract.js';
-import { canonicalProviderId, normalizeProviderOrder, sortProvidersByAvailability } from './provider-order.js';
+import { normalizeProviderId, normalizeProviderOrder, sortProvidersByAvailability } from './provider-order.js';
 
 const DEFAULT_REFRESH_INTERVAL_MS = 60_000;
 
@@ -135,8 +135,9 @@ export function projectQuotaSnapshot(
 function canonicalizeProviders(providers: QuotaProviderState[]): QuotaProviderState[] {
   const byId = new Map<string, QuotaProviderState>();
   for (const provider of providers) {
-    const id = canonicalProviderId(provider.id);
-    if (!byId.has(id)) byId.set(id, { ...provider, id });
+    const id = normalizeProviderId(provider.id);
+    if (!id || byId.has(id)) continue;
+    byId.set(id, { ...provider, id });
   }
   return [...byId.values()];
 }
@@ -144,7 +145,8 @@ function canonicalizeProviders(providers: QuotaProviderState[]): QuotaProviderSt
 function canonicalizeOrder(order: Array<{ id: string; enabled: boolean }>): Array<{ id: string; enabled: boolean }> {
   const byId = new Map<string, { id: string; enabled: boolean }>();
   for (const entry of order) {
-    const id = canonicalProviderId(entry.id);
+    const id = normalizeProviderId(entry.id);
+    if (!id) continue;
     const existing = byId.get(id);
     byId.set(id, existing
       ? { id, enabled: existing.enabled || entry.enabled }
@@ -156,7 +158,8 @@ function canonicalizeOrder(order: Array<{ id: string; enabled: boolean }>): Arra
 function canonicalizeDiscovered(discovered: ProviderAuthStatus[]): ProviderAuthStatus[] {
   const byId = new Map<string, ProviderAuthStatus>();
   for (const entry of discovered) {
-    const id = canonicalProviderId(entry.id);
+    const id = normalizeProviderId(entry.id);
+    if (!id) continue;
     const existing = byId.get(id);
     byId.set(id, existing
       ? { ...existing, id, configured: existing.configured || entry.configured }
@@ -220,6 +223,8 @@ function projectCatalog(
   const byId = new Map(providers.map((provider) => [provider.id, provider]));
   const discoveredById = new Map(discovered.map((entry) => [entry.id, entry]));
 
+  // Rows come only from current authoritative sources (discovery and quota).
+  // Saved order preferences never synthesize a row; they only reorder these ids.
   const ids: string[] = [];
   const seen = new Set<string>();
   const pushId = (id: string): void => {
@@ -227,7 +232,6 @@ function projectCatalog(
     seen.add(id);
     ids.push(id);
   };
-  for (const entry of configuredOrder) pushId(entry.id);
   for (const entry of discovered) pushId(entry.id);
   for (const provider of providers) pushId(provider.id);
 
@@ -314,7 +318,7 @@ function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {
 }
 
 function unavailableQuotaMessage(authMode: ProviderAuthMode, configured: boolean, code?: string): string {
-  if (code === 'configuration_missing') return '尚未配置，请先完成 Grok 登录。';
+  if (code === 'configuration_missing') return '尚未配置，请先完成登录或填写 API Key 后刷新。';
   if (code === 'authentication_required') return '登录已失效，请重新登录后刷新。';
   if (code === 'quota_query_failed') return '额度查询失败，请稍后刷新。';
   if (authMode === 'none') return '此 Provider 暂不提供额度查询。';
