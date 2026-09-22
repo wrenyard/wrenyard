@@ -33,14 +33,10 @@ if (want('main')) {
     define: {
       __WRENYARD_DESKTOP_BUILD_TIME__: JSON.stringify(desktopBuildTime),
     },
-    // Keep the Electron API and DSH runtime/native package boundaries external;
-    // they are resolved from the installed/asar node_modules at runtime.
+    // Keep the Electron API external; it is resolved from the installed
+    // Electron runtime at run time.
     external: [
       'electron',
-      '@deepseek-ai/dsh',
-      '@deepseek-ai/dsh-base',
-      '@deepseek-ai/dsh-web-app',
-      '@wrenyard/dsh-shell',
     ],
     logLevel: 'info',
   });

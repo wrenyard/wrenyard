@@ -20,6 +20,7 @@ const FIRST_PARTY_MANIFESTS = [
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
   'packages/features/gateway/package.json',
+  'packages/features/session/package.json',
   'packages/providers/package.json',
 ];
 
@@ -59,7 +60,7 @@ async function buildFixture() {
     dsh_shell: ROOT_VERSION,
     dsh: '0.1.0-rc.6',
   });
-  await writeText(dir, 'apps/desktop/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
+  await writeText(dir, 'packages/features/session/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
   return dir;
 }
 
@@ -84,7 +85,7 @@ test('version-sync --check reports drift without modifying any file', async () =
   const dir = await buildFixture();
   await writeJson(dir, 'packages/models/package.json', { name: '@wrenyard/models', version: '0.1.1' });
   await writeJson(dir, 'packages/features/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
-  await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.7.18',\n};\n");
+  await writeText(dir, 'packages/features/session/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.7.18',\n};\n");
   try {
     let threw = false;
     try {
@@ -102,7 +103,7 @@ test('version-sync --check reports drift without modifying any file', async () =
     assert.equal(models.version, '0.1.1');
     const gateway = JSON.parse(await readFile(join(dir, 'packages/features/gateway/package.json'), 'utf8'));
     assert.equal(gateway.version, '0.1.1');
-    const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
+    const profile = await readFile(join(dir, 'packages/features/session/src/profile.ts'), 'utf8');
     assert.match(profile, /version: '0\.7\.18'/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -112,7 +113,7 @@ test('version-sync --check reports drift without modifying any file', async () =
 test('version-sync --write repairs drifted files and becomes stable', async () => {
   const dir = await buildFixture();
   await writeJson(dir, 'packages/providers/package.json', { name: '@wrenyard/providers', version: '0.1.1' });
-  await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
+  await writeText(dir, 'packages/features/session/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
   try {
     const out = runTool(dir, '--write');
     assert.match(out, /updated 2 file\(s\)/);
@@ -121,7 +122,7 @@ test('version-sync --write repairs drifted files and becomes stable', async () =
 
     const providers = JSON.parse(await readFile(join(dir, 'packages/providers/package.json'), 'utf8'));
     assert.equal(providers.version, ROOT_VERSION);
-    const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
+    const profile = await readFile(join(dir, 'packages/features/session/src/profile.ts'), 'utf8');
     assert.match(profile, new RegExp(`version: '${ROOT_VERSION}'`));
 
     // A follow-up --check must pass with no further changes needed.

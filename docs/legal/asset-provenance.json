@@ -59,7 +59,7 @@
     {
       "id": "nodejs-runtime",
       "paths": [],
-      "package": "node@22.19.0 (via SEA and postject)",
+      "package": "node@24.19.0 (via SEA and postject)",
       "origin": "external dependency",
       "owner": "Node.js contributors",
       "license": "MIT (with bundled notices)",

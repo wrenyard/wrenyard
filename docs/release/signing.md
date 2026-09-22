@@ -35,7 +35,7 @@ never runs in this repository today.
 
 The packed CLI tarball and portable suite zip ship a pinned current-platform
 Node runtime (`runtime/node` on POSIX, `runtime/node.exe` on Windows) taken
-from the exact `node@22.19.0` build dependency. It is covered by the artifact
+from the exact `node@24.19.0` build dependency. It is covered by the artifact
 checksums and the third-party notices, but it is signed only by the upstream
 Node.js project where applicable; no trusted signature is claimed on the
 bundled copy. Applying trusted platform signing/notarization to every
