@@ -6,23 +6,31 @@ export type * from './base/quota.ts';
 
 const explicitBindings = [...providerQuotas.values()].flatMap((quota) => quota.bindings);
 
+/** Pools a provider owns. A provider without a quota source owns none. */
 function defaultPoolsFor(providerId: string): readonly ProviderQuotaPool[] {
-  return providerQuotas.get(providerId)!.defaultPools;
+  return providerQuotas.get(providerId)?.defaultPools ?? [];
 }
 
-const catalogBindings = BUILTIN_PROVIDERS.flatMap((provider) => provider.models.map((model) =>
-  explicitBindings.find((entry) => entry.providerId === provider.id && entry.modelId === model.id)
-    ?? binding(provider.id, model.id, defaultPoolsFor(provider.id)),
-));
+const catalogBindings = BUILTIN_PROVIDERS.flatMap((provider) => {
+  const pools = defaultPoolsFor(provider.id);
+  return provider.models.flatMap((model) => {
+    const explicit = explicitBindings.find((entry) => entry.providerId === provider.id && entry.modelId === model.id);
+    if (explicit) return [explicit];
+    return pools.length ? [binding(provider.id, model.id, pools)] : [];
+  });
+});
 
 /**
  * Provider-default bindings so a registered provider's model (including
  * discovered models not listed in the catalog) always resolves to at least one
- * own-provider pool. Never inherits another provider's resources.
+ * own-provider pool. Never inherits another provider's resources. A provider
+ * that owns no quota source contributes no binding, so lookups for it stay
+ * undefined instead of claiming a pool it does not own.
  */
-const providerDefaultBindings: ProviderQuotaBinding[] = BUILTIN_PROVIDERS.map((provider) =>
-  binding(provider.id, '*', defaultPoolsFor(provider.id)),
-);
+const providerDefaultBindings: ProviderQuotaBinding[] = BUILTIN_PROVIDERS.flatMap((provider) => {
+  const pools = defaultPoolsFor(provider.id);
+  return pools.length ? [binding(provider.id, '*', pools)] : [];
+});
 
 export const PROVIDER_QUOTA_BINDINGS: readonly ProviderQuotaBinding[] = Object.freeze([
   ...catalogBindings,
@@ -44,9 +52,9 @@ function defaultBinding(providerId: string): ProviderQuotaBinding | undefined {
 
 /**
  * Returns the quota binding for a provider model, or undefined when the
- * provider itself is unknown. A registered provider always gets a non-empty
- * binding: an exact catalog binding when one exists, otherwise that provider's
- * own-default pool.
+ * provider is unknown or owns no quota source. A registered provider with a
+ * quota source always gets a non-empty binding: an exact catalog binding when
+ * one exists, otherwise that provider's own-default pool.
  */
 export function findProviderQuotaBinding(
   providerId: string,

@@ -7,13 +7,13 @@ import type { QuotaSnapshot } from '../base/quota-snapshot.ts';
 export const quota = {
   read: async (source: QuotaSource) => normalizeGrokQuota(await source.read()),
   bindings: [],
-  defaultPools: [quotaPool('spacex-ai/usage', [])],
+  defaultPools: [quotaPool('super-grok/usage', [])],
 } satisfies Provider['quota'];
 
 function normalizeGrokQuota(raw: unknown): QuotaSnapshot {
     const { data, source, fetched_at } = observation(raw), config = object(object(data).config);
     let pct = number(config.creditUsagePercent);
-    const used = number(object(config.used).val), limit = number(object(config.monthlyLimit).val);
+    const used = number(object(config.used).val), limit = number(config.monthlyLimit).val;
     if (pct === undefined && used !== undefined && limit !== undefined && limit > 0)
         pct = used / limit * 100;
     const windows: QuotaWindow[] = [];
