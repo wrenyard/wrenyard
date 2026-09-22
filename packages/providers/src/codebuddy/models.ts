@@ -11,7 +11,6 @@ import type {
 import {
   isMainstreamModelId,
   models,
-  THINKING_LOW_HIGH_MAX,
   type ModelDefaults,
   type RegisteredModel,
 } from '@wrenyard/models';
@@ -79,13 +78,6 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
   {
     id: 'deepseek-v4.1-flash',
     modelId: 'deepseek-v4.1-flash',
-    overrides: {
-      contextWindow: 1_000_000,
-      maxTokens: 50_000,
-      thinkingLevels: THINKING_LOW_HIGH_MAX,
-      capabilities: ['text', 'image'],
-      speed: 201,
-    },
   },
   {
     // The unified registry already supplies Pro's tier, capability set, thinking
@@ -103,43 +95,32 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
     modelId: 'hunyuan-hy4-preview',
     free: true,
     projectCanonical: true,
-    overrides: { speed: 38, intelligence: 'mid', capabilities: ['text'] },
   },
   {
     id: 'hy3',
     modelId: 'hunyuan-hy3',
     free: true,
     projectCanonical: true,
-    overrides: { speed: 94, intelligence: 'low', capabilities: ['text'] },
   },
   {
     id: 'minimax-m3',
     modelId: 'minimax-m3',
     projectCanonical: true,
-    overrides: { speed: 156, intelligence: 'low', capabilities: ['text'] },
   },
   {
     id: 'kimi-k3',
     modelId: 'kimi-k3',
     projectCanonical: true,
-    overrides: {
-      thinkingLevels: THINKING_LOW_HIGH_MAX,
-      capabilities: ['text', 'image'],
-      intelligence: 'high',
-      speed: 40,
-    },
   },
   {
     id: 'glm-5.3',
     modelId: 'glm-5.3',
     projectCanonical: true,
-    overrides: { intelligence: 'high', capabilities: ['text'], speed: 64 },
   },
   {
     id: 'glm-5.3-flash',
     modelId: 'glm-5.3-flash',
     projectCanonical: true,
-    overrides: { intelligence: 'mid', capabilities: ['text'], speed: 73 },
   },
   {
     id: 'claude-sonnet-5-1m',
