@@ -4,7 +4,7 @@
 // Unlike the configured live smoke (apps/desktop `smoke` script), this harness
 // never requires a user's real Wrenyard state, credentials or network model
 // access. It provisions a throwaway HOME/state/config/db plus a temp registered
-// workspace, launches the real Foreman daemon and the real Electron/DSH child,
+// workspace, launches the real Wrenyard daemon and the real Electron/DSH child,
 // and drives the Desktop `--smoke` assertions over the real IPC/Gateway. It
 // registers a synthetic provider credential and asserts provider/gateway
 // metadata only; it never binds a provider endpoint and performs no model calls.

@@ -2,7 +2,7 @@
   "name": "@wrenyard/desktop",
   "version": "1.0.0-dev.35",
   "private": true,
-  "description": "Wrenyard Desktop product shell for DSH and the headless Pet companion.",
+  "description": "Wrenyard Desktop product shell for DSH and its in-process Pet companion.",
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",
@@ -10,13 +10,16 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "pnpm --filter @wrenyard/pet build && tsc --noEmit && node tools/build.mjs && tsc --emitDeclarationOnly",
+    "build": "tsc --noEmit && node tools/build.mjs && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm --filter @wrenyard/pet build:main && tsx --test test/*.test.ts",
+    "test": "node tools/pet/renderer-cleanup-scan.mjs && node --test tools/convert-settings.test.mjs && tsx --test test/*.test.ts && vitest run",
     "start": "electron .",
     "dev": "npm run build && electron .",
     "smoke": "npm run build && electron . --smoke",
     "icon": "node tools/render-app-icon.mjs",
+    "pet:preview:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/preview-capture.mjs",
+    "pet:taskgraph:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/taskgraph-e2e-capture.mjs",
+    "convert:settings": "node tools/convert-settings.mjs",
     "dist:dir": "npm run build && electron-builder --dir",
     "dist:zip": "npm run build && electron-builder --publish never"
   },
@@ -53,11 +56,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "@wrenyard/pet": "workspace:*",
     "electron": "^39.8.10",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.0",
+    "pixi.js": "^8.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.6"
   }
 }

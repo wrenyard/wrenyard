@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { DesktopPetSettingsStore } from '../src/pet-settings-store.js';
+import { DesktopSettingsStore } from '../src/main/settings/desktop-settings.js';
 import {
   applySourceDevelopmentIdentity,
   DESKTOP_DATA_IDENTITY,
@@ -73,7 +73,7 @@ test('explicit WRENYARD_DESKTOP_USER_DATA override is honored on every platform'
   }
 });
 
-test('source identity reuses installed release settings and keeps pet.enabled=false', () => {
+test('source identity reuses installed release settings and keeps pet.visible=false', () => {
   const root = mkdtempSync(join(tmpdir(), 'wrenyard-desktop-source-'));
   try {
     const appData = join(root, 'Roaming');
@@ -81,7 +81,21 @@ test('source identity reuses installed release settings and keeps pet.enabled=fa
     mkdirSync(releaseDir, { recursive: true });
     writeFileSync(
       join(releaseDir, 'settings.json'),
-      `${JSON.stringify({ version: 1, pet: { enabled: false, quota: { providers: [] } } }, null, 2)}\n`,
+      `${JSON.stringify({
+        version: 2,
+        window: {},
+        tray: {},
+        providers: { providers: [{ id: 'chatgpt', enabled: true }] },
+        pet: {
+          visible: false,
+          scale: 3,
+          bubbleSeconds: 6,
+          bottomOffset: 0,
+          entities: { house: true, workers: true, taskgraphs: true },
+          appearance: { houseSkin: 'classic' },
+        },
+        update: { channel: 'stable' },
+      }, null, 2)}\n`,
       'utf8',
     );
     const brandDir = join(appData, PRODUCT_NAME);
@@ -99,11 +113,9 @@ test('source identity reuses installed release settings and keeps pet.enabled=fa
     assert.equal(existsSync(brandDir), false);
     assert.equal(readFileSync(join(releaseDir, 'settings.json'), 'utf8').includes('@wrenyard/desktop'), false);
 
-    const store = new DesktopPetSettingsStore({
-      path: join(applied!, 'settings.json'),
-      loadLegacy: () => { throw new Error('release settings must be read, not re-imported'); },
-    });
-    assert.equal(store.load().enabled, false);
+    const store = new DesktopSettingsStore({ path: join(applied!, 'settings.json') });
+    assert.equal(store.load().pet.visible, false);
+    assert.equal(store.loadUpdateChannel('dev'), 'stable');
     assert.equal(existsSync(brandDir), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

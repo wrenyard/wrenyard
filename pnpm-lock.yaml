@@ -43,119 +43,186 @@ importers:
 
   apps/cli:
     dependencies:
-      "@wrenyard/control-client":
+      '@wrenyard/control-client':
         specifier: workspace:*
         version: link:../../packages/control-client
+      '@wrenyard/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
     devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  apps/daemon:
+    dependencies:
+      '@langchain/core':
+        specifier: 1.2.5
+        version: 1.2.5(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../../packages/features/auto-routing
+      '@wrenyard/browser-use':
+        specifier: workspace:*
+        version: link:../../packages/features/browser-use
+      '@wrenyard/clients':
+        specifier: workspace:*
+        version: link:../../packages/clients
+      '@wrenyard/computer-use':
+        specifier: workspace:*
+        version: link:../../packages/features/computer-use
+      '@wrenyard/control-client':
+        specifier: workspace:*
+        version: link:../../packages/control-client
+      '@wrenyard/exec':
+        specifier: workspace:*
+        version: link:../../packages/features/exec
+      '@wrenyard/gateway':
+        specifier: workspace:*
+        version: link:../../packages/features/gateway
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@wrenyard/provider-service':
+        specifier: workspace:*
+        version: link:../../packages/features/provider
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@wrenyard/quota':
+        specifier: workspace:*
+        version: link:../../packages/features/quota
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      better-sqlite3:
+        specifier: 11.10.0
+        version: 11.10.0
       tsx:
         specifier: ^4.22.4
         version: 4.23.12
+      yaml:
+        specifier: ^2.7.0
+        version: 2.9.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: 7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
 
   apps/desktop:
     dependencies:
-      "@deepseek-ai/cordis-plugin-group":
+      '@deepseek-ai/cordis-plugin-group':
         specifier: 1.0.1
         version: 1.0.1(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)
-      "@deepseek-ai/dsh":
+      '@deepseek-ai/dsh':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(a0b55ece9229cbce2463865bc50ab619)
-      "@deepseek-ai/dsh-agent-instructions":
+      '@deepseek-ai/dsh-agent-instructions':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(aea42a70663db470994f4176a9619635)
-      "@deepseek-ai/dsh-anonymous-user-id":
+      '@deepseek-ai/dsh-anonymous-user-id':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-home-paths@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-atomic-write":
+      '@deepseek-ai/dsh-atomic-write':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-bash-local":
+      '@deepseek-ai/dsh-bash-local':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-settings@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/schemastery@3.18.1))(@deepseek-ai/dsh-shell@0.1.1-rc.2(206e5a113efc0246947fa5321bc71187))(@deepseek-ai/dsh-subprocess@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))
-      "@deepseek-ai/dsh-code-runtime":
+      '@deepseek-ai/dsh-code-runtime':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-compaction":
+      '@deepseek-ai/dsh-compaction':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(80d45efbb3b7de81b65c253ede5096fd)
-      "@deepseek-ai/dsh-fs":
+      '@deepseek-ai/dsh-fs':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(369bb7c3e084bdd2eec52747b4523f36)
-      "@deepseek-ai/dsh-invariants":
+      '@deepseek-ai/dsh-invariants':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)
-      "@deepseek-ai/dsh-output-retention":
+      '@deepseek-ai/dsh-output-retention':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-sandbox":
+      '@deepseek-ai/dsh-sandbox':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-llm@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))))(@deepseek-ai/dsh-session@0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc))
-      "@deepseek-ai/dsh-scope":
+      '@deepseek-ai/dsh-scope':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-session-telemetry":
+      '@deepseek-ai/dsh-session-telemetry':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-agent@0.1.1-rc.2(c1537a8836b04097f168b024f1e38d85))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-session@0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc))
-      "@deepseek-ai/dsh-session-title-llm":
+      '@deepseek-ai/dsh-session-title-llm':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(496254830230f8a6b76f3b008de343df)
-      "@deepseek-ai/dsh-shell":
+      '@deepseek-ai/dsh-shell':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(206e5a113efc0246947fa5321bc71187)
-      "@deepseek-ai/dsh-spill":
+      '@deepseek-ai/dsh-spill':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-llm@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))))(@deepseek-ai/dsh-session@0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc))
-      "@deepseek-ai/dsh-subagent-in-process-driver":
+      '@deepseek-ai/dsh-subagent-in-process-driver':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(be871aa02352f784a61c36caf4b59900)
-      "@deepseek-ai/dsh-subprocess":
+      '@deepseek-ai/dsh-subprocess':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-timeout":
+      '@deepseek-ai/dsh-timeout':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      "@deepseek-ai/dsh-workflow":
+      '@deepseek-ai/dsh-workflow':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(be2dac4e15e11ce84de4558727259db8)
-      "@wrenyard/control-client":
+      '@wrenyard/auto-routing':
         specifier: workspace:*
-        version: link:../../packages/control-client
-      "@wrenyard/clients":
+        version: link:../../packages/features/auto-routing
+      '@wrenyard/clients':
         specifier: workspace:*
         version: link:../../packages/clients
-      "@wrenyard/protocol":
+      '@wrenyard/control-client':
         specifier: workspace:*
-        version: link:../../packages/protocol
-      "@wrenyard/dsh-shell":
+        version: link:../../packages/control-client
+      '@wrenyard/dsh-shell':
         specifier: workspace:*
         version: link:../../packages/dsh-shell
-      "@wrenyard/models":
+      '@wrenyard/models':
         specifier: workspace:*
         version: link:../../packages/models
-      "@wrenyard/providers":
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../packages/providers
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
-      "@wrenyard/auto-routing":
-        specifier: workspace:*
-        version: link:../../packages/features/auto-routing
     devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.15.0
         version: 22.20.1
-      "@wrenyard/pet":
-        specifier: workspace:*
-        version: link:../pet
       electron:
         specifier: ^39.8.10
         version: 39.8.10(supports-color@7.2.0)
@@ -165,34 +232,18 @@ importers:
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
+      pixi.js:
+        specifier: ^8.0.0
+        version: 8.19.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
-
-  apps/pet:
-    dependencies:
-      pixi.js:
-        specifier: ^8.0.0
-        version: 8.19.0
-    devDependencies:
-      "@types/node":
-        specifier: ^20.14.0
-        version: 20.19.43
-      electron:
-        specifier: ^39.8.10
-        version: 39.8.10(supports-color@7.2.0)
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
       vitest:
         specifier: ^3.2.6
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0)
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0)
 
   packages/clients:
     dependencies:
@@ -236,14 +287,14 @@ importers:
 
   packages/clients/base:
     dependencies:
-      "@wrenyard/execution":
+      '@wrenyard/execution':
         specifier: workspace:*
         version: link:../../execution
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
     devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
@@ -412,11 +463,11 @@ importers:
 
   packages/control-client:
     dependencies:
-      "@wrenyard/protocol":
+      '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
@@ -433,17 +484,17 @@ importers:
 
   packages/execution:
     dependencies:
-      cross-spawn:
-        specifier: 7.0.6
-        version: 7.0.6
       better-sqlite3:
         specifier: 11.10.0
         version: 11.10.0
+      cross-spawn:
+        specifier: 7.0.6
+        version: 7.0.6
     devDependencies:
-      "@types/better-sqlite3":
+      '@types/better-sqlite3':
         specifier: 7.6.13
         version: 7.6.13
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
@@ -464,6 +515,69 @@ importers:
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/features/browser-use:
+    dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../../clients/base
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/features/computer-use:
+    dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../../clients/base
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/features/exec:
+    dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../../clients/base
+      '@wrenyard/clients':
+        specifier: workspace:*
+        version: link:../../clients
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -500,16 +614,41 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/features/provider:
+    dependencies:
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../providers
+      '@wrenyard/quota':
+        specifier: workspace:*
+        version: link:../quota
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/features/quota:
     dependencies:
-      "@wrenyard/clients":
+      '@wrenyard/clients':
         specifier: workspace:*
         version: link:../../clients
-      "@wrenyard/providers":
+      '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
     devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
@@ -542,160 +681,11 @@ importers:
 
   packages/providers:
     dependencies:
-      "@wrenyard/models":
+      '@wrenyard/models':
         specifier: workspace:*
         version: link:../models
     devDependencies:
-      "@types/node":
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  services/foreman:
-    dependencies:
-      "@wrenyard/gateway":
-        specifier: workspace:*
-        version: link:../../packages/features/gateway
-      "@wrenyard/providers":
-        specifier: workspace:*
-        version: link:../../packages/providers
-      "@langchain/core":
-        specifier: 1.2.5
-        version: 1.2.5(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
-      ajv:
-        specifier: ^8.20.0
-        version: 8.20.0
-      better-sqlite3:
-        specifier: 11.10.0
-        version: 11.10.0
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      yaml:
-        specifier: ^2.7.0
-        version: 2.9.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-      "@wrenyard/auto-routing":
-        specifier: workspace:*
-        version: link:../../packages/features/auto-routing
-      "@wrenyard/quota":
-        specifier: workspace:*
-        version: link:../../packages/features/quota
-      "@wrenyard/clients":
-        specifier: workspace:*
-        version: link:../../packages/clients
-      "@wrenyard/exec":
-        specifier: workspace:*
-        version: link:../../packages/features/exec
-      "@wrenyard/browser-use":
-        specifier: workspace:*
-        version: link:../../packages/features/browser-use
-      "@wrenyard/computer-use":
-        specifier: workspace:*
-        version: link:../../packages/features/computer-use
-      "@wrenyard/protocol":
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      "@wrenyard/provider-service":
-        specifier: workspace:*
-        version: link:../../packages/features/provider
-    devDependencies:
-      "@types/better-sqlite3":
-        specifier: 7.6.13
-        version: 7.6.13
-      "@types/node":
-        specifier: ^22.0.0
-        version: 22.20.1
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/exec:
-    dependencies:
-      "@wrenyard/agent-client":
-        specifier: workspace:*
-        version: link:../../clients/base
-      "@wrenyard/clients":
-        specifier: workspace:*
-        version: link:../../clients
-      "@wrenyard/protocol":
-        specifier: workspace:*
-        version: link:../../protocol
-    devDependencies:
-      "@types/node":
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/browser-use:
-    dependencies:
-      "@wrenyard/agent-client":
-        specifier: workspace:*
-        version: link:../../clients/base
-    devDependencies:
-      "@types/node":
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/computer-use:
-    dependencies:
-      "@wrenyard/agent-client":
-        specifier: workspace:*
-        version: link:../../clients/base
-    devDependencies:
-      "@types/node":
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/provider:
-    dependencies:
-      "@wrenyard/providers":
-        specifier: workspace:*
-        version: link:../../providers
-      "@wrenyard/protocol":
-        specifier: workspace:*
-        version: link:../../protocol
-      "@wrenyard/quota":
-        specifier: workspace:*
-        version: link:../quota
-    devDependencies:
-      "@types/node":
+      '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
       esbuild:
@@ -3836,9 +3826,6 @@ packages:
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
-
-  '@types/node@20.19.43':
-    resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -9427,10 +9414,6 @@ snapshots:
 
   '@types/ms@2.1.0': {}
 
-  '@types/node@20.19.43':
-    dependencies:
-      undici-types: 6.21.0
-
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
@@ -9454,13 +9437,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.2.7(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
+  '@vitest/mocker@3.2.7(vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
     dependencies:
       '@vitest/spy': 3.2.7
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+      vite: 6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
 
   '@vitest/pretty-format@3.2.7':
     dependencies:
@@ -11615,13 +11598,13 @@ snapshots:
 
   vary@1.1.2: {}
 
-  vite-node@3.2.4(@types/node@20.19.43)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0):
+  vite-node@3.2.4(@types/node@22.20.1)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3(supports-color@7.2.0)
       es-module-lexer: 1.7.0
       pathe: 2.0.3
-      vite: 6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+      vite: 6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -11636,7 +11619,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0):
+  vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0):
     dependencies:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.5)
@@ -11645,17 +11628,17 @@ snapshots:
       rollup: 4.62.4
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 20.19.43
+      '@types/node': 22.20.1
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.12
       yaml: 2.9.0
 
-  vitest@3.2.7(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0):
+  vitest@3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.7
-      '@vitest/mocker': 3.2.7(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      '@vitest/mocker': 3.2.7(vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       '@vitest/pretty-format': 3.2.7
       '@vitest/runner': 3.2.7
       '@vitest/snapshot': 3.2.7
@@ -11673,12 +11656,12 @@ snapshots:
       tinyglobby: 0.2.17
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
-      vite: 6.4.3(@types/node@20.19.43)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
-      vite-node: 3.2.4(@types/node@20.19.43)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0)
+      vite: 6.4.3(@types/node@22.20.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+      vite-node: 3.2.4(@types/node@22.20.1)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.12)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/debug': 4.1.13
-      '@types/node': 20.19.43
+      '@types/node': 22.20.1
     transitivePeerDependencies:
       - jiti
       - less

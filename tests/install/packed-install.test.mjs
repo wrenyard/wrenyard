@@ -164,9 +164,9 @@ function assertRootDevDepsAvailable(root) {
   }
 }
 
-// Gateway packages are production dependencies of Foreman and are expected as
-// physical snapshots. Reject workspace symlinks that would escape the packed
-// runtime after it moves to another machine.
+// Gateway packages are production dependencies of the daemon package and are
+// expected as physical snapshots. Reject workspace symlinks that would escape
+// the packed runtime after it moves to another machine.
 function assertNoWorkspaceLinks(root) {
   const violations = [];
   const walk = (dir) => {
@@ -183,12 +183,12 @@ function assertNoWorkspaceLinks(root) {
     }
   };
   walk(root);
-  assert.ok(violations.length === 0, `@wrenyard workspace entries in extracted Foreman tree:\n${violations.join('\n')}`);
+  assert.ok(violations.length === 0, `@wrenyard workspace entries in extracted control tree:\n${violations.join('\n')}`);
 }
 
-// A deployed Foreman tree is a portable runtime tree and must not carry pnpm
+// A deployed control tree is a portable runtime tree and must not carry pnpm
 // metadata that can embed build-host workspace paths.
-function assertNoPnpmWorkspaceMetadata(foremanRoot) {
+function assertNoPnpmWorkspaceMetadata(controlRoot) {
   for (const name of [
     'pnpm-lock.yaml',
     'pnpm-workspace.yaml',
@@ -197,18 +197,18 @@ function assertNoPnpmWorkspaceMetadata(foremanRoot) {
     'node_modules/.pnpm-workspace-state-v1.json',
   ]) {
     assert.ok(
-      !fs.existsSync(path.join(foremanRoot, name)),
-      `deployed Foreman tree must not ship ${name}`,
+      !fs.existsSync(path.join(controlRoot, name)),
+      `deployed control tree must not ship ${name}`,
     );
   }
 }
 
-// The staged/extracted Foreman tree must contain no directory named `.bin` at
+// The staged/extracted control tree must contain no directory named `.bin` at
 // any dependency depth. Modern pnpm layouts nest shims under deeper
 // node_modules/.bin dirs (for example .pnpm/<pkg>/node_modules/.bin), and every
 // shipped launcher resolves tsx through an explicit path, so a recursive check
 // (not only the top-level node_modules/.bin) is what catches real regressions.
-function assertNoBinDirs(foremanRoot) {
+function assertNoBinDirs(controlRoot) {
   const violations = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -222,8 +222,8 @@ function assertNoBinDirs(foremanRoot) {
       walk(file);
     }
   };
-  walk(foremanRoot);
-  assert.ok(violations.length === 0, `Foreman tree contains .bin shim directories:\n${violations.join('\n')}`);
+  walk(controlRoot);
+  assert.ok(violations.length === 0, `control tree contains .bin shim directories:\n${violations.join('\n')}`);
 }
 
 // Strip PowerShell comments (`#` to end of line) while preserving `#` inside
@@ -437,7 +437,7 @@ function assertNoBadSymlinks(root) {
 
 // Fail if any regular file under root embeds one of the forbidden build paths
 // as a byte string. pnpm shims once rewrote relative links into absolute
-// release-temp paths, so no staged/extracted Foreman file may reference the
+// release-temp paths, so no staged/extracted control file may reference the
 // release temp dir or the source worktree.
 function assertNoEmbeddedBuildPaths(root, forbidden) {
   const needles = forbidden.map((p) => Buffer.from(path.resolve(p), 'utf8'));
@@ -553,8 +553,8 @@ test('packed-install E2E: no consumer-side Go compilation', {
     const tgz = findFile(releaseDir, /wrenyard-cli-.*\.tgz$/);
     assert.ok(tgz, 'CLI tarball not found in release output');
 
-    // The minimal CLI tarball is a Foreman control package only. Pet ships only
-    // inside Desktop and is not emitted or installed as a standalone app.
+    // The minimal CLI tarball is a Wrenyard control package only. Pet ships
+    // only inside Desktop and is not emitted or installed as a standalone app.
     const tgzListing = run('tar', ['-tzf', tgz]).stdout;
     assert.ok(
       !tgzListing.split(/\r?\n/).some((line) => /(^|\/)apps\/pet(\/|$)/.test(line)),
@@ -586,14 +586,16 @@ test('packed-install E2E: no consumer-side Go compilation', {
     const workspaceInSuite = findFile(extractDir, /(^|\/|\\)pnpm-workspace\.yaml$/);
     assert.ok(workspaceInSuite, 'suite zip is missing pnpm-workspace.yaml');
 
-    // Deployed Foreman dependencies must be physical directories inside the
+    // Deployed control dependencies must be physical directories inside the
     // extracted tree (hoisted deploy), never symlinks into a build-time store.
-    const deployedForemanManifest = JSON.parse(
-      fs.readFileSync(path.join(extractDir, 'services', 'foreman', 'package.json'), 'utf8'),
+    // The deployed root is the CLI package; it pulls the daemon package (which
+    // owns the daemon server entry) in as a production dependency.
+    const deployedControlManifest = JSON.parse(
+      fs.readFileSync(path.join(extractDir, 'apps', 'cli', 'package.json'), 'utf8'),
     );
-    assert.ok(deployedForemanManifest.dependencies, 'deployed foreman declares no dependencies');
-    for (const dep of Object.keys(deployedForemanManifest.dependencies)) {
-      assertPhysicalInsideTree(extractDir, path.join('services', 'foreman', 'node_modules', dep));
+    assert.ok(deployedControlManifest.dependencies, 'deployed control declares no dependencies');
+    for (const dep of Object.keys(deployedControlManifest.dependencies)) {
+      assertPhysicalInsideTree(extractDir, path.join('apps', 'cli', 'node_modules', dep));
     }
     for (const dep of [
       'tsx',
@@ -602,11 +604,12 @@ test('packed-install E2E: no consumer-side Go compilation', {
       'zod',
       'better-sqlite3',
       '@langchain/core',
+      '@wrenyard/daemon',
       '@wrenyard/gateway',
       '@wrenyard/providers',
       '@wrenyard/auto-routing',
     ]) {
-      assertPhysicalInsideTree(extractDir, path.join('services', 'foreman', 'node_modules', dep));
+      assertPhysicalInsideTree(extractDir, path.join('apps', 'cli', 'node_modules', dep));
     }
 
     // The packed suite tree must keep only internal relative symlinks:
@@ -616,20 +619,20 @@ test('packed-install E2E: no consumer-side Go compilation', {
     assertNoBadSymlinks(extractDir);
     // Gateway dependencies are expected as physical package snapshots; no
     // workspace symlink may survive into the extracted suite.
-    assertNoWorkspaceLinks(path.join(extractDir, 'services', 'foreman'));
+    assertNoWorkspaceLinks(path.join(extractDir, 'apps', 'cli'));
     // The deployed tree is a portable runtime, not a package-manager workspace:
     // neither pnpm-lock.yaml nor pnpm-workspace.yaml may ship in the extracted
-    // services/foreman.
-    assertNoPnpmWorkspaceMetadata(path.join(extractDir, 'services', 'foreman'));
-    // The staged Foreman tree deliberately ships no .bin directory at any
+    // apps/cli.
+    assertNoPnpmWorkspaceMetadata(path.join(extractDir, 'apps', 'cli'));
+    // The staged control tree deliberately ships no .bin directory at any
     // depth: every launcher resolves tsx through an explicit path, and pnpm
     // shims are what historically leaked absolute build-temp paths (regression:
     // staging copies once rewrote relative .bin links to absolute build-temp
     // paths).
-    assertNoBinDirs(path.join(extractDir, 'services', 'foreman'));
+    assertNoBinDirs(path.join(extractDir, 'apps', 'cli'));
     // No regular staged file may embed the release temp dir or the source
     // worktree as a byte string.
-    assertNoEmbeddedBuildPaths(path.join(extractDir, 'services', 'foreman'), [tmp, ROOT]);
+    assertNoEmbeddedBuildPaths(path.join(extractDir, 'apps', 'cli'), [tmp, ROOT]);
 
     // Stage a real `forge` (if the suite ships one) so the installed CLI's
     // runtime command can find it on PATH during the run step.
@@ -658,14 +661,14 @@ test('packed-install E2E: no consumer-side Go compilation', {
     run(installed, ['runtime', '--version'], { env: consumerEnv });
 
     // The CLI package must ship the pinned Node runtime (hidden under
-    // .wrenyard/runtime) and run Foreman through it after moving away from the
-    // build temp directory.
+    // .wrenyard/runtime) and run the daemon control through it after moving
+    // away from the build temp directory.
     const cliPkgDir = path.join(consumer, 'node_modules', '@wrenyard', 'cli');
     assert.ok(
       fs.existsSync(path.join(cliPkgDir, '.wrenyard', 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')),
       'CLI tarball is missing the packaged node runtime',
     );
-    // Only `wrenyard` is a public launcher: the Foreman control and the native
+    // Only `wrenyard` is a public launcher: the daemon control and the native
     // Forge runtime are internal pieces of the package, never public bin
     // entries, so the npm shims must not exist.
     const installedForeman = path.join(consumer, 'node_modules', '.bin', process.platform === 'win32' ? 'foreman.cmd' : 'foreman');
@@ -673,12 +676,12 @@ test('packed-install E2E: no consumer-side Go compilation', {
     assert.ok(!fs.existsSync(installedForeman), 'foreman must not be a public bin entry; only wrenyard is public');
     assert.ok(!fs.existsSync(installedForgeShim), 'forge must not be a public bin entry; only wrenyard is public');
 
-    // Installed status must launch internal control through the packaged node:
-    // put a fake failing `node` first on PATH and run the Foreman status
-    // handler through the package's bundled Node + tsx (the same invocation the
-    // installed CLI launcher uses to spawn control). The handler exits 1 only
-    // because no daemon is running in the consumer project, and the fake PATH
-    // node proves the packaged node, not a PATH node, did the work.
+    // Installed status must run through the packaged node: put a fake failing
+    // `node` first on PATH and run the status handler the way the installed CLI
+    // launcher runs it (the bundled product CLI through the packaged node). The
+    // handler exits 1 only because no daemon is running in the consumer
+    // project, and the fake PATH node proves the packaged node, not a PATH
+    // node, did the work.
     const fakeNodeDir = path.join(tmp, 'fake-node');
     fs.mkdirSync(fakeNodeDir, { recursive: true });
     const fakeNode = path.join(fakeNodeDir, 'node');
@@ -705,8 +708,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
     };
     const bundledNode = path.join(cliPkgDir, '.wrenyard', 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
     const statusRes = spawnSync(bundledNode, [
-      path.join(cliPkgDir, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-      path.join(cliPkgDir, 'services', 'foreman', 'bin', 'foreman.mts'),
+      path.join(cliPkgDir, 'dist', 'wrenyard.mjs'),
       'status',
       '--config',
       isolatedStatusConfig,
@@ -719,15 +721,15 @@ test('packed-install E2E: no consumer-side Go compilation', {
     assert.match(
       `${statusRes.stdout}\n${statusRes.stderr}`,
       /Wrenyard status[\s\S]*daemon:\s+not running/,
-      'installed status did not reach the Foreman status handler through the bundled node',
+      'installed status did not reach the daemon status handler through the bundled node',
     );
 
-    // The manual tgz must carry Foreman's direct dependency graph into the
-    // installed package as physical directories: npm keeps real hoisted
-    // directories shipped inside a tarball's node_modules (and prunes
+    // The manual tgz must carry the deployed control tree's direct dependency
+    // graph into the installed package as physical directories: npm keeps real
+    // hoisted directories shipped inside a tarball's node_modules (and prunes
     // virtual-store symlink entries), so the supported contract is that each
     // key entry is a physical directory resolving inside the installed package
-    // before the installed Foreman is executed through the bundled Node
+    // before the installed control tree is executed through the bundled Node
     // runtime.
     for (const dep of [
       'tsx',
@@ -736,22 +738,23 @@ test('packed-install E2E: no consumer-side Go compilation', {
       'zod',
       'better-sqlite3',
       '@langchain/core',
+      '@wrenyard/daemon',
       '@wrenyard/gateway',
       '@wrenyard/providers',
       '@wrenyard/auto-routing',
     ]) {
-      assertPhysicalInsideTree(cliPkgDir, path.join('services', 'foreman', 'node_modules', dep));
+      assertPhysicalInsideTree(cliPkgDir, path.join('apps', 'cli', 'node_modules', dep));
     }
 
     // The installed CLI tree must likewise keep only internal relative
     // symlinks after the tarball is extracted into the consumer project, its
-    // staged Foreman tree must carry no @wrenyard workspace symlinks, and it
+    // staged control tree must carry no @wrenyard workspace symlinks, and it
     // must ship no node_modules/.bin or regular file embedding a build path.
     assertNoBadSymlinks(cliPkgDir);
-    assertNoWorkspaceLinks(path.join(cliPkgDir, 'services', 'foreman'));
-    assertNoPnpmWorkspaceMetadata(path.join(cliPkgDir, 'services', 'foreman'));
-    assertNoBinDirs(path.join(cliPkgDir, 'services', 'foreman'));
-    assertNoEmbeddedBuildPaths(path.join(cliPkgDir, 'services', 'foreman'), [tmp, ROOT]);
+    assertNoWorkspaceLinks(path.join(cliPkgDir, 'apps', 'cli'));
+    assertNoPnpmWorkspaceMetadata(path.join(cliPkgDir, 'apps', 'cli'));
+    assertNoBinDirs(path.join(cliPkgDir, 'apps', 'cli'));
+    assertNoEmbeddedBuildPaths(path.join(cliPkgDir, 'apps', 'cli'), [tmp, ROOT]);
 
     // 4. Run the standalone executable directly.
     run(sea, ['version'], { env: consumerEnv });
@@ -799,7 +802,7 @@ test('packed-install E2E: no consumer-side Go compilation', {
       assert.ok(fs.existsSync(path.join(prefix, 'current')), 'current link not found');
       run(launcher, ['version'], { env: consumerEnv });
       run(launcher, ['help'], { env: consumerEnv });
-      // Only wrenyard is a public launcher: the internal Foreman control and
+      // Only wrenyard is a public launcher: the internal daemon control and
       // the native Forge runtime stay hidden inside the installed suite.
       const foremanLauncher = path.join(prefix, 'bin', process.platform === 'win32' ? 'foreman.cmd' : 'foreman');
       const forgeLauncher = path.join(prefix, 'bin', process.platform === 'win32' ? 'forge.cmd' : 'forge');

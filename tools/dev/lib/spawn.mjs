@@ -129,7 +129,8 @@ export function pnpmInvocation(checkout, pnpmArgs, nodeExecutable = process.exec
 export function tsxLoaderInvocation(checkout, entry, extraArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
   const tsxRoot = firstExisting([
     join(checkout, 'node_modules', 'tsx'),
-    join(checkout, 'services', 'foreman', 'node_modules', 'tsx'),
+    join(checkout, 'apps', 'daemon', 'node_modules', 'tsx'),
+    join(checkout, 'apps', 'cli', 'node_modules', 'tsx'),
   ], exists);
   if (!tsxRoot) {
     throw new Error('tsx was not found. Run pnpm install --frozen-lockfile in the checkout root.');
@@ -149,7 +150,8 @@ export function tsxLoaderInvocation(checkout, entry, extraArgs = [], nodeExecuta
 export function sourceCliInvocation(checkout, cliArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
   const tsxCli = firstExisting([
     join(checkout, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    join(checkout, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(checkout, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(checkout, 'apps', 'daemon', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
   ], exists);
   const cliSource = join(checkout, 'apps', 'cli', 'src', 'index.ts');
   if (!tsxCli || !exists(cliSource)) {
@@ -163,12 +165,12 @@ export function sourceCliInvocation(checkout, cliArgs = [], nodeExecutable = pro
 }
 
 export function daemonInvocation(checkout, configPath, extraArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
-  const entry = join(checkout, 'services', 'foreman', 'bin', 'foreman-deamon.mts');
+  const entry = join(checkout, 'apps', 'daemon', 'bin', 'daemon.mts');
   if (!exists(entry)) {
     throw new Error(`Daemon entry missing: ${entry}`);
   }
   const invocation = tsxLoaderInvocation(checkout, entry, ['--config', configPath, ...extraArgs], nodeExecutable, exists);
-  invocation.cwd = join(checkout, 'services', 'foreman');
+  invocation.cwd = join(checkout, 'apps', 'daemon');
   return invocation;
 }
 

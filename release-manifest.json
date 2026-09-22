@@ -6,28 +6,18 @@
   "publishable": false,
   "platform_artifacts": {},
   "components": {
-    "foreman": {
-      "source": "services/foreman",
-      "version": "1.0.0-dev.35",
-      "source_sha": "787d91b244cdb01c4a130887ca39c9ffe476275b"
-    },
-    "pet": {
-      "source": "apps/pet",
-      "version": "1.0.0-dev.35",
-      "source_sha": "06112cfdeaa824409086051db2cea6c122728f92"
-    },
     "cli": {
       "source": "apps/cli",
       "version": "1.0.0-dev.35",
       "source_sha": null
     },
+    "daemon": {
+      "source": "apps/daemon",
+      "version": "1.0.0-dev.35",
+      "source_sha": "787d91b244cdb01c4a130887ca39c9ffe476275b"
+    },
     "desktop": {
       "source": "apps/desktop",
-      "version": "1.0.0-dev.35",
-      "source_sha": null
-    },
-    "dsh_shell": {
-      "source": "packages/dsh-shell",
       "version": "1.0.0-dev.35",
       "source_sha": null
     }
