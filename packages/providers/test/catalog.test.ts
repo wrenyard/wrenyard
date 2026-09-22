@@ -7,7 +7,7 @@ import {
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
 } from '../src/index.ts';
-import { builtinModelDisplayName } from '@wrenyard/models';
+import { builtinModelDisplayName, models } from '@wrenyard/models';
 
 test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
@@ -476,7 +476,7 @@ test('new Flash ignores retired model speed history', () => {
   assert.equal(speed.source, 'catalog_default');
   assert.equal(speed.tps, 201);
   const tokenhub = catalog.provider('tokenhub')!.models.find(model => model.id === 'deepseek/deepseek-flash')!;
-  assert.equal(tokenhub.speed, 207);
+  assert.equal(tokenhub.speed, models.require('deepseek-v4.1-flash').defaults.speed);
 });
 
 test('Cursor registers twelve multi-vendor models with intelligence, images, and known pricing', () => {
