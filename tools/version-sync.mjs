@@ -6,10 +6,15 @@
 //   - every first-party package manifest (apps/*, packages/*, packages/features/*)
 //   - release-manifest.json (suite_version + each component version)
 //   - contracts/versions.json (first-party desktop and dsh_shell entries)
-//   - the Desktop profile manifest version (apps/desktop/src/profile.ts)
+//   - the Desktop profile manifest version (packages/features/session/src/profile.ts)
 //
 // Protocol and upstream (DSH) versions are never altered; any drift in those
 // values is reported but never repaired.
+//
+// The workspace member list is intentionally explicit. `packages/features/session`
+// and `packages/dsh-shell` ship inside the daemon control tree (the session
+// feature owns the DSH process/client and reaches the DSH native bundle through
+// package dependencies), so their manifests stay part of the same first-party pin.
 //
 // Usage: node tools/version-sync.mjs [--check|--write] [--root <dir>]
 //   --check (default) verifies every first-party location matches the root
@@ -49,12 +54,13 @@ const FIRST_PARTY_MANIFESTS = [
   'packages/control-client/package.json',
   'packages/dsh-shell/package.json',
   'packages/features/gateway/package.json',
+  'packages/features/session/package.json',
   'packages/providers/package.json',
 ];
 
 const RELEASE_MANIFEST = 'release-manifest.json';
 const CONTRACTS = 'contracts/versions.json';
-const PROFILE_PATH = 'apps/desktop/src/profile.ts';
+const PROFILE_PATH = 'packages/features/session/src/profile.ts';
 
 // Protocol and upstream versions that must be preserved untouched.
 const PROTOCOL_VERSION = '1';

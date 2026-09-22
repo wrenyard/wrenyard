@@ -704,7 +704,7 @@ export function createSupervisor(options = {}) {
     });
     const slot = bindSlot('desktop', child, launchId);
     persist();
-    logger.info('desktop-spawn', `launchId=${launchId} pid=${child.pid ?? 'unknown'}`);
+    logger.info('desktop-spawn', `launchId=${launchId} pid=${child.pid ?? 'unknown'} userData=${userData}`);
     try {
       // Desktop readiness only means the OS launched the process. Its UI and
       // supervisor bridge may initialize later; neither gates source dev.

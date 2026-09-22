@@ -305,6 +305,46 @@ import {
   type ExecStartParams,
   type ExecStartResult,
 } from './methods/exec.mts'
+import {
+  sessionBackendParamsSchema,
+  sessionBackendResultSchema,
+  sessionCancelParamsSchema,
+  sessionCancelResultSchema,
+  sessionCreateParamsSchema,
+  sessionCreateResultSchema,
+  sessionSelectModelParamsSchema,
+  sessionSelectModelResultSchema,
+  sessionSelectParamsSchema,
+  sessionSelectResultSchema,
+  sessionSendParamsSchema,
+  sessionSendResultSchema,
+  sessionSetWorkspaceParamsSchema,
+  sessionSetWorkspaceResultSchema,
+  sessionSnapshotParamsSchema,
+  sessionSnapshotResultSchema,
+  sessionSummaryModelGetParamsSchema,
+  sessionSummaryModelResultSchema,
+  sessionSummaryModelSetParamsSchema,
+  type SessionBackendParams,
+  type SessionBackendResult,
+  type SessionCancelParams,
+  type SessionCancelResult,
+  type SessionCreateParams,
+  type SessionCreateResult,
+  type SessionSelectModelParams,
+  type SessionSelectModelResult,
+  type SessionSelectParams,
+  type SessionSelectResult,
+  type SessionSendParams,
+  type SessionSendResult,
+  type SessionSetWorkspaceParams,
+  type SessionSetWorkspaceResult,
+  type SessionSnapshotParams,
+  type SessionSnapshotResult,
+  type SessionSummaryModelGetParams,
+  type SessionSummaryModelResult,
+  type SessionSummaryModelSetParams,
+} from './methods/session.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -518,6 +558,16 @@ export interface ForemanMethodParams {
   'exec.get': ExecGetParams
   'exec.events': ExecEventsParams
   'exec.cancel': ExecCancelParams
+  'session.snapshot': SessionSnapshotParams
+  'session.select': SessionSelectParams
+  'session.create': SessionCreateParams
+  'session.selectModel': SessionSelectModelParams
+  'session.send': SessionSendParams
+  'session.cancel': SessionCancelParams
+  'session.setWorkspace': SessionSetWorkspaceParams
+  'session.summary.model.get': SessionSummaryModelGetParams
+  'session.summary.model.set': SessionSummaryModelSetParams
+  'session.backend': SessionBackendParams
 }
 
 export interface ForemanMethodResults {
@@ -586,6 +636,16 @@ export interface ForemanMethodResults {
   'exec.get': ExecGetResult
   'exec.events': ExecEventsResult
   'exec.cancel': ExecCancelResult
+  'session.snapshot': SessionSnapshotResult
+  'session.select': SessionSelectResult
+  'session.create': SessionCreateResult
+  'session.selectModel': SessionSelectModelResult
+  'session.send': SessionSendResult
+  'session.cancel': SessionCancelResult
+  'session.setWorkspace': SessionSetWorkspaceResult
+  'session.summary.model.get': SessionSummaryModelResult
+  'session.summary.model.set': SessionSummaryModelResult
+  'session.backend': SessionBackendResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -854,6 +914,46 @@ export const methodRegistry: {
   'exec.cancel': {
     params: execCancelParamsSchema,
     result: execCancelResultSchema,
+  },
+  'session.snapshot': {
+    params: sessionSnapshotParamsSchema,
+    result: sessionSnapshotResultSchema,
+  },
+  'session.select': {
+    params: sessionSelectParamsSchema,
+    result: sessionSelectResultSchema,
+  },
+  'session.create': {
+    params: sessionCreateParamsSchema,
+    result: sessionCreateResultSchema,
+  },
+  'session.selectModel': {
+    params: sessionSelectModelParamsSchema,
+    result: sessionSelectModelResultSchema,
+  },
+  'session.send': {
+    params: sessionSendParamsSchema,
+    result: sessionSendResultSchema,
+  },
+  'session.cancel': {
+    params: sessionCancelParamsSchema,
+    result: sessionCancelResultSchema,
+  },
+  'session.setWorkspace': {
+    params: sessionSetWorkspaceParamsSchema,
+    result: sessionSetWorkspaceResultSchema,
+  },
+  'session.summary.model.get': {
+    params: sessionSummaryModelGetParamsSchema,
+    result: sessionSummaryModelResultSchema,
+  },
+  'session.summary.model.set': {
+    params: sessionSummaryModelSetParamsSchema,
+    result: sessionSummaryModelResultSchema,
+  },
+  'session.backend': {
+    params: sessionBackendParamsSchema,
+    result: sessionBackendResultSchema,
   },
 }
 

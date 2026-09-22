@@ -28,8 +28,8 @@ if (parsed.unknown.length > 0) {
 }
 
 if (typeof globalThis.fetch !== 'function') {
-  // Node 22 always has fetch; this only documents the runtime expectation.
-  process.stderr.write('Node 22.19 or newer is required. Run: pnpm install --frozen-lockfile\n');
+  // Node 24 always has fetch; this only documents the runtime expectation.
+  process.stderr.write('Node 24.19 or newer is required. Run: pnpm install --frozen-lockfile\n');
   process.exit(EXIT.failed);
 }
 

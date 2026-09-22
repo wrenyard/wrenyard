@@ -122,8 +122,8 @@ export function checkToolchain(options) {
   const exists = options.exists ?? existsSync;
   const errors = [];
   const [major, minor, patch] = nodeVersion.split('.').map((part) => Number(part));
-  if (major < 22 || (major === 22 && (minor < 19 || (minor === 19 && patch < 0)))) {
-    errors.push(`Node ${nodeVersion} is too old; package.json requires >=22.19.0`);
+  if (major < 24 || (major === 24 && (minor < 19 || (minor === 19 && patch < 0)))) {
+    errors.push(`Node ${nodeVersion} is too old; package.json requires >=24.19.0`);
   }
   if (!exists(join(checkout, 'node_modules'))) {
     errors.push('node_modules is missing. Run: pnpm install --frozen-lockfile');

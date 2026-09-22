@@ -13,8 +13,7 @@ import type {
 } from './common/methods.ts'
 import type { ExecMethods } from './exec/methods.ts'
 import type { ProviderMethods } from './provider/methods.ts'
-import type { SessionNotifications } from './session/events.ts'
-import type { SessionMethods } from './session/methods.ts'
+import type { SessionMethods, SessionNotifications } from './session/methods.ts'
 
 export interface ProtocolMethods extends SessionMethods, ExecMethods, ProviderMethods {}
 export interface ProtocolNotifications extends SessionNotifications {}

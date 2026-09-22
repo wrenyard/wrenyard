@@ -15,6 +15,10 @@ import { resolvePortConflict } from './startup/port-guard.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers } from '../server/handlers/core.mts'
 import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../control/ipc-server.mts'
+import { registerSessionHandlers } from '../server/handlers/session.mts'
+import { TaskService } from '../core/task/service.mts'
+import { createSessionService, type SessionService } from '@wrenyard/session'
+import { resolveDesktopStateRoot } from '../config/desktop-state.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -222,6 +226,15 @@ async function startForemanDaemonWithRuntime(
     agent: runtime.supervisor,
     runner: runtime.runner,
   }
+
+  // One daemon-owned TaskService backs both the task.run.* RPC surface and the
+  // session feature's in-process wait/cancel. A session wait therefore observes
+  // exactly the runs this daemon accepted, with no second registry.
+  const taskService = new TaskService({ workspaceRoot: config.workspaceRoot, operations })
+  // Assigned once the session service exists (which needs the bound IPC path).
+  // Provider credential changes refresh the session model projection through
+  // this holder; the feature additionally watches provider identity itself.
+  const sessionRefresh: { current?: SessionService } = {}
 
   // Single shared TaskGraphService used by all RPC transports.
   const taskgraphWorkspaceRoot = config.workspaceRoot
@@ -626,7 +639,18 @@ async function startForemanDaemonWithRuntime(
       token: gatewayToken,
     }),
     providerList: () => providerService.list(),
-    providerConfigure: (params) => providerService.configure(params),
+    providerConfigure: async (params) => {
+      const result = await providerService.configure(params)
+      // A new credential can change which models the session/DSh projection
+      // admits. Refresh is best-effort: the provider.configure reply must not
+      // depend on the session backend being reachable.
+      try {
+        await sessionRefresh.current?.refreshModels()
+      } catch (error) {
+        writeDaemonLog('warn', 'session model refresh after provider.configure failed', error)
+      }
+      return result
+    },
     providerQuota: (params) => providerService.quotaSnapshot(params),
     clientConfiguration: {
       snapshot: () => clientConfigurationService.snapshot(),
@@ -638,6 +662,7 @@ async function startForemanDaemonWithRuntime(
     taskSettings: taskSettingsService,
     runtimeAlias: runtimeAliasService,
     execService: runtime.execService,
+    taskService,
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
       if (!provider) throw new Error('Execution requires a provider')
@@ -816,6 +841,32 @@ async function startForemanDaemonWithRuntime(
     path: config.service.ipc?.path,
   })
   activeIpcPath = ipcPath
+  // The session feature owns DSH plus conversation persistence. It is rooted at
+  // the Desktop userData directory so a CLI-started daemon and the Electron app
+  // share exactly one conversation state tree; its gateway connection and task
+  // wait/cancel are injected in-process, and DSH MCP tools reach the daemon over
+  // this same IPC path like every other client.
+  const sessionService = createSessionService({
+    stateRoot: resolveDesktopStateRoot(),
+    initialWorkspace: {
+      status: 'configured',
+      source: 'user-config',
+      configPath: authoritativeConfigPath,
+      path: config.workspaceRoot,
+      readOnly: false,
+    },
+    ipcPath,
+    getGatewayConnection: async () => ({
+      ...await gateway.connection(gatewayOrigin(config.service.host, boundPort)),
+      token: gatewayToken,
+    }),
+    waitForTaskRun: (taskRunId, signal) => taskService.wait(taskRunId, undefined, signal),
+    cancelTaskRun: async (taskRunId) => {
+      await taskService.cancel(taskRunId)
+    },
+  })
+  sessionRefresh.current = sessionService
+  registerSessionHandlers(rpcRouter, { sessionService })
   let ipcServer: IpcServer | undefined
   try {
     await ensureGatewayCredentialHelper(credentialHelperPath, activeIpcPath)
@@ -824,6 +875,9 @@ async function startForemanDaemonWithRuntime(
       onMessage: (message) => rpcRouter.handleMessage(message, { transport: 'ipc' }),
     })
   } catch (error) {
+    await sessionService.close().catch((closeError: unknown) => {
+      writeDaemonLog('warn', 'session service startup cleanup failed', closeError)
+    })
     await cleanupFailedDaemonResources({
       activeSseStreams,
       connections,
@@ -836,6 +890,12 @@ async function startForemanDaemonWithRuntime(
     throw error
   }
   if (!ipcServer) throw new Error('failed to start IPC server')
+  // Start the DSH-backed session backend only after the IPC router is serving,
+  // and never await it: daemon boot (HTTP/MCP/IPC readiness) must not be gated
+  // on DSH coming up. A failed start is reported through session.backend.
+  void sessionService.start().catch((error: unknown) => {
+    writeDaemonLog('error', 'session service start failed', error)
+  })
   let stopped = false
   const runningIpcServer = ipcServer
   const runningDaemon: RunningForemanDaemon = {
@@ -856,7 +916,17 @@ async function startForemanDaemonWithRuntime(
       let ipcError: unknown
       let supervisorError: unknown
       let execError: unknown
+      let sessionError: unknown
       const httpClose = closeHttpServerIfListening(httpServer)
+      // Stop the session/DSH backend first: it owns its child process and the
+      // conversation persistence it writes, and must not observe a closed
+      // gateway or a torn-down supervisor.
+      try {
+        await sessionService.close()
+      } catch (error) {
+        sessionError = error
+        writeDaemonLog('warn', 'session service shutdown failed', error)
+      }
       await gateway.close()
       restoreGatewayEnvironment()
       try {
@@ -893,6 +963,7 @@ async function startForemanDaemonWithRuntime(
       if (ipcError) throw ipcError
       if (execError) throw execError
       if (supervisorError) throw supervisorError
+      if (sessionError) throw sessionError
     },
   }
   stopFromShutdownRequest = async () => {
@@ -1041,6 +1112,7 @@ interface DaemonRpcRouterOptions {
   taskSettings?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskSettings']
   runtimeAlias?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['runtimeAlias']
   execService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['execService']
+  taskService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskService']
   resolveExecRequest?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveExecRequest']
   resolveTaskRunDisplayNames?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveTaskRunDisplayNames']
 }

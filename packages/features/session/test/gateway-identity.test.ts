@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { sameGatewayIdentity } from '../src/service-recovery.js';
+import { sameGatewayIdentity } from '../src/gateway-identity.js';
 
 // WrenyardGatewayConnection-shaped fixtures kept structural on purpose so this
 // file stays Electron-free and never serializes the connection token.

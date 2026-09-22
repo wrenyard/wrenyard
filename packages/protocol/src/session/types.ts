@@ -1,111 +1,260 @@
 /**
- * Session DTOs for the future conversation API.
+ * Session product DTOs.
  *
- * Design rules, all enforced by convention rather than by runtime validation:
+ * These are the exact shapes the Desktop conversation surface consumes: the
+ * `ConversationSnapshot` and every product type it transitively carries were
+ * moved here verbatim from the Desktop shell contract when the session feature
+ * became a first-class protocol surface. Field names, optionality, and unions
+ * are frozen product wire shapes — the protocol only describes them, it never
+ * validates a payload.
+ *
+ * Design rules, enforced by convention rather than by runtime validation:
  *
  * - Ids are OPAQUE non-empty strings. Never parse, order, or assume a format.
  * - Timestamps are epoch MILLISECONDS as plain numbers.
- * - Field names are camelCase.
  * - Only JSON-safe concrete shapes are used. No `Date`, `Error`, `Map`, `Set`,
- *   function, class instance, `undefined`-carrying required field, or native
- *   agent event object appears anywhere in this file.
+ *   function, or class instance appears anywhere in this file.
  *
  * These are TYPES ONLY and they DO NOT VALIDATE incoming JSON. See README.md.
  */
 
-/** Opaque session/turn/message identifier. Non-empty on the wire. */
-export type SessionId = string
-
-/** Opaque turn identifier. Non-empty on the wire. */
-export type TurnId = string
-
-/** Opaque message identifier. Non-empty on the wire. */
-export type MessageId = string
-
-/** Opaque workspace identifier. Non-empty on the wire. */
-export type WorkspaceId = string
-
-/** Epoch milliseconds since the Unix epoch. */
-export type EpochMilliseconds = number
+/**
+ * Whether a workspace is usable, plus where the configuration came from. A
+ * snapshot never carries a credential; `readOnly` marks a configuration the
+ * product itself may not rewrite.
+ */
+export interface WorkspaceConfigurationSnapshot {
+  status: 'configured' | 'missing' | 'invalid'
+  source: 'environment' | 'user-config' | 'none'
+  configPath: string
+  path?: string
+  message?: string
+  readOnly: boolean
+}
 
 /**
- * Per-session monotonically increasing event sequence number.
- *
- * Events use positive safe integers starting at 1. A cursor may be 0 before
- * the first event. Sequence numbers are never reused within a session.
+ * Selection-time speed evidence from the resolved speed contract. This is the
+ * estimate chosen before the run started; it is distinct from the actual
+ * measured `usage.outputTps` captured after the run completed.
  */
-export type EventSeq = number
-
-/** Opaque pagination cursor. The encoding is owned by the feature, not here. */
-export type PaginationCursor = string
-
-/** Routing reference to the model a turn was requested against. */
-export interface SessionModelRef {
-  providerId: string
-  modelId: string
+export interface TaskRunSpeedEvidence {
+  /** Selection-time expected throughput (tokens per second). */
+  effectiveTps: number
+  /** Where the selection estimate came from. Invalid evidence is omitted as a whole. */
+  source: 'local_31d' | 'provider_override' | 'catalog_default'
+  /** Number of local samples behind the selection estimate, when known. */
+  sampleCount: number | null
+  /** Whether actual throughput is expected to meet the selection estimate, when known. */
+  expectedTpsMet: boolean | null
+  /** Reason the selection estimate is considered degraded, when known. */
+  degradationReason?: string
 }
 
-/** Role of the author of a session message. */
-export type SessionMessageRole = 'user' | 'assistant' | 'tool'
-
-/** Terminal-or-in-flight state of a single turn. */
-export type SessionTurnStatus =
-  | 'queued'
-  | 'running'
-  | 'completed'
-  | 'cancelled'
-  | 'failed'
-
-/** Failure detail carried by a turn whose status is `failed`. */
-export interface SessionTurnError {
-  /** Stable machine-readable failure code. */
-  code: string
-  /** Human-readable failure description. */
-  message: string
+/**
+ * Per-run usage projection. Completeness reflects the CORE `reference_cost_complete`
+ * flag: only `true` marks a run fully costed. Partial runs keep unknown optional
+ * numbers absent rather than substituting zero; `unavailable` runs carry identity
+ * only. `referenceCostUsd` is an estimate, never a billed amount.
+ */
+export interface TaskRunUsage {
+  completeness: 'complete' | 'partial' | 'unavailable'
+  attemptCount: number
+  usageEventCount: number
+  inputTokens?: number
+  cachedInputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  generationMs?: number
+  outputTps?: number
+  tpsContract?: 'tokenizer_v1'
+  /** Estimated reference cost in USD. Absent (`undefined`) when CORE omits the numeric; never a fabricated value. */
+  referenceCostUsd?: number
+  /** True when CORE fully costed this run; partial runs omit the cost. */
+  referenceCostComplete: boolean
+  referenceCostBasis?: string
 }
 
-/** Lightweight session listing record. */
-export interface SessionSummary {
-  sessionId: SessionId
-  workspaceId: WorkspaceId
+/** A single recent Task run, projected from CORE's frozen TaskRunOutputResult metadata. */
+export interface TaskRunSnapshot {
+  taskRunId: string
+  taskId: string
+  taskName?: string
+  source?: 'builtin' | 'project' | 'unknown'
+  /** Exact persisted execution project; present only when nonblank. */
+  project?: string
+  status?: 'done' | 'failed' | 'cancelled' | 'interrupted' | 'running' | 'queued'
+  startedAt?: string
+  finishedAt?: string
+  resolvedClient?: string
+  resolvedProvider?: string
+  resolvedProfile?: string
+  resolvedModel?: string
+  resolvedModelId?: string
+  /** Paired Catalog provider display label; present only when the run row carries both labels. */
+  resolvedProviderDisplayName?: string
+  /** Paired Catalog model display label; present only when the run row carries both labels. */
+  resolvedModelDisplayName?: string
+  speed?: TaskRunSpeedEvidence
+  usage: TaskRunUsage
+}
+
+/** One conversation listed in the session sidebar. */
+export interface ConversationSessionSnapshot {
+  id: string
   title: string
-  createdAt: EpochMilliseconds
-  updatedAt: EpochMilliseconds
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  agentPreset?: string
+}
+
+/**
+ * Stable per-turn timing/usage metadata projected from the retained DSH event
+ * stream. Every optional number is observation-only: when DSH never supplied the
+ * datum it stays absent rather than being filled with a substitute.
+ */
+export interface ConversationTurnSnapshot {
+  id: string
+  /** Exact `turn/start` event time, or the earliest observed event for the turn. */
+  startedAt: number
+  /** Exact `turn/end` event time; absent while the turn is still running. */
+  endedAt?: number
+  running: boolean
+  /** Last assistant message body projected for a completed turn. */
+  finalItemId?: string
   /**
-   * Turn currently occupying the session, when one exists. At most one turn
-   * of a session is active at a time (see `session.send`).
+   * Latest progress note of a work turn that is still running because it owns
+   * dispatched task runs. Replaced by `finalItemId` once the turn completes, so
+   * a progress note never survives next to the final answer.
    */
-  activeTurnId?: TurnId
+  progressItemId?: string
+  /**
+   * Dispatched task runs this work turn still waits on. Present only while the
+   * turn runs and owns at least one unresolved run, so a settled turn never
+   * claims outstanding work.
+   */
+  pendingTaskCount?: number
+  /** Count of `run_task`/`task_run` tool calls observed inside this turn. */
+  dispatchCount: number
+  inputTokens?: number
+  outputTokens?: number
+  outputTps?: number
 }
 
-/**
- * The initial protocol uses the same record for listing and detail.
- */
-export type Session = SessionSummary
-
-/** One retained message of a session. */
-export interface SessionMessage {
-  messageId: MessageId
-  sessionId: SessionId
-  turnId: TurnId
-  role: SessionMessageRole
+/** One rendered transcript item of the selected conversation. */
+export interface ConversationItemSnapshot {
+  id: string
+  kind: 'user' | 'assistant' | 'tool'
   text: string
-  createdAt: EpochMilliseconds
-  updatedAt: EpochMilliseconds
+  time: number
+  /** Stable DSH turn identity used to render one assistant message per turn. */
+  turnId?: string
+  running?: boolean
+  toolName?: string
+  toolState?: 'running' | 'done' | 'failed'
+  /** Bounded raw result text for the tool call, when CORE supplies one. */
+  toolResultText?: string
+  /**
+   * Observed run_task metadata. A dispatch that is still executing carries its
+   * launch identity with a nonterminal `status` and identity-only usage; the
+   * authoritative terminal projection replaces it once the run resolves.
+   */
+  taskRun?: TaskRunSnapshot
+  /** Exact DSH step number that produced this item, when the event carried one. */
+  step?: number
+  /** Concise Chinese summary of the tool call derived from its observed arguments. */
+  toolSummary?: string
+  /** Bounded document references observed for a workspace doc tool result. */
+  documentLinks?: Array<{ title: string; path: string }>
+}
+
+/** The model choice currently applied to the selected conversation. */
+export interface ConversationModelSelectionSnapshot {
+  provider: string
+  /** Catalog Provider behind the DSH transport route. */
+  catalogProvider: string
+  model: string
+  label: string
+  providerLabel: string
+  advertised: boolean
+  /** True when the current model's provider credentials were passed to DSH. */
+  configured: boolean
+  reasoningEffort?: string
+}
+
+/** One selectable model of the advertised directory. */
+export interface ConversationModelOptionSnapshot {
+  provider: string
+  /** Catalog Provider behind the DSH transport route. */
+  catalogProvider: string
+  providerLabel: string
+  model: string
+  label: string
+  description?: string
+  defaultReasoningEffort?: string
+  reasoningEfforts?: string[]
+  /**
+   * Exact built-in Catalog input capabilities (`text`/`image`) projected for
+   * this option. Derived from the authoritative Catalog model, never from DSH
+   * claims or the model name. `undefined` means the capability is unknown —
+   * the UI must not assume text-only for an unmatched model.
+   */
+  inputTypes?: readonly ('text' | 'image')[]
+}
+
+export interface ConversationModelGroupSnapshot {
+  provider: string
+  label: string
+  models: ConversationModelOptionSnapshot[]
+}
+
+export interface ConversationModelsSnapshot {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  groups: ConversationModelGroupSnapshot[]
+  current?: ConversationModelSelectionSnapshot
+  routable?: boolean
+  message?: string
+}
+
+/** The whole selectable conversation projection, as one versioned snapshot. */
+export interface ConversationSnapshot {
+  status: 'ready' | 'workspace-required' | 'unavailable'
+  workspace: WorkspaceConfigurationSnapshot
+  sessions: ConversationSessionSnapshot[]
+  selectedSessionId?: string
+  selectedTitle?: string
+  selectedRunning: boolean
+  models: ConversationModelsSnapshot
+  hasMore: boolean
+  items: ConversationItemSnapshot[]
+  /** Observed turn boundaries/usage for the retained history; absent when none exist. */
+  turns?: ConversationTurnSnapshot[]
+  message?: string
 }
 
 /**
- * One turn of a session: a single accepted generation request and its
- * progress toward a terminal status.
+ * One canonical summary-model choice projected from the live local Gateway
+ * connection. `available` is credential evidence from the daemon gateway
+ * projection — a provider directory entry alone is never treated as usable.
  */
-export interface SessionTurn {
-  turnId: TurnId
-  sessionId: SessionId
-  status: SessionTurnStatus
-  model: SessionModelRef
-  createdAt: EpochMilliseconds
-  /** Absent while the turn is not terminal. */
-  completedAt?: EpochMilliseconds
-  /** Present only when `status` is `failed`. */
-  error?: SessionTurnError
+export interface SummaryModelOptionSnapshot {
+  /** Canonical (provider-independent) model id persisted by the preference. */
+  canonicalModel: string
+  /** Exact `provider/model` public id the local Gateway expects, when usable. */
+  publicId?: string
+  displayName: string
+  /** Provider display label backing this option, when resolved. */
+  providerLabel?: string
+  available: boolean
+}
+
+export interface SummarySettingsSnapshot {
+  /** Exact canonical model id currently persisted (default DeepSeek V4.1 Flash). */
+  selectedCanonicalModel: string
+  options: SummaryModelOptionSnapshot[]
+  /** True when the selected canonical model has no usable ordinary-LLM provider. */
+  unresolved: boolean
+  message?: string
 }

@@ -30,8 +30,6 @@ export interface DshWebOptions {
   host?: string;
   /** Port; 0 lets DSH pick an ephemeral port. */
   port?: number;
-  /** Launch under the Electron executable (sets ELECTRON_RUN_AS_NODE=1). */
-  runAsElectron?: boolean;
   /** Injected runner/command for tests, e.g. [process.execPath, '/tmp/fake']. */
   command?: readonly string[];
   /** Explicit Wrenyard connection env to propagate; overrides process.env. */
@@ -63,7 +61,6 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     const host = options.host ?? '127.0.0.1';
     const port = options.port ?? 0;
     const timeoutMs = options.timeoutMs ?? 30_000;
-    const runAsElectron = options.runAsElectron ?? Boolean(process.versions.electron);
     // Launcher flags (--profile, --patch) must precede web-app flags
     // (--host, --port). dsh 0.1.0-rc.6 treats everything after the first
     // app flag as web argv; `--patch` after `--host` is `unknown option`
@@ -80,15 +77,14 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     const program = injected ? injected[0] : process.execPath;
     // dsh-base instantiates cordis-plugin-hmr before dsh-web-app can set
     // `disabled: true`. HMR requires `--expose-internals` in process.execArgv;
-    // without it the child exits 1 during profile boot and Desktop flash-quits
-    // before the window shows. Keep the flag ahead of the script path so
-    // Electron-as-node / Node put it in execArgv, not in DSH argv.
+    // without it the child exits 1 during profile boot and the backend never
+    // becomes ready. Keep the flag ahead of the script path so Node puts it in
+    // execArgv, not in DSH argv.
     const programArgs = injected
       ? [...injected.slice(1), ...args]
       : ['--expose-internals', options.binPath, ...args];
 
     const env: NodeJS.ProcessEnv = { ...process.env, DSH_HOME: options.profileHome };
-    if (runAsElectron) env.ELECTRON_RUN_AS_NODE = '1';
     // Propagate the Wrenyard connection context to the child without logging
     // values; explicit overrides win (LaunchServices supplies no shell env).
     Object.assign(env, resolveWrenyardConnectionEnv(), options.wrenyardEnv, options.extraEnv);
