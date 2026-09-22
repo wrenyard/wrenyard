@@ -669,9 +669,17 @@ async function startForemanDaemonWithRuntime(
       if (params.thinking && !['low', 'medium', 'high', 'xhigh', 'max'].includes(params.thinking)) throw new Error('Invalid thinking level')
       const plan = catalog.resolveRun(params.client, provider, params.model, params.thinking as Parameters<typeof catalog.resolveRun>[3])
       if (params.mode && params.mode !== plan.mode) throw new Error('Requested mode does not match the selected client/provider')
+      // The native wire spelling is owned by the provider, not by this request:
+      // resolve it through the provider runtime so an explicit exec launches the
+      // exact product id (e.g. canonical Claude 5 -> its `-1m` row) in every
+      // environment. An explicit thinking-mapped substitution still wins, and
+      // the public canonical id is preserved for the gateway/id surfaces.
+      const providerDefinition = catalog.provider(provider)
+      const upstreamModel = plan.upstreamModel
+        ?? (providerDefinition ? providerRuntime.resolveUpstreamModel(providerDefinition, plan.model) : plan.model)
       return {
         ...params, provider, canonicalModel: plan.model,
-        model: plan.upstreamModel ?? plan.model, mode: plan.mode, protocol: plan.protocol,
+        model: upstreamModel, mode: plan.mode, protocol: plan.protocol,
         thinking: plan.reasoningEffort ?? plan.thinking,
       }
     },
