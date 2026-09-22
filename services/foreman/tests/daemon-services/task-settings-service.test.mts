@@ -33,9 +33,9 @@ import {
   type CodeBuddyActiveSnapshotView,
 } from '../../lib/daemon/services/auto-routing-snapshot-service.mts'
 import {
-  evaluateForgeNativeRouteReadiness,
-  type ForgeProviderReadinessSnapshot,
-} from '../../lib/daemon/execution/forge-provider-readiness-query.mts'
+  evaluateNativeRouteReadiness,
+  type NativeProviderReadinessSnapshot,
+} from '../../lib/daemon/execution/native-provider-readiness.mts'
 import type { TaskRoutingTestResult, TaskSettingsLoadError } from '../../lib/protocol/methods/task.mts'
 const CATALOG_CHECKED_AT = '2026-09-05'
 const QUOTA_T0 = 1_726_000_000_000
@@ -2057,7 +2057,7 @@ describe('daemon task-settings-service (no-model)', () => {
     // The unified ChatGPT provider uses the `codex` native client and credential
     // resolver; other providers key readiness on their own provider id.
     const providerId = runtime.provider
-    const state = evaluateForgeNativeRouteReadiness(
+    const state = evaluateNativeRouteReadiness(
       availabilityContext?.nativeProviderReadiness ?? undefined,
       {
         providerId,
@@ -2087,7 +2087,7 @@ describe('daemon task-settings-service (no-model)', () => {
     writeConfig({})
     const model = CURSOR_GROK_QUOTA_PROFILE.model
     let blocked = true
-    const current = (): ForgeProviderReadinessSnapshot => ({
+    const current = (): NativeProviderReadinessSnapshot => ({
       sampledAtMs: QUOTA_T0,
       authByProvider: { cursor: true },
       cursorModelAvailability: { [model]: blocked
@@ -2124,7 +2124,7 @@ describe('daemon task-settings-service (no-model)', () => {
   it('binds one fresh native readiness sample per run and observes login changes and query errors', async () => {
     writeConfig({})
     let nativeCalls = 0
-    let next: ForgeProviderReadinessSnapshot | Error = {
+    let next: NativeProviderReadinessSnapshot | Error = {
       sampledAtMs: QUOTA_T0,
       authByProvider: Object.freeze({ chatgpt: true }),
     }

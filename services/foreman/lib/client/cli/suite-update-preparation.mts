@@ -63,7 +63,6 @@ export class SuitePreparationError extends Error {
 const SUITE_MARKERS = [
   'pnpm-workspace.yaml',
   'release-manifest.json',
-  join('runtime', 'forge', 'go.mod'),
   join('services', 'foreman', 'package.json'),
 ] as const
 
@@ -86,18 +85,12 @@ export function resolveDependencyPackageRoot(checkoutPath: string, name: string)
   }
 }
 
-function forgeArtifactName(): string {
-  return process.platform === 'win32' ? 'forge.exe' : 'forge'
-}
-
 /**
  * Build the exact preparation command sequence for a source checkout:
  *
  *   1. `node <pnpm> install --frozen-lockfile`  — lockfile-honoring deps
  *   2. `node <pnpm> run typecheck`              — TS packages + Pet
  *   3. `node <pnpm> run build`                  — TS packages + Pet
- *   4. `go -C <runtime/forge> build -o <runtime/forge/bin/forge> ./cmd/forge`
- *   5. `<runtime/forge/bin/forge> setup --self-install` — replay-safe local stable runtime
  *
  * No git pull and no network beyond the lockfile-bounded pnpm install.
  */
@@ -124,8 +117,6 @@ export function buildSuitePreparationCommands(
       pnpmCliPath,
     )
   }
-  const forgeRuntimeDir = join(checkoutPath, 'runtime', 'forge')
-  const forgeBinaryPath = join(forgeRuntimeDir, 'bin', forgeArtifactName())
 
   const makeCommand = (command: string, args: string[]): SuitePreparationCommand => ({
     command,
@@ -140,8 +131,6 @@ export function buildSuitePreparationCommands(
     makeCommand(process.execPath, [pnpmCliPath, 'install', '--frozen-lockfile']),
     makeCommand(process.execPath, [pnpmCliPath, 'run', 'typecheck']),
     makeCommand(process.execPath, [pnpmCliPath, 'run', 'build']),
-    makeCommand('go', ['-C', forgeRuntimeDir, 'build', '-o', forgeBinaryPath, './cmd/forge']),
-    makeCommand(forgeBinaryPath, ['setup', '--self-install']),
   ]
 }
 
@@ -169,8 +158,7 @@ const defaultRunner: SuitePreparationRunner = {
  * Prepare a source checkout in place: run every {@link buildSuitePreparationCommands}
  * step in order, fail-fast on the first nonzero/signal/startup error, and stop
  * issuing further commands. Repeatable: a re-run (including replay after a
- * crash) proceeds from the already-resolved lockfile and the idempotent Forge
- * self-install.
+ * crash) proceeds from the already-resolved lockfile.
  */
 export async function prepareWrenyardSuite(
   checkoutPath: string,

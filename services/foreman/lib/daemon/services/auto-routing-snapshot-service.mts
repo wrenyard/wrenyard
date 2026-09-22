@@ -72,7 +72,7 @@
  *
  * Out of scope by construction: prices, tariffs, credits, fallback routing and
  * credentials. Provider acquisition is coordinated by @wrenyard/quota; the default query uses
- * the existing Foreman Forge helper (no shell, bounded timeout, capped
+ * the existing Foreman Wrenyard helper (no shell, bounded timeout, capped
  * stdout/stderr) for raw account data and client-protocol requests. Output that exceeds the
  * caps terminates the child and is rejected, never parsed as truncated data.
  */
@@ -192,7 +192,7 @@ interface RawWindow {
   readonly windowMs: number | null;
 }
 
-/** One raw Forge balance entry: a currency plus a decimal amount string. */
+/** One raw Wrenyard balance entry: a currency plus a decimal amount string. */
 interface RawBalance {
   readonly currency: string | null;
   readonly amount: string | null;
@@ -265,7 +265,7 @@ function normalizeRow(item: unknown): RawRow | null {
     }
   }
 
-  // Existing Forge balances source: raw `balances: [{ currency, amount }]` with
+  // Existing Wrenyard balances source: raw `balances: [{ currency, amount }]` with
   // a decimal amount string. Never synthesized, never coerced to zero.
   const balances: RawBalance[] = [];
   if (Array.isArray(raw.balances)) {
@@ -350,7 +350,7 @@ type RequiredQuotaTarget =
     }
   | {
       /** Mandatory monetary balance resource; evidence is located by the raw
-       *  Forge balances array on the same provider row. */
+       *  Wrenyard balances array on the same provider row. */
       readonly id: string;
       readonly balanceId: string;
       readonly windowName?: undefined;
@@ -370,7 +370,7 @@ interface BindingQuotaShape {
  * `quotaPoolId`:
  *
  *  - a `balance` pool contributes one discriminated balance constraint, with
- *    evidence sourced from the same raw row's Forge `balances` array;
+ *    evidence sourced from the same raw row's Wrenyard `balances` array;
  *  - a `quota` pool contributes one target, unless its window is explicitly
  *    not applicable in a fresh authoritative provider response;
  *  - a `quota` pool with no proven raw windows always contributes exactly one
@@ -455,7 +455,7 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
 
 /**
  * Builds discriminated monetary balance evidence for one mandatory balance
- * resource from the raw Forge balances array on the same row.
+ * resource from the raw Wrenyard balances array on the same row.
  *
  * Only a usable row with a fresh observation yields evidence: any valid positive
  * balance keeps the account available (all must be valid to claim all-zero).
@@ -710,7 +710,7 @@ export class AutoRoutingQuotaSnapshotService {
       return this.failClosed(context);
     }
     // Evaluate provider observations against the time at which the asynchronous
-    // sample completed. Forge stamps each provider row as that provider
+    // sample completed. Wrenyard stamps each provider row as that provider
     // finishes, so sampling `now` before the query would incorrectly classify
     // ordinary rows produced during a slow refresh as future evidence. This
     // still rejects genuine clock-skewed future timestamps in rowUsable().

@@ -1,6 +1,5 @@
 import type { PrimitiveSet } from '../../../types.mts'
 import type {
-  AgentRuntimePermission,
   OperationDescriptor,
   OperationKind,
   OperationName,
@@ -15,4 +14,3 @@ export type PrimitiveKind = OperationKind
 export type PrimitiveDescriptor = OperationDescriptor
 
 export type RuntimePrimitiveImplementations = Pick<PrimitiveSet, RuntimePrimitiveName>
-export type { AgentRuntimePermission }

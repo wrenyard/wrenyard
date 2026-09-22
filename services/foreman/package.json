@@ -34,7 +34,12 @@
     "zod": "^4.4.3",
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/quota": "workspace:*",
-    "@wrenyard/clients": "workspace:*"
+    "@wrenyard/clients": "workspace:*",
+    "@wrenyard/exec": "workspace:*",
+    "@wrenyard/browser-use": "workspace:*",
+    "@wrenyard/computer-use": "workspace:*",
+    "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/provider-service": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

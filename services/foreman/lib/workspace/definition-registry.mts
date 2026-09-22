@@ -117,9 +117,9 @@ export interface ListedDefinition {
   effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
   timeoutScope?: TaskTimeoutScope
-  /** Available Forge capability pack ids declared by the task config.
-   *  Present only when the task declares capabilities. */
-  capabilities?: readonly string[]
+  /** Available Wrenyard capability pack ids declared by the task config.
+   *  Present only when the task declares execution features. */
+  features?: readonly string[]
   /** `legacy` definitions remain exactly describable/resolvable for persisted
    *  work, but are omitted from new-work list surfaces. Current source-authored
    *  legacy definitions are pin-free — exact runtime recovery comes from
@@ -902,7 +902,7 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
     ...(normalizedInput ? { input_example: generateInputExample(normalizedInput as any) } : {}),
     ...(extractGateMetadata(config) ? { gates: extractGateMetadata(config) } : {}),
     ...timeoutMetadata(config),
-    ...capabilitiesMetadata(config),
+    ...featuresMetadata(config),
     ...(config.scheduling
       ? { scheduling: config.scheduling }
       : {}),
@@ -939,9 +939,9 @@ function taskInputSchemaWithContext(schema: unknown): unknown {
   }
 }
 
-function capabilitiesMetadata(config: import('../types.mts').TaskConfig): { capabilities?: readonly string[] } {
-  if (!config.capabilities) return {}
-  return { capabilities: [...config.capabilities.available] }
+function featuresMetadata(config: import('../types.mts').TaskConfig): { features?: readonly string[] } {
+  if (!config.features) return {}
+  return { features: [...config.features.available] }
 }
 
 function assertTaskSchemas(config: import('../types.mts').TaskConfig, sourcePath: string): void {

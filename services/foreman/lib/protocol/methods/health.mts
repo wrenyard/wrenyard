@@ -13,7 +13,6 @@ export interface HealthPingResult {
     instanceId?: string
     launchId?: string
     node?: string
-    runtimeBin?: string
   }
   dispatch?: {
     mode: 'accepting' | 'frozen' | 'planned_restart'
@@ -54,7 +53,6 @@ export const healthPingResultSchema = {
         instanceId: { type: 'string' },
         launchId: { type: 'string' },
         node: { type: 'string' },
-        runtimeBin: { type: 'string' },
       },
       additionalProperties: true,
     },

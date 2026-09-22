@@ -26,7 +26,7 @@ export interface ResolvedDefinitionContract {
   category?: { id: string; displayLabel: string }
   /** One-line human-readable definition description (snapshots bound it). */
   description?: string
-  /** Resolved requested agent runtime selector (e.g. 'forge/codex-luna'). */
+  /** Resolved requested agent runtime selector (e.g. 'chatgpt/gpt-5.6-sol:codex'). */
   agentRuntime?: string
   scheduling?: 'active' | 'legacy'
 }

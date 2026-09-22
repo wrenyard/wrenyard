@@ -44,8 +44,8 @@ export interface ForemanUpdatePreparationDeps {
   /** Wall-clock used for `failed_at`; injectable for deterministic tests. */
   clock?: () => Date
   /**
-   * Prepares the pulled monorepo checkout (install, typecheck, build, Forge
-   * self-install) before the daemon lifecycle. Defaults to the real suite
+   * Prepares the pulled monorepo checkout (install, typecheck, build)
+   * before the daemon lifecycle. Defaults to the real suite
    * preparer; tests inject a no-op so fake git paths never run real commands.
    */
   prepareSuite?: SuiteUpdatePreparer
