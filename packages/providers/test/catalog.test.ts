@@ -430,7 +430,7 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
 test('renamed providers expose their exact ids, labels, and client bindings', () => {
   const catalog = createBuiltinCatalog();
   // Claude subscription is the native Claude client provider; the official
-  // Anthropic API is a separately configured forge-managed provider.
+  // Anthropic API is a separately configured managed provider.
   const claudeCoding = catalog.provider('claude-coding')!;
   assert.equal(claudeCoding.displayName, 'Claude');
   assert.deepEqual(claudeCoding.nativeClients, ['claude']);
@@ -438,7 +438,7 @@ test('renamed providers expose their exact ids, labels, and client bindings', ()
   assert.equal(claudeCoding.quotaProvider, 'claude-coding');
   const anthropic = catalog.provider('anthropic')!;
   assert.equal(anthropic.displayName, 'Anthropic');
-  assert.equal(anthropic.credentialResolver, 'forge-managed');
+  assert.equal(anthropic.credentialResolver, 'managed');
   assert.equal(anthropic.quotaProvider, 'anthropic');
   assert.equal(anthropic.defaultModel, 'claude-sonnet-5');
   assert.deepEqual(anthropic.models.map((entry) => entry.id), [

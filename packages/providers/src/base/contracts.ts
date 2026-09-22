@@ -173,7 +173,7 @@ export const PUBLIC_CLIENT_KEYS: Readonly<Record<string, string>> = Object.freez
 
 export type ProviderAuthScheme = 'bearer' | 'x-api-key';
 export type CredentialResolver =
-  | 'forge-managed'
+  | 'managed'
   | 'codebuddy'
   | 'codex'
   | 'claude'
