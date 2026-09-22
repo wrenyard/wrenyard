@@ -1,5 +1,5 @@
-import type { ProviderDefinition, CanonicalModelDefinition, IntelligenceTier, ModelCapability, ModelDefinition, ModelPricing, ThinkingLevel } from './catalog.ts';
-import { builtinModelDisplayName, type BuiltinModelId } from '../model-display-names.ts';
+import { builtinModelDisplayName } from '@wrenyard/models';
+import type { ProviderDefinition, IntelligenceTier, ModelCapability, ModelDefinition, ModelPricing, ThinkingLevel } from './catalog.ts';
 
 type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing'> & {
   speed?: number;
@@ -9,43 +9,25 @@ type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pric
 
 type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly RawModelDefinition[] };
 
-// Shared identities are deliberately opt-in. Each entry represents an exact,
-// evidence-backed model version exposed through more than one provider route;
-// an unlisted route remains provider-local even when its raw id happens to
-// match another provider's id. This registry is the single canonical label
-// source for model-only statistics.
-export const CANONICAL_MODELS = {
-  'claude-opus-5': { id: 'claude-opus-5', displayName: builtinModelDisplayName('claude-opus-5') },
-  'glm-5.3': { id: 'glm-5.3', displayName: builtinModelDisplayName('glm-5.3') },
-  'glm-5.3-flash': { id: 'glm-5.3-flash', displayName: builtinModelDisplayName('glm-5.3-flash') },
-  'gpt-5.6-luna': { id: 'gpt-5.6-luna', displayName: builtinModelDisplayName('gpt-5.6-luna') },
-  'gpt-5.6-sol': { id: 'gpt-5.6-sol', displayName: builtinModelDisplayName('gpt-5.6-sol') },
-  'gpt-5.6-terra': { id: 'gpt-5.6-terra', displayName: builtinModelDisplayName('gpt-5.6-terra') },
-  'hunyuan-hy4-preview': { id: 'hunyuan-hy4-preview', displayName: builtinModelDisplayName('hunyuan-hy4-preview') },
-  'kimi-k2.6': { id: 'kimi-k2.6', displayName: builtinModelDisplayName('kimi-k2.6') },
-  'kimi-k2.8': { id: 'kimi-k2.8', displayName: builtinModelDisplayName('kimi-k2.8') },
-  'kimi-k3': { id: 'kimi-k3', displayName: builtinModelDisplayName('kimi-k3') },
-  'minimax-m2.7': { id: 'minimax-m2.7', displayName: builtinModelDisplayName('minimax-m2.7') },
-  'minimax-m2.7-highspeed': { id: 'minimax-m2.7-highspeed', displayName: builtinModelDisplayName('minimax-m2.7-highspeed') },
-  'minimax-m3': { id: 'minimax-m3', displayName: builtinModelDisplayName('minimax-m3') },
-  'qwen3-coder-next': { id: 'qwen3-coder-next', displayName: builtinModelDisplayName('qwen3-coder-next') },
-  'qwen3.5-plus': { id: 'qwen3.5-plus', displayName: builtinModelDisplayName('qwen3.5-plus') },
-  'qwen3.7-plus': { id: 'qwen3.7-plus', displayName: builtinModelDisplayName('qwen3.7-plus') },
-} as const satisfies Readonly<Record<string, CanonicalModelDefinition>>;
-
 export const model = (
-  id: BuiltinModelId,
+  id: string,
   contextWindow?: number,
   maxTokens?: number,
-  canonicalModel?: CanonicalModelDefinition,
+  canonicalId?: string,
   thinkingLevels?: readonly ThinkingLevel[],
-): RawModelDefinition => ({
-  id, displayName: builtinModelDisplayName(id),
-  ...(contextWindow ? { contextWindow } : {}),
-  ...(maxTokens ? { maxTokens } : {}),
-  ...(canonicalModel ? { canonicalModel } : {}),
-  ...(thinkingLevels ? { thinkingLevels } : {}),
-});
+): RawModelDefinition => {
+  const canonical = canonicalId === undefined
+    ? undefined
+    : { id: canonicalId, displayName: builtinModelDisplayName(canonicalId) };
+  return {
+    id,
+    displayName: canonical?.displayName ?? builtinModelDisplayName(id),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxTokens ? { maxTokens } : {}),
+    ...(canonical ? { canonicalModel: canonical } : {}),
+    ...(thinkingLevels ? { thinkingLevels } : {}),
+  };
+};
 
 export const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'openai_chat' as const, endpoint, authScheme });
@@ -75,12 +57,12 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, number>> = {
   'MiniMax-M2.7': 60,
   'MiniMax-M2.7-highspeed': 100,
   'MiniMax-M3': 156,
-  'claude-fable-5': 63,
   'claude-haiku-4-5-20251001': 81,
   'claude-opus-5': 50,
   'claude-sonnet-5': 60,
   'composer-2.5': 40,
   'grok-4.6': 59,
+  'grok-4.7': 59,
   'muse-spark-1.3': 40,
   'gemini-3.8-flash': 40,
   'claude-fable-5-1': 40,
@@ -88,13 +70,10 @@ const MODEL_SPEED_DEFAULTS: Readonly<Record<string, number>> = {
   'glm-5.2': 63,
   'glm-5.3': 64,
   'glm-5.3-flash': 73,
-  'gpt-5.4': 140,
-  'gpt-5.5': 89,
   'gpt-5.6-luna': 107,
   'gpt-5.6-sol': 63,
   'gpt-5.6-terra': 98,
   'gpt-6-astra': 51,
-  'grok-4.5': 58,
   hy3: 94,
   'hy4-preview': 38,
   k3: 40,
@@ -274,6 +253,11 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text', 'image'],
     pricing: [0.5, 2, 6],
   },
+  'grok-4.7': {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    pricing: [0.5, 2, 6],
+  },
   'muse-spark-1.3': {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
@@ -288,11 +272,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'premium',
     capabilities: ['text', 'image'],
     pricing: [0.25, 10, 50],
-  },
-  'grok-4.5': {
-    intelligence: 'high',
-    capabilities: ['text'],
-    pricing: [0.003, 0.15, 0.6],
   },
   'qwen3-coder-next': {
     intelligence: 'low',
@@ -329,16 +308,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     capabilities: ['text'],
     pricing: [0.26, 1.4, 4.4],
   },
-  'gpt-5.4': {
-    intelligence: 'mid',
-    capabilities: ['text'],
-    pricing: [0.25, 2.5, 15],
-  },
-  'gpt-5.5': {
-    intelligence: 'high',
-    capabilities: ['text'],
-    pricing: [0.5, 5, 30],
-  },
   'kimi-k2.5': {
     intelligence: 'low',
     capabilities: ['text'],
@@ -358,11 +327,6 @@ const MODEL_METADATA: Readonly<Record<string, ModelMeta>> = {
     intelligence: 'low',
     capabilities: ['text'],
     pricing: [0.003, 0.15, 0.6],
-  },
-  'claude-fable-5': {
-    intelligence: 'premium',
-    capabilities: ['text'],
-    pricing: [1, 10, 50],
   },
   'claude-opus-5': {
     intelligence: 'premium',

@@ -1,4 +1,4 @@
-import { resolveModelSpeed, builtinModelDisplayId } from '@wrenyard/providers'
+import { resolveModelSpeed } from '@wrenyard/providers'
 import type { Catalog, ProviderDefinition, ModelDefinition, LocalSpeedSample } from '@wrenyard/providers/catalog'
 import type { ProviderRuntime } from '@wrenyard/providers'
 import { QuotaService, currentCodeBuddyContext } from '@wrenyard/quota'
@@ -172,7 +172,7 @@ export class ProviderService {
       ...(status === undefined ? {} : status),
       effectiveTps: speed.tps,
       speedSource: speed.source,
-      canonicalId: model.canonicalModel?.id ?? builtinModelDisplayId(model.id),
+      canonicalId: model.canonicalModel?.id ?? model.id,
       intelligence: model.intelligence,
       pricing: model.pricing,
       // Availability is a fact about the current credential AND the resolver's
