@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime } from '@wrenyard/providers';
-import type { ForgeExecutionOptions } from '@wrenyard/execution';
+import type { ClientOptions } from '@wrenyard/clients';
 export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding';
 const endpoints: Record<HttpQuotaProvider, string> = {
     deepseek: 'https://api.deepseek.com/user/balance',
@@ -37,9 +37,9 @@ async function credential(provider: HttpQuotaProvider, env: NodeJS.ProcessEnv): 
     return undefined;
 }
 /** Direct API acquisition: no Forge process, token logging, or credential persistence. */
-export class HttpQuotaClient {
+export class HttpQuotaSource {
     constructor(private readonly request: typeof fetch = fetch) { }
-    async readUsage(provider: HttpQuotaProvider, options?: ForgeExecutionOptions): Promise<unknown> {
+    async readUsage(provider: HttpQuotaProvider, options?: ClientOptions): Promise<unknown> {
         const token = await credential(provider, options?.env ?? process.env);
         if (!token)
             return { error_code: 'configuration_missing' };

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/clients/claude"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/credentials/claude"
 	"golang.org/x/term"
 )
 

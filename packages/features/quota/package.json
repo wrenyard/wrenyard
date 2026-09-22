@@ -17,8 +17,7 @@
   },
   "dependencies": {
     "@wrenyard/clients": "workspace:*",
-    "@wrenyard/providers": "workspace:*",
-    "@wrenyard/execution": "workspace:*"
+    "@wrenyard/providers": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

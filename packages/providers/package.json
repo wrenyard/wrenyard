@@ -10,8 +10,7 @@
     "./model-display-names": "./src/model-display-names.ts",
     "./catalog": "./src/base/catalog.ts",
     "./codebuddy": "./src/codebuddy/index.ts",
-    "./chatgpt": "./src/chatgpt/index.ts",
-    "./quota-normalizers": "./src/quota-normalizers.ts"
+    "./chatgpt": "./src/chatgpt/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

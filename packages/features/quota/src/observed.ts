@@ -2,13 +2,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createCodeBuddy } from '@wrenyard/providers/codebuddy';
-import type { ForgeExecutionOptions } from '@wrenyard/execution';
+import type { ClientOptions } from '@wrenyard/clients';
 export interface CodeBuddyQueryContext {
     readonly expectedScope: string;
     readonly expectedEnvironment: string;
 }
 /** Read the current account's observation directly; never publish its private scope. */
-export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, options?: ForgeExecutionOptions): Promise<unknown> {
+export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, options?: ClientOptions): Promise<unknown> {
     const empty = { source: 'observed', fetched_at: new Date().toISOString(), data: null };
     if (!context?.expectedScope || !context.expectedEnvironment)
         return empty;
@@ -30,7 +30,7 @@ export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, 
         return empty;
     }
 }
-export async function currentCodeBuddyContext(options?: ForgeExecutionOptions): Promise<CodeBuddyQueryContext | undefined> {
+export async function currentCodeBuddyContext(options?: ClientOptions): Promise<CodeBuddyQueryContext | undefined> {
     const env = options?.env ?? process.env, home = env.HOME || env.USERPROFILE || homedir();
     try {
         const active = await createCodeBuddy({ env, home }).snapshot();

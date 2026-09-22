@@ -1,131 +1,8 @@
 import type { ChildProcess } from 'node:child_process'
-import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { parseRunSyntax } from '@wrenyard/providers/catalog'
-import { spawnForge as spawnResolvedForge } from './exec.mts'
-import { parseAgentRuntime } from '../../core/agent-runtime.mts'
-
-export type ForgeDirectPermission = 'readonly' | 'edit' | 'yolo'
-
-export interface ForgeCommandOptions {
-  profile: string
-  permission: ForgeDirectPermission
-  cwd: string
-  prompt: string
-  resume?: string
-  /** If set, use this as the concrete profile (canonical dynamic target) for
-   *  retry/resume, overriding any agentRuntime classification. */
-  resolvedProfile?: string
-  /** Selected Forge capability pack ids; each emits one --cap pair before
-   *  the prompt/stdin boundary. When absent or empty, argv is unchanged. */
-  capabilities?: readonly string[]
-}
-
-export interface ForgeSpawnOptions extends ForgeCommandOptions {
-  env?: NodeJS.ProcessEnv
-}
-
-export interface ForgeSpawnResult {
-  child: ChildProcess
-  pid: number
-  pgid: number | undefined
-}
-
 export type ForgeStreamJsonEvent = Record<string, unknown>
-
 const DEFAULT_STREAM_JSON_MAX_LINE_BYTES = 1024 * 1024
-const LEGACY_FORGE_TASK_SESSION_ID = /^fg_\d{8}_[0-9a-f]{4}$/u
-
-export interface ReadStreamJsonOptions {
-  maxLineBytes?: number
-}
-
-export function buildForgeCommand(opts: ForgeCommandOptions): string[] {
-  const cwd = assertAbsoluteCwd(opts.cwd)
-  const resume = assertNativeResumeId(opts.resume)
-  const profileArgs = buildProfileArgs(opts)
-  const args = [
-    ...profileArgs,
-    '--permission',
-    'yolo',
-    '-C',
-    cwd,
-    '-f',
-    'stream-json',
-    ...(resume ? ['-r', resume] : []),
-    ...buildCapArgs(opts.capabilities),
-  ]
-
-  return args
-}
-
-function buildProfileArgs(opts: ForgeCommandOptions): string[] {
-  if (opts.resolvedProfile) {
-    return ['--profile', opts.resolvedProfile]
-  }
-  const profile = opts.profile
-  // Canonical dynamic target (provider/model:client) first: validate it with
-  // the shared parseRunSyntax contract and pass it intact to Forge --profile.
-  // A malformed dynamic-looking value (contains ':') fails rather than
-  // falling back to a legacy source preset.
-  if (profile.includes(':')) {
-    parseRunSyntax(profile)
-    return ['--profile', profile]
-  }
-  try {
-    const rt = parseAgentRuntime(profile)
-    if (rt.isPolicy) {
-      return ['--profile-policy', rt.configId]
-    }
-    return ['--profile', rt.configId]
-  } catch (error) {
-    if (profile.includes('/')) throw error
-    // Fallback for legacy simple profile names that aren't in agentRuntime format
-    return ['--profile', profile]
-  }
-}
-
-function buildCapArgs(capabilities: readonly string[] | undefined): string[] {
-  if (!capabilities || capabilities.length === 0) return []
-  const args: string[] = []
-  for (const id of capabilities) {
-    args.push('--cap', id)
-  }
-  return args
-}
-
-export function spawnForge(opts: ForgeSpawnOptions): ForgeSpawnResult {
-  const cwd = assertAbsoluteCwd(opts.cwd)
-  const child = spawnResolvedForge(buildForgeCommand(opts), {
-    cwd,
-    env: opts.env ?? process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    // detached:true creates a new process group so kill(-pgid) can terminate the whole tree;
-    // lifecycle binding is via pipe SIGPIPE on parent death + explicit service-shutdown kill, not unref().
-    detached: process.platform !== 'win32',
-    windowsHide: true,
-  })
-
-  if (!child.pid) {
-    child.once('error', () => {
-      // Prevent an unhandled async spawn error after surfacing the sync failure.
-    })
-    throw new Error('Failed to spawn forge process')
-  }
-
-  if (child.stdin) {
-    child.stdin.on('error', () => {
-      // The process may exit before reading stdin; terminal handling surfaces the real failure.
-    })
-    child.stdin.end(opts.prompt)
-  }
-
-  return {
-    child,
-    pid: child.pid,
-    pgid: process.platform === 'win32' ? undefined : child.pid,
-  }
-}
+export interface ReadStreamJsonOptions { maxLineBytes?: number }
 
 export async function* readStreamJson(
   child: ChildProcess,
@@ -207,21 +84,6 @@ export async function* readStreamJson(
 
     return events
   }
-}
-
-function assertAbsoluteCwd(cwd: string): string {
-  if (!path.isAbsolute(cwd)) {
-    throw new Error(`Forge cwd must be an absolute path for -C; received ${JSON.stringify(cwd)}`)
-  }
-  return cwd
-}
-
-function assertNativeResumeId(resume: string | undefined): string | undefined {
-  if (!resume) return undefined
-  if (LEGACY_FORGE_TASK_SESSION_ID.test(resume)) {
-    throw new Error(`Forge direct runtime resume requires a downstream native session id, not legacy Forge task-session id ${JSON.stringify(resume)}`)
-  }
-  return resume
 }
 
 function warnOversizedStreamJsonLine(lineBytes: number, maxLineBytes: number): void {

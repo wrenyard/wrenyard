@@ -256,7 +256,7 @@ function assertWorkspaceInstallStateUnchanged(root, snapshot) {
 // dev set after the deploy.
 function workspacePackageDirs(root) {
   const dirs = [root];
-  for (const rel of ['apps', 'services', 'packages', 'packages/features']) {
+  for (const rel of ['apps', 'services', 'packages', 'packages/features', 'packages/clients']) {
     const dir = path.join(root, rel);
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -325,6 +325,14 @@ function normalizeForemanWorkspaceDependencySpecs(deploy) {
     '@wrenyard/providers',
     '@wrenyard/auto-routing',
     '@wrenyard/clients',
+    '@wrenyard/agent-client',
+    '@wrenyard/client-codex',
+    '@wrenyard/client-claude',
+    '@wrenyard/client-cursor',
+    '@wrenyard/client-grok',
+    '@wrenyard/client-codebuddy',
+    '@wrenyard/client-opencode',
+    '@wrenyard/client-dsh',
     '@wrenyard/execution',
     '@wrenyard/quota',
   ];
@@ -374,6 +382,14 @@ function assertPhysicalForemanDependencies(deploy) {
     '@wrenyard/providers',
       '@wrenyard/auto-routing',
     '@wrenyard/clients',
+    '@wrenyard/agent-client',
+    '@wrenyard/client-codex',
+    '@wrenyard/client-claude',
+    '@wrenyard/client-cursor',
+    '@wrenyard/client-grok',
+    '@wrenyard/client-codebuddy',
+    '@wrenyard/client-opencode',
+    '@wrenyard/client-dsh',
     '@wrenyard/execution',
     '@wrenyard/quota',
   ];

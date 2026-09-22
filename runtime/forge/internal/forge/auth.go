@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wrenyard/wrenyard/runtime/forge/internal/clients/claude"
+	"github.com/wrenyard/wrenyard/runtime/forge/internal/credentials/claude"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers"
 	"github.com/wrenyard/wrenyard/runtime/forge/internal/providers/auth"
 	"golang.org/x/term"
