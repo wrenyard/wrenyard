@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { connectControl, ERRORS, isAddrInUse, listenControl } from './control.mjs';
 import { processAlive, readInstanceFile } from './identity.mjs';
-import { sameCheckout } from './paths.mjs';
+import { sameCheckout, stateRoot, controlEndpoint, instancePath } from './paths.mjs';
 import { spawnArgv } from './spawn.mjs';
 
 export const EXIT = Object.freeze({
@@ -58,6 +58,20 @@ function waitForChildExit(child, timeoutMs) {
  */
 export async function probeControlEndpoint(endpoint, options = {}) {
   const platform = options.platform ?? process.platform;
+  // Windows permits multiple servers for one pipe name; binding cannot prove
+  // that the existing supervisor is gone. Probe its control channel directly.
+  if (platform === 'win32') {
+    let client;
+    try {
+      client = await connectControl(endpoint);
+      return { peer: await client.request('status', {}, 2_000), probeError: null };
+    } catch (probeError) {
+      if (probeError?.code === 'ENOENT' || probeError?.code === 'ECONNREFUSED') return null;
+      return { peer: null, probeError };
+    } finally {
+      client?.close();
+    }
+  }
   try {
     const server = await listenControl(endpoint, { platform, retryStale: platform !== 'win32' });
     await closeServer(server);
@@ -254,7 +268,9 @@ export async function runLauncher(options) {
   const stderr = options.stderr ?? ((line) => process.stderr.write(`${line}\n`));
   const replacement = await replaceExistingSupervisor({
     ...options,
-    stdout: options.stdout ? stdout : undefined,
+    controlEndpoint: options.controlEndpoint ?? controlEndpoint(options.platform ?? process.platform, stateRoot(options.env ?? process.env)),
+    instanceFile: options.instanceFile ?? instancePath(stateRoot(options.env ?? process.env)),
+    stdout,
   });
   if (options.replaceOnly === true) return { exitCode: EXIT.ok, replaced: replacement.replaced };
 
