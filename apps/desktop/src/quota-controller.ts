@@ -36,6 +36,7 @@ export class DesktopQuotaController {
   private message: string | undefined;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private pending: Promise<QuotaSnapshot> | null = null;
+  private pendingForced = false;
 
   constructor(private readonly options: DesktopQuotaControllerOptions) {}
 
@@ -77,7 +78,12 @@ export class DesktopQuotaController {
   }
 
   private refresh(forceRefresh: boolean): Promise<QuotaSnapshot> {
-    if (this.pending) return this.pending;
+    if (this.pending) {
+      return forceRefresh && !this.pendingForced
+        ? this.pending.then(() => this.refresh(true))
+        : this.pending;
+    }
+    this.pendingForced = forceRefresh;
     this.pending = this.performRefresh(forceRefresh).finally(() => {
       this.pending = null;
     });
@@ -85,20 +91,17 @@ export class DesktopQuotaController {
   }
 
   private async performRefresh(forceRefresh: boolean): Promise<QuotaSnapshot> {
-    try {
-      const [providers, discovered] = await Promise.all([
-        this.options.source.listProviders(forceRefresh),
-        this.options.providerSource
-          ? this.options.providerSource.listProviders().catch(() => [] as ProviderAuthStatus[])
-          : Promise.resolve([] as ProviderAuthStatus[]),
-      ]);
-      this.providers = cloneProviders(providers);
-      this.discovered = discovered;
+    const [quota, discovery] = await Promise.allSettled([
+      this.options.source.listProviders(forceRefresh),
+      this.options.providerSource?.listProviders() ?? Promise.resolve(this.discovered),
+    ]);
+    if (discovery.status === 'fulfilled') this.discovered = discovery.value;
+    if (quota.status === 'fulfilled') {
+      this.providers = cloneProviders(quota.value);
       this.refreshedAt = Date.now();
       this.message = this.providers.length > 0 ? undefined : '暂时无法读取额度数据，请稍后刷新。';
-    } catch (error) {
-      this.providers = [];
-      this.refreshedAt = Date.now();
+    } else {
+      this.providers = this.providers.map(provider => ({ ...provider, stale: true }));
       this.message = '暂时无法读取额度数据，请稍后刷新。';
     }
     const snapshot = this.snapshot();
