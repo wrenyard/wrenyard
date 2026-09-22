@@ -14,12 +14,10 @@ import {
   resolveConfigPath,
   resolveWorkDir,
   suiteDir,
-  whichCmd,
   workspaceRootForRuntime,
 } from '../shared.mts'
 import { collectForemanStatus, formatStatusCheck } from './status.mts'
 import { loadForemanServiceConfig, type ForemanServiceConfig } from '../../../config/index.mts'
-import { resolveDaemonForgeEnv } from '../../../daemon/execution/forge-support.mts'
 import { ensureDiscovered, listTasks } from '../../../workspace/task-loader.mts'
 
 export async function handleDoctor(args: string[] = []): Promise<number> {
@@ -105,13 +103,6 @@ export async function handleDoctor(args: string[] = []): Promise<number> {
   } else {
     console.log(`Git repo not found at ${suiteDir}`)
     ok = false
-  }
-
-  try {
-    execFileSync(whichCmd, ['forge'], { stdio: 'pipe', env: resolveDaemonForgeEnv(), windowsHide: true })
-    console.log('Forge binary OK')
-  } catch {
-    console.log("Forge binary 'forge' not found on PATH")
   }
 
   try {

@@ -1,16 +1,16 @@
-import type { TaskCapabilityConfig } from './types.mts'
+import type { TaskFeatureConfig } from './types.mts'
 
 /**
- * Resolve selected capability ids from a TaskCapabilityConfig.
+ * Resolve selected feature ids from a TaskFeatureConfig.
  *
  * Normalizes, trims, and deduplicates selected ids in declaration order.
- * Returns [] when no capability config exists.
+ * Returns [] when no feature config exists.
  *
  * Validation errors are surfaced as Error throws so callers can treat them
- * as deterministic task execution errors before spawning Forge.
+ * as deterministic task execution errors before launching an agent.
  */
-export function resolveCapabilities(
-  config: TaskCapabilityConfig | undefined,
+export function resolveFeatures(
+  config: TaskFeatureConfig | undefined,
   input: unknown,
 ): readonly string[] {
   if (!config) return []
@@ -18,7 +18,7 @@ export function resolveCapabilities(
   const available = validateAvailableIds(config.available)
 
   if (!config.select) {
-    // When select is absent, all available capabilities are mounted.
+    // When select is absent, all available features are mounted.
     return available
   }
 
@@ -28,16 +28,16 @@ export function resolveCapabilities(
 
 function validateAvailableIds(available: readonly string[]): readonly string[] {
   if (!Array.isArray(available)) {
-    throw new Error('TaskCapabilityConfig.available must be an array of non-empty strings')
+    throw new Error('TaskFeatureConfig.available must be an array of non-empty strings')
   }
   const seen = new Set<string>()
   for (const id of available) {
     if (typeof id !== 'string' || id.trim().length === 0) {
-      throw new Error('TaskCapabilityConfig.available must contain only non-empty strings')
+      throw new Error('TaskFeatureConfig.available must contain only non-empty strings')
     }
     const trimmed = id.trim()
     if (seen.has(trimmed)) {
-      throw new Error(`Duplicate capability id in available: '${trimmed}'`)
+      throw new Error(`Duplicate feature id in available: '${trimmed}'`)
     }
     seen.add(trimmed)
   }
@@ -49,7 +49,7 @@ function normalizeSelectedIds(
   available: readonly string[],
 ): readonly string[] {
   if (!Array.isArray(selected)) {
-    throw new Error('Capability select() must return an array of non-empty strings')
+    throw new Error('Feature select() must return an array of non-empty strings')
   }
 
   if (selected.length === 0) {
@@ -61,12 +61,12 @@ function normalizeSelectedIds(
 
   for (const id of selected) {
     if (typeof id !== 'string' || id.trim().length === 0) {
-      throw new Error('Capability select() returned an empty or non-string id')
+      throw new Error('Feature select() returned an empty or non-string id')
     }
     const trimmed = id.trim()
     if (!availSet.has(trimmed)) {
       throw new Error(
-        `Selected capability '${trimmed}' is not in the declared available set: [${available.join(', ')}]`,
+        `Selected feature '${trimmed}' is not in the declared available set: [${available.join(', ')}]`,
       )
     }
     if (!result.includes(trimmed)) {

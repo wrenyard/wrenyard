@@ -1,43 +1,30 @@
 import type { JsonSchema } from '../jsonrpc.mts'
+import type {
+  ProviderConfigureParams,
+  ProviderConfigureResult,
+  ProviderListModel,
+  ProviderListModelPricing,
+  ProviderListParams,
+  ProviderListResult,
+  ProviderQuotaParams,
+  ProviderQuotaResult,
+  ProviderQuotaSnapshot,
+} from '@wrenyard/protocol/provider'
 
-export interface ProviderListParams {}
-/** USD per million tokens: [cached, input, output]. */
-export type ProviderListModelPricing = readonly [number, number, number]
-
-export interface ProviderListModel {
-  id: string
-  displayName: string
-  contextWindow?: number
-  maxTokens?: number
-  effectiveTps?: number | null
-  quotaAbundant?: boolean
-  free?: boolean
-  taskOnly?: boolean
-  /** Provider-independent canonical model id; falls back to the model id. */
-  canonicalId?: string
-  /** Catalog intelligence tier for the model. */
-  intelligence?: 'low' | 'mid' | 'high' | 'premium'
-  /** Catalog list price as [cached, input, output] USD per million tokens. */
-  pricing?: ProviderListModelPricing
-  /** Which evidence tier produced `effectiveTps`. */
-  speedSource?: 'local_31d' | 'provider_override' | 'catalog_default'
-  /** True when a credential is configured AND the resolver admits provider/model. */
-  available?: boolean
+// Wire DTOs are declared once in @wrenyard/protocol/provider and re-exported
+// here so every existing daemon import path keeps working. The runtime JSON
+// schemas below (including the quota schema) stay daemon-owned.
+export type {
+  ProviderConfigureParams,
+  ProviderConfigureResult,
+  ProviderListModel,
+  ProviderListModelPricing,
+  ProviderListParams,
+  ProviderListResult,
+  ProviderQuotaParams,
+  ProviderQuotaResult,
+  ProviderQuotaSnapshot,
 }
-export interface ProviderListResult {
-  providers: Array<{
-    id: string
-    displayName: string
-    description: string
-    setupHint: string
-    configured: boolean
-    authMode: 'api-key' | 'native' | 'none'
-    protocols: Array<'openai_chat' | 'openai_responses' | 'anthropic_messages'>
-    models: ProviderListModel[]
-  }>
-}
-export interface ProviderConfigureParams { providerId: string; key: string }
-export interface ProviderConfigureResult { ok: true }
 
 export const providerListParamsSchema = {
   type: 'object', properties: {}, additionalProperties: false,
@@ -91,4 +78,45 @@ export const providerConfigureParamsSchema = {
 
 export const providerConfigureResultSchema = {
   type: 'object', required: ['ok'], properties: { ok: { const: true } }, additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const providerQuotaParamsSchema = {
+  type: 'object', properties: {
+    forceRefresh: { type: 'boolean' },
+  }, additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const providerQuotaResultSchema = {
+  type: 'object', required: ['providers', 'fetchedAt'], properties: {
+    providers: { type: 'array', maxItems: 64, items: {
+      type: 'object', required: ['provider', 'status', 'stale'], properties: {
+        provider: { type: 'string', minLength: 1, maxLength: 120 },
+        status: { type: 'string', enum: ['ok', 'error', 'unavailable'] },
+        stale: { type: 'boolean' },
+        code: { type: 'string', maxLength: 200 },
+        used: { type: 'number' },
+        total: { type: 'number' },
+        balances: { type: 'array', maxItems: 128, items: {
+          type: 'object', required: ['currency', 'amount'], properties: {
+            currency: { type: 'string', minLength: 1, maxLength: 32 },
+            amount: { type: 'string', maxLength: 64 },
+          }, additionalProperties: false,
+        } },
+        fetched_at: { type: 'string', maxLength: 64 },
+        source: { type: 'string', maxLength: 200 },
+        message: { type: 'string', maxLength: 500 },
+        error: { type: 'string', maxLength: 500 },
+        windows: { type: 'array', maxItems: 64, items: {
+          type: 'object', required: ['name', 'pct', 'window_minutes'], properties: {
+            name: { type: 'string', minLength: 1, maxLength: 120 },
+            pct: { type: 'number' },
+            window_minutes: { type: 'number' },
+            resets_at: { type: 'string', maxLength: 64 },
+          }, additionalProperties: false,
+        } },
+        not_applicable_windows: { type: 'array', maxItems: 64, items: { type: 'string', maxLength: 120 } },
+      }, additionalProperties: false,
+    } },
+    fetchedAt: { type: 'number' },
+  }, additionalProperties: false,
 } as const satisfies JsonSchema

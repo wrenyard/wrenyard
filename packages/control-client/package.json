@@ -18,5 +18,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@wrenyard/protocol": "workspace:*"
   }
 }

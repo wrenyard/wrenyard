@@ -3,7 +3,6 @@ import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed } from '@wrenyard/providers/catalog';
 import { resolveConstrainedDispatch } from '@wrenyard/auto-routing';
 import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
-import { parseAgentRuntime } from '../agent-runtime.mts'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
 import {
   selectTaskResolutionFailure,
@@ -28,14 +27,7 @@ import {
  * Every runtime identity is a canonical dynamic target
  * (`<provider>/<model>:<client>`) resolved once through the Catalog. Automatic
  * selection is driven solely by `catalog.enumerateTaskCandidates` and the
- * resolved runtime task plans: an absent declaredRuntime or a legacy policy
- * string (fast/general/ultra) opens the full task-capable candidate pool and a
- * non-policy legacy `forge/<profile>` declaration no longer maps to any source
- * preset and fails closed. Every candidate
- * passes the same hard gates, then `resolveConstrainedDispatch` collapses
- * provider/model clients (native > grok > claude/others) and ranks the models.
- * `resolveConstrainedDispatch` is the sole filter/order; this
- * resolver performs no duplicate filtering of its own.
+ * resolved runtime task plans. Targets use canonical provider/model:client identities.
  */
 
 export class NoEligiblePlanError extends Error {
@@ -84,8 +76,8 @@ export interface TaskDispatchResolverDeps {
 export interface ResolveTaskDispatchInput {
   taskName: string
   requirements: TaskDispatchRequirements
-  /** Exact declared runtime classification (`'forge/fast'`) or absent for auto. */
-  declaredRuntime?: string
+  /** Canonical provider/model:client target, or absent for automatic selection. */
+  target?: string
 }
 
 export type TaskDispatchResolution =
@@ -100,8 +92,8 @@ export type TaskDispatchResolution =
 export interface TaskDispatchEligibleInput {
   taskName: string
   requirements: TaskDispatchRequirements
-  /** Exact declared runtime classification or a policy runtime. Never a machine preference. */
-  declaredRuntime?: string
+  /** Canonical target constraint. Never a machine preference. */
+  target?: string
 }
 
 /**
@@ -334,30 +326,16 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // are runtime-owned and never exposed through the public identity.
   const runtimePlans = await resolveRuntimeTaskPlans(catalog, deps.runtime)
 
-  // Legacy policy detection (fast/general/ultra) remains a temporary auto
-  // classification only. A policy selector or an absent declared runtime opens
-  // the full canonical candidate pool and lets the task requirements perform
-  // the sole hard filtering and ranking. Any other declared runtime — including
-  // a legacy non-policy forge/<profile>, which no longer maps to a source
-  // preset — fails closed rather than broadening admission.
-  const isPolicyClassification = (raw: string): boolean => {
+  // Automatic selection uses all candidates; an explicit target narrows it.
+  const selectCandidatePool = (input: ResolveTaskDispatchInput): DispatchCandidate[] | NoEligiblePlanError => {
+    if (!input.target) return allCandidates
     try {
-      return parseAgentRuntime(raw).isPolicy
+      const target = formatRunSyntax(parseRunSyntax(input.target))
+      return allCandidates.filter(candidate => candidate.profileId === target)
     } catch {
-      return false
-    }
-  }
-
-  const selectCandidatePool = (
-    input: ResolveTaskDispatchInput,
-  ): DispatchCandidate[] | NoEligiblePlanError => {
-    if (!input.declaredRuntime) return allCandidates
-    if (!isPolicyClassification(input.declaredRuntime)) {
       return new NoEligiblePlanError(input.taskName, allCandidates, input.requirements)
     }
-    return allCandidates
   }
-
   // Canonical identity of a candidate equals its catalog profileId (the public
   // provider/model:client run syntax). Every runtime plan is keyed by the same
   // canonical target, so plan lookups use this identity directly.
@@ -512,7 +490,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const canonicalTarget = chosen ? canonicalTargetOf(chosen) : formatRunSyntax(selected.plan)
 
     // Require a compiled runtime plan for the selected canonical target. The
-    // public snapshot retains canonical identity; Forge consumes the exact
+    // public snapshot retains canonical identity; Wrenyard consumes the exact
     // target and any upstream alias stays runtime-internal.
     const runtimePlan = runtimePlans[canonicalTarget]
     if (!runtimePlan) {
@@ -535,7 +513,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const pricing = model.pricing
 
     const resolved = toResolvedDispatch(
-      input.declaredRuntime ?? '',
+      input.target ?? '',
       canonicalTarget,
       selected.plan,
       model,
@@ -625,7 +603,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // for below-minimum targets rather than substituting another candidate.
     if (intelligenceMin !== undefined) {
       const probed = evaluate(
-        { taskName, requirements: { intelligenceMin }, declaredRuntime: exactAgentRuntime },
+        { taskName, requirements: { intelligenceMin }, target: exactAgentRuntime },
         [candidate],
       )
       if (!probed.ok) {
@@ -641,7 +619,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
-      { taskName, requirements, declaredRuntime: exactAgentRuntime },
+      { taskName, requirements, target: exactAgentRuntime },
       [candidate],
     )
 
@@ -704,7 +682,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       const eliminations: TaskResolutionElimination[] = []
       for (const candidate of pool) {
         const outcome = evaluate(
-          { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
+          { taskName: input.taskName, requirements: input.requirements, target: input.target },
           [candidate],
           localSpeed,
         )
@@ -749,12 +727,12 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         // Baseline availability: no submitted requirements at all, so a
         // candidate that a submitted gate later rejects still surfaces here.
         const baseline = evaluate(
-          { taskName: input.taskName, requirements: {}, declaredRuntime: input.declaredRuntime },
+          { taskName: input.taskName, requirements: {}, target: input.target },
           [candidate],
           localSpeed,
         )
         const admitted = evaluate(
-          { taskName: input.taskName, requirements: input.requirements, declaredRuntime: input.declaredRuntime },
+          { taskName: input.taskName, requirements: input.requirements, target: input.target },
           [candidate],
           localSpeed,
         )

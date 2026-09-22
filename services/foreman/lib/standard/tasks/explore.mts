@@ -158,7 +158,7 @@ workflow])
 
 /**
  * The independent, generic explore builtin. No domain specifics: open
- * `Target`, generic role, READ-ONLY, forge/fast.
+ * `Target`, generic role, READ-ONLY, automatic.
  */
 const definition: TaskDefinition = {
   __type: 'task',

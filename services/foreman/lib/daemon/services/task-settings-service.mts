@@ -93,8 +93,7 @@ import type {
   TaskRunSettingsResolution,
 } from '../../types.mts'
 import type { CodeBuddyExecutionBinding } from '../../core/operations/types.mts'
-import type { ForgeProviderReadinessSnapshot } from '../execution/forge-provider-readiness-query.mts'
-import type { ForgeClientReadinessSnapshot } from '../execution/forge-client-readiness-query.mts'
+import type { NativeProviderReadinessSnapshot } from '../execution/native-provider-readiness.mts'
 
 export type {
   TaskRunSettingsLayerName,
@@ -200,10 +199,10 @@ export interface TaskSettingsProviderAvailability {
  * callback must fail closed instead of loading a different credential. */
 export interface TaskSettingsRuntimeAvailabilityContext {
   readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined
-  /** One request/evaluation-bound Forge status sample for native providers.
+  /** One request/evaluation-bound native provider status sample.
    *  Null means the bounded status read failed and callers must stay unknown;
    *  absence of the context means explicit-mode callers may load one fresh. */
-  readonly nativeProviderReadiness: ForgeProviderReadinessSnapshot | null
+  readonly nativeProviderReadiness: NativeProviderReadinessSnapshot | null
 }
 
 /** Internal resolved target for a readiness probe. Mode is required so a
@@ -220,16 +219,29 @@ export type TaskSettingsRuntimeAvailabilityCallback = (
   context?: TaskSettingsRuntimeAvailabilityContext,
 ) => Promise<TaskSettingsProviderAvailability> | TaskSettingsProviderAvailability
 
-/** One bounded Forge provider-list status read. No credentials cross this
+/** One bounded native provider status read. No credentials cross this
  * boundary; TaskSettings only binds the immutable result to one evaluation. */
 export type TaskSettingsNativeProviderReadinessCallback =
-  () => Promise<ForgeProviderReadinessSnapshot>
+  () => Promise<NativeProviderReadinessSnapshot>
 
-/** One bounded authoritative Forge client readiness read (`doctor clients
- *  --json`). It carries ALL catalog/config clients with their enabled/installed
+/** Authoritative per-client config/installation state. */
+export interface ClientReadiness {
+  readonly enabled: boolean
+  readonly installed: boolean
+}
+
+export interface ClientReadinessSnapshot {
+  /** Completion time of the authoritative non-inference client read. */
+  readonly sampledAtMs: number
+  /** Exact client id -> authoritative config/installation state. */
+  readonly clientsById: Readonly<Record<string, ClientReadiness>>
+}
+
+/** One bounded authoritative client readiness read backed by each AgentClient's
+ *  inspect result. It carries ALL registered clients with their enabled/installed
  *  facts and no credentials, paths, or raw stderr. */
 export type TaskSettingsClientReadinessCallback =
-  () => Promise<ForgeClientReadinessSnapshot>
+  () => Promise<ClientReadinessSnapshot>
 
 export interface TaskSettingsDaemonStatus {
   accepting: boolean
@@ -259,9 +271,9 @@ export interface TaskSettingsServiceOptions {
   /** Optional authoritative non-inference native provider status source. It is
    * sampled once only when an evaluation contains native Codex/Cursor choices. */
   nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
-  /** Optional authoritative Forge client readiness source (`doctor clients`).
-   *  When configured, a client must be enabled AND installed to be admitted;
-   *  a failed query or a missing client state fails closed. */
+  /** Optional authoritative client readiness source backed by each AgentClient
+   *  inspect result. When configured, a client must be enabled AND installed to
+   *  be admitted; a failed query or a missing client state fails closed. */
   clientReadiness?: TaskSettingsClientReadinessCallback
   /** Daemon-owned immutable automatic-routing quota snapshot service shared by
    *  every automatic selection (run and snapshot row preview). Snapshot row
@@ -674,7 +686,7 @@ export class TaskSettingsService {
 
   /** Live provider/model metadata for selector surfaces. A pair is advertised
    *  as active only when it is dispatchable right now: the same authoritative
-   *  non-billable admission the routingTest baseline applies (Forge client gate
+   *  non-billable admission the routingTest baseline applies (Wrenyard client gate
    *  plus the live runtimeAvailability probe binding the request's single quota
    *  and native-provider samples) is consulted before collapsing. Any ready
    *  supporting client admits the pair and an admin-denied native model/client
@@ -1186,7 +1198,7 @@ export class TaskSettingsService {
    *  ranking — are deliberately NOT imposed. A target is reported available
    *  only when the same authoritative gates `resolveForRun` applies also admit
    *  it: the target resolves to a task-capable plan, its client is
-   *  enabled/installed per the Forge client-readiness sample, and its provider
+   *  enabled/installed per the client-readiness sample, and its provider
    *  credential/route is live. No inference, save, reservation, or model call
    *  happens here, and no fallback is ever substituted for an unavailable
    *  target. An unknown task or project errors rather than returning an empty
@@ -1288,12 +1300,12 @@ export class TaskSettingsService {
    *  throws, so discovery and run admission never disagree. */
   private clientRejectionReason(
     client: string,
-    sample: ForgeClientReadinessSnapshot | null,
+    sample: ClientReadinessSnapshot | null,
   ): string | undefined {
     if (this.clientReadiness === undefined) return undefined
     if (sample === null) return `client '${client}' readiness could not be determined`
     const state = sample.clientsById[client]
-    if (state === undefined) return `client '${client}' is unknown to Forge`
+    if (state === undefined) return `client '${client}' is unknown to Wrenyard`
     if (!state.enabled) return `client '${client}' is disabled in config`
     if (!state.installed) return `client '${client}' is not installed`
     return undefined
@@ -1778,7 +1790,7 @@ export class TaskSettingsService {
         throw new TaskSettingsRuntimeUnavailableError(
           taskId,
           runtimeId,
-          `client '${triple.client}' is unknown to Forge`,
+          `client '${triple.client}' is unknown to Wrenyard`,
         )
       }
       if (!state.enabled) {
@@ -1810,14 +1822,14 @@ export class TaskSettingsService {
     return undefined
   }
 
-  /** One authoritative Forge client-readiness sample bound to a single
+  /** One authoritative client-readiness sample bound to a single
    *  evaluation. When a request-scoped preview memo is supplied (automatic
    *  snapshot rows), the same immutable sample is shared by every relevant row
    *  in the request; runs/save preflight pass no memo and sample fresh. A
    *  rejected query resolves to null so callers fail closed. */
   private async clientReadinessSample(
     previewMemo?: AutomaticPreviewMemo,
-  ): Promise<ForgeClientReadinessSnapshot | null> {
+  ): Promise<ClientReadinessSnapshot | null> {
     if (this.clientReadiness === undefined) return null
     if (previewMemo === undefined) return this.loadClientReadiness()
     const pending = previewMemo.clientReadiness
@@ -1825,7 +1837,7 @@ export class TaskSettingsService {
     return await pending
   }
 
-  private async loadClientReadiness(): Promise<ForgeClientReadinessSnapshot | null> {
+  private async loadClientReadiness(): Promise<ClientReadinessSnapshot | null> {
     try {
       return await this.clientReadiness!()
     } catch {
@@ -1834,12 +1846,12 @@ export class TaskSettingsService {
   }
 
   /** Authoritative admission for one client: enabled AND installed, per the
-   *  Forge client-readiness sample. When the callback is configured, a null
+   *  client-readiness sample. When the callback is configured, a null
    *  sample (failed query) and an unknown client both fail closed. When no
    *  callback is configured the gate is inert for isolation. */
   private clientAdmitted(
     client: string,
-    sample: ForgeClientReadinessSnapshot | null,
+    sample: ClientReadinessSnapshot | null,
   ): boolean {
     if (this.clientReadiness === undefined) return true
     if (sample === null) return false
@@ -1873,7 +1885,7 @@ export class TaskSettingsService {
    *  policy path used by both resolveForRun and automatic snapshot row preview.
    *
    *  Exactly one AutoRoutingQuotaSnapshot is obtained per call. When eligible
-   *  native Codex/Cursor choices exist, exactly one bounded Forge provider
+   *  native Codex/Cursor choices exist, exactly one bounded Wrenyard provider
    *  readiness snapshot is also obtained; both immutable samples are bound to
    *  the same evaluation. With a request-scoped preview memo (snapshot rows),
    *  those samples are shared by every relevant automatic row. Static hard gates
@@ -1920,7 +1932,7 @@ export class TaskSettingsService {
     if (previewMemo !== undefined) previewMemo.quota = quotaPromise
 
     const needsNative = needsNativeProviderReadiness(eligible.choices)
-    let nativeReadinessPromise: Promise<ForgeProviderReadinessSnapshot | null> = Promise.resolve(null)
+    let nativeReadinessPromise: Promise<NativeProviderReadinessSnapshot | null> = Promise.resolve(null)
     if (needsNative && this.nativeProviderReadiness !== undefined) {
       nativeReadinessPromise = previewMemo?.nativeProviderReadiness
         ?? Promise.resolve()
@@ -1938,8 +1950,8 @@ export class TaskSettingsService {
     const clientSamplePromise = this.clientReadinessSample(previewMemo)
     const [boundSnapshot, nativeProviderReadiness, clientSample]: [
       AutoRoutingBoundQuotaSnapshot | null,
-      ForgeProviderReadinessSnapshot | null,
-      ForgeClientReadinessSnapshot | null,
+      NativeProviderReadinessSnapshot | null,
+      ClientReadinessSnapshot | null,
     ] = await Promise.all([quotaPromise, nativeReadinessPromise, clientSamplePromise])
     const snapshot: AutoRoutingQuotaSnapshot | null = boundSnapshot?.snapshot ?? null
     const availabilityContext: TaskSettingsRuntimeAvailabilityContext = {
@@ -1953,7 +1965,7 @@ export class TaskSettingsService {
       trace.nowMs = nowMs
     }
 
-    // The authoritative Forge client-readiness sample bound above is consulted
+    // The authoritative client-readiness sample bound above is consulted
     // for every exact choice BEFORE the provider readiness probe and BEFORE
     // collapseAutomaticChoices, so a client that is disabled or not installed
     // can never admit a pair and an unavailable client (e.g. grok) cannot hide
@@ -2359,11 +2371,11 @@ interface AutomaticPreviewMemo {
   /** One immutable authoritative native-provider status sample shared by all
    * relevant automatic rows in this snapshot request. Null is a sampled
    * failure and must never trigger a second query or optimistic fallback. */
-  nativeProviderReadiness?: Promise<ForgeProviderReadinessSnapshot | null>
-  /** One immutable authoritative Forge client readiness sample shared by all
+  nativeProviderReadiness?: Promise<NativeProviderReadinessSnapshot | null>
+  /** One immutable authoritative client readiness sample shared by all
    * relevant automatic rows in this snapshot request. Null is a sampled
    * failure and must never trigger a second query or optimistic fallback. */
-  clientReadiness?: Promise<ForgeClientReadinessSnapshot | null>
+  clientReadiness?: Promise<ClientReadinessSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
   /** Non-billable explicit-readiness probe (daemon admission + provider
@@ -2448,7 +2460,7 @@ function automaticClientPreference(choice: TaskDispatchChoice): number {
 }
 
 /** Only exact native Codex/Cursor-client candidates require the authoritative
- * Forge provider-status sample. This intentionally keys on the native client,
+ * Wrenyard provider-status sample. This intentionally keys on the native client,
  * not the Catalog provider id: the single ChatGPT provider uses the codex
  * native client and credential resolver, while its quota pools stay scoped to
  * the ChatGPT provider row. Gateway variants never consume native login state. */

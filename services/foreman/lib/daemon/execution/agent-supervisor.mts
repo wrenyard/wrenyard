@@ -1,24 +1,18 @@
-import { createAgentClients, type AgentProcess } from '@wrenyard/clients';
+import { createAgentClients, type AgentRequest, type AgentSession } from '@wrenyard/clients';
+import { ExecService, type ExecRequest } from '@wrenyard/exec';
 import { randomBytes } from 'node:crypto'
-import type { ChildProcess } from 'node:child_process'
 import type { ForemanDatabase } from '../../db/types.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import { TaskRunStore } from '../../db/stores/task-run-store.mts'
-import {
-  readStreamJson,
-  type ForgeStreamJsonEvent,
-} from '../../adapters/forge/direct-client.mts'
 import { assertValidTimeoutMs } from '../../task-timeouts.mts'
 import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
-import { RepoWriteLocks, requiresRepoWriteLock } from './repo-write-locks.mts'
-import { parseAgentRuntime } from '../../core/agent-runtime.mts'
+import { RepoWriteLocks } from './repo-write-locks.mts'
 import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,
-  AgentRuntimePermission,
   ClientFamily,
   CodeBuddyExecutionBinding,
   ExecutionHandle,
@@ -50,6 +44,13 @@ const STDERR_TAIL_MAX_LEN = 4_000
  */
 const CANCEL_SETTLEMENT_TIMEOUT_MS = 5_000
 
+/**
+ * Fixed value written to the INERT `executions.permission` DB legacy column.
+ * The column is retained only for schema compatibility: it is never read,
+ * interpreted, or migrated. There is no permission concept in execution.
+ */
+const EXECUTIONS_LEGACY_PERMISSION = 'yolo'
+
 export interface AgentExecutionSupervisorOptions {
   db: ForemanDatabase
   repoWriteLocks: RepoWriteLocks
@@ -73,6 +74,18 @@ export interface AgentExecutionSupervisorOptions {
    * after a kill keeps the execution/task active and repo-write protected.
    */
   isProcessLiveImpl?: (pid: number) => boolean
+  catalog?: ReturnType<typeof createBuiltinCatalog>
+  /**
+   * Shared raw prompt-execution service. When supplied, every task attempt is
+   * lowered onto `ExecService.start` instead of calling the agent client
+   * directly, so the task path and the explicit `wrenyard exec` path share one
+   * launch/feature/replay implementation. When omitted, the supervisor builds
+   * and owns a standalone `ExecService` over its own client map so it can always
+   * call `ExecService.start`. The supervisor still owns DB persistence,
+   * scheduling, leases, repo-write locks, resolved routing, and prompt
+   * translation; the ExecService only runs the resolved client.
+   */
+  execService?: ExecService
 }
 
 /**
@@ -106,12 +119,12 @@ interface RegistryEntry {
   executionId: string
   taskId?: string
   cwd: string
-  permission: AgentRuntimePermission
   repoWriteLock: boolean
   writePaths?: readonly string[]
   /** Private admission-only binding retained in memory while queued. */
   codeBuddyExecution?: CodeBuddyExecutionBinding
-  child?: ChildProcess
+  session?: AgentSession
+  pendingExit?: { exitCode: number | null; signal: NodeJS.Signals | null }
   pid?: number
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
@@ -164,17 +177,30 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly cancelSettlementTimeoutMs: number
   private readonly killProcessTreeFn: (pid: number, pgid?: number) => Promise<void>
   private readonly isProcessLiveFn: (pid: number) => boolean
+  private readonly catalog: ReturnType<typeof createBuiltinCatalog>
+  private readonly execService: ExecService
+  /** True when this supervisor built its own fallback ExecService and must
+   *  close it on shutdown. A shared, externally supplied service is never
+   *  closed here. */
+  private readonly ownsExecService: boolean
   private readonly registry = new Map<string, RegistryEntry>()
   private acceptingNew = true
   private promoting = false
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
     this.cancelSettlementTimeoutMs = cancelSettlementTimeoutMs ?? CANCEL_SETTLEMENT_TIMEOUT_MS
     this.killProcessTreeFn = killProcessTreeImpl ?? killProcessTree
     this.isProcessLiveFn = isProcessLiveImpl ?? defaultIsProcessLive
+    this.catalog = catalog ?? createBuiltinCatalog()
+    // A standalone supervisor (isolated tests, library use) always runs through
+    // an ExecService. It builds one over its own client map when the daemon does
+    // not supply the shared configured service, so the supervisor never has a
+    // direct client.start fallback and always owns only what it created.
+    this.execService = execService ?? new ExecService({ clients: agentClients })
+    this.ownsExecService = execService === undefined
   }
 
   private taskRuns(): TaskRunStore {
@@ -211,7 +237,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           executionId,
           opts.taskId ?? null,
           opts.profile,
-          opts.permission,
+          // INERT DB legacy column: the schema still requires a permission value,
+          // so a fixed literal is written. It is never read or interpreted.
+          EXECUTIONS_LEGACY_PERMISSION,
           opts.cwd,
           opts.prompt,
           opts.resume ?? null,
@@ -296,7 +324,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
       if (attachFailed) {
         // The task became terminal before this execution could bind to it. Do not launch
-        // Forge; synchronously terminalize the new execution as cancelled and release any
+        // Wrenyard; synchronously terminalize the new execution as cancelled and release any
         // repo write lock that was acquired for it.
         entry = this.createRegistryEntry(executionId, opts, hasRepoLock, 1)
         this.registry.set(executionId, entry)
@@ -348,12 +376,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const claimed = this.claimTerminalIntent(entry, { kind: 'cancel' })
     entry.cancelRequested = true
 
-    if (!entry.child || !entry.pid) {
+    if (!entry.session || !entry.pid) {
       if (claimed) this.terminalizeQueued(entry, 'cancelled', 'cancel', 'cancelled')
       return
     }
 
-    // Request Forge termination, then block until child close and stream completion
+    // Request Wrenyard termination, then block until child close and stream completion
     // have committed the terminal execution, task, events, and repo lock release.
     await this.requestKillOnce(entry)
 
@@ -377,7 +405,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   getExecution(executionId: string): ExecutionRecord | undefined {
     return this.get<ExecutionRecord>(
-      `SELECT id, task_id, profile, permission, cwd, prompt, status,
+      `SELECT id, task_id, profile, cwd, prompt, status,
         native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
         kill_reason, timeout_ms, requested_agent_runtime, resolved_profile
       FROM executions
@@ -512,7 +540,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   async shutdown(): Promise<void> {
     this.stopAcceptingNew()
-    const activeEntries = [...this.registry.values()].filter((entry) => entry.child && entry.pid)
+    const activeEntries = [...this.registry.values()].filter((entry) => entry.session && entry.pid)
     for (const entry of activeEntries) {
       entry.shutdownRequested = true
       this.claimTerminalIntent(entry, { kind: 'shutdown' })
@@ -526,7 +554,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     }
 
     for (const entry of [...this.registry.values()]) {
-      if (!entry.child || !entry.pid) {
+      if (!entry.session || !entry.pid) {
         if (this.claimTerminalIntent(entry, { kind: 'shutdown' })) {
           this.terminalizeQueued(entry, 'interrupted', 'shutdown', 'shutdown')
         }
@@ -538,6 +566,17 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     }
 
     await Promise.allSettled([...this.registry.values()].map((entry) => entry.waitPromise))
+
+    // Close only the fallback ExecService this supervisor created. A shared,
+    // externally supplied service is owned by its daemon and must not be closed
+    // when one task's supervisor shuts down.
+    if (this.ownsExecService) {
+      try {
+        await this.execService.close()
+      } catch (error: unknown) {
+        this.log('warn', `[foreman] failed to close owned exec service: ${errorMessage(error)}`)
+      }
+    }
   }
 
   private createRegistryEntry(
@@ -557,7 +596,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       executionId,
       taskId: opts.taskId,
       cwd: opts.cwd,
-      permission: opts.permission,
       repoWriteLock: opts.repoWriteLock === true,
       writePaths: opts.writePaths ? [...opts.writePaths] : undefined,
       codeBuddyExecution: isCodeBuddyExecution(opts) && opts.codeBuddyExecution
@@ -596,18 +634,45 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 
-    let spawnResult: AgentProcess
+    let session: AgentSession
     try {
       const profile = resolvedProfile ?? opts.profile;
-      const clientId = profile.includes(':') ? parseRunSyntax(profile).client : opts.clientFamily;
+      const syntax = profile.includes(':') ? parseRunSyntax(profile) : undefined;
+      const clientId = syntax?.client ?? opts.clientFamily;
       const client = clientId ? agentClients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
-      this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, profile});
-      spawnResult = client.start({
-        profile, directory: opts.cwd, prompt: opts.prompt, sessionId: opts.resume, capabilities: opts.capabilities,
-      }, {
-        // The authoritative task run id is always derived from `opts.taskId`, whether the
-        // execution launched immediately or was reconstructed from a persisted execution row.
+      if (!syntax?.model) throw new Error('Execution requires a resolved model');
+      const plan = this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model);
+      this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, model: syntax.model});
+      // The resolved client/provider/model/mode/thinking/cwd are all owned by
+      // the task layer. The daemon's shared ExecService only runs the resolved
+      // client, so both this path and an explicit `wrenyard exec` share one
+      // launch/feature/replay implementation.
+      const agentRequest: AgentRequest = {
+        model: plan.upstreamModel ?? syntax.model,
+        canonicalModel: syntax.model,
+        provider: syntax.provider,
+        mode: plan.mode,
+        protocol: plan.protocol,
+        prompt: opts.prompt,
+        cwd: opts.cwd,
+        ...(opts.resume === undefined ? {} : { resumeSessionId: opts.resume }),
+        ...(plan.reasoningEffort ?? plan.thinking
+          ? { thinking: plan.reasoningEffort ?? plan.thinking }
+          : {}),
+      };
+      // The fully resolved user request is shaped once, then lowered onto the
+      // shared exec surface. Task-declared feature ids map to exec feature ids
+      // through one explicit compatibility boundary; an unknown id throws rather
+      // than being silently dropped.
+      const execRequest: ExecRequest = {
+        ...agentRequest,
+        client: client.id,
+        features: toExecFeatureIds(opts.features),
+      };
+      // The authoritative task run id is always derived from `opts.taskId`, whether the
+      // execution launched immediately or was reconstructed from a persisted execution row.
+      const operationOptions = {
         env: resolveTaskAgentEnv(
           process.env,
           opts.taskId,
@@ -615,15 +680,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           this.buildThinkingPlanEnv(entry.executionId),
           entry.executionId,
         ),
-      })
+      };
+      session = await this.execService.start(execRequest, operationOptions)
     } catch (error) {
       this.terminalizeStartingFailure(entry, error)
       return
     }
 
-    entry.child = spawnResult.child
-    entry.pid = spawnResult.pid
-    entry.pgid = spawnResult.pgid
+    entry.session = session
+    entry.pid = session.diagnostics.pid
 
     const timestamp = nowIso()
     this.tx(() => {
@@ -631,8 +696,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         `UPDATE executions
         SET status = 'running', pid = ?, pgid = ?, started_at = ?, updated_at = ?
         WHERE id = ? AND status = 'starting'`,
-        spawnResult.pid,
-        spawnResult.pgid ?? null,
+        session.diagnostics.pid ?? null,
+        null,
         timestamp,
         timestamp,
         entry.executionId,
@@ -672,40 +737,43 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   private attachChildObservers(entry: RegistryEntry): void {
-    const child = entry.child
-    if (!child) return
-
-    if (child.stderr) {
-      child.stderr.on('data', (chunk: unknown) => {
-        entry.stderrTail = tailString(entry.stderrTail + chunkToString(chunk), STDERR_TAIL_MAX_LEN)
-      })
-    }
-
-    child.once('error', (error) => {
-      entry.childError = error.message
-    })
-
-    child.once('close', (exitCode, signal) => {
-      void this.handleChildClose(entry, exitCode, signal ?? null).catch((error: unknown) => {
-        this.log('error', `[foreman] close handler failed for ${entry.executionId}: ${errorMessage(error)}`)
-      })
-    })
+    if (!entry.session) return
 
     entry.streamDone = this.consumeStream(entry).catch((error: unknown) => {
       entry.streamError = errorMessage(error)
       this.log('warn', `[foreman] stream consumer failed for ${entry.executionId}: ${entry.streamError}`)
     })
+    void entry.streamDone.then(() => {
+      const exit = entry.pendingExit
+      if (!exit) return
+      void this.handleChildClose(entry, exit.exitCode, exit.signal).catch((error: unknown) => {
+        this.log('error', `[foreman] close handler failed for ${entry.executionId}: ${errorMessage(error)}`)
+      })
+    })
   }
 
   private async consumeStream(entry: RegistryEntry): Promise<void> {
-    if (!entry.child) return
+    if (!entry.session) return
 
-    for await (const rawEvent of readStreamJson(entry.child)) {
+    for await (const agentEvent of entry.session.events) {
+      if (agentEvent.type === 'stderr') {
+        entry.stderrTail = tailString(entry.stderrTail + agentEvent.text, STDERR_TAIL_MAX_LEN)
+        continue
+      }
+      if (agentEvent.type === 'error') {
+        entry.childError = agentEvent.message
+        continue
+      }
+      if (agentEvent.type === 'exit') {
+        entry.pendingExit = { exitCode: agentEvent.exitCode, signal: agentEvent.signal }
+        return
+      }
       // A bounded cancellation may have terminalized and forgotten this entry
       // while the stream is stalled; late stream events must not mutate the
       // terminal state or insert post-terminal events.
       if (entry.terminalGeneration > 0) return
-      const event = normalizeForgeStreamEvent(rawEvent)
+      const rawEvent = agentEvent.record
+      const event = normalizeClientEvent(rawEvent)
       if (!event) continue
       const detectedNative = detectNativeSession(event)
       if (detectedNative) {
@@ -1320,7 +1388,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     try {
       while (this.runningCount() < MAX_CONCURRENT_EXECUTIONS) {
         const rows = this.query<ExecutionRecord>(
-          `SELECT id, task_id, profile, permission, cwd, prompt, status,
+          `SELECT id, task_id, profile, cwd, prompt, status,
             native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
             kill_reason, timeout_ms, requested_agent_runtime, resolved_profile
           FROM executions
@@ -1358,7 +1426,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private runningCount(): number {
     let count = 0
     for (const entry of this.registry.values()) {
-      if (entry.child && entry.terminalGeneration === 0) count += 1
+      if (entry.session && entry.terminalGeneration === 0) count += 1
     }
     return count
   }
@@ -1407,7 +1475,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if ((row.mode !== 'native' && row.mode !== 'gateway') || !row.client || !row.provider || !row.model || !row.profile) {
       throw new Error('Persisted thinking dispatch is incomplete')
     }
-    const plan = createBuiltinCatalog().resolveRun(row.client, row.provider, row.model, thinking)
+    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, thinking)
     return { profile: row.profile, plan }
   }
 
@@ -1441,6 +1509,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   private requestKillOnce(entry: RegistryEntry): Promise<void> {
+    if (entry.session) {
+      entry.killPromise ??= entry.session.cancel()
+      return entry.killPromise
+    }
     if (!entry.pid) return Promise.resolve()
     entry.killPromise ??= this.killProcessTreeFn(entry.pid, entry.pgid)
     return entry.killPromise
@@ -1531,6 +1603,41 @@ function toPersistedThinkingLevel(raw: string | null): 'low' | 'medium' | 'high'
     : undefined
 }
 
+/**
+ * Single explicit compatibility boundary mapping task-declared feature ids onto
+ * exec feature ids.
+ *
+ * The exec feature registry exposes exactly `browser-use` and `computer-use`
+ * (see exec-features.mts). Historical/legacy task definitions may still declare
+ * `browser` / `browser-use` and `computer` / `computer-use`, so both spellings
+ * of each known feature are mapped explicitly. Mapping is total for the known
+ * ids and ordered/de-duplicated. An unknown requested feature MUST throw: a
+ * task can never silently drop a feature it asked for.
+ */
+const TASK_FEATURE_TO_EXEC_FEATURE: Readonly<Record<string, string>> = {
+  'browser': 'browser-use',
+  'browser-use': 'browser-use',
+  'computer': 'computer-use',
+  'computer-use': 'computer-use',
+}
+
+function toExecFeatureIds(features: readonly string[] | undefined): readonly string[] {
+  if (!features || features.length === 0) return []
+  const resolved: string[] = []
+  for (const feature of features) {
+    const trimmed = feature.trim()
+    if (!trimmed) {
+      throw new Error('Requested execution feature id must be a non-empty string')
+    }
+    const featureId = TASK_FEATURE_TO_EXEC_FEATURE[trimmed]
+    if (!featureId) {
+      throw new Error(`Unknown execution feature '${trimmed}'`)
+    }
+    if (!resolved.includes(featureId)) resolved.push(featureId)
+  }
+  return resolved
+}
+
 export function resolveTaskAgentEnv(
   env: NodeJS.ProcessEnv,
   taskRunId?: string,
@@ -1539,7 +1646,7 @@ export function resolveTaskAgentEnv(
   executionId?: string,
 ): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
-  // Forge child unchanged, then drop any stale inherited task context...
+  // native client child unchanged, then drop any stale inherited task context...
   const next: NodeJS.ProcessEnv = { ...env }
   delete next.FOREMAN_TASK_RUN_ID
   // ...and every case variant of the private CodeBuddy admission tuple. Only a
@@ -1766,28 +1873,8 @@ function mapTpsSamples(value: unknown): unknown[] | undefined {
   })
 }
 
-function normalizeForgeStreamEvent(event: StreamEventRecord): StreamEventRecord | undefined {
-  if (!isForgeAgentStreamV1(event)) {
-    return undefined
-  }
-
-  const type = stringProp(event, 'type')
-  const data = recordProp(event, 'data')
-  if (!type || !data) return undefined
-
-  return dropUndefined({
-    ...data,
-    type,
-    timestamp: stringProp(event, 'timestamp') ?? undefined,
-    protocol: stringProp(event, 'protocol') ?? undefined,
-    version: numberProp(event, 'version'),
-    run_id: stringProp(event, 'run_id') ?? undefined,
-    seq: numberProp(event, 'seq'),
-  })
-}
-
-function isForgeAgentStreamV1(event: StreamEventRecord): boolean {
-  return stringProp(event, 'protocol') === 'forge.agent.stream' && numberProp(event, 'version') === 1
+function normalizeClientEvent(event: StreamEventRecord): StreamEventRecord | undefined {
+  return stringProp(event, 'type') ? event : undefined
 }
 
 function detectNativeSession(event: StreamEventRecord): { nativeSessionId: string; clientFamily: ClientFamily } | undefined {
@@ -1803,12 +1890,12 @@ function detectNativeSession(event: StreamEventRecord): { nativeSessionId: strin
 }
 
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy'
 }
 
 function detectResolvedProfile(event: StreamEventRecord): string | undefined {
   const type = stringProp(event, 'type')
-  if (type !== 'run_started' && !(type === 'run_finished' && isForgeAgentStreamV1(event))) {
+  if (type !== 'run_started' && type !== 'run_finished') {
     return undefined
   }
   const profile = stringProp(event, 'profile')
@@ -1816,7 +1903,7 @@ function detectResolvedProfile(event: StreamEventRecord): string | undefined {
 }
 
 function detectFailureClass(event: StreamEventRecord): string | undefined {
-  if (stringProp(event, 'type') !== 'run_finished' || !isForgeAgentStreamV1(event)) {
+  if (stringProp(event, 'type') !== 'run_finished') {
     return undefined
   }
   const fc = stringProp(event, 'failure_class')
@@ -1825,7 +1912,7 @@ function detectFailureClass(event: StreamEventRecord): string | undefined {
 
 function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {
   const type = stringProp(event, 'type')
-  if (type === 'run_finished' && isForgeAgentStreamV1(event)) {
+  if (type === 'run_finished') {
     const status = stringProp(event, 'status')
     const exitCode = numberProp(event, 'exit_code')
     return {
@@ -1901,11 +1988,12 @@ function assertStartExecutionOpts(opts: StartExecutionOpts): void {
 }
 
 function normalizeStartExecutionOpts(opts: StartExecutionOpts): StartExecutionOpts {
-  const legacyRequiresLock = requiresRepoWriteLock(opts.permission)
+  // Repository coordination only. An omitted repoWriteLock keeps the historical
+  // conservative default (repo-wide write lock); a readonly task opts out with an
+  // explicit `false`.
   return {
     ...opts,
-    permission: 'yolo',
-    repoWriteLock: opts.repoWriteLock ?? (opts.writePaths !== undefined || legacyRequiresLock),
+    repoWriteLock: opts.repoWriteLock ?? true,
   }
 }
 
@@ -1941,7 +2029,6 @@ function optsFromRow(row: ExecutionRecord, entry: RegistryEntry): StartExecution
   return {
     taskId: row.task_id ?? undefined,
     profile: row.profile,
-    permission: 'yolo',
     repoWriteLock: entry.repoWriteLock,
     writePaths: entry.writePaths,
     cwd: row.cwd,

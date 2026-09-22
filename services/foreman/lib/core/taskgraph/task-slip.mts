@@ -28,7 +28,7 @@ export interface TaskNodeSlip {
   agentRuntime?: string
   /**
    * Authoritative resolved Foreman task definition name (e.g. 'commit',
-   * 'forge-deploy', 'investigate'), normalized to <=128 UTF-16 units. This is
+   * 'release', 'investigate'), normalized to <=128 UTF-16 units. This is
    * distinct from the runtime task_run_id and is never inferred from the
    * user-facing node name or action params at read time.
    */

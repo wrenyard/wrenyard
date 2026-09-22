@@ -12,7 +12,7 @@ import type { AgentResult } from '../../types.mts'
  */
 export type TaskSchemaInput = ZodType
 
-export interface TaskCapabilityConfig {
+export interface TaskFeatureConfig {
   available: readonly string[]
   select?(input: unknown): readonly string[]
 }
@@ -30,7 +30,7 @@ export interface TaskCapabilityConfig {
  * never pin a runtime — they select automatically from dispatch, and any
  * explicit user selection belongs to Task settings, not Task definitions.
  * Required model capabilities live in the dispatch requirements themselves —
- * distinct from the Forge capability packs declared on `TaskConfig.capabilities`.
+ * distinct from the execution features declared on `TaskConfig.features`.
  */
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 export type { TaskDispatchRequirements }
@@ -56,12 +56,12 @@ export interface TaskConfigBase {
   /** Explicit hard dispatch requirements (catalog SSOT). Active Tasks select
    *  automatically from dispatch; a machine preference can never bypass these
    *  requirements. Required model capabilities are part of this contract,
-   *  distinct from Forge capability packs. */
+   *  distinct from the execution-feature bundles declared on `TaskConfig.features`. */
   dispatch?: TaskDispatchRequirements
-  /** Declared Forge capability packs this task can select.
-   *  Capabilities are mounted when the task runs; absent means no capability
-   *  gate. Generic — does not know about specific capability names. */
-  capabilities?: TaskCapabilityConfig
+  /** Declared execution-feature bundles this task can select. Features are
+   *  mounted when the task runs; absent means no feature gate. Generic — does
+   *  not know about specific feature names. */
+  features?: TaskFeatureConfig
   description?: string
   instructions?: Array<string | ((input?: unknown) => string | Promise<string>)>
   input: TaskSchemaInput

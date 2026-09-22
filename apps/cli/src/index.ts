@@ -4,13 +4,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { RuntimeResolutionError, resolveForgeBinary } from '@wrenyard/runtime-resolver';
 import { formatOutcome, parseUpdateArgs, runUpdate } from './release-update.js';
 
 /** Subcommands of the legacy `foreman` binary routed through the unified CLI. */
 export type ForemanCommand =
   | 'service'
   | 'task'
+  | 'exec'
   | 'taskgraph'
   | 'project'
   | 'message'
@@ -23,7 +23,6 @@ export type Route =
   | { kind: 'help' }
   | { kind: 'version' }
   | { kind: 'foreman'; args: string[] }
-  | { kind: 'forge'; args: string[] }
   | { kind: 'desktop'; args: string[] }
   | { kind: 'update'; args: string[] }
   | { kind: 'doctor' }
@@ -41,8 +40,6 @@ export interface SpawnResult {
 /** Injected process runner; defaults to `spawnSync` in production. */
 export type Runner = (command: string, args: string[], options: SpawnSyncOptions) => SpawnResult;
 
-/** Resolves the Forge binary path; returns null or throws when it cannot be found. */
-export type ForgeResolver = (env: NodeJS.ProcessEnv) => string | null;
 
 /** Options injectable from tests; every field falls back to production behavior. */
 export interface MainOptions {
@@ -51,7 +48,6 @@ export interface MainOptions {
   stderr?: (text: string) => void;
   env?: NodeJS.ProcessEnv;
   suiteRoot?: string;
-  resolver?: ForgeResolver;
   /** Node executable used to spawn Foreman; defaults to process.execPath. */
   nodeExecutable?: string;
   /** Desktop binary override; wins over WRENYARD_DESKTOP_BIN and layout discovery. */
@@ -68,7 +64,6 @@ interface MainContext {
   stderr: (text: string) => void;
   env: NodeJS.ProcessEnv;
   suiteRoot: string;
-  resolver: ForgeResolver;
   nodeExecutable: string;
   desktopBin?: string;
   suiteVersion?: string;
@@ -89,10 +84,10 @@ Commands:
   project, message,
   status
   quota [provider] [--json]  Query provider quotas
+  exec [options] <prompt> Execute a prompt through the daemon
   update [--version V]    Update from the latest release; --json for machine output
-  runtime <command>       Control the wrenyard runtime
   desktop                 Launch the wrenyard Desktop application
-  doctor                  Diagnostics: service doctor --json, then runtime doctor --json`;
+  doctor                  Diagnose the Wrenyard service`;
 
 /** Pure route mapping from argv to a dispatch target; performs no I/O. */
 export function routeCommand(argv: string[]): Route {
@@ -114,6 +109,7 @@ export function routeCommand(argv: string[]): Route {
     case 'daemon':
       return { kind: 'foreman', args: ['daemon', ...rest] };
     case 'task':
+    case 'exec':
     case 'taskgraph':
     case 'project':
     case 'message':
@@ -124,8 +120,6 @@ export function routeCommand(argv: string[]): Route {
       // Public updates are release-based and never touch the internal Git
       // updater: the release updater drives the bundled installer.
       return { kind: 'update', args: rest };
-    case 'runtime':
-      return { kind: 'forge', args: rest };
     case 'desktop':
       return { kind: 'desktop', args: rest };
     case 'doctor':
@@ -212,55 +206,6 @@ function runForeman(args: string[], ctx: MainContext): number {
   const result = ctx.runner(ctx.nodeExecutable, [tsxCli, control, ...args], RUN_OPTIONS);
   if (result.error) {
     ctx.stderr(`wrenyard: failed to spawn wrenyard service: ${result.error.message}`);
-  }
-  return exitCode(result);
-}
-
-function runForge(args: string[], ctx: MainContext): number {
-  let binary: string | null = null;
-  let reportedError: string | null = null;
-  // WRENYARD_RUNTIME_BIN is the primary way to pin the runtime binary.
-  const runtimeBin = ctx.env.WRENYARD_RUNTIME_BIN;
-  if (typeof runtimeBin === 'string' && runtimeBin.length > 0) {
-    binary = runtimeBin;
-  } else {
-    // Legacy read fallback: the pre-1.0 WRENYARD_FORGE_BIN override still wins
-    // over on-disk discovery when set.
-    const envBinary = ctx.env.WRENYARD_FORGE_BIN;
-    if (typeof envBinary === 'string' && envBinary.length > 0) {
-      binary = envBinary;
-    } else {
-      const adjacent = resolve(ctx.suiteRoot, 'bin', process.platform === 'win32' ? 'forge.exe' : 'forge');
-      if (existsSync(adjacent)) {
-        binary = adjacent;
-      }
-    }
-  }
-  if (binary === null) {
-    try {
-      const resolved = ctx.resolver(ctx.env);
-      binary = typeof resolved === 'string' && resolved.length > 0 ? resolved : null;
-    } catch (error) {
-      binary = null;
-      if (error instanceof RuntimeResolutionError) {
-        reportedError = error.message;
-        ctx.stderr(reportedError);
-      }
-    }
-  }
-  if (binary === null) {
-    if (isDevelopmentSuite(ctx.suiteRoot)) {
-      binary = 'forge';
-    } else {
-      if (reportedError === null) {
-        ctx.stderr('Unable to locate the Forge binary.');
-      }
-      return 1;
-    }
-  }
-  const result = ctx.runner(binary, args, RUN_OPTIONS);
-  if (result.error) {
-    ctx.stderr(`wrenyard: failed to spawn runtime: ${result.error.message}`);
   }
   return exitCode(result);
 }
@@ -362,13 +307,6 @@ export function main(argv: string[] = process.argv.slice(2), options: MainOption
     stderr: options.stderr ?? ((text) => process.stderr.write(`${text}\n`)),
     env,
     suiteRoot,
-    resolver:
-      options.resolver ??
-      ((resolverEnv: NodeJS.ProcessEnv) =>
-        resolveForgeBinary({
-          env: resolverEnv,
-          allowPathFallback: isDevelopmentSuite(suiteRoot),
-        })),
     nodeExecutable: options.nodeExecutable ?? process.execPath,
     desktopBin: options.desktopBin,
     suiteVersion: options.suiteVersion,
@@ -385,16 +323,12 @@ export function main(argv: string[] = process.argv.slice(2), options: MainOption
       return 0;
     case 'foreman':
       return runForeman(route.args, ctx);
-    case 'forge':
-      return runForge(route.args, ctx);
     case 'desktop':
       return runDesktop(route.args, ctx);
     case 'update':
       return runUpdateCommand(route.args, ctx);
     case 'doctor': {
-      const foremanStatus = runForeman(['doctor'], ctx);
-      const forgeStatus = runForge(['doctor', '--json'], ctx);
-      return foremanStatus !== 0 ? foremanStatus : forgeStatus;
+      return runForeman(['doctor'], ctx);
     }
     case 'unknown':
       ctx.stderr(`Unknown command: ${route.command}`);

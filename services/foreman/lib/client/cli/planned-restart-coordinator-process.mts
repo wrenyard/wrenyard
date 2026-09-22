@@ -71,8 +71,8 @@ export function decideCoordinatorStartup(
  * provider injected here from `createForemanUpdatePreparationProvider`) are
  * supported; the update provider reads its checkout identity from the durable
  * plan, pulls only after the coordinator reaches a stable drain, and then
- * prepares the whole suite (pnpm install/typecheck/build plus the local Forge
- * self-install) before the daemon lifecycle begins.
+ * prepares the whole suite (pnpm install/typecheck/build) before the daemon
+ * lifecycle begins.
  *
  * Startup validation is single-mode: the plan must exist, match the requested
  * operation id and kind, and be nonterminal. A terminal or absent plan means
@@ -148,7 +148,7 @@ export async function runPlannedRestartCoordinatorProcess(
   // 5. Resolve the preparation provider. For update, construct the git-backed
   //    provider exactly once from the durable plan's checkout identity. No
   //    preflight happens here; after the drain the provider pulls the suite
-  //    and prepares it (install/typecheck/build/forge self-install) before the
+  //    and prepares it (install/typecheck/build) before the
   //    daemon lifecycle runs.
   const injectedProviders: PlannedRestartPreparationProvider[] = []
   if (args.kind === 'update') {

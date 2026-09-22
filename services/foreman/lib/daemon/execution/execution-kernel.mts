@@ -32,7 +32,7 @@ import {
   validateAgainstSchema,
 } from '../../workspace/schema-loader.mts'
 import { collectStructuredOutput, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
-import { resolveCapabilities } from '../../core/task/capabilities.mts'
+import { resolveFeatures } from '../../core/task/features.mts'
 import { buildTaskPrompt } from '../../core/task/prompt.mts'
 import { splitTaskInputContext } from '../../core/task/context.mts'
 import { resolveTaskWritePaths } from '../../core/task/write-targets.mts'
@@ -391,9 +391,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     }
     const executionOptions = options
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
-    // Resolve selected capabilities from config before spawning Forge.
+    // Resolve selected features from config before launching an agent.
     // Invalid selections surface as deterministic task execution errors.
-    const selectedCapabilities = resolveCapabilities(config.capabilities, effectiveInput)
+    const selectedFeatures = resolveFeatures(config.features, effectiveInput)
     const writePaths = resolveTaskWritePaths(
       config,
       effectiveInput,
@@ -507,7 +507,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       const runAgent: StructuredOutputAgent = (profile, prompt, opts) => {
         return primitives.agent(profile, prompt, {
           ...opts,
-          permission: 'yolo',
           repoWriteLock: opts?.repoWriteLock ?? repoWriteLock,
           writePaths: opts?.writePaths,
         })
@@ -528,14 +527,13 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         workingDirectory: executionOptions.workingDirectory,
         taskName: target.name,
         taskId,
-        permission: 'yolo',
         repoWriteLock,
         // Default correction budget: every task — including edit/commit — keeps
         // the same bounded in-session output correction (three corrections after
         // the initial attempt). A correction continues the original native
         // session on the resolved model/profile and never replays the task.
         timeoutMs: resolvedTimeoutMs ?? config.timeoutMs,
-        capabilities: selectedCapabilities,
+        features: selectedFeatures,
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,
         dispatchSnapshot,

@@ -1,4 +1,3 @@
-import type { AgentRuntimePermission } from '../operations/types.mts'
 import { compileSchema, validateAgainstSchema, V2SchemaValidationError, type CompiledSchema } from '../../workspace/schema-loader.mts'
 import type { ZodType } from 'zod'
 import {
@@ -6,7 +5,7 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
 } from '../../task-timeouts.mts'
-import { GateFailureError, mapForgeFailureClass } from './failure.mts'
+import { GateFailureError, mapAgentFailureClass } from './failure.mts'
 import {
   DELIVERY_END,
   DELIVERY_START,
@@ -19,7 +18,6 @@ import {
   type StructuredOutputDiagnostic,
   type StructuredOutputErrorKind,
 } from './delivery-protocol.mts'
-import { parseAgentRuntime } from '../agent-runtime.mts'
 
 /**
  * Output schema accepted by `collectStructuredOutput`. AC-5 final state:
@@ -76,16 +74,16 @@ export interface StructuredOutputOptions {
   timeoutMs?: number
   taskName?: string
   taskId?: string
-  permission?: AgentRuntimePermission
   /** Repository coordination only. Explicit false keeps observational tasks
-   *  retryable even though production clients always launch in YOLO mode. */
+   *  retryable even though production clients always launch in their
+   *  unrestricted runtime mode. Defaults to true when omitted. */
   repoWriteLock?: boolean
   onDelivery?: (delivery: { summary?: string; data: unknown }) => void
   beforeAttempt?: () => void | Promise<void>
-  capabilities?: readonly string[]
+  features?: readonly string[]
   writePaths?: readonly string[]
   /** Original requested agent runtime, carried separately from the exact
-   *  approved forge profile passed as `profile`. */
+   *  approved execution target passed as `profile`. */
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded
    *  unchanged on the initial attempt and on every structured retry. */
@@ -100,12 +98,11 @@ export interface StructuredOutputAgentOptions {
   workingDirectory?: string
   timeoutMs?: number
   resume?: string
-  permission?: AgentRuntimePermission
   repoWriteLock?: boolean
   taskId?: string
-  capabilities?: readonly string[]
+  features?: readonly string[]
   writePaths?: readonly string[]
-  /** Original requested agent runtime, carried separately from the exact approved forge profile passed as `profile`. */
+  /** Original requested agent runtime, carried separately from the exact approved execution target passed as `profile`. */
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded unchanged on every structured retry. */
   dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
@@ -123,7 +120,7 @@ export interface StructuredOutputAgentResult {
   exitCode?: number | null
   killReason?: string | null
   resolvedProfile?: string
-  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: string | null
 }
 
@@ -138,14 +135,15 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
   const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
   // ── Mutation-aware evidence only ──
-  // Task coordination metadata, not the universally-YOLO runtime mode, decides
-  // whether an attempt may have changed repository state. It no longer gates
-  // retries: every task — including edit/commit — gets the same bounded
-  // in-session output correction. The marker is only used to attach
-  // unverified-side-effect evidence when every attempt is exhausted.
+  // Task coordination metadata, not the runtime mode, decides whether an
+  // attempt may have changed repository state. It no longer gates retries:
+  // every task — including edit/commit — gets the same bounded in-session
+  // output correction. The marker is only used to attach unverified-side-effect
+  // evidence when every attempt is exhausted. An omitted repoWriteLock keeps
+  // the conservative default (mutation-capable).
   const mutationCapable =
-    (opts.repoWriteLock ?? (opts.permission !== 'readonly')) ||
-    (opts.capabilities?.length ?? 0) > 0
+    (opts.repoWriteLock ?? true) ||
+    (opts.features?.length ?? 0) > 0
   // Default remains three corrections after the initial attempt.
   const maxResumeAttempts = opts.maxResumeAttempts ?? 3
   let lastValidationErrors: string[] | undefined
@@ -206,10 +204,9 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           workingDirectory: opts.workingDirectory,
           timeoutMs: attemptTimeoutMs,
           resume,
-          permission: opts.permission,
           repoWriteLock: opts.repoWriteLock,
           taskId: opts.taskId,
-          capabilities: opts.capabilities,
+          features: opts.features,
           writePaths: opts.writePaths,
           requestedAgentRuntime: opts.requestedAgentRuntime,
           dispatchSnapshot: opts.dispatchSnapshot,
@@ -360,11 +357,11 @@ function agentFailedError(
   detail?: string | null,
   failureClass?: string | null,
 ): Error & { failure_category: string; error_message: string } {
-  // Map a canonical Forge FailureClass onto a stable task failure category so a
-  // profile/policy exhaustion is reported as runtime_status/transport rather
-  // than collapsed into the generic agent_failed bucket. Missing/unknown class
-  // defaults to agent_failed.
-  const category = mapForgeFailureClass(failureClass) ?? 'agent_failed'
+  // Map a canonical agent-runtime FailureClass onto a stable task failure
+  // category so a capacity/policy exhaustion is reported as
+  // runtime_status/transport rather than collapsed into the generic
+  // agent_failed bucket. Missing/unknown class defaults to agent_failed.
+  const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
   return Object.assign(
     new Error(`Agent execution failed: ${executionId}`),
     {
@@ -373,7 +370,7 @@ function agentFailedError(
         type: category,
         execution_id: executionId,
         status: 'failed',
-        ...(failureClass ? { forge_failure_class: failureClass } : {}),
+        ...(failureClass ? { agent_failure_class: failureClass } : {}),
         ...(detail ? { detail: detail.slice(0, 2000) } : {}),
       }),
     },
@@ -616,33 +613,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isPolicyAgentRuntime(raw: string): boolean {
-  try {
-    return parseAgentRuntime(raw).isPolicy
-  } catch {
-    return false
-  }
-}
-
 function assertResolvedProfileForRetry(agentRuntime: string, resolvedProfile: string | undefined): string {
   if (resolvedProfile) {
-    // A resolved canonical dynamic target (provider/model:client) is preserved
-    // exactly: it is never wrapped as forge/<profile>, which would corrupt the
-    // identity into an invalid forge/provider/model:client string. Only a
-    // genuinely legacy simple profile name (no '/', no ':') keeps the legacy
-    // forge/<profile> wrapper; any already-qualified profile is reused verbatim.
-    if (!resolvedProfile.includes('/') && !resolvedProfile.includes(':')) {
-      return `forge/${resolvedProfile}`
-    }
+    // The resolved profile is the canonical exact execution target
+    // (provider/model:client) captured by the supervisor from the terminal
+    // stream event. It is reused verbatim as the retry profile; it is never
+    // wrapped or reinterpreted as a legacy runtime identity.
     return resolvedProfile
-  }
-  // No resolved profile: reuse the original runtime when it is not a policy
-  // classification. A policy-based agentRuntime with no resolved profile is a
-  // deterministic failure.
-  if (isPolicyAgentRuntime(agentRuntime)) {
-    throw new Error(
-      `A concrete resolved profile is required for policy retry. The policy-based agentRuntime '${agentRuntime}' did not produce a resolved profile.`,
-    )
   }
   return agentRuntime
 }

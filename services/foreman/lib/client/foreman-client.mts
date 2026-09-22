@@ -1,3 +1,4 @@
+import type { ProviderQuotaParams, ProviderQuotaResult, ProviderConfigureParams, ProviderConfigureResult } from '@wrenyard/protocol/provider'
 import type {
   ActivitySnapshotParams,
   ActivitySnapshotV1,
@@ -85,6 +86,16 @@ import type {
   ClientConfigurationPlanRestoreResult,
   ClientConfigurationRestoreParams,
   ClientConfigurationRestoreResult,
+  ExecCancelParams,
+  ExecCancelResult,
+  ExecEventsParams,
+  ExecEventsResult,
+  ExecGetParams,
+  ExecGetResult,
+  ExecStartParams,
+  ExecStartResult,
+  ProviderListParams,
+  ProviderListResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -164,6 +175,18 @@ export class ForemanClient {
   readonly health = {
     ping: (params: HealthPingParams = {}): Promise<HealthPingResult> => {
       return this.rpc.request<HealthPingResult>('health.ping', params)
+    },
+  }
+
+  readonly provider = {
+    list: (params: ProviderListParams = {}): Promise<ProviderListResult> => {
+      return this.rpc.request<ProviderListResult>('provider.list', params)
+    },
+    configure: (params: ProviderConfigureParams): Promise<ProviderConfigureResult> => {
+      return this.rpc.request<ProviderConfigureResult>('provider.configure', params)
+    },
+    quota: (params: ProviderQuotaParams = {}): Promise<ProviderQuotaResult> => {
+      return this.rpc.request<ProviderQuotaResult>('provider.quota', params, { timeoutMs: 45_000 })
     },
   }
 
@@ -255,6 +278,21 @@ export class ForemanClient {
   readonly message = {
     send: (params: MessageSendParams): Promise<MessageSendResult> => {
       return this.rpc.request<MessageSendResult>('message.send', params)
+    },
+  }
+
+  readonly exec = {
+    start: (params: ExecStartParams): Promise<ExecStartResult> => {
+      return this.rpc.request<ExecStartResult>('exec.start', params)
+    },
+    get: (params: ExecGetParams): Promise<ExecGetResult> => {
+      return this.rpc.request<ExecGetResult>('exec.get', params)
+    },
+    events: (params: ExecEventsParams): Promise<ExecEventsResult> => {
+      return this.rpc.request<ExecEventsResult>('exec.events', params)
+    },
+    cancel: (params: ExecCancelParams): Promise<ExecCancelResult> => {
+      return this.rpc.request<ExecCancelResult>('exec.cancel', params)
     },
   }
 

@@ -85,12 +85,16 @@ import {
   providerConfigureResultSchema,
   providerListParamsSchema,
   providerListResultSchema,
+  providerQuotaParamsSchema,
+  providerQuotaResultSchema,
   type ProviderConfigureParams,
   type ProviderConfigureResult,
   type ProviderListParams,
   type ProviderListResult,
+  type ProviderQuotaParams,
+  type ProviderQuotaResult,
 } from './methods/provider.mts'
-export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult } from './methods/provider.mts'
+export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult, ProviderQuotaParams, ProviderQuotaResult } from './methods/provider.mts'
 import {
   messageSendParamsSchema,
   messageSendResultSchema,
@@ -283,6 +287,24 @@ import {
   type RuntimeAliasSnapshotParams,
   type RuntimeAliasSnapshotResult,
 } from './methods/runtime-alias.mts'
+import {
+  execCancelParamsSchema,
+  execCancelResultSchema,
+  execEventsParamsSchema,
+  execEventsResultSchema,
+  execGetParamsSchema,
+  execGetResultSchema,
+  execStartParamsSchema,
+  execStartResultSchema,
+  type ExecCancelParams,
+  type ExecCancelResult,
+  type ExecEventsParams,
+  type ExecEventsResult,
+  type ExecGetParams,
+  type ExecGetResult,
+  type ExecStartParams,
+  type ExecStartResult,
+} from './methods/exec.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -352,6 +374,16 @@ export type {
   RuntimeAliasSnapshotParams,
   RuntimeAliasSnapshotResult,
 } from './methods/runtime-alias.mts'
+export type {
+  ExecCancelParams,
+  ExecCancelResult,
+  ExecEventsParams,
+  ExecEventsResult,
+  ExecGetParams,
+  ExecGetResult,
+  ExecStartParams,
+  ExecStartResult,
+} from './methods/exec.mts'
 export type {
   StatsTodayParams,
   StatsTodayResult,
@@ -436,6 +468,7 @@ export interface ForemanMethodParams {
   'client.configuration.restore': ClientConfigurationRestoreParams
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
+  'provider.quota': ProviderQuotaParams
   'event.list': EventListParams
   'stats.today': StatsTodayParams
   'stats.summary': StatsSummaryParams
@@ -481,6 +514,10 @@ export interface ForemanMethodParams {
   'runtime.alias.snapshot': RuntimeAliasSnapshotParams
   'runtime.alias.put': RuntimeAliasPutParams
   'runtime.alias.remove': RuntimeAliasRemoveParams
+  'exec.start': ExecStartParams
+  'exec.get': ExecGetParams
+  'exec.events': ExecEventsParams
+  'exec.cancel': ExecCancelParams
 }
 
 export interface ForemanMethodResults {
@@ -499,6 +536,7 @@ export interface ForemanMethodResults {
   'client.configuration.restore': ClientConfigurationRestoreResult
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
+  'provider.quota': ProviderQuotaResult
   'event.list': EventListResult
   'stats.today': StatsTodayResult
   'stats.summary': StatsSummaryResult
@@ -544,6 +582,10 @@ export interface ForemanMethodResults {
   'runtime.alias.snapshot': RuntimeAliasSnapshotResult
   'runtime.alias.put': RuntimeAliasSnapshotResult
   'runtime.alias.remove': RuntimeAliasSnapshotResult
+  'exec.start': ExecStartResult
+  'exec.get': ExecGetResult
+  'exec.events': ExecEventsResult
+  'exec.cancel': ExecCancelResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -612,6 +654,10 @@ export const methodRegistry: {
   'provider.configure': {
     params: providerConfigureParamsSchema,
     result: providerConfigureResultSchema,
+  },
+  'provider.quota': {
+    params: providerQuotaParamsSchema,
+    result: providerQuotaResultSchema,
   },
   'event.list': {
     params: eventListParamsSchema,
@@ -792,6 +838,22 @@ export const methodRegistry: {
   'runtime.alias.remove': {
     params: runtimeAliasRemoveParamsSchema,
     result: runtimeAliasRemoveResultSchema,
+  },
+  'exec.start': {
+    params: execStartParamsSchema,
+    result: execStartResultSchema,
+  },
+  'exec.get': {
+    params: execGetParamsSchema,
+    result: execGetResultSchema,
+  },
+  'exec.events': {
+    params: execEventsParamsSchema,
+    result: execEventsResultSchema,
+  },
+  'exec.cancel': {
+    params: execCancelParamsSchema,
+    result: execCancelResultSchema,
   },
 }
 

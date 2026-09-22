@@ -11,13 +11,12 @@ export interface OperationDescriptor {
   description: string
 }
 
-export type AgentRuntimePermission = 'readonly' | 'edit' | 'yolo'
-export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor'
+export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor' | 'grok' | 'dsh' | 'codebuddy'
 
 /**
  * Private, non-persistent CodeBuddy admission binding captured from one active
  * credential snapshot. It is deliberately separate from TaskDispatchSnapshot:
- * these values may reach only the local Forge admission process environment
+ * these values may reach only the local client admission process environment
  * and must never enter telemetry, protocol DTOs, logs, or database rows.
  */
 export interface CodeBuddyExecutionBinding {
@@ -39,7 +38,7 @@ import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
 
 export type TaskDispatchSnapshot = TaskResolvedDispatch
 
-import type { ForgeFailureClass } from '../task/failure.mts'
+import type { AgentFailureClass } from '../task/failure.mts'
 export type ExecutionStatus =
   | 'queued'
   | 'starting'
@@ -53,8 +52,9 @@ export type ExecutionStatus =
 export interface StartAgentExecutionOptions {
   taskId?: string
   profile: string
-  permission: AgentRuntimePermission
-  /** Repository coordination only; never changes the YOLO client plan. */
+  /** Repository coordination only: when true this execution participates in
+   *  Foreman's repo write-lock admission. There is no permission concept any
+   *  more; every client always launches in its unrestricted runtime mode. */
   repoWriteLock?: boolean
   cwd: string
   prompt: string
@@ -64,8 +64,10 @@ export interface StartAgentExecutionOptions {
   /** Normalized agent runtime string ('<runtime>/<config-id>') carried from the
    *  task definition. Null for historical/legacy executions that predate this field. */
   requestedAgentRuntime?: string
-  /** Selected Forge capability ids passed to the agent at launch. */
-  capabilities?: readonly string[]
+  /** Selected execution-feature ids (MCP feature bundles) carried from the task
+   *  definition. Lowered to exec feature ids by an explicit name map before an
+   *  execution starts; an unmapped id throws rather than being dropped. */
+  features?: readonly string[]
   /** Canonical exact file paths for file-scoped write admission. Empty retains
    *  conservative repo-wide locking when repoWriteLock is true. */
   writePaths?: readonly string[]
@@ -74,8 +76,8 @@ export interface StartAgentExecutionOptions {
   dispatchSnapshot?: TaskDispatchSnapshot | null
   /** Private CodeBuddy admission binding; kept in memory only. */
   codeBuddyExecution?: CodeBuddyExecutionBinding
-  /** Canonical Forge failure class, when supplied by the resolver. */
-  failureClass?: ForgeFailureClass | string | null
+  /** Canonical agent-runtime failure class, when supplied by the resolver. */
+  failureClass?: AgentFailureClass | string | null
 }
 
 export interface ExecutionResult {
@@ -85,8 +87,8 @@ export interface ExecutionResult {
   error?: string | null
   exitCode?: number | null
   killReason?: string | null
-  /** Canonical Forge failure class captured from `run_finished`, if present. */
-  failureClass?: ForgeFailureClass | string | null
+  /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
+  failureClass?: AgentFailureClass | string | null
 }
 
 export interface ExecutionHandle {
@@ -96,11 +98,15 @@ export interface ExecutionHandle {
   cancel(): Promise<void>
 }
 
+/**
+ * Live execution row. The persisted `executions.permission` column is INERT DB
+ * legacy: it is written as a fixed literal for schema compatibility and never
+ * read or interpreted, so it deliberately has no field here.
+ */
 export interface ExecutionRecord {
   id: string
   task_id: string | null
   profile: string
-  permission: AgentRuntimePermission
   cwd: string
   prompt: string
   status: ExecutionStatus
@@ -116,7 +122,7 @@ export interface ExecutionRecord {
   timeout_ms: number | null
   requested_agent_runtime?: string | null
   resolved_profile?: string | null
-  /** Canonical Forge failure class captured from `run_finished`, if present. */
+  /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failure_class?: string | null
 }
 

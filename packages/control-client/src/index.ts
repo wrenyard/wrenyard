@@ -1,3 +1,4 @@
+import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import { createConnection, type Socket } from "node:net";
 
 export type WrenyardIpcEnvironment = NodeJS.ProcessEnv;
@@ -230,40 +231,7 @@ export interface WrenyardClientConfigurationPlan {
   requiresRestart: WrenyardClientSurfaceId[];
 }
 
-export interface WrenyardProviderStatus {
-  id: string;
-  displayName: string;
-  description: string;
-  setupHint: string;
-  configured: boolean;
-  authMode: 'api-key' | 'native' | 'none';
-  protocols: Array<'openai_chat' | 'openai_responses' | 'anthropic_messages'>;
-  models: Array<{
-    id: string;
-    displayName: string;
-    contextWindow?: number;
-    maxTokens?: number;
-    taskOnly?: boolean;
-    effectiveTps?: number | null;
-    quotaAbundant?: boolean;
-    free?: boolean;
-    /** Provider-independent canonical model id; falls back to the model id. */
-    canonicalId?: string;
-    /** Catalog intelligence tier for the model. */
-    intelligence?: 'low' | 'mid' | 'high' | 'premium';
-    /**
-     * Catalog pricing subset; only the USD-per-million input/output/cached
-     * numbers. Required and finite, mirroring the required Catalog
-     * ModelDefinition.pricing.
-     */
-    /** USD per million tokens: [cached, input, output]. */
-    pricing: readonly [number, number, number];
-    /** Which evidence tier produced `effectiveTps`. */
-    speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
-    /** True when a credential is configured AND the resolver admits provider/model. */
-    available?: boolean;
-  }>;
-}
+export type WrenyardProviderStatus = ProviderListResult['providers'][number];
 
 interface PendingRequest {
   resolve: (result: unknown) => void;
@@ -379,6 +347,14 @@ export class WrenyardIpcClient {
     return this.request('provider.list', {}, options);
   }
 
+  /**
+   * Read the daemon-owned provider quota projection. The daemon owns quota
+   * acquisition and interpretation; the caller only forwards `forceRefresh`
+   * and projects the returned provider rows.
+   */
+  providerQuota(forceRefresh = false, options?: WrenyardIpcRequestOptions): Promise<ProviderQuotaResult> {
+    return this.request('provider.quota', { forceRefresh }, { timeoutMs: 45_000, ...options });
+  }
   /** Store a managed provider API key through the daemon's local IPC channel. */
   providerConfigure(providerId: string, key: string, options?: WrenyardIpcRequestOptions): Promise<{ ok: true }> {
     return this.request('provider.configure', { providerId, key }, options);

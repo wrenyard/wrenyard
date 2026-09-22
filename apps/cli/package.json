@@ -10,7 +10,6 @@
     "build": "tsc -p tsconfig.build.json && node tools/build.mjs"
   },
   "dependencies": {
-    "@wrenyard/runtime-resolver": "workspace:*",
     "@wrenyard/control-client": "workspace:*"
   },
   "devDependencies": {
