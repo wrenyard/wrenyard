@@ -827,7 +827,8 @@ function packCliTgz(stage, outputDir, version) {
           if (!isWithin(rootReal, real)) throw new Error(`symlink entry resolves outside tree: ${abs} -> ${target} (${real})`);
           archive.symlink(entryPath(abs), target, stat.mode & 0o7777);
         } else if (stat.isFile()) {
-          archive.append(fs.createReadStream(abs), { name: entryPath(abs), mode: stat.mode & 0o7777 });
+          // Open each input only when the archive queue consumes it.
+          archive.file(abs, { name: entryPath(abs), mode: stat.mode & 0o7777 });
         }
       }
     };
