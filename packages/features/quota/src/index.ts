@@ -1,84 +1,70 @@
-import { HttpQuotaClient, type HttpQuotaProvider } from './http.ts';
-import { readCodeBuddyObservation, type CodeBuddyQueryContext } from './observed.ts';
-import type { ForgeExecutionOptions } from '@wrenyard/execution';
-import { CodexClient, AccountClient, type AccountUsageSource } from '@wrenyard/clients';
-import { normalizeChatGPTQuota } from '@wrenyard/providers/chatgpt';
-import { normalizeCursorQuota, normalizeDeepSeekQuota, normalizeKimiQuota, normalizeZhipuQuota, normalizeGrokQuota, normalizeClaudeQuota, normalizeCodeBuddyQuota } from '@wrenyard/providers/quota-normalizers';
+import { providerQuotas, type ProviderQuota, type QuotaSource } from '@wrenyard/providers';
 import type { QuotaSnapshot } from '@wrenyard/providers/base';
+import { createAgentClients, ClientError, type AgentClient, type ClientOptions } from '@wrenyard/clients';
+import { HttpQuotaSource } from './http.ts';
+import { readCodeBuddyObservation, type CodeBuddyQueryContext } from './observed.ts';
 export type { CodeBuddyQueryContext } from './observed.ts';
+export type QuotaQueryOptions = ClientOptions;
 export interface QuotaServiceOptions {
-    readonly codex?: Pick<CodexClient, 'readRateLimits'>;
-    readonly http?: Pick<HttpQuotaClient, 'readUsage'>;
-    readonly accounts?: Pick<AccountClient, 'readUsage' | 'readClaudeOAuth'>;
+    readonly providers?: ReadonlyMap<string, ProviderQuota>;
+    readonly clients?: ReadonlyMap<string, AgentClient>;
+    readonly http?: Pick<HttpQuotaSource, 'readUsage'>;
 }
-type Normalizer = (raw: unknown) => QuotaSnapshot | undefined;
-const accountCollectors: Readonly<Record<string, Normalizer>> = {
-    cursor: normalizeCursorQuota,
-    deepseek: normalizeDeepSeekQuota,
-    'kimi-coding': normalizeKimiQuota,
-    'zhipu-coding': normalizeZhipuQuota,
-    'claude-coding': normalizeClaudeQuota,
-    'super-grok': normalizeGrokQuota,
-    codebuddy: normalizeCodeBuddyQuota,
-};
-export const QUOTA_PROVIDER_IDS = ['chatgpt', ...Object.keys(accountCollectors)] as readonly string[];
-/** Acquisition and failure isolation. Each provider interprets its own raw data.
- * Routing snapshot caching stays with its existing owner; no account data is
- * cached here, so fresh requests never reuse an earlier login's observation.
- */
+export const QUOTA_PROVIDER_IDS = [...providerQuotas].filter(([, quota]) => quota.read).map(([id]) => id);
+/** The feature binds I/O; provider.quota owns interpretation and fallback. */
 export class QuotaService {
-    private readonly codex: Pick<CodexClient, 'readRateLimits'>;
-    private readonly http: Pick<HttpQuotaClient, 'readUsage'>;
-    private readonly accounts: Pick<AccountClient, 'readUsage' | 'readClaudeOAuth'>;
+    private readonly providers: ReadonlyMap<string, ProviderQuota>;
+    private readonly clients: ReadonlyMap<string, AgentClient>;
+    private readonly http: Pick<HttpQuotaSource, 'readUsage'>;
     constructor(options: QuotaServiceOptions = {}) {
-        this.http = options.http ?? new HttpQuotaClient();
-        this.codex = options.codex ?? new CodexClient();
-        this.accounts = options.accounts ?? new AccountClient();
+        this.providers = options.providers ?? providerQuotas;
+        this.clients = options.clients ?? createAgentClients();
+        this.http = options.http ?? new HttpQuotaSource();
     }
-    async fetch(provider: string, context?: CodeBuddyQueryContext, options?: ForgeExecutionOptions): Promise<QuotaSnapshot | undefined> {
+    private source(provider: string, context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): QuotaSource {
+        const clientIds: Readonly<Record<string, string>> = {
+            chatgpt: 'codex', cursor: 'cursor', 'claude-coding': 'claude', 'spacex-ai': 'grok',
+        };
+        return { read: async (source = 'primary') => {
+                options?.signal?.throwIfAborted();
+                let raw: unknown;
+                if (provider === 'deepseek' || provider === 'kimi-coding' || provider === 'zhipu-coding')
+                    raw = await this.http.readUsage(provider, options);
+                else if (provider === 'codebuddy')
+                    raw = await readCodeBuddyObservation(context, options);
+                else {
+                    const client = this.clients.get(clientIds[provider]);
+                    if (!client?.capabilities.account || !client.readAccount)
+                        throw new Error('Account capability unavailable');
+                    raw = await client.readAccount({ refresh: source === 'fallback' }, options);
+                }
+                if (raw && typeof raw === 'object' && 'error_code' in raw)
+                    throw new ClientError(String(raw.error_code));
+                options?.signal?.throwIfAborted();
+                return raw;
+            } };
+    }
+    async fetch(provider: string, context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): Promise<QuotaSnapshot | undefined> {
         options?.signal?.throwIfAborted();
-        const id = provider === 'spacex-ai' ? 'super-grok' : provider;
-        if (id !== 'chatgpt' && !Object.hasOwn(accountCollectors, id)) {
-            return { provider, status: 'unavailable', stale: false, code: 'quota_unsupported', message: 'Quota acquisition is not supported for this provider' };
-        }
-        // Absence of current account context must not reuse an observed CodeBuddy block.
-        if (id === 'codebuddy' && (!context?.expectedScope || !context.expectedEnvironment))
-            return undefined;
+        const id = provider === 'super-grok' ? 'spacex-ai' : provider;
+        const quota = this.providers.get(id);
+        if (!quota?.read)
+            return { provider: id, status: 'unavailable', stale: false, code: 'quota_unsupported', message: 'Quota acquisition is not supported for this provider' };
         try {
-            const raw = id === 'chatgpt' ? await this.codex.readRateLimits(options)
-                : id === 'codebuddy' ? await readCodeBuddyObservation(context, options)
-                    : ['deepseek', 'kimi-coding', 'zhipu-coding'].includes(id) ? await this.http.readUsage(id as HttpQuotaProvider, options)
-                        : await this.accounts.readUsage(id as AccountUsageSource, options);
-            options?.signal?.throwIfAborted();
-            if (raw && typeof raw === 'object' && 'error_code' in raw) {
-                const code = ['configuration_missing', 'authentication_required', 'quota_query_failed'].includes(String(raw.error_code)) ? String(raw.error_code) : 'quota_query_failed';
-                return { provider: id, status: 'error', stale: false, code, error: 'Provider quota unavailable' };
-            }
-            if (id === 'claude-coding' && raw && typeof raw === 'object' && 'source' in raw && raw.source === 'claude-sources') {
-                try {
-                    return normalizeClaudeQuota(raw);
-                }
-                catch {
-                    return normalizeClaudeQuota(await this.accounts.readClaudeOAuth(options));
-                }
-            }
-            return id === 'chatgpt' ? normalizeChatGPTQuota(raw) : accountCollectors[id as AccountUsageSource](raw);
+            return await quota.read(this.source(id, context, options));
         }
-        catch {
+        catch (error) {
             options?.signal?.throwIfAborted();
-            return { provider: id, status: 'error', stale: false, code: 'quota_query_failed', error: 'Provider quota unavailable' };
+            const code = error instanceof ClientError && ['configuration_missing', 'authentication_required'].includes(error.code) ? error.code : 'quota_query_failed';
+            return { provider: id === 'spacex-ai' ? 'super-grok' : id, status: 'error', stale: false, code, error: 'Provider quota unavailable' };
         }
     }
-    async list(context?: CodeBuddyQueryContext, options?: ForgeExecutionOptions): Promise<readonly QuotaSnapshot[]> {
-        // Source reads are independent; a failed login never masks other providers.
-        const rows = await Promise.all(QUOTA_PROVIDER_IDS.map(id => this.fetch(id, context, options)));
+    async list(context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): Promise<readonly QuotaSnapshot[]> {
+        const ids = [...this.providers].filter(([, quota]) => quota.read).map(([id]) => id);
+        const rows = await Promise.all(ids.map(id => this.fetch(id, context, options)));
         return rows.filter((row): row is QuotaSnapshot => row !== undefined);
     }
-    async chatGPT(options?: ForgeExecutionOptions): Promise<QuotaSnapshot> {
-        return (await this.fetch('chatgpt', undefined, options))!;
-    }
-    async queryJson(context?: CodeBuddyQueryContext, options?: ForgeExecutionOptions): Promise<string> {
-        return JSON.stringify(await this.list(context, options));
-    }
+    async chatGPT(options?: QuotaQueryOptions): Promise<QuotaSnapshot> { return (await this.fetch('chatgpt', undefined, options))!; }
+    async queryJson(context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): Promise<string> { return JSON.stringify(await this.list(context, options)); }
 }
 export { currentCodeBuddyContext } from './observed.ts';

@@ -1,12 +1,11 @@
+import { createAgentClients, type AgentProcess } from '@wrenyard/clients';
 import { randomBytes } from 'node:crypto'
 import type { ChildProcess } from 'node:child_process'
 import type { ForemanDatabase } from '../../db/types.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import { TaskRunStore } from '../../db/stores/task-run-store.mts'
 import {
-  buildForgeCommand,
   readStreamJson,
-  spawnForge,
   type ForgeStreamJsonEvent,
 } from '../../adapters/forge/direct-client.mts'
 import { assertValidTimeoutMs } from '../../task-timeouts.mts'
@@ -37,6 +36,7 @@ export type {
   StartAgentExecutionOptions as StartExecutionOpts,
 } from '../../core/operations/types.mts'
 
+const agentClients = createAgentClients();
 const MAX_CONCURRENT_EXECUTIONS = 10
 const SHUTDOWN_GRACE_MS = 10_000
 const STDERR_TAIL_MAX_LEN = 4_000
@@ -596,26 +596,16 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 
-    let spawnResult: ReturnType<typeof spawnForge>
+    let spawnResult: AgentProcess
     try {
-      const commandArgs = buildForgeCommand({
-        profile: opts.profile,
-        permission: opts.permission,
-        cwd: opts.cwd,
-        prompt: opts.prompt,
-        resume: opts.resume,
-        resolvedProfile: resolvedProfile ?? undefined,
-        capabilities: opts.capabilities,
-      })
-      this.log('debug', `[foreman] starting forge execution ${entry.executionId}`, { args: commandArgs })
-      spawnResult = spawnForge({
-        profile: opts.profile,
-        permission: opts.permission,
-        cwd: opts.cwd,
-        prompt: opts.prompt,
-        resume: opts.resume,
-        resolvedProfile: resolvedProfile ?? undefined,
-        capabilities: opts.capabilities,
+      const profile = resolvedProfile ?? opts.profile;
+      const clientId = profile.includes(':') ? parseRunSyntax(profile).client : opts.clientFamily;
+      const client = clientId ? agentClients.get(clientId) : undefined;
+      if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
+      this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, profile});
+      spawnResult = client.start({
+        profile, directory: opts.cwd, prompt: opts.prompt, sessionId: opts.resume, capabilities: opts.capabilities,
+      }, {
         // The authoritative task run id is always derived from `opts.taskId`, whether the
         // execution launched immediately or was reconstructed from a persisted execution row.
         env: resolveTaskAgentEnv(
