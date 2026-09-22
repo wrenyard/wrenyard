@@ -63,11 +63,17 @@ export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, fa
             const complete = usage ? completeUsageTokens(usage) : undefined;
             const durationMS = positiveInt(record.duration_ms);
             const failed = record.is_error === true || hasNormalizedFailureField(record);
-            const data: Record<string, unknown> = {
-                input_tokens: usage ? complete?.input ?? 0 : 0,
-                output_tokens: usage ? complete?.output ?? 0 : 0,
-                duration_ms: durationMS ?? 0,
-            };
+            // Only genuinely captured counters are emitted. A partition the
+            // client never reported stays absent rather than being fabricated
+            // as an explicit zero, so a scope-less partial turn_usage record
+            // never claims tokens that were never observed.
+            const data: Record<string, unknown> = {};
+            if (complete?.input !== undefined)
+                data.input_tokens = complete.input;
+            if (complete?.output !== undefined)
+                data.output_tokens = complete.output;
+            if (durationMS !== undefined)
+                data.duration_ms = durationMS;
             if (!failed && durationMS !== undefined && complete) {
                 data.token_scope = TOKEN_SCOPE_AGENT_TURN;
                 data.duration_scope = DURATION_SCOPE_AGENT_TURN;
