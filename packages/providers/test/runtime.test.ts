@@ -353,12 +353,13 @@ test('canonicalizeObservedProviderModelId reverses the Kimi Coding wire alias fr
 test('canonicalizeObservedProviderModelId reverses the Cursor Grok thinking wire alias to its registered model', () => {
   // Cursor confirms Grok only at high, materialized as the suffixed wire id.
   assert.equal(canonicalizeObservedProviderModelId('cursor', 'cursor-grok-4.6-high'), 'grok-4.6');
+  assert.equal(canonicalizeObservedProviderModelId('cursor', 'grok-4.7-high'), 'grok-4.7');
   // The canonical id and any unknown/legacy Cursor id are left unchanged.
-  for (const model of ['grok-4.6', 'cursor-grok-4.6-low', 'grok-4.5', 'composer-2.5', 'cursor-composer-2.5']) {
+  for (const model of ['grok-4.6', 'grok-4.7', 'cursor-grok-4.6-low', 'grok-4.5', 'grok-4.7-high-fast', 'composer-2.5', 'cursor-composer-2.5']) {
     assert.equal(canonicalizeObservedProviderModelId('cursor', model), model);
   }
   // Ambiguity is never guessed: the grok wire alias belongs to cursor, not to
-  // the spacex-ai provider that also registers grok-4.5.
+  // the spacex-ai provider.
   assert.equal(canonicalizeObservedProviderModelId('spacex-ai', 'cursor-grok-4.6-high'), 'cursor-grok-4.6-high');
   assert.equal(canonicalizeObservedProviderModelId('anthropic', 'cursor-grok-4.6-high'), 'cursor-grok-4.6-high');
 });

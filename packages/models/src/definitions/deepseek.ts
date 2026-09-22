@@ -11,7 +11,7 @@ export const deepseekModels = [
     pricing: [0.006, 0.3, 1.2],
     speed: 201,
   }, { lab: 'deepseek', family: 'deepseek-v4.1' }),
-  defineModel('deepseek-pro', 'DeepSeek V4 Pro', {
+  defineModel('deepseek-v4-pro', 'DeepSeek V4 Pro', {
     intelligence: 'mid',
     capabilities: ['text'],
     thinkingLevels: THINKING_LOW_HIGH_MAX,

@@ -6,8 +6,8 @@ export const definition = defineProvider({
   // V4 Pro. Pro was scheduled to fold into Flash on 2026-09-14 but DeepSeek
   // reversed that and kept it billable, so it is a live route again.
   models: [
-    model('deepseek-flash', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
-    model('deepseek-pro', 1_000_000, 384_000, undefined, THINKING_LOW_HIGH_MAX),
+    model('deepseek-flash', 1_000_000, 384_000, 'deepseek-v4.1-flash', THINKING_LOW_HIGH_MAX),
+    model('deepseek-pro', 1_000_000, 384_000, 'deepseek-v4-pro', THINKING_LOW_HIGH_MAX),
   ],
   protocols: [openAI('https://api.deepseek.com/chat/completions')],
 });
