@@ -1,11 +1,18 @@
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createCodeBuddy } from '@wrenyard/providers/codebuddy';
-import type { ClientOptions } from '@wrenyard/clients';
+import { CodeBuddyClient, type ClientOptions } from '@wrenyard/clients';
 export interface CodeBuddyQueryContext {
     readonly expectedScope: string;
     readonly expectedEnvironment: string;
+}
+/** Read the current CodeBuddy account observation directly; never publish its private scope. */
+async function readActiveCodeBuddyScope(options?: ClientOptions): Promise<{ stableScope: string; environment: string } | undefined> {
+    const install = await new CodeBuddyClient().readInstall(options);
+    const stableScope = install.account?.stableScope;
+    if (!stableScope)
+        return undefined;
+    return { stableScope, environment: install.product.environment };
 }
 /** Read the current account's observation directly; never publish its private scope. */
 export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, options?: ClientOptions): Promise<unknown> {
@@ -13,10 +20,10 @@ export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, 
     if (!context?.expectedScope || !context.expectedEnvironment)
         return empty;
     const env = options?.env ?? process.env, home = env.HOME || env.USERPROFILE || homedir();
-    const active = await createCodeBuddy({ env, home }).snapshot();
+    const active = await readActiveCodeBuddyScope(options);
     if (!active || active.stableScope !== context.expectedScope || active.environment !== context.expectedEnvironment)
         return empty;
-    const file = join(env.XDG_STATE_HOME || join(home, '.local', 'state'), 'wrenyard', 'runtime', 'codebuddy.json');
+    const file = join(env.XDG_STATE_HOME || join(home, '.local', 'state'), 'wrenyard', 'quota', 'codebuddy.json');
     try {
         if ((await stat(file)).size > 65536)
             return empty;
@@ -31,10 +38,9 @@ export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, 
     }
 }
 export async function currentCodeBuddyContext(options?: ClientOptions): Promise<CodeBuddyQueryContext | undefined> {
-    const env = options?.env ?? process.env, home = env.HOME || env.USERPROFILE || homedir();
     try {
-        const active = await createCodeBuddy({ env, home }).snapshot();
-        return active?.stableScope ? { expectedScope: active.stableScope, expectedEnvironment: active.environment } : undefined;
+        const active = await readActiveCodeBuddyScope(options);
+        return active ? { expectedScope: active.stableScope, expectedEnvironment: active.environment } : undefined;
     }
     catch {
         return undefined;
