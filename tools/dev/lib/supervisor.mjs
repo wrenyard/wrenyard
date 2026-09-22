@@ -21,7 +21,6 @@ import {
   businessIpcPath,
   configDir,
   controlEndpoint as resolveControlEndpoint,
-  defaultRuntimeBin,
   desktopUserData,
   instancePath as resolveInstancePath,
   logDir as resolveLogDir,
@@ -277,7 +276,6 @@ export function createSupervisor(options = {}) {
   let desktopStart = null;
   let desktopSession = null;
   let desktopStoppedByUser = false;
-  let currentRuntimeBin = options.runtimeBin ?? defaultRuntimeBin(checkout, platform, exists);
   let stopping = false;
   let replacing = false;
   let buildAbort = null;
@@ -286,11 +284,6 @@ export function createSupervisor(options = {}) {
   let buildFailure = null;
   let bootComplete = false;
   const sessions = new Set();
-
-  function updateRuntimeBin(next) {
-    if (!next) return;
-    currentRuntimeBin = next;
-  }
 
   /**
    * pnpm install/build invocations are resolved against the checkout the way
@@ -313,7 +306,6 @@ export function createSupervisor(options = {}) {
       checkout,
       cli: [cli.command, ...cli.args].join(' '),
       nodeBin: nodeExecutable,
-      runtimeBin: currentRuntimeBin,
       desktopBin: [nodeExecutable, join(checkout, 'apps', 'desktop')].join(' '),
       controlEndpoint,
       userData,
@@ -339,7 +331,6 @@ export function createSupervisor(options = {}) {
         sources: {
           cli: 'apps/cli/src/index.ts',
           node: nodeExecutable,
-          runtime: currentRuntimeBin,
           desktop: 'apps/desktop',
         },
       })),
@@ -393,7 +384,6 @@ export function createSupervisor(options = {}) {
       sources: {
         cli: 'apps/cli/src/index.ts',
         node: nodeExecutable,
-        runtime: currentRuntimeBin,
         desktop: 'electron cli.js + apps/desktop',
       },
       paths: {
@@ -422,7 +412,6 @@ export function createSupervisor(options = {}) {
       `desktop pid: ${snap.pids.desktop ?? '—'}`,
       `cli: source apps/cli/src/index.ts via tsx`,
       `node: ${snap.sources.node}`,
-      `runtime: ${snap.sources.runtime ?? 'unresolved'}`,
       `config: ${snap.paths.config}`,
       `state: ${snap.paths.state}`,
       `userData: ${snap.paths.userData}`,
@@ -847,14 +836,12 @@ export function createSupervisor(options = {}) {
           platform,
           env,
           exists,
-          currentRuntimeBin,
           signal: buildAbort.signal,
         });
         if (result.ok !== true) {
           queue.failBuild(generation, result.error);
           throw fail(ERRORS.internal, result.error ?? 'build failed');
         }
-        updateRuntimeBin(result.artifacts?.runtimeBin);
       }
     } catch (error) {
       queue.failBuild(generation, error instanceof Error ? error.message : String(error));
@@ -1076,9 +1063,7 @@ export function createSupervisor(options = {}) {
       return { alreadyRunning: false, degraded: true, snapshot: snapshot() };
     }
 
-    updateRuntimeBin(checkBuildArtifacts({ checkout, platform, exists }).runtimeBin);
     persist();
-
     let handover = { switched: false, token: null };
     try {
       handover = await handoverInstalled();
@@ -1149,13 +1134,14 @@ export function createSupervisor(options = {}) {
   async function buildManifest() {
     await runFrozenInstall();
     await buildInitialArtifacts([]);
-    updateRuntimeBin(checkBuildArtifacts({ checkout, platform, exists }).runtimeBin);
   }
 
   /**
-   * First-startup build. Any artifact `pnpm build` produces (`shared`, `pet`,
-   * `forge`) is always rebuilt because those are owned by the repository build
-   * script, not by the watcher; Desktop targets are only built when missing.
+   * First-startup build. Any artifact `pnpm build` produces for the workspace
+   * (`shared`, `pet`) is always rebuilt because those are owned by the
+   * repository build script, not by the watcher; Desktop targets are only built
+   * when missing. The runtime is native TypeScript in `@wrenyard/execution`, so
+   * there is no separate runtime binary to build here.
    */
   async function buildInitialArtifacts(missingErrors) {
     setStatus('preparing', 'building artifacts');
@@ -1163,7 +1149,6 @@ export function createSupervisor(options = {}) {
       { label: 'shared packages', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('packages') },
       { label: 'pet', command: 'node', args: ['--version'], mode: 'pnpm', pnpmArgs: buildPackageArgs('pet') },
       { label: 'desktop', command: nodeExecutable, args: desktopBuildArgs(COMPONENT_BUILD_TARGETS, true) },
-      { label: 'forge runtime', command: 'go', args: forgeBuildArgs() },
     ];
     const result = await runExternalSteps('build', steps);
     if (result.ok !== true) {
@@ -1174,10 +1159,6 @@ export function createSupervisor(options = {}) {
   function buildPackageArgs(filter) {
     if (filter === 'packages') return ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--filter', './packages/clients/*', '--if-present', 'run', 'build'];
     return ['--filter', '@wrenyard/pet', 'run', 'build'];
-  }
-
-  function forgeBuildArgs() {
-    return ['-C', join(checkout, 'runtime', 'forge'), 'build', '-o', join(checkout, 'runtime', 'forge', 'bin', platform === 'win32' ? 'forge.exe' : 'forge'), './cmd/forge'];
   }
 
   async function runExternalSteps(kind, steps) {

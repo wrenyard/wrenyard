@@ -55,6 +55,9 @@ const supervisor = createSupervisor({
   onStopped() {
     exitAfterStop(EXIT.ok);
   },
+  onReplaced() {
+    exitAfterStop(EXIT.ok);
+  },
   /**
    * Dev tooling changed. The supervisor has already stopped its owned stack, so
    * the only safe way to load the new modules is a fresh process: exit with the
