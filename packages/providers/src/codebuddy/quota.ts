@@ -18,9 +18,10 @@ function binding(providerId: string, modelId: string, pools: readonly ReturnType
 const HY_FAMILY_POOL = quotaPool('codebuddy/hy-family');
 const MONTHLY_POOL = quotaPool('codebuddy/monthly');
 
+/** HY3 and HY4 Preview draw jointly on the family allowance. Offerings carry the
+ * canonical registry ids, never the product-file wire spellings. */
 function isHyFamilyModel(modelId: string): boolean {
-  const canonical = modelId.endsWith('-ioa') ? modelId.slice(0, -4) : modelId;
-  return canonical === 'hy3' || canonical === 'hy4-preview';
+  return modelId === 'hunyuan-hy3' || modelId === 'hunyuan-hy4-preview';
 }
 
 /**

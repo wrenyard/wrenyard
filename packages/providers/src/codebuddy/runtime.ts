@@ -45,20 +45,26 @@ export interface CodeBuddyProviderProduct {
 }
 
 function createModelRouting(state: CodeBuddyModels) {
+  /**
+   * The exact spelling the installed product file declares for a canonical
+   * offering. The mapping is fixed by the selected product entries, never by
+   * the active environment or credential: a real product row is by itself
+   * evidence for the wire spelling, so it applies to native dispatch, gateway
+   * dispatch and observed-id normalization alike, and an unlisted id is
+   * identity.
+   */
   function codeBuddyUpstreamWireModel(model: string): string {
     return state.upstreamModels[model] ?? model;
   }
 
+  /**
+   * Reverse an observed wire spelling onto the offering it names. This reads
+   * the provider's published alias map (current wire ids plus historical
+   * spellings) rather than the outbound map, so a retired spelling normalizes
+   * without ever becoming routable again.
+   */
   function canonicalizeCodeBuddyObservedModelId(model: string): string {
-    for (const [canonical, upstream] of Object.entries(state.upstreamModels)) {
-      if (upstream === model) return canonical;
-    }
-    return model;
-  }
-
-  function codeBuddyUpstreamResolve(environment: CodeBuddyEnvironment | undefined, model: string): string {
-    if (environment !== 'ioa') return model;
-    return codeBuddyUpstreamWireModel(model);
+    return state.definition.modelAliases?.[model] ?? model;
   }
 
   function evaluateCodeBuddyFreeSupply(
@@ -76,7 +82,7 @@ function createModelRouting(state: CodeBuddyModels) {
     };
   }
 
-  return { codeBuddyUpstreamResolve, evaluateCodeBuddyFreeSupply, canonicalizeCodeBuddyObservedModelId };
+  return { codeBuddyUpstreamWireModel, evaluateCodeBuddyFreeSupply, canonicalizeCodeBuddyObservedModelId };
 }
 
 const codeBuddyNativeHeaders = new WeakMap<CodeBuddyCredential, Readonly<Record<string, string>>>();
@@ -95,7 +101,7 @@ function freezeCodeBuddyActiveSnapshot(
     environment,
     stableScope,
     resolveUpstreamModel(model: string): string {
-      return routing.codeBuddyUpstreamResolve(environment, model);
+      return routing.codeBuddyUpstreamWireModel(model);
     },
     freeSupply(model: string): CodeBuddyFreeSupplyFact | undefined {
       return routing.evaluateCodeBuddyFreeSupply(environment, model);
@@ -135,9 +141,14 @@ export function createCodeBuddyRuntime(product: CodeBuddyProviderProduct | undef
     async credential(): Promise<CodeBuddyCredential | undefined> {
       return credential;
     },
-    resolveUpstreamModel(model: string, bound?: CodeBuddyCredential): string | undefined {
-      if (!bound) return model;
-      return routing.codeBuddyUpstreamResolve(environments.get(bound), model);
+    /**
+     * Canonical offering -> the exact product-file wire spelling. The mapping
+     * depends only on the selected product entries, so it holds with or without
+     * a bound credential (matching the Kimi Coding wire-alias contract) and is
+     * what a native CodeBuddy launch must pass to the CLI `--model`.
+     */
+    resolveUpstreamModel(model: string, _bound?: CodeBuddyCredential): string | undefined {
+      return routing.codeBuddyUpstreamWireModel(model);
     },
     freeSupply(model: string, bound: CodeBuddyCredential): CodeBuddyFreeSupplyFact | undefined {
       return routing.evaluateCodeBuddyFreeSupply(environments.get(bound), model);

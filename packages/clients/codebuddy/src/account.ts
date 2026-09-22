@@ -42,6 +42,15 @@ export function parseCodeBuddyAuth(parsed: Record<string, unknown>): ParsedCodeB
         root: parsed,
     };
 }
+/**
+ * The signed-in account's `uid` — `account.uid` of the active auth state. The
+ * CLI's `UserinfoProvider` reports exactly this value as `userId`, and its
+ * `CloudProductManager` uses it as the key of the cached server product
+ * configuration, so it is the cache's account scope.
+ */
+export function codeBuddyAccountUserId(authState: ParsedCodeBuddyAuth): string | undefined {
+    return accountField('uid', authState);
+}
 export function codeBuddyStableAccountIdentity(authState: ParsedCodeBuddyAuth): CodeBuddyStableIdentity | undefined {
     let primaryId: string | undefined;
     for (const field of ACCOUNT_ID_FIELDS) {
