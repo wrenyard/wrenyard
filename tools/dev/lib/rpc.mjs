@@ -87,7 +87,6 @@ export function sourceIdentityFromHealth(health) {
     instanceId: typeof identity.instanceId === 'string' ? identity.instanceId : undefined,
     launchId: typeof identity.launchId === 'string' ? identity.launchId : undefined,
     node: typeof identity.node === 'string' ? identity.node : undefined,
-    runtimeBin: typeof identity.runtimeBin === 'string' ? identity.runtimeBin : undefined,
     verified: true,
   };
 }

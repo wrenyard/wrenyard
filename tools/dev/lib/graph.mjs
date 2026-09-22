@@ -31,7 +31,6 @@ export const COMPONENTS = Object.freeze({
   pet: 'pet',
   daemon: 'daemon',
   cli: 'cli',
-  runtime: 'runtime',
   shared: 'shared',
   supervisor: 'supervisor',
   manifest: 'manifest',
@@ -46,10 +45,6 @@ export function shouldIgnore(relativePath) {
   if (!posixPath || posixPath === '.') return true;
   const segments = posixPath.split('/');
   if (segments.some((segment) => IGNORED_SEGMENTS.has(segment))) return true;
-  // Go writes the runtime binary here; spawning it on Windows also emits
-  // change events. Incremental rebuilds use `.dev-gen`, already ignored.
-  // Do not ignore every `bin` segment: `services/foreman/bin` is source.
-  if (posixPath === 'runtime/forge/bin' || posixPath.startsWith('runtime/forge/bin/')) return true;
   const base = segments[segments.length - 1];
   if (IGNORED_FILES.has(base)) return true;
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(base)) return true;
@@ -80,10 +75,6 @@ export function classifyPath(relativePath) {
     || posixPath === 'tools/dev'
   ) {
     return [COMPONENTS.supervisor];
-  }
-
-  if (posixPath.startsWith('runtime/forge/')) {
-    return [COMPONENTS.runtime];
   }
 
   if (posixPath.startsWith('apps/cli/')) {
@@ -160,7 +151,6 @@ const WATCH_ROOTS = [
   'apps',
   'packages',
   'services',
-  'runtime',
   'tools/dev',
   'package.json',
   'pnpm-lock.yaml',

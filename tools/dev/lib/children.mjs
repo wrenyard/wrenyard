@@ -15,7 +15,6 @@ export function sourceChildEnv(baseEnv, resolved) {
   env.WRENYARD_ROOT = resolved.checkout;
   env.WRENYARD_CLI = resolved.cli;
   env.WRENYARD_NODE_BIN = resolved.nodeBin;
-  env.WRENYARD_RUNTIME_BIN = resolved.runtimeBin;
   env.WRENYARD_DESKTOP_BIN = resolved.desktopBin;
   env.WRENYARD_DEV_CONTROL = resolved.controlEndpoint;
   env.WRENYARD_DESKTOP_USER_DATA = resolved.userData;
@@ -71,6 +70,7 @@ export function spawnDesktopProcess(options) {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     platform,
+    windowsHide: false,
   });
   attachLogs(child, options.logPath);
   return child;

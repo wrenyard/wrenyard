@@ -104,24 +104,4 @@ export function desktopUserData(platform = process.platform, env = process.env, 
   return join(xdg ? resolve(xdg) : join(home, '.config'), DESKTOP_DATA_IDENTITY);
 }
 
-export function runtimeGenerationDir(checkout, generation) {
-  return join(checkout, 'runtime', 'forge', '.dev-gen', generation);
-}
-
-export function runtimeGenerationBin(checkout, generation, platform = process.platform) {
-  const name = platform === 'win32' ? 'forge.exe' : 'forge';
-  return join(runtimeGenerationDir(checkout, generation), name);
-}
-
-export function defaultRuntimeBin(checkout, platform = process.platform, exists = existsSync) {
-  const name = platform === 'win32' ? 'forge.exe' : 'forge';
-  const candidates = [
-    join(checkout, 'runtime', 'forge', 'bin', name),
-    join(checkout, 'runtime', 'forge', 'bin', 'forge'),
-    join(checkout, 'bin', name),
-    join(checkout, 'bin', 'forge'),
-  ];
-  return candidates.find((candidate) => exists(candidate));
-}
-
 export { sep };

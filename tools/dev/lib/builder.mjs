@@ -1,9 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { COMPONENTS } from './graph.mjs';
-import { goBuildInvocation, pnpmInvocation, spawnArgv } from './spawn.mjs';
-import { defaultRuntimeBin, runtimeGenerationBin, runtimeGenerationDir } from './paths.mjs';
+import { pnpmInvocation, spawnArgv } from './spawn.mjs';
 
 function runCommand(command, args, options = {}) {
   return new Promise((resolve) => {
@@ -71,10 +70,6 @@ export function desktopTargetsFor(components) {
   return [...new Set(targets)];
 }
 
-export function needsGoBuild(components) {
-  return components.includes(COMPONENTS.runtime);
-}
-
 export function needsPetBuild(components) {
   return components.includes(COMPONENTS.pet) || components.includes(COMPONENTS.shared);
 }
@@ -92,7 +87,7 @@ export async function buildGeneration(options) {
     run = runCommand,
     exists,
   } = options;
-  const artifacts = { runtimeBin: options.currentRuntimeBin };
+  const artifacts = {};
   const logs = [];
 
   if (options.signal?.aborted) {
@@ -127,20 +122,6 @@ export async function buildGeneration(options) {
     }
   }
 
-  if (needsGoBuild(generation.components)) {
-    const outDir = runtimeGenerationDir(checkout, generation.id);
-    mkdirSync(outDir, { recursive: true });
-    const output = runtimeGenerationBin(checkout, generation.id, platform);
-    const invocation = goBuildInvocation(checkout, output);
-    const result = await run(invocation.command, invocation.args, { cwd: checkout, env: options.env, signal: options.signal, platform });
-    logs.push(result.stderr || result.stdout);
-    if (result.status !== 0) {
-      return { ok: false, logs, error: `Go runtime build failed:\n${result.stderr || result.stdout}` };
-    }
-    artifacts.runtimeBin = output;
-    artifacts.runtimeGeneration = generation.id;
-  }
-
   if (options.signal?.aborted) {
     return { ok: false, logs, error: 'build cancelled' };
   }
@@ -166,35 +147,11 @@ export function checkToolchain(options) {
 }
 
 export function checkBuildArtifacts(options) {
-  const { checkout, platform = process.platform, exists = existsSync, stat = statSync } = options;
+  const { checkout, exists = existsSync } = options;
   const errors = [];
   const desktopMain = join(checkout, 'apps', 'desktop', 'dist', 'main.js');
   if (!exists(desktopMain)) {
     errors.push('Desktop dist is missing. Run: pnpm build');
-  }
-  let runtime = defaultRuntimeBin(checkout, platform, exists);
-  if (platform === 'win32' && runtime && !runtime.toLowerCase().endsWith('.exe')) {
-    const exe = join(dirname(runtime), 'forge.exe');
-    try {
-      (options.copyFile ?? copyFileSync)(runtime, exe);
-      runtime = exe;
-    } catch (error) {
-      errors.push(`Go runtime binary is missing a .exe suffix and could not be copied to forge.exe: ${error instanceof Error ? error.message : String(error)}`);
-      runtime = undefined;
-    }
-  }
-  if (!runtime) {
-    errors.push(platform === 'win32'
-      ? 'Go runtime binary (.exe) is missing. Run: pnpm build'
-      : 'Go runtime binary is missing. Run: pnpm build');
-  } else {
-    try {
-      if (!options.copyFile && !stat(runtime).isFile()) {
-        errors.push(`Runtime path is not a file: ${runtime}`);
-      }
-    } catch {
-      if (!options.copyFile) errors.push(`Runtime path is not a file: ${runtime}`);
-    }
   }
   const electronCli = [
     join(checkout, 'apps', 'desktop', 'node_modules', 'electron', 'cli.js'),
@@ -203,14 +160,5 @@ export function checkBuildArtifacts(options) {
   if (!electronCli) {
     errors.push('Electron was not installed. Re-run pnpm install --frozen-lockfile; pnpm-workspace.yaml already allows the electron build script.');
   }
-  return { errors, runtimeBin: runtime };
-}
-
-export function cleanupRuntimeGeneration(checkout, generationId, inUse) {
-  if (!generationId || inUse.has(generationId)) return;
-  try {
-    rmSync(runtimeGenerationDir(checkout, generationId), { recursive: true, force: true });
-  } catch {
-    // Windows may still have the exe mapped; keep it until the next idle cleanup.
-  }
+  return { errors };
 }

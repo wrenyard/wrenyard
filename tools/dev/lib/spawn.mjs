@@ -172,14 +172,6 @@ export function daemonInvocation(checkout, configPath, extraArgs = [], nodeExecu
   return invocation;
 }
 
-export function goBuildInvocation(checkout, outputPath) {
-  return {
-    command: 'go',
-    args: ['-C', join(checkout, 'runtime', 'forge'), 'build', '-o', outputPath, './cmd/forge'],
-    cwd: checkout,
-  };
-}
-
 /**
  * Spawn a child with shell:false. Windows .cmd is wrapped explicitly.
  * @returns {import('node:child_process').ChildProcess}
@@ -191,7 +183,7 @@ export function spawnManaged(command, args, options = {}) {
     cwd: options.cwd,
     env: options.env,
     stdio: options.stdio ?? 'pipe',
-    windowsHide: true,
+    windowsHide: options.windowsHide ?? true,
     shell: false,
     detached: options.detached === true,
   });
