@@ -1,7 +1,7 @@
 import { defineProvider, CANONICAL_MODELS, model, anthropic } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'forge-managed',
+  id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'managed',
   defaultModel: 'claude-sonnet-5', quotaProvider: 'anthropic',
   models: [
     { ...model('claude-fable-5', 1_000_000, 131_072), family: 'claude', supports1MContext: true },
