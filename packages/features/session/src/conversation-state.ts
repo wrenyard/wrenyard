@@ -5,7 +5,7 @@ import type {
   TaskRunSnapshot,
   TaskRunSpeedEvidence,
   TaskRunUsage,
-} from './shell-contract.js';
+} from '@wrenyard/protocol/session';
 
 /**
  * Persisted product-owned conversation document.

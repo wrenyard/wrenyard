@@ -1,6 +1,6 @@
 # @wrenyard/desktop
 
-Hardened Electron desktop shell for the Wrenyard DSH.
+Electron product shell for Wrenyard daemon features.
 
 > **Status: public development preview.** Target-qualified Desktop archives
 > ship with Wrenyard development prereleases. They are suitable for testing,
@@ -11,22 +11,14 @@ Hardened Electron desktop shell for the Wrenyard DSH.
 
 `@wrenyard/desktop` is the 啾啾工坊 product boundary. Its Electron main process
 owns the application shell, notification-area integration and product settings,
-while DSH remains an isolated child process and Pet runs as an internal module:
+while conversations run in the daemon-owned session feature and Pet remains an internal Desktop module:
 
 ```
-Electron product shell
-  ├─ notification-area icon + product menu
-  ├─ Activity Bar + Desktop-owned conversation/statistics/providers/settings pages
-  ├─ bounded DSH HTTP/WebSocket adapter in the Electron main process
-  ├─ Pet controller + in-process Pet runtime (overlay windows and observers)
-  └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
-       └─ loads the "web" profile (profiles/web under the DSH home)
-            ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
-            ├─ last `--patch`: DSH_HOME/wrenyard-model-patch.yaml (one Wrenyard Gateway provider)
-            ├─ cwd + Host workspace registry pinned to Wrenyard `workspace.root`
-            ├─ agent preset `wrenyard` at $DSH_HOME/.agent-presets/wrenyard (display name 啾啾工坊模式; hero dropdown disabled)
-            └─ talks to Wrenyard through the public MCP/IPC contract
-                 (@wrenyard/control-client — never Wrenyard internals)
+Desktop renderer + preload + Electron main
+  |-- window, tray, product settings, Pet
+  `-- conversation-adapter -> SessionClient
+          `-- protocol/session IPC -> daemon handlers
+                  `-- @wrenyard/session -> DSH runtime
 ```
 
 - **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
@@ -129,61 +121,16 @@ Electron product shell
   settings remain available while control-plane features report unavailable.
   A missing or invalid `workspace.root` prevents DSH from starting and places
   an explicit gate over conversations. The gate can open settings or save a
-  valid directory directly; Desktop persists the path and replaces only the DSH
-  conversation session in-process, so the new binding is usable without an App
-  relaunch.
+  valid directory directly; Desktop persists and activates the daemon workspace,
+  then refreshes the session projection without an App relaunch.
   LaunchServices provides no shell environment, so the
   CLI is located explicitly and the resolved connection context is passed to
   the DSH child directly. Wrenyard remains the sole state/permission owner.
-- **DSH backend child** — started with launcher flags first
-  (`--profile web --patch <overlay>`), then web flags
-  (`--no-open --host 127.0.0.1 --port 0`). `--no-open` is the first web-app
-  flag: `dsh-web-app` otherwise opens the default browser, which Desktop never
-  wants because its own renderer talks to the loopback backend. `--patch` after `--host` is parsed as a
-  web-app option, rejected, and the Desktop flash-quits. The Electron-as-node
-  child must also receive `--expose-internals` *before* the DSH script path:
-  `dsh-base` constructs `cordis-plugin-hmr` before `dsh-web-app` can disable
-  it, and missing the flag exits the child with code 1 (same flash-quit). The overlay injects
-  exactly one `wrenyard` provider backed by the local Model Gateway. The daemon
-  supplies only the loopback Gateway URL and per-run local token through
-  `WRENYARD_GATEWAY_TOKEN`; upstream provider credentials never enter the DSH
-  process or generated patch. `DSH_HOME` points at
-  an isolated profile. Child cwd and the Host workspace registry are pinned to
-  Wrenyard `workspace.root` (`WRENYARD_DESKTOP_WORKSPACE` can override). The
-  directory picker and DSH Web renderer are not product surfaces. Desktop uses
-  the public unary API and mux/host event streams from the loopback child,
-  filters sessions to the fixed workspace, and sends only a bounded
-  conversation projection through preload IPC. The conversation header reads
-  the selected session's advisory model directory through `session.models` and
-  changes its next-request route through `session.selectModel`; the single DSH
-  Gateway transport is regrouped by the Catalog Provider carried in each
-  public `provider/model` id. The picker consumes the daemon-provided Gateway
-  directory and never receives upstream credentials. Unconfigured providers
-  keep their setup rows on the Providers page (模型供应), so configuration stays
-  reachable even though their models never appear in the picker. The header
-  keeps the model picker unlabeled and
-  shows only one Wrenyard daemon status lamp beside it; hovering or focusing the
-  lamp refreshes public health and shows online state plus the start time derived
-  from daemon uptime. The product projection exposes one canonical
-  Kimi K3 route (the
-  default route already has the 1M context window), collapses the Claude-oriented
-  `k3[1m]` alias, and uses concise product labels such as `GLM 5.3` and
-  `DeepSeek V4 Pro` while preserving public Gateway route ids. Desktop does not persist a
-  parallel model preference. The model control is a Desktop-themed listbox,
-  not a native select: every choice shows its Catalog Provider under the model
-  name, and the existing Desktop quota snapshot is projected into quiet
-  provider-level green/yellow/red status dots with accessible tooltips. Each
-  provider instance renders exactly one same-size dot; percentage windows and
-  monetary balances remain distinct; this view neither polls quota separately
-  nor infers a subscription tier. MCP defaults to
-  `http://127.0.0.1:8787/mcp` so the Foreman tools bridge can reach the daemon
-  under LaunchServices.
-  Startup resolves only after the exact loopback URL line is parsed and
-  `GET /` returns 2xx. Desktop owns the DSH child process tree and drains it
-  synchronously on smoke completion, startup failure and application quit:
-  SIGTERM to the process group, a bounded grace wait, then SIGKILL escalation
-  (`taskkill /T /F` on Windows). No background DSH service is intentionally
-  left running.
+- **Session ownership** — the daemon's session feature owns the DSH child,
+  conversation history, summary preference, task ownership and recovery.
+  Desktop receives versioned product snapshots over IPC. Closing Desktop
+  detaches the view; daemon shutdown releases the backend. See
+  [session feature](../../packages/features/session/README.md).
 - **BrowserWindow hardening** — `contextIsolation: true`, `nodeIntegration:
   false`, `sandbox: true`, a bounded shell preload bridge, `window.open`
   denied, navigation away from the exact origin denied, all permission
@@ -194,7 +141,7 @@ Electron product shell
 
 ## Isolated profile / state path
 
-On each launch the main process prepares a DSH home under the per-user Electron
+The daemon's session feature prepares the existing DSH home under the per-user Desktop
 data directory (`app.getPath('userData')`):
 
 ```
@@ -208,9 +155,9 @@ data directory (`app.getPath('userData')`):
 ```
 
 Only the managed `@wrenyard/dsh-shell` bundle copy and managed DeepSeek module
-link are replaced; unrelated profile content is preserved. When packaged, the shell sources come from
-`process.resourcesPath/dsh-shell` (via `extraResources`); in development they
-come from `packages/dsh-shell` in the monorepo.
+link are replaced; unrelated profile content is preserved. Shell sources resolve
+through the session package dependencies in source and deployed layouts. The
+daemon owns the managed copy; Desktop no longer copies DSH resources.
 
 ## Security boundary
 
@@ -220,7 +167,7 @@ come from `packages/dsh-shell` in the monorepo.
   `WRENYARD_IPC_PATH`, with legacy `FOREMAN_*` fallbacks) is propagated to the
   child without ever being logged.
 - The shell renderer has no Node access and receives only bounded settings,
-  statistics, quota and conversation projections. Only the Electron main process
+  statistics, quota and conversation projections. Only the daemon session feature
   talks to DSH; the renderer cannot open windows or navigate off-origin.
 - The renderer never receives release download URLs, filesystem paths, tokens or
   updater process access. Update staging accepts only exact target asset names,
@@ -232,7 +179,7 @@ come from `packages/dsh-shell` in the monorepo.
 | --- | --- |
 | `npm run build` | typecheck + esbuild main bundle + type declarations |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | unit tests (profile, conversation projection + DSH child lifecycle, via tsx) |
+| `npm test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
 | `npm run start` | run Electron against the current build |
 | `npm run dev` | build then run Electron |
 | `npm run smoke` | build then launch hidden Electron; exits 0 on load + health, non-zero on timeout |
@@ -253,6 +200,5 @@ unsigned unless a signtool identity is supplied.
 - Node.js `>=22.19.0`
 - A Wrenyard daemon (the startup health gate starts it on demand via the
   installed CLI; see `tools/desktop/install-dev.mjs`)
-- `npm install` at the monorepo root (workspace deps: `@wrenyard/control-client`,
-  `@wrenyard/dsh-shell`; runtime:
-  `@deepseek-ai/dsh@0.1.1-rc.2` pinned exactly)
+- `pnpm install` at the monorepo root. Desktop consumes the control client and
+  product protocol; the daemon's session feature owns the pinned DSH runtime.

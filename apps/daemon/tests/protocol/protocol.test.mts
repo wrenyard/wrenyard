@@ -87,6 +87,16 @@ const expectedMethods = [
   'workspace.doc.read',
   'workspace.doc.create',
   'workspace.doc.update',
+  'session.snapshot',
+  'session.select',
+  'session.create',
+  'session.selectModel',
+  'session.send',
+  'session.cancel',
+  'session.setWorkspace',
+  'session.summary.model.get',
+  'session.summary.model.set',
+  'session.backend',
 ]
 
 function assertProtocolError(error: unknown, code: number): void {

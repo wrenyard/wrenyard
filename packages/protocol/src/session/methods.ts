@@ -1,181 +1,144 @@
 /**
- * The seven session methods.
+ * The session methods.
  *
  * Each method is an explicit named `Params`/`Result` pair plus a descriptor
  * entry in `SessionMethods`. The descriptor map is the single source of truth
  * for typed requests/results; it is a TYPE MAP, not a runtime table.
  *
- * Semantics documented here are DRAFT protocol semantics. They describe the
- * contract a future adapter must implement; they are not a claim that any
- * runtime currently provides them.
+ * Every method except the summary-model pair and `session.backend`
+ * returns the same `SessionSnapshotResult`: a full product
+ * conversation snapshot plus the monotonic revision it was projected at. A
+ * caller never merges a delta — it replaces the projection it holds with the
+ * returned snapshot, so two callers can never diverge.
  */
 
 import type { RpcMethod } from '../common/methods.ts'
-import type { SessionEvent } from './events.ts'
 import type {
-  EventSeq,
-  PaginationCursor,
-  Session,
-  SessionId,
-  SessionMessage,
-  SessionModelRef,
-  SessionSummary,
-  SessionTurn,
-  TurnId,
-  WorkspaceId,
+  ConversationSnapshot,
+  SummarySettingsSnapshot,
+  WorkspaceConfigurationSnapshot,
 } from './types.ts'
 
-/** Page size used when a caller omits `limit` on a paged session method. */
-export const SESSION_PAGE_DEFAULT_LIMIT = 50
+/**
+ * Request one product conversation snapshot.
+ *
+ * `afterRevision` is the revision the caller already holds. When it equals the
+ * current revision the call waits (bounded by `waitMs`, at most 1000ms) for the
+ * next change or terminal flush and then returns a *full* snapshot — never a
+ * delta — with its revision. When it differs, or is absent, the call returns
+ * immediately. `waitMs` is a wait budget, not a poll interval; a caller that
+ * wants continuous updates simply re-issues the call with the last revision.
+ */
+export interface SessionSnapshotParams {
+  afterRevision?: number
+  waitMs?: number
+}
 
-/** Largest accepted page size on a paged session method. */
-export const SESSION_PAGE_MAX_LIMIT = 200
+/** Result of every action and snapshot method. */
+export interface SessionSnapshotResult {
+  conversation: ConversationSnapshot
+  /** Monotonic revision of the returned projection. */
+  revision: number
+}
+
+/** Params of `session.select`. */
+export interface SessionSelectParams {
+  sessionId: string
+}
 
 /** Params of `session.create`. */
-export interface SessionCreateParams {
-  workspaceId: WorkspaceId
-  /** Server-derived default when omitted. */
-  title?: string
-}
+export interface SessionCreateParams {}
 
-/** Result of `session.create`. */
-export interface SessionCreateResult {
-  session: Session
-}
-
-/** Params of `session.list`. */
-export interface SessionListParams {
-  workspaceId: WorkspaceId
-  /** Opaque continuation cursor from a previous page; absent for page one. */
-  cursor?: PaginationCursor
-  limit?: number
-}
-
-/** Result of `session.list`. */
-export interface SessionListResult {
-  sessions: SessionSummary[]
-  /** Absent when the listing is exhausted. */
-  nextCursor?: PaginationCursor
-}
-
-/** Params of `session.get`. */
-export interface SessionGetParams {
-  sessionId: SessionId
-}
-
-/** Result of `session.get`. */
-export interface SessionGetResult {
-  session: Session
-  /** Turn currently occupying the session, when one exists. */
-  activeTurn?: SessionTurn
-  /**
-   * Event sequence number captured at the SAME snapshot as `session` and
-   * `activeTurn`. It is NOT message history. Feed it to `session.events` as
-   * `afterSeq` to resume the stream without replaying the whole session.
-   */
-  cursor: EventSeq
-}
-
-/** Params of `session.messages.list`. */
-export interface SessionMessagesListParams {
-  sessionId: SessionId
-  /**
-   * Opaque cursor from a previous page. It freezes the pagination upper bound
-   * at the moment it was issued, so later messages cannot shift a page.
-   * This cursor is INDEPENDENT of the event cursor.
-   */
-  cursor?: PaginationCursor
-  limit?: number
-}
-
-/** Result of `session.messages.list`. */
-export interface SessionMessagesListResult {
-  /**
-   * Newest page first. Items within a page are chronological. Prepend older
-   * pages as a whole to preserve that order.
-   */
-  messages: SessionMessage[]
-  /** Absent when no older messages remain. */
-  nextCursor?: PaginationCursor
+/** Params of `session.selectModel`. */
+export interface SessionSelectModelParams {
+  provider: string
+  model: string
+  reasoningEffort?: string
 }
 
 /** Params of `session.send`. */
 export interface SessionSendParams {
-  sessionId: SessionId
-  /**
-   * Session-scoped idempotency key. An identical retry returns the same turn
-   * and message ids. Reusing the key with different content is a conflict.
-   */
-  clientRequestId: string
   text: string
-  model: SessionModelRef
+  clientTimeZone?: string
 }
+
+/** Params of `session.cancel`. The addressed turn, or the oldest running turn when absent. */
+export interface SessionCancelParams {
+  turnId?: string
+}
+
+/** Params of `session.setWorkspace`. */
+export interface SessionSetWorkspaceParams {
+  workspace: WorkspaceConfigurationSnapshot
+}
+
+/** Result of `session.select`. */
+export type SessionSelectResult = SessionSnapshotResult
+
+/** Result of `session.create`. */
+export type SessionCreateResult = SessionSnapshotResult
+
+/** Result of `session.selectModel`. */
+export type SessionSelectModelResult = SessionSnapshotResult
 
 /** Result of `session.send`. */
-export interface SessionSendResult {
-  /**
-   * Accepted turn. This is an ACCEPTANCE response, not a completed
-   * generation: the turn may still be queued or running when it returns.
-   */
-  turn: SessionTurn
-  /** The user message persisted for this request. */
-  userMessage: SessionMessage
-}
-
-/** Params of `session.cancel`. */
-export interface SessionCancelParams {
-  sessionId: SessionId
-  /** The specific turn to cancel. */
-  turnId: TurnId
-}
+export type SessionSendResult = SessionSnapshotResult
 
 /** Result of `session.cancel`. */
-export interface SessionCancelResult {
-  /**
-   * The addressed turn after the cancellation request. The response is
-   * idempotent for an already-terminal turn. Because cancellation is
-   * cooperative, this acknowledgement may still report an active status
-   * until the terminal `turn.updated` event arrives.
-   */
-  turn: SessionTurn
+export type SessionCancelResult = SessionSnapshotResult
+
+/** Result of `session.setWorkspace`. */
+export type SessionSetWorkspaceResult = SessionSnapshotResult
+
+/** Result of `session.summary.model.get` and `session.summary.model.set`. */
+export interface SessionSummaryModelResult {
+  summary: SummarySettingsSnapshot
 }
 
-/** Params of `session.events`. */
-export interface SessionEventsParams {
-  sessionId: SessionId
-  /**
-   * EXCLUSIVE lower bound: only events with `seq > afterSeq` are returned.
-   * `0` starts from the beginning of retained history, but only if that
-   * history has not expired. Paging never skips an event.
-   */
-  afterSeq: EventSeq
-  limit?: number
+export interface SessionSummaryModelGetParams {}
+export interface SessionBackendParams {}
+
+/** Params of `session.summary.model.set`. */
+export interface SessionSummaryModelSetParams {
+  /** Canonical (provider-independent) model id to persist. */
+  canonicalModel: string
 }
 
-/** Result of `session.events`. */
-export interface SessionEventsResult {
-  /** Ascending by `seq`, all greater than the requested `afterSeq`. */
-  events: SessionEvent[]
-  /**
-   * `seq` of the last returned event. On an empty page this retains the input
-   * `afterSeq`, so a client may poll with it again without advancing.
-   */
-  nextSeq: EventSeq
-  hasMore: boolean
+/**
+ * Result of `session.backend`.
+ *
+ * Main-process diagnostics only — this is the live state of the DSH backend
+ * child process. It is never projected to the renderer.
+ */
+export interface SessionBackendResult {
+  state: 'starting' | 'running' | 'stopped' | 'failed'
+  pid?: number
+  message?: string
+  /** DSH runtime version, retained for the product About view. */
+  version?: string
 }
 
 /**
  * Feature method map. Keys are the exact wire method names.
  *
- * A future conversation feature declares its own map the same way and the
- * root map composes it (see `../index.ts`).
+ * The root map composes this with the other feature maps (see `../index.ts`).
  */
 export interface SessionMethods {
+  'session.snapshot': RpcMethod<SessionSnapshotParams, SessionSnapshotResult>
+  'session.select': RpcMethod<SessionSelectParams, SessionSelectResult>
   'session.create': RpcMethod<SessionCreateParams, SessionCreateResult>
-  'session.list': RpcMethod<SessionListParams, SessionListResult>
-  'session.get': RpcMethod<SessionGetParams, SessionGetResult>
-  'session.messages.list': RpcMethod<SessionMessagesListParams, SessionMessagesListResult>
+  'session.selectModel': RpcMethod<SessionSelectModelParams, SessionSelectModelResult>
   'session.send': RpcMethod<SessionSendParams, SessionSendResult>
   'session.cancel': RpcMethod<SessionCancelParams, SessionCancelResult>
-  'session.events': RpcMethod<SessionEventsParams, SessionEventsResult>
+  'session.setWorkspace': RpcMethod<SessionSetWorkspaceParams, SessionSetWorkspaceResult>
+  'session.summary.model.get': RpcMethod<SessionSummaryModelGetParams, SessionSummaryModelResult>
+  'session.summary.model.set': RpcMethod<SessionSummaryModelSetParams, SessionSummaryModelResult>
+  'session.backend': RpcMethod<SessionBackendParams, SessionBackendResult>
 }
+
+/**
+ * Session push contract. Deliberately empty: continuous updates are pulled with
+ * `session.snapshot` + `waitMs`, so no notification channel exists yet. The
+ * interface is kept so the root notification composition stays stable.
+ */
+export interface SessionNotifications {}

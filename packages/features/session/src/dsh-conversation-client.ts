@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers';
-import { desktopCatalog } from './builtin-catalog.js';
+import { builtinCatalog } from './catalog.js';
 import { getEncoding } from 'js-tiktoken';
-import { parseTaskRunSnapshot } from './stats-snapshot.js';
+import { parseTaskRunSnapshot } from './task-run-snapshot.js';
 import {
   CONVERSATION_STATE_VERSION,
   ConversationStateStore,
@@ -21,7 +21,7 @@ import type {
   ConversationTurnSnapshot,
   TaskRunSnapshot,
   WorkspaceConfigurationSnapshot,
-} from './shell-contract.js';
+} from '@wrenyard/protocol/session';
 
 interface RpcSuccess {
   type: 'server-response';
@@ -502,15 +502,6 @@ function canonicalConversationModel(provider: string, model: string): string {
   if (provider === 'wrenyard') return canonicalizeBuiltinPublicModelId(model);
   const canonical = canonicalizeBuiltinPublicModelId(`${provider}/${model}`);
   return canonical.startsWith(`${provider}/`) ? canonical.slice(provider.length + 1) : model;
-}
-
-/**
- * Authoritative built-in Catalog, instantiated once. Used only to read the exact
- * input capabilities (`text`/`image`) of a model already projected into the
- * product directory — never to enumerate, re-merge, or fabricate models.
- */
-function builtinCatalog() {
-  return desktopCatalog();
 }
 
 /**
