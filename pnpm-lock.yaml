@@ -137,6 +137,9 @@ importers:
       "@wrenyard/dsh-shell":
         specifier: workspace:*
         version: link:../../packages/dsh-shell
+      "@wrenyard/models":
+        specifier: workspace:*
+        version: link:../../packages/models
       "@wrenyard/providers":
         specifier: workspace:*
         version: link:../../packages/providers

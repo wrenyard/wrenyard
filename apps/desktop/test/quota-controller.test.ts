@@ -195,7 +195,7 @@ test('successful runtime quota overrides a false native discovery result', () =>
     [
       { id: 'chatgpt', displayName: 'ChatGPT', configured: false, authMode: 'native' },
       { id: 'cursor', displayName: 'Cursor', configured: false, authMode: 'native' },
-      { id: 'super-grok', displayName: 'SuperGrok', configured: true, authMode: 'native' },
+      { id: 'super-grok', displayName: 'Super Grok', configured: true, authMode: 'native' },
     ],
   );
 
@@ -203,20 +203,53 @@ test('successful runtime quota overrides a false native discovery result', () =>
   assert.equal(snapshot.catalog.find((entry) => entry.id === 'chatgpt')?.configured, true);
   assert.equal(snapshot.catalog.find((entry) => entry.id === 'cursor')?.configured, true);
   assert.equal(snapshot.catalog.find((entry) => entry.id === 'super-grok')?.configured, false);
+  assert.equal(snapshot.catalog.find((entry) => entry.id === 'super-grok')?.label, 'Super Grok');
 });
 
-test('catalog migrates legacy xai state and presents the SpaceXAI provider name', () => {
-  const snapshot = projectQuotaSnapshot([], [{ id: 'xai', enabled: true }], 1, undefined, [
-    { id: 'xai', displayName: 'SpaceXAI', configured: true, authMode: 'native' },
-    { id: 'spacex-ai', displayName: 'SpaceXAI', configured: false, authMode: 'native' },
+test('saved order only reorders current providers and never synthesizes rows', () => {
+  const snapshot = projectQuotaSnapshot([], [{ id: 'unknown-preference-id', enabled: true }], 1, undefined, [
+    { id: 'spacex-ai', displayName: 'SpaceXAI', configured: true, authMode: 'native' },
   ]);
 
-  assert.deepEqual(snapshot.providerOrder, [{ id: 'spacex-ai', enabled: true }]);
+  assert.deepEqual(snapshot.providerOrder, [{ id: 'unknown-preference-id', enabled: true }]);
   assert.deepEqual(snapshot.providers, []);
-  const row = snapshot.catalog.find((entry) => entry.id === 'spacex-ai')!;
-  assert.equal(row.label, 'SpaceXAI');
-  assert.equal(row.configured, true);
-  assert.equal(snapshot.catalog.some((entry) => entry.id === 'xai'), false);
+  assert.deepEqual(snapshot.catalog.map((entry) => entry.id), ['spacex-ai']);
+  assert.equal(snapshot.catalog[0].label, 'SpaceXAI');
+  assert.equal(snapshot.catalog[0].configured, true);
+});
+
+test('super-grok subscription stays distinct from the spacex-ai API provider', () => {
+  const snapshot = projectQuotaSnapshot(
+    [{
+      id: 'super-grok',
+      label: 'Super Grok',
+      status: 'ok',
+      stale: false,
+      displayLine: 'super-grok 7d 80% remain',
+      error: null,
+      bars: {
+        remainingPct: 80,
+        expectedRemainingPct: null,
+        windows: [{ name: '7d', usedPct: 20, remainingPct: 80, expectedRemainingPct: null }],
+      },
+    }],
+    [
+      { id: 'super-grok', enabled: true },
+      { id: 'spacex-ai', enabled: true },
+    ],
+    1,
+    undefined,
+    [
+      { id: 'spacex-ai', displayName: 'SpaceXAI', configured: true, authMode: 'api-key' },
+      { id: 'super-grok', displayName: 'Super Grok', configured: false, authMode: 'native' },
+    ],
+  );
+  assert.deepEqual(snapshot.providerOrder.map((entry) => entry.id), ['super-grok', 'spacex-ai']);
+  const subscription = snapshot.catalog.find((entry) => entry.id === 'super-grok')!;
+  assert.equal(subscription.label, 'Super Grok');
+  const api = snapshot.catalog.find((entry) => entry.id === 'spacex-ai')!;
+  assert.equal(api.label, 'SpaceXAI');
+  assert.notEqual(subscription.id, api.id);
 });
 
 test('catalog keeps unknown/custom providers visible with generic copy', () => {
@@ -230,11 +263,10 @@ test('catalog keeps unknown/custom providers visible with generic copy', () => {
   assert.ok(row.description.length > 0);
 });
 
-test('catalog mutes an undiscovered custom provider without quota evidence', () => {
+test('saved order preferences alone never create catalog rows', () => {
   const snapshot = projectQuotaSnapshot([], [{ id: 'my-custom-pool', enabled: true }]);
-  const row = snapshot.catalog.find((c) => c.id === 'my-custom-pool')!;
-  assert.equal(row.authMode, 'none');
-  assert.equal(row.configured, false);
+  assert.deepEqual(snapshot.catalog, []);
+  assert.deepEqual(snapshot.providerOrder, [{ id: 'my-custom-pool', enabled: true }]);
 });
 
 test('catalog configuration modes follow product rules for kimi/glm/deepseek/native', () => {
@@ -276,7 +308,7 @@ test('quota projection never exposes raw provider failures to product surfaces',
   ];
   const discovered: ProviderAuthStatus[] = [
     { id: 'anthropic', configured: false, authMode: 'native' },
-    { id: 'super-grok', configured: true, authMode: 'native' },
+    { id: 'super-grok', displayName: 'Super Grok', configured: true, authMode: 'native' },
   ];
 
   const snapshot = projectQuotaSnapshot(failedProviders, [
@@ -293,6 +325,7 @@ test('quota projection never exposes raw provider failures to product surfaces',
   assert.equal(anthropic.quota?.message, '尚未登录，请完成登录后刷新。');
 
   const superGrok = snapshot.catalog.find((entry) => entry.id === 'super-grok')!;
+  assert.equal(superGrok.label, 'Super Grok');
   assert.equal(superGrok.configured, false);
   assert.equal(superGrok.authMode, 'native');
   assert.equal(superGrok.quota?.code, 'authentication_required');
@@ -355,51 +388,19 @@ test('observed CodeBuddy exhaustion projects friendly message and a 0% bar', () 
   assert.deepEqual(row.windows, [{ name: '1mo', remainingPct: 0, expectedRemainingPct: null }]);
 });
 
-test('legacy codebuddy-* ids collapse into one canonical provider with no IOA text', () => {
+test('discovery keeps distinct ids distinct and merges only exact duplicates', () => {
   const discovered: ProviderAuthStatus[] = [
-    { id: 'codebuddy-ioa', displayName: 'CodeBuddy', configured: true, authMode: 'native' },
-    { id: 'codebuddy-local', displayName: 'CodeBuddy', configured: false, authMode: 'native' },
-  ];
-  const snapshot = projectQuotaSnapshot(
-    [{
-      id: 'codebuddy-ioa',
-      label: 'CodeBuddy',
-      status: 'ok',
-      stale: false,
-      displayLine: 'CodeBuddy 1mo 0% remain · reset',
-      error: null,
-    }],
-    [
-      { id: 'codebuddy', enabled: true },
-      { id: 'codebuddy-ioa', enabled: true },
-    ],
-    1,
-    undefined,
-    discovered,
-  );
-
-  assert.deepEqual(snapshot.providers.map((p) => p.id), ['codebuddy']);
-  const serialized = JSON.stringify(snapshot);
-  assert.equal(serialized.includes('codebuddy-'), false);
-  assert.equal(serialized.toLowerCase().includes('ioa'), false);
-
-  const catalog = snapshot.catalog.find((c) => c.id === 'codebuddy')!;
-  assert.equal(catalog.configured, true);
-  assert.equal(catalog.authMode, 'native');
-  assert.equal(catalog.label, 'CodeBuddy');
-  assert.equal(snapshot.catalog.filter((c) => c.id === 'codebuddy').length, 1);
-});
-
-test('duplicate codebuddy discovery merges with configured=true winning', () => {
-  const discovered: ProviderAuthStatus[] = [
-    { id: 'codebuddy', configured: false, authMode: 'native' },
-    { id: 'codebuddy-ioa', configured: true, authMode: 'native' },
+    { id: 'pool-alpha', displayName: 'Pool Alpha', configured: false, authMode: 'native' },
+    { id: 'pool-alpha', displayName: 'Pool Alpha', configured: true, authMode: 'native' },
+    { id: 'pool-beta', displayName: 'Pool Beta', configured: false, authMode: 'native' },
   ];
   const snapshot = projectQuotaSnapshot([], [], 1, undefined, discovered);
-  const rows = snapshot.catalog.filter((c) => c.id === 'codebuddy');
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].configured, true);
-  assert.equal(rows[0].authMode, 'native');
+
+  assert.deepEqual(snapshot.catalog.map((entry) => entry.id), ['pool-alpha', 'pool-beta']);
+  const alpha = snapshot.catalog.find((entry) => entry.id === 'pool-alpha')!;
+  assert.equal(alpha.configured, true);
+  assert.equal(alpha.authMode, 'native');
+  assert.equal(alpha.label, 'Pool Alpha');
 });
 
 test('connected CodeBuddy with no observation says quota lookup is unavailable', () => {
