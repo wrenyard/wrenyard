@@ -1,4 +1,4 @@
-// src/main/forge-types.ts
+// src/main/agent-types.ts
 // Shared interface contract — single source of truth for data layer types.
 // Application-layer tasks must import (or re-export) from this file.
 
@@ -49,7 +49,7 @@ export interface TurnUsageSignal {
   durationMs?: number;
 }
 
-export type ForgeEventSignal =
+export type AgentEventSignal =
   | LifecycleSignal
   | MessageSignal
   | ToolCallSignal
@@ -78,7 +78,7 @@ export interface LivenessVerdict {
 }
 
 // WorkerSnapshot is the shared application-layer worker representation.
-// Listed in the final review as a forge-types single-source type.
+// Listed in the final review as a agent-types single-source type.
 export interface WorkerSnapshot {
   workerIdentityKey: string;
   profile: string;

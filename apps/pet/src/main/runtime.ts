@@ -9,11 +9,11 @@ import { buildQuotaTips } from './quota-tips';
 import type { QuotaProviderState } from '../shared/entities';
 import { ForemanIpcClient } from './foreman-ipc-client';
 import { TaskGraphWindowOwner } from './taskgraph-windows';
-import type { ForgeEventSignal } from './forge-types';
+import type { AgentEventSignal } from './agent-types';
 import type { AppConfig } from './config';
 
 export type PetRuntimeStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
-export { QuotaService } from './quota-service';
+export { parseQuotaJson } from './quota-service';
 export type { QuotaProviderState } from '../shared/entities';
 
 export interface DesktopPetRuntimeOptions {
@@ -278,7 +278,7 @@ export class DesktopPetRuntime {
   }
 }
 
-function isTransientSignal(signal: ForgeEventSignal): boolean {
+function isTransientSignal(signal: AgentEventSignal): boolean {
   return signal.kind === 'message'
     || signal.kind === 'tool_call'
     || signal.kind === 'tool_result'

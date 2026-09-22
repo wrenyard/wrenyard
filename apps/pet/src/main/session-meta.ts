@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { SessionMetaData } from './forge-types';
+import type { SessionMetaData } from './agent-types';
 
 // ── Project inference from workDir ──
 

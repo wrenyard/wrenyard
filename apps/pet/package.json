@@ -28,8 +28,7 @@
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
   },
   "dependencies": {
-    "pixi.js": "^8.0.0",
-    "@wrenyard/quota": "workspace:*"
+    "pixi.js": "^8.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

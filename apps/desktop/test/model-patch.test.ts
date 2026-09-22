@@ -48,7 +48,7 @@ async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-test('renderModelPatch matches the public fdsh overlay contract', () => {
+test('renderModelPatch matches the public DSH overlay contract', () => {
   const raw = renderModelPatch(connection);
   assert.ok(raw.startsWith('# wrenyard dsh patch (generated; secret-free)\n- id: sandbox-policy\n'));
   assert.match(raw, /- id: sandbox-policy\n  config:\n    mode: danger-full-access\n/);

@@ -52,6 +52,10 @@ export const SHELL_CHANNELS = {
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
   summaryModelSnapshot: 'wrenyard-shell:summary-model-snapshot',
   summaryModelSave: 'wrenyard-shell:summary-model-save',
+  execStart: 'wrenyard-shell:exec-start',
+  execGet: 'wrenyard-shell:exec-get',
+  execEvents: 'wrenyard-shell:exec-events',
+  execCancel: 'wrenyard-shell:exec-cancel',
 } as const;
 
 export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
@@ -903,6 +907,23 @@ export interface SummarySettingsSnapshot {
   message?: string;
 }
 
+/**
+ * Raw prompt-execution surface. Desktop is only a typed transport for the
+ * daemon's `exec.*` IPC methods: it forwards an already-resolved client/
+ * provider/model/mode/thinking/cwd and renders snapshots and events. It never
+ * resolves a model, reads a catalog, or persists an execution. Every field
+ * mirrors the daemon's snake/camel wire DTOs exactly; ids are opaque strings and
+ * timestamps are epoch milliseconds.
+ */
+import type {
+  ExecStatus, ExecSnapshot as ExecSnapshotDto, ExecStartParams as ExecStartRequest,
+  ExecEventEnvelope as ExecEventEnvelopeDto, ExecEventsParams as ExecEventsRequest,
+  ExecEventsResult, ExecCancelResult,
+} from '@wrenyard/protocol/exec';
+export type {
+  ExecStatus, ExecSnapshotDto, ExecStartRequest, ExecEventEnvelopeDto,
+  ExecEventsRequest, ExecEventsResult, ExecCancelResult,
+};
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   navigate(page: ShellPage): Promise<void>;
@@ -946,6 +967,10 @@ export interface WrenyardShellApi {
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   getSummarySettings(): Promise<SummarySettingsSnapshot>;
   saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
+  execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
+  execGet(id: string): Promise<ExecSnapshotDto>;
+  execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
+  execCancel(id: string): Promise<ExecCancelResult>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

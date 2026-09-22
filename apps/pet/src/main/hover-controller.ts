@@ -1,4 +1,4 @@
-import type { WorkerSnapshot } from './forge-types';
+import type { WorkerSnapshot } from './agent-types';
 
 // ── Hit-test ──
 

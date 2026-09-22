@@ -1,11 +1,11 @@
 // src/main/foreman-event-map.ts
 
 import type {
-  ForgeEventSignal,
+  AgentEventSignal,
   LifecycleSignal,
   ToolResultSignal,
   TurnUsageSignal,
-} from './forge-types';
+} from './agent-types';
 
 // ── Event type mapping ──
 
@@ -65,9 +65,9 @@ export interface EventsLineData {
 }
 
 /**
- * Map a single Foreman event to a normalized ForgeEventSignal.
+ * Map a single Foreman event to a normalized AgentEventSignal.
  */
-export function mapForgeEvent(obj: EventsLine, hasSpawn: boolean): ForgeEventSignal | null {
+export function mapForgeEvent(obj: EventsLine, hasSpawn: boolean): AgentEventSignal | null {
   const ts = parseEventTimestamp(obj);
   if (ts === null) return null;
 
@@ -173,7 +173,7 @@ function mapResult(obj: EventsLine, ts: number): LifecycleSignal {
   return mapTurnComplete(obj, ts);
 }
 
-function mapMessage(obj: EventsLine, ts: number): ForgeEventSignal | null {
+function mapMessage(obj: EventsLine, ts: number): AgentEventSignal | null {
   const role = obj.data?.role ?? obj.role;
   const text = obj.data?.text ?? obj.text;
 
@@ -187,7 +187,7 @@ function mapMessage(obj: EventsLine, ts: number): ForgeEventSignal | null {
   };
 }
 
-function mapToolCall(obj: EventsLine, ts: number): ForgeEventSignal | null {
+function mapToolCall(obj: EventsLine, ts: number): AgentEventSignal | null {
   const name = obj.data?.name ?? obj.name;
   const inputSummary = obj.data?.input_summary ?? obj.input_summary;
   const callId = obj.data?.call_id ?? obj.call_id;

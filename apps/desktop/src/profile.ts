@@ -31,7 +31,20 @@ export interface ParsedWebUrl {
  * ever replaced; no user profile content is mutated. Copies are made to a temp
  * directory and atomically renamed into place.
  */
-export async function prepareProfile(
+let profilePreparation: Promise<unknown> = Promise.resolve();
+
+export function prepareProfile(
+  dshHome: string,
+  shellSourceDir: string,
+  runtimeModulesDir?: string,
+): Promise<PreparedProfile> {
+  // Startup and gateway recovery can request the same managed profile together.
+  const pending = profilePreparation.then(() => prepareProfileFiles(dshHome, shellSourceDir, runtimeModulesDir));
+  profilePreparation = pending.catch(() => undefined);
+  return pending;
+}
+
+async function prepareProfileFiles(
   dshHome: string,
   shellSourceDir: string,
   runtimeModulesDir?: string,

@@ -60,7 +60,7 @@ export interface GraphSlipNodeDto {
   deps: string[];
   state: TaskGraphNodeState;
   task_run_id?: string;
-  /** Foreman task definition name (e.g. commit/forge-deploy/investigate)
+  /** Foreman task definition name (e.g. commit/release/investigate)
    * from the activity snapshot node field task_id. The renderer's 任务 ID
    * tip row shows exactly this value and omits the row when absent — the
    * runtime instance id task_run_id is never shown under that label. */

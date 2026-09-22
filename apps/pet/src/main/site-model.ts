@@ -4,16 +4,16 @@ import { normalizeBroadcast, shouldExpireBroadcast } from '../shared/broadcast';
 import type { ActivityPresence, ActivityTaskPresence } from '../shared/activity-snapshot';
 import { ActivityNotificationQueue } from './activity-notifications';
 import type {
-  ForgeEventSignal,
+  AgentEventSignal,
   LifecycleSignal,
   ToolResultSignal,
   ToolUseSignal,
   TurnUsageSignal,
   TextSignal,
-} from './forge-types';
+} from './agent-types';
 
 type InputSignal =
-  | ForgeEventSignal
+  | AgentEventSignal
   | { kind: 'terminate' };
 
 interface WorkerState {
@@ -176,7 +176,7 @@ export class SiteModel {
    * are ignored here: they must never create/delete workers or change
    * running/queued — presence is owned by the activity snapshot.
    */
-  ingestTransient(signal: ForgeEventSignal, meta: SessionMetaData | null): void {
+  ingestTransient(signal: AgentEventSignal, meta: SessionMetaData | null): void {
     if (!meta) return;
     const worker = this.resolveWorker(meta);
     if (!worker) return;
@@ -353,7 +353,7 @@ export class SiteModel {
     return worker;
   }
 
-  private applySignal(worker: WorkerState, signal: ForgeEventSignal, ts: number): void {
+  private applySignal(worker: WorkerState, signal: AgentEventSignal, ts: number): void {
     switch (signal.kind) {
       case 'spawn':
         worker.phase = 'working';

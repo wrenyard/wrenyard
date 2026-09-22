@@ -45,7 +45,7 @@ export interface ActivitySnapshotNode {
   node_id: string;
   state: ActivityNodeState;
   task_run_id?: string;
-  /** Foreman task definition name (e.g. commit/forge-deploy/investigate),
+  /** Foreman task definition name (e.g. commit/release/investigate),
    * distinct from the runtime instance id task_run_id. Optional; the tip's
    * 任务 ID row shows exactly this value and omits the row when absent. */
   task_id?: string;

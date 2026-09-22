@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import { DesktopPetRuntime, QuotaService } from '@wrenyard/pet/runtime';
+import { DesktopPetRuntime } from '@wrenyard/pet/runtime';
 import { startDshWeb } from './dsh-process.js';
 import { DshConversationClient } from './dsh-conversation-client.js';
 import {
@@ -23,12 +23,13 @@ import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
 import { DesktopPetSettingsStore } from './pet-settings-store.js';
 import { DesktopQuotaController } from './quota-controller.js';
+import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
 import { readConversationActivity } from './conversation-activity.js';
 import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, buildSummarySettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { isSettingsLaunchRequest, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { activeTaskCountFromDaemonStatus, DesktopUpdateController } from './update-controller.js';
 import { resolveInstallation } from './installation-discovery.js';
@@ -217,18 +218,6 @@ function resolvePetAssets(): { rendererDir: string; preloadDir: string } {
     rendererDir: join(root, 'renderer'),
     preloadDir: join(root, 'preloads'),
   };
-}
-
-/** LaunchServices has no shell PATH; resolve quota against the installed suite. */
-function resolveQuotaRuntimeBin(): string | undefined {
-  const binaryName = process.platform === 'win32' ? 'forge.exe' : 'forge';
-  const candidates = [
-    process.env.WRENYARD_RUNTIME_BIN,
-    process.env.WRENYARD_FORGE_BIN,
-    join(homedir(), '.local', 'share', 'wrenyard', 'current', 'bin', binaryName),
-    app.isPackaged ? undefined : resolve(app.getAppPath(), '..', '..', 'runtime', 'forge', 'bin', binaryName),
-  ];
-  return candidates.find((candidate): candidate is string => Boolean(candidate && existsSync(candidate)));
 }
 
 async function runSmoke(shell: ShellWindowController): Promise<void> {
@@ -756,12 +745,17 @@ async function requestInstallFromMenu(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
+  console.info('[wrenyard-desktop] initializing catalog');
+  const { refreshDesktopCatalog } = await import('./builtin-catalog.js');
+  await refreshDesktopCatalog();
+  console.info('[wrenyard-desktop] catalog ready');
   await ensureDesktopActivationPolicy({
     setActivationPolicy: (policy) => app.setActivationPolicy(policy),
     ...(app.dock ? { showDock: () => app.dock!.show() } : {}),
   });
   const ipcPath = resolveWrenyardIpcPath();
   const workspaceConfiguration = await inspectProductWorkspace();
+  console.info('[wrenyard-desktop] workspace ready');
 
   const requestForeman = async (method: string, params: unknown): Promise<unknown> => {
     const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS });
@@ -829,8 +823,7 @@ async function bootstrap(): Promise<void> {
   const requestRoutingTestTasks = async (): Promise<TaskRoutingTestTasksResult> => {
     return (await requestForeman('task.settings.routingTestTasks', {})) as TaskRoutingTestTasksResult;
   };
-  const saveTaskSettings = async (request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> => {
-    const params: Record<string, unknown> = {
+  const saveTaskSettings = async (request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> => {    const params: Record<string, unknown> = {
       scope: request.scope,
       expected_revision: request.expected_revision,
       patch: request.patch,
@@ -850,6 +843,26 @@ async function bootstrap(): Promise<void> {
       }
       throw error;
     }
+  };
+  // Raw prompt-execution transport. Desktop forwards an already-resolved
+  // request to the daemon exec.* methods and returns their bounded snapshots
+  // and events unchanged; it never resolves a model, reads a catalog, or
+  // persists an execution.
+  const execStart = async (request: ExecStartRequest): Promise<ExecSnapshotDto> => {
+    const result = (await requestForeman('exec.start', request)) as { execution: ExecSnapshotDto };
+    return result.execution;
+  };
+  const execGet = async (id: string): Promise<ExecSnapshotDto> => {
+    const result = (await requestForeman('exec.get', { id })) as { execution: ExecSnapshotDto };
+    return result.execution;
+  };
+  const execEvents = async (request: ExecEventsRequest): Promise<ExecEventsResult> => {
+    const params: Record<string, unknown> = { id: request.id };
+    if (request.afterSeq !== undefined) params.afterSeq = request.afterSeq;
+    return (await requestForeman('exec.events', params)) as ExecEventsResult;
+  };
+  const execCancel = async (id: string): Promise<{ id: string; status: ExecSnapshotDto['status'] }> => {
+    return (await requestForeman('exec.cancel', { id })) as { id: string; status: ExecSnapshotDto['status'] };
   };
 
   await assertForemanHealthy().catch((error: unknown) => {
@@ -875,9 +888,12 @@ async function bootstrap(): Promise<void> {
     createSession: (workspace, onUnexpectedExit) => createConversationSession(workspace, ipcPath, onUnexpectedExit, summarize),
     onChanged: () => shellWindow?.notifyConversationChanged(),
   });
-  await conversationController.start().catch((error: unknown) => {
+  const conversationStart = conversationController.start().catch((error: unknown) => {
     console.error('[wrenyard-desktop] DSH conversation backend failed to start:', error);
   });
+  console.info('[wrenyard-desktop] initializing shell');
+  // Render the shell while the native conversation backend initializes.
+  if (SMOKE) await conversationStart;
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -922,13 +938,14 @@ async function bootstrap(): Promise<void> {
       isPrimary: display.id === screen.getPrimaryDisplay().id,
     })),
   });
-  await petController.start().catch((error: unknown) => {
+  const petStart = petController.start().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] Pet module failed to start:', error);
   });
+  if (SMOKE) await petStart;
   const providerService = new ProviderService({ ipcPath });
   const clientConfigurationService = new ClientConfigurationDesktopService({ ipcPath });
   quotaController = new DesktopQuotaController({
-    source: new QuotaService({ runtimeCommand: resolveQuotaRuntimeBin() }),
+    source: new DesktopQuotaSource(ipcPath),
     providerSource: providerService,
     getProviderOrder: () => petController!.getConfig().quota.providers,
     onChanged: (_snapshot, providers) => {
@@ -937,7 +954,10 @@ async function bootstrap(): Promise<void> {
       shellWindow?.notifyQuotaChanged();
     },
   });
-  await quotaController.start();
+  // Provider discovery may wait on native clients; it must not delay the window.
+  void quotaController.start().catch((error: unknown) => {
+    console.warn('[wrenyard-desktop] initial quota refresh failed:', error);
+  });
 
   /**
    * Reactivate the daemon after a workspace change: gate on an idle daemon,
@@ -1053,6 +1073,10 @@ async function bootstrap(): Promise<void> {
         readSummaryModel: () => conversationSummary!.selectedModel(),
       });
     },
+    execStart: (request: ExecStartRequest) => execStart(request),
+    execGet: (id: string) => execGet(id),
+    execEvents: (request: ExecEventsRequest) => execEvents(request),
+    execCancel: (id: string) => execCancel(id),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

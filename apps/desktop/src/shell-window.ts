@@ -33,6 +33,11 @@ import {
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
   type SummarySettingsSnapshot,
+  type ExecStartRequest,
+  type ExecSnapshotDto,
+  type ExecEventsRequest,
+  type ExecEventsResult,
+  type ExecCancelResult,
 } from './shell-contract.js';
 import type {
   ClientConfigurationDto,
@@ -84,6 +89,10 @@ export interface ShellWindowOptions {
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   getSummarySettings(): Promise<SummarySettingsSnapshot>;
   saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
+  execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
+  execGet(id: string): Promise<ExecSnapshotDto>;
+  execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
+  execCancel(id: string): Promise<ExecCancelResult>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -303,6 +312,90 @@ function validateTaskRoutingTestParams(value: unknown): TaskRoutingTestParams {
   return params;
 }
 
+const EXEC_ID_MAX = 200;
+const EXEC_FEATURE_MAX = 32;
+const EXEC_FEATURE_ID_MAX = 120;
+const EXEC_PROMPT_MAX = 4_000_000;
+const EXEC_CWD_MAX = 4_096;
+const EXEC_MODEL_MAX = 512;
+const EXEC_PROVIDER_MAX = 200;
+const EXEC_CLIENT_MAX = 120;
+const EXEC_SESSION_MAX = 1_024;
+const EXEC_THINKING_MAX = 128;
+const EXEC_MODE_VALUES = new Set(['native', 'gateway']);
+
+function isBoundedExecId(value: unknown): value is string {
+  return isBoundedString(value, EXEC_ID_MAX);
+}
+
+/**
+ * IPC-boundary validation for one raw prompt execution request. Desktop only
+ * checks DTO shape and bounds; the daemon owns client/model resolution, so an
+ * unknown client or feature id is rejected there, not guessed here. No field
+ * can smuggle a process environment or credential.
+ */
+function validateExecStartRequest(value: unknown): ExecStartRequest {
+  if (!isBoundedPlainObject(value)) throw new Error('执行请求无效');
+  const client = value.client;
+  if (typeof client !== 'string' || !client.trim() || client.length > EXEC_CLIENT_MAX) throw new Error('执行客户端无效');
+  const model = value.model;
+  if (typeof model !== 'string' || !model.trim() || model.length > EXEC_MODEL_MAX) throw new Error('执行模型无效');
+  const prompt = value.prompt;
+  if (typeof prompt !== 'string' || !prompt || prompt.length > EXEC_PROMPT_MAX) throw new Error('执行提示词无效');
+  const cwd = value.cwd;
+  if (typeof cwd !== 'string' || !cwd.trim() || cwd.length > EXEC_CWD_MAX || TASK_SETTINGS_CONTROL_CHARS.test(cwd)) {
+    throw new Error('执行工作目录无效');
+  }
+  const request: ExecStartRequest = { client, model, prompt, cwd };
+  if (value.provider !== undefined) {
+    if (typeof value.provider !== 'string' || !value.provider.trim() || value.provider.length > EXEC_PROVIDER_MAX) {
+      throw new Error('执行 provider 无效');
+    }
+    request.provider = value.provider;
+  }
+  if (value.mode !== undefined) {
+    if (typeof value.mode !== 'string' || !EXEC_MODE_VALUES.has(value.mode)) throw new Error('执行模式无效');
+    request.mode = value.mode as 'native' | 'gateway';
+  }
+  if (value.resumeSessionId !== undefined) {
+    if (typeof value.resumeSessionId !== 'string' || !value.resumeSessionId.trim() || value.resumeSessionId.length > EXEC_SESSION_MAX) {
+      throw new Error('恢复会话 id 无效');
+    }
+    request.resumeSessionId = value.resumeSessionId;
+  }
+  if (value.thinking !== undefined) {
+    if (typeof value.thinking !== 'string' || !value.thinking.trim() || value.thinking.length > EXEC_THINKING_MAX) {
+      throw new Error('思考强度无效');
+    }
+    request.thinking = value.thinking;
+  }
+  if (value.features !== undefined) {
+    const features = value.features;
+    if (!Array.isArray(features) || features.length > EXEC_FEATURE_MAX) throw new Error('执行特性列表无效');
+    for (const feature of features) {
+      if (typeof feature !== 'string' || !feature.trim() || feature.length > EXEC_FEATURE_ID_MAX) {
+        throw new Error('执行特性 id 无效');
+      }
+    }
+    request.features = features as string[];
+  }
+  return request;
+}
+
+/** IPC-boundary validation for one exec.events page request. */
+function validateExecEventsRequest(value: unknown): ExecEventsRequest {
+  if (!isBoundedPlainObject(value)) throw new Error('执行事件请求无效');
+  const id = value.id;
+  if (!isBoundedExecId(id)) throw new Error('执行 id 无效');
+  const request: ExecEventsRequest = { id };
+  if (value.afterSeq !== undefined) {
+    const afterSeq = value.afterSeq;
+    if (typeof afterSeq !== 'number' || !Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error('执行事件游标无效');
+    request.afterSeq = afterSeq;
+  }
+  return request;
+}
+
 export class ShellWindowController {
   readonly window: BrowserWindow;
   private page: ShellPage = 'workbench';
@@ -331,6 +424,7 @@ export class ShellWindowController {
       },
     };
     const win = new BrowserWindow(windowOptions);
+    console.info('[wrenyard-desktop] shell window created');
     const controller = new ShellWindowController(win, options.appVersion);
     controller.installSecurity(options.rendererPath);
     controller.installIpc(options);
@@ -342,6 +436,7 @@ export class ShellWindowController {
     await win.loadFile(options.rendererPath);
     controller.setPage('workbench', false);
     if (!options.smoke) win.show();
+    console.info(`[wrenyard-desktop] shell loaded (visible=${win.isVisible()})`);
     return controller;
   }
 
@@ -571,6 +666,24 @@ export class ShellWindowController {
       }
       return options.saveSummaryModel(canonicalModel);
     });
+    ipcMain.handle(SHELL_CHANNELS.execStart, async (event, request: unknown) => {
+      assertShellSender(event.sender);
+      return options.execStart(validateExecStartRequest(request));
+    });
+    ipcMain.handle(SHELL_CHANNELS.execGet, async (event, id: unknown) => {
+      assertShellSender(event.sender);
+      if (!isBoundedExecId(id)) throw new Error('执行 id 无效');
+      return options.execGet(id);
+    });
+    ipcMain.handle(SHELL_CHANNELS.execEvents, async (event, request: unknown) => {
+      assertShellSender(event.sender);
+      return options.execEvents(validateExecEventsRequest(request));
+    });
+    ipcMain.handle(SHELL_CHANNELS.execCancel, async (event, id: unknown) => {
+      assertShellSender(event.sender);
+      if (!isBoundedExecId(id)) throw new Error('执行 id 无效');
+      return options.execCancel(id);
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -611,6 +724,10 @@ export class ShellWindowController {
       SHELL_CHANNELS.taskRoutingTestTasks,
       SHELL_CHANNELS.summaryModelSnapshot,
       SHELL_CHANNELS.summaryModelSave,
+      SHELL_CHANNELS.execStart,
+      SHELL_CHANNELS.execGet,
+      SHELL_CHANNELS.execEvents,
+      SHELL_CHANNELS.execCancel,
     ]) ipcMain.removeHandler(channel);
   }
 

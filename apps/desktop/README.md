@@ -22,7 +22,7 @@ Electron product shell
   └─ spawns @deepseek-ai/dsh/lib/bin.js via ELECTRON_RUN_AS_NODE=1
        └─ loads the "web" profile (profiles/web under the DSH home)
             ├─ bundles: @deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @wrenyard/dsh-shell
-            ├─ last `--patch`: DSH_HOME/forge-model-patch.yaml (one Wrenyard Gateway provider)
+            ├─ last `--patch`: DSH_HOME/wrenyard-model-patch.yaml (one Wrenyard Gateway provider)
             ├─ cwd + Host workspace registry pinned to Wrenyard `workspace.root`
             ├─ agent preset `wrenyard` at $DSH_HOME/.agent-presets/wrenyard (display name 啾啾工坊模式; hero dropdown disabled)
             └─ talks to Wrenyard through the public MCP/IPC contract
@@ -196,7 +196,7 @@ data directory (`app.getPath('userData')`):
 
 ```
 <userData>/dsh/
-  forge-model-patch.yaml              # secret-free single-Gateway-provider overlay
+  wrenyard-model-patch.yaml              # secret-free single-Gateway-provider overlay
   profiles/web/
     node_modules/@wrenyard/dsh-shell/   # managed copy, replaced atomically each launch
     node_modules/@deepseek-ai -> ...    # link to packaged DSH runtime modules
