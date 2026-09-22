@@ -1,14 +1,13 @@
-import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
-import type { Provider, ProviderContext } from '../base/index.ts';
+import type { Provider } from '../base/index.ts';
 import { codeBuddyClient, createCodeBuddyModels } from './models.ts';
-import { loadInstalledCodeBuddyProductModels, type CodeBuddyProductModelEntry } from './product.ts';
-import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity } from './runtime.ts';
+import type { CodeBuddyProductModelEntry } from './product.ts';
+import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity, type CodeBuddyProviderProduct } from './runtime.ts';
 import { createCodeBuddyQuota } from './quota.ts';
 
-export interface CodeBuddyOptions extends Partial<ProviderContext> {
-  productPath?: string;
-  /** Explicit discovery input, useful for callers owning the product snapshot. */
+export interface CodeBuddyOptions {
+  /** Explicit product and account snapshot. Absent means no install was supplied. */
+  product?: CodeBuddyProviderProduct;
+  /** @deprecated Prefer product.entries. Kept so callers can pass an already parsed model list. */
   productModels?: readonly CodeBuddyProductModelEntry[];
 }
 
@@ -17,20 +16,14 @@ export interface CodeBuddy extends Provider {
   clientIdentity(): Promise<CodeBuddyClientIdentity | undefined>;
 }
 
-/** Compose discovery, model metadata, routing and quota from one model table. */
+/** Build a CodeBuddy provider from an injected snapshot. Does not search the machine. */
 export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
-  const context: ProviderContext = {
-    env: options.env ?? process.env,
-    home: options.home ?? homedir(),
-    platform: options.platform ?? process.platform,
-    readFile: options.readFile ?? ((path, encoding) => fs.readFile(path, encoding)),
-    realpath: options.realpath ?? ((path) => fs.realpath(path)),
-  };
-  const entries = options.productModels ?? loadInstalledCodeBuddyProductModels({
-    ...context, productPath: options.productPath,
-  }).entries;
+  const product = options.product ?? (options.productModels
+    ? { status: 'ready' as const, environment: 'unknown' as const, entries: options.productModels }
+    : undefined);
+  const entries = product?.status === 'ready' ? product.entries : [];
   const state = createCodeBuddyModels(entries);
-  const runtime = createCodeBuddyRuntime({ ...context, codeBuddyProductPath: options.productPath }, state);
+  const runtime = createCodeBuddyRuntime(product, state);
   return {
     id: state.definition.id,
     definition: state.definition,
@@ -46,4 +39,4 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
   };
 }
 
-export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyCredential, CodeBuddyEnvironment } from './runtime.ts';
+export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyCredential, CodeBuddyEnvironment, CodeBuddyProviderProduct } from './runtime.ts';

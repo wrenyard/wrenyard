@@ -6,7 +6,7 @@ import {
   deriveTaskDispatchPlans,
 } from '../src/index.ts';
 
-function forgeManagedRuntime(keys: Record<string, string>) {
+function managedRuntime(keys: Record<string, string>) {
   return createBuiltinProviderRuntime({
     env: { XDG_DATA_HOME: '/data' },
     home: '/home',
@@ -27,7 +27,7 @@ function codeBuddyRuntime(domain?: string) {
   });
 }
 
-test('three free-pool providers are registered with forge-managed credentials and exact models', () => {
+test('three free-pool providers are registered with managed credentials and exact models', () => {
   const catalog = createBuiltinCatalog();
   const zen = catalog.provider('opencode-zen');
   const openrouter = catalog.provider('openrouter');
@@ -35,9 +35,9 @@ test('three free-pool providers are registered with forge-managed credentials an
   assert.ok(zen, 'opencode-zen must exist');
   assert.ok(openrouter, 'openrouter must exist');
   assert.ok(go, 'opencode-go must exist');
-  assert.equal(zen!.credentialResolver, 'forge-managed');
-  assert.equal(openrouter!.credentialResolver, 'forge-managed');
-  assert.equal(go!.credentialResolver, 'forge-managed');
+  assert.equal(zen!.credentialResolver, 'managed');
+  assert.equal(openrouter!.credentialResolver, 'managed');
+  assert.equal(go!.credentialResolver, 'managed');
   assert.equal(zen!.displayName, 'OpenCode Zen');
   assert.equal(openrouter!.displayName, 'OpenRouter');
   assert.equal(zen!.protocols?.[0].endpoint, 'https://opencode.ai/zen/v1/chat/completions');
@@ -149,7 +149,7 @@ test('Zen and OpenRouter free models carry the free entitlement and a reference 
 
 test('free supply is granted only to the exact authenticated allowlists for Zen and OpenRouter', async () => {
   const catalog = createBuiltinCatalog();
-  const runtime = forgeManagedRuntime({
+  const runtime = managedRuntime({
     'opencode-zen': 'zen-key',
     openrouter: 'or-key',
     'opencode-go': 'go-key',
@@ -189,7 +189,7 @@ test('free supply is granted only to the exact authenticated allowlists for Zen 
 test('free supply is denied for anonymous, missing, and non-managed credentials', async () => {
   const catalog = createBuiltinCatalog();
   const zen = catalog.provider('opencode-zen')!;
-  const runtime = forgeManagedRuntime({});
+  const runtime = managedRuntime({});
   // Anonymous (empty) credential.
   assert.equal(runtime.freeSupply?.(zen, 'mimo-v2.5-free', { value: '' }), undefined);
   // Missing credential object.

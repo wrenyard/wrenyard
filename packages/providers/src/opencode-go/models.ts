@@ -1,7 +1,7 @@
 import { defineProvider, CANONICAL_MODELS, model, openAI } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'opencode-go', displayName: 'OpenCode Go', credentialResolver: 'forge-managed', defaultModel: 'glm-5.3-flash',
+  id: 'opencode-go', displayName: 'OpenCode Go', credentialResolver: 'managed', defaultModel: 'glm-5.3-flash',
   models: [
     { ...model('glm-5.3-flash', undefined, undefined, CANONICAL_MODELS['glm-5.3-flash']), capabilities: ['text'], pricing: [0.03, 0.15, 0.50] },
     { ...model('glm-5.3', undefined, undefined, CANONICAL_MODELS['glm-5.3']), capabilities: ['text'], pricing: [0.26, 1.4, 4.4] },

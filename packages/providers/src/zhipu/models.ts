@@ -1,7 +1,7 @@
 import { defineProvider, CANONICAL_MODELS, model, openAI } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'forge-managed', defaultModel: 'glm-5.3',
+  id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'managed', defaultModel: 'glm-5.3',
   // The open platform's current lineup, matching the vendor's own "Latest
   // Models" price table. GLM-5.2 stays because the open platform still sells
   // it after the Coding plan dropped it; GLM-5.3-FlashX is deliberately absent

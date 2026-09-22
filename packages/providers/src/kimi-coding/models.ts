@@ -1,7 +1,7 @@
 import { defineProvider, CANONICAL_MODELS, model, openAI, anthropic, THINKING_LOW_HIGH_MAX, effortLadder } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'forge-managed',
+  id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'managed',
   defaultModel: 'k3', quotaProvider: 'kimi-coding',
   models: [
     model('k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),

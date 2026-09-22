@@ -1,7 +1,7 @@
 import { defineProvider, model, openAI } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'openrouter', displayName: 'OpenRouter', credentialResolver: 'forge-managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
+  id: 'openrouter', displayName: 'OpenRouter', credentialResolver: 'managed', defaultModel: 'nex-agi/nex-n2.5-mini:free',
   models: [
     { ...model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929), free: true, capabilities: ['text', 'image'] },
     { ...model('nex-agi/nex-n2.5-pro:free', 262_144, 235_929), free: true, capabilities: ['text', 'image'] },

@@ -1,7 +1,7 @@
 import { defineProvider, CANONICAL_MODELS, model, openAI, anthropic, THINKING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'opencode-zen', displayName: 'OpenCode Zen', credentialResolver: 'forge-managed',
+  id: 'opencode-zen', displayName: 'OpenCode Zen', credentialResolver: 'managed',
   nativeClients: ['opencode'], defaultModel: 'kimi-k3',
   models: [
     // Zen free pool: usable only through the genuine OpenCode client

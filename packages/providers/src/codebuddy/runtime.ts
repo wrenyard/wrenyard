@@ -1,34 +1,13 @@
-import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import type { ProviderDefinition } from '../base/index.ts';
-import {
-  codeBuddyAuthPath,
-  codeBuddyStableAccountField,
-  codeBuddyStableAccountIdentity,
-  parseCodeBuddyAuth,
-  type CodeBuddyStableIdentity,
-  type ParsedCodeBuddyAuth,
-} from './auth.ts';
 import type { CodeBuddyModels } from './models.ts';
-import {
-  authenticationAttributes,
-  classifyCodeBuddyEnvironment,
-  codeBuddyProductCandidates,
-  resolveCodeBuddyProductPaths,
-  type CodeBuddyAuthenticationAttributes,
-  type CodeBuddyEnvironment,
-} from './product.ts';
+import type { CodeBuddyEnvironment, CodeBuddyProductModelEntry } from './product.ts';
 
 export type { CodeBuddyEnvironment };
 
 export interface CodeBuddyClientIdentity {
-  /** product.json `platform`, e.g. `CLI`. */
   readonly platform: string;
-  /** product.json `productName`, e.g. `CodeBuddy`. */
   readonly productName: string;
-  /** Installed package version, used as both platform and product version. */
   readonly version: string;
-  /** product.json `deploymentType`, defaulting to `SaaS`. */
   readonly deploymentType: string;
 }
 
@@ -42,18 +21,6 @@ export interface CodeBuddyFreeSupplyFact {
   readonly ruleId: string
 }
 
-/**
- * Immutable active-credential snapshot for an already-loaded CodeBuddy
- * credential. Created from exactly one auth-file read; the credential, the
- * normalized environment classification, an optional opaque versioned stable
- * scope, canonical-to-wire model resolution and model-scoped free eligibility
- * are all bound to that one read, so repeated mapping/free evaluations never
- * re-read files and cannot diverge. The credential field intentionally carries
- * the bearer value needed by existing runtime consumers; no raw account
- * identifier, domain, or user-facing identity is exposed, and the only
- * identity-derived value is an opaque digest under stableScope, present only
- * when a stable non-secret account id exists.
- */
 export interface CodeBuddyActiveSnapshot {
   readonly provider: 'codebuddy'
   readonly credential: CodeBuddyCredential
@@ -63,21 +30,20 @@ export interface CodeBuddyActiveSnapshot {
   freeSupply(model: string): CodeBuddyFreeSupplyFact | undefined
 }
 
-export interface CodeBuddyRuntimeOptions {
-  env: NodeJS.ProcessEnv;
-  home: string;
-  platform: NodeJS.Platform;
-  codeBuddyProductPath?: string;
-  readFile: (path: string, encoding: 'utf8') => Promise<string>;
-  realpath: (path: string) => Promise<string>;
+/** Product and account facts supplied by the composition root. This module does not read the install. */
+export interface CodeBuddyProviderProduct {
+  readonly status: 'ready' | 'unavailable';
+  readonly environment: CodeBuddyEnvironment;
+  readonly entries: readonly CodeBuddyProductModelEntry[];
+  readonly identity?: CodeBuddyClientIdentity;
+  readonly account?: {
+    readonly accessToken: string;
+    readonly domain?: string;
+    readonly stableScope?: string;
+    readonly headers?: Readonly<Record<string, string>>;
+  };
 }
 
-/**
- * Shared exact mapping lookup used both for upstream remapping and for
- * confirmed-free eligibility: a canonical model maps to its wire model and an
- * already-mapped wire id maps to itself. Because both code paths read the same
- * table through this one helper, mapping and free applicability cannot drift.
- */
 function createModelRouting(state: CodeBuddyModels) {
   function codeBuddyUpstreamWireModel(model: string): string {
     return state.upstreamModels[model] ?? model;
@@ -113,67 +79,15 @@ function createModelRouting(state: CodeBuddyModels) {
   return { codeBuddyUpstreamResolve, evaluateCodeBuddyFreeSupply, canonicalizeCodeBuddyObservedModelId };
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-const CODEBUDDY_STABLE_SCOPE_VERSION = 'cbv1';
-
-function codeBuddyStableScope(
-  identity: CodeBuddyStableIdentity,
-  domain: string | undefined,
-  environment: CodeBuddyEnvironment,
-): string {
-  const payload: Record<string, string> = { id: identity.primaryId };
-  if (identity.enterpriseId !== undefined) payload.enterpriseId = identity.enterpriseId;
-  if (identity.accountType !== undefined) payload.accountType = identity.accountType;
-  if (identity.idp !== undefined) payload.idp = identity.idp;
-  if (domain !== undefined) payload.domain = domain;
-  payload.environment = environment;
-  const canonical = `${CODEBUDDY_STABLE_SCOPE_VERSION}:${JSON.stringify(payload)}`;
-  return `${CODEBUDDY_STABLE_SCOPE_VERSION}:${createHash('sha256').update(canonical).digest('hex')}`;
-}
-
-/**
- * Private per-credential native CodeBuddy Gateway headers keyed by the
- * credential object identity (a WeakMap value, never an enumerable property),
- * so the active snapshot and the runtime credential share the same
- * atomically-read account context without ever exposing an identifier on the
- * public credential or snapshot shape. Populated only from the single
- * auth-file read already used to build each credential; never read anywhere
- * except the openai_chat auth-header path.
- */
 const codeBuddyNativeHeaders = new WeakMap<CodeBuddyCredential, Readonly<Record<string, string>>>();
-
 const CODEBUDDY_NATIVE_HEADER_NAMES = ['X-User-Id', 'X-Enterprise-Id', 'X-Tenant-Id', 'X-Domain'] as const;
-
-function codeBuddyNativeAuthHeaders(authState: ParsedCodeBuddyAuth): Readonly<Record<string, string>> | undefined {
-  const validated = (value: string | undefined): string | undefined => {
-    if (value === undefined || /[\r\n]/u.test(value)) return undefined;
-    return value;
-  };
-  const userId = validated(codeBuddyStableAccountField('uid', authState));
-  const enterpriseId = validated(codeBuddyStableAccountField('enterpriseId', authState));
-  const domain = validated(authState.domain);
-  if (userId === undefined && enterpriseId === undefined && domain === undefined) return undefined;
-  const headers: Record<string, string> = {};
-  if (userId !== undefined) headers['X-User-Id'] = userId;
-  if (enterpriseId !== undefined) {
-    headers['X-Enterprise-Id'] = enterpriseId;
-    headers['X-Tenant-Id'] = enterpriseId;
-  }
-  if (domain !== undefined) headers['X-Domain'] = domain;
-  return headers;
-}
 
 function freezeCodeBuddyActiveSnapshot(
   credential: CodeBuddyCredential,
   environment: CodeBuddyEnvironment,
-  identity: CodeBuddyStableIdentity | undefined,
-  domain: string | undefined,
+  stableScope: string | undefined,
   routing: ReturnType<typeof createModelRouting>,
 ): CodeBuddyActiveSnapshot {
-  const stableScope = identity === undefined ? undefined : codeBuddyStableScope(identity, domain, environment);
   const frozenCredential = Object.freeze(credential);
   return Object.freeze({
     provider: 'codebuddy',
@@ -187,59 +101,6 @@ function freezeCodeBuddyActiveSnapshot(
       return routing.evaluateCodeBuddyFreeSupply(environment, model);
     },
   });
-}
-
-async function loadCodeBuddyAuthenticationAttributes(
-  candidates: readonly string[],
-  readFile: (path: string, encoding: 'utf8') => Promise<string>,
-  realpath: (path: string) => Promise<string>,
-): Promise<CodeBuddyAuthenticationAttributes | undefined> {
-  for (const path of await resolveCodeBuddyProductPaths(candidates, realpath)) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-      const attributes = authenticationAttributes(parsed);
-      if (attributes) return attributes;
-    } catch { /* try the next installed product candidate */ }
-  }
-  return undefined;
-}
-
-async function loadCodeBuddyClientIdentity(
-  candidates: readonly string[],
-  readFile: (path: string, encoding: 'utf8') => Promise<string>,
-  realpath: (path: string) => Promise<string>,
-): Promise<CodeBuddyClientIdentity | undefined> {
-  for (const path of await resolveCodeBuddyProductPaths(candidates, realpath)) {
-    try {
-      const product = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-      const platform = nonEmptyString(product.platform);
-      const productName = nonEmptyString(product.productName);
-      if (platform === undefined || productName === undefined) continue;
-      const deploymentType = nonEmptyString(product.deploymentType) ?? 'SaaS';
-      let version = nonEmptyString(product.productVersion);
-      if (version === undefined) {
-        try {
-          const manifest = JSON.parse(await readFile(join(dirname(path), 'package.json'), 'utf8')) as Record<string, unknown>;
-          const publishConfig = manifest.publishConfig as { customPackage?: { version?: unknown } } | undefined;
-          version = nonEmptyString(publishConfig?.customPackage?.version) ?? nonEmptyString(manifest.version);
-        } catch { /* fall through to the next product candidate */ }
-      }
-      if (version === undefined) continue;
-      return { platform, productName, version, deploymentType };
-    } catch { /* try the next installed product candidate */ }
-  }
-  return undefined;
-}
-
-function bindCredentialHeaders(
-  credential: CodeBuddyCredential,
-  environment: CodeBuddyEnvironment,
-  environments: WeakMap<CodeBuddyCredential, CodeBuddyEnvironment>,
-  authState: ParsedCodeBuddyAuth,
-): void {
-  environments.set(credential, environment);
-  const nativeHeaders = codeBuddyNativeAuthHeaders(authState);
-  if (nativeHeaders) codeBuddyNativeHeaders.set(credential, nativeHeaders);
 }
 
 export function applyCodeBuddyNativeHeaders(
@@ -257,68 +118,36 @@ export function applyCodeBuddyNativeHeaders(
   }
 }
 
-export function createCodeBuddyRuntime(options: CodeBuddyRuntimeOptions, state: CodeBuddyModels) {
-  const { env, home, platform, readFile, realpath } = options;
+export function createCodeBuddyRuntime(product: CodeBuddyProviderProduct | undefined, state: CodeBuddyModels) {
   const routing = createModelRouting(state);
-  const codeBuddyEnvironments = new WeakMap<CodeBuddyCredential, CodeBuddyEnvironment>();
-  const productCandidates = () => codeBuddyProductCandidates(env, platform, options.codeBuddyProductPath);
+  const ready = product?.status === 'ready' ? product : undefined;
+  const environment = ready?.environment ?? 'unknown';
+  const account = ready?.account;
+  const credential = account?.accessToken ? Object.freeze({ value: account.accessToken }) : undefined;
+  const environments = new WeakMap<CodeBuddyCredential, CodeBuddyEnvironment>();
+  if (credential) {
+    environments.set(credential, environment);
+    if (account?.headers) codeBuddyNativeHeaders.set(credential, account.headers);
+  }
 
   return {
     canonicalizeModel: routing.canonicalizeCodeBuddyObservedModelId,
     async credential(): Promise<CodeBuddyCredential | undefined> {
-      try {
-        const parsed = JSON.parse(await readFile(codeBuddyAuthPath(platform, env, home), 'utf8')) as Record<string, unknown>;
-        const authState = parseCodeBuddyAuth(parsed);
-        if (!authState.accessToken) return undefined;
-        const attributes = await loadCodeBuddyAuthenticationAttributes(productCandidates(), readFile, realpath);
-        const credential = { value: authState.accessToken };
-        bindCredentialHeaders(
-          credential,
-          classifyCodeBuddyEnvironment(attributes, authState.domain),
-          codeBuddyEnvironments,
-          authState,
-        );
-        return credential;
-      } catch {
-        return undefined;
-      }
+      return credential;
     },
-    resolveUpstreamModel(
-      model: string,
-      credential?: CodeBuddyCredential,
-    ): string | undefined {
-      if (!credential) return model;
-      return routing.codeBuddyUpstreamResolve(codeBuddyEnvironments.get(credential), model);
+    resolveUpstreamModel(model: string, bound?: CodeBuddyCredential): string | undefined {
+      if (!bound) return model;
+      return routing.codeBuddyUpstreamResolve(environments.get(bound), model);
     },
-    freeSupply(
-      model: string,
-      credential: CodeBuddyCredential,
-    ): CodeBuddyFreeSupplyFact | undefined {
-      return routing.evaluateCodeBuddyFreeSupply(codeBuddyEnvironments.get(credential), model);
+    freeSupply(model: string, bound: CodeBuddyCredential): CodeBuddyFreeSupplyFact | undefined {
+      return routing.evaluateCodeBuddyFreeSupply(environments.get(bound), model);
     },
     async snapshot(): Promise<CodeBuddyActiveSnapshot | undefined> {
-      try {
-        const value: unknown = JSON.parse(await readFile(codeBuddyAuthPath(platform, env, home), 'utf8'));
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-        const authState = parseCodeBuddyAuth(value as Record<string, unknown>);
-        if (!authState.accessToken) return undefined;
-        const attributes = await loadCodeBuddyAuthenticationAttributes(productCandidates(), readFile, realpath);
-        const environment = classifyCodeBuddyEnvironment(attributes, authState.domain);
-        const credential = Object.freeze({ value: authState.accessToken });
-        bindCredentialHeaders(credential, environment, codeBuddyEnvironments, authState);
-        return freezeCodeBuddyActiveSnapshot(
-          credential,
-          environment,
-          codeBuddyStableAccountIdentity(authState),
-          authState.domain,
-          routing,
-        );
-      } catch {
-        return undefined;
-      }
+      if (!credential) return undefined;
+      return freezeCodeBuddyActiveSnapshot(credential, environment, account?.stableScope, routing);
     },
     async clientIdentity(): Promise<CodeBuddyClientIdentity | undefined> {
-      return loadCodeBuddyClientIdentity(productCandidates(), readFile, realpath);
+      return ready?.identity;
     },
   };
 }

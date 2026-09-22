@@ -1,6 +1,5 @@
 import { kimiCodingUpstreamWireModel } from './kimi-coding/runtime.ts';
 import { deepSeekEnvApiKey } from './deepseek/runtime.ts';
-import { legacyCredentialStoreIds as LEGACY_CREDENTIAL_STORE_IDS } from './anthropic/runtime.ts';
 import type { ProviderDefinition } from './base/index.ts';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
@@ -8,7 +7,6 @@ import { dirname, join } from 'node:path';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
 import { codeBuddy, providerImplementations } from './builtins.ts';
-import { createCodeBuddy } from './codebuddy/index.ts';
 import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity } from './codebuddy/index.ts';
 import type { Provider } from './base/index.ts';
 
@@ -79,7 +77,7 @@ export function canonicalizeObservedProviderModelId(provider: string, model: str
 }
 
 /**
- * Confirmed-free evaluation for forge-managed free-pool providers. Only an
+ * Confirmed-free evaluation for managed free-pool providers. Only an
  * already-loaded, non-empty authenticated managed credential together with a
  * declared free model ever qualifies; list pricing is deliberately independent
  * from this provider/account entitlement.
@@ -90,7 +88,7 @@ function evaluateManagedFreeSupply(
   credential: ProviderCredential | undefined,
 ): RoutingFreeSupplyFact | undefined {
   if (!credential || !credential.value.trim()) return undefined;
-  if (provider.credentialResolver !== 'forge-managed') return undefined;
+  if (provider.credentialResolver !== 'managed') return undefined;
   const definition = provider.models.find((entry) => entry.id === model);
   if (!definition) return undefined;
   if (definition.free !== true) return undefined;
@@ -101,23 +99,16 @@ function evaluateManagedFreeSupply(
   };
 }
 
-function runtimeAuthPath(env: NodeJS.ProcessEnv, home: string): string {
-  const dataHome = env.XDG_DATA_HOME?.trim() || join(home, '.local', 'share');
-  return join(dataHome, 'wrenyard', 'runtime', 'auth.json');
+/**
+ * Canonical managed-provider credential store:
+ * `<XDG_CONFIG_HOME or ~/.config>/wrenyard/providers/auth.json`.
+ */
+function managedAuthPath(env: NodeJS.ProcessEnv, home: string): string {
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(home, '.config');
+  return join(configHome, 'wrenyard', 'providers', 'auth.json');
 }
 
-function canonicalCredentialStoreId(providerId: string): string {
-  return LEGACY_CREDENTIAL_STORE_IDS[providerId] ?? providerId;
-}
-
-/** The exact legacy store ids that rename onto the given canonical provider. */
-function legacyCredentialStoreIds(providerId: string): string[] {
-  return Object.entries(LEGACY_CREDENTIAL_STORE_IDS)
-    .filter(([, canonical]) => canonical === providerId)
-    .map(([legacy]) => legacy);
-}
-
-/** Reads one forge-managed API-key entry, accepting only an explicit `api` type. */
+/** Reads one managed API-key entry, accepting only an explicit `api` type. */
 function apiKeyEntry(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const entry = value as { type?: unknown; key?: unknown };
@@ -126,23 +117,12 @@ function apiKeyEntry(value: unknown): string | undefined {
 }
 
 /**
- * Resolve the persisted API key for a forge-managed provider. The canonical id
- * is tried first so an explicit new-id key always wins; only when it is absent
- * does an exact legacy id fall back, and only for an API-typed entry, so a
- * subscription OAuth entry is never exposed as an API key.
+ * Resolve the persisted API key for a managed provider from its canonical id.
+ * Only an API-typed entry is exposed, so a subscription OAuth entry is never
+ * returned as an API key.
  */
 function resolveManagedApiKey(entries: Record<string, unknown>, providerId: string): string | undefined {
-  const canonical = canonicalCredentialStoreId(providerId);
-  const direct = apiKeyEntry(entries[canonical]);
-  if (direct !== undefined) return direct;
-  // The requested id may itself be a legacy id, or a canonical id whose exact
-  // legacy predecessor is still persisted from before the rename.
-  const candidates = canonical === providerId ? legacyCredentialStoreIds(providerId) : [providerId];
-  for (const candidate of candidates) {
-    const value = apiKeyEntry(entries[candidate]);
-    if (value !== undefined) return value;
-  }
-  return undefined;
+  return apiKeyEntry(entries[providerId]);
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -152,23 +132,11 @@ function nonEmptyString(value: unknown): string | undefined {
 export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOptions = {}): ProviderRuntime {
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
-  const platform = options.platform ?? process.platform;
   const readFile = options.readFile ?? ((path: string, encoding: 'utf8') => fs.readFile(path, encoding));
-  const realpath = options.realpath ?? ((path: string) => fs.realpath(path));
   const writeFile = options.writeFile ?? ((path, data, fileOptions) => fs.writeFile(path, data, fileOptions));
   const rename = options.rename ?? ((oldPath, newPath) => fs.rename(oldPath, newPath));
   const mkdir = options.mkdir ?? ((path, directoryOptions) => fs.mkdir(path, directoryOptions));
-  const customEnvironment = options.env !== undefined || options.home !== undefined
-    || options.platform !== undefined || options.codeBuddyProductPath !== undefined
-    || options.readFile !== undefined || options.realpath !== undefined;
-  const activeCodeBuddy = customEnvironment ? createCodeBuddy({
-    env,
-    home,
-    platform,
-    productPath: options.codeBuddyProductPath,
-    readFile,
-    realpath,
-  }) : codeBuddy;
+  const activeCodeBuddy = codeBuddy;
   const implementations = new Map(providerImplementations);
   implementations.set(activeCodeBuddy.id, activeCodeBuddy);
   for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
@@ -180,8 +148,8 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         if (credential) credentialProviders.set(credential, implementation);
         return credential;
       }
-      if (provider.credentialResolver === 'forge-managed') {
-        const path = runtimeAuthPath(env, home);
+      if (provider.credentialResolver === 'managed') {
+        const path = managedAuthPath(env, home);
         let managed: string | undefined;
         try {
           const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
@@ -223,12 +191,12 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
     async configureApiKey(provider, key) {
       const implementation = implementations.get(provider.id);
       if (implementation?.configureApiKey) return implementation.configureApiKey(key);
-      if (provider.credentialResolver !== 'forge-managed') {
+      if (provider.credentialResolver !== 'managed') {
         throw new Error(`provider ${provider.id} does not accept a managed API key`);
       }
       const normalized = key.trim();
       if (!normalized || normalized.length > 4096) throw new Error('API key is invalid');
-      const path = runtimeAuthPath(env, home);
+      const path = managedAuthPath(env, home);
       let entries: Record<string, { type?: string; key?: string }> = {};
       try {
         const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
@@ -237,16 +205,6 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('provider credential store is invalid');
       }
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      // One-time canonicalization of a legacy id entry: only an API-typed entry
-      // is moved to the canonical id, and never over an existing canonical key.
-      for (const legacyId of legacyCredentialStoreIds(provider.id)) {
-        if (!(legacyId in entries) || entries[legacyId]?.type !== 'api') continue;
-        const canonicalEntry = entries[provider.id];
-        if (canonicalEntry === undefined || canonicalEntry.type !== 'api') {
-          entries[provider.id] = entries[legacyId]!;
-        }
-        delete entries[legacyId];
-      }
       entries[provider.id] = { type: 'api', key: normalized };
       const temporary = `${path}.${process.pid}.tmp`;
       await writeFile(temporary, `${JSON.stringify(entries, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

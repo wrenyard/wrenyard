@@ -81,9 +81,9 @@ async function loadCodeBuddySnapshot(auth: Record<string, unknown>, attributes: 
   return { runtime, snapshot: snapshot!, requestedPaths };
 }
 
-test('forge-managed credentials are read without being projected into catalog data', async () => {
+test('managed credentials are read without being projected into catalog data', async () => {
   const runtime = createBuiltinProviderRuntime({
-    env: { XDG_DATA_HOME: '/data' }, home: '/home',
+    env: { XDG_CONFIG_HOME: '/config' }, home: '/home',
     readFile: async () => JSON.stringify({ openai: { type: 'api', key: 'secret' } }),
   });
   const provider = createBuiltinCatalog().provider('openai')!;
@@ -95,7 +95,7 @@ test('forge-managed credentials are read without being projected into catalog da
 test('DeepSeek resolves the managed auth.json API entry and never leaks it into catalog data', async () => {
   const requestedPaths: string[] = [];
   const runtime = createBuiltinProviderRuntime({
-    env: { XDG_DATA_HOME: '/data' }, home: '/home',
+    env: { XDG_CONFIG_HOME: '/config' }, home: '/home',
     readFile: async (path) => {
       requestedPaths.push(path);
       return JSON.stringify({ deepseek: { type: 'api', key: 'managed-deepseek-key' } });
@@ -106,22 +106,22 @@ test('DeepSeek resolves the managed auth.json API entry and never leaks it into 
   assert.equal(credential?.value, 'managed-deepseek-key');
   assert.equal(upstreamAuthHeaders(provider, credential!, 'openai_chat').get('authorization'), 'Bearer managed-deepseek-key');
   // The credential store path is the only file read; nothing is written.
-  assert.deepEqual(requestedPaths, ['/data/wrenyard/runtime/auth.json']);
+  assert.deepEqual(requestedPaths, ['/config/wrenyard/providers/auth.json']);
 });
 
 test('DeepSeek falls back to an environment key only when the managed store has no entry', async () => {
   const runtime = createBuiltinProviderRuntime({
-    env: { XDG_DATA_HOME: '/data', FORGE_DEEPSEEK_API_KEY: 'env-forge-key', DEEPSEEK_API_KEY: 'env-legacy-key' },
+    env: { XDG_CONFIG_HOME: '/config', WRENYARD_DEEPSEEK_API_KEY: 'env-managed-key', DEEPSEEK_API_KEY: 'env-upstream-key' },
     home: '/home',
     readFile: async () => JSON.stringify({}),
   });
   const provider = createBuiltinCatalog().provider('deepseek')!;
-  assert.deepEqual(await runtime.credential(provider), { value: 'env-forge-key' });
+  assert.deepEqual(await runtime.credential(provider), { value: 'env-managed-key' });
 });
 
-test('DeepSeek accepts DEEPSEEK_API_KEY as the legacy environment fallback', async () => {
+test('DeepSeek accepts DEEPSEEK_API_KEY as the upstream environment fallback', async () => {
   const runtime = createBuiltinProviderRuntime({
-    env: { XDG_DATA_HOME: '/data', DEEPSEEK_API_KEY: 'env-legacy-key' },
+    env: { XDG_CONFIG_HOME: '/config', DEEPSEEK_API_KEY: 'env-upstream-key' },
     home: '/home',
     readFile: async () => JSON.stringify({}),
   });
