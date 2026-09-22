@@ -5,7 +5,7 @@
  *
  * A self-contained Cordis plugin compatible with @deepseek-ai/dsh@0.1.0-rc.6.
  * It talks only to Wrenyard's public MCP (HTTP/SSE JSON-RPC) and owner-only
- * NDJSON IPC surfaces, whose wire protocols are stable. It never imports Forge
+ * NDJSON IPC surfaces, whose wire protocols are stable. It never imports Wrenyard
  * or Wrenyard source, never logs credentials or raw environment values, and
  * bundles no internal provider.
  *

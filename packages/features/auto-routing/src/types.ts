@@ -47,7 +47,7 @@ export interface QuotaEvidence {
  * uncovered. A constraint is either a windowed quota constraint (percent +
  * replenishment evidence) or a discriminated monetary balance constraint.
  *
- * Balance evidence comes from the existing Forge balances source (raw
+ * Balance evidence comes from the existing Wrenyard balances source (raw
  * `{ currency, amount }` decimal string). A fresh, valid amount strictly
  * greater than zero means not exhausted with zero quota quality (it never
  * boosts subscription pace); exactly zero blocks; malformed/negative/stale/
@@ -62,7 +62,7 @@ export interface RequiredQuotaConstraint {
 }
 /** Discriminated monetary balance evidence for one required balance resource. */
 export interface BalanceEvidence {
-  /** Raw decimal amount string from Forge balances (authoritative). */
+  /** Raw decimal amount string from Wrenyard balances (authoritative). */
   amount: string;
   /** Timestamp (epoch ms) the observation was taken. */
   observedAtMs: number;
