@@ -7,5 +7,5 @@
   "release_manifest": "wrenyard.release-manifest.v1",
   "desktop": "1.0.0-dev.35",
   "dsh_shell": "1.0.0-dev.35",
-  "dsh": "0.1.0-rc.6"
+  "dsh": "0.1.1-rc.2"
 }
