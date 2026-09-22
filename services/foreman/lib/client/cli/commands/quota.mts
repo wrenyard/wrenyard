@@ -19,9 +19,9 @@ export async function handleQuota(args: string[]): Promise<number> {
   const client = await connectConfiguredForemanClient(values.config)
   try {
     const snapshot = await client.provider.quota({ forceRefresh: values.refresh === true })
-    const requested = positionals[0] === 'super-grok' ? 'spacex-ai' : positionals[0]
+    const requested = positionals[0]
     const rows = requested
-      ? snapshot.providers.filter(row => (row.provider === 'super-grok' ? 'spacex-ai' : row.provider) === requested)
+      ? snapshot.providers.filter(row => row.provider === requested)
       : snapshot.providers
     if (requested && rows.length === 0) {
       console.error(`No quota observation available for provider: ${requested}`)
