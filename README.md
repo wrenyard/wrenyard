@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Wrenyard is a development-preview product that unifies task orchestration, a
-precompiled Go runtime, and a desktop observer under one command surface:
+native agent execution, and a desktop observer under one command surface:
 **`wrenyard`**.
 
 > **Status: development preview.** Installable from source and from the
@@ -18,8 +18,9 @@ precompiled Go runtime, and a desktop observer under one command surface:
   point, also shipped as a standalone single-file Node SEA executable.
 - **`services/foreman`** — the TypeScript control plane that schedules and
   tracks task graph work.
-- **`runtime/forge`** — the Go runtime that executes agent work and streams
-  activity, shipped as precompiled per-platform packages.
+- **packages/features** — product features, including execution, providers, quota and routing.
+- **packages/clients** — native client arguments, account reads and event normalization.
+- **packages/execution** — subprocess, stdio RPC, SQLite and keychain primitives.
 - **`apps/pet`** — the headless Desktop companion renderer. It reads current
   activity from the control plane and owns only passive companion overlays;
   it has no tray, settings, statistics page or hover action buttons.
@@ -29,8 +30,6 @@ precompiled Go runtime, and a desktop observer under one command surface:
   component.
 - **`packages/dsh-shell`** — the dsh profile/bundle shell reused by the
   desktop host.
-- **`packages/runtime-*`** — auditable staging manifests for the CI-built
-  precompiled Forge runtime payloads.
 
 Wrenyard is one product in one monorepo. `wrenyard` is the only public command
 surface; there are no legacy public compatibility commands.
@@ -40,8 +39,7 @@ surface; there are no legacy public compatibility commands.
 ```
 apps/          applications (unified CLI, desktop DSH shell, observer)
 services/      control-plane services
-runtime/       Go runtime components
-packages/      shared packages and per-platform runtime staging
+packages/      features, clients, execution, protocol and shared definitions
 contracts/     cross-component schemas and version index
 tools/         developer tooling, checks, and release scripts
 docs/          architecture, migration, and signing notes
@@ -57,11 +55,6 @@ automatically.
 
 - Node.js 22.19 or newer
 - pnpm 11.19.0 (frozen via the repository lockfile)
-- Go 1.26 — only needed for contributors and release builders working on the
-  Forge runtime; not required to consume the built artifacts. A full
-  source-development environment (`pnpm build` then `pnpm dev`) does need Go
-  so the daemon can resolve a real platform binary (`.exe` on Windows).
-
 ## Develop from source
 
 After a clone, from the repository root (not an installed suite):
@@ -74,8 +67,7 @@ pnpm dev
 ```
 
 macOS uses the same last three commands; only the checkout path changes.
-Toolchain versions come from the root `package.json`, the lockfile, and
-`runtime/forge/go.mod` (Node >=22.19.0, pnpm 11.19.0, Go 1.26). The install
+Toolchain versions come from the root `package.json` and lockfile (Node >=22.19.0, pnpm 11.19.0). The install
 is allowed to run the Electron native build script (`pnpm-workspace.yaml`
 `allowBuilds.electron`). Do not skip that: an install that leaves Electron
 missing cannot start Desktop.
@@ -225,7 +217,7 @@ pnpm release:check      # manifest + legal verification (also part of pnpm check
 ```
 
 `pnpm check` covers workspace checks, identifier/secret scans, manifest and
-legal verification, and Go vet/test/build; it does not run packed-install E2E.
+legal verification; it does not run packed-install E2E.
 These checks are run through the workspace Tasks and repository instructions,
 not by GitHub Actions. `pnpm release:local` is build-only: it performs the
 compilation, packaging, license-report generation, and payload scrubbing needed

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Canonical local/CI release pipeline. It builds only the current host target,
 // never publishes, and writes a CLI tarball (one public wrenyard launcher, with
-// the Foreman control and the native/bundled runtimes hidden), precompiled
-// Forge runtime tarball, Node SEA executable, portable suite zip, optional
-// Desktop zip (with its Pet module), the embedded development identity, legal report,
-// checksums and a target-qualified artifact manifest to one output directory.
+// the Foreman control and the bundled Node runtime hidden), a Node SEA
+// executable, portable suite zip, optional Desktop zip (with its Pet module),
+// the embedded development identity, legal report, checksums and a
+// target-qualified artifact manifest to one output directory.
 
 import archiver from 'archiver';
 import crypto from 'node:crypto';
@@ -532,8 +532,6 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { main } from '../dist/wrenyard.mjs';
 const suiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const forge = path.join(suiteRoot, '.wrenyard', 'runtime', ${JSON.stringify(`forge${target.exeSuffix}`)});
-process.env.WRENYARD_FORGE_BIN ??= forge;
   process.exitCode = main(process.argv.slice(2), {
   suiteRoot,
   nodeExecutable: path.join(suiteRoot, '.wrenyard', 'runtime', ${JSON.stringify(`node${target.exeSuffix}`)}),
@@ -689,9 +687,9 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
 }
 
 // The npm package exposes exactly one public launcher (wrenyard); the Foreman
-// control launcher, the native Forge runtime and the bundled Node runtime are
-// hidden under .wrenyard so they never surface as extra public bin commands.
-function writePackageStage(stage, version, versions, cliDist, runtimeStage, foremanDeploy) {
+// control launcher and the bundled Node runtime are hidden under .wrenyard so
+// they never surface as extra public bin commands.
+function writePackageStage(stage, version, versions, cliDist, foremanDeploy) {
   ensureDir(path.join(stage, 'bin'));
   ensureDir(path.join(stage, 'dist'));
   ensureDir(path.join(stage, '.wrenyard', 'control'));
@@ -701,7 +699,6 @@ function writePackageStage(stage, version, versions, cliDist, runtimeStage, fore
   fs.chmodSync(path.join(stage, 'bin', 'wrenyard.mjs'), 0o755);
   fs.chmodSync(path.join(stage, '.wrenyard', 'control', 'foreman.mjs'), 0o755);
   copyFile(cliDist, path.join(stage, 'dist', 'wrenyard.mjs'));
-  copyFile(path.join(runtimeStage, 'bin', `forge${target.exeSuffix}`), path.join(stage, '.wrenyard', 'runtime', `forge${target.exeSuffix}`), 0o755);
   copyFile(pinnedNodeBinary(), path.join(stage, '.wrenyard', 'runtime', `node${target.exeSuffix}`), 0o755);
   copyDir(foremanDeploy, path.join(stage, 'services', 'foreman'));
   copyDir(path.join(ROOT, 'contracts'), path.join(stage, 'contracts'));
@@ -711,7 +708,7 @@ function writePackageStage(stage, version, versions, cliDist, runtimeStage, fore
   const manifest = {
     name: '@wrenyard/cli',
     version,
-    description: 'Wrenyard unified CLI with a precompiled host Forge runtime.',
+    description: 'Wrenyard unified CLI.',
     type: 'module',
     license: 'MIT',
     os: [process.platform],
@@ -723,11 +720,10 @@ function writePackageStage(stage, version, versions, cliDist, runtimeStage, fore
   fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function writeSuiteStage(stage, version, sea, runtimeStage, foremanDeploy) {
+function writeSuiteStage(stage, version, sea, foremanDeploy) {
   ensureDir(path.join(stage, 'bin'));
   const seaName = `wrenyard${target.exeSuffix}`;
   copyFile(sea, path.join(stage, seaName), 0o755);
-  copyFile(path.join(runtimeStage, 'bin', `forge${target.exeSuffix}`), path.join(stage, 'bin', `forge${target.exeSuffix}`), 0o755);
   copyFile(pinnedNodeBinary(), path.join(stage, 'runtime', `node${target.exeSuffix}`), 0o755);
   fs.writeFileSync(path.join(stage, 'bin', 'foreman.mjs'), foremanLauncher('runtime'));
   fs.chmodSync(path.join(stage, 'bin', 'foreman.mjs'), 0o755);
@@ -758,15 +754,6 @@ exec "$real_dir/../runtime/node" "$real_dir/foreman.mjs" "$@"
   copyFile(path.join(ROOT, 'scripts', 'install.sh'), path.join(stage, 'install.sh'), 0o755);
   copyFile(path.join(ROOT, 'scripts', 'install.ps1'), path.join(stage, 'install.ps1'));
   fs.writeFileSync(path.join(stage, 'SUITE_VERSION'), `${version}\n`);
-}
-
-function pack(stage, outputDir) {
-  const stdout = run('npm', ['pack', '--pack-destination', outputDir], { cwd: stage });
-  const name = stdout.trim().split(/\r?\n/).at(-1);
-  if (!name) throw new Error(`npm pack produced no filename for ${stage}`);
-  const file = path.join(outputDir, name);
-  if (!fs.existsSync(file)) throw new Error(`npm pack output missing: ${file}`);
-  return file;
 }
 
 // Cross-platform npm-compatible writer for the CLI tarball. It walks the
@@ -835,9 +822,6 @@ async function main() {
   try {
     run('pnpm', ['--filter', '@wrenyard/cli', 'build']);
 
-    const runtimeStage = path.join(tmp, 'runtime');
-    run(process.execPath, [path.join(RELEASE_DIR, 'build-runtime-package.mjs'), '--output-dir', runtimeStage]);
-
     const sea = path.join(outputDir, `wrenyard-${version}-${target.triplet}${target.exeSuffix}`);
     run(process.execPath, [
       path.join(RELEASE_DIR, 'build-sea.mjs'),
@@ -871,7 +855,7 @@ async function main() {
       path.join(ROOT, 'services', 'foreman'),
       path.join(deployWorkspace, 'services', 'foreman'),
     );
-    for (const name of ['models', 'providers', 'clients', 'execution', 'features/auto-routing', 'features/gateway', 'features/quota']) {
+    for (const name of ['models', 'providers', 'clients', 'execution', 'protocol', 'features/auto-routing', 'features/gateway', 'features/quota', 'features/exec', 'features/provider', 'features/browser-use', 'features/computer-use']) {
       copyDirWithoutNodeModules(
         path.join(ROOT, 'packages', name),
         path.join(deployWorkspace, 'packages', name),
@@ -899,14 +883,8 @@ async function main() {
     // complete for the E2E containment checks that follow.
     assertPhysicalForemanDependencies(foremanDeploy);
 
-    const packedRuntime = pack(runtimeStage, outputDir);
-    // Rename the npm-pack tarball to a target-qualified name so multi-target
-    // release uploads never collide (the npm filename is host-ambiguous).
-    const runtimeTgz = path.join(outputDir, `wrenyard-runtime-${version}-${target.triplet}.tgz`);
-    fs.copyFileSync(packedRuntime, runtimeTgz);
-    fs.rmSync(packedRuntime, { force: true });
     const cliStage = path.join(tmp, 'cli');
-    writePackageStage(cliStage, version, versions, path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard.mjs'), runtimeStage, foremanDeploy);
+    writePackageStage(cliStage, version, versions, path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard.mjs'), foremanDeploy);
     assertPortableTree(cliStage);
     assertNoBuildPathsInStagedForeman(cliStage, 'cli', tmp, ROOT);
     assertStagedForemanRuns(cliStage, 'cli', '.wrenyard/runtime');
@@ -915,7 +893,7 @@ async function main() {
     const cliTgz = await packCliTgz(cliStage, outputDir, version);
 
     const suiteStage = path.join(tmp, 'suite');
-    writeSuiteStage(suiteStage, version, sea, runtimeStage, foremanDeploy);
+    writeSuiteStage(suiteStage, version, sea, foremanDeploy);
     assertPortableTree(suiteStage);
     assertNoBuildPathsInStagedForeman(suiteStage, 'suite', tmp, ROOT);
     assertStagedForemanRuns(suiteStage, 'suite', 'runtime');
@@ -945,7 +923,7 @@ async function main() {
     const devIdentity = path.join(outputDir, 'release-manifest.json');
     copyFile(path.join(ROOT, 'release-manifest.json'), devIdentity);
 
-    const distributables = [sea, runtimeTgz, cliTgz, suiteZip, desktopZip, licenseReport, path.join(outputDir, 'install.sh'), path.join(outputDir, 'install.ps1'), devIdentity]
+    const distributables = [sea, cliTgz, suiteZip, desktopZip, licenseReport, path.join(outputDir, 'install.sh'), path.join(outputDir, 'install.ps1'), devIdentity]
       .filter(Boolean)
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
     const artifacts = distributables.map((file) => ({
