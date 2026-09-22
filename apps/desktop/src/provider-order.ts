@@ -4,33 +4,23 @@ export interface ProviderOrderEntry {
   enabled: boolean;
 }
 
-/** Collapse legacy/runtime-specific ids to the current product provider id.
- *  The legacy `codex` provider id migrates to the single `chatgpt` provider
- *  (data migration only; the registry defines no aliases).
- *  The codex client remains distinct.
- *  The legacy internal `opencode-native` id migrates to the current
- *  `opencode-zen` provider so a saved order entry keeps its position. */
-export function canonicalProviderId(rawId: string): string {
-  const id = rawId.trim();
-  if (id === 'xai') return 'spacex-ai';
-  if (id === 'codebuddy' || id.startsWith('codebuddy-')) return 'codebuddy';
-  if (id === 'codex') return 'chatgpt';
-  if (id === 'opencode-native') return 'opencode-zen';
-  return id;
+/**
+ * Trim a saved provider id. Provider identity migrations are gone: discovery and
+ * quota data already supply canonical ids, and a preference only reorders the
+ * providers those current sources report. An empty result is an unusable row.
+ */
+export function normalizeProviderId(rawId: string): string {
+  return rawId.trim();
 }
 
 /** Keep one bounded entry per provider while preserving the user's order. */
 export function normalizeProviderOrder(entries: readonly ProviderOrderEntry[]): ProviderOrderEntry[] {
-  const positions = new Map<string, number>();
+  const seen = new Set<string>();
   const normalized: ProviderOrderEntry[] = [];
   for (const entry of entries) {
-    const id = canonicalProviderId(entry.id);
-    if (!id) continue;
-    const position = positions.get(id);
-    if (position !== undefined) {
-      continue;
-    }
-    positions.set(id, normalized.length);
+    const id = normalizeProviderId(entry.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
     normalized.push({ id, enabled: true });
   }
   return normalized;
@@ -48,7 +38,7 @@ export function reorderProviders(
   const result: ProviderOrderEntry[] = [];
   const seen = new Set<string>();
   const append = (rawId: string): void => {
-    const id = canonicalProviderId(rawId);
+    const id = normalizeProviderId(rawId);
     if (!id || seen.has(id)) return;
     seen.add(id);
     result.push(existing.get(id) ?? { id, enabled: true });

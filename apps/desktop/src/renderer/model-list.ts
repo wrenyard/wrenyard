@@ -78,6 +78,7 @@ const PROVIDER_BRAND: ReadonlyArray<[string, string]> = [
   ['gemini', 'gemini'],
   ['google', 'gemini'],
   ['spacex-ai', 'grok'],
+  ['super-grok', 'grok'],
   ['grok', 'grok'],
   ['deepseek', 'deepseek'],
   ['kimi', 'kimi'],

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  canonicalProviderId,
+  normalizeProviderId,
   normalizeProviderOrder,
   reorderProviders,
   sortProvidersByAvailability,
@@ -18,41 +18,30 @@ test('provider ordering migrates legacy enablement away and activates new discov
   ]);
 });
 
-test('provider ordering migrates legacy xai to spacex-ai without losing enablement or position', () => {
+test('saved order entries are trimmed and exact duplicates collapse to one row', () => {
+  assert.equal(normalizeProviderId('  cursor  '), 'cursor');
+  assert.equal(normalizeProviderId('   '), '');
+  assert.deepEqual(normalizeProviderOrder([
+    { id: '  cursor  ', enabled: true },
+    { id: 'cursor', enabled: false },
+    { id: '   ', enabled: true },
+    { id: 'super-grok', enabled: true },
+    { id: 'spacex-ai', enabled: true },
+  ]), [
+    { id: 'cursor', enabled: true },
+    { id: 'super-grok', enabled: true },
+    { id: 'spacex-ai', enabled: true },
+  ]);
+});
+
+test('unknown saved order ids stay inert preferences instead of being remapped', () => {
+  // No identity migration: an id that current sources do not report keeps its
+  // own row (and is ignored by discovery) rather than collapsing into a peer.
   assert.deepEqual(reorderProviders([
-    { id: 'xai', enabled: false },
-    { id: 'spacex-ai', enabled: true },
-    { id: 'chatgpt', enabled: true },
-  ], ['xai', 'chatgpt']), [
-    { id: 'spacex-ai', enabled: true },
-    { id: 'chatgpt', enabled: true },
-  ]);
-});
-
-test('legacy order collapses codex into one stable chatgpt entry', () => {
-  assert.equal(canonicalProviderId('codex'), 'chatgpt');
-  // First occurrence keeps the position; the later canonical duplicate is dropped.
-  assert.deepEqual(normalizeProviderOrder([
-    { id: 'codex', enabled: true },
-    { id: 'cursor', enabled: true },
-    { id: 'chatgpt', enabled: true },
-    { id: 'anthropic', enabled: true },
-  ]), [
-    { id: 'chatgpt', enabled: true },
-    { id: 'cursor', enabled: true },
-    { id: 'anthropic', enabled: true },
-  ]);
-});
-
-test('legacy opencode-native order entry collapses into one opencode-zen entry', () => {
-  assert.equal(canonicalProviderId('opencode-native'), 'opencode-zen');
-  assert.deepEqual(normalizeProviderOrder([
-    { id: 'opencode-native', enabled: true },
-    { id: 'cursor', enabled: true },
-    { id: 'opencode-zen', enabled: true },
-  ]), [
-    { id: 'opencode-zen', enabled: true },
-    { id: 'cursor', enabled: true },
+    { id: 'current-provider', enabled: true },
+  ], ['legacy-unknown-id', 'current-provider']), [
+    { id: 'legacy-unknown-id', enabled: true },
+    { id: 'current-provider', enabled: true },
   ]);
 });
 

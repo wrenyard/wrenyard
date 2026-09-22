@@ -46,6 +46,7 @@
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
     "@wrenyard/dsh-shell": "workspace:*",
+    "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "js-tiktoken": "1.0.21",
     "@wrenyard/auto-routing": "workspace:*"
