@@ -1,21 +1,22 @@
-import {
-  spawn,
-  type ChildProcess,
-  type SpawnOptions,
-} from 'node:child_process'
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
+import crossSpawn from 'cross-spawn'
 
+const nativeSpawn = crossSpawn as (
+  command: string, args: readonly string[], options: SpawnOptions,
+) => ChildProcess
 const PROCESS_TREE_KILL_GRACE_MS = 10_000
 const PROCESS_TREE_KILL_POLL_MS = 100
 
+/** Shared native spawn, including Windows npm shims and argument escaping. */
+export function spawnProcess(command: string, args: readonly string[], options: SpawnOptions = {}): ChildProcess {
+  return nativeSpawn(command, args, { ...options, shell: false, windowsHide: resolveWindowsHideOption(options) })
+}
 export function spawnShellProcess(
   command: string,
-  args: string[],
+  args: readonly string[],
   options: SpawnOptions = {},
 ): ChildProcess {
-  return spawn(command, args, {
-    ...options,
-    windowsHide: resolveWindowsHideOption(options),
-  })
+  return spawnProcess(command, args, options)
 }
 
 export function resolveWindowsHideOption(options: { windowsHide?: boolean }): boolean | undefined {

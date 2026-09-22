@@ -1,5 +1,10 @@
-export { ForgeExecutor, ExecutionError, type ForgeExecutionOptions, type ExecutionResult } from './forge.ts';
-export { resolveRuntimeBin, resolveForgeInvocation, resolveForgeEnv, type ResolveRuntimeBinOptions } from './invocation.ts';
-export { killProcessTree } from './process.ts';
-export { clientOperation, rpcSequence, NativeOperationError } from './client-protocol.ts';
-export type { RpcRequest, RpcStep } from './client-protocol.ts';
+export { Executor, ExecutionError, type ExecutionOptions, type ExecutionResult } from './executor.ts';
+export { startProcess, type ProcessSpec, type ProcessFile, type ExecutionSession, type ExecutionEvent, type StartProcessOptions } from './session.ts';
+export {
+  killProcessTree,
+  spawnProcess,
+  spawnShellProcess,
+  resolveWindowsHideOption,
+} from './process.ts';
+export { rpcSequence, NativeOperationError, type RpcRequest, type RpcStep } from './client-protocol.ts';
+export { readKeychain, readSqliteValue, type CredentialRequest, type KeychainCredential, type SqliteCredential } from './credentials.ts';
