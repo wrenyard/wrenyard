@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/daemon",
-  "version": "1.0.0-dev.36",
+  "version": "1.0.0-dev.37",
   "description": "Wrenyard — AI task and TaskGraph orchestration daemon",
   "private": true,
   "license": "MIT",
