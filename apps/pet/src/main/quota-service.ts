@@ -1,100 +1,16 @@
-import { QuotaService as ProductQuotaService, currentCodeBuddyContext } from '@wrenyard/quota/runtime';
-import os from 'node:os';
-import path from 'node:path';
-import type { DiagnosticLogger } from './diagnostic-logger';
-import type { QuotaProviderState, QuotaWindowRow } from '../shared/entities';
-/** Timeout for native client operations used by the quota feature. */
-export const QUOTA_TIMEOUT_MS = 30_000;
+import type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../shared/entities';
+import { floorQuotaPercentage } from '../shared/quota-percentage';
 
-export interface QuotaServiceOptions {
-  logger?: DiagnosticLogger;
-  cacheTtlMs?: number;
-  runtimeCommand?: string;
-}
-
-export class QuotaService {
-  private readonly logger: DiagnosticLogger | undefined;
-  private readonly cacheTtlMs: number;
-  private readonly runtimeCommand: string | undefined;
-  private cache: { providers: QuotaProviderState[]; fetchedAt: number } | null = null;
-  private pending: Promise<QuotaProviderState[]> | null = null;
-
-  constructor(opts?: QuotaServiceOptions) {
-    this.logger = opts?.logger;
-    this.cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
-    this.runtimeCommand = opts?.runtimeCommand;
-  }
-
-  async listProviders(forceRefresh = false): Promise<QuotaProviderState[]> {
-    if (!forceRefresh && this.cache && Date.now() - this.cache.fetchedAt < this.cacheTtlMs) {
-      return this.cache.providers;
-    }
-
-    if (this.pending) return this.pending;
-
-    this.pending = this.fetchProviders().finally(() => {
-      this.pending = null;
-    });
-
-    return this.pending;
-  }
-
-  invalidateCache(): void {
-    this.cache = null;
-  }
-
-  private async fetchProviders(): Promise<QuotaProviderState[]> {
-    try {
-      const output = await runQuotaJson(this.runtimeCommand);
-      const providers = parseQuotaJson(output);
-      this.cache = { providers, fetchedAt: Date.now() };
-      return providers;
-    } catch (err) {
-      this.logger?.warn('quota_fetch_error', {
-        error: err instanceof Error ? { name: err.name, message: err.message } : String(err),
-      });
-      return [];
-    }
-  }
-}
-
-/**
- * npm start / Electron inherit parent `node_modules/.bin` entries. Forge's
- * `LookPath("codex")` then hits a stale home-directory Codex wrapper before
- * Homebrew / `~/.local/bin`, which surfaces as app-server initialize EOF.
- */
-export function sanitizeQuotaChildEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  const delimiter = path.delimiter;
-  const home = env.HOME || os.homedir();
-  const preferred = [
-    path.join(home, '.local', 'bin'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-  ];
-  const rest = (env.PATH ?? '')
-    .split(delimiter)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .filter((entry) => !isNpmNodeModulesBin(entry) && !preferred.includes(entry));
-  return {
-    ...env,
-    PATH: [...preferred, ...rest].join(delimiter),
-  };
-}
-
-function isNpmNodeModulesBin(entry: string): boolean {
-  const normalized = entry.replaceAll('\\', '/');
-  return normalized === '/node_modules/.bin' || normalized.endsWith('/node_modules/.bin');
-}
-
-const productQuota = new ProductQuotaService();
-async function runQuotaJson(runtimeCommand?: string): Promise<string> {
-  const env = sanitizeQuotaChildEnv();
-  if (runtimeCommand) env.WRENYARD_RUNTIME_BIN = runtimeCommand;
-  else if (!env.WRENYARD_RUNTIME_BIN && env.WRENYARD_FORGE_BIN) env.WRENYARD_RUNTIME_BIN = env.WRENYARD_FORGE_BIN;
-  return productQuota.queryJson(await currentCodeBuddyContext({env}), {env, timeoutMs:QUOTA_TIMEOUT_MS});
+interface RawQuotaWindow {
+  name?: string;
+  pct?: number;
+  used_pct?: number;
+  remaining_pct?: number;
+  expected_remaining_pct?: number;
+  /** Provider wire window duration in minutes; drives the time-aware pace. */
+  window_minutes?: number;
+  /** Provider wire ISO reset time; drives the time-aware pace and reset label. */
+  resets_at?: string;
 }
 
 interface RawQuotaEntry {
@@ -111,13 +27,14 @@ interface RawQuotaEntry {
   remaining_pct?: number;
   expected_remaining_pct?: number;
   /** Per-window rows */
-  windows?: Array<{
-    name?: string;
-    pct?: number;
-    used_pct?: number;
-    remaining_pct?: number;
-    expected_remaining_pct?: number;
-  }>;
+  windows?: RawQuotaWindow[];
+  /**
+   * Provider-declared window names that do not apply to this account (e.g. the
+   * ChatGPT Pro 5h window). They carry no percentage, so they stay out of the
+   * structured bars and are restored in the subtitle as `<name> n/a` rather
+   * than being silently dropped.
+   */
+  not_applicable_windows?: string[];
   /** Monetary balances from quota feature snapshots */
   balances?: Array<{
     currency?: unknown;
@@ -129,7 +46,27 @@ function isFiniteZeroToOneHundred(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
 }
 
-function parseWindowBars(e: RawQuotaEntry): QuotaProviderState['bars'] {
+/**
+ * Time-aware pace for one provider window: the remaining percentage implied by
+ * the reset horizon (`resets_at - now`) over the window duration. This is the
+ * same expected-remaining arithmetic the routing quota policy uses, and it is
+ * the only source of the desktop pace marker after the wire dropped the
+ * precomputed `expected_remaining_pct`. Returns null when the wire carries no
+ * usable reset horizon, so no value is ever fabricated.
+ */
+function expectedRemainingFromWindow(w: RawQuotaWindow, nowMs: number): number | null {
+  const minutes = w.window_minutes;
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0) return null;
+  if (typeof w.resets_at !== 'string') return null;
+  const resetMs = Date.parse(w.resets_at);
+  if (!Number.isFinite(resetMs)) return null;
+  const horizonMs = resetMs - nowMs;
+  const windowMs = minutes * 60_000;
+  if (horizonMs <= 0 || horizonMs > windowMs) return null;
+  return Math.round((horizonMs / windowMs) * 100 * 10) / 10;
+}
+
+function parseWindowBars(e: RawQuotaEntry, nowMs: number): QuotaProviderState['bars'] {
   let windows: QuotaWindowRow[] = [];
 
   if (Array.isArray(e.windows) && e.windows.length > 0) {
@@ -144,9 +81,11 @@ function parseWindowBars(e: RawQuotaEntry): QuotaProviderState['bars'] {
           ? w.remaining_pct
           : (isFiniteZeroToOneHundred(w.used_pct) ? Math.round((100 - w.used_pct) * 10) / 10
              : (isFiniteZeroToOneHundred(w.pct) ? Math.round((100 - w.pct) * 10) / 10 : 0));
+        // An explicit wire value wins; otherwise derive the pace from the reset
+        // horizon. No reset horizon leaves the marker absent rather than zero.
         const expectedRemainingPct = isFiniteZeroToOneHundred(w.expected_remaining_pct)
           ? w.expected_remaining_pct
-          : null;
+          : expectedRemainingFromWindow(w, nowMs);
         return { name: w.name, usedPct, remainingPct, expectedRemainingPct };
       });
     // All windows filtered out but original array had entries => invalid
@@ -223,7 +162,89 @@ function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
   return rows.length > 0 ? rows : undefined;
 }
 
-export function parseQuotaJson(raw: string): QuotaProviderState[] {
+/** Integer pace delta label (`(+N%)`/`(-N%)`) for the anchor window. */
+function paceLabel(window: QuotaWindowRow): string | null {
+  if (window.expectedRemainingPct === null) return null;
+  const delta = Math.round(window.remainingPct - window.expectedRemainingPct);
+  return `(${delta >= 0 ? '+' : ''}${delta}%)`;
+}
+
+/** Compact countdown (`16d 14h reset` / `2h 5m reset` / `9m reset`). */
+function resetLabel(window: RawQuotaWindow | undefined, nowMs: number): string | null {
+  if (!window || typeof window.resets_at !== 'string') return null;
+  const resetMs = Date.parse(window.resets_at);
+  if (!Number.isFinite(resetMs) || resetMs <= nowMs) return null;
+  const remaining = resetMs - nowMs;
+  const days = Math.floor(remaining / 86_400_000);
+  const hours = Math.floor((remaining % 86_400_000) / 3_600_000);
+  const minutes = Math.floor((remaining % 3_600_000) / 60_000);
+  const text = days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return `${text} reset`;
+}
+
+/**
+ * Rebuild the provider subtitle the wire no longer carries (`display_line` was
+ * retired) from the structured observation only: window names/remaining, the
+ * anchor pace delta, the reset countdown and any provider-declared
+ * non-applicable window (`<name> n/a`). Values come exclusively from wire
+ * fields; a missing field is omitted rather than substituted.
+ */
+function synthesizeDisplayLine(
+  id: string,
+  rawWindows: RawQuotaWindow[] | undefined,
+  notApplicableWindows: string[] | undefined,
+  bars: QuotaProviderState['bars'],
+  balances: QuotaProviderState['balances'],
+  status: QuotaProviderStatus,
+  nowMs: number,
+): string | null {
+  if (status !== 'ok') return null;
+  const windows = bars?.windows ?? [];
+  const rawByName = new Map<string, RawQuotaWindow>();
+  for (const window of rawWindows ?? []) {
+    if (typeof window?.name === 'string' && !rawByName.has(window.name)) rawByName.set(window.name, window);
+  }
+  // A window the provider marks non-applicable has no percentage to bar, so it
+  // is preserved as an explicit `n/a` token instead of disappearing.
+  const naParts: string[] = [];
+  for (const name of Array.isArray(notApplicableWindows) ? notApplicableWindows : []) {
+    if (typeof name !== 'string' || name.length === 0) continue;
+    if (windows.some((window) => window.name === name)) continue;
+    const part = `${name} n/a`;
+    if (!naParts.includes(part)) naParts.push(part);
+  }
+  if (windows.length > 0) {
+    let anchor = windows.findIndex((window) => window.name.toLowerCase() === '7d');
+    if (anchor < 0) anchor = windows.length - 1;
+    const parts = windows.map((window) => `${window.name} ${floorQuotaPercentage(window.remainingPct)}%`);
+    const pace = paceLabel(windows[anchor]);
+    if (pace) parts[anchor] += ` ${pace}`;
+    // Prefer the anchor window's reset; fall back to the first window that
+    // carries one so a reset countdown is never dropped for lack of an anchor.
+    let reset = resetLabel(rawByName.get(windows[anchor].name), nowMs);
+    if (!reset) {
+      for (const window of windows) {
+        reset = resetLabel(rawByName.get(window.name), nowMs);
+        if (reset) break;
+      }
+    }
+    parts.push(...naParts);
+    if (reset) parts.push(reset);
+    return `${id} ${parts.join(' · ')}`;
+  }
+  if (naParts.length > 0 || (balances && balances.length > 0)) {
+    const parts = [
+      ...naParts,
+      ...(balances && balances.length > 0
+        ? [`bal. ${balances.map((balance) => balance.display).join(' · ')}`]
+        : []),
+    ];
+    return `${id} ${parts.join(' · ')}`;
+  }
+  return null;
+}
+
+export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderState[] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
     throw new TypeError('quota feature output must be a JSON array');
@@ -240,8 +261,8 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
     if (typeof e.provider !== 'string' || e.provider.length === 0) continue;
     const id = e.provider;
     const label = typeof e.label === 'string' ? e.label : id;
-    const displayLine = typeof e.display_line === 'string' && e.display_line.length > 0 ? e.display_line : null;
-    // Forge-provided message takes precedence over the error field; both are
+    const rawDisplayLine = typeof e.display_line === 'string' && e.display_line.length > 0 ? e.display_line : null;
+    // Provider message takes precedence over the error field; both are
     // preserved generically so pending/error rows can surface the message.
     const error =
       typeof e.message === 'string' && e.message.length > 0
@@ -251,23 +272,24 @@ export function parseQuotaJson(raw: string): QuotaProviderState[] {
           : null;
     const stale = e.stale === true;
 
-    // Passive Forge code metadata (e.g. `authentication_pending`). Preserved
+    // Passive provider code metadata (e.g. `authentication_pending`). Preserved
     // generically; status/message/error stay independent and code never
     // triggers provider-specific behavior.
     const code = typeof e.code === 'string' && e.code.length > 0 ? e.code : null;
 
-    const status = e.status === 'pending'
-      ? 'pending'
-      : e.status === 'unavailable'
-        ? 'unavailable'
-      : displayLine
-        ? 'ok'
-        : error
-          ? 'error'
-          : 'unavailable';
+    // Structured snapshots do not need the retired CLI display_line. A
+    // successful plan/exhaustion message is informational, not a failure.
+    const status = e.status === 'ok' || e.status === 'error'
+      || e.status === 'pending' || e.status === 'unavailable'
+      ? e.status
+      : rawDisplayLine ? 'ok' : error ? 'error' : 'unavailable';
 
-    const bars = parseWindowBars(e);
+    const bars = parseWindowBars(e, now);
     const balances = parseBalances(e);
+    // The wire retires `display_line`; rebuild the subtitle projection from the
+    // structured window/balance rows so the Provider page and Pet tips keep the
+    // previously displayed window, pace and reset details.
+    const displayLine = rawDisplayLine ?? synthesizeDisplayLine(id, e.windows, e.not_applicable_windows, bars, balances, status, now);
 
     results.push({
       id,

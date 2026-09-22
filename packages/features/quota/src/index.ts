@@ -4,7 +4,7 @@ import { createAgentClients, ClientError, type AgentClient, type ClientOptions }
 import { HttpQuotaSource } from './http.ts';
 import { readCodeBuddyObservation, type CodeBuddyQueryContext } from './observed.ts';
 export type { CodeBuddyQueryContext } from './observed.ts';
-export type QuotaQueryOptions = ClientOptions;
+export interface QuotaQueryOptions extends ClientOptions { refresh?: boolean }
 export interface QuotaServiceOptions {
     readonly providers?: ReadonlyMap<string, ProviderQuota>;
     readonly clients?: ReadonlyMap<string, AgentClient>;
@@ -36,7 +36,7 @@ export class QuotaService {
                     const client = this.clients.get(clientIds[provider]);
                     if (!client?.capabilities.account || !client.readAccount)
                         throw new Error('Account capability unavailable');
-                    raw = await client.readAccount({ refresh: source === 'fallback' }, options);
+                    raw = await client.readAccount({ ...options, refresh: options?.refresh === true || source === 'fallback' });
                 }
                 if (raw && typeof raw === 'object' && 'error_code' in raw)
                     throw new ClientError(String(raw.error_code));
@@ -50,13 +50,21 @@ export class QuotaService {
         const quota = this.providers.get(id);
         if (!quota?.read)
             return { provider: id, status: 'unavailable', stale: false, code: 'quota_unsupported', message: 'Quota acquisition is not supported for this provider' };
+        // Bound the complete provider read, including any fallback. A timeout
+        // affects this provider only; explicit caller cancellation still propagates.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 30_000);
+        const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
         try {
-            return await quota.read(this.source(id, context, options));
+            return await quota.read(this.source(id, context, { ...options, signal }));
         }
         catch (error) {
             options?.signal?.throwIfAborted();
             const code = error instanceof ClientError && ['configuration_missing', 'authentication_required'].includes(error.code) ? error.code : 'quota_query_failed';
             return { provider: id === 'spacex-ai' ? 'super-grok' : id, status: 'error', stale: false, code, error: 'Provider quota unavailable' };
+        }
+        finally {
+            clearTimeout(timer);
         }
     }
     async list(context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): Promise<readonly QuotaSnapshot[]> {

@@ -1,6 +1,4 @@
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime } from '@wrenyard/providers';
 import type { ClientOptions } from '@wrenyard/clients';
 export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding';
@@ -9,10 +7,6 @@ const endpoints: Record<HttpQuotaProvider, string> = {
     'kimi-coding': 'https://api.kimi.com/coding/v1/usages',
     'zhipu-coding': 'https://open.bigmodel.cn/api/monitor/usage/quota/limit',
 };
-const secretKeys: Record<HttpQuotaProvider, readonly string[]> = {
-    deepseek: [], 'kimi-coding': ['kimi-coding-api-key', 'kimi-api-key', 'moonshot-api-key'],
-    'zhipu-coding': ['glm-anthropic-auth-token', 'glm-Tencent-auth-token', 'glm-api-key', 'zhipu-api-key'],
-};
 async function credential(provider: HttpQuotaProvider, env: NodeJS.ProcessEnv): Promise<string | undefined> {
     const home = env.HOME || env.USERPROFILE || homedir();
     const definition = BUILTIN_PROVIDERS.find(item => item.id === provider)!;
@@ -20,23 +14,13 @@ async function credential(provider: HttpQuotaProvider, env: NodeJS.ProcessEnv): 
     if (managed?.value)
         return managed.value;
     if (provider === 'kimi-coding')
-        for (const key of ['KIMI_CODE_API_KEY', 'FORGE_KIMI_CODING_API_KEY', 'KIMI_CODING_API_KEY', 'MOONSHOT_API_KEY']) {
+        for (const key of ['KIMI_CODE_API_KEY', 'WRENYARD_KIMI_CODING_API_KEY', 'KIMI_CODING_API_KEY', 'MOONSHOT_API_KEY']) {
             if (env[key]?.trim())
                 return env[key]!.trim();
         }
-    const root = env.WRENYARD_ROOT || process.cwd();
-    for (const file of [join(env.XDG_CONFIG_HOME || join(home, '.config'), 'wrenyard', 'runtime', 'secrets.json'), join(root, 'runtime', 'forge', 'data', 'secrets.json'), join(root, 'data', 'secrets.json')]) {
-        try {
-            const values = JSON.parse(await readFile(file, 'utf8'));
-            for (const key of secretKeys[provider])
-                if (typeof values[key] === 'string' && values[key].trim())
-                    return values[key].trim();
-        }
-        catch { /* Optional legacy credential source. */ }
-    }
     return undefined;
 }
-/** Direct API acquisition: no Forge process, token logging, or credential persistence. */
+/** Direct API acquisition: no subprocess, token logging, or credential persistence. */
 export class HttpQuotaSource {
     constructor(private readonly request: typeof fetch = fetch) { }
     async readUsage(provider: HttpQuotaProvider, options?: ClientOptions): Promise<unknown> {
