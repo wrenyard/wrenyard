@@ -1,4 +1,5 @@
-import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
+import type { AgentRequest } from '@wrenyard/agent-client';
+import { inspectCodex } from './installation.ts';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
@@ -41,7 +42,7 @@ function codexMcpArgs(servers: readonly ResolvedMcpServer[]): string[] {
 
 export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
     assertLaunch(request);
-    const status = await findExecutable(['codex'], { env });
+    const status = await inspectCodex({ env });
     if (status.installation.state !== 'installed')
         throw new Error('codex is not installed');
     const args: string[] = [];
