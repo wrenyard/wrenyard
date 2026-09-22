@@ -60,11 +60,18 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M2.7': 'minimax-m2.7',
   'claude-haiku-4.5': 'claude-haiku-4-5',
+  // DeepSeek V4 ships as `deepseek-v4-<tier>` in the plain/internal product
+  // files and as `deepseek-v4-<tier>-ioa` in the iOA one; both channel forms
+  // collapse onto the two unified registry identities.
+  'deepseek-v4-flash': 'deepseek-v4.1-flash',
+  'deepseek-v4-flash-ioa': 'deepseek-v4.1-flash',
+  'deepseek-v4-pro': 'deepseek-pro',
+  'deepseek-v4-pro-ioa': 'deepseek-pro',
 };
 
 /**
- * Channel overlay after the mainstream JSON match. Used as overrides when the
- * product file lists the same model, and as extra offerings when it does not.
+ * Channel overlay after the mainstream JSON match. Only decorates an offering
+ * the product file already matched; it never manufactures offerings by itself.
  */
 const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
   {
@@ -76,6 +83,17 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
       thinkingLevels: THINKING_LOW_HIGH_MAX,
       capabilities: ['text', 'image'],
       speed: 201,
+    },
+  },
+  {
+    // The unified registry already supplies Pro's tier, capability set, thinking
+    // ladder, pricing and speed; only the product-file context/output metadata
+    // is carried across as an override.
+    id: 'deepseek-pro',
+    modelId: 'deepseek-pro',
+    overrides: {
+      contextWindow: 1_000_000,
+      maxTokens: 50_000,
     },
   },
   {
@@ -122,8 +140,10 @@ const CODEBUDDY_CUSTOM_MODELS: readonly CodeBuddyCustomModel[] = [
   },
 ];
 
+/** Confirmed iOA wire ids; `deepseek-pro` is the one DeepSeek entry added for Pro. */
 const CUSTOM_IOA_UPSTREAM: Readonly<Record<string, string>> = {
   'deepseek-v4.1-flash': 'deepseek-v4.1-flash-ioa',
+  'deepseek-pro': 'deepseek-v4-pro-ioa',
   'hy4-preview': 'hy4-preview-ioa',
   'hy3': 'hy3-ioa',
   'minimax-m3': 'minimax-m3-ioa',
@@ -198,6 +218,24 @@ function offeringFromRegistered(
   };
 }
 
+/**
+ * Historical upstream spellings canonicalize onto the offering they name, so
+ * model-only statistics keep attributing an observed id after the product file
+ * has moved on to a new wire id. This is independent of current membership:
+ * it is derived from the identity map, not from which entries are offered.
+ */
+function historicalAliasesFor(offerings: readonly CodeBuddyModel[]): Record<string, string> {
+  const offeringIds = new Set(offerings.map((entry) => entry.id));
+  const aliases: Record<string, string> = {};
+  for (const [observed, unifiedId] of Object.entries(CODEBUDDY_PRODUCT_MODEL_IDS)) {
+    const target = customForModelId(unifiedId)?.id ?? unifiedId;
+    if (observed === target) continue;
+    if (!offeringIds.has(target) || offeringIds.has(observed)) continue;
+    aliases[observed] = target;
+  }
+  return aliases;
+}
+
 function thinkingMappingsFor(offerings: readonly CodeBuddyModel[]): NonNullable<ProviderDefinition['thinkingMappings']> {
   const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder> }> = {};
   for (const entry of offerings) {
@@ -226,9 +264,13 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   upstreamByCanonical: Record<string, string>;
 } {
   const byOfferingId = new Map<string, CodeBuddyModel>();
-  const matchedModelIds = new Set<string>();
+  // Confirmed product wire ids seed the map up front, so observed spellings keep
+  // canonicalizing even when the current product file stops listing them.
   const upstreamByCanonical: Record<string, string> = { ...CUSTOM_IOA_UPSTREAM };
 
+  // Membership is product-driven: an offering exists only when a product-file
+  // entry resolves onto the unified registry. The channel overlay never
+  // manufactures offerings on its own — it only decorates a matched entry.
   for (const entry of productEntries) {
     const modelId = resolveCodeBuddyProductModelId(entry.id);
     if (!modelId) continue;
@@ -238,14 +280,8 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     const offeringId = custom?.id ?? codeBuddyCanonicalModelId(entry.id);
     if (byOfferingId.has(offeringId)) continue;
     byOfferingId.set(offeringId, offeringFromRegistered(offeringId, registered, custom, entry));
-    matchedModelIds.add(modelId);
+    // The product-file id is the wire spelling when it differs from the offering.
     if (entry.id !== offeringId) upstreamByCanonical[offeringId] = entry.id;
-  }
-
-  for (const custom of CODEBUDDY_CUSTOM_MODELS) {
-    if (matchedModelIds.has(custom.modelId) || byOfferingId.has(custom.id)) continue;
-    const registered = models.require(custom.modelId);
-    byOfferingId.set(custom.id, offeringFromRegistered(custom.id, registered, custom));
   }
 
   return { models: [...byOfferingId.values()], upstreamByCanonical };
@@ -264,7 +300,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     defaultModel: 'deepseek-v4.1-flash',
     useClientBinary: true,
     models: built.models,
-    modelAliases: aliasesFor(built.models, upstreamModels),
+    modelAliases: { ...historicalAliasesFor(built.models), ...aliasesFor(built.models, upstreamModels) },
     thinkingMappings: thinkingMappingsFor(built.models),
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
   };

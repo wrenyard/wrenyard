@@ -20,7 +20,7 @@ export interface ProviderQuotaPool {
   readonly kind: QuotaPoolKind;
   /** Raw usage windows for a `quota` pool; empty when no evidence exists yet. */
   readonly windows: readonly ProviderQuotaPoolWindow[];
-  /** Raw Forge balance row id for a `balance` pool. */
+  /** Raw upstream balance row id for a `balance` pool. */
   readonly balanceId?: string;
   readonly evidenceRef?: string;
   readonly checkedAt?: string;
@@ -31,4 +31,3 @@ export interface ProviderQuotaBinding {
   readonly modelId: string;
   readonly pools: readonly ProviderQuotaPool[];
 }
-
