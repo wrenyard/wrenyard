@@ -29,7 +29,7 @@ export interface ProviderListModel {
   /** Catalog intelligence tier for the model. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
   /** Catalog list price as [cached, input, output] USD per million tokens. */
-  pricing?: ProviderListModelPricing
+  pricing: ProviderListModelPricing
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default'
   /** True when a credential is configured AND the resolver admits provider/model. */
@@ -110,4 +110,3 @@ export interface ProviderQuotaResult {
   /** Epoch milliseconds the snapshot set was produced. */
   fetchedAt: number
 }
-
