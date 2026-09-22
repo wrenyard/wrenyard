@@ -1,6 +1,6 @@
 {
   "schema_version": "wrenyard.release-manifest.v1",
-  "suite_version": "1.0.0-dev.37",
+  "suite_version": "1.0.0-dev.38",
   "protocol_version": "1",
   "release_status": "development",
   "publishable": false,
@@ -8,17 +8,17 @@
   "components": {
     "cli": {
       "source": "apps/cli",
-      "version": "1.0.0-dev.37",
+      "version": "1.0.0-dev.38",
       "source_sha": null
     },
     "daemon": {
       "source": "apps/daemon",
-      "version": "1.0.0-dev.37",
+      "version": "1.0.0-dev.38",
       "source_sha": "787d91b244cdb01c4a130887ca39c9ffe476275b"
     },
     "desktop": {
       "source": "apps/desktop",
-      "version": "1.0.0-dev.37",
+      "version": "1.0.0-dev.38",
       "source_sha": null
     }
   }
