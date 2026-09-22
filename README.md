@@ -53,7 +53,7 @@ automatically.
 
 ## Prerequisites
 
-- Node.js 22.19 or newer
+- Node.js 24.19 or newer
 - pnpm 11.19.0 (frozen via the repository lockfile)
 ## Develop from source
 
@@ -67,10 +67,15 @@ pnpm dev
 ```
 
 macOS uses the same last three commands; only the checkout path changes.
-Toolchain versions come from the root `package.json` and lockfile (Node >=22.19.0, pnpm 11.19.0). The install
+Toolchain versions come from the root `package.json` and lockfile (Node >=24.19.0, pnpm 11.19.0). The install
 is allowed to run the Electron native build script (`pnpm-workspace.yaml`
 `allowBuilds.electron`). Do not skip that: an install that leaves Electron
 missing cannot start Desktop.
+
+SQLite uses better-sqlite3 13 Node-API prebuilds shipped with the package; its
+implicit node-gyp build is disabled, so supported x64/arm64 hosts do not need
+Python or a C++ toolchain. After updating dependencies, run pnpm install and
+restart pnpm dev once to load the pinned Node 24 runtime.
 
 `pnpm build` prepares development artifacts only. It does not produce a
 release archive, install anything, or start the app.

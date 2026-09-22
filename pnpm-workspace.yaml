@@ -28,7 +28,9 @@ injectWorkspacePackages: true
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   '@google/genai': true
-  better-sqlite3: true
+  # v13 ships Node-API prebuilds for supported Windows/macOS/Linux x64/arm64 targets.
+  # Skip implicit node-gyp rebuild, which otherwise requires Python even for prebuilds.
+  better-sqlite3: false
   electron: true
   electron-winstaller: true
   esbuild: true

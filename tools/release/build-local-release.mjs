@@ -279,7 +279,10 @@ function workspacePackageDirs(root) {
 // Source directories copied into the isolated deploy workspace. The deployed
 // CLI package pulls the daemon and the workspace feature/client packages in as
 // production dependencies, so every workspace member it can reach must be
-// present for `pnpm deploy` to resolve them.
+// present for `pnpm deploy` to resolve them. These are physical directory
+// listings only: the deploy itself follows the real package dependency graph,
+// so DSH runtime packages and the @wrenyard/dsh-shell bundle reach the control
+// tree through `@wrenyard/session` instead of any hand-copied asset step.
 const DEPLOY_WORKSPACE_SOURCES = [
   path.join('apps', 'cli'),
   path.join('apps', 'daemon'),
@@ -289,6 +292,7 @@ const DEPLOY_WORKSPACE_SOURCES = [
   path.join('packages', 'clients'),
   path.join('packages', 'execution'),
   path.join('packages', 'control-client'),
+  path.join('packages', 'dsh-shell'),
   path.join('packages', 'features', 'auto-routing'),
   path.join('packages', 'features', 'gateway'),
   path.join('packages', 'features', 'quota'),
@@ -296,6 +300,7 @@ const DEPLOY_WORKSPACE_SOURCES = [
   path.join('packages', 'features', 'provider'),
   path.join('packages', 'features', 'browser-use'),
   path.join('packages', 'features', 'computer-use'),
+  path.join('packages', 'features', 'session'),
 ];
 
 // Every first-party workspace package name that pnpm deploy may reference. A
@@ -317,6 +322,7 @@ const WORKSPACE_PACKAGE_NAMES = [
   '@wrenyard/computer-use',
   '@wrenyard/control-client',
   '@wrenyard/daemon',
+  '@wrenyard/dsh-shell',
   '@wrenyard/exec',
   '@wrenyard/execution',
   '@wrenyard/gateway',
@@ -325,7 +331,19 @@ const WORKSPACE_PACKAGE_NAMES = [
   '@wrenyard/provider-service',
   '@wrenyard/providers',
   '@wrenyard/quota',
+  '@wrenyard/session',
 ];
+
+// Third-party dependency scopes that must ship as physical directories in the
+// deployed control tree. @deepseek-ai carries the DSH runtime the daemon-side
+// session feature drives; it is asserted exactly like the first-party tree so a
+// silent hoist/linker change cannot ship a control tree without its DSH runtime.
+const ASSERTED_DEPENDENCY_SCOPES = ['@wrenyard/', '@deepseek-ai/'];
+
+// Named non-scoped production dependencies of the control tree that are also
+// asserted physical. Kept as an explicit list rather than "every third-party
+// package" so the check stays a bounded, reviewable contract.
+const ASSERTED_DEPENDENCY_NAMES = ['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core'];
 
 // Reject only workspace symlinks: a packaged runtime must never point back into
 // the source checkout or the pnpm store.
@@ -405,12 +423,14 @@ function normalizeWorkspaceDependencySpecs(deploy) {
 }
 
 // Before the deployed tree is copied into any stage, every declared production
-// dependency (the deploy root plus each hoisted first-party package) must exist
-// as a physical directory, never a symlink. npm retains physical directories
-// shipped inside a tarball's node_modules but prunes symlinked virtual-store
-// entries, so the --config.node-linker=hoisted deploy plus this check
-// guarantees the shipped dependency graph stays complete; the E2E repeats
-// physical-directory containment checks after extraction and after npm install.
+// dependency of the control tree (the deploy root plus each hoisted first-party
+// package, restricted to ASSERTED_DEPENDENCY_SCOPES/NAMES) must exist as a
+// physical directory, never a symlink. npm retains physical directories shipped
+// inside a tarball's node_modules but prunes symlinked virtual-store entries, so
+// the --config.node-linker=hoisted deploy plus this check guarantees the shipped
+// dependency graph stays complete — including the DSH runtime the session
+// feature drives; the E2E repeats physical-directory containment checks after
+// extraction and after npm install.
 function assertPhysicalDeployDependencies(deploy) {
   const manifests = [path.join(deploy, 'package.json')];
   for (const name of WORKSPACE_PACKAGE_NAMES) {
@@ -422,8 +442,8 @@ function assertPhysicalDeployDependencies(deploy) {
     const manifest = readJson(manifestPath);
     for (const field of ['dependencies', 'optionalDependencies']) {
       for (const name of Object.keys(manifest[field] ?? {})) {
-        const scoped = name.startsWith('@wrenyard/');
-        if (!scoped && !['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core'].includes(name)) continue;
+        const scoped = ASSERTED_DEPENDENCY_SCOPES.some((scope) => name.startsWith(scope));
+        if (!scoped && !ASSERTED_DEPENDENCY_NAMES.includes(name)) continue;
         direct.add(name);
       }
     }
@@ -548,7 +568,7 @@ function assertStagedControlRuns(stage, label, nodeRelPath) {
 }
 
 // Resolve the pinned Node runtime binary from the root `node` dependency
-// (declared pinned at node@22.19.0) instead of process.execPath, so every
+// (declared pinned at node@24.19.0) instead of process.execPath, so every
 // shipped CLI/suite runtime is exactly the documented pinned Node and never
 // captures whatever Node happened to run the release pipeline. The lookup
 // mirrors build-sea.mjs: createRequire resolves the `node` package's
@@ -732,7 +752,7 @@ function writePackageStage(stage, version, versions, cliDist, controlDeploy) {
     cpu: [process.arch],
     bin: { wrenyard: './bin/wrenyard.mjs' },
     files: ['bin', 'dist', '.wrenyard', 'apps', 'contracts', 'release-manifest.json', 'pnpm-workspace.yaml', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'],
-    engines: { node: '>=22.19.0' },
+    engines: { node: '>=24.19.0' },
   };
   fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }

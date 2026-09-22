@@ -20,7 +20,8 @@
  * These are TYPES ONLY and they DO NOT VALIDATE incoming JSON. See README.md.
  */
 
-import type { EpochMilliseconds } from '../session/types.ts'
+/** Epoch milliseconds since the Unix epoch. */
+export type EpochMilliseconds = number
 
 /** Opaque execution identifier. Non-empty on the wire. */
 export type ExecId = string

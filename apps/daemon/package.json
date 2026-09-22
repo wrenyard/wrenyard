@@ -20,6 +20,7 @@
     "./protocol/registry": "./lib/protocol/registry.mts",
     "./protocol/errors": "./lib/protocol/errors.mts",
     "./protocol/methods/exec": "./lib/protocol/methods/exec.mts",
+    "./protocol/methods/session": "./lib/protocol/methods/session.mts",
     "./protocol/methods/task": "./lib/protocol/methods/task.mts",
     "./protocol/methods/taskgraph": "./lib/protocol/methods/taskgraph.mts",
     "./config": "./lib/config/index.mts",
@@ -42,15 +43,16 @@
     "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=18.3.0"
+    "node": ">=24.19.0"
   },
   "dependencies": {
     "@wrenyard/gateway": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/control-client": "workspace:*",
+    "@wrenyard/session": "workspace:*",
     "@langchain/core": "1.2.5",
     "ajv": "^8.20.0",
-    "better-sqlite3": "11.10.0",
+    "better-sqlite3": "13.0.3",
     "tsx": "^4.22.4",
     "yaml": "^2.7.0",
     "zod": "^4.4.3",

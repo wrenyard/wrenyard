@@ -20,19 +20,19 @@ import test from 'node:test';
  * the callback shape level.
  */
 
-const desktopRootRequire = createRequire(import.meta.url);
+const sessionRootRequire = createRequire(import.meta.url);
 
 /**
- * Resolve a DSH package out of the installed desktop dependency tree without
+ * Resolve a DSH package out of the installed session dependency tree without
  * hardcoding a pnpm virtual-store hash. `@deepseek-ai/dsh-tools` is not a
- * direct dependency of this app; it is available in the desktop DSH dependency graph,
- * so anchoring on the resolved dsh manifest is the stable route. The anchor is
- * the manifest's *realpath*: pnpm's virtual store keeps peer/dependency
- * symlinks beside it, which the flat `apps/desktop/node_modules` tree does not
- * expose for transitive packages.
+ * direct dependency of this package; it is available in the session DSH
+ * dependency graph, so anchoring on the resolved dsh manifest is the stable
+ * route. The anchor is the manifest's *realpath*: pnpm's virtual store keeps
+ * peer/dependency symlinks beside it, which the flat workspace `node_modules`
+ * tree does not expose for transitive packages.
  */
 function resolveDshPackage(specifier: string): string {
-  const dshManifest = realpathSync(desktopRootRequire.resolve('@deepseek-ai/dsh/package.json'));
+  const dshManifest = realpathSync(sessionRootRequire.resolve('@deepseek-ai/dsh/package.json'));
   return createRequire(dshManifest).resolve(specifier);
 }
 
@@ -85,7 +85,7 @@ test('boundary guard lets a legitimate tool run and denies a late-registered orc
   }>('@deepseek-ai/dsh-scope');
 
   const boundaryModule = (await import(
-    new URL('../../../packages/dsh-shell/src/tool-boundary.mjs', import.meta.url).href
+    new URL('../../../../packages/dsh-shell/src/tool-boundary.mjs', import.meta.url).href
   )) as {
     name: string;
     ORCHESTRATION_DENY: readonly string[];

@@ -14,7 +14,7 @@
   },
   "packageManager": "pnpm@11.19.0",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.19.0"
   },
   "bin": {
     "wrenyard": "./bin/wrenyard.mjs"
@@ -55,7 +55,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "archiver": "^7.0.1",
-    "node": "22.19.0",
+    "node": "24.19.0",
     "pnpm": "11.19.0",
     "postject": "^1.0.0-alpha.6",
     "tsx": "^4.22.4",

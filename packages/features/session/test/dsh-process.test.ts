@@ -313,10 +313,7 @@ test('startDshWeb suppresses the DSH browser launch and hides Windows console ch
     assert.ok(argv.indexOf('--patch') < noOpenAt, '--no-open must follow the launcher flags');
     assert.ok(noOpenAt < argv.indexOf('--host'), '--no-open must precede the web-app flags');
 
-    const [dshProcessSource, mainSource] = await Promise.all([
-      readFile(new URL('../src/dsh-process.ts', import.meta.url), 'utf8'),
-      readFile(new URL('../src/main.ts', import.meta.url), 'utf8'),
-    ]);
+    const dshProcessSource = await readFile(new URL('../src/dsh-process.ts', import.meta.url), 'utf8');
     assert.match(
       spawnOptionsBlock(dshProcessSource, 'spawn(program, programArgs', 'let settled', 'DSH child'),
       /windowsHide:\s*true/,
@@ -327,22 +324,18 @@ test('startDshWeb suppresses the DSH browser launch and hides Windows console ch
       /windowsHide:\s*true/,
       'the Windows taskkill child must be spawned with windowsHide: true',
     );
-    assert.match(
-      spawnOptionsBlock(mainSource, "spawn(cli, ['daemon', 'start']", 'child.unref()', 'daemon start'),
-      /windowsHide:\s*true/,
-      'the detached daemon-start child must be spawned with windowsHide: true',
-    );
   });
 });
 
 test('startDshWeb puts --expose-internals in execArgv, not DSH argv', async () => {
   await withTemp(async (dir) => {
     const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
+    // No injected command: the default real Node child runs the fixture script,
+    // exactly as production launches DSH under node with the HMR flag.
     const handle = await startDshWeb({
       binPath: bin,
       profileHome: join(dir, 'dsh-home'),
       workspace: dir,
-      runAsElectron: false,
       timeoutMs: 5_000,
     });
     await handle.stop();

@@ -111,6 +111,13 @@ export interface CoreRpcHandlerOptions {
   execService?: ExecService
   resolveExecRequest?: (params: ExecStartParams) => ExecRequest
   /**
+   * Daemon-owned TaskService shared by every transport. The session feature
+   * waits on and cancels task runs through this same instance so an in-process
+   * wait observes exactly the runs the RPC/MCP surface accepts. When omitted a
+   * private instance is created for this router only.
+   */
+  taskService?: TaskService
+  /**
    * Daemon-owned exact current-Catalog display-name lookup used to label recent
    * stats.summary task-run rows. Optional: contexts without it emit rows
    * without the additive paired display-name fields.
@@ -154,7 +161,8 @@ export interface CoreRpcContext {
 }
 
 export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerOptions): void {
-  const taskService = new TaskService({ workspaceRoot: options.workspaceRoot, operations: options.operations })
+  const taskService = options.taskService
+    ?? new TaskService({ workspaceRoot: options.workspaceRoot, operations: options.operations })
   let taskgraphService: TaskGraphService | undefined
   const getTaskGraphService = (): TaskGraphService => {
     // When the daemon wires its own single TaskGraphService, use it directly

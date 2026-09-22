@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
-import { desktopCatalog } from './builtin-catalog.js';
+import { builtinCatalog } from './catalog.js';
 
 /**
  * Canonical (provider-independent) model identity used for the conversation
@@ -206,7 +206,7 @@ export function summaryGatewayCandidates(connection: WrenyardGatewayConnection):
  * label guess, and never inferred equivalence from another provider's id).
  */
 export function canonicalSummaryModelId(publicId: string): string {
-  const catalog = desktopCatalog();
+  const catalog = builtinCatalog();
   const separator = publicId.indexOf('/');
   if (separator <= 0 || separator === publicId.length - 1) return publicId;
   const providerId = publicId.slice(0, separator);
@@ -520,8 +520,8 @@ function boundSummaryText(text: string): string | undefined {
 }
 
 /**
- * Factory mirroring the class export: main.ts binds the live Gateway reader and
- * the workspace-scoped userData preference file.
+ * Factory mirroring the class export: the session service binds the live
+ * Gateway reader and the state-root-scoped preference file.
  */
 export function createConversationSummaryService(
   dependencies: ConversationSummaryDependencies,

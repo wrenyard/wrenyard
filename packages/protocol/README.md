@@ -6,10 +6,10 @@ private, MIT, ESM, zero runtime dependencies.
 > **These types DO NOT VALIDATE incoming JSON.**
 >
 > Nothing in this package parses, checks, sanitizes, dispatches, or stores a
-> message. A value typed as `Session` is a compile-time claim about a wire
-> shape, not a runtime guarantee. **Runtime validation must stay at future
-> adapters** on the transport boundary. Until such an adapter exists, treat
-> every payload crossing the wire as untrusted.
+> message. A value typed as `ConversationSnapshot` is a compile-time claim about
+> a wire shape, not a runtime guarantee. **Runtime validation stays at the
+> adapter** on the transport boundary. Treat every payload crossing the wire as
+> untrusted.
 
 ## Boundaries
 
@@ -24,17 +24,17 @@ contain, and must not grow, any of the following:
 - desktop UI state, view models, or presentation projections
 - runtime dependency on any Wrenyard business package
 
-It also does not implement the session engine. "A session stores messages and
-owns turns" describes the contract a future feature service must satisfy; it is
-not a description of code in this repository.
+It also does not implement the session engine: `@wrenyard/session` owns the DSH
+backend, persistence and recovery. The types here are the shape it projects.
 
 ### Relationship to existing code
 
 This package is **not** the existing worker/daemon session surface and **not**
-`message.send`. The conversation DTOs here describe a future product
-conversation API. The existing `apps/daemon/lib/protocol` wire shape and
-`packages/control-client` transport are unchanged and are not imported here;
-the JSON-RPC envelope shape is mirrored so the future adapter can carry both.
+`message.send`. The conversation DTOs here are the product conversation API that
+`@wrenyard/session` returns and `@wrenyard/control-client/session` transports.
+The existing `apps/daemon/lib/protocol` wire shape is unchanged and is not
+imported here; the JSON-RPC envelope shape is mirrored so the adapter can carry
+both.
 
 Types are declared as regular interfaces without index signatures. JSON
 serialization safety comes from each concrete DTO being composed only of
@@ -51,13 +51,11 @@ src/
     jsonrpc.ts          JSON-RPC 2.0 envelopes + standard numeric error codes
     methods.ts          RpcMethod / RpcNotification descriptors and the
                         helpers that infer params, results, requests, responses
-    errors.ts           known numeric protocol codes (SESSION_NOT_FOUND -32003)
     index.ts
   session/
-    types.ts            ids, epoch ms, SessionSummary/Session/Message/Turn
-    methods.ts          the seven method param/result pairs + SessionMethods
-    events.ts           SessionEvent union + SessionNotifications (future push)
-    errors.ts           SessionErrorData discriminated by kind
+    types.ts            ConversationSnapshot + every product DTO it carries
+    methods.ts          method param/result pairs + SessionMethods, and the
+                        (currently empty) SessionNotifications map
     index.ts
   exec/
     types.ts            ExecSnapshot + ExecEventEnvelope (no process/env fields)
@@ -65,7 +63,6 @@ src/
     errors.ts           ExecErrorData discriminated by kind
     index.ts
   examples/
-    session.ts          static typed example data (satisfies, no casts)
     exec.ts             static typed example data (satisfies, no casts)
 README.md
 package.json
@@ -80,77 +77,59 @@ but nothing in this task runs it.
 
 ## Session methods
 
-Seven methods, each with explicit named `Params`/`Result` types. Wire names are
+Ten methods, each with explicit named `Params`/`Result` types. Wire names are
 the map keys in `SessionMethods`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `session.create` | `{ workspaceId, title? }` | `{ session }` |
-| `session.list` | `{ workspaceId, cursor?, limit? }` | `{ sessions, nextCursor? }` |
-| `session.get` | `{ sessionId }` | `{ session, activeTurn?, cursor }` |
-| `session.messages.list` | `{ sessionId, cursor?, limit? }` | `{ messages, nextCursor? }` |
-| `session.send` | `{ sessionId, clientRequestId, text, model }` | `{ turn, userMessage }` |
-| `session.cancel` | `{ sessionId, turnId }` | `{ turn }` |
-| `session.events` | `{ sessionId, afterSeq, limit? }` | `{ events, nextSeq, hasMore }` |
+| `session.snapshot` | `{ afterRevision?, waitMs? }` | `SessionSnapshotResult` |
+| `session.select` | `{ sessionId }` | `SessionSnapshotResult` |
+| `session.create` | `{}` | `SessionSnapshotResult` |
+| `session.selectModel` | `{ provider, model, reasoningEffort? }` | `SessionSnapshotResult` |
+| `session.send` | `{ text, clientTimeZone? }` | `SessionSnapshotResult` |
+| `session.cancel` | `{ turnId? }` | `SessionSnapshotResult` |
+| `session.setWorkspace` | `{ workspace }` | `SessionSnapshotResult` |
+| `session.summary.model.get` | *none* | `{ summary }` |
+| `session.summary.model.set` | `{ canonicalModel }` | `{ summary }` |
+| `session.backend` | *none* | `SessionBackendResult` |
 
-Draft semantics a future adapter must honor:
+Contract semantics the adapters honor:
 
-- **`session.get.cursor`** is the event sequence at the *same snapshot* as the
-  returned metadata. It is not message history. Use it as the `afterSeq` of the
-  first `session.events` poll.
-- **`session.messages.list`** uses an opaque cursor that freezes the pagination
-  upper bound at issue time, so a newer message cannot shift a page. Newest
-  page first; items *within* a page are chronological. This cursor is
-  independent of the event cursor, and the two must not be interchanged.
-- **`session.send`** returns an *acceptance*, not a completed generation: the
-  turn may still be queued or running. `clientRequestId` is a session-scoped
-  idempotency key — an identical retry returns the same turn and message ids,
-  the same key with different content is a conflict, only one turn is active per
-  session at a time, and a disconnect does not cancel the turn. This draft
-  retains idempotency records for the session's lifetime.
-- **`session.cancel`** is idempotent and targets a specific turn. It returns a
-  terminal turn when the turn already is terminal; because cancellation is
-  cooperative, the acknowledgement may still report an active status until the
-  terminal `turn.updated` event arrives.
-- **`session.events`** is exclusive on `afterSeq`, ascending on the per-session
-  positive safe-integer `seq`, and never skips an event. `nextSeq` is the last
-  returned `seq`; on an empty page it retains the input `afterSeq`. `afterSeq:
-  0` starts from the beginning of retained history *only if that history has not
-  expired*. Paging defaults to 50 and caps at 200
-  (`SESSION_PAGE_DEFAULT_LIMIT` / `SESSION_PAGE_MAX_LIMIT`); invalid paging
-  arguments are rejected at the future adapter, not here.
+- **Every action returns the full projection.** `SessionSnapshotResult` is
+  `{ conversation, revision }`, where `conversation` is the complete
+  `ConversationSnapshot`. A caller replaces the projection it holds; it never
+  merges a delta, so two callers cannot diverge.
+- **`session.snapshot` is the only read.** `afterRevision` is the revision the
+  caller already holds. When it equals the current revision the call waits for
+  the next change or terminal flush — bounded by `waitMs`, never more than
+  1000ms — and still returns a *complete* snapshot. A different revision, or an
+  omitted one, returns immediately. Continuous updates are pull-based; there is
+  no push channel.
+- **`revision` is monotonic and epoch-seeded**, so it never resets within a
+  process and a cursor captured before a reconnect can never be mistaken for a
+  live one. A reconnecting client re-reads with no cursor at all.
+- **`session.cancel`** addresses one turn by `turnId` (or the oldest running turn
+  of the selected conversation when absent). Only that turn's own execution
+  branch and its owned task runs are stopped, so parallel turns and other
+  conversations are unaffected.
+- **`session.setWorkspace`** switches the bound workspace. The workspace is
+  validated against the configured workspace root first; a mismatch is refused
+  instead of silently rebinding the conversation.
+- **`session.summary.model.get` / `.set`** carry `SummarySettingsSnapshot`:
+  the persisted canonical model id plus the options the live local model Gateway
+  can actually serve.
+- **`session.backend`** is main-process diagnostics only — it reports the DSH
+  child process state (`starting`, `running`, `stopped`, `failed`). It is never
+  projected to the renderer.
+
+`SessionNotifications` is intentionally empty: nothing is pushed today.
 
 ### Recommended read flow
 
-1. `session.get` once to obtain the session snapshot and its `cursor`.
-2. `session.messages.list` to page backwards through history.
-3. `session.events` with `afterSeq = get.cursor` to follow forward progress.
-
-Apply events in sequence order, deduplicating by `(sessionId, seq)` and
-upserting entities by id. When loading older history alongside events, only
-fill missing entities; never overwrite an entity already refreshed by the
-event stream. Timestamps are display metadata, not ordering tokens. If an
-event cursor expires, discard that projection and restart the read flow.
-
-## Events and error data
-
-`SessionEvent` is discriminated on `type`: `session.updated` (carries
-`session`), `turn.updated` (carries `turn`), `message.upserted` (carries
-`message`). Each also carries `sessionId`, `seq`, `occurredAt`, and `type`.
-Events are always whole-entity updates — there are no text deltas.
-
-The same `SessionEvent` union is used by polling and by the **future**
-`SessionNotifications` push contract (`'session.event'`). **No push or
-subscription is implemented here**; polling is the only mechanism this draft
-describes.
-
-`SessionErrorData` is discriminated on `kind`: `session_not_found`,
-`turn_not_found`, `session_busy`, `idempotency_conflict`, `cursor_expired`,
-`cursor_ahead`. Only `session_not_found` has a numeric wire code today
-(`-32003`). **The remaining numeric mapping is pending and must be defined
-before runtime integration**; speculative codes were intentionally not
-assigned. A consumer should discriminate on `kind`, and an expired or
-ahead cursor means the client must resynchronize rather than retry blindly.
+1. Read once with no `afterRevision` to seed the projection and its `revision`.
+2. Re-issue `session.snapshot` with `afterRevision: <last revision>, waitMs: 1000`
+   in a loop. Each reply replaces the projection and advances the cursor; a
+   reconnect starts again from step 1 with no cursor.
 
 ## Typed usage
 
@@ -158,22 +137,19 @@ ahead cursor means the client must resynchronize rather than retry blindly.
 import type {
   ProtocolResponse,
   RpcTypedRequest,
-  SessionEvent,
   SessionMethods,
   SessionSendParams,
 } from '@wrenyard/protocol'
 
 // Params/results are inferred from the feature map, not restated:
-type GetRequest = RpcTypedRequest<SessionMethods, 'session.get'>
-//   -> { jsonrpc: '2.0'; method: 'session.get'; params: SessionGetParams; id: JsonRpcId }
+type SnapshotRequest = RpcTypedRequest<SessionMethods, 'session.snapshot'>
+//   -> { jsonrpc: '2.0'; method: 'session.snapshot'; params: SessionSnapshotParams; id: JsonRpcId }
 type SendResponse = ProtocolResponse<'session.send'>
 //   -> success carrying SessionSendResult, or an error response
 
 const sendParams = {
-  sessionId: 'ses_1',
-  clientRequestId: 'cli_1',
   text: 'hello',
-  model: { providerId: 'codebuddy', modelId: 'deepseek-v4.1-flash' },
+  clientTimeZone: 'Asia/Shanghai',
 } satisfies SessionSendParams
 ```
 
@@ -184,21 +160,20 @@ import type { ProtocolRequestUnion } from '@wrenyard/protocol'
 
 function handle(request: ProtocolRequestUnion) {
   switch (request.method) {
-    case 'session.get':
-      // request.params is narrowed to SessionGetParams here
+    case 'session.select':
+      // request.params is narrowed to SessionSelectParams here
       return request.params.sessionId
     case 'session.send':
       // request.params is narrowed to SessionSendParams here
-      return request.params.clientRequestId
+      return request.params.text
     default:
       return undefined
   }
 }
 ```
 
-Typed sample payloads using `satisfies` live in `src/examples/session.ts` and
-`src/examples/exec.ts`. They are not imported at runtime. The compiler has not
-been run for this draft. JSON-RPC responses contain no method name: a client
+Typed sample payloads using `satisfies` live in `src/examples/exec.ts`. They are
+not imported at runtime. JSON-RPC responses contain no method name: a client
 matches the response id to a pending request before selecting the corresponding
 result type.
 
@@ -252,9 +227,9 @@ either. Raw child stdout/stderr does not cross this wire; the normalized agent
 event record is the only transport detail carried.
 
 Exec errors are discriminated on `kind`: `exec_not_found`,
-`exec_client_unavailable`, `exec_cursor_expired`, `exec_feature_unknown`. As
-with the session feature, **none of them has an assigned numeric wire code**;
-the adapter must define the mapping.
+`exec_client_unavailable`, `exec_cursor_expired`, `exec_feature_unknown`.
+**None of them has an assigned numeric wire code**; the adapter must define the
+mapping.
 
 ## Future feature migration
 
@@ -279,14 +254,12 @@ To add a feature (for example `taskgraph`):
 3. Add subpath exports in `package.json` if the feature should be importable
    on its own (`./<feature>`).
 
-Migrating an existing surface (for example the legacy `message.send` or the
-desktop conversation snapshot) has three rules:
+Migrating an existing surface (for example the legacy `message.send`) has two
+rules:
 
 - **Preserve legacy wire names and fields.** Keep snake_case field names and
   existing method names exactly as they are on the wire; the DTOs are the
   adapter's target, not a wire rename.
-- **Re-export during migration.** Keep legacy re-exports until every consumer
-  has moved, then delete them in one deliberate change.
 - **Runtime remains outside protocol.** Feature services may consume these
   type-only contracts. Transport adapters own validation and numeric error-code
   assignment; protocol never imports the feature implementation.
@@ -305,6 +278,8 @@ The daemon validates and dispatches these methods over local IPC to
 
 ## Implementation status
 
-This package has no runtime wiring. Exec and provider handlers exist in the
-daemon; session remains a design scaffold. No tests or typecheck were run for
-the local refactor.
+The session contract here is the real, implemented surface: `@wrenyard/session`
+projects `ConversationSnapshot` with a monotonic revision, and
+`@wrenyard/control-client/session` transports it. Exec and provider handlers
+exist in the daemon. The protocol package itself still has no runtime wiring and
+never imports a feature implementation.
