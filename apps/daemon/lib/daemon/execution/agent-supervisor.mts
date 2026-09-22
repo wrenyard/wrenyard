@@ -643,13 +643,24 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
       const plan = this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model);
+      // A native dispatch must hand the CLI the exact wire spelling the
+      // installed product/login declares — e.g. canonical `claude-sonnet-5` is
+      // the product's 1M row `claude-sonnet-5-1m`, not the 200K row that shares
+      // the public id. The admission binding already carries that wire id for
+      // this exact execution (resolved from the current product snapshot when
+      // the run was admitted); an explicit thinking-mapped substitution still
+      // wins. The public canonical id stays in canonicalModel, so observed ids
+      // normalize back and no wire spelling ever reaches a public surface.
+      const launchModel = plan.upstreamModel
+        ?? (plan.mode === 'native' ? entry.codeBuddyExecution?.expectedWireModel : undefined)
+        ?? syntax.model;
       this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, model: syntax.model});
       // The resolved client/provider/model/mode/thinking/cwd are all owned by
       // the task layer. The daemon's shared ExecService only runs the resolved
       // client, so both this path and an explicit `wrenyard exec` share one
       // launch/feature/replay implementation.
       const agentRequest: AgentRequest = {
-        model: plan.upstreamModel ?? syntax.model,
+        model: launchModel,
         canonicalModel: syntax.model,
         provider: syntax.provider,
         mode: plan.mode,
