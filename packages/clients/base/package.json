@@ -4,13 +4,20 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./session": "./src/session.ts",
+    "./native": "./src/native.ts",
+    "./statistics": "./src/statistics.ts",
+    "./mcp": "./src/mcp.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
   },
   "dependencies": {
-    "@wrenyard/execution": "workspace:*"
+    "@wrenyard/execution": "workspace:*",
+    "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
