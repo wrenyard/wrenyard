@@ -902,6 +902,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     const endedAt = nowIso()
     const eventStatus = mapEventStatus(terminal.status)
+    // `applied` records whether THIS call's conditional UPDATE won, evaluated
+    // strictly inside the transaction. `committed` is only ever assigned once
+    // the transaction has returned successfully, so a transaction that rolls
+    // back can never be mistaken for a committed terminal state.
+    let applied = false
     let committed = false
     let terminalError: unknown
     let result: ExecutionResult | undefined
@@ -927,9 +932,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         )
 
         if (updateResult.changes !== 1) return
-        committed = true
-
-        if (terminal.status === 'done') this.persistNativeSessionIfCaptured(entry, endedAt)
+        applied = true
 
         this.insertEvent({
           executionId: entry.executionId,
@@ -969,6 +972,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.repoWriteLocks.releaseByExecution(entry.executionId)
       })
 
+      // The transaction returned without throwing: the terminal status, output
+      // and terminal/result/turn-complete events are durably committed (or
+      // another writer had already terminalized this execution).
+      committed = applied
+
       if (committed) {
         result = {
           executionId: entry.executionId,
@@ -983,6 +991,21 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         const row = this.getExecution(entry.executionId)
         if (row && isTerminalStatus(row.status)) result = resultFromRow(row)
         else terminalError = new Error(`Execution '${entry.executionId}' terminal transaction did not commit`)
+      }
+
+      // Optional native-session persistence happens strictly AFTER the terminal
+      // commit and is best-effort: a failure here can never roll back the
+      // committed terminal result, never leak the repo write lock, and never
+      // discard the usage/events captured before the failure.
+      if (committed && terminal.status === 'done') {
+        try {
+          this.persistNativeSessionIfCaptured(entry, endedAt)
+        } catch (sessionError) {
+          this.log(
+            'warn',
+            `[foreman] Failed to persist native session for ${entry.executionId}: ${errorMessage(sessionError)}`,
+          )
+        }
       }
     } catch (error) {
       terminalError = error
@@ -1509,6 +1532,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   private rejectAndForget(entry: RegistryEntry, error: unknown): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
+    // A terminal transaction that threw rolled back together with its
+    // in-transaction repo-lock release, so release again here as a guaranteed
+    // fallback on the error path (releaseByExecution is idempotent).
+    this.repoWriteLocks.releaseByExecution(entry.executionId)
     this.registry.delete(entry.executionId)
     entry.rejectWait(error)
   }
