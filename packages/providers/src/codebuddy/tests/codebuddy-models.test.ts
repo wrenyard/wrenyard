@@ -18,7 +18,8 @@ test('CodeBuddy product ids match the mainstream registry or are ignored', () =>
   assert.equal(resolveCodeBuddyProductModelId('hy4-preview'), 'hunyuan-hy4-preview');
   assert.equal(resolveCodeBuddyProductModelId('gpt-5.6-sol'), 'gpt-5.6-sol');
   assert.equal(resolveCodeBuddyProductModelId('kimi-k3-ioa'), 'kimi-k3');
-  assert.equal(resolveCodeBuddyProductModelId('minimax-m2.7-ioa'), 'minimax-m2.7');
+  assert.equal(resolveCodeBuddyProductModelId('minimax-m2.7-ioa'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('MiniMax-M2.7'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('claude-haiku-4.5'), 'claude-haiku-4-5');
   assert.equal(resolveCodeBuddyProductModelId('MiniMax-M3'), 'minimax-m3');
   assert.equal(resolveCodeBuddyProductModelId('echo'), undefined);
@@ -33,9 +34,15 @@ test('CodeBuddy product ids match the mainstream registry or are ignored', () =>
   assert.equal(resolveCodeBuddyProductModelId('gpt-5.5'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('gpt-5.5-ioa'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('claude-fable-5'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-flash-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-flash-ioa'), 'deepseek-v4.1-flash');
+  assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro'), 'deepseek-v4-pro');
+  assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro-ioa'), 'deepseek-v4-pro');
+  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m'), 'claude-sonnet-5');
+  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m-ioa'), 'claude-sonnet-5');
+  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5-1m'), 'claude-opus-5');
+  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5-1m-ioa'), 'claude-opus-5');
+  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('hunyuan-image-v3.0-ioa'), undefined);
 });
 
@@ -60,7 +67,6 @@ test('CodeBuddy offerings are mainstream JSON matches plus CUSTOM leftovers', ()
     'gpt-5.5',
     'claude-fable-5',
     'deepseek-v4-flash',
-    'deepseek-v4-pro',
     'default-model',
   ]) {
     assert.ok(!ids.includes(banned), `${banned} leaked into CodeBuddy offerings`);

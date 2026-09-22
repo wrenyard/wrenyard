@@ -7,7 +7,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./base": "./src/base/index.ts",
-    "./model-display-names": "./src/model-display-names.ts",
     "./catalog": "./src/base/catalog.ts",
     "./codebuddy": "./src/codebuddy/index.ts",
     "./chatgpt": "./src/chatgpt/index.ts"

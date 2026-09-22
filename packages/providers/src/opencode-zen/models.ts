@@ -1,4 +1,4 @@
-import { defineProvider, CANONICAL_MODELS, model, openAI, anthropic, THINKING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
+import { defineProvider, model, openAI, anthropic, THINKING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
   id: 'opencode-zen', displayName: 'OpenCode Zen', credentialResolver: 'managed',
@@ -8,15 +8,15 @@ export const definition = defineProvider({
     // transport, so these never appear in the client-agnostic gateway
     // directory. `union-alpha` speaks the Anthropic messages protocol; the
     // remaining free models are chat-completions only.
-    { ...model('mimo-v2.5-free', 1_048_576, 32_768), free: true, supportedClients: ['opencode'] },
-    { ...model('ling-3.0-flash-fin-free', 262_144, 32_768), free: true, supportedClients: ['opencode'] },
+    { ...model('mimo-v2.5-free', 1_048_576, 32_768, 'mimo-v2.5'), free: true, supportedClients: ['opencode'] },
+    { ...model('ling-3.0-flash-fin-free', 262_144, 32_768, 'ling-3.0-flash-fin'), free: true, supportedClients: ['opencode'] },
     { ...model('big-pickle'), free: true, supportedClients: ['opencode'] },
     { ...model('union-alpha'), free: true, supportedClients: ['opencode'] },
-    { ...model('nemotron-3-ultra-free', 1_000_000, 32_768), free: true, supportedClients: ['opencode'] },
-    { ...model('nemotron-3.5-lightning-free', 1_000_000, 32_768), free: true, supportedClients: ['opencode'] },
+    { ...model('nemotron-3-ultra-free', 1_000_000, 32_768, 'nemotron-3-ultra'), free: true, supportedClients: ['opencode'] },
+    { ...model('nemotron-3.5-lightning-free', 1_000_000, 32_768, 'nemotron-3.5-lightning'), free: true, supportedClients: ['opencode'] },
     // Paid Zen pool: gateway-usable, priced by the existing catalog metadata.
-    model('glm-5.3', 1_048_576, 32_768, CANONICAL_MODELS['glm-5.3']),
-    model('kimi-k3', 1_048_576, 32_768, CANONICAL_MODELS['kimi-k3'], THINKING_LOW_HIGH_MAX),
+    model('glm-5.3', 1_048_576, 32_768, 'glm-5.3'),
+    model('kimi-k3', 1_048_576, 32_768, 'kimi-k3', THINKING_LOW_HIGH_MAX),
   ],
   protocols: [
     openAI('https://opencode.ai/zen/v1/chat/completions'),

@@ -4,7 +4,12 @@ export function defineModel(
   id: string,
   displayName: string,
   defaults: ModelDefaults,
-  extra: { lab: string; family?: string; version?: string; native?: ModelNativeAttributes },
+  extra: {
+    lab: string;
+    family?: string;
+    version?: string;
+    native?: ModelNativeAttributes;
+  },
 ): RegisteredModel {
   return {
     id,

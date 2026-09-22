@@ -9,8 +9,6 @@ export {
   isBuiltinClientGatewayProviderSupported,
 } from './catalog.ts';
 export { createBuiltinCatalog } from './registry.ts';
-export { builtinModelDisplayName, builtinModelDisplayId } from './model-display-names.ts';
-export type { BuiltinModelId } from './model-display-names.ts';
 export { resolveModelSpeed } from './base/catalog.ts';
 export type { DispatchCandidate, IntelligenceTier, LocalSpeedSample, ModelPricing, SpeedEvidence, SpeedSource } from './base/catalog.ts';
 export { canonicalizeObservedProviderModelId, createBuiltinProviderRuntime, resolveRuntimeTaskPlans, upstreamAuthHeaders } from './runtime.ts';

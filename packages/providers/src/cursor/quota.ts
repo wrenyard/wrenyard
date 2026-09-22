@@ -19,6 +19,7 @@ export const quota = {
   read: async (source: QuotaSource) => normalizeCursorQuota(await source.read()),
   bindings: [
     binding('cursor', 'grok-4.6', [CURSOR_POOL]),
+    binding('cursor', 'grok-4.7', [CURSOR_POOL]),
     binding('cursor', 'composer-2.5', [CURSOR_POOL]),
     // Third-party Cursor models consume the Other allowance, not the Cursor pool.
     binding('cursor', 'kimi-k3', [CURSOR_OTHER_POOL]),
@@ -29,7 +30,6 @@ export const quota = {
     binding('cursor', 'claude-sonnet-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'muse-spark-1.3', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gemini-3.8-flash', [CURSOR_OTHER_POOL]),
-    binding('cursor', 'claude-fable-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),
   ],
   defaultPools: [quotaPool('cursor/usage', [])],

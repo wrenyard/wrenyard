@@ -1,3 +1,4 @@
+import { MAINSTREAM_MODEL_IDS } from './mainstream.ts';
 import { INTELLIGENCE_TIERS, THINKING_LEVELS, type RegisteredModel } from './types.ts';
 import { alibabaModels } from './definitions/alibaba.ts';
 import { anthropicModels } from './definitions/anthropic.ts';
@@ -102,6 +103,18 @@ export class ModelRegistry {
   list(): readonly RegisteredModel[] {
     return [...this.modelsById.values()];
   }
+
+  /** Display name of an exact registered model id. */
+  displayName(id: string): string | undefined {
+    return this.modelsById.get(id)?.displayName;
+  }
+}
+
+/** Display name of an exact WY model id. Provider spellings resolve through that provider's canonical model first. */
+export function builtinModelDisplayName(id: string): string {
+  const name = models.displayName(id);
+  if (name === undefined) throw new Error(`unknown registered model: ${id}`);
+  return name;
 }
 
 const BUILTIN_MODELS: readonly RegisteredModel[] = [
@@ -129,56 +142,8 @@ const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...poolsideModels,
 ];
 
-/**
- * Default product-enabled model ids for Desktop chat and task dispatch.
- * Older and niche registered identities stay in the registry; providers may
- * adopt this list, then overlay channel CUSTOM offerings.
- */
-export const MAINSTREAM_MODEL_IDS = [
-  'deepseek-v4.1-flash',
-  'deepseek-pro',
-  'hunyuan-hy4-preview',
-  'hunyuan-hy3',
-  'kimi-k3',
-  'kimi-k2.8',
-  'gpt-6-astra',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-  'glm-5.3',
-  'glm-5.3-flash',
-  'minimax-m3',
-  'minimax-m2.7',
-  'minimax-m2.7-highspeed',
-  'claude-fable-5-1',
-  'claude-opus-5',
-  'claude-sonnet-5',
-  'claude-haiku-4-5',
-  'grok-4.6',
-  'grok-4.5',
-  'composer-2.5',
-  'muse-spark-1.3',
-  'gemini-3.8-flash',
-  'doubao-seed-2-0-lite',
-  'qwen3.8-max',
-  'qwen3.7-plus',
-  'qwen3.7-flash',
-  'qwen3.6-plus',
-  'qwen3.5-plus',
-  'qwen3-coder-next',
-  'qwen3-coder-plus',
-] as const;
-
-export type MainstreamModelId = (typeof MAINSTREAM_MODEL_IDS)[number];
-
-const MAINSTREAM_MODEL_ID_SET: ReadonlySet<string> = new Set(MAINSTREAM_MODEL_IDS);
-
-export function isMainstreamModelId(id: string): boolean {
-  return MAINSTREAM_MODEL_ID_SET.has(id);
-}
-
 function assertMainstreamModelIds(registry: ModelRegistry): void {
-  if (MAINSTREAM_MODEL_ID_SET.size !== MAINSTREAM_MODEL_IDS.length) {
+  if (new Set(MAINSTREAM_MODEL_IDS).size !== MAINSTREAM_MODEL_IDS.length) {
     throw new Error('MAINSTREAM_MODEL_IDS must not contain duplicates');
   }
   for (const id of MAINSTREAM_MODEL_IDS) registry.require(id);

@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   BUILTIN_PROVIDERS,
-  builtinModelDisplayName,
   createBuiltinCatalog,
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
 } from '../src/index.ts';
+import { builtinModelDisplayName } from '@wrenyard/models';
 
 test('CodeBuddy keeps native routing and exposes every confirmed gateway model', () => {
   const catalog = createBuiltinCatalog();
@@ -38,9 +38,6 @@ test('CodeBuddy keeps native routing and exposes every confirmed gateway model',
     'deepseek-v4-pro',
     'glm-5.2',
     'kimi-k2.6',
-    'gpt-5.4',
-    'gpt-5.5',
-    'claude-fable-5',
     'minimax-m2.5',
     'default-model',
   ]) {
@@ -130,8 +127,8 @@ test('derived task plans key representative native and gateway combinations cano
   assert.deepEqual(plans['zhipu-coding/glm-5.3-flash:cc'], {
     client: 'claude', provider: 'zhipu-coding', model: 'glm-5.3-flash', mode: 'gateway', protocol: 'anthropic_messages',
   });
-  assert.deepEqual(plans['spacex-ai/grok-4.5:gk'], {
-    client: 'grok', provider: 'spacex-ai', model: 'grok-4.5', mode: 'native', supportsWebSearch: true,
+  assert.deepEqual(plans['spacex-ai/grok-4.7:gk'], {
+    client: 'grok', provider: 'spacex-ai', model: 'grok-4.7', mode: 'native', supportsWebSearch: true,
   });
   assert.equal(plans['codebuddy/hy3:gk'], undefined);
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:gk'], undefined);
@@ -146,7 +143,7 @@ test('native web search is admitted only for explicitly supported native client/
   assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].supportsWebSearch, true);
   assert.equal(plans['cursor/composer-2.5:cur'].supportsWebSearch, true);
   assert.equal(plans['cursor/grok-4.6:cur'].supportsWebSearch, true);
-  assert.equal(plans['spacex-ai/grok-4.5:gk'].supportsWebSearch, true);
+  assert.equal(plans['spacex-ai/grok-4.7:gk'].supportsWebSearch, true);
 
   // CodeBuddy/DeepSeek native routes are NOT marked: the client does not declare
   // native web search, even though it runs natively.
@@ -221,12 +218,12 @@ test('Codex GPT plans default to the highest mapped thinking level and never inv
   assert.equal(plans['chatgpt/gpt-5.6-terra:codex'].thinking, 'max');
   assert.equal(plans['chatgpt/gpt-5.6-luna:codex'].thinking, 'max');
   assert.equal(plans['openai/gpt-5.6-sol:codex'].thinking, 'max');
-  // Older GPT families cap at xhigh with the exact wire effort.
-  assert.equal(plans['chatgpt/gpt-5.5:codex'].thinking, 'xhigh');
-  assert.equal(plans['chatgpt/gpt-5.4:codex'].thinking, 'xhigh');
+  // Registry history keeps the retired names resolvable even though ChatGPT
+  // no longer offers them.
+  assert.equal(builtinModelDisplayName('gpt-5.5'), 'GPT 5.5');
+  assert.equal(builtinModelDisplayName('gpt-5.4'), 'GPT 5.4');
   // Requests above the usable range are capped at its highest mapped level.
   assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.6-sol', 'low').reasoningEffort, 'low');
-  assert.equal(catalog.resolveRun('codex', 'chatgpt', 'gpt-5.4', 'max').reasoningEffort, 'xhigh');
   // An unmapped model family leaves thinking unset rather than inventing transport.
   assert.equal(plans['zhipu-coding/glm-5.3-flash:cc'].reasoningEffort, undefined);
   assert.equal(plans['codebuddy/deepseek-v4.1-flash:cb'].thinking, 'max');
@@ -263,23 +260,16 @@ test('built-in models carry their configured accessibility tier', () => {
   assert.equal(tier('codebuddy', 'hy4-preview'), 'mid');
   assert.equal(tier('codebuddy', 'deepseek-v4.1-flash'), 'mid');
   assert.equal(tier('tokenhub', 'deepseek/deepseek-flash'), 'mid');
-  assert.equal(tier('anthropic', 'claude-fable-5'), 'premium');
   assert.equal(tier('anthropic', 'claude-opus-5'), 'premium');
   assert.equal(tier('anthropic', 'claude-haiku-4-5-20251001'), 'low');
   assert.equal(tier('zhipu', 'glm-5.3'), 'high');
   assert.equal(tier('zhipu', 'glm-5.2'), 'mid');
-  assert.equal(tier('chatgpt', 'gpt-5.4'), 'mid');
   assert.equal(tier('moonshot', 'kimi-k3'), 'high');
-  assert.equal(tier('qwen-coding', 'qwen3.6-plus'), 'low');
+  assert.equal(tier('qwen', 'qwen3.8-max'), 'mid');
 
   assert.equal(tier('anthropic', 'claude-sonnet-5'), 'mid');
-  assert.equal(tier('chatgpt', 'gpt-5.5'), 'high');
   assert.equal(tier('cursor', 'composer-2.5'), 'low');
-  assert.equal(tier('minimax', 'MiniMax-M2.7-highspeed'), 'low');
-  assert.equal(tier('qwen', 'qwen3.7-flash'), 'low');
-  assert.equal(tier('qwen-coding', 'qwen3.5-plus'), 'low');
-  assert.equal(tier('qwen-coding', 'qwen3-coder-plus'), 'low');
-  assert.equal(tier('spacex-ai', 'grok-4.5'), 'high');
+  assert.equal(tier('minimax', 'MiniMax-M3'), 'low');
   assert.equal(tier('volcengine', 'doubao-seed-2-0-lite-260215'), 'low');
 });
 
@@ -303,8 +293,8 @@ test('every registered built-in model has a valid authoritative speed default', 
   const representative = new Map(entries.map(({ model }) => [model.id, model.speed]));
   assert.equal(representative.get('gpt-6-astra'), 51);
   assert.equal(representative.get('gpt-5.6-terra'), 98);
-  assert.equal(representative.get('MiniMax-M2.7-highspeed'), 100);
-  assert.equal(representative.get('qwen3.7-flash'), 111);
+  assert.equal(representative.get('MiniMax-M3'), 156);
+  assert.equal(representative.get('qwen3.8-max'), 39);
   assert.equal(representative.get('doubao-seed-2-0-lite-260215'), 35);
 });
 
@@ -350,13 +340,10 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   ] as const) {
     assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m3', displayName: builtinModelDisplayName('minimax-m3') });
   }
-  for (const [provider, model] of [
-    ['minimax', 'MiniMax-M2.7'],
-    ['minimax-coding', 'MiniMax-M2.7'],
-    ['tokenhub', 'minimax-m2.7'],
-  ] as const) {
-    assert.deepEqual(route(provider, model).canonicalModel, { id: 'minimax-m2.7', displayName: builtinModelDisplayName('minimax-m2.7') });
-  }
+  assert.equal(route('minimax', 'MiniMax-M2.7'), undefined);
+  assert.equal(route('tokenhub', 'minimax-m2.7'), undefined);
+  assert.equal(route('tokenhub', 'qwen3.5-plus'), undefined);
+  assert.equal(route('qwen', 'qwen3.7-plus'), undefined);
 
   assert.deepEqual(route('codebuddy', 'hy4-preview').canonicalModel, {
     id: 'hunyuan-hy4-preview',
@@ -364,13 +351,21 @@ test('shared canonical model metadata is explicit, version-exact, and label-cons
   });
   assert.deepEqual(route('tokenhub', 'hy4-preview').canonicalModel, route('codebuddy', 'hy4-preview').canonicalModel);
 
-  // DeepSeek routes remain provider-local. Current provider aliases and
-  // matching marketing labels must never fold their historical usage into an
-  // unversioned route.
+  // Provider spellings of V4.1 Flash point at the official model. Pro's public
+  // id is already that official id, and the CodeBuddy offering keeps the same id.
   assert.equal(route('codebuddy', 'deepseek-v4.1-flash').canonicalModel, undefined);
-  assert.equal(route('tokenhub', 'deepseek/deepseek-flash').canonicalModel, undefined);
-  assert.equal(route('deepseek', 'deepseek-flash').canonicalModel, undefined);
-  assert.equal(route('deepseek', 'deepseek-pro').canonicalModel, undefined);
+  assert.deepEqual(route('tokenhub', 'deepseek/deepseek-flash').canonicalModel, {
+    id: 'deepseek-v4.1-flash',
+    displayName: builtinModelDisplayName('deepseek-v4.1-flash'),
+  });
+  assert.deepEqual(route('deepseek', 'deepseek-flash').canonicalModel, {
+    id: 'deepseek-v4.1-flash',
+    displayName: builtinModelDisplayName('deepseek-v4.1-flash'),
+  });
+  assert.deepEqual(route('deepseek', 'deepseek-pro').canonicalModel, {
+    id: 'deepseek-v4-pro',
+    displayName: builtinModelDisplayName('deepseek-v4-pro'),
+  });
 
   const groups = new Map<string, Set<string>>();
   for (const provider of BUILTIN_PROVIDERS) {
@@ -392,10 +387,11 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
   for (const provider of BUILTIN_PROVIDERS) {
     for (const model of provider.models) {
       assert.doesNotMatch(model.displayName, /-/u, `${provider.id}/${model.id} displayName must not contain a hyphen`);
+      const officialId = model.canonicalModel?.id ?? model.id;
       assert.equal(
         model.displayName,
-        builtinModelDisplayName(model.id as Parameters<typeof builtinModelDisplayName>[0]),
-        `${provider.id}/${model.id} displayName must come from the SSOT`,
+        builtinModelDisplayName(officialId),
+        `${provider.id}/${model.id} displayName must come from the canonical model definition`,
       );
     }
   }
@@ -412,19 +408,27 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
     }
   }
 
-  for (const [alias, target] of [
-    ['k3', 'kimi-k3'],
-    ['kimi-for-coding', 'kimi-k2.8'],
-    ['MiniMax-M3', 'minimax-m3'],
-    ['deepseek-flash', 'deepseek-v4.1-flash'],
-    ['hy4-preview', 'hunyuan-hy4-preview'],
-    ['inclusionai/ling-3.0-flash-vl:free', 'ling-3.0-flash-vl'],
-    ['qwen/qwen3.8-27b:free', 'qwen3.8-27b'],
-    ['nemotron-3-ultra-free', 'nemotron-3-ultra'],
-    ['nemotron-3.5-lightning-free', 'nemotron-3.5-lightning'],
+  const catalog = createBuiltinCatalog();
+  const offering = (provider: string, id: string) =>
+    catalog.provider(provider)!.models.find((entry) => entry.id === id)!;
+  for (const [provider, id, canonical] of [
+    ['kimi-coding', 'k3', 'kimi-k3'],
+    ['minimax', 'MiniMax-M3', 'minimax-m3'],
+    ['deepseek', 'deepseek-flash', 'deepseek-v4.1-flash'],
+    ['tokenhub', 'hy4-preview', 'hunyuan-hy4-preview'],
+    ['openrouter', 'inclusionai/ling-3.0-flash-vl:free', 'ling-3.0-flash-vl'],
+    ['openrouter', 'qwen/qwen3.8-27b:free', 'qwen3.8-27b'],
+    ['opencode-zen', 'nemotron-3-ultra-free', 'nemotron-3-ultra'],
+    ['opencode-zen', 'nemotron-3.5-lightning-free', 'nemotron-3.5-lightning'],
+    ['anthropic', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5'],
   ] as const) {
-    assert.equal(builtinModelDisplayName(alias), builtinModelDisplayName(target));
+    const route = offering(provider, id);
+    assert.equal(route.canonicalModel?.id, canonical, `${provider}/${id}`);
+    assert.equal(route.displayName, builtinModelDisplayName(canonical));
   }
+  assert.equal(catalog.provider('kimi-coding')!.modelAliases?.['kimi-for-coding'], 'kimi-k2.8');
+  assert.equal(catalog.provider('cursor')!.modelAliases?.['cursor-grok-4.6-high'], 'grok-4.6');
+  assert.equal(catalog.provider('cursor')!.modelAliases?.['grok-4.7-high'], 'grok-4.7');
 });
 
 test('renamed providers expose their exact ids, labels, and client bindings', () => {
@@ -442,7 +446,6 @@ test('renamed providers expose their exact ids, labels, and client bindings', ()
   assert.equal(anthropic.quotaProvider, 'anthropic');
   assert.equal(anthropic.defaultModel, 'claude-sonnet-5');
   assert.deepEqual(anthropic.models.map((entry) => entry.id), [
-    'claude-fable-5',
     'claude-opus-5',
     'claude-sonnet-5',
     'claude-haiku-4-5-20251001',
@@ -458,8 +461,8 @@ test('renamed providers expose their exact ids, labels, and client bindings', ()
   assert.equal(catalog.provider('minimax')!.displayName, 'MiniMax');
   assert.equal(catalog.provider('moonshot')!.displayName, 'Moonshot');
   assert.equal(catalog.provider('zhipu')!.displayName, 'Zhipu');
-  // The Grok native client provider is labelled "Super Grok".
-  assert.equal(catalog.provider('spacex-ai')!.displayName, 'Super Grok');
+  // spacex-ai is the model API. Super Grok is the separate subscription id.
+  assert.equal(catalog.provider('spacex-ai')!.displayName, 'SpaceXAI');
 });
 
 
@@ -482,6 +485,7 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.deepEqual(cursor.models.map((entry) => entry.id), [
     'composer-2.5',
     'grok-4.6',
+    'grok-4.7',
     'kimi-k3',
     'claude-opus-5',
     'gpt-5.6-luna',
@@ -490,7 +494,6 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
     'claude-sonnet-5',
     'muse-spark-1.3',
     'gemini-3.8-flash',
-    'claude-fable-5',
     'claude-fable-5-1',
   ]);
   const byId = Object.fromEntries(cursor.models.map((entry) => [entry.id, entry]));
@@ -498,7 +501,6 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['gpt-5.6-terra']!.intelligence, 'mid');
   assert.equal(byId['gpt-5.6-luna']!.intelligence, 'mid');
   assert.equal(byId['claude-sonnet-5']!.intelligence, 'mid');
-  assert.equal(byId['claude-fable-5']!.intelligence, 'premium');
   assert.equal(byId['claude-opus-5']!.intelligence, 'premium');
   assert.equal(byId['claude-fable-5-1']!.intelligence, 'premium');
   assert.equal(byId['muse-spark-1.3']!.intelligence, 'mid');
@@ -506,6 +508,11 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   assert.equal(byId['composer-2.5']!.intelligence, 'low');
   assert.equal(byId['grok-4.6']!.intelligence, 'high');
   assert.deepEqual(byId['grok-4.6']!.thinkingLevels, ['high']);
+  assert.equal(byId['grok-4.7']!.intelligence, 'high');
+  assert.deepEqual(byId['grok-4.7']!.thinkingLevels, ['high']);
+  assert.equal(byId['grok-4.7']!.contextWindow, 256_000);
+  assert.deepEqual(byId['grok-4.7']!.pricing, [0.5, 2, 6]);
+  assert.equal(byId['grok-4.7']!.speed, 59);
   assert.deepEqual(byId['gpt-5.6-sol']!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(byId['kimi-k3']!.intelligence, 'high');
   for (const model of cursor.models) {
@@ -527,8 +534,6 @@ test('Cursor registers twelve multi-vendor models with intelligence, images, and
   cursorPrice('gemini-3.8-flash', 0.075, 0.75, 3.5);
   cursorPrice('composer-2.5', 0.2, 0.5, 2.5);
   cursorPrice('claude-fable-5-1', 0.25, 10, 50);
-  assert.deepEqual(byId['claude-fable-5']!.pricing, [1, 10, 50]);
-  assert.ok(!('unavailable' in byId['claude-fable-5']!));
   assert.ok(!('unavailable' in byId['claude-fable-5-1']!));
 });
 
@@ -545,11 +550,35 @@ test('Cursor GPT-5.6 thinking maps all five levels into model substitution witho
     // Omitting the request selects the highest declared+mapped level.
     assert.equal(catalog.resolveRun('cursor', 'cursor', modelId).thinking, 'max');
   }
-  // Grok is only confirmed at high, mapping to the exact cursor-grok-4.6-high id.
+  // Grok 4.6 is only confirmed at high, mapping to the exact cursor-grok-4.6-high id.
   assert.deepEqual(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').thinking, 'high');
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6').upstreamModel, 'cursor-grok-4.6-high');
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'max').thinking, 'high');
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.6', 'low').thinking, 'high');
   // The legacy saved-config id remains a provider input alias to the canonical id.
   assert.equal(catalog.resolveRun('cursor', 'cursor', 'cursor-grok-4.6-high').model, 'grok-4.6');
+  // Grok 4.7 maps only the listed high wire id, so an omitted request stays at high.
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.7').thinking, 'high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.7').upstreamModel, 'grok-4.7-high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.7', 'xhigh').thinking, 'high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.7', 'low').thinking, 'high');
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'grok-4.7-high').model, 'grok-4.7');
+  const native = catalog.provider('spacex-ai')!;
+  assert.deepEqual(native.models.map((entry) => entry.id), ['grok-4.7']);
+  assert.equal(native.defaultModel, 'grok-4.7');
+  const grok = native.models[0]!;
+  assert.equal(grok.intelligence, 'high');
+  assert.deepEqual(grok.pricing, [0.5, 2, 6]);
+  assert.deepEqual(grok.capabilities, ['text']);
+  assert.equal(grok.contextWindow, 500_000);
+  assert.equal(grok.thinkingLevels, undefined);
+  assert.equal(grok.speed, 59);
+  assert.deepEqual(grok.canonicalModel, { id: 'grok-4.7', displayName: 'Grok 4.7' });
+  const plan = catalog.resolveRun('grok', 'spacex-ai', 'grok-4.7');
+  assert.equal(plan.model, 'grok-4.7');
+  assert.equal(plan.mode, 'native');
+  assert.equal(plan.upstreamModel, undefined);
+  assert.equal(plan.thinking, undefined);
+  assert.equal(plan.supportsWebSearch, true);
+  assert.equal(builtinModelDisplayName('grok-4.7'), 'Grok 4.7');
 });

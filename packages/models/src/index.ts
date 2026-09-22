@@ -15,9 +15,9 @@ export {
   THINKING_UP_TO_XHIGH,
 } from './types.ts';
 export {
-  MAINSTREAM_MODEL_IDS,
   ModelRegistry,
-  isMainstreamModelId,
+  builtinModelDisplayName,
   models,
 } from './registry.ts';
-export type { MainstreamModelId } from './registry.ts';
+export { MAINSTREAM_MODEL_IDS, isMainstreamModelId } from './mainstream.ts';
+export type { MainstreamModelId } from './mainstream.ts';
