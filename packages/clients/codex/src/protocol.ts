@@ -232,7 +232,7 @@ async function* protocol(
         const callId = stringOf(item, 'id').trim();
         if (!callId)
             return;
-        const [status, output] = toolOutcome(item, itemType);
+        const { status, output } = toolOutcome(item, itemType);
         yield { type: 'output', record: toolResultRecord(callId, status, output) };
     }
 }
@@ -353,11 +353,17 @@ function turnUsage(params: Record<string, unknown>): Record<string, unknown> | u
     const input = nonnegativeInt(source.input_tokens);
     const output = nonnegativeInt(source.output_tokens);
     const durationMS = positiveInt(params.duration_ms);
-    const data: Record<string, unknown> = {
-        input_tokens: input ?? 0,
-        output_tokens: output ?? 0,
-        duration_ms: durationMS ?? 0,
-    };
+    // Only genuinely captured counters are emitted. A partition the client
+    // never reported stays absent rather than being fabricated as an
+    // explicit zero, so a scope-less partial turn_usage record never claims
+    // tokens that were never observed.
+    const data: Record<string, unknown> = {};
+    if (input !== undefined)
+        data.input_tokens = input;
+    if (output !== undefined)
+        data.output_tokens = output;
+    if (durationMS !== undefined)
+        data.duration_ms = durationMS;
     const cached = nonnegativeInt(source.cached_input_tokens);
     if (cached !== undefined)
         data.cached_input_tokens = cached;

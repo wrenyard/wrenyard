@@ -38,13 +38,14 @@ function seedExecution(
   executionId: string,
   taskRunId: string,
   elapsedMs = 1000,
+  status: 'done' | 'failed' | 'cancelled' = 'done',
 ): void {
   const startedAt = TS
   const endedAt = new Date(Date.parse(TS) + elapsedMs).toISOString()
   db.prepare(
     `INSERT INTO executions (id, task_id, profile, permission, cwd, prompt, status, started_at, ended_at, created_at, updated_at, requested_agent_runtime)
-     VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', 'done', ?, ?, ?, ?, 'agent')`,
-  ).run(executionId, taskRunId, startedAt, endedAt, TS, TS)
+     VALUES (?, ?, 'default', 'readonly', '/tmp', 'p', ?, ?, ?, ?, ?, 'agent')`,
+  ).run(executionId, taskRunId, status, startedAt, endedAt, TS, TS)
 }
 
 function seedTurnUsage(
@@ -53,14 +54,23 @@ function seedTurnUsage(
   taskRunId: string,
   data: Record<string, unknown> = {},
   seq = 0,
+  opts: { trustedScopes?: boolean } = {},
 ): void {
   // Billing fixtures retain their accounting fields. Speed fixtures also carry
   // an independent response-paired sample and never infer it from accounting.
+  // The trusted provenance contract is injected by default and can be turned
+  // off explicitly (`trustedScopes: false`) to model the scope-less partial
+  // snapshot a failed or cancelled run persists; any field may still be
+  // overridden through `data`.
   const full: Record<string, unknown> = {
-    token_scope: 'agent_turn',
-    duration_scope: 'agent_turn',
-    tps_contract: 'agent_turn_v1',
     duration_ms: 1000,
+    ...(opts.trustedScopes === false
+      ? {}
+      : {
+        token_scope: 'agent_turn',
+        duration_scope: 'agent_turn',
+        tps_contract: 'agent_turn_v1',
+      }),
     ...data,
   }
   if (
@@ -1076,5 +1086,168 @@ test('a definition that cannot be resolved omits task_name instead of guessing o
       invalidateProjectCache()
       rmSync(workspace, { recursive: true, force: true })
     }
+  })
+})
+
+// ── Failure metrics: single scope-less usage snapshot ─────────────────────────
+// A failed or cancelled run persists a turn_usage row without the trusted
+// agent_turn provenance contract. Exactly one such row for an attempt is a
+// partial displayable snapshot: its captured partitions and its fully priced
+// observed reference cost stay visible, while completeness/cost trust stay
+// partial and no speed is invented. Several unscoped rows, an explicit
+// cumulative scope, or no row at all must never be summed or zero-filled.
+
+test('a failed run with a single scope-less usage snapshot preserves tokens and priced partial cost', () => {
+  withDb((db) => {
+    const task = 'task-failed-unscoped'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'failed')
+    seedTurnUsage(db, 'e1', task, {
+      input_tokens: 100,
+      cached_input_tokens: 50,
+      output_tokens: 20,
+    }, 0, { trustedScopes: false })
+    seedTelemetry(db, task, { usage_event_count: 0, completeness: 'partial' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    // The captured partitions survive as a partial snapshot.
+    assert.equal(usage.completeness, 'partial')
+    assert.equal(usage.input_tokens, 100)
+    assert.equal(usage.cached_input_tokens, 50)
+    assert.equal(usage.output_tokens, 20)
+    assert.equal(usage.total_tokens, 170)
+    assert.equal(usage.attempt_count, 1)
+    // The fully priced observed reference cost is exposed, while the trust flag
+    // stays false because the provenance contract was never claimed.
+    assert.ok(Math.abs((usage.reference_cost_usd ?? -1) - 165 / 1_000_000) < 1e-12)
+    assert.equal(usage.reference_cost_basis, 'catalog_reference')
+    assert.equal(usage.reference_cost_complete, false)
+    // No fabricated speed for a failed run without a measurable sample.
+    assert.equal(usage.generation_ms, undefined)
+    assert.equal(usage.output_tps, undefined)
+    assert.equal(usage.tps_contract, undefined)
+  })
+})
+
+test('a cancelled run with a scope-less usage snapshot keeps its captured partitions', () => {
+  withDb((db) => {
+    const task = 'task-cancelled-unscoped'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'cancelled')
+    seedTurnUsage(db, 'e1', task, {
+      input_tokens: 10,
+      cached_input_tokens: 0,
+      output_tokens: 5,
+    }, 0, { trustedScopes: false })
+    seedTelemetry(db, task, { usage_event_count: 0, completeness: 'partial' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    assert.equal(usage.completeness, 'partial')
+    assert.equal(usage.input_tokens, 10)
+    assert.equal(usage.cached_input_tokens, 0)
+    assert.equal(usage.output_tokens, 5)
+    assert.equal(usage.total_tokens, 15)
+    assert.ok(Math.abs((usage.reference_cost_usd ?? -1) - 20 / 1_000_000) < 1e-12)
+    assert.equal(usage.reference_cost_complete, false)
+  })
+})
+
+test('several scope-less usage rows for one attempt are excluded and never summed', () => {
+  withDb((db) => {
+    const task = 'task-unscoped-multi'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'failed')
+    seedTurnUsage(db, 'e1', task, { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 }, 0, { trustedScopes: false })
+    seedTurnUsage(db, 'e1', task, { input_tokens: 900, cached_input_tokens: 90, output_tokens: 80 }, 1, { trustedScopes: false })
+    seedTelemetry(db, task, { usage_event_count: 0, completeness: 'partial' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    assert.equal(usage.completeness, 'unavailable')
+    assert.equal(usage.input_tokens, undefined)
+    assert.equal(usage.cached_input_tokens, undefined)
+    assert.equal(usage.output_tokens, undefined)
+    assert.equal(usage.total_tokens, undefined)
+    assert.equal(usage.reference_cost_usd, undefined)
+    assert.equal(usage.reference_cost_complete, false)
+  })
+})
+
+test('an explicit cumulative scope is excluded even as the only usage row', () => {
+  withDb((db) => {
+    const task = 'task-cumulative-only'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'failed')
+    seedTurnUsage(db, 'e1', task, {
+      token_scope: 'agent_turn_cumulative',
+      duration_scope: 'agent_turn_cumulative',
+      input_tokens: 500,
+      cached_input_tokens: 500,
+      output_tokens: 500,
+    })
+    seedTelemetry(db, task, { usage_event_count: 0, completeness: 'partial' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    assert.equal(usage.completeness, 'unavailable')
+    assert.equal(usage.input_tokens, undefined)
+    assert.equal(usage.cached_input_tokens, undefined)
+    assert.equal(usage.output_tokens, undefined)
+    assert.equal(usage.total_tokens, undefined)
+    assert.equal(usage.reference_cost_usd, undefined)
+    assert.equal(usage.reference_cost_complete, false)
+  })
+})
+
+test('a failed run with no usage row at all stays unknown instead of zero', () => {
+  withDb((db) => {
+    const task = 'task-no-usage'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'failed')
+    seedTelemetry(db, task, { usage_event_count: 0, completeness: 'unavailable' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    assert.equal(usage.completeness, 'unavailable')
+    assert.equal(usage.attempt_count, 1)
+    assert.equal(usage.input_tokens, undefined)
+    assert.equal(usage.cached_input_tokens, undefined)
+    assert.equal(usage.output_tokens, undefined)
+    assert.equal(usage.total_tokens, undefined)
+    assert.equal(usage.reference_cost_usd, undefined)
+    assert.equal(usage.reference_cost_complete, false)
+    assert.equal(usage.generation_ms, undefined)
+    assert.equal(usage.output_tps, undefined)
+  })
+})
+
+test('a scope-less row next to a trusted row never upgrades or poisons the accounting', () => {
+  withDb((db) => {
+    const task = 'task-trusted-plus-unscoped'
+    seedTask(db, task)
+    seedExecution(db, 'e1', task, 1000, 'failed')
+    // The scope-less row is not the only row for the attempt, so it is
+    // excluded; the trusted row is the only displayable one and keeps its
+    // trusted semantics unchanged while the mixed attempt stays partial.
+    seedTurnUsage(db, 'e1', task, { input_tokens: 700, cached_input_tokens: 70, output_tokens: 700 }, 0, { trustedScopes: false })
+    seedTurnUsage(db, 'e1', task, { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 }, 1)
+    seedTelemetry(db, task, { usage_event_count: 1, completeness: 'partial' })
+    seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
+
+    const { usage } = readTaskRunMetadata(task)
+
+    assert.equal(usage.completeness, 'partial')
+    assert.equal(usage.input_tokens, undefined)
+    assert.equal(usage.output_tokens, undefined)
+    assert.equal(usage.total_tokens, undefined)
+    assert.equal(usage.reference_cost_usd, undefined)
+    assert.equal(usage.reference_cost_complete, false)
   })
 })

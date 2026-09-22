@@ -21,9 +21,12 @@ import { isThinkingLevel } from '../../task-run-metadata-types.mts'
  * reference cost is computed with that attempt's own captured model/pricing
  * snapshot and the raw turn_usage tokens persisted for its execution_id — never
  * by an even-split approximation across attempts. Failed/retry attempts are
- * included. Unknown numerics are omitted, never zero-filled, and historical
- * incomplete dispatches are represented by omitting `resolved` entirely rather
- * than emitting a partial snapshot object.
+ * included, and a single scope-less turn_usage snapshot (a failed or cancelled
+ * run whose client never claimed the trusted agent_turn contract) is displayed
+ * as a partial snapshot while never upgrading completeness or summing several
+ * unscoped rows. Unknown numerics are omitted, never zero-filled, and
+ * historical incomplete dispatches are represented by omitting `resolved`
+ * entirely rather than emitting a partial snapshot object.
  */
 export interface TaskRunResolvedUsage {
   resolved?: TaskResolvedDispatch
@@ -99,14 +102,22 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   const usageEventCount = telemetry?.usage_event_count ?? 0
 
   // --- Token projection -------------------------------------------------
-  // Unavailable when there are no attempts or no additive event carries any
+  // A persisted row is TRUSTED only when it carries token_scope ===
+  // 'agent_turn' (the additive agent-turn contract). A scope-less row is a
+  // partial displayable snapshot and is accepted ONLY when it is the single
+  // turn_usage record persisted for that execution/attempt, so captured
+  // partitions from a failed or cancelled run stay visible without ever
+  // summing several unscoped rows. An explicit cumulative/foreign scope, or a
+  // malformed row, is excluded and contributes nothing.
+  //
+  // Unavailable when there are no attempts or no displayable event carries any
   // valid token partition. Otherwise 'complete' requires every attempt to have
-  // at least one persisted row, every row to be additive agent_turn, and every
+  // at least one persisted row, every row to be trusted additive, and every
   // row to carry valid input, normalized cached total and output. Decoupled
   // from pricing and TPS completeness.
-  let anyAdditiveValidToken = false
+  let anyDisplayableValidToken = false
   let everyAttemptHasRow = attemptRows.length > 0
-  let everyRowAdditive = true
+  let everyRowTrusted = true
   let everyRowFullTokens = true
   for (const a of attemptRows) {
     const events = eventsByExecution.get(a.execution_id) ?? []
@@ -115,12 +126,13 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
       continue
     }
     for (const e of events) {
-      if (!e.additive) {
-        everyRowAdditive = false
+      if (!isDisplayableTurnUsage(e, events.length)) {
+        everyRowTrusted = false
         continue
       }
+      if (e.trust !== 'additive') everyRowTrusted = false
       if (e.input !== undefined || e.cached !== undefined || e.output !== undefined) {
-        anyAdditiveValidToken = true
+        anyDisplayableValidToken = true
       }
       if (e.input === undefined || e.cached === undefined || e.output === undefined) {
         everyRowFullTokens = false
@@ -129,8 +141,8 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   }
 
   let completeness: TaskUsageCompleteness
-  if (attemptRows.length === 0 || !anyAdditiveValidToken) completeness = 'unavailable'
-  else if (everyAttemptHasRow && everyRowAdditive && everyRowFullTokens) completeness = 'complete'
+  if (attemptRows.length === 0 || !anyDisplayableValidToken) completeness = 'unavailable'
+  else if (everyAttemptHasRow && everyRowTrusted && everyRowFullTokens) completeness = 'complete'
   else completeness = 'partial'
 
   const usage: TaskUsage = {
@@ -140,16 +152,19 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
     reference_cost_complete: false,
   }
 
-  // Per-field aggregates are emitted only when every attempt is covered, every
-  // persisted event is additive, and every persisted event carries that exact
-  // normalized field. A mixed event set may truthfully emit output_tokens while
-  // omitting input_tokens. cached_input_tokens uses the normalized cached total;
+  // Per-field aggregates are emitted only for displayable events, and only
+  // when every attempt is covered and every displayable event carries that
+  // exact normalized field. A mixed event set may truthfully emit output_tokens
+  // while omitting input_tokens. Any non-displayable row (an explicit
+  // cumulative/foreign scope, a malformed row, or one of several unscoped rows)
+  // blocks every field, so a partial snapshot is never summed into a
+  // fabricated total. cached_input_tokens uses the normalized cached total;
   // read/creation aggregates are emitted only when each event has that split.
-  let allInput = everyAttemptHasRow && everyRowAdditive
-  let allCached = everyAttemptHasRow && everyRowAdditive
-  let allOutput = everyAttemptHasRow && everyRowAdditive
-  let allRead = everyAttemptHasRow && everyRowAdditive
-  let allWrite = everyAttemptHasRow && everyRowAdditive
+  let allInput = everyAttemptHasRow
+  let allCached = everyAttemptHasRow
+  let allOutput = everyAttemptHasRow
+  let allRead = everyAttemptHasRow
+  let allWrite = everyAttemptHasRow
   let sumInput = 0
   let sumCached = 0
   let sumOutput = 0
@@ -158,7 +173,7 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   for (const a of attemptRows) {
     const events = eventsByExecution.get(a.execution_id) ?? []
     for (const e of events) {
-      if (!e.additive) {
+      if (!isDisplayableTurnUsage(e, events.length)) {
         allInput = allCached = allOutput = allRead = allWrite = false
         continue
       }
@@ -197,34 +212,49 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   }
 
   // --- Cost projection --------------------------------------------------
-  // Price every additive event in its own attempt with that attempt's captured
-  // dispatch snapshot. A complete cost requires full per-event coverage,
-  // internally consistent cache splits, and a finite nonnegative rate for every
-  // positive token component. A partial sum is never exposed.
+  // Price every displayable event in its own attempt with that attempt's
+  // captured dispatch snapshot. `reference_cost_usd` is exposed whenever the
+  // observed partitions are fully priced — so a scope-less partial snapshot
+  // keeps its fully priced observed reference cost — while
+  // `reference_cost_complete` stays false unless every attempt/event was
+  // covered by trusted additive usage with complete partitions. A partially
+  // priced sum is never exposed.
   let referenceCostUsd = 0
-  let costComplete = attemptRows.length > 0
+  let costTrustComplete = attemptRows.length > 0
+  let costFullyPriced = attemptRows.length > 0
   for (const a of attemptRows) {
     const events = eventsByExecution.get(a.execution_id) ?? []
     const dispatch = dispatchByExecution.get(a.execution_id)
     if (events.length === 0 || !dispatch) {
-      costComplete = false
+      costTrustComplete = false
+      costFullyPriced = false
       continue
     }
     for (const e of events) {
-      if (!e.additive || e.input === undefined || e.cached === undefined || e.output === undefined) {
-        costComplete = false
+      if (!isDisplayableTurnUsage(e, events.length)) {
+        costTrustComplete = false
+        costFullyPriced = false
+        continue
+      }
+      if (e.trust !== 'additive') costTrustComplete = false
+      if (e.input === undefined || e.cached === undefined || e.output === undefined) {
+        costTrustComplete = false
+        costFullyPriced = false
         continue
       }
       const { cost, fullyPriced } = priceEvent(e, dispatch)
-      if (!fullyPriced) costComplete = false
+      if (!fullyPriced) {
+        costTrustComplete = false
+        costFullyPriced = false
+      }
       referenceCostUsd += cost
     }
   }
-  if (costComplete) {
+  if (costFullyPriced) {
     usage.reference_cost_usd = referenceCostUsd
     usage.reference_cost_basis = 'catalog_reference'
-    usage.reference_cost_complete = true
   }
+  usage.reference_cost_complete = costTrustComplete && costFullyPriced
 
   // Resolved dispatch: the most recent attempt whose captured snapshot is
   // schema-valid and complete (all required identity/speed/intelligence/
@@ -438,13 +468,16 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
- * A single turn_usage record with presence semantics. `additive` is true only
- * when token_scope === 'agent_turn'. `cached` is the normalized cached total
- * (full cached when present, otherwise read+creation when both splits are
+ * A single turn_usage record with presence semantics. `trust` is 'additive'
+ * only when token_scope === 'agent_turn' (the fully trusted agent-turn
+ * contract), 'unscoped' when the record carries no token_scope at all (a
+ * partial displayable snapshot), and 'excluded' when it carries an explicit
+ * cumulative/foreign scope or is malformed. `cached` is the normalized cached
+ * total (full cached when present, otherwise read+creation when both splits are
  * valid).
  */
 interface TurnUsageEvent {
-  additive: boolean
+  trust: 'additive' | 'unscoped' | 'excluded'
   input?: number
   cached?: number
   read?: number
@@ -452,12 +485,24 @@ interface TurnUsageEvent {
   output?: number
 }
 
-const EMPTY_TURN_EVENT: TurnUsageEvent = { additive: false }
+const EXCLUDED_TURN_EVENT: TurnUsageEvent = { trust: 'excluded' }
+
+/**
+ * A persisted row contributes to the projected usage only when it is either
+ * fully trusted additive usage, or the SINGLE scope-less snapshot recorded for
+ * its execution/attempt. Every other row — an explicit cumulative/foreign
+ * scope, a malformed row, or one of several unscoped rows — is excluded, so
+ * unscoped usage is never summed into a fabricated total.
+ */
+function isDisplayableTurnUsage(event: TurnUsageEvent, eventCount: number): boolean {
+  if (event.trust === 'additive') return true
+  return event.trust === 'unscoped' && eventCount === 1
+}
 
 /**
  * Read every persisted turn_usage row for one execution, ordered by seq. A row
- * whose JSON or scope is invalid is kept as a non-additive record so it can
- * force coverage to incomplete rather than be silently dropped.
+ * whose JSON or scope is invalid is kept as an excluded record so it can force
+ * coverage to incomplete rather than be silently dropped.
  */
 function readExecutionEvents(executionId: string): TurnUsageEvent[] {
   const rows = dbQuery<{ data: string | null }>(
@@ -468,22 +513,24 @@ function readExecutionEvents(executionId: string): TurnUsageEvent[] {
 }
 
 function parseTurnUsage(value: string | null): TurnUsageEvent {
-  if (value === null) return EMPTY_TURN_EVENT
+  if (value === null) return EXCLUDED_TURN_EVENT
   let parsed: unknown
   try {
     parsed = JSON.parse(value)
   } catch {
-    return EMPTY_TURN_EVENT
+    return EXCLUDED_TURN_EVENT
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EMPTY_TURN_EVENT
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EXCLUDED_TURN_EVENT
   const rec = parsed as Record<string, unknown>
 
-  const additive = rec.token_scope === 'agent_turn'
-  const input = additive ? readNonNegativeInteger(rec.input_tokens) : undefined
-  const fullCached = additive ? readNonNegativeInteger(rec.cached_input_tokens) : undefined
-  const readSplit = additive ? readNonNegativeInteger(rec.cache_read_input_tokens) : undefined
-  const writeSplit = additive ? readNonNegativeInteger(rec.cache_creation_input_tokens) : undefined
-  const output = additive ? readNonNegativeInteger(rec.output_tokens) : undefined
+  const trust = turnUsageTrust(rec)
+  if (trust === 'excluded') return EXCLUDED_TURN_EVENT
+
+  const input = readNonNegativeInteger(rec.input_tokens)
+  const fullCached = readNonNegativeInteger(rec.cached_input_tokens)
+  const readSplit = readNonNegativeInteger(rec.cache_read_input_tokens)
+  const writeSplit = readNonNegativeInteger(rec.cache_creation_input_tokens)
+  const output = readNonNegativeInteger(rec.output_tokens)
 
   // Normalized cached total: full cached when present, otherwise read+creation
   // only when both optional splits are valid, otherwise undefined. The full
@@ -493,13 +540,27 @@ function parseTurnUsage(value: string | null): TurnUsageEvent {
   else if (readSplit !== undefined && writeSplit !== undefined) cached = readSplit + writeSplit
 
   return {
-    additive,
+    trust,
     input,
     cached,
     read: readSplit,
     write: writeSplit,
     output,
   }
+}
+
+/**
+ * Classify a persisted turn_usage record's provenance. Only the exact
+ * 'agent_turn' scope is trusted additive usage. A record with no scope at all
+ * (absent, null, or empty string) is an unscoped partial snapshot. Any other
+ * explicit scope — including cumulative scopes such as
+ * 'agent_turn_cumulative' — is excluded and never contributes.
+ */
+function turnUsageTrust(rec: Record<string, unknown>): TurnUsageEvent['trust'] {
+  const scope = rec.token_scope
+  if (scope === 'agent_turn') return 'additive'
+  if (scope === undefined || scope === null || scope === '') return 'unscoped'
+  return 'excluded'
 }
 
 /**
@@ -517,13 +578,13 @@ function validRate(rate: number | null): boolean {
 }
 
 /**
- * Price a single additive event with the dispatch snapshot captured for its own
- * execution attempt. A valid zero component needs no rate; a positive component
- * without a finite nonnegative rate makes the result not fully priced. With a
- * creation split, price creation at the cache_write rate and the (cached -
- * creation) remainder at the generic cache rate; the full cached partition is
- * never added on top of the splits. Without a creation split, price the full
- * cached partition at the generic cache rate.
+ * Price a single displayable event with the dispatch snapshot captured for its
+ * own execution attempt. A valid zero component needs no rate; a positive
+ * component without a finite nonnegative rate makes the result not fully
+ * priced. With a creation split, price creation at the cache_write rate and the
+ * (cached - creation) remainder at the generic cache rate; the full cached
+ * partition is never added on top of the splits. Without a creation split,
+ * price the full cached partition at the generic cache rate.
  */
 function priceEvent(e: TurnUsageEvent, d: AttemptDispatchRow): { cost: number; fullyPriced: boolean } {
   let cost = 0
