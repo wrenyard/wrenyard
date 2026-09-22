@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { formatOutcome, parseUpdateArgs, runUpdate } from './release-update.js';
 
 /** Subcommands of the legacy `foreman` binary routed through the unified CLI. */
@@ -346,8 +346,30 @@ export function main(argv: string[] = process.argv.slice(2), options: MainOption
   }
 }
 
+// Entry identity must survive path respelling: the module resolver canonicalizes
+// `import.meta.url` (resolving symlinks, so a staged entry under macOS
+// /var/folders is reported as /private/var/folders) while `process.argv[1]` keeps
+// the spelling the caller passed, so comparing the two file URLs alone silently
+// skipped main() and exited 0 with no output.
+function canonicalPath(candidate: string): string | undefined {
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when `entry` names the module at `moduleUrl`, in whichever spelling the caller used. */
+export function isEntryPoint(entry: string | undefined, moduleUrl: string | undefined): boolean {
+  // The SEA bundle is CommonJS; its explicit launcher calls main instead.
+  if (!entry || !moduleUrl) return false;
+  const self = fileURLToPath(moduleUrl);
+  const selfReal = canonicalPath(self) ?? self;
+  const entryReal = canonicalPath(entry) ?? entry;
+  return entry === self || entry === selfReal || entryReal === self || entryReal === selfReal;
+}
+
 // Run only when this module is the entry point; importing it (e.g. from tests) is inert.
-const entryUrl = process.argv[1] === undefined ? undefined : pathToFileURL(process.argv[1]).href;
-if (entryUrl !== undefined && entryUrl === import.meta.url) {
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   process.exitCode = main();
 }
