@@ -7,10 +7,14 @@
   "exports": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
+    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/index.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "cross-spawn": "7.0.6",
+    "better-sqlite3": "11.10.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
     "tsx": "^4.22.4",
