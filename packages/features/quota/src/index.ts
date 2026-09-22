@@ -23,7 +23,7 @@ export class QuotaService {
     }
     private source(provider: string, context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): QuotaSource {
         const clientIds: Readonly<Record<string, string>> = {
-            chatgpt: 'codex', cursor: 'cursor', 'claude-coding': 'claude', 'spacex-ai': 'grok',
+            chatgpt: 'codex', cursor: 'cursor', 'claude-coding': 'claude', 'super-grok': 'grok',
         };
         return { read: async (source = 'primary') => {
                 options?.signal?.throwIfAborted();
@@ -46,22 +46,21 @@ export class QuotaService {
     }
     async fetch(provider: string, context?: CodeBuddyQueryContext, options?: QuotaQueryOptions): Promise<QuotaSnapshot | undefined> {
         options?.signal?.throwIfAborted();
-        const id = provider === 'super-grok' ? 'spacex-ai' : provider;
-        const quota = this.providers.get(id);
+        const quota = this.providers.get(provider);
         if (!quota?.read)
-            return { provider: id, status: 'unavailable', stale: false, code: 'quota_unsupported', message: 'Quota acquisition is not supported for this provider' };
+            return { provider, status: 'unavailable', stale: false, code: 'quota_unsupported', message: 'Quota acquisition is not supported for this provider' };
         // Bound the complete provider read, including any fallback. A timeout
         // affects this provider only; explicit caller cancellation still propagates.
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 30_000);
         const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
         try {
-            return await quota.read(this.source(id, context, { ...options, signal }));
+            return await quota.read(this.source(provider, context, { ...options, signal }));
         }
         catch (error) {
             options?.signal?.throwIfAborted();
             const code = error instanceof ClientError && ['configuration_missing', 'authentication_required'].includes(error.code) ? error.code : 'quota_query_failed';
-            return { provider: id === 'spacex-ai' ? 'super-grok' : id, status: 'error', stale: false, code, error: 'Provider quota unavailable' };
+            return { provider, status: 'error', stale: false, code, error: 'Provider quota unavailable' };
         }
         finally {
             clearTimeout(timer);

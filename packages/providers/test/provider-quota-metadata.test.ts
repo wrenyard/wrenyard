@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   PROVIDER_QUOTA_BINDINGS,
   findProviderQuotaBinding,
+  providerQuotas,
   type ProviderQuotaBinding,
 } from '../src/provider-quota-metadata.ts';
 import { BUILTIN_PROVIDERS } from '../src/catalog.ts';
@@ -27,6 +28,12 @@ test('every builtin catalog model resolves to a non-empty own-provider binding',
   for (const provider of BUILTIN_PROVIDERS) {
     for (const modelDefinition of provider.models) {
       const binding = findProviderQuotaBinding(provider.id, modelDefinition.id);
+      // A provider that owns no quota source contributes no binding at all;
+      // its models stay unbound instead of claiming a pool it does not own.
+      if (!providerQuotas.has(provider.id)) {
+        assert.equal(binding, undefined, `${provider.id} owns no quota source`);
+        continue;
+      }
       assert.ok(binding, `missing binding for ${provider.id}/${modelDefinition.id}`);
       assert.equal(binding!.providerId, provider.id);
       assert.equal(binding!.modelId, modelDefinition.id);
@@ -66,6 +73,7 @@ test('Cursor binds Grok and Composer to the Cursor pool and third-party models t
   const grok = expectBinding('cursor', 'grok-4.6');
   assert.deepEqual(bindingWindowIds(grok), ['Cursor']);
   assert.deepEqual(bindingPoolIds(grok), ['cursor/cursor']);
+  assert.deepEqual(bindingPoolIds(expectBinding('cursor', 'grok-4.7')), ['cursor/cursor']);
 
   const composer = expectBinding('cursor', 'composer-2.5');
   assert.deepEqual(bindingPoolIds(composer), ['cursor/cursor']);
@@ -79,7 +87,6 @@ test('Cursor binds Grok and Composer to the Cursor pool and third-party models t
     'claude-sonnet-5',
     'muse-spark-1.3',
     'gemini-3.8-flash',
-    'claude-fable-5',
     'claude-fable-5-1',
   ];
   for (const modelId of otherModelIds) {
