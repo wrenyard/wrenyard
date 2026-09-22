@@ -633,3 +633,200 @@ test('initDb idempotently migrates nullable auto_routing onto legacy dispatch ro
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+const REQUIRED_CLIENT_FAMILIES = ['claude', 'codex', 'opencode', 'cursor', 'grok', 'dsh', 'codebuddy'] as const
+
+function insertExecution(
+  db: ReturnType<typeof initDb>,
+  id: string,
+  family: string,
+  now: string,
+  overrides: { nativeSessionId?: string; profile?: string; prompt?: string } = {},
+): void {
+  db.prepare(
+    `INSERT INTO executions (
+      id, profile, permission, cwd, prompt, status, native_session_id, client_family,
+      created_at, updated_at
+    ) VALUES (?, ?, 'readonly', '/tmp', ?, 'queued', ?, ?, ?, ?)`,
+  ).run(
+    id,
+    overrides.profile ?? 'client-family-profile',
+    overrides.prompt ?? 'client family prompt',
+    overrides.nativeSessionId ?? null,
+    family,
+    now,
+    now,
+  )
+}
+
+test('fresh initDb schema accepts the seven supported client families and rejects an unknown one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-client-family-fresh-'))
+  const dbPath = join(dir, 'wrenyard.db')
+  const now = new Date().toISOString()
+  try {
+    const db = initDb(dbPath)
+    for (const family of REQUIRED_CLIENT_FAMILIES) {
+      assert.doesNotThrow(() => {
+        insertExecution(db, `exec_fresh_${family}`, family, now)
+      }, `fresh client_family CHECK must accept '${family}'`)
+    }
+    assert.throws(() => {
+      insertExecution(db, 'exec_fresh_unknown', 'unknown-client', now)
+    }, /CHECK/, 'fresh client_family CHECK must still reject an unknown family')
+  } finally {
+    closeDb()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('initDb migrates a deployed four-family client_family CHECK preserving rows, indexes and foreign keys', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-db-four-family-'))
+  const dbPath = join(dir, 'wrenyard.db')
+  const now = new Date().toISOString()
+  try {
+    // Seed the exact four-family era executions table: claude/codex/opencode/
+    // cursor are accepted while grok, dsh and codebuddy are still rejected.
+    const oldDb = new Database(dbPath)
+    // Only the legacy executions table is seeded; bootstrap creates tasks.
+    oldDb.pragma('foreign_keys = OFF')
+    oldDb.exec(`
+      CREATE TABLE executions (
+        id                TEXT PRIMARY KEY,
+        task_id           TEXT REFERENCES tasks(id),
+        profile           TEXT NOT NULL,
+        permission        TEXT NOT NULL CHECK(permission IN ('readonly','edit','yolo')),
+        cwd               TEXT NOT NULL,
+        prompt            TEXT NOT NULL,
+        status            TEXT NOT NULL CHECK(status IN
+                          ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
+        native_session_id TEXT,
+        client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor')),
+        pid               INTEGER, pgid INTEGER,
+        started_at        TEXT, ended_at TEXT,
+        exit_code         INTEGER, kill_signal TEXT,
+        kill_reason       TEXT CHECK(kill_reason IN ('cancel','timeout','shutdown','crash','spawn-error')),
+        output            TEXT, raw_result TEXT, error TEXT,
+        timeout_ms        INTEGER,
+        requested_agent_runtime TEXT,
+        resolved_profile  TEXT,
+        created_at        TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_exec_status ON executions(status);
+      CREATE INDEX idx_exec_task   ON executions(task_id);
+    `)
+    const insert = oldDb.prepare(
+      `INSERT INTO executions (
+        id, profile, permission, cwd, prompt, status, native_session_id, client_family,
+        pid, started_at, ended_at, exit_code, kill_reason, output, raw_result, error,
+        timeout_ms, requested_agent_runtime, resolved_profile, created_at, updated_at
+      ) VALUES (?, ?, 'readonly', '/tmp', ?, 'done', ?, ?, 4242, ?, ?, 0, NULL, ?, ?, NULL, 1000, 'agent', 'captured-profile', ?, ?)`,
+    )
+    for (const family of ['claude', 'codex', 'opencode', 'cursor']) {
+      insert.run(
+        `exec_deployed_${family}`,
+        `${family}-profile`,
+        `${family} prompt`,
+        `native-${family}`,
+        family,
+        now,
+        now,
+        `${family} output`,
+        `${family} raw`,
+        now,
+        now,
+      )
+    }
+    oldDb.close()
+
+    const db = initDb(dbPath)
+
+    // Every pre-existing row survives the CHECK rebuild with its captured values.
+    for (const family of ['claude', 'codex', 'opencode', 'cursor']) {
+      const row = db.prepare<[string], {
+        profile: string
+        prompt: string
+        client_family: string | null
+        native_session_id: string | null
+        output: string | null
+        raw_result: string | null
+        pid: number | null
+        timeout_ms: number | null
+        requested_agent_runtime: string | null
+        resolved_profile: string | null
+      }>(
+        `SELECT profile, prompt, client_family, native_session_id, output, raw_result, pid, timeout_ms,
+                requested_agent_runtime, resolved_profile
+         FROM executions WHERE id = ?`,
+      ).get(`exec_deployed_${family}`)
+      assert.ok(row, `row for ${family} must survive the migration`)
+      assert.equal(row.client_family, family)
+      assert.equal(row.profile, `${family}-profile`)
+      assert.equal(row.prompt, `${family} prompt`)
+      assert.equal(row.native_session_id, `native-${family}`)
+      assert.equal(row.output, `${family} output`)
+      assert.equal(row.raw_result, `${family} raw`)
+      assert.equal(row.pid, 4242)
+      assert.equal(row.timeout_ms, 1000)
+      assert.equal(row.requested_agent_runtime, 'agent')
+      assert.equal(row.resolved_profile, 'captured-profile')
+    }
+
+    // The execution indexes are recreated after the table rebuild.
+    const indexNames = (database: Database.Database): string[] => database
+      .prepare<[], { name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'executions'`)
+      .all()
+      .map((index) => index.name)
+    assert.ok(indexNames(db).includes('idx_exec_status'), 'execution status index must be recreated')
+    assert.ok(indexNames(db).includes('idx_exec_task'), 'execution task index must be recreated')
+
+    // Foreign keys survive: the rebuilt table still accepts a referencing event.
+    db.prepare(
+      `INSERT INTO events (execution_id, seq, type, timestamp, data, created_at)
+       VALUES ('exec_deployed_claude', 1, 'terminal', ?, '{}', ?)`,
+    ).run(now, now)
+    assert.deepEqual(db.pragma('foreign_key_check'), [])
+    assert.equal(
+      db.prepare<[], { cnt: number }>(
+        `SELECT COUNT(*) AS cnt FROM events WHERE execution_id = 'exec_deployed_claude'`,
+      ).get()?.cnt,
+      1,
+    )
+
+    // The rebuilt CHECK now accepts every required family.
+    for (const family of ['grok', 'dsh', 'codebuddy']) {
+      assert.doesNotThrow(() => {
+        insertExecution(db, `exec_deployed_new_${family}`, family, now)
+      }, `migrated client_family CHECK must accept '${family}'`)
+    }
+    assert.throws(() => {
+      insertExecution(db, 'exec_deployed_unknown', 'unknown-client', now)
+    }, /CHECK/, 'migrated client_family CHECK must still reject an unknown family')
+
+    closeDb()
+
+    // A second bootstrap is an idempotent no-op: rows and indexes stay intact
+    // and every family is still accepted.
+    const db2 = initDb(dbPath)
+    assert.equal(
+      db2.prepare<[], { cnt: number }>(`SELECT COUNT(*) AS cnt FROM executions`).get()?.cnt,
+      7,
+      'the four migrated plus three newly admitted rows must all survive a second bootstrap',
+    )
+    assert.ok(indexNames(db2).includes('idx_exec_status'), 'second bootstrap must keep the status index')
+    assert.ok(indexNames(db2).includes('idx_exec_task'), 'second bootstrap must keep the task index')
+    for (const family of ['cursor', 'grok', 'codebuddy']) {
+      assert.doesNotThrow(() => {
+        insertExecution(db2, `exec_idempotent_${family}`, family, now)
+      }, `idempotent bootstrap must still accept '${family}'`)
+    }
+    for (const family of ['claude', 'codex', 'opencode', 'cursor']) {
+      const row = db2.prepare<[string], { native_session_id: string | null }>(
+        `SELECT native_session_id FROM executions WHERE id = ?`,
+      ).get(`exec_deployed_${family}`)
+      assert.equal(row?.native_session_id, `native-${family}`, 'rows survive a second bootstrap')
+    }
+  } finally {
+    closeDb()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
