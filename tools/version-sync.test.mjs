@@ -5,24 +5,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { FIRST_PARTY_MANIFESTS } from './version-sync.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const tool = join(scriptDir, 'version-sync.mjs');
 
 const ROOT_VERSION = '1.0.0-dev.0';
-
-const FIRST_PARTY_MANIFESTS = [
-  'apps/cli/package.json',
-  'apps/daemon/package.json',
-  'apps/desktop/package.json',
-  'packages/models/package.json',
-  'packages/features/auto-routing/package.json',
-  'packages/control-client/package.json',
-  'packages/dsh-shell/package.json',
-  'packages/features/gateway/package.json',
-  'packages/features/session/package.json',
-  'packages/providers/package.json',
-];
+const DSH_VERSION = '0.1.1-rc.2';
 
 async function writeJson(dir, rel, obj) {
   const abs = join(dir, rel);
@@ -58,7 +47,7 @@ async function buildFixture() {
     protocol_version: '1',
     desktop: ROOT_VERSION,
     dsh_shell: ROOT_VERSION,
-    dsh: '0.1.0-rc.6',
+    dsh: DSH_VERSION,
   });
   await writeText(dir, 'packages/features/session/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
   return dir;
@@ -138,7 +127,7 @@ test('version-sync --write preserves protocol and upstream versions', async () =
     runTool(dir, '--write');
     const contracts = JSON.parse(await readFile(join(dir, 'contracts/versions.json'), 'utf8'));
     assert.equal(contracts.protocol_version, '1');
-    assert.equal(contracts.dsh, '0.1.0-rc.6');
+    assert.equal(contracts.dsh, DSH_VERSION);
     assert.equal(contracts.desktop, ROOT_VERSION);
     assert.equal(contracts.dsh_shell, ROOT_VERSION);
     const manifest = JSON.parse(await readFile(join(dir, 'release-manifest.json'), 'utf8'));
@@ -155,7 +144,7 @@ test('version-sync --check reports protocol/upstream drift as a guard failure', 
     protocol_version: '1',
     desktop: ROOT_VERSION,
     dsh_shell: ROOT_VERSION,
-    dsh: '0.1.0-rc.7',
+    dsh: '0.1.0-rc.6',
   });
   try {
     let threw = false;
@@ -164,9 +153,29 @@ test('version-sync --check reports protocol/upstream drift as a guard failure', 
     } catch (error) {
       threw = true;
       const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, /dsh must remain 0\.1\.0-rc\.6/);
+      assert.match(out, /dsh must remain 0\.1\.1-rc\.2/);
     }
     assert.equal(threw, true, '--check must exit non-zero when upstream drift exists');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('version-sync --check reports a missing first-party manifest as drift instead of throwing ENOENT', async () => {
+  const dir = await buildFixture();
+  const missing = 'packages/features/quota/package.json';
+  await rm(join(dir, missing), { force: true });
+  try {
+    let threw = false;
+    try {
+      runTool(dir, '--check');
+    } catch (error) {
+      threw = true;
+      const out = String(error.stdout) + String(error.stderr);
+      assert.match(out, new RegExp(`${missing.replace(/[/.]/g, '\\$&')} \\(missing\\)`));
+      assert.ok(!out.includes('ENOENT'), 'missing manifests must not surface as ENOENT');
+    }
+    assert.equal(threw, true, '--check must exit non-zero when a first-party manifest is missing');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const workflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+const workflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8').replace(/\r\n/g, '\n');
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
 const localBuilder = readFileSync(resolve(repoRoot, 'tools', 'release', 'build-local-release.mjs'), 'utf8');
 
