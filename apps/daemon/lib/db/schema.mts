@@ -97,12 +97,30 @@ function tableExists(database: ForemanDatabase, table: string): boolean {
   return tableCreateSql(database, table) !== undefined
 }
 
-function needsCursorClientFamilyMigration(sql: string | undefined): boolean {
-  return Boolean(sql?.includes('client_family IN') && !sql.includes("'cursor'"))
+/**
+ * Every client family the current executions schema must accept. A legacy
+ * table whose client_family CHECK omits ANY of them (for example the deployed
+ * claude/codex/opencode/cursor-era table that predates grok/dsh/codebuddy)
+ * must be rebuilt, so the check is "is any required family missing" rather
+ * than "is this one particular family missing".
+ */
+const REQUIRED_CLIENT_FAMILIES = [
+  'claude',
+  'codex',
+  'opencode',
+  'cursor',
+  'grok',
+  'dsh',
+  'codebuddy',
+] as const
+
+function needsClientFamilyMigration(sql: string | undefined): boolean {
+  if (!sql?.includes('client_family IN')) return false
+  return REQUIRED_CLIENT_FAMILIES.some((family) => !sql.includes(`'${family}'`))
 }
 
 function needsCurrentExecutionsMigration(sql: string | undefined): boolean {
-  return Boolean(sql && (needsCursorClientFamilyMigration(sql) || /\bsession_id\b/iu.test(sql)))
+  return Boolean(sql && (needsClientFamilyMigration(sql) || /\bsession_id\b/iu.test(sql)))
 }
 
 function needsNullableEventExecutionsMigration(sql: string | undefined): boolean {
@@ -282,7 +300,7 @@ const EXECUTIONS_TABLE_SQL = `CREATE TABLE executions (
   status            TEXT NOT NULL CHECK(status IN
                       ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
   native_session_id TEXT,
-  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor')),
+  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor','grok','dsh','codebuddy')),
   pid               INTEGER, pgid INTEGER,
   started_at        TEXT, ended_at TEXT,
   exit_code         INTEGER, kill_signal TEXT,
