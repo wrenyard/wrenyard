@@ -4,7 +4,7 @@ import type { Provider, ProviderContext } from '../base/index.ts';
 import { codeBuddyClient, createCodeBuddyModels } from './models.ts';
 import { loadInstalledCodeBuddyProductModels, type CodeBuddyProductModelEntry } from './product.ts';
 import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity } from './runtime.ts';
-import { codeBuddyDefaultPools, codeBuddyQuotaBindings } from './quota.ts';
+import { createCodeBuddyQuota } from './quota.ts';
 
 export interface CodeBuddyOptions extends Partial<ProviderContext> {
   productPath?: string;
@@ -35,10 +35,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     id: state.definition.id,
     definition: state.definition,
     clients: [codeBuddyClient],
-    quota: {
-      bindings: codeBuddyQuotaBindings(state.definition),
-      defaultPools: codeBuddyDefaultPools(),
-    },
+    quota: createCodeBuddyQuota(state.definition),
     credential: runtime.credential,
     resolveModel: (model, credential) => runtime.resolveUpstreamModel(model, credential) ?? model,
     canonicalizeModel: runtime.canonicalizeModel,

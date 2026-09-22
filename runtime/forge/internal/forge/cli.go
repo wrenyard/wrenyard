@@ -161,7 +161,7 @@ COMMANDS
   update                   Update Forge, run setup, retire legacy aliases, and run doctor
 
 CLIENT EXECUTION (INTERNAL)
-  client <client> <operation>  Read native client protocol data
+  client <rpc|credential>      Execute an internal JSON protocol request
 
 SHELL (INTERNAL)
   shell dsh plan                Print the resolved fdsh/DSH launch plan

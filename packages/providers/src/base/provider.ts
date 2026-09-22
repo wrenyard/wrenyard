@@ -1,5 +1,5 @@
 import type { ClientDefinition, GatewayProtocol, ProviderDefinition } from './contracts.ts';
-import type { ProviderQuotaBinding, ProviderQuotaPool } from './quota.ts';
+import type { ProviderQuota } from './provider-quota.ts';
 
 export interface ProviderCredential {
   value: string;
@@ -22,10 +22,7 @@ export interface Provider {
   readonly id: string;
   readonly definition: ProviderDefinition;
   readonly clients: readonly ClientDefinition[];
-  readonly quota: {
-    readonly bindings: readonly ProviderQuotaBinding[];
-    readonly defaultPools: readonly ProviderQuotaPool[];
-  };
+  readonly quota: ProviderQuota;
   credential(): Promise<ProviderCredential | undefined>;
   resolveModel(model: string, credential?: ProviderCredential): string;
   canonicalizeModel(model: string): string;
