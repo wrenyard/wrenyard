@@ -882,7 +882,10 @@ export function createSupervisor(options = {}) {
   function pump() {
     if (stopping || replacing) return Promise.resolve();
     if (pumpPromise) return pumpPromise;
-    pumpPromise = (async () => {
+    // Assign the in-flight promise before the loop can exit on an empty queue.
+    // Otherwise its synchronous finally clears the slot before this assignment
+    // restores an already-settled promise, blocking every later source change.
+    pumpPromise = Promise.resolve().then(async () => {
       try {
         for (;;) {
           if (stopping || replacing) return;
@@ -905,7 +908,7 @@ export function createSupervisor(options = {}) {
       } finally {
         pumpPromise = null;
       }
-    })();
+    });
     return pumpPromise;
   }
 
