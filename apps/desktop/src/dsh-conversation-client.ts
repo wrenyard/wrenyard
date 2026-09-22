@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalizeBuiltinPublicModelId, createBuiltinCatalog } from '@wrenyard/providers';
+import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers';
+import { desktopCatalog } from './builtin-catalog.js';
 import { getEncoding } from 'js-tiktoken';
 import { parseTaskRunSnapshot } from './stats-snapshot.js';
 import {
@@ -508,7 +509,9 @@ function canonicalConversationModel(provider: string, model: string): string {
  * input capabilities (`text`/`image`) of a model already projected into the
  * product directory — never to enumerate, re-merge, or fabricate models.
  */
-const BUILTIN_CATALOG = createBuiltinCatalog();
+function builtinCatalog() {
+  return desktopCatalog();
+}
 
 /**
  * Project a model's exact Catalog input capabilities for a DSH directory entry.
@@ -532,7 +535,7 @@ function catalogInputTypes(provider: string, model: string): readonly ('text' | 
   if (separator <= 0) return undefined;
   const exactProvider = canonical.slice(0, separator);
   const exactModel = canonical.slice(separator + 1);
-  const definition = BUILTIN_CATALOG
+  const definition = builtinCatalog()
     .provider(exactProvider)
     ?.models.find((candidate) => candidate.id === exactModel);
   return definition?.capabilities ? [...definition.capabilities] : undefined;

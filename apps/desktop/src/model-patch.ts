@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 
-export const MODEL_PATCH_FILENAME = 'forge-model-patch.yaml';
+export const MODEL_PATCH_FILENAME = 'wrenyard-model-patch.yaml';
 export const DEFAULT_WRENYARD_MCP_URL = 'http://127.0.0.1:8787/mcp';
 export const WRENYARD_DSH_PROVIDER_ID = 'wrenyard';
 export const WRENYARD_GATEWAY_TOKEN_ENV = 'WRENYARD_GATEWAY_TOKEN';
