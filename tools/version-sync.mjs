@@ -29,7 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = join(scriptDir, '..');
 
-const FIRST_PARTY_MANIFESTS = [
+export const FIRST_PARTY_MANIFESTS = [
   'apps/cli/package.json',
   'apps/daemon/package.json',
   'apps/desktop/package.json',
@@ -64,7 +64,7 @@ const PROFILE_PATH = 'packages/features/session/src/profile.ts';
 
 // Protocol and upstream versions that must be preserved untouched.
 const PROTOCOL_VERSION = '1';
-const DSH_VERSION = '0.1.0-rc.6';
+const DSH_VERSION = '0.1.1-rc.2';
 
 export function run(argv, cwd = process.cwd()) {
   const write = argv.includes('--write');
@@ -85,6 +85,10 @@ export function run(argv, cwd = process.cwd()) {
 
   const syncJson = (rel, mutate) => {
     const abs = join(root, rel);
+    if (!existsSync(abs)) {
+      drifted.push(`${rel} (missing)`);
+      return;
+    }
     const current = JSON.stringify(JSON.parse(readFileSync(abs, 'utf8')), null, 2) + '\n';
     const obj = JSON.parse(current);
     mutate(obj, version);
