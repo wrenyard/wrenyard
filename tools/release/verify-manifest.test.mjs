@@ -17,11 +17,9 @@ const realVerifier = join(here, 'verify-manifest.mjs');
 const realSchema = join(here, '..', '..', 'contracts', 'suite-manifest.schema.json');
 
 const componentSources = {
-  foreman: 'runtime/foreman',
-  pet: 'apps/pet',
   cli: 'apps/cli',
+  daemon: 'apps/daemon',
   desktop: 'apps/desktop',
-  dsh_shell: 'packages/dsh-shell',
 };
 
 const fixtureRoots = [];
@@ -87,11 +85,9 @@ function buildComponents(values, { sourceSha = null, sources = {} } = {}) {
     source_sha: sourceSha,
   });
   return {
-    foreman: mk('foreman'),
-    pet: mk('pet'),
     cli: mk('cli'),
+    daemon: mk('daemon'),
     desktop: mk('desktop'),
-    dsh_shell: mk('dsh_shell'),
   };
 }
 
@@ -178,7 +174,7 @@ test('rejects a manifest missing a component or carrying an extra one', () => {
 test('rejects a component source escaping the suite root', () => {
   const root = makeFixture();
   const values = contractValues(root);
-  const components = buildComponents(values, { sources: { foreman: '../outside' } });
+  const components = buildComponents(values, { sources: { daemon: '../outside' } });
   writeManifest(root, buildManifest(values, { components }));
   expectFail(runVerifier(root), /source must be contained under the suite root/);
 });

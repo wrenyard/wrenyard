@@ -180,7 +180,7 @@ test('doctor runs Foreman then Forge and succeeds when both pass', (t) => {
   assert.equal(code, 0);
   assert.equal(recorder.calls.length, 2);
   assert.equal(recorder.calls[0].command, process.execPath);
-  assert.ok(recorder.calls[0].args[1].endsWith(join('services', 'foreman', 'bin', 'foreman.mts')));
+  assert.ok(recorder.calls[0].args[1].endsWith(join('apps', 'cli', 'src', 'index.mts')));
   assert.deepEqual(recorder.calls[0].args.slice(2), ['doctor']);
   assert.deepEqual(recorder.calls[1], { command: '/opt/bin/forge', args: ['doctor', '--json'] });
 });
@@ -346,9 +346,9 @@ test('foreman is spawned with the configured nodeExecutable', (t) => {
   assert.equal(recorder.calls[0].command, '/opt/node/bin/node');
   assert.equal(
     recorder.calls[0].args[0],
-    join(root, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(root, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
   );
-  assert.ok(recorder.calls[0].args[1].endsWith(join('services', 'foreman', 'bin', 'foreman.mts')));
+  assert.ok(recorder.calls[0].args[1].endsWith(join('apps', 'cli', 'src', 'index.mts')));
   assert.deepEqual(recorder.calls[0].args.slice(2), ['status']);
 });
 
@@ -365,9 +365,9 @@ test('daemon executes through bundled Node and the staged tsx/Foreman control', 
   assert.equal(recorder.calls[0].command, '/suite/runtime/node');
   assert.equal(
     recorder.calls[0].args[0],
-    join(root, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(root, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
   );
-  assert.ok(recorder.calls[0].args[1].endsWith(join('services', 'foreman', 'bin', 'foreman.mts')));
+  assert.ok(recorder.calls[0].args[1].endsWith(join('apps', 'cli', 'src', 'index.mts')));
   assert.deepEqual(recorder.calls[0].args.slice(2), ['daemon', 'start']);
 });
 
@@ -592,8 +592,8 @@ test('installed control uses the bundled node on a restricted PATH', (t) => {
   assert.equal(recorder.calls[0].command, '/suite/runtime/node');
   assert.equal(
     recorder.calls[0].args[0],
-    join(root, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(root, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
   );
-  assert.ok(recorder.calls[0].args[1].endsWith(join('services', 'foreman', 'bin', 'foreman.mts')));
+  assert.ok(recorder.calls[0].args[1].endsWith(join('apps', 'cli', 'src', 'index.mts')));
   assert.deepEqual(recorder.calls[0].args.slice(2), ['status']);
 });

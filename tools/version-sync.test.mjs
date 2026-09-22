@@ -13,9 +13,8 @@ const ROOT_VERSION = '1.0.0-dev.0';
 
 const FIRST_PARTY_MANIFESTS = [
   'apps/cli/package.json',
+  'apps/daemon/package.json',
   'apps/desktop/package.json',
-  'apps/pet/package.json',
-  'services/foreman/package.json',
   'packages/models/package.json',
   'packages/features/auto-routing/package.json',
   'packages/control-client/package.json',
@@ -49,11 +48,9 @@ async function buildFixture() {
     release_status: 'development',
     publishable: false,
     components: {
-      foreman: { version: ROOT_VERSION },
-      pet: { version: ROOT_VERSION },
       cli: { version: ROOT_VERSION },
+      daemon: { version: ROOT_VERSION },
       desktop: { version: ROOT_VERSION },
-      dsh_shell: { version: ROOT_VERSION },
     },
   });
   await writeJson(dir, 'contracts/versions.json', {

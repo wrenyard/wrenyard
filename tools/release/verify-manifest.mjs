@@ -42,7 +42,7 @@ try {
 
 const matches = (value, pattern) => typeof pattern === 'string' && new RegExp(pattern).test(value);
 
-const requiredComponents = ['foreman', 'pet', 'cli', 'desktop', 'dsh_shell'];
+const requiredComponents = ['cli', 'daemon', 'desktop'];
 
 // Artifact names must match the object-key pattern the contract schema defines.
 const artifactNameRe = (() => {

@@ -42,13 +42,11 @@
     "components": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["foreman", "pet", "cli", "desktop", "dsh_shell"],
+      "required": ["cli", "daemon", "desktop"],
       "properties": {
-        "foreman": { "$ref": "#/$defs/component" },
-        "pet": { "$ref": "#/$defs/component" },
         "cli": { "$ref": "#/$defs/component" },
-        "desktop": { "$ref": "#/$defs/component" },
-        "dsh_shell": { "$ref": "#/$defs/component" }
+        "daemon": { "$ref": "#/$defs/component" },
+        "desktop": { "$ref": "#/$defs/component" }
       }
     }
   },

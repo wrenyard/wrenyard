@@ -375,7 +375,7 @@ rm -rf "$STAGING_DIR" "$BACKUP_DIR"
 mkdir -p "$STAGING_DIR"
 cp -R "$TMP_DIR/extract"/. "$STAGING_DIR"/
 
-find "$STAGING_DIR" -type f \( -name 'wrenyard' -o -name 'forge' -o -name 'foreman' -o -name 'foreman.mjs' -o -name 'node' \) -exec chmod +x {} +
+find "$STAGING_DIR" -type f \( -name 'wrenyard' -o -name 'forge' -o -name 'node' \) -exec chmod +x {} +
 
 INSTALLED_WRENYARD="$(find_artifact "$STAGING_DIR" 'wrenyard')"
 [ -n "$INSTALLED_WRENYARD" ] || die "installed suite is missing the wrenyard executable"

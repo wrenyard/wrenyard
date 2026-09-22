@@ -1,70 +1,91 @@
+import type { BrowserWindow } from 'electron';
 import {
   applyPetSettingsPatch,
   serializePetSettings,
   type AppConfig,
   type EntityVisibilityConfig,
-} from '@wrenyard/pet/config';
-import type { PetRuntimeStatus } from '@wrenyard/pet/runtime';
-import type { QuotaProviderState } from '@wrenyard/pet/runtime';
+} from './pet/main/config';
+import type { PetRuntimeStatus } from './pet/main/runtime';
+import type { QuotaProviderState } from './main/projections/quota-runtime';
 import type {
   PetCompanionSettings,
   PetCompanionSnapshot,
   PetDisplaySnapshot,
 } from './shell-contract.js';
-import { normalizeProviderOrder, reorderProviders } from './provider-order.js';
+import { normalizeProviderOrder } from './provider-order.js';
+import {
+  configFromPetSettings,
+  petSettingsFromConfig,
+  type DesktopSettingsStore,
+} from './main/settings/desktop-settings.js';
 
 export interface DesktopPetRuntimeHandle {
   readonly status: PetRuntimeStatus;
   start(): Promise<void>;
   stop(): Promise<void>;
+  setVisible(visible: boolean): void;
   setQuotaProviders(providers: QuotaProviderState[]): void;
-  /** Optional task-run transcript preview; older test doubles may omit it. */
-  openTaskTranscript?(taskRunId: string): Promise<void>;
+  /** House window, used by the shared window owner to place task entities. */
+  getHouseWindow?(): BrowserWindow | null;
 }
 
 export interface DesktopPetControllerOptions {
-  loadConfig(): AppConfig;
-  saveConfig(config: AppConfig): void;
+  /** Single Desktop settings store; the controller never caches its own copy. */
+  store: DesktopSettingsStore;
   createRuntime(config: AppConfig, onConfigChange: (config: AppConfig) => void): DesktopPetRuntimeHandle;
   listDisplays?(): PetDisplaySnapshot[];
 }
 
-/** Owns Pet persistence and lifecycle inside the Desktop application. */
+/**
+ * Owns Pet lifecycle and visibility inside the Desktop application. It never
+ * persists its own document: every preference write goes through the shared
+ * Desktop settings store, partitioned so a Pet save cannot clobber provider
+ * order or update channel.
+ *
+ * Visibility is separate from disposal. `setVisible` only toggles the mounted
+ * runtime; the runtime is created once and destroyed only on `stop()` (quit) or
+ * a structural change the windows cannot apply in place.
+ */
 export class DesktopPetController {
-  private readonly load: () => AppConfig;
-  private readonly save: (config: AppConfig) => void;
+  private readonly store: DesktopSettingsStore;
   private readonly createRuntime: DesktopPetControllerOptions['createRuntime'];
   private readonly listDisplays: () => PetDisplaySnapshot[];
   private runtime: DesktopPetRuntimeHandle | null = null;
+  private runtimeConfig: AppConfig | null = null;
   private quotaProviders: QuotaProviderState[] = [];
   private transition: Promise<void> = Promise.resolve();
 
   constructor(options: DesktopPetControllerOptions) {
-    this.load = options.loadConfig;
-    this.save = options.saveConfig;
+    this.store = options.store;
     this.createRuntime = options.createRuntime;
     this.listDisplays = options.listDisplays ?? (() => []);
   }
 
+  /** Pet runtime config projected from the store partitions. */
   getConfig(): AppConfig {
-    const config = this.load();
-    return {
-      ...config,
-      quota: {
-        providers: normalizeProviderOrder(config.quota.providers),
-      },
-    };
+    const settings = this.store.load();
+    return configFromPetSettings(
+      settings.pet,
+      normalizeProviderOrder(settings.providers.providers),
+      settings.window.graphSlip,
+    );
+  }
+
+  /** Persisted visibility intent, independent of runtime state. */
+  isVisible(): boolean {
+    return this.store.load().pet.visible;
+  }
+
+  /** House window of the mounted runtime, when one exists. */
+  getHouseWindow(): BrowserWindow | null {
+    return this.runtime?.getHouseWindow?.() ?? null;
   }
 
   async start(): Promise<void> {
     return this.enqueue(async () => {
       const config = this.getConfig();
-      if (!config.enabled || this.runtime?.status === 'running') return;
-      if (this.runtime) await this.runtime.stop();
-      const runtime = this.createRuntime(config, (updated) => this.save(updated));
-      this.runtime = runtime;
-      await runtime.start();
-      runtime.setQuotaProviders(this.quotaProviders);
+      if (!config.enabled) return;
+      await this.startRuntime(config);
     });
   }
 
@@ -72,21 +93,29 @@ export class DesktopPetController {
     return this.enqueue(async () => {
       const runtime = this.runtime;
       this.runtime = null;
+      this.runtimeConfig = null;
       await runtime?.stop();
+    });
+  }
+
+  /** Change Pet visibility without rebuilding the runtime or its subscriptions. */
+  async setVisible(visible: boolean): Promise<void> {
+    return this.enqueue(async () => {
+      const settings = this.store.load();
+      if (settings.pet.visible !== visible) {
+        this.store.patch('pet', { ...settings.pet, visible });
+      }
+      if (visible) await this.startRuntime(this.getConfig());
+      else this.runtime?.setVisible(false);
     });
   }
 
   async restart(): Promise<void> {
     return this.enqueue(async () => {
+      await this.stopRuntime();
       const config = this.getConfig();
-      const previous = this.runtime;
-      this.runtime = null;
-      await previous?.stop();
       if (!config.enabled) return;
-      const runtime = this.createRuntime(config, (updated) => this.save(updated));
-      this.runtime = runtime;
-      await runtime.start();
-      runtime.setQuotaProviders(this.quotaProviders);
+      await this.startRuntime(config);
     });
   }
 
@@ -101,9 +130,21 @@ export class DesktopPetController {
   async saveSettings(settings: PetCompanionSettings): Promise<void> {
     const result = applyPetSettingsPatch(this.getConfig(), settings);
     if (!result.changed) return;
-    this.save(result.config);
-    if (result.config.enabled) await this.restart();
-    else await this.stop();
+    this.store.patch('pet', petSettingsFromConfig(result.config));
+
+    return this.enqueue(async () => {
+      if (!result.config.enabled) {
+        this.runtime?.setVisible(false);
+        return;
+      }
+      if (this.runtime?.status === 'running' && !this.requiresRebuild(result.config)) {
+        // Live-appliable change: keep the mounted runtime and its subscriptions.
+        this.runtime.setVisible(true);
+        return;
+      }
+      await this.stopRuntime();
+      await this.startRuntime(this.getConfig());
+    });
   }
 
   async setEntityVisibility(key: keyof EntityVisibilityConfig, visible: boolean): Promise<void> {
@@ -118,20 +159,9 @@ export class DesktopPetController {
     await this.saveSettings(current);
   }
 
+  /** Tray/compat entry point: same semantics as {@link setVisible}. */
   async setEnabled(enabled: boolean): Promise<void> {
-    const current = serializePetSettings(this.getConfig());
-    current.enabled = enabled;
-    await this.saveSettings(current);
-  }
-
-  async saveProviderOrder(providerIds: string[]): Promise<void> {
-    const current = this.getConfig();
-    const providers = reorderProviders(current.quota.providers, providerIds);
-    if (JSON.stringify(providers) === JSON.stringify(current.quota.providers)) return;
-    this.save({
-      ...current,
-      quota: { providers },
-    });
+    await this.setVisible(enabled);
   }
 
   setQuotaProviders(providers: QuotaProviderState[]): void {
@@ -139,29 +169,46 @@ export class DesktopPetController {
     this.runtime?.setQuotaProviders(this.quotaProviders);
   }
 
-  /**
-   * Request a task-run transcript preview without changing Pet settings. The
-   * runtime is created lazily if absent but is never started, so Pet stays
-   * disabled and the preview does not enable entities/pollers. A later
-   * start/stop reuses this same runtime or cleans it up under the existing
-   * lifecycle policy, serialized through the shared transition ownership so
-   * preview and lifecycle operations can never interleave.
-   */
-  async openTaskTranscript(taskRunId: string): Promise<void> {
-    return this.enqueue(async () => {
-      const runtime = this.ensureRuntime();
-      if (!runtime.openTaskTranscript) {
-        throw new Error('Desktop Pet: task transcript preview is unavailable');
-      }
-      await runtime.openTaskTranscript(taskRunId);
-    });
+  private async startRuntime(config: AppConfig): Promise<void> {
+    if (this.runtime?.status === 'running' && !this.requiresRebuild(config)) {
+      this.runtime.setVisible(true);
+      return;
+    }
+    if (this.runtime) await this.runtime.stop();
+    const runtime = this.createRuntime(config, (updated) => this.persistRuntimeConfig(updated));
+    this.runtime = runtime;
+    this.runtimeConfig = config;
+    await runtime.start();
+    runtime.setVisible(true);
+    runtime.setQuotaProviders(this.quotaProviders);
   }
 
-  private ensureRuntime(): DesktopPetRuntimeHandle {
-    if (this.runtime) return this.runtime;
-    const runtime = this.createRuntime(this.getConfig(), (updated) => this.save(updated));
-    this.runtime = runtime;
-    return runtime;
+  private async stopRuntime(): Promise<void> {
+    const runtime = this.runtime;
+    this.runtime = null;
+    this.runtimeConfig = null;
+    await runtime?.stop();
+  }
+
+  /**
+   * A rebuild is only needed for changes the mounted entity windows cannot
+   * apply in place: overall visibility is applied live, but scale, house skin,
+   * display selection, entity toggles and tip timing all change window geometry
+   * or the config the entity manager was constructed with.
+   */
+  private requiresRebuild(config: AppConfig): boolean {
+    const current = this.runtimeConfig;
+    if (!current) return true;
+    // `enabled` is the visibility intent, handled by setVisible before this
+    // check, so it must not force a rebuild by itself. Shared window geometry is
+    // not Pet config either; it is owned by the Desktop window partition.
+    const normalized = (value: AppConfig) => JSON.stringify({ ...value, enabled: false, windows: {} });
+    return normalized(current) !== normalized(config);
+  }
+
+  private persistRuntimeConfig(config: AppConfig): void {
+    this.runtimeConfig = config;
+    this.store.patch('pet', { ...petSettingsFromConfig(config), visible: this.store.load().pet.visible });
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {
