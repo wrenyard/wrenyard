@@ -608,18 +608,11 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     try {
       const request = options.resolveExecRequest?.(params)
       if (!request) throw new Error('Exec catalog resolution is unavailable')
-      handle = await service.start({
-        client: params.client,
-        model: params.model,
-        prompt: params.prompt,
-        cwd: params.cwd,
-        ...(params.provider === undefined ? {} : { provider: params.provider }),
-        ...(params.mode === undefined ? {} : { mode: params.mode }),
-        ...(params.resumeSessionId === undefined ? {} : { resumeSessionId: params.resumeSessionId }),
-        ...(params.thinking === undefined ? {} : { thinking: params.thinking }),
-        ...(params.features === undefined ? {} : { features: params.features }),
-        ...request,
-      })
+      // The resolved request is built by spreading the original params (see
+      // daemon.resolveExecRequest), so spreading params first and the resolved
+      // request second carries every mandatory field exactly once while letting
+      // the resolved provider/model/mode/thinking override the raw input.
+      handle = await service.start({ ...params, ...request })
     } catch (error) {
       throw protocolErrorFromExecStart(error, params.client)
     }
