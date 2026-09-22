@@ -1,7 +1,8 @@
 # Signing
 
-Wrenyard is one public product in one monorepo; Foreman, Forge, Pet, and the
-Desktop shell are internal components. Two signing levels are supported:
+Wrenyard is one public product in one monorepo; the CLI, daemon, and Desktop are
+its three program entry points, and the Pet module plus the DSH shell are
+internal parts of Desktop. Two signing levels are supported:
 local/CI preview signing and trusted release signing. No certificates,
 private keys, or personal identifiers are ever committed to the repository,
 and no user-specific paths or secrets appear in signing configuration.

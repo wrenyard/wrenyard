@@ -32,7 +32,7 @@ not a description of code in this repository.
 
 This package is **not** the existing worker/daemon session surface and **not**
 `message.send`. The conversation DTOs here describe a future product
-conversation API. The existing `services/foreman/lib/protocol` wire shape and
+conversation API. The existing `apps/daemon/lib/protocol` wire shape and
 `packages/control-client` transport are unchanged and are not imported here;
 the JSON-RPC envelope shape is mirrored so the future adapter can carry both.
 

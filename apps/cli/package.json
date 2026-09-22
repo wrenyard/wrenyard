@@ -6,16 +6,18 @@
   "license": "MIT",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts",
+    "test": "tsx --test test/*.test.ts test/*.test.mts",
     "build": "tsc -p tsconfig.build.json && node tools/build.mjs"
   },
   "dependencies": {
-    "@wrenyard/control-client": "workspace:*"
+    "@wrenyard/control-client": "workspace:*",
+    "@wrenyard/daemon": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
-    "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   },
   "engines": {

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Canonical local/CI release pipeline. It builds only the current host target,
 // never publishes, and writes a CLI tarball (one public wrenyard launcher, with
-// the Foreman control and the bundled Node runtime hidden), a Node SEA
-// executable, portable suite zip, optional Desktop zip (with its Pet module),
-// the embedded development identity, legal report, checksums and a
+// the daemon control tree and the bundled Node runtime hidden), a Node SEA
+// executable, portable suite zip, optional Desktop zip (with its in-tree Pet
+// module), the embedded development identity, legal report, checksums and a
 // target-qualified artifact manifest to one output directory.
 
 import archiver from 'archiver';
@@ -20,6 +20,14 @@ import { scanText } from '../check-secrets.mjs';
 const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(RELEASE_DIR, '..', '..');
 const target = entryFor();
+
+// The shipped control tree is the deployed CLI package: the CLI owns the
+// command implementation and pulls the daemon package (and tsx) in as physical
+// production dependencies. Canonical source paths mirror to the stage as
+// `apps/cli/**`; the daemon server entry inside it is
+// `apps/cli/node_modules/@wrenyard/daemon/bin/daemon.mts`.
+const STAGED_CONTROL_ROOT = 'apps/cli';
+const STAGED_CLI_SOURCE = path.join('apps', 'cli', 'src', 'index.ts');
 
 function parseArgs(argv) {
   const options = {
@@ -251,12 +259,12 @@ function assertWorkspaceInstallStateUnchanged(root, snapshot) {
   }
 }
 
-// Absolute workspace member directories (root plus the apps/*, services/* and
-// packages/* and packages/features/* projects) used to prove the install state still covers the full
-// dev set after the deploy.
+// Absolute workspace member directories (root plus the apps/* and packages/*
+// and packages/features/* and packages/clients/* projects) used to prove the
+// install state still covers the full dev set after the deploy.
 function workspacePackageDirs(root) {
   const dirs = [root];
-  for (const rel of ['apps', 'services', 'packages', 'packages/features', 'packages/clients']) {
+  for (const rel of ['apps', 'packages', 'packages/features', 'packages/clients']) {
     const dir = path.join(root, rel);
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -268,9 +276,59 @@ function workspacePackageDirs(root) {
   return dirs;
 }
 
-// Gateway packages are production dependencies of Foreman and must be injected
-// as physical package snapshots. Reject only workspace symlinks: a packaged
-// runtime must never point back into the source checkout or pnpm store.
+// Source directories copied into the isolated deploy workspace. The deployed
+// CLI package pulls the daemon and the workspace feature/client packages in as
+// production dependencies, so every workspace member it can reach must be
+// present for `pnpm deploy` to resolve them.
+const DEPLOY_WORKSPACE_SOURCES = [
+  path.join('apps', 'cli'),
+  path.join('apps', 'daemon'),
+  path.join('packages', 'models'),
+  path.join('packages', 'providers'),
+  path.join('packages', 'protocol'),
+  path.join('packages', 'clients'),
+  path.join('packages', 'execution'),
+  path.join('packages', 'control-client'),
+  path.join('packages', 'features', 'auto-routing'),
+  path.join('packages', 'features', 'gateway'),
+  path.join('packages', 'features', 'quota'),
+  path.join('packages', 'features', 'exec'),
+  path.join('packages', 'features', 'provider'),
+  path.join('packages', 'features', 'browser-use'),
+  path.join('packages', 'features', 'computer-use'),
+];
+
+// Every first-party workspace package name that pnpm deploy may reference. A
+// deployed manifest must never keep a workspace/file: spec for one of these:
+// the physical snapshot beside it is the shipped dependency.
+const WORKSPACE_PACKAGE_NAMES = [
+  '@wrenyard/agent-client',
+  '@wrenyard/auto-routing',
+  '@wrenyard/browser-use',
+  '@wrenyard/cli',
+  '@wrenyard/client-claude',
+  '@wrenyard/client-codebuddy',
+  '@wrenyard/client-codex',
+  '@wrenyard/client-cursor',
+  '@wrenyard/client-dsh',
+  '@wrenyard/client-grok',
+  '@wrenyard/client-opencode',
+  '@wrenyard/clients',
+  '@wrenyard/computer-use',
+  '@wrenyard/control-client',
+  '@wrenyard/daemon',
+  '@wrenyard/exec',
+  '@wrenyard/execution',
+  '@wrenyard/gateway',
+  '@wrenyard/models',
+  '@wrenyard/protocol',
+  '@wrenyard/provider-service',
+  '@wrenyard/providers',
+  '@wrenyard/quota',
+];
+
+// Reject only workspace symlinks: a packaged runtime must never point back into
+// the source checkout or the pnpm store.
 function assertNoWorkspaceLinks(root) {
   const violations = [];
   const walk = (dir) => {
@@ -289,7 +347,7 @@ function assertNoWorkspaceLinks(root) {
   };
   walk(root);
   if (violations.length > 0) {
-    throw new Error(`deployed Foreman tree contains @wrenyard workspace entries:\n${violations.join('\n')}`);
+    throw new Error(`deployed control tree contains @wrenyard workspace entries:\n${violations.join('\n')}`);
   }
 }
 
@@ -298,7 +356,7 @@ function assertNoWorkspaceLinks(root) {
 // contain build-host paths, but the physical runtime dependency tree does not
 // need them. Remove only these known metadata files and fail closed if any
 // survives.
-function stripForemanDeployMetadata(deploy) {
+function stripDeployMetadata(deploy) {
   for (const name of [
     'pnpm-lock.yaml',
     'pnpm-workspace.yaml',
@@ -309,7 +367,7 @@ function stripForemanDeployMetadata(deploy) {
     const file = path.join(deploy, name);
     fs.rmSync(file, { force: true });
     if (fs.existsSync(file)) {
-      throw new Error(`deployed Foreman tree still contains ${name}: ${file}`);
+      throw new Error(`deployed control tree still contains ${name}: ${file}`);
     }
   }
 }
@@ -318,32 +376,16 @@ function stripForemanDeployMetadata(deploy) {
 // its temporary workspace. The deployed tree already contains physical package
 // snapshots, so normalize only those known internal dependency specs to their
 // exact packaged versions before portability checks and staging.
-function normalizeForemanWorkspaceDependencySpecs(deploy) {
-  const internalNames = [
-    '@wrenyard/models',
-    '@wrenyard/gateway',
-    '@wrenyard/providers',
-    '@wrenyard/auto-routing',
-    '@wrenyard/clients',
-    '@wrenyard/agent-client',
-    '@wrenyard/client-codex',
-    '@wrenyard/client-claude',
-    '@wrenyard/client-cursor',
-    '@wrenyard/client-grok',
-    '@wrenyard/client-codebuddy',
-    '@wrenyard/client-opencode',
-    '@wrenyard/client-dsh',
-    '@wrenyard/execution',
-    '@wrenyard/quota',
-  ];
-  const versions = new Map(internalNames.map((name) => {
-    const manifest = readJson(path.join(deploy, 'node_modules', ...name.split('/'), 'package.json'));
-    return [name, manifest.version];
-  }));
-  const manifests = [
-    path.join(deploy, 'package.json'),
-    ...internalNames.map((name) => path.join(deploy, 'node_modules', ...name.split('/'), 'package.json')),
-  ];
+function normalizeWorkspaceDependencySpecs(deploy) {
+  const versions = new Map();
+  const manifests = [path.join(deploy, 'package.json')];
+  for (const name of WORKSPACE_PACKAGE_NAMES) {
+    const manifestPath = path.join(deploy, 'node_modules', ...name.split('/'), 'package.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = readJson(manifestPath);
+    versions.set(name, manifest.version);
+    manifests.push(manifestPath);
+  }
   for (const manifestPath of manifests) {
     const manifest = readJson(manifestPath);
     let changed = false;
@@ -362,37 +404,30 @@ function normalizeForemanWorkspaceDependencySpecs(deploy) {
   }
 }
 
-// Before the deployed Foreman tree is copied into any stage, every direct
-// production dependency must exist as a physical hoisted directory, never a
-// symlink. npm retains physical directories shipped inside a tarball's
-// node_modules but prunes symlinked virtual-store entries, so the
-// --config.node-linker=hoisted deploy plus this check guarantees the shipped
-// dependency graph stays complete; the E2E repeats physical-directory
-// containment checks after extraction and after npm install.
-function assertPhysicalForemanDependencies(deploy) {
-  const direct = [
-    'tsx',
-    'ajv',
-    'yaml',
-    'zod',
-    'better-sqlite3',
-    '@langchain/core',
-    '@wrenyard/models',
-    '@wrenyard/gateway',
-    '@wrenyard/providers',
-      '@wrenyard/auto-routing',
-    '@wrenyard/clients',
-    '@wrenyard/agent-client',
-    '@wrenyard/client-codex',
-    '@wrenyard/client-claude',
-    '@wrenyard/client-cursor',
-    '@wrenyard/client-grok',
-    '@wrenyard/client-codebuddy',
-    '@wrenyard/client-opencode',
-    '@wrenyard/client-dsh',
-    '@wrenyard/execution',
-    '@wrenyard/quota',
-  ];
+// Before the deployed tree is copied into any stage, every declared production
+// dependency (the deploy root plus each hoisted first-party package) must exist
+// as a physical directory, never a symlink. npm retains physical directories
+// shipped inside a tarball's node_modules but prunes symlinked virtual-store
+// entries, so the --config.node-linker=hoisted deploy plus this check
+// guarantees the shipped dependency graph stays complete; the E2E repeats
+// physical-directory containment checks after extraction and after npm install.
+function assertPhysicalDeployDependencies(deploy) {
+  const manifests = [path.join(deploy, 'package.json')];
+  for (const name of WORKSPACE_PACKAGE_NAMES) {
+    const manifestPath = path.join(deploy, 'node_modules', ...name.split('/'), 'package.json');
+    if (fs.existsSync(manifestPath)) manifests.push(manifestPath);
+  }
+  const direct = new Set();
+  for (const manifestPath of manifests) {
+    const manifest = readJson(manifestPath);
+    for (const field of ['dependencies', 'optionalDependencies']) {
+      for (const name of Object.keys(manifest[field] ?? {})) {
+        const scoped = name.startsWith('@wrenyard/');
+        if (!scoped && !['tsx', 'ajv', 'yaml', 'zod', 'better-sqlite3', '@langchain/core'].includes(name)) continue;
+        direct.add(name);
+      }
+    }
+  }
   const violations = [];
   for (const dep of direct) {
     const entry = path.join(deploy, 'node_modules', dep);
@@ -410,20 +445,20 @@ function assertPhysicalForemanDependencies(deploy) {
     }
   }
   if (violations.length > 0) {
-    throw new Error(`deployed Foreman direct dependencies are not physical directories:\n${violations.join('\n')}`);
+    throw new Error(`deployed control direct dependencies are not physical directories:\n${violations.join('\n')}`);
   }
 }
 
-// The deploy root is the Foreman package itself: pnpm's isolated deploy writes
-// the package and its production node_modules directly at <deploy>/node_modules.
+// The deploy root is the CLI package itself: pnpm's isolated deploy writes the
+// package and its production node_modules directly at <deploy>/node_modules.
 // The deployed tree must never ship pnpm's .bin shim directory: every shipped
 // launcher invokes tsx through an explicit path, and the .bin dir is what
 // historically rewrote relative links into absolute build-temp paths. Modern
 // pnpm layouts also nest shims at deeper depths (for example
 // .pnpm/<pkg>/node_modules/.bin), so the removal walks the whole deploy tree.
-function removeForemanBinDir(deploy) {
+function removeDeployBinDir(deploy) {
   removeNestedBinDirs(deploy);
-  assertNoForemanBinDir(deploy, 'deploy');
+  assertNoDeployBinDir(deploy, 'deploy');
 }
 
 // Recursively remove every directory whose basename is exactly `.bin` under
@@ -445,9 +480,9 @@ function removeNestedBinDirs(root) {
   walk(root);
 }
 
-// Fail closed if any directory named `.bin` remains anywhere in the Foreman
-// tree, not only the top-level node_modules/.bin.
-function assertNoForemanBinDir(foremanRoot, label) {
+// Fail closed if any directory named `.bin` remains anywhere in the deployed
+// control tree, not only the top-level node_modules/.bin.
+function assertNoDeployBinDir(deployRoot, label) {
   const violations = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -461,18 +496,22 @@ function assertNoForemanBinDir(foremanRoot, label) {
       walk(file);
     }
   };
-  walk(foremanRoot);
+  walk(deployRoot);
   if (violations.length > 0) {
-    throw new Error(`${label} Foreman tree still contains pnpm .bin shims:\n${violations.join('\n')}`);
+    throw new Error(`${label} control tree still contains pnpm .bin shims:\n${violations.join('\n')}`);
   }
 }
 
-// Fail closed if any regular file inside a staged Foreman runtime embeds the
+// Fail closed if any regular file inside a staged control runtime embeds the
 // canonical release build temp path or the source worktree as byte strings.
 // The scan complements the symlink containment checks: even without .bin
 // shims, an absolute build path written into file content would break the
 // packed artifacts on another machine.
-function assertNoBuildPathsInStagedForeman(stage, label, buildTmp, worktree) {
+function assertNoBuildPathsInStagedControl(stage, label, buildTmp, worktree) {
+  const root = path.join(stage, STAGED_CONTROL_ROOT);
+  if (!fs.existsSync(root)) {
+    throw new Error(`staged ${label} control tree missing: ${root}`);
+  }
   const needles = [path.resolve(buildTmp), path.resolve(worktree)].map((p) => Buffer.from(p, 'utf8'));
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -485,27 +524,27 @@ function assertNoBuildPathsInStagedForeman(stage, label, buildTmp, worktree) {
       const bytes = fs.readFileSync(file);
       for (const needle of needles) {
         if (bytes.includes(needle)) {
-          throw new Error(`staged ${label} Foreman file embeds a build path: ${file}`);
+          throw new Error(`staged ${label} control file embeds a build path: ${file}`);
         }
       }
     }
   };
-  walk(path.join(stage, 'services', 'foreman'));
+  walk(root);
 }
 
-// Run the real staged Foreman entry through the staged Node runtime and tsx to
-// prove the artifact-contained Foreman actually executes before it is emitted.
-// nodeRelPath locates the staged bundled node (the CLI package hides it under
-// .wrenyard/runtime while the suite keeps it at runtime/).
-function assertStagedForemanRuns(stage, label, nodeRelPath) {
+// Run the real staged control sources through the staged Node runtime and tsx
+// to prove the artifact-contained control tree actually executes before it is
+// emitted. nodeRelPath locates the staged bundled node (the CLI package hides
+// it under .wrenyard/runtime while the suite keeps it at runtime/).
+function assertStagedControlRuns(stage, label, nodeRelPath) {
   const node = path.join(stage, nodeRelPath, `node${target.exeSuffix}`);
-  const tsx = path.join(stage, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const source = path.join(stage, 'services', 'foreman', 'bin', 'foreman.mts');
-  for (const [name, file] of [['node', node], ['tsx', tsx], ['foreman.mts', source]]) {
-    if (!fs.existsSync(file)) throw new Error(`staged ${label} Foreman entry missing ${name}: ${file}`);
+  const tsx = path.join(stage, STAGED_CONTROL_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const source = path.join(stage, STAGED_CLI_SOURCE);
+  for (const [name, file] of [['node', node], ['tsx', tsx], ['cli source', source]]) {
+    if (!fs.existsSync(file)) throw new Error(`staged ${label} control entry missing ${name}: ${file}`);
   }
   const output = run(node, [tsx, source, '--version']);
-  if (!output || !output.trim()) throw new Error(`staged ${label} Foreman entry printed no --version output`);
+  if (!output || !output.trim()) throw new Error(`staged ${label} control entry printed no --version output`);
 }
 
 // Resolve the pinned Node runtime binary from the root `node` dependency
@@ -538,25 +577,6 @@ const suiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
   suiteVersion: ${JSON.stringify(version)},
   componentVersions: ${JSON.stringify(versions)},
 });
-`;
-}
-
-// nodeRelPath is the runtime subdirectory the launcher spawns the bundled Node
-// from: the CLI package hides it under .wrenyard/runtime while the suite keeps
-// it at the top-level runtime/ that scripts/install.sh validates.
-function foremanLauncher(nodeRelPath) {
-  return `#!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tsx = path.join(root, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const source = path.join(root, 'services', 'foreman', 'bin', 'foreman.mts');
-const result = spawnSync(path.join(root, ${JSON.stringify(nodeRelPath)}, ${JSON.stringify(`node${target.exeSuffix}`)}), [tsx, source, ...process.argv.slice(2)], {
-  stdio: 'inherit', shell: false, windowsHide: true, env: process.env,
-});
-if (result.error) console.error('foreman launcher failed:', result.error.message);
-process.exitCode = result.error ? 1 : (result.status ?? 1);
 `;
 }
 
@@ -686,21 +706,18 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
   if (violations.length) throw new Error('unsafe staged ' + label + ' payload:\n' + violations.join('\n'));
 }
 
-// The npm package exposes exactly one public launcher (wrenyard); the Foreman
-// control launcher and the bundled Node runtime are hidden under .wrenyard so
-// they never surface as extra public bin commands.
-function writePackageStage(stage, version, versions, cliDist, foremanDeploy) {
+// The npm package exposes exactly one public launcher (wrenyard); the control
+// tree and the bundled Node runtime are hidden under .wrenyard so they never
+// surface as extra public bin commands.
+function writePackageStage(stage, version, versions, cliDist, controlDeploy) {
   ensureDir(path.join(stage, 'bin'));
   ensureDir(path.join(stage, 'dist'));
-  ensureDir(path.join(stage, '.wrenyard', 'control'));
   ensureDir(path.join(stage, '.wrenyard', 'runtime'));
   fs.writeFileSync(path.join(stage, 'bin', 'wrenyard.mjs'), cliLauncher(version, versions));
-  fs.writeFileSync(path.join(stage, '.wrenyard', 'control', 'foreman.mjs'), foremanLauncher('.wrenyard/runtime'));
   fs.chmodSync(path.join(stage, 'bin', 'wrenyard.mjs'), 0o755);
-  fs.chmodSync(path.join(stage, '.wrenyard', 'control', 'foreman.mjs'), 0o755);
   copyFile(cliDist, path.join(stage, 'dist', 'wrenyard.mjs'));
   copyFile(pinnedNodeBinary(), path.join(stage, '.wrenyard', 'runtime', `node${target.exeSuffix}`), 0o755);
-  copyDir(foremanDeploy, path.join(stage, 'services', 'foreman'));
+  copyDir(controlDeploy, path.join(stage, STAGED_CONTROL_ROOT));
   copyDir(path.join(ROOT, 'contracts'), path.join(stage, 'contracts'));
   for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'release-manifest.json', 'pnpm-workspace.yaml']) {
     copyFile(path.join(ROOT, name), path.join(stage, name));
@@ -714,38 +731,17 @@ function writePackageStage(stage, version, versions, cliDist, foremanDeploy) {
     os: [process.platform],
     cpu: [process.arch],
     bin: { wrenyard: './bin/wrenyard.mjs' },
-    files: ['bin', 'dist', '.wrenyard', 'services', 'contracts', 'release-manifest.json', 'pnpm-workspace.yaml', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'],
+    files: ['bin', 'dist', '.wrenyard', 'apps', 'contracts', 'release-manifest.json', 'pnpm-workspace.yaml', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'],
     engines: { node: '>=22.19.0' },
   };
   fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function writeSuiteStage(stage, version, sea, foremanDeploy) {
-  ensureDir(path.join(stage, 'bin'));
+function writeSuiteStage(stage, version, sea, controlDeploy) {
   const seaName = `wrenyard${target.exeSuffix}`;
   copyFile(sea, path.join(stage, seaName), 0o755);
   copyFile(pinnedNodeBinary(), path.join(stage, 'runtime', `node${target.exeSuffix}`), 0o755);
-  fs.writeFileSync(path.join(stage, 'bin', 'foreman.mjs'), foremanLauncher('runtime'));
-  fs.chmodSync(path.join(stage, 'bin', 'foreman.mjs'), 0o755);
-  if (process.platform !== 'win32') {
-    fs.writeFileSync(path.join(stage, 'bin', 'foreman'), `#!/bin/sh
-# Symlink-safe launcher: resolve every symlink in $0 (absolute or relative
-# link targets) so it works through <prefix>/bin/foreman -> <prefix>/current/bin/foreman.
-script=$0
-while [ -L "$script" ]; do
-  dir=$(dirname "$script")
-  target=$(readlink "$script")
-  case "$target" in
-    /*) script=$target ;;
-    *) script=$dir/$target ;;
-  esac
-done
-real_dir=$(dirname "$script")
-exec "$real_dir/../runtime/node" "$real_dir/foreman.mjs" "$@"
-`);
-    fs.chmodSync(path.join(stage, 'bin', 'foreman'), 0o755);
-  }
-  copyDir(foremanDeploy, path.join(stage, 'services', 'foreman'));
+  copyDir(controlDeploy, path.join(stage, STAGED_CONTROL_ROOT));
   copyDir(path.join(ROOT, 'contracts'), path.join(stage, 'contracts'));
   copyDir(path.join(ROOT, 'docs', 'release'), path.join(stage, 'docs', 'release'));
   for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'release-manifest.json', 'pnpm-workspace.yaml']) {
@@ -829,7 +825,7 @@ async function main() {
       '--output', sea,
     ]);
 
-    const foremanDeploy = path.join(tmp, 'foreman');
+    const controlDeploy = path.join(tmp, 'control');
     // Deploy with pnpm's shared-lockfile isolated linker, keeping the workspace
     // context cleared (no --legacy) so the source workspace install stays
     // byte-identical, but overriding node-linker to "hoisted" for this single
@@ -847,57 +843,53 @@ async function main() {
     // native modules; neither operation is allowed to touch the live source
     // workspace that is developing Wrenyard itself.
     const deployWorkspace = path.join(tmp, 'deploy-workspace');
-    ensureDir(path.join(deployWorkspace, 'services'));
     for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
       copyFile(path.join(ROOT, name), path.join(deployWorkspace, name));
     }
-    copyDirWithoutNodeModules(
-      path.join(ROOT, 'services', 'foreman'),
-      path.join(deployWorkspace, 'services', 'foreman'),
-    );
-    for (const name of ['models', 'providers', 'clients', 'execution', 'protocol', 'features/auto-routing', 'features/gateway', 'features/quota', 'features/exec', 'features/provider', 'features/browser-use', 'features/computer-use']) {
-      copyDirWithoutNodeModules(
-        path.join(ROOT, 'packages', name),
-        path.join(deployWorkspace, 'packages', name),
-      );
+    for (const rel of DEPLOY_WORKSPACE_SOURCES) {
+      const source = path.join(ROOT, rel);
+      if (!fs.existsSync(source)) {
+        throw new Error(`deploy workspace source missing: ${rel}`);
+      }
+      copyDirWithoutNodeModules(source, path.join(deployWorkspace, rel));
     }
     run('pnpm', [
       '--config.node-linker=hoisted',
       '--config.package-import-method=copy',
-      '--filter', '@wrenyard/foreman',
-      'deploy', '--prod', foremanDeploy,
+      '--filter', '@wrenyard/cli',
+      'deploy', '--prod', controlDeploy,
     ], { cwd: deployWorkspace });
-    normalizeForemanWorkspaceDependencySpecs(foremanDeploy);
-    // Strip deploy-only pnpm metadata before any CLI/suite copy. Embedded
-    // services/foreman is a portable runtime tree, while the intentional
+    normalizeWorkspaceDependencySpecs(controlDeploy);
+    // Strip deploy-only pnpm metadata before any CLI/suite copy. The embedded
+    // control tree is a portable runtime tree, while the intentional
     // product-root pnpm-workspace.yaml is copied into each stage separately.
-    stripForemanDeployMetadata(foremanDeploy);
+    stripDeployMetadata(controlDeploy);
     assertWorkspaceInstallStateUnchanged(ROOT, installSnapshot);
-    assertPortableTree(foremanDeploy);
-    // Gateway packages are expected as physical snapshots; reject workspace
+    assertPortableTree(controlDeploy);
+    // Workspace packages are expected as physical snapshots; reject workspace
     // symlinks that would make the staged runtime depend on the source tree.
-    assertNoWorkspaceLinks(foremanDeploy);
-    removeForemanBinDir(foremanDeploy);
+    assertNoWorkspaceLinks(controlDeploy);
+    removeDeployBinDir(controlDeploy);
     // Prove the hoisted deploy is physical before any stage copy: npm keeps
     // physical directories shipped inside a tarball, so the staged graph stays
     // complete for the E2E containment checks that follow.
-    assertPhysicalForemanDependencies(foremanDeploy);
+    assertPhysicalDeployDependencies(controlDeploy);
 
     const cliStage = path.join(tmp, 'cli');
-    writePackageStage(cliStage, version, versions, path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard.mjs'), foremanDeploy);
+    writePackageStage(cliStage, version, versions, path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard.mjs'), controlDeploy);
     assertPortableTree(cliStage);
-    assertNoBuildPathsInStagedForeman(cliStage, 'cli', tmp, ROOT);
-    assertStagedForemanRuns(cliStage, 'cli', '.wrenyard/runtime');
-    assertNoForemanBinDir(path.join(cliStage, 'services', 'foreman'), 'cli');
+    assertNoBuildPathsInStagedControl(cliStage, 'cli', tmp, ROOT);
+    assertStagedControlRuns(cliStage, 'cli', '.wrenyard/runtime');
+    assertNoDeployBinDir(path.join(cliStage, STAGED_CONTROL_ROOT), 'cli');
     assertSafeReleasePayload(cliStage, 'cli', tmp, ROOT);
     const cliTgz = await packCliTgz(cliStage, outputDir, version);
 
     const suiteStage = path.join(tmp, 'suite');
-    writeSuiteStage(suiteStage, version, sea, foremanDeploy);
+    writeSuiteStage(suiteStage, version, sea, controlDeploy);
     assertPortableTree(suiteStage);
-    assertNoBuildPathsInStagedForeman(suiteStage, 'suite', tmp, ROOT);
-    assertStagedForemanRuns(suiteStage, 'suite', 'runtime');
-    assertNoForemanBinDir(path.join(suiteStage, 'services', 'foreman'), 'suite');
+    assertNoBuildPathsInStagedControl(suiteStage, 'suite', tmp, ROOT);
+    assertStagedControlRuns(suiteStage, 'suite', 'runtime');
+    assertNoDeployBinDir(path.join(suiteStage, STAGED_CONTROL_ROOT), 'suite');
     assertSafeReleasePayload(suiteStage, 'suite', tmp, ROOT);
     const suiteZip = path.join(outputDir, `wrenyard-${version}-${target.triplet}-suite.zip`);
     await zipDirectory(suiteStage, suiteZip);

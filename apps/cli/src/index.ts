@@ -198,11 +198,20 @@ function exitCode(result: SpawnResult): number {
 }
 
 function runForeman(args: string[], ctx: MainContext): number {
-  // The internal service entry remains the canonical control; the root
-  // `foreman` alias was removed. It is a .mts source file, so it is spawned
-  // through the staged tsx CLI with the suite runtime node.
-  const tsxCli = resolve(ctx.suiteRoot, 'services', 'foreman', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const control = resolve(ctx.suiteRoot, 'services', 'foreman', 'bin', 'foreman.mts');
+  // The internal control is this CLI's own command implementation. It is a
+  // .mts source tree that imports the daemon through its published subpaths,
+  // so it is spawned through the CLI's staged tsx loader with the suite
+  // runtime node rather than being bundled into the product entry.
+  const cliRoot = resolve(ctx.suiteRoot, 'apps', 'cli');
+  const tsxCli = [
+    resolve(cliRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    resolve(ctx.suiteRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+  ].find((candidate) => existsSync(candidate));
+  if (tsxCli === undefined) {
+    ctx.stderr('Unable to locate the staged tsx loader for the Wrenyard CLI.');
+    return 1;
+  }
+  const control = resolve(cliRoot, 'src', 'index.mts');
   const result = ctx.runner(ctx.nodeExecutable, [tsxCli, control, ...args], RUN_OPTIONS);
   if (result.error) {
     ctx.stderr(`wrenyard: failed to spawn wrenyard service: ${result.error.message}`);

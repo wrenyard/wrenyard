@@ -96,5 +96,5 @@ test('release:local stays build-only while retaining production build stages', (
   assert.ok(!localBuilder.includes('build-runtime-package.mjs'));
   assert.ok(!localBuilder.includes('runtimeStage'));
   assert.ok(localBuilder.includes('assertSafeReleasePayload'));
-  assert.ok(localBuilder.includes('assertNoBuildPathsInStagedForeman'));
+  assert.ok(localBuilder.includes('assertNoBuildPathsInStagedControl'));
 });

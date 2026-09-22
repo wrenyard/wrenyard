@@ -49,7 +49,7 @@ test('recent-run ledger is a seven-column authoritative table without dense cell
     'status cell delegates to the shared agent-task status icon',
   );
   assert.ok(
-    appSource.includes("import { createAgentTaskStatusIcon } from './agent-task-icon.js';"),
+    appSource.includes("import { createAgentTaskStatusIcon } from '../src/renderer/agent-task-icon.js';"),
     'the shared agent-task status icon module is imported',
   );
   assert.ok(!appSource.includes('taskRunStatusGlyph'), 'the removed local glyph helper is not reintroduced');

@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import { DesktopPetRuntime } from '@wrenyard/pet/runtime';
+import { DesktopPetRuntime } from './pet/main/runtime.js';
 import { startDshWeb } from './dsh-process.js';
 import { DshConversationClient } from './dsh-conversation-client.js';
 import {
@@ -21,7 +21,11 @@ import { SummaryModelPreferenceStore, createConversationSummaryService, type Con
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
-import { DesktopPetSettingsStore } from './pet-settings-store.js';
+import { DesktopSettingsStore } from './main/settings/desktop-settings.js';
+import { WrenyardDaemonClient } from './main/daemon-client/client.js';
+import { DaemonSubscriptions } from './main/daemon-client/subscriptions.js';
+import { reorderProviders } from './provider-order.js';
+import { TaskGraphWindowOwner } from './main/windows/taskgraph-windows.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
@@ -218,6 +222,15 @@ function resolvePetAssets(): { rendererDir: string; preloadDir: string } {
     rendererDir: join(root, 'renderer'),
     preloadDir: join(root, 'preloads'),
   };
+}
+
+/**
+ * Locate the shared Pet/TaskGraph renderer HTML assets for the Desktop-owned
+ * window owner. Dev resolves the built bundle; packaged resolves the asar
+ * resource path. Both layouts are produced by the single Desktop build.
+ */
+function resolveSharedHtmlDir(): string {
+  return resolvePetAssets().rendererDir;
 }
 
 async function runSmoke(shell: ShellWindowController): Promise<void> {
@@ -673,6 +686,8 @@ let conversationController: DesktopConversationController | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
+let desktopSubscriptions: DaemonSubscriptions | null = null;
+let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
 /**
@@ -899,14 +914,23 @@ async function bootstrap(): Promise<void> {
   session.defaultSession.setPermissionCheckHandler(() => false);
 
   const petAssets = resolvePetAssets();
-  const petSettings = new DesktopPetSettingsStore({
+  const settingsStore = new DesktopSettingsStore({
     path: join(app.getPath('userData'), 'settings.json'),
+    onChange: () => desktopTray?.rebuild(),
   });
+  // Surface an unreadable/incompatible document explicitly instead of letting a
+  // corrupt file be silently replaced with defaults. The original file is kept.
+  let loadedSettings: ReturnType<DesktopSettingsStore['load']> | undefined;
+  try {
+    loadedSettings = settingsStore.load();
+  } catch (error) {
+    console.warn('[wrenyard-desktop] Desktop settings could not be loaded:', error instanceof Error ? error.message : String(error));
+  }
   const wrenyardCli = resolveWrenyardCli();
   const wrenyardNode = resolveInstallation().runtimePath;
   updateController = new DesktopUpdateController({
     currentVersion: app.getVersion(),
-    settings: petSettings,
+    settings: settingsStore,
     cliPath: wrenyardCli,
     helperPath: join(app.getAppPath(), 'dist', 'update-helper.cjs'),
     helperRuntimePath: wrenyardNode,
@@ -921,14 +945,46 @@ async function bootstrap(): Promise<void> {
     onChanged: () => shellWindow?.notifyUpdateChanged(),
     sourceDevelopment: isSourceDevelopment(),
   });
+
+  // One shared daemon transport and subscription set for the whole Desktop
+  // process. The shell window, tray and Pet all consume the same rounds; the
+  // Pet never opens its own connection or timer.
+  const daemonClient = new WrenyardDaemonClient({ path: ipcPath });
+  const windowOwner = new TaskGraphWindowOwner({
+    daemonClient,
+    htmlDir: resolveSharedHtmlDir(),
+    preloadDir: petAssets.preloadDir,
+    // TaskGraph detail/transcript windows are general Desktop windows: they are
+    // reachable from the shell whether or not the Pet module is running.
+    getHouseWindow: () => petController?.getHouseWindow() ?? null,
+    graphSlipGeometry: loadedSettings?.window.graphSlip,
+    onGraphSlipGeometryChange: (geometry) => {
+      settingsStore.patch('window', { ...settingsStore.load().window, graphSlip: geometry });
+    },
+    entitiesVisible: (loadedSettings?.pet.visible ?? true)
+      && (loadedSettings?.pet.entities.taskgraphs ?? true),
+    logger: console,
+  });
+  taskgraphWindowOwner = windowOwner;
+  desktopSubscriptions = new DaemonSubscriptions({
+    client: daemonClient,
+    ipcPath,
+    getTrackedTaskgraphIds: () => windowOwner.getTrackedTaskgraphIds(),
+  });
+  desktopSubscriptions.start();
+  // The single shared activity round feeds the general TaskGraph windows as
+  // well, so Wren entities and Graph Slips stay live even while Pet is hidden.
+  desktopSubscriptions.subscribe({
+    onActivity: (presence) => windowOwner.applyActivity(presence),
+  });
+
   petController = new DesktopPetController({
-    loadConfig: () => petSettings.load(),
-    saveConfig: (config) => petSettings.save(config),
+    store: settingsStore,
     createRuntime: (config, onConfigChange) => new DesktopPetRuntime({
       config,
-      ipcPath,
       rendererDir: petAssets.rendererDir,
       preloadDir: petAssets.preloadDir,
+      subscriptions: desktopSubscriptions!,
       onConfigChange,
       debugRenderer: process.env.PET_DEBUG === '1' || process.env.PET_DEBUG === 'true',
     }),
@@ -947,7 +1003,7 @@ async function bootstrap(): Promise<void> {
   quotaController = new DesktopQuotaController({
     source: new DesktopQuotaSource(ipcPath),
     providerSource: providerService,
-    getProviderOrder: () => petController!.getConfig().quota.providers,
+    getProviderOrder: () => settingsStore.load().providers.providers,
     onChanged: (_snapshot, providers) => {
       petController?.setQuotaProviders(providers);
       desktopTray?.rebuild();
@@ -990,7 +1046,9 @@ async function bootstrap(): Promise<void> {
     getStats: () => readStatsSnapshot(ipcPath),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
     saveProviderOrder: async (providerIds: string[]) => {
-      await petController!.saveProviderOrder(providerIds);
+      settingsStore.patch('providers', {
+        providers: reorderProviders(settingsStore.load().providers.providers, providerIds),
+      });
       return quotaController!.notifyConfigurationChanged();
     },
     configureProviderKey: async (providerId: string, key: string) => {
@@ -1046,7 +1104,9 @@ async function bootstrap(): Promise<void> {
     },
     getConversation: async () => conversationController!.snapshot(),
     getConversationActivity: () => readConversationActivity(ipcPath),
-    openTaskTranscript: (taskRunId) => petController!.openTaskTranscript(taskRunId),
+    // Task detail/transcript windows are general Desktop windows, owned by the
+    // window owner and reachable even when Pet is hidden.
+    openTaskTranscript: (taskRunId) => windowOwner.openTaskTranscript(taskRunId),
     selectConversation: (sessionId: string) => conversationController!.select(sessionId),
     createConversation: () => conversationController!.create(),
     selectConversationModel: (provider: string, model: string, reasoningEffort?: string) => conversationController!.selectModel(provider, model, reasoningEffort),
@@ -1110,11 +1170,35 @@ async function bootstrap(): Promise<void> {
     shellWindow?.window.hide();
   });
 
+  /**
+   * Graph-Wren entity windows are general Desktop windows owned by the shared
+   * window owner, so their visibility follows the Pet's overall visibility and
+   * its own entity toggle without rebuilding the Pet runtime.
+   */
+  const syncTaskgraphEntityVisibility = (): void => {
+    const pet = settingsStore.load().pet;
+    windowOwner.setEntitiesVisible(pet.visible && pet.entities.taskgraphs);
+  };
+
   desktopTray = createDesktopTray({
     getPetConfig: () => petController!.getConfig(),
-    setPetEntityVisibility: (key, visible) => petController!.setEntityVisibility(key, visible),
+    setPetEntityVisibility: (key, visible) => {
+      if (key === 'taskgraphs') {
+        const pet = settingsStore.load().pet;
+        settingsStore.patch('pet', {
+          ...pet,
+          entities: { ...pet.entities, taskgraphs: visible },
+        });
+        syncTaskgraphEntityVisibility();
+        return Promise.resolve();
+      }
+      return petController!.setEntityVisibility(key, visible);
+    },
     selectPetDisplay: (displayId) => petController!.selectDisplay(displayId),
-    setPetEnabled: (enabled) => petController!.setEnabled(enabled),
+    setPetEnabled: async (enabled) => {
+      await petController!.setVisible(enabled);
+      syncTaskgraphEntityVisibility();
+    },
     restartPet: () => petController!.restart(),
     openDesktop: () => showDesktop('workbench'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
@@ -1180,6 +1264,12 @@ app.on('before-quit', (event) => {
       updateController = null;
       await petController?.stop();
       petController = null;
+      // Tear down the shared daemon subscriptions and the Desktop-owned task
+      // windows after the Pet module stops consuming them.
+      desktopSubscriptions?.dispose();
+      desktopSubscriptions = null;
+      taskgraphWindowOwner?.destroy();
+      taskgraphWindowOwner = null;
       await conversationController?.stop();
       conversationController = null;
     } catch {
@@ -1206,6 +1296,10 @@ if (!gotSingleInstanceLock) {
       updateController?.stop();
       updateController = null;
       await petController?.stop();
+      desktopSubscriptions?.dispose();
+      desktopSubscriptions = null;
+      taskgraphWindowOwner?.destroy();
+      taskgraphWindowOwner = null;
       await conversationController?.stop();
       conversationController = null;
     } catch {
