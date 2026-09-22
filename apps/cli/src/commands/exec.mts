@@ -84,7 +84,7 @@ export async function handleExec(args: string[]): Promise<number> {
       ...(features.length > 0 ? { features } : {}),
     })
     activeExecutionId = started.execution.id
-    if (cancelRequested) await client.exec.cancel({ id: activeExecutionId })
+    if (cancelling) await client.exec.cancel({ id: activeExecutionId })
 
     if (values['no-stream']) {
       writeServicePayload(servicePayload(started))
