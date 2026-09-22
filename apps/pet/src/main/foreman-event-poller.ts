@@ -1,5 +1,5 @@
 import type { DiagnosticLogger } from './diagnostic-logger';
-import type { ForgeEventSignal, SessionMetaData } from './forge-types';
+import type { AgentEventSignal, SessionMetaData } from './agent-types';
 import { ForemanIpcClient, resolveForemanIpcPath } from './foreman-ipc-client';
 import {
   mapForgeEvent,
@@ -54,7 +54,7 @@ export interface ForemanEventPollerOptions {
   limit?: number;
   request?: ForemanRpcRequest;
   logger?: DiagnosticLogger;
-  onSignal: (workerKey: string, signal: ForgeEventSignal, meta: SessionMetaData) => void;
+  onSignal: (workerKey: string, signal: AgentEventSignal, meta: SessionMetaData) => void;
 }
 
 interface ForemanEventsPayload {
@@ -408,7 +408,7 @@ export class ForemanEventPoller {
 
 function metaForEvent(
   workerKey: string,
-  signal: ForgeEventSignal | null,
+  signal: AgentEventSignal | null,
   event: ForemanEventRecord,
   taskRunInfo: TaskRunInfo | null,
   previous?: SessionMetaData,

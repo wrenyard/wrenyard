@@ -1,4 +1,4 @@
-import { createBuiltinCatalog } from '@wrenyard/providers';
+import { desktopCatalog } from './builtin-catalog.js';
 import type { WrenyardGatewayConnection, WrenyardGatewayModel } from '@wrenyard/control-client';
 import type { SettingsSnapshot, SummarySettingsSnapshot } from './shell-contract.js';
 import type { PetCompanionSnapshot } from './shell-contract.js';
@@ -68,7 +68,7 @@ export async function buildSummarySettingsSnapshot(options: {
     });
   }
   if (selectedCanonicalModel && !seen.has(selectedCanonicalModel)) {
-    const definition = createBuiltinCatalog().providers().flatMap((provider) => provider.models)
+    const definition = desktopCatalog().providers().flatMap((provider) => provider.models)
       .find((model) => (model.canonicalModel?.id ?? model.id) === selectedCanonicalModel);
     projected.push({ canonicalModel: selectedCanonicalModel,
       displayName: definition?.displayName ?? selectedCanonicalModel, available: false });

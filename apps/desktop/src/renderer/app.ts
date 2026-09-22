@@ -926,15 +926,25 @@ function appendQuotaContent(container: HTMLElement, entry: ProviderCatalogSnapsh
     container.append(bars);
   }
   for (const balance of balances) container.append(quotaBalanceRow(balance));
-  if (quota.message || (windows.length === 0 && balances.length === 0)) {
+  const hasStructured = windows.length > 0 || balances.length > 0;
+  if (quota.message) {
     const note = document.createElement('p');
-    note.className = 'quota-provider-message';
-    note.textContent = quota.message ?? quota.displayLine ?? '暂无可展示的额度数据。';
+    // A successful status carries an informational message (plan/exhaustion),
+    // not a failure: it keeps the muted detail styling and is rendered as its
+    // own line so it never replaces the window/reset/pace subtitle below.
+    note.className = quota.status === 'ok' ? 'quota-provider-detail' : 'quota-provider-message';
+    note.textContent = quota.message;
     container.append(note);
-  } else if (quota.displayLine) {
+  }
+  if (quota.displayLine) {
     const note = document.createElement('p');
     note.className = 'quota-provider-detail';
     note.textContent = quota.displayLine;
+    container.append(note);
+  } else if (!hasStructured && !quota.message) {
+    const note = document.createElement('p');
+    note.className = 'quota-provider-message';
+    note.textContent = '暂无可展示的额度数据。';
     container.append(note);
   }
 }
@@ -1422,8 +1432,9 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
   list.replaceChildren(
     tableHeader(['模型', '运行', 'Token', 'TPS']),
     ...rows.slice(0, 12).map((row) => {
-      // The main cell shows only the unified short model display name from the
-      // server; when it is absent we render a safe dash, never a raw id.
+      // The unified short model display name now falls back to the truthful
+      // persisted id when no friendly name exists, so the server value may
+      // itself be an id; only a genuinely absent value renders as a dash.
       const displayName = row.modelDisplayName && row.modelDisplayName.length > 0 ? row.modelDisplayName : '-';
       const rowElement = tableRow([
         displayName,
@@ -1437,8 +1448,9 @@ function renderProfiles(snapshot: StatsSnapshot, statsWindow: StatsWindowSnapsho
         const distinct = Array.isArray(providers)
           ? [...new Set(providers.filter((name): name is string => typeof name === 'string' && name.length > 0))]
           : [];
-        // Provider display names are exposed only in the tooltip; never in the
-        // main cell text and never as raw identity ids.
+        // Provider display names are exposed only in the tooltip and may be
+        // the truthful persisted id when no friendly name exists; the main
+        // cell never repeats them.
         firstCell.title = distinct.length > 0 ? `提供方：${distinct.join('、')}` : '-';
       }
       return rowElement;

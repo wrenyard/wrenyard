@@ -21,6 +21,11 @@ import {
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
   type SummarySettingsSnapshot,
+  type ExecStartRequest,
+  type ExecSnapshotDto,
+  type ExecEventsRequest,
+  type ExecEventsResult,
+  type ExecCancelResult,
 } from './shell-contract.js';
 
 const api: WrenyardShellApi = {
@@ -158,6 +163,18 @@ const api: WrenyardShellApi = {
   },
   saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.summaryModelSave, canonicalModel) as Promise<SummarySettingsSnapshot>;
+  },
+  execStart(request: ExecStartRequest): Promise<ExecSnapshotDto> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.execStart, request) as Promise<ExecSnapshotDto>;
+  },
+  execGet(id: string): Promise<ExecSnapshotDto> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.execGet, id) as Promise<ExecSnapshotDto>;
+  },
+  execEvents(request: ExecEventsRequest): Promise<ExecEventsResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.execEvents, request) as Promise<ExecEventsResult>;
+  },
+  execCancel(id: string): Promise<ExecCancelResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.execCancel, id) as Promise<ExecCancelResult>;
   },
 };
 

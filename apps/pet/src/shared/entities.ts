@@ -43,7 +43,7 @@ export interface QuotaProviderBars {
   windows: QuotaWindowRow[];
 }
 
-/** Shared quota provider/bar status. `pending` is included so Forge
+/** Shared quota provider/bar status. `pending` is included so Wrenyard
  *  authentication-pending states type-check generically without
  *  provider-specific branching. */
 export type QuotaProviderStatus = 'ok' | 'pending' | 'error' | 'unavailable';
@@ -63,7 +63,7 @@ export interface QuotaProviderState {
   error: string | null;
   status: QuotaProviderStatus;
   stale: boolean;
-  /** Passive Forge-provided code metadata (e.g. `authentication_pending`).
+  /** Passive Wrenyard-provided code metadata (e.g. `authentication_pending`).
    *  Informational only; it must never trigger actions. */
   code?: string | null;
   /** Parsed window data for graphical rendering */

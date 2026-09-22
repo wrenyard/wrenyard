@@ -26,6 +26,8 @@ if (want('main')) {
     bundle: true,
     platform: 'node',
     format: 'esm',
+    // Bundled CommonJS dependencies still require Node built-ins at runtime.
+    banner: { js: "import { createRequire as createBundleRequire } from 'node:module'; const require = createBundleRequire(import.meta.url);" },
     // Matches the Node runtime bundled with the pinned Electron release.
     target: 'node22',
     sourcemap: 'external',
