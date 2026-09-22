@@ -270,3 +270,52 @@ test('rejects source map payloads', () => {
     fs.rmSync(stage, { recursive: true, force: true });
   }
 });
+
+test('accepts the upstream PEM banner constant under a staged dependency path', () => {
+  const stage = makeStage();
+  try {
+    // jose dist/webapi/key/import.js validates the PKCS#8 prefix against a bare
+    // banner string: an upstream format marker, not key material. Both the
+    // staged control path and a hoisted top-level dependency path are exercised
+    // with native separators, so the same test covers Windows and POSIX
+    // dependency spellings.
+    const banner = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ');
+    const source = `if (pkcs8.indexOf('${banner}') !== 0) { throw new TypeError('bad'); }\n`;
+    writeFile(stage, path.join('apps', 'cli', 'node_modules', 'jose', 'dist', 'webapi', 'key', 'import.js'), source);
+    writeFile(stage, 'node_modules/jose/dist/webapi/key/import.js', source);
+    const result = runGate(stage);
+    assert.equal(result.ok, true, result.message);
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('still rejects real private-key material inside a dependency', () => {
+  const stage = makeStage();
+  try {
+    const begin = ['-----BEGIN', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
+    const end = ['-----END', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
+    writeFile(stage, 'node_modules/some-dep/lib/keys.js', `const k = \`${begin}\nMIIsynthetic\n${end}\n\`;\n`);
+    const result = runGate(stage);
+    assert.equal(result.ok, false, 'expected a real dependency private key to be rejected');
+    assert.match(result.message, /secret signature detected/);
+    assert.match(result.message, /pem-private-key/);
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test('rejects a lone PEM banner injected into a first-party file without echoing it', () => {
+  const stage = makeStage();
+  try {
+    const banner = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ');
+    writeFile(stage, 'apps/cli/src/index.js', `export const marker = '${banner}';\n`);
+    const result = runGate(stage);
+    assert.equal(result.ok, false, 'expected the first-party banner to be rejected');
+    assert.match(result.message, /secret signature detected/);
+    assert.match(result.message, /pem-private-key/);
+    assert.equal(result.message.includes('PRIVATE KEY'), false, 'report leaked the banner text');
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+});

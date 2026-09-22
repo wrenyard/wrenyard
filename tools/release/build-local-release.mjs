@@ -614,7 +614,7 @@ const suiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 // maps and public documentation/certificate examples under node_modules are
 // normal runtime assets, so only first-party source maps and the explicit
 // credential/database/log artifacts are rejected. The bounded credential scan
-// covers all first-party text but only the private-key PEM signature in
+// covers all first-party text but only real private-key material in
 // dependencies. It never reads or prints matched secret values: observations
 // name only the path and detector/rule.
 
@@ -634,9 +634,17 @@ const FORBIDDEN_PAYLOAD_EXTENSIONS = new Set([
 
 const FORBIDDEN_PAYLOAD_DIRS = new Set(['.git', '.gnupg', '.ssh', 'agent-workspace']);
 
+// Upstream code legitimately spells PEM banners as format constants (jose's
+// PKCS#8 prefix check in dist/webapi/key/import.js is the shipped example), so a
+// dependency fails the credential scan only on real key material: a complete
+// BEGIN/END private-key block, never a lone banner string.
+const PRIVATE_KEY_BLOCK =
+  /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/u;
+
 // A path is a dependency tree (third-party) when its last node_modules segment
 // is not a @wrenyard scoped package; anything else under node_modules is an
-// upstream asset.
+// upstream asset. Segments come from splitting a relative path on the host
+// separator, so the same tree classifies identically on Windows and POSIX.
 function isDependencyPath(segments) {
   const index = segments.lastIndexOf('node_modules');
   return index >= 0 && segments[index + 1] !== '@wrenyard';
@@ -717,8 +725,11 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
       if (embedsBuildPath || embedsHomePath) report(file, 'embeds a local developer/home/checkout absolute path');
       if (!text) continue;
       // First-party code is scanned for every secret signature. Upstream assets
-      // can contain public examples, but must never contain private keys.
-      const findings = scanText(text).filter(finding => !dependency || finding.detector === 'pem-private-key');
+      // can contain public examples, but must never contain real key material.
+      const findings = scanText(text).filter((finding) => {
+        if (!dependency) return true;
+        return finding.detector === 'pem-private-key' && PRIVATE_KEY_BLOCK.test(text);
+      });
       if (findings.length) report(file, 'secret signature detected (' + [...new Set(findings.map(f => f.detector))].join(', ') + ')');
     }
   }
