@@ -24,6 +24,7 @@ import type {
   ExecId,
   ExecSeq,
   ExecSnapshot,
+  ExecStatus,
 } from './types.ts'
 
 /** Params of `exec.start`. */
