@@ -51,6 +51,10 @@ import type {
   TaskGraphSlipResult,
   GatewayConnectionResult,
   ClientConfigurationSnapshotResult,
+  ExecCancelResult,
+  ExecEventsResult,
+  ExecGetResult,
+  ExecStartResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
@@ -76,6 +80,8 @@ import {
   MalformedStoreError,
   RevisionConflictError,
 } from '../../runtime-aliases/store.mts'
+import type { ExecService, ExecRequest } from '@wrenyard/exec'
+import type { ExecStartParams } from '@wrenyard/protocol'
 
 export interface CoreRpcHandlerOptions {
   startedAt: number
@@ -96,6 +102,15 @@ export interface CoreRpcHandlerOptions {
   /** Daemon-owned RuntimeAliasService backing runtime.alias.snapshot/put/remove. */
   runtimeAlias?: RuntimeAliasService
   /**
+   * Daemon-owned shared ExecService backing exec.start/get/events/cancel. The
+   * same instance is used by the task supervisor, so raw prompt executions and
+   * lowered task attempts share one client/feature registry and one shutdown
+   * path. IPC-only: exec requests carry a raw prompt and a working directory
+   * and are never exposed over the HTTP or MCP transports.
+   */
+  execService?: ExecService
+  resolveExecRequest?: (params: ExecStartParams) => ExecRequest
+  /**
    * Daemon-owned exact current-Catalog display-name lookup used to label recent
    * stats.summary task-run rows. Optional: contexts without it emit rows
    * without the additive paired display-name fields.
@@ -103,6 +118,7 @@ export interface CoreRpcHandlerOptions {
   resolveTaskRunDisplayNames?: import('../../events/stats-query.mts').TaskRunDisplayNameResolver
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
+  providerQuota?: (params: import('../../protocol/methods/provider.mts').ProviderQuotaParams) => Promise<import('../../protocol/methods/provider.mts').ProviderQuotaResult>
   clientConfiguration?: {
     snapshot(): Promise<ClientConfigurationSnapshotResult>
     plan(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanResult>
@@ -120,7 +136,6 @@ export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
   instanceId?: string
   launchId?: string
   node: string
-  runtimeBin?: string
 } {
   const source = env.WRENYARD_SOURCE_DEV === '1'
   return {
@@ -129,7 +144,6 @@ export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
     ...(source && env.WRENYARD_DEV_INSTANCE_ID ? { instanceId: env.WRENYARD_DEV_INSTANCE_ID } : {}),
     ...(source && env.WRENYARD_DEV_LAUNCH_ID ? { launchId: env.WRENYARD_DEV_LAUNCH_ID } : {}),
     node: process.execPath,
-    ...(env.WRENYARD_RUNTIME_BIN?.trim() ? { runtimeBin: env.WRENYARD_RUNTIME_BIN.trim() } : {}),
   }
 }
 
@@ -219,6 +233,21 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.providerConfigure!(params)
+    })
+  }
+  // provider.quota is IPC-only, like provider.list/configure: it acquires live
+  // per-provider quota from the injected feature service and never leaks a
+  // credential. The daemon provides the callback; the feature owns acquisition.
+  if (options.providerQuota) {
+    router.register('provider.quota', async (params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'provider.quota is only available over IPC' },
+          { code: 'provider_quota_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.providerQuota!(params)
     })
   }
   if (options.clientConfiguration) {
@@ -539,6 +568,92 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   router.register('runtime.alias.remove', async (params, _message, context) => {
     const service = requireRuntimeAliasService(context, 'runtime.alias.remove')
     return callRuntimeAliasService(() => service.remove(params))
+  })
+  // exec.* delegate to the injected daemon-owned shared ExecService; the RPC
+  // surface never resolves a client/provider/model/mode/thinking/cwd and never
+  // persists anything — the caller has already resolved all of it. IPC-only,
+  // because a raw prompt plus a working directory must not be reachable over
+  // the HTTP or MCP transports. When the dependency is absent the methods fail
+  // loud with a bounded unavailable error instead of being silently dropped.
+  const requireExecService = (
+    context: unknown,
+    method: string,
+  ): ExecService => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+        { code: 'exec_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.execService) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'exec_unavailable' },
+      )
+    }
+    return options.execService
+  }
+  router.register('exec.start', async (params, _message, context) => {
+    const service = requireExecService(context, 'exec.start')
+    let handle: Awaited<ReturnType<ExecService['start']>>
+    try {
+      const request = options.resolveExecRequest?.(params)
+      if (!request) throw new Error('Exec catalog resolution is unavailable')
+      handle = await service.start({
+        client: params.client,
+        model: params.model,
+        prompt: params.prompt,
+        cwd: params.cwd,
+        ...(params.provider === undefined ? {} : { provider: params.provider }),
+        ...(params.mode === undefined ? {} : { mode: params.mode }),
+        ...(params.resumeSessionId === undefined ? {} : { resumeSessionId: params.resumeSessionId }),
+        ...(params.thinking === undefined ? {} : { thinking: params.thinking }),
+        ...(params.features === undefined ? {} : { features: params.features }),
+        ...request,
+      })
+    } catch (error) {
+      throw protocolErrorFromExecStart(error, params.client)
+    }
+    return { execution: toJsonShape(handle.snapshot) } satisfies ExecStartResult
+  })
+  router.register('exec.get', (params, _message, context) => {
+    const service = requireExecService(context, 'exec.get')
+    const snapshot = service.get(params.id)
+    if (!snapshot) throw execNotFound(params.id)
+    return { execution: toJsonShape(snapshot) } satisfies ExecGetResult
+  })
+  router.register('exec.events', (params, _message, context) => {
+    const service = requireExecService(context, 'exec.events')
+    const afterSeq = params.afterSeq ?? 0
+    const page = service.eventsWithGap(params.id, afterSeq)
+    if ('oldestRetainedSeq' in page) {
+      // `eventsWithGap` reports `oldestRetainedSeq: 0` both for an execution it
+      // does not know at all and for a cursor trimmed past retention. Only the
+      // latter is a resynchronise hint; an unknown id is a plain not-found.
+      if (!service.get(params.id)) throw execNotFound(params.id)
+      throw execCursorExpired(params.id, page.oldestRetainedSeq)
+    }
+    return {
+      events: toJsonShape(page.events) as ExecEventsResult['events'],
+      nextSeq: page.nextSeq,
+    } satisfies ExecEventsResult
+  })
+  router.register('exec.cancel', async (params, _message, context) => {
+    const service = requireExecService(context, 'exec.cancel')
+    try {
+      await service.cancel(params.id)
+    } catch (error) {
+      if (isExecUnknownError(error)) throw execNotFound(params.id)
+      throw error
+    }
+    // Cancellation is cooperative: report the observed status, defaulting to
+    // `cancelled` when no snapshot survives the prune that follows settlement.
+    const snapshot = service.get(params.id)
+    return {
+      id: params.id,
+      status: snapshot?.status ?? 'cancelled',
+    } satisfies ExecCancelResult
   })
   router.register('task.run.create', async (params, _message, context) => {
     if (options.dispatchControl) assertDispatchAccepting(options.dispatchControl)
@@ -1041,6 +1156,52 @@ function projectDispatchStatus(status: DispatchStatus): {
 
 function toJsonShape<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function execNotFound(id: string): ProtocolError {
+  return new ProtocolError(
+    { code: INVALID_PARAMS.code, message: `Execution '${id}' not found` },
+    { kind: 'exec_not_found', id },
+  )
+}
+
+function execCursorExpired(id: string, oldestRetainedSeq: number): ProtocolError {
+  return new ProtocolError(
+    { code: INVALID_PARAMS.code, message: `Execution '${id}' event cursor is older than retained history` },
+    { kind: 'exec_cursor_expired', id, oldest_retained_seq: oldestRetainedSeq },
+  )
+}
+
+/**
+ * `ExecService.start` rejects an unknown/unrunnable client and an unknown
+ * feature id before spawning anything. Map those to precise, non-retryable
+ * protocol errors; a blank feature list or a client-side launch failure stays a
+ * generic invalid-params failure.
+ */
+function protocolErrorFromExecStart(error: unknown, client: string): ProtocolError {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.startsWith('Unknown agent client') || message.startsWith('Agent client ')) {
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message },
+      { kind: 'exec_client_unavailable', client },
+    )
+  }
+  if (message.startsWith('Unknown execution feature')) {
+    const features = message
+      .slice(message.indexOf(':') + 1)
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+    return new ProtocolError(
+      { code: INVALID_PARAMS.code, message },
+      { kind: 'exec_feature_unknown', features },
+    )
+  }
+  return new ProtocolError({ code: INVALID_PARAMS.code, message }, { code: 'exec_start_failed', client })
+}
+
+function isExecUnknownError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Unknown execution')
 }
 
 /** Widen a handler function to RpcHandler to bypass strict typed-router overload checks. */

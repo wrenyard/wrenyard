@@ -1,7 +1,7 @@
 import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
-import type { TaskCapabilityConfig } from '../../core/task/types.mts'
+import type { TaskFeatureConfig } from '../../core/task/types.mts'
 import {
   AcceptanceCriterionSchema,
   AssessmentSchema,
@@ -119,7 +119,7 @@ Shape:
  * each criterion, chooses a reasonable verification action, and reports
  * evidence without proposing code edits.
  *
- * Capability guidance (browser-use / computer-use) is injected into the
+ * Feature guidance (browser-use / computer-use) is injected into the
  * prompt when the corresponding capability is selected via TaskConfig.
  */
 
@@ -149,9 +149,9 @@ export type TestOutput = {
   assessments: Assessment[]
 }
 
-// ─── Capability config ────────────────────────────────────────────
+// ─── Feature config ────────────────────────────────────────────
 
-export const testCapabilityConfig: TaskCapabilityConfig = {
+export const testFeatureConfig: TaskFeatureConfig = {
   available: ['browser-use', 'computer-use'],
   select(input: unknown): readonly string[] {
     const data = input as TestInput | undefined
@@ -181,12 +181,12 @@ const definition = {
   __type: 'task' as const,
   config: {
     description:
-      'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via capability packs.',
+      'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via execution features.',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     // A declared empty target set means this mutation-capable task requires a
     // conservative repo-wide coordination lock.
     writeTargets: () => [],
-    capabilities: testCapabilityConfig,
+    features: testFeatureConfig,
     instructions: [shellUsage],
     input: TestInputSchema,
     output: TestOutputSchema,

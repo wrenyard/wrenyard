@@ -3,19 +3,14 @@ import type { TaskSettingsLayer } from './protocol/methods/task.mts'
 
 export type JsonSchema = boolean | Record<string, unknown>
 
-export type PermissionMode = 'readonly' | 'edit' | 'yolo'
-
 export interface AgentOpts {
   workingDirectory?: string
   timeoutMs?: number
   resume?: string
-  permission: PermissionMode
-  /** Coordination metadata only. Runtime permission is always YOLO. When
-   *  false, an observational task remains concurrent despite unrestricted
-   *  client capabilities. */
+  /** Repository write coordination, independent of client execution access. */
   repoWriteLock?: boolean
   taskId?: string
-  capabilities?: readonly string[]
+  features?: readonly string[]
   /** Canonical exact file paths used only for Foreman's write-lock admission. */
   writePaths?: readonly string[]
   /** Original requested agent runtime carried separately from the exact
@@ -25,24 +20,24 @@ export interface AgentOpts {
   dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
   /** Private non-persistent CodeBuddy admission binding. */
   codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
-  /** Canonical Forge failure class, when classified by the runtime. */
-  failureClass?: import('./core/task/failure.mts').ForgeFailureClass | string | null
+  /** Canonical agent-runtime failure class, when classified by the runtime. */
+  failureClass?: import('./core/task/failure.mts').AgentFailureClass | string | null
 }
 
 export interface AgentResult {
   output: string
   status: 'done' | 'failed' | 'cancelled'
   nativeSessionId?: string
-  /** Concrete profile resolved by the Forge runtime during execution.
-   *  Set when run_started.profile is detected; undefined for initial runs,
-   *  legacy unmigrated executions, and non-Forge runtimes. */
+  /** Concrete execution profile captured from the terminal stream event.
+   *  Set when the runtime reports a resolved agent runtime profile; undefined
+   *  for initial runs and for runtimes that do not report one. */
   resolvedProfile?: string
   /** Original requested agent runtime, distinct from the exact execution profile. */
   requestedAgentRuntime?: string
   /** Per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
-  /** Canonical Forge failure class captured from `run_finished`, if present. */
-  failureClass?: import('./core/task/failure.mts').ForgeFailureClass | string | null
+  /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
+  failureClass?: import('./core/task/failure.mts').AgentFailureClass | string | null
 }
 
 export interface ShellOpts {
@@ -141,8 +136,9 @@ export interface TaskRunSettingsParams {
 
 export interface TaskRunSettingsResolution {
   mode: 'automatic' | 'explicit'
-  /** The single exact runtime id the execution must launch ('forge/<profile>').
-   *  Set only when explicit mode resolves a reference to a canonical target. */
+  /** The single exact canonical execution target the run must launch
+   *  ('<provider>/<model>:<client>'). Set only when explicit mode resolves a
+   *  reference to a canonical target. */
   exactAgentRuntime: string | null
   /** Resolved dispatch snapshot produced by the daemon resolver for this run. */
   dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null

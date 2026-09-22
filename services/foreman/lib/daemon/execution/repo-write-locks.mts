@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
-import type { AgentRuntimePermission } from '../../core/operations/types.mts'
 
 export type RepoWriteLockMode = 'edit' | 'yolo'
 
@@ -122,8 +121,4 @@ function locksConflict(left: readonly string[] | null, right: readonly string[] 
 function canonicalPath(value: string): string {
   const absolute = resolve(value)
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
-
-export function requiresRepoWriteLock(permission: AgentRuntimePermission): permission is RepoWriteLockMode {
-  return permission === 'edit' || permission === 'yolo'
 }
