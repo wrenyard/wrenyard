@@ -72,7 +72,7 @@ export function buildQuotaTips(providers: QuotaProviderState[], order: string[])
   return tips;
 }
 
-/** House Tips display remaining quota; pace/reset text stays Forge-owned. */
+/** House Tips display remaining quota; pace/reset text stays Wrenyard-owned. */
 export function formatRemainQuotaLine(
   id: string,
   windows: QuotaWindowRow[],
@@ -94,6 +94,11 @@ export function formatRemainQuotaLine(
 
 function normalizeDisplayLine(provider: QuotaProviderState): string {
   if (provider.displayLine == null) {
+    if (provider.status === 'ok') {
+      const detail = provider.balances?.map(balance => balance.display).join(' · ')
+        || provider.error || 'quota available';
+      return `${provider.id} ${truncateMessage(detail, 80)}`;
+    }
     return provider.error
       ? `${provider.id}: error — ${truncateMessage(provider.error, 80)}`
       : `${provider.id}: unavailable`;
