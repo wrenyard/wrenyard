@@ -1,3 +1,4 @@
+/// <reference path="./cross-spawn.d.ts" />
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import crossSpawn from 'cross-spawn'
 
