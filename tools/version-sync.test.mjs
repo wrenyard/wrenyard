@@ -22,11 +22,6 @@ const FIRST_PARTY_MANIFESTS = [
   'packages/dsh-shell/package.json',
   'packages/features/gateway/package.json',
   'packages/providers/package.json',
-  'packages/runtime-resolver/package.json',
-  'packages/runtime-darwin-arm64/package.json',
-  'packages/runtime-darwin-x64/package.json',
-  'packages/runtime-linux-x64/package.json',
-  'packages/runtime-win32-x64/package.json',
 ];
 
 async function writeJson(dir, rel, obj) {
@@ -54,7 +49,6 @@ async function buildFixture() {
     release_status: 'development',
     publishable: false,
     components: {
-      forge: { version: ROOT_VERSION },
       foreman: { version: ROOT_VERSION },
       pet: { version: ROOT_VERSION },
       cli: { version: ROOT_VERSION },
@@ -68,7 +62,6 @@ async function buildFixture() {
     dsh_shell: ROOT_VERSION,
     dsh: '0.1.0-rc.6',
   });
-  await writeText(dir, 'runtime/forge/internal/forge/embed.go', `package forge\n\nconst version = "${ROOT_VERSION}"\n`);
   await writeText(dir, 'apps/desktop/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
   return dir;
 }
@@ -94,7 +87,7 @@ test('version-sync --check reports drift without modifying any file', async () =
   const dir = await buildFixture();
   await writeJson(dir, 'packages/models/package.json', { name: '@wrenyard/models', version: '0.1.1' });
   await writeJson(dir, 'packages/features/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
-  await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
+  await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.7.18',\n};\n");
   try {
     let threw = false;
     try {
@@ -104,7 +97,7 @@ test('version-sync --check reports drift without modifying any file', async () =
       const out = String(error.stdout) + String(error.stderr);
       assert.match(out, /packages\/models\/package\.json/);
       assert.match(out, /packages\/features\/gateway\/package\.json/);
-      assert.match(out, /embed\.go/);
+      assert.match(out, /profile\.ts/);
     }
     assert.equal(threw, true, '--check must exit non-zero on drift');
     // No file was mutated by --check.
@@ -112,8 +105,8 @@ test('version-sync --check reports drift without modifying any file', async () =
     assert.equal(models.version, '0.1.1');
     const gateway = JSON.parse(await readFile(join(dir, 'packages/features/gateway/package.json'), 'utf8'));
     assert.equal(gateway.version, '0.1.1');
-    const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
-    assert.match(embed, /const version = "0\.7\.18"/);
+    const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
+    assert.match(profile, /version: '0\.7\.18'/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -122,19 +115,15 @@ test('version-sync --check reports drift without modifying any file', async () =
 test('version-sync --write repairs drifted files and becomes stable', async () => {
   const dir = await buildFixture();
   await writeJson(dir, 'packages/providers/package.json', { name: '@wrenyard/providers', version: '0.1.1' });
-  await writeText(dir, 'runtime/forge/internal/forge/embed.go', 'package forge\n\nconst version = "0.7.18"\n');
   await writeText(dir, 'apps/desktop/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
   try {
     const out = runTool(dir, '--write');
-    assert.match(out, /updated 3 file\(s\)/);
+    assert.match(out, /updated 2 file\(s\)/);
     assert.match(out, /packages\/providers\/package\.json/);
-    assert.match(out, /embed\.go/);
     assert.match(out, /profile\.ts/);
 
     const providers = JSON.parse(await readFile(join(dir, 'packages/providers/package.json'), 'utf8'));
     assert.equal(providers.version, ROOT_VERSION);
-    const embed = await readFile(join(dir, 'runtime/forge/internal/forge/embed.go'), 'utf8');
-    assert.match(embed, new RegExp(`const version = "${ROOT_VERSION}"`));
     const profile = await readFile(join(dir, 'apps/desktop/src/profile.ts'), 'utf8');
     assert.match(profile, new RegExp(`version: '${ROOT_VERSION}'`));
 

@@ -42,7 +42,7 @@ try {
 
 const matches = (value, pattern) => typeof pattern === 'string' && new RegExp(pattern).test(value);
 
-const requiredComponents = ['forge', 'foreman', 'pet', 'cli', 'desktop', 'dsh_shell'];
+const requiredComponents = ['foreman', 'pet', 'cli', 'desktop', 'dsh_shell'];
 
 // Artifact names must match the object-key pattern the contract schema defines.
 const artifactNameRe = (() => {
@@ -258,15 +258,6 @@ if (manifest && schema) {
     }
     if (!manifest.platform_artifacts || Object.keys(manifest.platform_artifacts).length === 0) {
       fail('publishable manifests require at least one platform_artifact');
-    }
-    const forgeGoMod = join(suiteRoot, 'runtime', 'forge', 'go.mod');
-    const userNs = String.fromCharCode(100, 108, 117, 99, 107);
-    const transitionalModule = ['github.com', userNs, 'forge'].join('/');
-    const moduleDecl = existsSync(forgeGoMod)
-      ? readFileSync(forgeGoMod, 'utf8').split('\n').map((line) => line.trim()).find((line) => line.startsWith('module '))
-      : undefined;
-    if (moduleDecl !== undefined && moduleDecl === `module ${transitionalModule}`) {
-      fail('publishable manifests cannot use the transitional personal Forge module namespace');
     }
   }
 }

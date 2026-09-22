@@ -17,7 +17,6 @@ const realVerifier = join(here, 'verify-manifest.mjs');
 const realSchema = join(here, '..', '..', 'contracts', 'suite-manifest.schema.json');
 
 const componentSources = {
-  forge: 'runtime/forge',
   foreman: 'runtime/foreman',
   pet: 'apps/pet',
   cli: 'apps/cli',
@@ -40,7 +39,6 @@ function makeFixture() {
   for (const source of Object.values(componentSources)) {
     mkdirSync(join(root, source), { recursive: true });
   }
-  writeFileSync(join(root, 'runtime', 'forge', 'go.mod'), 'module github.com/wrenyard/forge\n');
   return root;
 }
 
@@ -67,19 +65,19 @@ function contractValues(root) {
 }
 
 function pickArtifactName(pattern) {
-  if (typeof pattern !== 'string') return 'forge-darwin-arm64.zip';
+  if (typeof pattern !== 'string') return 'wrenyard-darwin-arm64.zip';
   const re = new RegExp(pattern);
   for (const candidate of [
-    'forge-darwin-arm64.zip',
-    'forge-macos.zip',
-    'forge.dmg',
-    'forge-macos',
-    'forge-darwin',
-    'forge',
+    'wrenyard-darwin-arm64.zip',
+    'wrenyard-macos.zip',
+    'wrenyard.dmg',
+    'wrenyard-macos',
+    'wrenyard-darwin',
+    'wrenyard',
   ]) {
     if (re.test(candidate)) return candidate;
   }
-  return 'forge-darwin-arm64.zip';
+  return 'wrenyard-darwin-arm64.zip';
 }
 
 function buildComponents(values, { sourceSha = null, sources = {} } = {}) {
@@ -89,7 +87,6 @@ function buildComponents(values, { sourceSha = null, sources = {} } = {}) {
     source_sha: sourceSha,
   });
   return {
-    forge: mk('forge'),
     foreman: mk('foreman'),
     pet: mk('pet'),
     cli: mk('cli'),
@@ -128,7 +125,7 @@ function expectFail(result, pattern) {
   assert.match(result.stderr, pattern);
 }
 
-function addArtifact(root, { name, path = 'dist/forge.zip', content = 'fixture payload' }) {
+function addArtifact(root, { name, path = 'dist/wrenyard.zip', content = 'fixture payload' }) {
   const full = join(root, path);
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, content);
@@ -137,7 +134,7 @@ function addArtifact(root, { name, path = 'dist/forge.zip', content = 'fixture p
 
 // The external target artifact index emitted by the release builder is
 // validated as a separate document from the embedded development identity.
-function addIndexArtifact(root, { path = 'dist/forge.zip', content = 'index payload' } = {}) {
+function addIndexArtifact(root, { path = 'dist/wrenyard.zip', content = 'index payload' } = {}) {
   const full = join(root, path);
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, content);
@@ -181,7 +178,7 @@ test('rejects a manifest missing a component or carrying an extra one', () => {
 test('rejects a component source escaping the suite root', () => {
   const root = makeFixture();
   const values = contractValues(root);
-  const components = buildComponents(values, { sources: { forge: '../outside' } });
+  const components = buildComponents(values, { sources: { foreman: '../outside' } });
   writeManifest(root, buildManifest(values, { components }));
   expectFail(runVerifier(root), /source must be contained under the suite root/);
 });
@@ -211,16 +208,6 @@ test('rejects a platform artifact path escaping the suite root', () => {
   expectFail(runVerifier(root), /path must be contained under the suite root/);
 });
 
-test('rejects publishable manifests using the transitional personal Forge module namespace', () => {
-  const root = makeFixture();
-  const values = contractValues(root);
-  const userNs = ['d', 'l', 'u', 'c', 'k'].join('');
-  writeFileSync(join(root, 'runtime', 'forge', 'go.mod'), `module github.com/${userNs}/forge\n`);
-  const artifacts = addArtifact(root, { name: values.artifact_name });
-  writeManifest(root, buildManifest(values, { status: 'stable', publishable: true, artifacts }));
-  expectFail(runVerifier(root), /transitional personal Forge module namespace/);
-});
-
 test('rejects a platform artifact symlinked to a file outside the suite without hashing it', (t) => {
   const root = makeFixture();
   const values = contractValues(root);
@@ -230,7 +217,7 @@ test('rejects a platform artifact symlinked to a file outside the suite without 
   fixtureRoots.push(externalRoot);
   const outsideFile = join(externalRoot, 'outside.zip');
   writeFileSync(outsideFile, 'outside payload');
-  const linkPath = join(root, 'dist', 'forge.zip');
+  const linkPath = join(root, 'dist', 'wrenyard.zip');
   mkdirSync(dirname(linkPath), { recursive: true });
   try {
     symlinkSync(outsideFile, linkPath);
@@ -241,7 +228,7 @@ test('rejects a platform artifact symlinked to a file outside the suite without 
   // Lexically inside the suite, but a symlink to a regular file in another
   // temp directory; a valid-looking but wrong hash would surface a computed
   // digest only if the outside target were actually hashed.
-  const artifacts = { [values.artifact_name]: { format: 'zip', path: 'dist/forge.zip', sha256: 'f'.repeat(64) } };
+  const artifacts = { [values.artifact_name]: { format: 'zip', path: 'dist/wrenyard.zip', sha256: 'f'.repeat(64) } };
   writeManifest(root, buildManifest(values, { status: 'stable', publishable: true, artifacts }));
   const result = runVerifier(root);
   expectFail(result, /escapes the suite root after realpath/);

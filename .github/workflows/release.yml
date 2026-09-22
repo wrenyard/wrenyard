@@ -38,10 +38,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 1.26.x
-          cache: false
       - run: pnpm install --frozen-lockfile
       - name: Validate native build target
         run: node tools/release/validate-release.mjs --target ${{ matrix.target }}

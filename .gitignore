@@ -9,7 +9,6 @@ apps/desktop/release/
 # Generated runtime payload binaries.
 bin/daemon/
 bin/foreman-task.*
-runtime/forge/.dev-gen/
 
 # Local environment, logs, configuration, and state.
 .env*

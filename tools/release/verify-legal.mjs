@@ -15,7 +15,7 @@ export const REQUIRED_FILES = [
 export const CERT_EXTENSIONS = new Set(['.p12', '.pfx', '.pem', '.key']);
 
 export const SOURCE_CANDIDATE_DIRS = [
-  'src', 'apps', 'packages', 'services', 'tools', 'scripts', 'forge',
+  'src', 'apps', 'packages', 'services', 'tools', 'scripts',
   'docs', 'config', 'test', 'tests', 'electron',
 ];
 
