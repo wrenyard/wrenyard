@@ -42,9 +42,8 @@
     "components": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["forge", "foreman", "pet", "cli", "desktop", "dsh_shell"],
+      "required": ["foreman", "pet", "cli", "desktop", "dsh_shell"],
       "properties": {
-        "forge": { "$ref": "#/$defs/component" },
         "foreman": { "$ref": "#/$defs/component" },
         "pet": { "$ref": "#/$defs/component" },
         "cli": { "$ref": "#/$defs/component" },
