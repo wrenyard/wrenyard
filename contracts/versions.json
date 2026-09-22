@@ -1,7 +1,7 @@
 {
   "schema_version": "wrenyard.contract-versions.v1",
   "protocol_version": "1",
-  "agent_stream": "forge.agent.stream.v1",
+  "agent_stream": "wrenyard.agent.stream.v1",
   "activity_snapshot": "foreman.activity.snapshot.v1",
   "taskgraph_slip": "foreman.taskgraph.slip.v1",
   "release_manifest": "wrenyard.release-manifest.v1",
