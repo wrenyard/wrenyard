@@ -1,16 +1,17 @@
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ThinkingLevel } from '../base/index.ts';
 import { resolveProviderModel, type CanonicalModelOverrides } from '../base/model-defaults.ts';
-import { isMainstreamModelId, models } from '@wrenyard/models';
+import { MAINSTREAM_MODEL_IDS, isMainstreamModelId, models } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
+  codeBuddyHasLongContextVariant,
   productCreditsAreFree,
   type CodeBuddyProductModelEntry,
 } from './product.ts';
 
 /**
- * Product-file ids whose WY identity differs from the id (or the id with
- * `-ioa` stripped). Direct registry lookup remains the membership test;
- * similar names are never inferred.
+ * Product-file ids whose WY identity is a genuine rename rather than a
+ * wire-suffix or numeric-separator variant of a registered id. Direct registry
+ * lookup remains the membership test; similar names are never inferred.
  */
 const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy3': 'hunyuan-hy3',
@@ -19,15 +20,6 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy4-preview-ioa': 'hunyuan-hy4-preview',
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M2.7': 'minimax-m2.7',
-  'claude-haiku-4.5': 'claude-haiku-4-5',
-  // CodeBuddy's 1M Claude rows publish the canonical Claude 5 identities; the
-  // `-1m` spelling stays a provider-private wire id. The unsuffixed Sonnet 5 row
-  // is the 200K window (server product config: maxInputTokens 200000), so it can
-  // never claim claude-sonnet-5, while the unsuffixed Opus 5 row is itself 1M in
-  // the same config (maxInputTokens 1000000, maxOutputTokens 128000) with no
-  // `-1m` row beside it, so its own id is already the canonical identity.
-  'claude-sonnet-5-1m': 'claude-sonnet-5',
-  'claude-opus-5-1m': 'claude-opus-5',
   // DeepSeek V4 ships as `deepseek-v4-<tier>` in the plain/internal product
   // files and as `deepseek-v4-<tier>-ioa` in the iOA one; both channel forms
   // collapse onto the two unified registry identities.
@@ -36,39 +28,21 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'deepseek-v4-pro-ioa': 'deepseek-v4-pro',
 };
 
-/**
- * The only provider differences CodeBuddy has from the registered canonical
- * models it adopts *beyond* the selected product entry's own metadata: the
- * Claude family identity (which the registry does not record) and nothing else.
- * Context/output windows, image input and long-context support are taken from
- * the product entry itself (see productMetadataOverrides), so they are not
- * duplicated here. An adopted model with no entry is used verbatim from the
- * registry, and nothing is invented for an id this map does not name.
- */
-const CODEBUDDY_MODEL_OVERRIDES: Readonly<Record<string, CanonicalModelOverrides>> = {
-  'claude-haiku-4-5': { family: 'claude', claudeTier: 'haiku' },
-  'claude-sonnet-5': { family: 'claude', claudeTier: 'sonnet' },
-  'claude-opus-5': { family: 'claude', claudeTier: 'opus' },
-};
-
 const ONE_MILLION_TOKENS = 1_000_000;
+const CLAUDE_TIERS = ['haiku', 'sonnet', 'opus'] as const;
+
+/** Unify numeric version separators; only separators between digits are touched. */
+const normalizeNumericSeparators = (id: string): string => id.replace(/(?<=\d)\.(?=\d)/gu, '-');
 
 /**
- * The product entry's own verified metadata, carried onto the adopted registry
- * model: the context and output windows the client actually enforces, the image
- * input the row declares, and long-context support derived solely from a row
- * that itself declares a 1M window. A row whose metadata says a short window
- * therefore never claims long-context support, and a row with no window
- * metadata keeps the registry's own.
+ * Normalized spelling of every mainstream canonical id. A product id matches a
+ * canonical model through numeric-separator equivalence alone (`claude-opus-5.5`
+ * equals `claude-opus-5-5`), while the canonical spelling is what comes back, so
+ * dotted `gpt-5.6` and `deepseek-v4.1` canonical ids stay intact.
  */
-function productMetadataOverrides(entry: CodeBuddyProductModelEntry): CanonicalModelOverrides {
-  const overrides: CanonicalModelOverrides = {};
-  if (entry.maxInputTokens) overrides.contextWindow = entry.maxInputTokens;
-  if (entry.maxOutputTokens) overrides.maxOutputTokens = entry.maxOutputTokens;
-  if (entry.supportsImages === true) overrides.capabilities = ['text', 'image'];
-  if (entry.maxInputTokens && entry.maxInputTokens >= ONE_MILLION_TOKENS) overrides.supports1MContext = true;
-  return overrides;
-}
+const MAINSTREAM_BY_NORMALIZED_ID: ReadonlyMap<string, string> = new Map(
+  MAINSTREAM_MODEL_IDS.map((id): [string, string] => [normalizeNumericSeparators(id), id]),
+);
 
 /**
  * Historical observed wire spellings that keep canonicalizing onto the offering
@@ -96,20 +70,19 @@ export const codeBuddyClient: ClientDefinition = {
   taskCapable: true,
 };
 
-// CodeBuddy publishes this unsuffixed id as a 200K model. It shares a spelling
-// with the official 1M definition and must not be treated as the same model.
-const SHORT_CONTEXT_CLAUDE_5 = new Set(['claude-sonnet-5']);
-
+/**
+ * Exact canonical ids and genuine aliases precede normalized matching; the
+ * result is always an existing mainstream registry model. Product ids are
+ * canonicalized by stripping the `-ioa` and `-1m` wire suffixes (in either
+ * order) before the numeric-separator comparison.
+ */
 function lookupUnifiedModelId(productId: string): string | undefined {
-  const mapped = CODEBUDDY_PRODUCT_MODEL_IDS[productId];
-  if (mapped && models.get(mapped)) return mapped;
+  if (isMainstreamModelId(productId)) return productId;
   const stripped = codeBuddyCanonicalModelId(productId);
-  const strippedMapped = CODEBUDDY_PRODUCT_MODEL_IDS[stripped];
-  if (strippedMapped && models.get(strippedMapped)) return strippedMapped;
-  if (SHORT_CONTEXT_CLAUDE_5.has(productId) || SHORT_CONTEXT_CLAUDE_5.has(stripped)) return undefined;
-  if (models.get(productId)) return productId;
-  if (stripped !== productId && models.get(stripped)) return stripped;
-  return undefined;
+  const aliased = CODEBUDDY_PRODUCT_MODEL_IDS[productId] ?? CODEBUDDY_PRODUCT_MODEL_IDS[stripped];
+  if (aliased !== undefined && isMainstreamModelId(aliased)) return aliased;
+  if (isMainstreamModelId(stripped)) return stripped;
+  return MAINSTREAM_BY_NORMALIZED_ID.get(normalizeNumericSeparators(stripped));
 }
 
 /** Map a product-file id onto a mainstream unified model, or ignore it. */
@@ -120,26 +93,31 @@ export function resolveCodeBuddyProductModelId(productId: string): string | unde
 }
 
 /**
- * One product entry per canonical offering. Membership is product-driven: an
- * entry exists only where a product-file row resolves onto the unified registry.
- * When a product file lists both an unsuffixed row and its explicit `-1m`
- * variant — which resolve onto the same canonical model — the explicit variant
- * supplies the outbound wire spelling; the product order of every other row is
- * preserved.
+ * Claude family metadata for a registered Claude model, derived from the
+ * registry's own family plus the tier token in the id — never a per-version
+ * map.
  */
-function preferredEntries(
-  entries: readonly CodeBuddyProductModelEntry[],
-): ReadonlyMap<string, CodeBuddyProductModelEntry> {
-  const byOfferingId = new Map<string, CodeBuddyProductModelEntry>();
-  for (const entry of entries) {
-    const modelId = resolveCodeBuddyProductModelId(entry.id);
-    if (!modelId) continue;
-    const current = byOfferingId.get(modelId);
-    if (current === undefined || (entry.id.endsWith('-1m') && !current.id.endsWith('-1m'))) {
-      byOfferingId.set(modelId, entry);
-    }
-  }
-  return byOfferingId;
+function claudeMetadataOverrides(modelId: string): CanonicalModelOverrides {
+  if (models.get(modelId)?.family !== 'claude') return {};
+  const tier = CLAUDE_TIERS.find((candidate) => modelId.startsWith(`claude-${candidate}-`));
+  return { family: 'claude', ...(tier === undefined ? {} : { claudeTier: tier }) };
+}
+
+/**
+ * The product entry's own verified metadata, carried onto the adopted registry
+ * model: the output window the client declares and the image input the row
+ * declares. The context window is inherited from the canonical registry model,
+ * and long-context support follows that canonical window — not the product row.
+ */
+function productMetadataOverrides(
+  entry: CodeBuddyProductModelEntry,
+  canonicalContextWindow: number | undefined,
+): CanonicalModelOverrides {
+  const overrides: CanonicalModelOverrides = {};
+  if (entry.maxOutputTokens) overrides.maxOutputTokens = entry.maxOutputTokens;
+  if (entry.supportsImages === true) overrides.capabilities = ['text', 'image'];
+  if (canonicalContextWindow !== undefined && canonicalContextWindow >= ONE_MILLION_TOKENS) overrides.supports1MContext = true;
+  return overrides;
 }
 
 /**
@@ -169,16 +147,22 @@ function thinkingMappingsFor(offerings: readonly ModelDefinition[]): NonNullable
   return mappings;
 }
 
-function aliasesFor(
-  offerings: readonly ModelDefinition[],
-  upstreamByCanonical: Readonly<Record<string, string>>,
+/**
+ * Every discovered wire spelling of an offered canonical model becomes an
+ * inbound alias, including the variants the selected product row did not supply
+ * (the selected wire id stays the outbound spelling in `upstreamByCanonical`).
+ */
+function discoveredAliasesFor(
+  variantsByCanonical: ReadonlyMap<string, ReadonlySet<string>>,
+  offeringIds: ReadonlySet<string>,
 ): Record<string, string> {
-  const modelIds = new Set(offerings.map((entry) => entry.id));
   const aliases: Record<string, string> = {};
-  for (const [canonicalId, upstreamId] of Object.entries(upstreamByCanonical)) {
-    if (canonicalId === upstreamId) continue;
-    if (!modelIds.has(canonicalId) || modelIds.has(upstreamId)) continue;
-    aliases[upstreamId] = canonicalId;
+  for (const [canonicalId, variants] of variantsByCanonical) {
+    if (!offeringIds.has(canonicalId)) continue;
+    for (const observed of variants) {
+      if (observed === canonicalId || offeringIds.has(observed)) continue;
+      aliases[observed] = canonicalId;
+    }
   }
   return aliases;
 }
@@ -186,7 +170,27 @@ function aliasesFor(
 function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelEntry[]): {
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
+  variantsByCanonical: ReadonlyMap<string, ReadonlySet<string>>;
 } {
+  // Membership is product-driven: an entry exists only when a product-file row
+  // resolves onto the unified registry. When a canonical model is named by both
+  // an ordinary row and an explicit long-context (`-1m`) variant, the actually
+  // discovered variant supplies the outbound wire spelling and the ordinary row
+  // is the fallback; every discovered variant is kept as an inbound alias.
+  const selectedEntries = new Map<string, CodeBuddyProductModelEntry>();
+  const variantsByCanonical = new Map<string, Set<string>>();
+  for (const entry of productEntries) {
+    const modelId = resolveCodeBuddyProductModelId(entry.id);
+    if (!modelId) continue;
+    const variants = variantsByCanonical.get(modelId) ?? new Set<string>();
+    variants.add(entry.id);
+    variantsByCanonical.set(modelId, variants);
+    const current = selectedEntries.get(modelId);
+    if (current === undefined || (codeBuddyHasLongContextVariant(entry.id) && !codeBuddyHasLongContextVariant(current.id))) {
+      selectedEntries.set(modelId, entry);
+    }
+  }
+
   const byOfferingId = new Map<string, ModelDefinition>();
   // Outbound wire ids come from the selected product entries alone — a mapping
   // exists exactly when the current product file names the row, including rows
@@ -194,14 +198,11 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   // spelling survives the product that declared it and no environment can be
   // routed to another environment's spelling.
   const upstreamByCanonical: Record<string, string> = {};
-
-  // Membership is product-driven and the offering IS the canonical registry
-  // model: an entry exists only when a product-file row resolves onto the
-  // unified registry, and it is then decorated by the row's own metadata plus
-  // the compact difference map alone. No rename layer exists, and no offering is
-  // manufactured from a name.
-  for (const [modelId, entry] of preferredEntries(productEntries)) {
-    const overrides: CanonicalModelOverrides = { ...productMetadataOverrides(entry), ...CODEBUDDY_MODEL_OVERRIDES[modelId] };
+  for (const [modelId, entry] of selectedEntries) {
+    const overrides: CanonicalModelOverrides = {
+      ...productMetadataOverrides(entry, models.get(modelId)?.defaults.contextWindow),
+      ...claudeMetadataOverrides(modelId),
+    };
     const resolved = resolveProviderModel({ canonical: modelId, overrides });
     byOfferingId.set(
       modelId,
@@ -212,12 +213,13 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     upstreamByCanonical[modelId] = entry.id;
   }
 
-  return { models: [...byOfferingId.values()], upstreamByCanonical };
+  return { models: [...byOfferingId.values()], upstreamByCanonical, variantsByCanonical };
 }
 
 export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[]) {
   const built = buildCodeBuddyOfferings(entries);
   const upstreamModels: Readonly<Record<string, string>> = Object.freeze(built.upstreamByCanonical);
+  const offeringIds: ReadonlySet<string> = new Set(built.models.map((entry) => entry.id));
   const definition: Omit<ProviderDefinition, 'models'> & { models: readonly ModelDefinition[] } = {
     id: 'codebuddy',
     displayName: 'CodeBuddy',
@@ -232,7 +234,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     // snapshot is absent. Outbound wire ids come from the selected product.
     modelAliases: {
       ...historicalAliasesFor(built.models),
-      ...aliasesFor(built.models, upstreamModels),
+      ...discoveredAliasesFor(built.variantsByCanonical, offeringIds),
     },
     thinkingMappings: thinkingMappingsFor(built.models),
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],

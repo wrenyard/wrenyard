@@ -15,9 +15,8 @@ export const definition = defineProvider({
     model('grok-4.6', 256_000, undefined, undefined, ['high']),
     model('grok-4.7', 256_000, undefined, 'grok-4.7', ['high']),
     model('kimi-k3', 1_048_576, undefined, 'kimi-k3'),
-    { ...model('claude-opus-5', 300_000, undefined, 'claude-opus-5'), capabilities: ['text', 'image'], pricing: [0.5, 5, 25] },
+    { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true } },
     { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
-    { ...model('gpt-5.6-terra', 272_000, undefined, 'gpt-5.6-terra', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.2, 2, 12] },
     { ...model('gpt-5.6-sol', 272_000, undefined, 'gpt-5.6-sol', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
     { ...model('claude-sonnet-5', 300_000), capabilities: ['text', 'image'], pricing: [0.2, 2, 10] },
     model('muse-spark-1.3', 300_000),
@@ -34,7 +33,6 @@ export const definition = defineProvider({
   // high, to the listed grok-4.7-high id, so an omitted request stays at high.
   thinkingMappings: {
     'gpt-5.6-sol': { cursor: cursorGptThinkingMappings('gpt-5.6-sol') },
-    'gpt-5.6-terra': { cursor: cursorGptThinkingMappings('gpt-5.6-terra') },
     'gpt-5.6-luna': { cursor: cursorGptThinkingMappings('gpt-5.6-luna') },
     'grok-4.6': { cursor: { high: { model: 'cursor-grok-4.6-high' } } },
     'grok-4.7': { cursor: { high: { model: 'grok-4.7-high' } } },
