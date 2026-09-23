@@ -23,9 +23,8 @@ export const quota = {
     binding('cursor', 'composer-2.5', [CURSOR_POOL]),
     // Third-party Cursor models consume the Other allowance, not the Cursor pool.
     binding('cursor', 'kimi-k3', [CURSOR_OTHER_POOL]),
-    binding('cursor', 'claude-opus-5', [CURSOR_OTHER_POOL]),
+    binding('cursor', 'claude-opus-5-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gpt-5.6-luna', [CURSOR_OTHER_POOL]),
-    binding('cursor', 'gpt-5.6-terra', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gpt-5.6-sol', [CURSOR_OTHER_POOL]),
     binding('cursor', 'claude-sonnet-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'muse-spark-1.3', [CURSOR_OTHER_POOL]),
