@@ -5,6 +5,7 @@ import { readCodexAccount } from './account.ts';
 import { inspectCodex } from './installation.ts';
 import { launchCodex } from './launch.ts';
 import { readCodexReadiness } from './readiness.ts';
+import { isolatedCodexHome, prepareCodexAuth } from './readiness.ts';
 export class CodexClient implements AgentClient {
     readonly id = 'codex';
     readonly capabilities = { run: true, account: true, resume: true };
@@ -14,7 +15,10 @@ export class CodexClient implements AgentClient {
     }
     async start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession> {
         const env = options?.env ?? process.env;
-        return await startCodexSession(await launchCodex(request, env), request, options);
+        const isolatedHome = isolatedCodexHome(env);
+        const spec = await launchCodex(request, env, isolatedHome);
+        const auth = await prepareCodexAuth(env, isolatedHome, request.mode !== 'gateway');
+        return await startCodexSession(spec, request, auth, options);
     }
     readAccount(options?: AccountOptions): Promise<AccountSnapshot> {
         return readCodexAccount(this.execution, options);
