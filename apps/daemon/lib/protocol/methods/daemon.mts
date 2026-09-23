@@ -2,6 +2,7 @@ import type { JsonSchema } from '../jsonrpc.mts'
 
 export interface DaemonShutdownParams {
   reason?: string
+  force?: boolean
 }
 
 export interface DaemonShutdownResult {
@@ -14,6 +15,7 @@ export const daemonShutdownParamsSchema = {
   type: 'object',
   properties: {
     reason: { type: 'string' },
+    force: { type: 'boolean' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -157,6 +159,7 @@ export interface DaemonStatusResult {
   mode: 'accepting' | 'frozen' | 'planned_restart'
   frozen: boolean
   accepting: boolean
+  shutting_down?: boolean
   activeTasks: string[]
   activeTaskCount: number
   activeWorkflows: string[]
@@ -186,6 +189,7 @@ export const daemonStatusResultSchema = {
     mode: { type: 'string', enum: ['accepting', 'frozen', 'planned_restart'] },
     frozen: { type: 'boolean' },
     accepting: { type: 'boolean' },
+    shutting_down: { type: 'boolean' },
     activeTasks: { type: 'array', items: { type: 'string' } },
     activeTaskCount: { type: 'integer', minimum: 0 },
     activeWorkflows: { type: 'array', items: { type: 'string' } },

@@ -26,7 +26,7 @@ if (!runningWithTsx) {
 const { runForemanService } = await import('../lib/server-bootstrap/service.mts')
 
 runForemanService().then((code) => {
-  if (code !== 0) process.exit(code)
+  process.exit(code)
 }).catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)
