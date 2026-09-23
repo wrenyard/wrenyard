@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import {
   closeSync,
   existsSync,
@@ -23,12 +23,10 @@ import {
   sleep,
   suiteDir,
   waitForIpcReachable,
-  waitForIpcUnreachable,
 } from './shared.mts'
 
 const STATE_VERSION = 1
 const STARTUP_TIMEOUT_MS = 15_000
-const SHUTDOWN_TIMEOUT_MS = 5_000
 
 export interface DaemonLogPaths {
   stdout: string
@@ -63,6 +61,7 @@ export interface DaemonLifecycleOptions {
   config: ForemanServiceConfig
   resolvedConfigPath: string
   cliValues?: Record<string, unknown>
+  shutdownForce?: boolean
 }
 
 export interface DaemonLifecycleResult {
@@ -141,7 +140,7 @@ export async function startDaemonProcess(options: DaemonLifecycleOptions): Promi
 
   const stalePid = readDaemonPid(paths) ?? existingState?.pid
   if (stalePid && isProcessAlive(stalePid)) {
-    await terminateDaemonPid(stalePid)
+    throw new Error(`Wrenyard daemon pid ${stalePid} is alive but IPC is unreachable; inspect it before starting another daemon`)
   }
   clearDaemonState(paths)
 
@@ -191,10 +190,8 @@ export async function startDaemonProcess(options: DaemonLifecycleOptions): Promi
   try {
     await waitForIpcReachable(ipcPath, STARTUP_TIMEOUT_MS)
   } catch (error) {
-    await terminateDaemonPid(childPid)
-    clearDaemonState(paths)
     const detail = errorMessage(error)
-    throw new Error(`Wrenyard daemon process started but did not become reachable over IPC. ${detail}`)
+    throw new Error(`Wrenyard daemon pid ${childPid} did not become reachable over IPC. ${detail}. Its state is retained for inspection.`)
   }
 
   return {
@@ -215,30 +212,22 @@ export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promis
   const httpUrl = localForemanServiceOriginForConfig(options.config)
   const state = readDaemonState(paths)
   const pid = readDaemonPid(paths) ?? state?.pid
-  let graceful = false
-  let forced = false
-
-  try {
+  const reachable = await isIpcReachable(ipcPath)
+  if (reachable) {
     const client = await connectIpcForemanClient({ path: ipcPath, timeoutMs: 1_000 })
     try {
-      await client.daemon.shutdown({ reason: 'wrenyard daemon stop' })
-      graceful = true
+      await client.daemon.shutdown({ reason: 'wrenyard daemon stop', force: options.shutdownForce === true })
     } finally {
       client.close()
     }
-  } catch {
-    // If IPC is already gone, stop falls back to the state PID below.
+  } else if (pid && isProcessAlive(pid)) {
+    throw new Error(`Wrenyard daemon pid ${pid} is alive but IPC is unreachable; graceful shutdown could not be requested`)
   }
 
-  await waitForIpcUnreachable(ipcPath, SHUTDOWN_TIMEOUT_MS)
-
-  if (pid && isProcessAlive(pid)) {
-    await terminateDaemonPid(pid)
-    forced = true
-  }
-  if (await isIpcReachable(ipcPath)) {
-    throw new Error(`Wrenyard daemon IPC is still reachable at ${ipcPath} after shutdown`)
-  }
+  // The daemon owns its drain and exit. An active job may keep it alive for as
+  // long as needed; the caller never converts a slow shutdown into a kill.
+  while (pid && isProcessAlive(pid)) await sleep(200)
+  while (await isIpcReachable(ipcPath)) await sleep(200)
 
   clearDaemonState(paths)
   return {
@@ -247,8 +236,8 @@ export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promis
     httpUrl,
     statePath: paths.statePath,
     logPaths: paths.logPaths,
-    graceful,
-    forced,
+    graceful: reachable,
+    forced: false,
   }
 }
 
@@ -397,43 +386,4 @@ function isProcessAlive(pid: number): boolean {
     const code = (error as NodeJS.ErrnoException).code
     return code === 'EPERM'
   }
-}
-
-async function terminateDaemonPid(pid: number): Promise<void> {
-  if (!isProcessAlive(pid)) return
-  try {
-    process.kill(pid, 'SIGTERM')
-  } catch {
-    // Fall through to the hard stop path if the process still exists.
-  }
-
-  if (await waitForProcessExit(pid, SHUTDOWN_TIMEOUT_MS)) return
-
-  if (process.platform === 'win32') {
-    try {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        stdio: ['ignore', 'ignore', 'ignore'],
-        windowsHide: true,
-      })
-    } catch {
-      // Best effort. The final wait below decides whether it worked.
-    }
-  } else {
-    try {
-      process.kill(pid, 'SIGKILL')
-    } catch {
-      // Best effort.
-    }
-  }
-
-  await waitForProcessExit(pid, 2_000)
-}
-
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) return true
-    await sleep(100)
-  }
-  return !isProcessAlive(pid)
 }
