@@ -18,9 +18,26 @@ export interface CodeBuddyProductModelEntry {
 }
 
 const IOA_SUFFIX = '-ioa';
+const LONG_CONTEXT_SUFFIX = '-1m';
+const WIRE_SUFFIXES = [IOA_SUFFIX, LONG_CONTEXT_SUFFIX] as const;
 
+/**
+ * Strip the provider-private channel (`-ioa`) and long-context (`-1m`) wire
+ * suffixes in either order, yielding the lookup identity of a product id.
+ */
 export function codeBuddyCanonicalModelId(productId: string): string {
-  return productId.endsWith(IOA_SUFFIX) ? productId.slice(0, -IOA_SUFFIX.length) : productId;
+  let id = productId;
+  for (;;) {
+    const suffix = WIRE_SUFFIXES.find((candidate) => id.endsWith(candidate));
+    if (suffix === undefined) return id;
+    id = id.slice(0, -suffix.length);
+  }
+}
+
+/** True when a product id declares the long-context (`-1m`) variant, in either suffix order. */
+export function codeBuddyHasLongContextVariant(productId: string): boolean {
+  const base = productId.endsWith(IOA_SUFFIX) ? productId.slice(0, -IOA_SUFFIX.length) : productId;
+  return base.endsWith(LONG_CONTEXT_SUFFIX);
 }
 
 export function classifyCodeBuddyEnvironment(

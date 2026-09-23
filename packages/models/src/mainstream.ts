@@ -11,14 +11,16 @@ export const MAINSTREAM_MODEL_IDS = [
   'kimi-k3',
   'kimi-k2.8',
   'gpt-6-astra',
+  'gpt-6-sol',
+  'gpt-6-luna',
   'gpt-5.6-sol',
-  'gpt-5.6-terra',
   'gpt-5.6-luna',
   'glm-5.3',
   'glm-5.3-flash',
   'minimax-m3',
   'claude-fable-5-1',
   'claude-opus-5',
+  'claude-opus-5-5',
   'claude-sonnet-5',
   'claude-haiku-4-5',
   'grok-4.7',
@@ -28,6 +30,9 @@ export const MAINSTREAM_MODEL_IDS = [
   'gemini-3.8-flash',
   'doubao-seed-2-0-lite',
   'qwen3.8-max',
+  'mimo-v2.6-pro',
+  'mimo-v2.6-flash',
+  'mimo-v2.6-pro-ultraspeed',
 ] as const;
 
 export type MainstreamModelId = (typeof MAINSTREAM_MODEL_IDS)[number];

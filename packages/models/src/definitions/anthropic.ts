@@ -1,4 +1,5 @@
 import { defineModel } from './define.ts';
+import { THINKING_FULL } from '../types.ts';
 
 export const anthropicModels = [
   defineModel('claude-fable-5', 'Claude Fable 5', {
@@ -18,6 +19,16 @@ export const anthropicModels = [
     capabilities: ['text'],
     pricing: [0.5, 5, 25],
     speed: 50,
+  }, { lab: 'anthropic', family: 'claude' }),
+  // Speed default for the entry below is an initial catalog estimate pending local measured samples.
+  defineModel('claude-opus-5-5', 'Claude Opus 5.5', {
+    intelligence: 'premium',
+    capabilities: ['text', 'image'],
+    thinkingLevels: THINKING_FULL,
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    pricing: [0.2, 4, 20],
+    speed: 65,
   }, { lab: 'anthropic', family: 'claude' }),
   defineModel('claude-sonnet-5', 'Claude Sonnet 5', {
     intelligence: 'mid',
