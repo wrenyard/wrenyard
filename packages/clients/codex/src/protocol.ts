@@ -4,6 +4,7 @@ import { startProcess, type ProcessSpec } from '@wrenyard/execution';
 import type { AgentEvent, AgentRequest, AgentSession, OperationOptions } from '@wrenyard/agent-client';
 import { finishedEvent, jsonStringValue, messageEvent, recordOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
 import { applyTrustedAgentTurnContract, completeUsageTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
+import { refreshCodexAuth, type CodexAuth } from './readiness.ts';
 
 interface PendingCall {
     readonly method: string;
@@ -11,19 +12,23 @@ interface PendingCall {
     reject(error: Error): void;
 }
 
-export async function startCodexSession(spec: ProcessSpec, request: AgentRequest, options?: OperationOptions): Promise<AgentSession> {
+export async function startCodexSession(spec: ProcessSpec, request: AgentRequest, auth: CodexAuth, options?: OperationOptions): Promise<AgentSession> {
     const execution = await startProcess(spec, options);
+    const refreshController = new AbortController();
+    const refreshSignal = options?.signal
+        ? AbortSignal.any([options.signal, refreshController.signal]) : refreshController.signal;
     let settled = false;
     let resolveResult!: (value: { exitCode: number | null }) => void;
     const result = new Promise<{ exitCode: number | null }>((resolve) => { resolveResult = resolve; });
     const finish = (exitCode: number | null) => {
         if (settled) return;
         settled = true;
+        refreshController.abort();
         void execution.cancel().then(() => resolveResult({ exitCode }), () => resolveResult({ exitCode: 1 }));
     };
     void execution.result.then(() => { if (!settled) finish(1); });
     return {
-        events: protocol(execution, request, finish),
+        events: protocol(execution, request, auth, spec.executable, refreshSignal, finish),
         result,
         cancel: () => execution.cancel(),
         diagnostics: execution.diagnostics,
@@ -33,6 +38,9 @@ export async function startCodexSession(spec: ProcessSpec, request: AgentRequest
 async function* protocol(
     execution: Awaited<ReturnType<typeof startProcess>>,
     request: AgentRequest,
+    auth: CodexAuth,
+    executable: string,
+    refreshSignal: AbortSignal,
     finish: (exitCode: number | null) => void,
 ): AsyncGenerator<AgentEvent> {
     const pending = new Map<number, PendingCall>();
@@ -46,6 +54,7 @@ async function* protocol(
     let finished = false;
     let logicalExitCode = 1;
     let turnId: string | undefined;
+    let accessToken = auth.login?.type === 'chatgptAuthTokens' ? auth.login.accessToken : '';
     const complete = (failed: boolean): AgentEvent | undefined => {
         if (finished) return undefined;
         finished = true;
@@ -69,8 +78,9 @@ async function* protocol(
         if (event.type === 'started' && !sent) {
             sent = true;
             void call('initialize', { clientInfo: { name: 'wrenyard', title: 'Wrenyard', version: '1' }, capabilities: { experimentalApi: true } })
-                .then(() => {
+                .then(async () => {
                 execution.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: null }) + '\n');
+                if (auth.login) await call('account/login/start', auth.login);
                 const params: Record<string, unknown> = {
                     model: request.model, cwd: request.cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
                     experimentalRawEvents: !request.resumeSessionId,
@@ -127,7 +137,26 @@ async function* protocol(
         try { message = JSON.parse(line) as Record<string, unknown>; }
         catch { return; }
         if (typeof message.id === 'number' && typeof message.method === 'string') {
-            execution.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\n');
+            if (message.method === 'account/chatgptAuthTokens/refresh' && auth.login?.type === 'chatgptAuthTokens') {
+                const id = message.id;
+                void refreshCodexAuth(auth, executable, accessToken, refreshSignal).then((login) => {
+                    if (finished || login.type !== 'chatgptAuthTokens') return;
+                    accessToken = login.accessToken;
+                    const { accessToken: token, chatgptAccountId, chatgptPlanType } = login;
+                    execution.write(JSON.stringify({ jsonrpc: '2.0', id, result: {
+                        accessToken: token, chatgptAccountId,
+                        ...(chatgptPlanType ? { chatgptPlanType } : {}),
+                    } }) + '\n');
+                }).catch(() => {
+                    if (!finished) execution.write(JSON.stringify({ jsonrpc: '2.0', id,
+                        error: { code: -32000, message: 'Codex authentication refresh failed' } }) + '\n');
+                });
+            } else if (CODEX_APPROVAL_METHODS.has(message.method)) {
+                execution.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { decision: 'accept' } }) + '\n');
+            } else {
+                execution.write(JSON.stringify({ jsonrpc: '2.0', id: message.id,
+                    error: { code: -32601, message: 'Method not found' } }) + '\n');
+            }
             return;
         }
         if (typeof message.id === 'number') {
@@ -244,6 +273,11 @@ const CODEX_TOOL_ITEMS: Readonly<Record<string, true>> = {
     web_search: true,
     file_change: true,
 };
+
+const CODEX_APPROVAL_METHODS = new Set([
+    'execCommandApproval', 'applyPatchApproval',
+    'item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
+]);
 
 /** Joins a command payload, whether it is a shell string or an argv list. */
 function commandSummary(raw: unknown): string {

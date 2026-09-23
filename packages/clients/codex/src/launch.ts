@@ -1,8 +1,9 @@
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { inspectCodex } from './installation.ts';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
+import { codexChildEnv } from './readiness.ts';
 
 /**
  * A TOML literal for a string value. The reference encoder used JSON string
@@ -40,7 +41,7 @@ function codexMcpArgs(servers: readonly ResolvedMcpServer[]): string[] {
     return args;
 }
 
-export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
+export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv, isolatedHome: string): Promise<ProcessSpec> {
     assertLaunch(request);
     const status = await inspectCodex({ env });
     if (status.installation.state !== 'installed')
@@ -61,5 +62,6 @@ export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv)
     // MCP servers are registered as -c overrides ahead of the app-server bridge.
     args.push(...codexMcpArgs(resolveMcpServers(request.mcpServers)));
     args.push('app-server', '--stdio');
-    return { executable: status.installation.executable, args, cwd: request.cwd, env: stringEnv(env, { CODEX_MODEL: request.model }) };
+    return { executable: status.installation.executable, args, cwd: request.cwd,
+        env: { ...codexChildEnv(env, isolatedHome, request.mode !== 'gateway'), CODEX_MODEL: request.model } };
 }
