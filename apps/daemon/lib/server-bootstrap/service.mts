@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadForemanServiceConfig, resolveForemanConfigPath, type ForemanServiceConfig } from '../config/index.mts'
-import { ForemanDaemon } from '../daemon/daemon.mts'
+import { ForemanDaemon, type RunningForemanDaemon } from '../daemon/daemon.mts'
 
 /**
  * CLI argument guards for the daemon bootstrap. They live here (rather than in
@@ -64,49 +64,39 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
   const { config, resolvedConfigPath } = loadServiceConfigForDaemon(values.config, values)
   if (!config.service.enabled) throw new Error('Wrenyard daemon service is disabled by config')
 
-  let shutdownFromRpc: ((reason: string) => Promise<void>) | undefined
   const daemon = new ForemanDaemon({
     config,
     configPath: resolvedConfigPath,
-    onShutdownRequest: async (reason) => {
-      await shutdownFromRpc?.(reason)
-    },
   })
-  const running = await daemon.start()
+
+  // Handlers are installed before the run promise so a signal or parent message
+  // that arrives during bootstrap is recorded on the daemon rather than lost.
+  process.on('SIGTERM', () => { daemon.requestShutdown('SIGTERM') })
+  process.on('SIGINT', () => { daemon.requestShutdown('SIGINT') })
+  process.on('message', (msg) => {
+    if (msg === 'shutdown') daemon.requestShutdown('process shutdown message')
+  })
+
+  // run() owns start -> await shutdown request -> drain -> stop -> exit code.
+  const running = daemon.run()
+
+  let started: RunningForemanDaemon
+  try {
+    started = await daemon.start()
+  } catch {
+    // run() already logged the failure and performs its own cleanup; its code is
+    // the authoritative exit code.
+    return await running
+  }
+
   process.stderr.write(`[foreman-daemon] listening on http://${config.service.host}:${config.service.port}\n`)
   process.stderr.write(`[foreman-daemon] MCP:     http://${config.service.host}:${config.service.port}/mcp\n`)
   process.stderr.write(`[foreman-daemon] Message: use send_message on /mcp?sender=<role-id>\n`)
   process.stderr.write(`[foreman-daemon] Health:  http://${config.service.host}:${config.service.port}/health\n`)
-  process.stderr.write(`[foreman-daemon] IPC:     ${running.ipcPath}\n`)
+  process.stderr.write(`[foreman-daemon] IPC:     ${started.ipcPath}\n`)
   process.stderr.write(`[foreman-daemon] workspace: ${config.workspaceRoot}\n`)
 
   if (process.send) process.send('ready')
 
-  let shuttingDown = false
-
-  async function shutdown(reason: string): Promise<void> {
-    if (shuttingDown) return
-    shuttingDown = true
-    const forceExitTimer = setTimeout(() => process.exit(1), 5000)
-    forceExitTimer.unref()
-    console.log(`[foreman] Shutting down: ${reason}`)
-
-    try {
-      await daemon.stop()
-    } catch {
-      // Best effort during process shutdown.
-    }
-
-    process.exit(0)
-  }
-  shutdownFromRpc = shutdown
-
-  process.on('SIGTERM', () => { void shutdown('SIGTERM') })
-  process.on('SIGINT', () => { void shutdown('SIGINT') })
-  process.on('message', (msg) => {
-    if (msg === 'shutdown') void shutdown('process shutdown message')
-  })
-
-  await new Promise(() => {})
-  return 0
+  return await running
 }

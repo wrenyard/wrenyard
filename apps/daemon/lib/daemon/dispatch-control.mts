@@ -21,6 +21,7 @@ export interface DispatchStatus {
   /** Backward-compatible non-accepting flag for both frozen and planned_restart. */
   frozen: boolean
   accepting: boolean
+  shuttingDown?: boolean
   /** Current planned-restart plan summary, or null when none is active. */
   plannedRestart: PlannedRestartPlanSummary | null
   activeTasks: string[]
@@ -53,6 +54,7 @@ export class DispatchControlError extends Error {
 
 export class DispatchControl {
   private readonly store: PlannedRestartStore
+  private shutdownRequested = false
 
   constructor(store?: PlannedRestartStore) {
     this.store = store ?? new PlannedRestartStore()
@@ -66,7 +68,18 @@ export class DispatchControl {
     this.store.setAdmissionMode('accepting')
   }
 
+  requestShutdown(): void {
+    this.shutdownRequested = true
+  }
+
+  get isShutdownRequested(): boolean {
+    return this.shutdownRequested
+  }
+
   assertAccepting(): void {
+    // This durable mode check also runs for child work spawned by admitted
+    // tasks. The in-memory shutdown flag is enforced at the RPC boundary so
+    // those continuations can finish while new top-level calls are refused.
     const snapshot = this.store.snapshot()
     if (snapshot.mode === 'planned_restart') {
       throw new DispatchControlError(DAEMON_PLANNED_RESTART_CODE, DAEMON_PLANNED_RESTART_MESSAGE)
@@ -90,7 +103,8 @@ export class DispatchControl {
     return {
       mode: snapshot.mode,
       frozen,
-      accepting: snapshot.mode === 'accepting',
+      accepting: snapshot.mode === 'accepting' && !this.shutdownRequested,
+      shuttingDown: this.shutdownRequested,
       plannedRestart: snapshot.plan ? summarizePlan(snapshot.plan) : null,
       activeTasks: activeTaskIds,
       activeTaskCount: activeTaskIds.length,

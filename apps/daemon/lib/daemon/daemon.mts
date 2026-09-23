@@ -2,7 +2,7 @@ import { timingSafeEqual, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { closeDb, getDb, initDb } from '../db/connection.mts'
+import { closeDb, getDb, initDb, query as dbQuery } from '../db/connection.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { MessageStore } from '../db/stores/message-store.mts'
@@ -16,6 +16,7 @@ import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers } from '../server/handlers/core.mts'
 import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
+import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { TaskService } from '../core/task/service.mts'
 import { createSessionService, type SessionService } from '@wrenyard/session'
 import { resolveDesktopStateRoot } from '../config/desktop-state.mts'
@@ -83,6 +84,13 @@ export interface RunningForemanDaemon {
   /** Deterministic daemon-side task dispatch resolver. Supplies exact constrained
    *  plans to the execution kernel; it performs no service lifecycle mutation. */
   taskDispatchResolver: TaskDispatchResolver
+  /** Records the request, closes admission, and resolves shutdownRequested. Never drains or stops. */
+  requestShutdown(reason: string, force?: boolean): void
+  /** Resolves once any exit entry (RPC, signal, parent message) requested shutdown. */
+  readonly shutdownRequested: Promise<void>
+  /** Waits for admitted work to finish. An explicit force skips the wait. Never stops the daemon. */
+  drain(): Promise<void>
+  /** Idempotent close; a second call never restarts cleanup, even after a failed close. */
   stop(): Promise<void>
 }
 
@@ -103,37 +111,109 @@ export interface ForemanDaemonOptions {
   config: ForemanServiceConfig
   configPath?: string
   deps?: ForemanDaemonDeps
-  onShutdownRequest?: (reason: string) => void | Promise<void>
 }
 
 export class ForemanDaemon {
   private readonly config: ForemanServiceConfig
   private readonly configPath: string | undefined
   private readonly deps: ForemanDaemonDeps
-  private readonly onShutdownRequest: ((reason: string) => void | Promise<void>) | undefined
   private running: RunningForemanDaemon | undefined
+  private runningShutdown: { reason: string; force: boolean } | undefined
+  private startPromise: Promise<RunningForemanDaemon> | undefined
+  private stopPromise: Promise<void> | undefined
+  private runPromise: Promise<number> | undefined
 
   constructor(options: ForemanDaemonOptions) {
     this.config = options.config
     this.configPath = options.configPath
     this.deps = options.deps ?? {}
-    this.onShutdownRequest = options.onShutdownRequest
   }
 
-  async start(): Promise<RunningForemanDaemon> {
-    if (this.running) return this.running
-    this.running = await startForemanDaemon(this.config, this.deps, {
-      configPath: this.configPath,
-      onShutdownRequest: this.onShutdownRequest,
-    })
-    return this.running
+  /**
+   * Sole sequential daemon flow: start, wait for a shutdown request, drain
+   * admitted work, then stop. Never runs twice and never rejects; the returned
+   * code is the process exit code.
+   */
+  run(): Promise<number> {
+    if (this.runPromise) return this.runPromise
+    this.runPromise = (async () => {
+      // A shutdown request that arrives while start() is still in flight is
+      // retained here and forwarded once the running daemon exists, so it can
+      // never be dropped between admission closing and start() resolving.
+      let running: RunningForemanDaemon
+      try {
+        running = await this.start()
+      } catch (error) {
+        writeDaemonLog('error', 'daemon failed to start', error)
+        await this.stop().catch((stopError: unknown) => {
+          writeDaemonLog('warn', 'daemon cleanup after failed start failed', stopError)
+        })
+        return 1
+      }
+      const pendingShutdown = this.runningShutdown
+      if (pendingShutdown) running.requestShutdown(pendingShutdown.reason, pendingShutdown.force)
+      try {
+        await running.shutdownRequested
+        // Let the IPC shutdown reply reach its transport before close tears
+        // down client sockets. This is one turn, not a shutdown scheduler.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        await running.drain()
+        await this.stop()
+        return 0
+      } catch (error) {
+        writeDaemonLog('error', 'daemon shutdown failed', error)
+        await this.stop().catch((stopError: unknown) => {
+          writeDaemonLog('warn', 'daemon stop after shutdown failure failed', stopError)
+        })
+        return 1
+      }
+    })()
+    return this.runPromise
   }
 
-  async stop(): Promise<void> {
-    const current = this.running
-    if (!current) return
-    this.running = undefined
-    await current.stop()
+  start(): Promise<RunningForemanDaemon> {
+    if (this.running) return Promise.resolve(this.running)
+    // One in-flight start is shared so a concurrent caller can never bootstrap
+    // a second runtime against the same database/IPC endpoint.
+    if (!this.startPromise) {
+      this.startPromise = startForemanDaemon(this.config, this.deps, {
+        configPath: this.configPath,
+      }).then((running) => {
+        this.running = running
+        return running
+      }).finally(() => {
+        this.startPromise = undefined
+      })
+    }
+    return this.startPromise
+  }
+
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise
+    this.stopPromise = (async () => {
+      const current = this.running
+      this.running = undefined
+      await current?.stop()
+    })()
+    // Cache the promise even on rejection so a second stop() rethrows the same
+    // failure instead of racing a start() against a half-torn-down runtime.
+    this.stopPromise.catch(() => {})
+    return this.stopPromise
+  }
+
+  requestShutdown(reason: string, force = false): void {
+    const running = this.running
+    if (!running) {
+      // Startup is still in flight; requestShutdown() on the running daemon
+      // closes admission on the shared DispatchControl, so defer the exact
+      // request until start() resolves rather than dropping it.
+      this.runningShutdown = {
+        reason,
+        force: force || this.runningShutdown?.force === true,
+      }
+      return
+    }
+    running.requestShutdown(reason, force)
   }
 
   get current(): RunningForemanDaemon | undefined {
@@ -187,7 +267,7 @@ function createExternalDeliveryPort(
 export async function startForemanDaemon(
   config: ForemanServiceConfig,
   deps: ForemanDaemonDeps = {},
-  options: { configPath?: string; onShutdownRequest?: (reason: string) => void | Promise<void> } = {},
+  options: { configPath?: string } = {},
 ): Promise<RunningForemanDaemon> {
   // Hydrate the durable admission plan BEFORE any database or runtime bootstrap
   // so a persisted planned_restart mode is in force before HTTP, IPC, MCP, or
@@ -220,7 +300,7 @@ async function startForemanDaemonWithRuntime(
   config: ForemanServiceConfig,
   runtime: ForemanDaemonRuntime,
   deps: ForemanDaemonDeps,
-  options: { configPath?: string; onShutdownRequest?: (reason: string) => void | Promise<void> },
+  options: { configPath?: string },
 ): Promise<RunningForemanDaemon> {
   const operations: OperationHost = {
     agent: runtime.supervisor,
@@ -561,7 +641,8 @@ async function startForemanDaemonWithRuntime(
     ...await gateway.connection(gatewayOrigin(config.service.host, config.service.port)),
     token: gatewayToken,
   }, dispatchPlans)
-  let stopFromShutdownRequest: ((reason: string) => Promise<void>) | undefined
+  let requestShutdownFromRpc: ((reason: string, force: boolean) => void) | undefined
+  let pendingRpcShutdown: { reason: string; force: boolean } | undefined
   const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
   const clientDiscovery = new InstalledClientDiscovery()
   const clientOwnership = new JsonClientOwnershipStore(join(stateRoot, 'client-configuration', 'ownership.json'))
@@ -726,14 +807,39 @@ async function startForemanDaemonWithRuntime(
         stats_model_display_name: recordedModel,
       }
     },
-    shutdown: async (reason) => {
-      if (options.onShutdownRequest) {
-        await options.onShutdownRequest(reason)
-        return
+    shutdown: (reason, force) => {
+      if (requestShutdownFromRpc) requestShutdownFromRpc(reason, force)
+      else {
+        runtime.dispatchControl.requestShutdown()
+        pendingRpcShutdown = {
+          reason,
+          force: force || pendingRpcShutdown?.force === true,
+        }
       }
-      await stopFromShutdownRequest?.(reason)
     },
   })
+
+  // During drain, preserve status/cancel/signals and the calls required by
+  // admitted work. New top-level dispatch and long polling cannot hold the
+  // daemon open or create more work after the shutdown request is accepted.
+  const blockedDuringShutdown = new Set([
+    'taskgraph.create', 'task.run.create', 'exec.start', 'session.send',
+    'taskgraph.wait', 'task.run.wait',
+  ])
+  rpcRouter.setAdmissionGate((method, params) => {
+    const longSessionPoll = method === 'session.snapshot'
+      && typeof params === 'object' && params !== null
+      && 'waitMs' in params && typeof params.waitMs === 'number' && params.waitMs > 0
+    if (runtime.dispatchControl.isShutdownRequested && (blockedDuringShutdown.has(method) || longSessionPoll)) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Daemon is shutting down and is not accepting this request.' },
+        { code: 'daemon_shutting_down', method },
+      )
+    }
+  }, [
+    'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
+    'task.run.create', 'exec.start', 'session.send', 'message.send',
+  ])
 
   // Begin idempotent taskgraph startup reconciliation exactly once before any
   // IPC/HTTP/MCP handler or transport is exposed. Every persisted actionable
@@ -905,6 +1011,79 @@ async function startForemanDaemonWithRuntime(
     writeDaemonLog('error', 'session service start failed', error)
   })
   let stopped = false
+  let shutdownForce = false
+  let shutdownRequestedResolve: (() => void) | undefined
+  // Deferred latch: every exit entry awaits this instead of polling a flag, so the
+  // first requestShutdown resolves it exactly once and later calls are no-ops.
+  const shutdownRequestedPromise = new Promise<void>((resolve) => {
+    shutdownRequestedResolve = resolve
+  })
+  let drainPromise: Promise<void> | undefined
+  // Wakes the 200ms idle wait the moment an explicit force skips the wait. Reset
+  // to undefined once a waiter consumes it so no permanent timer is left behind.
+  let drainWakeResolve: (() => void) | undefined
+  let drainWaitTimer: NodeJS.Timeout | undefined
+  let stopPromise: Promise<void> | undefined
+  requestShutdownFromRpc = (reason, force) => {
+    shutdownForce ||= force
+    runtime.dispatchControl.requestShutdown()
+    shutdownRequestedResolve?.()
+    // A force escalation must not wait out the current 200ms sleep; wake the
+    // drain loop so it re-evaluates immediately.
+    if (shutdownForce) {
+      const wake = drainWakeResolve
+      drainWakeResolve = undefined
+      if (drainWaitTimer) clearTimeout(drainWaitTimer)
+      drainWaitTimer = undefined
+      wake?.()
+    }
+  }
+  if (pendingRpcShutdown) {
+    requestShutdownFromRpc(pendingRpcShutdown.reason, pendingRpcShutdown.force)
+  }
+  // Poll the existing idle checks sequentially every 200ms until the daemon is
+  // idle or an explicit force skips the wait entirely. Never runs twice and
+  // never calls the callback or stop(): it only waits for admitted work.
+  async function drain(): Promise<void> {
+    if (drainPromise) return drainPromise
+    drainPromise = (async () => {
+      while (!shutdownForce && !stopped) {
+        const status = runtime.dispatchControl.status()
+        // These checks touch different subsystems (sqlite, session snapshot, RPC);
+        // run them one at a time so a slow check cannot race a sibling.
+        const activeGraphs = dbQuery<{ id: string }>(
+          `SELECT DISTINCT r.id FROM taskgraph_run r
+           LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
+           WHERE r.state = 'running' OR r.cancel_requested = 1
+              OR (r.state = 'paused' AND n.state = 'running')
+              OR (r.state = 'paused' AND r.on_node_failure = 'cancel' AND n.state = 'failed')
+           LIMIT 1`,
+        )
+        const conversation = (await sessionService.snapshot()).conversation
+        const activeConversation = conversation.status === 'ready' && (
+          conversation.selectedRunning
+          || conversation.sessions.some((session) => session.running)
+          || (conversation.turns?.some((turn) => turn.running) ?? false)
+        )
+        const idle = status.activeTaskCount === 0
+          && status.activeWorkflowCount === 0
+          && status.activeExecutionCount === 0
+          && activeGraphs.length === 0
+          && !activeConversation
+          && rpcRouter.activeWorkRequestCount === 0
+        if (idle) break
+        await new Promise<void>((resolve) => {
+          drainWakeResolve = resolve
+          drainWaitTimer = setTimeout(() => {
+            if (drainWakeResolve === resolve) drainWakeResolve = undefined
+            drainWaitTimer = undefined
+            resolve()
+          }, 200)
+        })
+      }
+    })()
+    return drainPromise
+  }
   const runningIpcServer = ipcServer
   const runningDaemon: RunningForemanDaemon = {
     db: runtime.db,
@@ -918,36 +1097,57 @@ async function startForemanDaemonWithRuntime(
     ipcPath,
     ipcServer: runningIpcServer,
     taskDispatchResolver,
-    stop: async () => {
-      if (stopped) return
+    requestShutdown: (reason, force = false) => requestShutdownFromRpc?.(reason, force),
+    shutdownRequested: shutdownRequestedPromise,
+    drain: () => drain(),
+    stop: () => {
+      if (stopPromise) return stopPromise
       stopped = true
-      let ipcError: unknown
-      let supervisorError: unknown
-      let execError: unknown
-      let sessionError: unknown
-      const httpClose = closeHttpServerIfListening(httpServer)
-      // Stop the session/DSH backend first: it owns its child process and the
-      // conversation persistence it writes, and must not observe a closed
-      // gateway or a torn-down supervisor.
+      stopPromise = (async () => {
+      let firstError: unknown
+      let hasError = false
+      const recordFailure = (message: string, error: unknown): void => {
+        writeDaemonLog('warn', message, error)
+        if (!hasError) {
+          hasError = true
+          firstError = error
+        }
+      }
+      // Start the HTTP close first so its async handle teardown overlaps the
+      // synchronous resource shutdown below; it is awaited near the end.
+      const httpClose = closeHttpServerIfListening(httpServer).catch((error: unknown) => {
+        recordFailure('HTTP server shutdown failed', error)
+      })
+      // Stop the session/DSH backend immediately after: it owns its child
+      // process and the conversation persistence it writes, and must not
+      // observe a closed gateway or a torn-down supervisor.
       try {
         await sessionService.close()
       } catch (error) {
-        sessionError = error
-        writeDaemonLog('warn', 'session service shutdown failed', error)
+        recordFailure('session service shutdown failed', error)
       }
-      await gateway.close()
-      restoreGatewayEnvironment()
+      // A gateway failure must not skip IPC/supervisor/exec/HTTP/DB cleanup:
+      // each owned resource is attempted exactly once in order regardless.
+      try {
+        await gateway.close()
+      } catch (error) {
+        recordFailure('gateway shutdown failed', error)
+      } finally {
+        try {
+          restoreGatewayEnvironment()
+        } catch (error) {
+          recordFailure('gateway environment restore failed', error)
+        }
+      }
       try {
         await runningIpcServer.close()
       } catch (error) {
-        ipcError = error
-        writeDaemonLog('warn', 'IPC server shutdown failed', error)
+        recordFailure('IPC server shutdown failed', error)
       }
       try {
         await runtime.supervisor.shutdown()
       } catch (error) {
-        supervisorError = error
-        writeDaemonLog('warn', 'supervisor shutdown failed', error)
+        recordFailure('supervisor shutdown failed', error)
       }
       // Cancel every live raw prompt execution so no agent child outlives the
       // daemon. The task supervisor's children are already settled above; this
@@ -955,27 +1155,36 @@ async function startForemanDaemonWithRuntime(
       try {
         await runtime.execService.close()
       } catch (error) {
-        execError = error
-        writeDaemonLog('warn', 'exec service shutdown failed', error)
+        recordFailure('exec service shutdown failed', error)
       }
-
       try {
         mcpServer.close()
+      } catch (error) {
+        recordFailure('MCP shutdown failed', error)
+      }
+      try {
         // Close all active channel SSE streams and clear timers (Fix 2)
         closeActiveSseStreams(activeSseStreams, connections)
+      } catch (error) {
+        recordFailure('SSE shutdown failed', error)
+      }
+      try {
         await httpClose
       } finally {
-        releaseDaemonDb()
+        try {
+          releaseDaemonDb()
+        } catch (error) {
+          recordFailure('database release failed', error)
+        }
       }
 
-      if (ipcError) throw ipcError
-      if (execError) throw execError
-      if (supervisorError) throw supervisorError
-      if (sessionError) throw sessionError
+      if (hasError) throw firstError
+      })()
+      // Cache the promise even on rejection so a second stop() rethrows the same
+      // failure instead of restarting cleanup against already-torn-down resources.
+      stopPromise.catch(() => {})
+      return stopPromise
     },
-  }
-  stopFromShutdownRequest = async () => {
-    await runningDaemon.stop()
   }
   return runningDaemon
 }
@@ -1108,7 +1317,7 @@ interface DaemonRpcRouterOptions {
   workspaceRoot: string
   messageService?: MessageService
   operations?: OperationHost
-  shutdown?: (reason: string) => void | Promise<void>
+  shutdown?: (reason: string, force: boolean) => void
   dispatchControl?: DispatchControl
   taskgraphService?: TaskGraphService
   workspaceDocService?: WorkspaceDocService

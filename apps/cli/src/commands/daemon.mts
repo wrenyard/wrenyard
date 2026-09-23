@@ -52,16 +52,16 @@ export async function handleDaemonStop(args: string[]): Promise<number> {
       config: { type: 'string' },
       host: { type: 'string' },
       port: { type: 'string' },
+      force: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
-  requireNoPositionals(positionals, 'wrenyard daemon stop [--config path]')
+  requireNoPositionals(positionals, 'wrenyard daemon stop [--config path] [--force]')
 
   const { config, resolvedConfigPath } = loadServiceConfigForCli(values.config, values)
-  const result = await stopDaemonProcess({ config, resolvedConfigPath, cliValues: values })
+  await stopDaemonProcess({ config, resolvedConfigPath, cliValues: values, shutdownForce: values.force === true })
   console.log('Wrenyard daemon stopped')
-  if (result.forced) console.log('Stop required process fallback after IPC shutdown failed or timed out')
   return 0
 }
 

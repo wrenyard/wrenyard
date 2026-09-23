@@ -18,6 +18,7 @@ export interface HealthPingResult {
     mode: 'accepting' | 'frozen' | 'planned_restart'
     frozen: boolean
     accepting: boolean
+    shutting_down?: boolean
     activeTaskCount: number
     activeWorkflowCount: number
     activeExecutionCount: number
@@ -65,6 +66,7 @@ export const healthPingResultSchema = {
         mode: { type: 'string', enum: ['accepting', 'frozen', 'planned_restart'] },
         frozen: { type: 'boolean' },
         accepting: { type: 'boolean' },
+        shutting_down: { type: 'boolean' },
         activeTaskCount: { type: 'integer', minimum: 0 },
         activeWorkflowCount: { type: 'integer', minimum: 0 },
         activeExecutionCount: { type: 'integer', minimum: 0 },
