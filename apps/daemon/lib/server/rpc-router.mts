@@ -31,6 +31,19 @@ export type RpcHandler<TParams = unknown, TResult = unknown, TContext = unknown>
 
 export class RpcRouter {
   private readonly handlers = new Map<string, RpcHandler>()
+  private admissionGate: ((method: string, params: unknown) => void) | undefined
+  private readonly activeWorkMethods = new Set<string>()
+  private activeWorkRequests = 0
+
+  setAdmissionGate(gate: (method: string, params: unknown) => void, workMethods: Iterable<string>): void {
+    this.admissionGate = gate
+    this.activeWorkMethods.clear()
+    for (const method of workMethods) this.activeWorkMethods.add(method)
+  }
+
+  get activeWorkRequestCount(): number {
+    return this.activeWorkRequests
+  }
 
   register<TMethod extends ForemanMethod>(
     method: TMethod,
@@ -59,7 +72,15 @@ export class RpcRouter {
         throw new ProtocolError(METHOD_NOT_FOUND, { method: message.method })
       }
 
-      const result = await handler(params, message, context)
+      this.admissionGate?.(message.method, params)
+      const tracksWork = this.activeWorkMethods.has(message.method)
+      if (tracksWork) this.activeWorkRequests += 1
+      let result: unknown
+      try {
+        result = await handler(params, message, context)
+      } finally {
+        if (tracksWork) this.activeWorkRequests -= 1
+      }
       if (isNotification) return undefined
 
       const validatedResult = parseMethodResult(message.method, result)

@@ -87,7 +87,7 @@ export interface CoreRpcHandlerOptions {
   startedAt: number
   workspaceRoot: string
   operations?: OperationHost
-  shutdown?: (reason: string) => void | Promise<void>
+  shutdown?: (reason: string, force: boolean) => void
   dispatchControl?: DispatchControl
   /** Daemon-owned TaskGraphService shared by all transports. */
   taskgraphService?: TaskGraphService
@@ -187,6 +187,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         mode: 'accepting' | 'frozen' | 'planned_restart'
         frozen: boolean
         accepting: boolean
+        shutting_down: boolean
         activeTaskCount: number
         activeWorkflowCount: number
         activeExecutionCount: number
@@ -359,7 +360,9 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     const reason = typeof params.reason === 'string' && params.reason.trim()
       ? params.reason.trim()
       : 'daemon.shutdown'
-    scheduleShutdown(options.shutdown, reason)
+    // Set the admission flag before acknowledging the request. The daemon's
+    // tick owns the eventual stop; only an explicit force skips its drain.
+    options.shutdown(reason, params.force === true)
     return {
       ok: true,
       shutting_down: true,
@@ -873,18 +876,6 @@ function isCoreRpcTransport(value: unknown): value is CoreRpcTransport {
   return value === 'ipc' || value === 'http' || value === 'mcp'
 }
 
-function scheduleShutdown(
-  shutdown: (reason: string) => void | Promise<void>,
-  reason: string,
-): void {
-  const immediate = setImmediate(() => {
-    void Promise.resolve(shutdown(reason)).catch((error: unknown) => {
-      process.stderr.write(`[foreman] daemon.shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`)
-    })
-  })
-  immediate.unref()
-}
-
 function isSender(value: unknown): value is MessageSender {
   return !!value
     && typeof value === 'object'
@@ -1116,6 +1107,7 @@ function projectDispatchStatus(status: DispatchStatus): {
   mode: DispatchStatus['mode']
   frozen: boolean
   accepting: boolean
+  shutting_down: boolean
   activeTasks: string[]
   activeTaskCount: number
   activeWorkflows: string[]
@@ -1135,6 +1127,7 @@ function projectDispatchStatus(status: DispatchStatus): {
     mode: status.mode,
     frozen: status.frozen,
     accepting: status.accepting,
+    shutting_down: status.shuttingDown === true,
     activeTasks: status.activeTasks,
     activeTaskCount: status.activeTaskCount,
     activeWorkflows: status.activeWorkflows,

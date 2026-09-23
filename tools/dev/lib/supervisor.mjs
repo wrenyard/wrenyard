@@ -537,9 +537,8 @@ export function createSupervisor(options = {}) {
     }
   }
 
-  async function waitForIpcDown(timeoutMs = HEALTH_WAIT_MS) {
-    const deadline = now() + timeoutMs;
-    while (now() < deadline) {
+  async function waitForIpcDown() {
+    for (;;) {
       try {
         await pingDaemon();
       } catch {
@@ -547,7 +546,6 @@ export function createSupervisor(options = {}) {
       }
       await wait(200);
     }
-    throw fail(ERRORS.internal, `business IPC still reachable at ${ipcPath}`);
   }
 
   async function quitDesktop() {
@@ -620,25 +618,27 @@ export function createSupervisor(options = {}) {
     if (slot) slot.expectedExit = true;
     try {
       await withRpc((client) => client.request('daemon.shutdown', { reason: 'source development supervisor' }), 2000);
-    } catch {
-      // Process stop below is the fallback.
+    } catch (error) {
+      if (!slot?.child || !childHasExited(slot.child)) {
+        if (slot) slot.expectedExit = false;
+        throw fail(ERRORS.internal, `Cannot request graceful daemon shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     if (slot?.child) {
-      const stopped = await stopChildFn(slot.child);
-      if (!stopped.ok) {
-        slot.expectedExit = false;
-        throw fail(ERRORS.internal, stopped.error ?? `Daemon pid ${slot.child.pid ?? 'unknown'} did not exit`);
-      }
+      while (!childHasExited(slot.child)) await wait(200);
       if (daemonSlot === slot) {
         daemonSlot = null;
         daemon = null;
       }
     }
-    await waitForIpcDown(options.ipcDownMs ?? 8_000);
+    await waitForIpcDown();
   }
 
   async function startDaemon() {
     if (daemonStart) return daemonStart;
+    if (daemonSlot?.child && !childHasExited(daemonSlot.child)) {
+      throw fail(ERRORS.internal, `Daemon pid ${daemonSlot.child.pid ?? 'unknown'} is still running`);
+    }
     daemonStart = startDaemonOnce().finally(() => {
       daemonStart = null;
     });
@@ -670,12 +670,7 @@ export function createSupervisor(options = {}) {
       slot.startInFlight = false;
       if (!slot.expectedExit && daemonSlot === slot && !slot.failureCounted && !childHasExited(child)) {
         slot.failureCounted = true;
-        slot.expectedExit = true;
-        try { await stopChildFn(child); } catch { /* owned child cleanup */ }
-        if (daemonSlot === slot) {
-          daemonSlot = null;
-          daemon = null;
-        }
+        logger.error('daemon-start-failed', `Daemon pid ${child.pid ?? 'unknown'} remains alive for inspection`);
       }
       throw error;
     }
@@ -808,8 +803,8 @@ export function createSupervisor(options = {}) {
 
   /**
    * The single source-change path: build the affected targets, then restart the
-   * complete daemon + Desktop stack. There is no renderer-only reload, no idle
-   * wait (the user accepts interrupting in-flight work), and no crash retry.
+   * complete daemon + Desktop stack. The daemon drains accepted work before
+   * the Desktop is closed and the new stack is started.
    *
    * The claimed generation is passed in by `pump`; it is the *only* consumer, so
    * the generation is never taken twice (a second `takeRestart` returns null and
@@ -867,8 +862,8 @@ export function createSupervisor(options = {}) {
    * creates one.
    */
   async function restartStack() {
-    await quitDesktop();
     await stopDaemon();
+    await quitDesktop();
     await startDaemon();
     await startDesktop();
     return { swapped: true, daemon: daemonSlot?.launchId ?? null, desktop: desktopSlot?.launchId ?? null };
@@ -920,8 +915,8 @@ export function createSupervisor(options = {}) {
     // The watcher stays alive until the stop fully succeeds: a failed component
     // stop must leave a usable supervisor, not a dead one.
     try {
-      await quitDesktop();
       await stopDaemon();
+      await quitDesktop();
     } catch (error) {
       stopping = false;
       setStatus(healthyStatus(), 'stop aborted; supervisor remains usable');
@@ -1266,8 +1261,8 @@ export function createSupervisor(options = {}) {
         setStatus('stopping', 'reloading dev tooling');
         buildAbort?.abort();
         await (pumpPromise ?? Promise.resolve()).catch(() => undefined);
-        await quitDesktop().catch(() => undefined);
-        await stopDaemon().catch(() => undefined);
+        await stopDaemon();
+        await quitDesktop();
         try {
           watcher?.close();
           watcher = null;
@@ -1276,6 +1271,11 @@ export function createSupervisor(options = {}) {
         }
         setStatus('stopped', 'reloading dev tooling');
         options.onReload?.();
+      } catch (error) {
+        replacing = false;
+        setStatus('degraded', error instanceof Error ? error.message : String(error));
+        logger.error('reload-failed', error instanceof Error ? error.message : String(error));
+        throw error;
       } finally {
         reloadPromise = null;
       }
@@ -1313,11 +1313,9 @@ export function createSupervisor(options = {}) {
     // the launcher has its answer, and the launcher then waits for our exit.
     setImmediate(settleRestartWaiters);
     buildAbort?.abort();
-    quitDesktop()
-      .catch((error) => logger.warn('replace-desktop', error instanceof Error ? error.message : String(error)))
-      .then(() => stopDaemon())
-      .catch((error) => logger.warn('replace-daemon', error instanceof Error ? error.message : String(error)))
-      .finally(() => {
+    stopDaemon()
+      .then(() => quitDesktop())
+      .then(() => {
         try {
           watcher?.close();
           watcher = null;
@@ -1331,6 +1329,11 @@ export function createSupervisor(options = {}) {
         }
         setStatus('stopped');
         options.onReplaced?.();
+      })
+      .catch((error) => {
+        replacing = false;
+        setStatus('degraded', error instanceof Error ? error.message : String(error));
+        logger.error('replace-failed', error instanceof Error ? error.message : String(error));
       });
     return { accepted: true };
   }

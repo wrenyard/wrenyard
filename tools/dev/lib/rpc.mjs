@@ -118,6 +118,9 @@ export function dispatchBlocksNewWork(health) {
   if (dispatch.recovery_required === true) {
     return { known: true, blocked: true, reason: 'daemon recovery is required' };
   }
+  if (dispatch.shutting_down === true) {
+    return { known: true, blocked: true, reason: 'daemon is shutting down' };
+  }
   if (dispatch.mode === 'planned_restart') {
     return { known: true, blocked: true, reason: 'a planned restart is active' };
   }
