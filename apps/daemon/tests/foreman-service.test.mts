@@ -656,8 +656,13 @@ function createTestService(workDir: string, deps?: any) {
       rmSync(endpoint.dir, { recursive: true, force: true })
     }
 
+    // startForemanDaemon now returns the ForemanDaemon instance itself; its
+    // resources live behind getters (not own enumerable props), so expose the
+    // fields the tests read explicitly instead of spreading the instance.
     return {
-      ...running,
+      httpServer: running.httpServer,
+      ipcPath: running.ipcPath,
+      dispatchControl: running.dispatchControl,
       async stop() {
         try {
           await stop()

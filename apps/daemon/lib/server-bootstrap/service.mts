@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadForemanServiceConfig, resolveForemanConfigPath, type ForemanServiceConfig } from '../config/index.mts'
-import { ForemanDaemon, type RunningForemanDaemon } from '../daemon/daemon.mts'
+import { ForemanDaemon } from '../daemon/daemon.mts'
 
 /**
  * CLI argument guards for the daemon bootstrap. They live here (rather than in
@@ -67,36 +67,27 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
   const daemon = new ForemanDaemon({
     config,
     configPath: resolvedConfigPath,
+    // Ready logs and the parent-process notification are the named startup
+    // notification; run() does not call start() a second time to learn about it.
+    onStarted: ({ ipcPath }) => {
+      process.stderr.write(`[foreman-daemon] listening on http://${config.service.host}:${config.service.port}\n`)
+      process.stderr.write(`[foreman-daemon] MCP:     http://${config.service.host}:${config.service.port}/mcp\n`)
+      process.stderr.write(`[foreman-daemon] Message: use send_message on /mcp?sender=<role-id>\n`)
+      process.stderr.write(`[foreman-daemon] Health:  http://${config.service.host}:${config.service.port}/health\n`)
+      process.stderr.write(`[foreman-daemon] IPC:     ${ipcPath}\n`)
+      process.stderr.write(`[foreman-daemon] workspace: ${config.workspaceRoot}\n`)
+      if (process.send) process.send('ready')
+    },
   })
 
-  // Handlers are installed before the run promise so a signal or parent message
-  // that arrives during bootstrap is recorded on the daemon rather than lost.
+  // Handlers are installed before run() so a signal or parent message that
+  // arrives during bootstrap is recorded on the daemon rather than lost.
   process.on('SIGTERM', () => { daemon.requestShutdown('SIGTERM') })
   process.on('SIGINT', () => { daemon.requestShutdown('SIGINT') })
   process.on('message', (msg) => {
     if (msg === 'shutdown') daemon.requestShutdown('process shutdown message')
   })
 
-  // run() owns start -> await shutdown request -> drain -> stop -> exit code.
-  const running = daemon.run()
-
-  let started: RunningForemanDaemon
-  try {
-    started = await daemon.start()
-  } catch {
-    // run() already logged the failure and performs its own cleanup; its code is
-    // the authoritative exit code.
-    return await running
-  }
-
-  process.stderr.write(`[foreman-daemon] listening on http://${config.service.host}:${config.service.port}\n`)
-  process.stderr.write(`[foreman-daemon] MCP:     http://${config.service.host}:${config.service.port}/mcp\n`)
-  process.stderr.write(`[foreman-daemon] Message: use send_message on /mcp?sender=<role-id>\n`)
-  process.stderr.write(`[foreman-daemon] Health:  http://${config.service.host}:${config.service.port}/health\n`)
-  process.stderr.write(`[foreman-daemon] IPC:     ${started.ipcPath}\n`)
-  process.stderr.write(`[foreman-daemon] workspace: ${config.workspaceRoot}\n`)
-
-  if (process.send) process.send('ready')
-
-  return await running
+  // run() owns start -> await shutdown request -> drain -> close -> exit code.
+  return await daemon.run()
 }

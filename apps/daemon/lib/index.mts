@@ -6,7 +6,7 @@
  * subpath exports declared in package.json rather than reaching into `lib/`.
  */
 export { ForemanDaemon, startForemanDaemon } from './daemon/daemon.mts'
-export type { ForemanDaemonOptions, ForemanDaemonDeps, RunningForemanDaemon } from './daemon/daemon.mts'
+export type { ForemanDaemonOptions, ForemanDaemonDeps, ForemanDaemonStartedInfo, RunningForemanDaemon } from './daemon/daemon.mts'
 export { runForemanService } from './server-bootstrap/service.mts'
 export { connectIpcForemanClient } from './control/ipc-client.mts'
 export type { ConnectIpcForemanClientOptions } from './control/ipc-client.mts'
