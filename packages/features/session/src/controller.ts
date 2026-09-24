@@ -194,7 +194,7 @@ export class SessionController {
       } finally {
         this.transitioning = false;
       }
-    });
+    })();
   }
 
   /**

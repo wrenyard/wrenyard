@@ -5,6 +5,7 @@ import { spawn as spawnProcess } from 'node:child_process';
 import { buildGeneration, checkBuildArtifacts, checkToolchain, COMPONENT_BUILD_TARGETS, desktopBuildArgs } from './builder.mjs';
 import { childHasExited, componentLogPath, spawnDaemonProcess, spawnDesktopProcess, stopChild, stopOwnedDesktopTree } from './children.mjs';
 import { attachHandler, connectControl, ERRORS, isAddrInUse, listenControl } from './control.mjs';
+import { checkDaemonStartup as realCheckDaemonStartup } from './daemon-preflight.mjs';
 import { COMPONENTS, createWatcher, expandDependents, significantComponents } from './graph.mjs';
 import {
   createInstanceRecord,
@@ -110,6 +111,7 @@ function createGenerationQueue(options = {}) {
   let seq = options.initialSeq ?? 0;
   let pending = null;
   let active = null;
+  let failed = null;
 
   function merge(base, next) {
     return {
@@ -139,6 +141,10 @@ function createGenerationQueue(options = {}) {
         reason: reason ?? 'watch',
       };
       pending = pending ? merge(pending, generation) : generation;
+      if (failed) {
+        pending = merge(failed, pending);
+        failed = null;
+      }
       return pending;
     },
     takeRestart() {
@@ -152,6 +158,9 @@ function createGenerationQueue(options = {}) {
     },
     failBuild(generation) {
       if (active?.id === generation?.id) active = null;
+      // Retry all affected components on the next save, without a retry loop.
+      if (pending) pending = merge(generation, pending);
+      else failed = failed ? merge(failed, generation) : generation;
     },
     isStale(generation) {
       return Boolean(pending && generation && pending.seq > generation.seq);
@@ -245,6 +254,7 @@ export function createSupervisor(options = {}) {
   const stopChildFn = options.stopChild ?? stopChild;
   const runCommand = options.runCommand ?? runExecFile;
   const spawnBuild = options.spawnProcess ?? spawnProcess;
+  const checkDaemonStartup = options.checkDaemonStartup ?? realCheckDaemonStartup;
   const makeLaunchId = options.newLaunchId ?? newLaunchId;
   const killDesktop = options.killDesktop === true;
   const installTimeoutMs = options.installTimeoutMs ?? 600_000;
@@ -279,8 +289,8 @@ export function createSupervisor(options = {}) {
   let stopping = false;
   let replacing = false;
   let buildAbort = null;
+  let preflightAbort = null;
   let pumpPromise = null;
-  let reloadPromise = null;
   let buildFailure = null;
   let bootComplete = false;
   const sessions = new Set();
@@ -768,9 +778,8 @@ export function createSupervisor(options = {}) {
       throw fail(ERRORS.busy, `cannot take over installed Wrenyard: ${block.reason}`);
     }
     logger.info('switching', 'Installed Wrenyard is running; switching to the source environment');
-    // The source stack replaces the installed daemon outright, so no drain wait
-    // is involved and no freeze is installed: an operator freeze belongs to the
-    // operator and is never created or cleared here.
+    const preflight = await preflightNextDaemon('installed daemon handover');
+    if (!preflight.ok) throw fail(ERRORS.internal, preflight.error);
     await stopDaemon();
     try {
       const again = await pingDaemon();
@@ -792,6 +801,7 @@ export function createSupervisor(options = {}) {
   function requestRestart(reason, components, files) {
     if (stopping || replacing) return Promise.resolve();
     queue.enqueue(reason, components, files);
+    // Builds and preflight share this queue, including tooling reloads.
     if (!bootComplete) return Promise.resolve();
     return pump();
   }
@@ -799,6 +809,65 @@ export function createSupervisor(options = {}) {
   function releaseBoot() {
     bootComplete = true;
     return pump();
+  }
+
+  /** A live owned daemon is one whose process is still running. */
+  function liveDaemonRunning() {
+    return Boolean(daemonSlot?.child) && !childHasExited(daemonSlot.child);
+  }
+
+  /**
+   * Validate the next daemon (production TypeScript plus a real, isolated
+   * startup probe) before anything live is stopped. A failed check leaves the
+   * running daemon, Desktop and watcher untouched; the caller reports degraded
+   * and keeps watching. An explicit stop aborts the check instead of bypassing
+   * it, so a user STOP still works on broken code.
+   *
+   * `options.checkDaemonStartup` is the injectable seam; tests supply a focused
+   * validator while production uses the real helper.
+   */
+  async function preflightNextDaemon(stage) {
+    preflightAbort = new AbortController();
+    try {
+      logger.info('preflight', `${stage}: building and probing the next daemon`);
+      const result = await checkDaemonStartup({
+        checkout,
+        configPath,
+        nodeExecutable,
+        env,
+        platform,
+        signal: preflightAbort.signal,
+        timeoutMs: options.preflightTimeoutMs,
+      });
+      if (result?.ok !== true) {
+        return { ok: false, error: result?.error ?? 'daemon preflight failed' };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      preflightAbort = null;
+    }
+  }
+
+  /**
+   * Manifest edit: a frozen install plus a full build. The frozen install may
+   * only run when nothing live owns node_modules; with the daemon running the
+   * currently installed dependencies are used and a missing dependency surfaces
+   * as an actionable build failure, so the live daemon is never disturbed by a
+   * synchronous install.
+   */
+  async function buildManifestGeneration() {
+    if (liveDaemonRunning()) {
+      logger.warn(
+        'manifest-live',
+        'manifest changed while the daemon is live; using the currently installed dependencies (no frozen install over the live daemon). '
+        + 'If dependencies need updating, stop dev, run pnpm install --frozen-lockfile, then run pnpm dev.',
+      );
+      await buildInitialArtifacts([]);
+      return;
+    }
+    await buildManifest();
   }
 
   /**
@@ -820,8 +889,9 @@ export function createSupervisor(options = {}) {
     try {
       if (isManifest) {
         // A manifest edit cannot be applied through the watcher's target list:
-        // it needs a frozen install and a full build of everything.
-        await buildManifest();
+        // it needs a full build of everything (and, only while nothing live owns
+        // node_modules, the frozen install).
+        await buildManifestGeneration();
       } else {
         const build = options.buildGeneration ?? buildGeneration;
         const result = await build({
@@ -845,11 +915,34 @@ export function createSupervisor(options = {}) {
       buildAbort = null;
     }
     queue.completeBuild(generation);
+    if (stopping || replacing) return { applied: false, reason: 'stopping' };
+
+    // Gate every source-triggered replacement on the next daemon building and
+    // starting cleanly. A failure throws here, so the live daemon, Desktop and
+    // watcher are never stopped for a candidate that cannot serve.
+    const preflight = await preflightNextDaemon(`generation ${generation.id}`);
+    if (!preflight.ok) {
+      queue.failBuild(generation, preflight.error);
+      throw fail(ERRORS.internal, `daemon preflight failed before restart: ${preflight.error}`);
+    }
+    // A newer save that arrived during the (possibly slow) build/probe makes
+    // this candidate stale: coalesce into the queued generation and recheck it
+    // instead of stopping the stack for an outdated revision.
+    if (stopping || replacing) return { applied: false, reason: 'stopping' };
+    if (queue.isStale(generation)) {
+      queue.enqueue('coalesced', generation.components, generation.files);
+      logger.info('preflight-superseded', `${generation.id} was superseded during preflight; applying the newer change instead`);
+      return { applied: false, reason: 'superseded' };
+    }
 
     // Every generation replaces the whole owned stack. A renderer change also
     // restarts the daemon, and a component that is already gone (crashed, or
     // quit by the user) is started here rather than left missing.
-    await restartStack();
+    if (components.some((component) => SUPERVISOR_COMPONENTS.has(component))) {
+      await reloadStack();
+    } else {
+      await restartStack();
+    }
     logger.info('applied', `${generation.id} restart ${Math.max(0, now() - started)}ms`);
     return { applied: true, action: 'restart-stack' };
   }
@@ -897,7 +990,7 @@ export function createSupervisor(options = {}) {
             continue;
           }
           buildFailure = null;
-          if (stopping) return;
+          if (stopping || replacing) return;
           setStatus(healthyStatus());
         }
       } finally {
@@ -911,6 +1004,7 @@ export function createSupervisor(options = {}) {
     stopping = true;
     setStatus('stopping');
     buildAbort?.abort();
+    preflightAbort?.abort();
     await (pumpPromise ?? Promise.resolve()).catch(() => undefined);
     // The watcher stays alive until the stop fully succeeds: a failed component
     // stop must leave a usable supervisor, not a dead one.
@@ -1227,13 +1321,14 @@ export function createSupervisor(options = {}) {
           // stopped first, then `onReload` (which owns the fresh process) takes
           // over. There is no cache-busted in-process re-import.
           logger.info('reload-requested', `${files.join(', ')} changed: stopping the owned stack for a fresh process.`);
-          requestReload(files);
+          requestReload(files, affected);
           return;
         }
         if (components.includes(COMPONENTS.manifest)) {
-          // A manifest edit is not a source build: run a frozen install followed
-          // by a full build, then restart the whole stack.
-          logger.info('manifest-changed', `files=${files.join(', ')}: frozen install then full build.`);
+          // A manifest edit is not a source build: a full build, and a frozen
+          // install only while nothing live owns node_modules, then a whole-stack
+          // restart once the next daemon passes preflight.
+          logger.info('manifest-changed', `files=${files.join(', ')}: full build then restart.`);
           requestRestart('manifest', affected, files);
           return;
         }
@@ -1245,42 +1340,33 @@ export function createSupervisor(options = {}) {
 
   /**
    * Tooling/supervisor edit: only a brand-new process can load current modules.
-   * The owned stack is stopped first, then `onReload` runs the replacement.
+   * The next daemon is preflighted first; only once it builds and starts cleanly
+   * is `replacing` set and the owned stack stopped, then `onReload` runs the
+   * replacement. A failed check leaves the live stack and watcher untouched.
    * Without a callback there is nothing safe to do but report it.
    */
-  function requestReload(files) {
-    if (stopping || replacing) return Promise.resolve();
+  function requestReload(files, components = [COMPONENTS.supervisor]) {
     if (typeof options.onReload !== 'function') {
-      logger.warn('reload-unavailable', `${files.join(', ')} changed: no reload callback is wired, so the running modules stay stale.`);
+      logger.warn('reload-unavailable', files.join(', ') + ' changed: no reload callback is wired.');
       return Promise.resolve();
     }
-    if (reloadPromise) return reloadPromise;
-    reloadPromise = (async () => {
-      try {
-        replacing = true;
-        setStatus('stopping', 'reloading dev tooling');
-        buildAbort?.abort();
-        await (pumpPromise ?? Promise.resolve()).catch(() => undefined);
-        await stopDaemon();
-        await quitDesktop();
-        try {
-          watcher?.close();
-          watcher = null;
-        } catch {
-          // ignore
-        }
-        setStatus('stopped', 'reloading dev tooling');
-        options.onReload?.();
-      } catch (error) {
-        replacing = false;
-        setStatus('degraded', error instanceof Error ? error.message : String(error));
-        logger.error('reload-failed', error instanceof Error ? error.message : String(error));
-        throw error;
-      } finally {
-        reloadPromise = null;
-      }
-    })();
-    return reloadPromise;
+    return requestRestart('reload', components, files);
+  }
+
+  async function reloadStack() {
+    replacing = true;
+    try {
+      setStatus('stopping', 'reloading dev tooling');
+      await stopDaemon();
+      await quitDesktop();
+      watcher?.close();
+      watcher = null;
+      setStatus('stopped', 'reloading dev tooling');
+      options.onReload();
+    } catch (error) {
+      replacing = false;
+      throw error;
+    }
   }
 
   async function handleSignal() {
@@ -1313,6 +1399,7 @@ export function createSupervisor(options = {}) {
     // the launcher has its answer, and the launcher then waits for our exit.
     setImmediate(settleRestartWaiters);
     buildAbort?.abort();
+    preflightAbort?.abort();
     stopDaemon()
       .then(() => quitDesktop())
       .then(() => {
