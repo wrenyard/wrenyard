@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { checkDaemonStartup } from './daemon-preflight.mjs';
 import { connectControl, ERRORS, isAddrInUse, listenControl } from './control.mjs';
 import { processAlive, readInstanceFile } from './identity.mjs';
-import { sameCheckout, stateRoot, controlEndpoint, instancePath } from './paths.mjs';
+import { sameCheckout, stateRoot, controlEndpoint, instancePath, configDir } from './paths.mjs';
 import { spawnArgv } from './spawn.mjs';
 
 export const EXIT = Object.freeze({
@@ -130,7 +132,16 @@ export async function replaceExistingSupervisor(input) {
     throw new Error(`A source-development instance already owns this user-data domain from ${peer.checkout ?? 'another checkout'}. Stop that checkout's pnpm dev first (Ctrl+C in its terminal).`);
   }
 
-  input.stdout?.(`Replacing the running source-development stack for this checkout (supervisor pid ${peer?.pids?.supervisor ?? 'unknown'}). The latest supervisor and tooling are loaded; in-flight tasks and conversations may be interrupted.`);
+  input.stdout?.('Checking the next daemon before requesting replacement.');
+  const preflight = await (input.checkDaemonStartup ?? checkDaemonStartup)({
+    checkout,
+    configPath: input.configPath ?? peer.paths?.config ?? join(configDir(input.env ?? process.env), 'config.json'),
+    nodeExecutable: input.nodeExecutable,
+    env: input.env,
+    platform: input.platform,
+  });
+  if (preflight?.ok !== true) throw new Error('Daemon preflight failed; the running stack was left untouched: ' + (preflight?.error ?? 'unknown failure'));
+  input.stdout?.('Replacing the running source-development stack after graceful shutdown.');
 
   let accepted = false;
   let stallTimer = null;
