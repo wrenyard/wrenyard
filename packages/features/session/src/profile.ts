@@ -101,7 +101,7 @@ async function prepareProfileFiles(
 
   const manifest = {
     name: '@wrenyard/dsh-profile',
-    version: '1.0.0-dev.40',
+    version: '1.0.0-dev.41',
     private: true,
     type: 'module',
     dsh: {
