@@ -46,9 +46,6 @@ import { assertDaemonIdle, runPlannedDaemonRestart } from './workspace-activatio
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 applySourceDevelopmentIdentity(app);
-// Supervised source-development Desktop is stopped by a dev-issued SIGTERM.
-// Register once, early, so it flows through the normal before-quit teardown.
-if (isSupervised()) process.on('SIGTERM', () => app.quit());
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 /** Task definition enumeration may cold-load the workspace and model catalog. */
 const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
@@ -917,6 +914,9 @@ app.on('before-quit', (event) => {
       // best-effort termination
     } finally {
       app.quit();
+      // A SIGTERM-initiated quit (e.g. pnpm dev) stalls after this second
+      // app.quit(); teardown is already done, so exit if still alive.
+      setTimeout(() => app.exit(0), 1_000);
     }
   })();
 });
