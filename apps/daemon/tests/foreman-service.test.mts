@@ -1457,9 +1457,21 @@ test('POST /message/deliver with hops=1 refuses remote channel with hop-limit', 
 // Federation integration: two instances
 // ============================================================
 
+async function withStateHome<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.WRENYARD_STATE_HOME
+  process.env.WRENYARD_STATE_HOME = dir
+  try {
+    return await fn()
+  } finally {
+    if (previous === undefined) delete process.env.WRENYARD_STATE_HOME
+    else process.env.WRENYARD_STATE_HOME = previous
+  }
+}
+
 test('POST /message/deliver allows remote channel through unified channel delivery', async () => {
   const workDirA = mkdtempSync(join(tmpdir(), 'foreman-federate-a-'))
   const workDirB = mkdtempSync(join(tmpdir(), 'foreman-federate-b-'))
+  const stateDirA = mkdtempSync(join(tmpdir(), 'foreman-federate-state-a-'))
   const endpointA = createTestIpcEndpoint('fed-a')
   const endpointB = createTestIpcEndpoint('fed-b')
   for (const wd of [workDirA, workDirB]) {
@@ -1487,22 +1499,24 @@ test('POST /message/deliver allows remote channel through unified channel delive
   const addrB = runningB.httpServer.address() as AddressInfo
   const urlB = `http://127.0.0.1:${addrB.port}`
 
-  // Instance A — sends to B via remote channel
-  const runningA = await startForemanDaemon({
-    service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
-    workspaceRoot: workDirA,
-    message: testMessageConfig(),
-    messageDelivery: {
-      enabled: true,
-      channels: {
-        remote_sys: { backend: 'remote', peer: 'peer-b', channel: 'sys' },
-      },
-      peers: { 'peer-b': { url: urlB } },
-      default: ['remote_sys'],
-    },
-  })
+  let runningA: Awaited<ReturnType<typeof startForemanDaemon>> | undefined
 
   try {
+    // Instance A — sends to B via remote channel, with its own state root
+    runningA = await withStateHome(stateDirA, () => startForemanDaemon({
+      service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
+      workspaceRoot: workDirA,
+      message: testMessageConfig(),
+      messageDelivery: {
+        enabled: true,
+        channels: {
+          remote_sys: { backend: 'remote', peer: 'peer-b', channel: 'sys' },
+        },
+        peers: { 'peer-b': { url: urlB } },
+        default: ['remote_sys'],
+      },
+    }))
+
     const addrA = runningA.httpServer.address() as AddressInfo
     const baseUrlA = `http://127.0.0.1:${addrA.port}`
 
@@ -1525,13 +1539,14 @@ test('POST /message/deliver allows remote channel through unified channel delive
     assert.equal(delivery.backend, 'remote')
     assert.equal(delivery.ok, true)
   } finally {
-    await runningA.stop()
+    await runningA?.stop()
     await runningB.stop()
     resetRegistry()
     rmSync(endpointA.dir, { recursive: true, force: true })
     rmSync(endpointB.dir, { recursive: true, force: true })
     rmSync(workDirA, { recursive: true, force: true })
     rmSync(workDirB, { recursive: true, force: true })
+    rmSync(stateDirA, { recursive: true, force: true })
   }
 })
 
@@ -1542,6 +1557,7 @@ test('POST /message/deliver allows remote channel through unified channel delive
 test('POST /message/deliver allows authenticated remote channel delivery', async () => {
   const workDirA = mkdtempSync(join(tmpdir(), 'foreman-federate-auth-a-'))
   const workDirB = mkdtempSync(join(tmpdir(), 'foreman-federate-auth-b-'))
+  const stateDirA = mkdtempSync(join(tmpdir(), 'foreman-federate-auth-state-a-'))
   const endpointA = createTestIpcEndpoint('fed-auth-a')
   const endpointB = createTestIpcEndpoint('fed-auth-b')
   for (const wd of [workDirA, workDirB]) {
@@ -1572,22 +1588,24 @@ test('POST /message/deliver allows authenticated remote channel delivery', async
     const addrB = runningB.httpServer.address() as AddressInfo
     const urlB = `http://127.0.0.1:${addrB.port}`
 
-    // Instance A — uses peer token to authenticate to B
-    const runningA = await startForemanDaemon({
-      service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
-      workspaceRoot: workDirA,
-      message: testMessageConfig(),
-      messageDelivery: {
-        enabled: true,
-        channels: {
-          remote_sys: { backend: 'remote', peer: 'peer-b', channel: 'sys' },
-        },
-        peers: { 'peer-b': { url: urlB, token_env: 'FED_AUTH_TOKEN' } },
-        default: ['remote_sys'],
-      },
-    })
+    let runningA: Awaited<ReturnType<typeof startForemanDaemon>> | undefined
 
     try {
+      // Instance A — uses peer token to authenticate to B, with its own state root
+      runningA = await withStateHome(stateDirA, () => startForemanDaemon({
+        service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpointA.path } },
+        workspaceRoot: workDirA,
+        message: testMessageConfig(),
+        messageDelivery: {
+          enabled: true,
+          channels: {
+            remote_sys: { backend: 'remote', peer: 'peer-b', channel: 'sys' },
+          },
+          peers: { 'peer-b': { url: urlB, token_env: 'FED_AUTH_TOKEN' } },
+          default: ['remote_sys'],
+        },
+      }))
+
       const addrA = runningA.httpServer.address() as AddressInfo
       const baseUrlA = `http://127.0.0.1:${addrA.port}`
 
@@ -1602,7 +1620,7 @@ test('POST /message/deliver allows authenticated remote channel delivery', async
       assert.equal(result.deliveries.length, 1)
       assert.equal(result.deliveries[0].ok, true)
     } finally {
-      await runningA.stop()
+      await runningA?.stop()
       await runningB.stop()
     }
   } finally {
@@ -1612,6 +1630,7 @@ test('POST /message/deliver allows authenticated remote channel delivery', async
     rmSync(endpointB.dir, { recursive: true, force: true })
     rmSync(workDirA, { recursive: true, force: true })
     rmSync(workDirB, { recursive: true, force: true })
+    rmSync(stateDirA, { recursive: true, force: true })
   }
 })
 

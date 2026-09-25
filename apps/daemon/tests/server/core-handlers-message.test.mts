@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { RpcRouter } from '../../lib/server/rpc-router.mts'
 import { readProcessIdentity, registerCoreHandlers } from '../../lib/server/handlers/core.mts'
+import { DispatchControl } from '../../lib/daemon/dispatch-control.mts'
+import { PlannedRestartStore } from '../../lib/daemon/planned-restart-store.mts'
 import { INVALID_PARAMS } from '../../lib/protocol/errors.mts'
 import type { MessageService } from '../../lib/message/message-service.mts'
+import { closeTestDb, initTestDb } from '../helpers/test-db.mts'
 
 function makeJsonRpcRequest(method: string, params: Record<string, unknown>, id: number): string {
   return JSON.stringify({ jsonrpc: '2.0', method, params, id })
@@ -108,16 +114,10 @@ describe('health.ping process identity', () => {
     assert.deepEqual(readProcessIdentity({
       WRENYARD_SOURCE_DEV: '1',
       WRENYARD_SOURCE_CHECKOUT: '/src',
-      WRENYARD_DEV_INSTANCE_ID: 'id-1',
-      WRENYARD_DEV_LAUNCH_ID: 'launch-1',
-      WRENYARD_RUNTIME_BIN: '/gen/forge.exe',
     }), {
       mode: 'source',
       checkout: '/src',
-      instanceId: 'id-1',
-      launchId: 'launch-1',
       node: process.execPath,
-      runtimeBin: '/gen/forge.exe',
     })
   })
 
@@ -128,24 +128,48 @@ describe('health.ping process identity', () => {
       workspaceRoot: '/tmp',
     })
     const previousFlag = process.env.WRENYARD_SOURCE_DEV
-    const previousId = process.env.WRENYARD_DEV_INSTANCE_ID
-    const previousLaunch = process.env.WRENYARD_DEV_LAUNCH_ID
     process.env.WRENYARD_SOURCE_DEV = '1'
-    process.env.WRENYARD_DEV_INSTANCE_ID = 'live-id'
-    process.env.WRENYARD_DEV_LAUNCH_ID = 'live-launch'
     try {
       const response = await router.handleMessage(makeJsonRpcRequest('health.ping', {}, 9), {})
-      const result = (response as { result: { identity: { mode: string; instanceId?: string; launchId?: string } } }).result
+      const result = (response as { result: { identity: { mode: string } } }).result
       assert.equal(result.identity.mode, 'source')
-      assert.equal(result.identity.instanceId, 'live-id')
-      assert.equal(result.identity.launchId, 'live-launch')
     } finally {
       if (previousFlag === undefined) delete process.env.WRENYARD_SOURCE_DEV
       else process.env.WRENYARD_SOURCE_DEV = previousFlag
-      if (previousId === undefined) delete process.env.WRENYARD_DEV_INSTANCE_ID
-      else process.env.WRENYARD_DEV_INSTANCE_ID = previousId
-      if (previousLaunch === undefined) delete process.env.WRENYARD_DEV_LAUNCH_ID
-      else process.env.WRENYARD_DEV_LAUNCH_ID = previousLaunch
+    }
+  })
+})
+
+describe('daemon.status idle reporting', () => {
+  it('daemon.status reports idle only when an isIdle option is provided', async () => {
+    initTestDb()
+    const dir = mkdtempSync(join(tmpdir(), 'wy-daemon-status-'))
+    try {
+      const control = new DispatchControl(new PlannedRestartStore(dir))
+
+      const withIdle = new RpcRouter()
+      registerCoreHandlers(withIdle, {
+        startedAt: Date.now(),
+        workspaceRoot: '/tmp',
+        dispatchControl: control,
+        isIdle: async () => false,
+      })
+      const idleResponse = await withIdle.handleMessage(makeJsonRpcRequest('daemon.status', {}, 11), {})
+      const idleResult = (idleResponse as { result: { idle?: boolean } }).result
+      assert.equal(idleResult.idle, false)
+
+      const withoutIdle = new RpcRouter()
+      registerCoreHandlers(withoutIdle, {
+        startedAt: Date.now(),
+        workspaceRoot: '/tmp',
+        dispatchControl: control,
+      })
+      const plainResponse = await withoutIdle.handleMessage(makeJsonRpcRequest('daemon.status', {}, 12), {})
+      const plainResult = (plainResponse as { result: Record<string, unknown> }).result
+      assert.equal('idle' in plainResult, false)
+    } finally {
+      closeTestDb()
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

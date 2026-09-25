@@ -606,7 +606,6 @@ describe('lib/protocol JSON-RPC contract', () => {
       identity: {
         mode: 'source',
         checkout: '/src',
-        instanceId: 'abc',
         node: '/node',
         runtimeBin: '/forge',
       },
