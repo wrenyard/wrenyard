@@ -24,6 +24,7 @@ import {
   suiteDir,
   waitForIpcReachable,
 } from './shared.mts'
+import { readSourceDevLock, sourceDevLockRefusalMessage } from './source-dev-lock.mts'
 
 const STATE_VERSION = 1
 const STARTUP_TIMEOUT_MS = 15_000
@@ -107,6 +108,11 @@ export function resolveForemanStateDir(): string {
 }
 
 export async function startDaemonProcess(options: DaemonLifecycleOptions): Promise<DaemonLifecycleResult> {
+  // A live `pnpm dev` owns the daemon and restarts it on source changes; a
+  // second daemon would fight it for the IPC path, so refuse before spawning.
+  const devLock = readSourceDevLock()
+  if (devLock) throw new Error(sourceDevLockRefusalMessage(devLock))
+
   const paths = resolveDaemonSupervisorPaths()
   const ipcPath = resolveForemanServiceIpcPath({
     port: options.config.service.port,

@@ -10,8 +10,6 @@ export interface HealthPingResult {
   identity?: {
     mode: 'source' | 'installed'
     checkout?: string
-    instanceId?: string
-    launchId?: string
     node?: string
   }
   dispatch?: {
@@ -51,8 +49,6 @@ export const healthPingResultSchema = {
       properties: {
         mode: { type: 'string', enum: ['source', 'installed'] },
         checkout: { type: 'string' },
-        instanceId: { type: 'string' },
-        launchId: { type: 'string' },
         node: { type: 'string' },
       },
       additionalProperties: true,

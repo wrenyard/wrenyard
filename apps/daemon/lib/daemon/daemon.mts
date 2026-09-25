@@ -13,7 +13,7 @@ import { resolveToken } from '../config/index.mts'
 import { ForemanMcpServer } from '../server/mcp/server.mts'
 import { resolvePortConflict } from './startup/port-guard.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
-import { registerCoreHandlers } from '../server/handlers/core.mts'
+import { registerCoreHandlers, readProcessIdentity } from '../server/handlers/core.mts'
 import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
@@ -28,6 +28,7 @@ import { handleRestApiRequest } from '../server/http/rest-api.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { DispatchControl } from './dispatch-control.mts'
 import { PlannedRestartStore } from './planned-restart-store.mts'
+import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { MessageDeliveryHub, type BackendFactory } from '../message/delivery/hub.mts'
 import { createBackend, createTransport, deliverToConnection, type BackendDeps, type McpConnection, type TransportFactory } from '../adapters/message/backends/index.mts'
 import type { ChannelConfig, MessageEnvelope, MessageDeliveryResult, MessageDeliveryRegistryConfig } from '../message/delivery/types.mts'
@@ -146,10 +147,10 @@ interface ForemanDaemonResources {
 
 /**
  * The single daemon instance and the only lifecycle owner. It holds the exit
- * request, the startup latch, the admitted-work drain, the created resources and
- * the one cached close promise. run() is the only lifecycle flow; a shutdown
- * request records itself on this instance at any time — including during
- * startup — and returns without waiting for the process to exit.
+ * request, the single-instance lock, the admitted-work drain and the created
+ * resources. run() is the only lifecycle flow; a shutdown request records
+ * itself on this instance at any time — including during startup — and returns
+ * without waiting for the process to exit.
  */
 export class ForemanDaemon implements RunningForemanDaemon {
   private readonly config: ForemanServiceConfig
@@ -158,112 +159,84 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private readonly onStarted: ((info: ForemanDaemonStartedInfo) => void) | undefined
 
   private resources: ForemanDaemonResources | undefined
-  private control: DispatchControl | undefined
+  private readonly plannedRestartStore: PlannedRestartStore
+  private readonly control: DispatchControl
+  private readonly lockPath: string
+  private lockHeld = false
 
-  private startPromise: Promise<void> | undefined
-  private closePromise: Promise<void> | undefined
-  private runPromise: Promise<number> | undefined
-
-  private shutdown = false
   private shutdownForce = false
   private shutdownRequestedResolve: (() => void) | undefined
   private readonly shutdownRequestedPromise: Promise<void>
-  private drainPromise: Promise<void> | undefined
-  // Wakes the 200ms idle wait the moment an explicit force skips the wait. Reset
-  // to undefined once a waiter consumes it so no permanent timer is left behind.
-  private drainWakeResolve: (() => void) | undefined
-  private drainWaitTimer: NodeJS.Timeout | undefined
 
   constructor(options: ForemanDaemonOptions) {
     this.config = options.config
     this.configPath = options.configPath
     this.deps = options.deps ?? {}
     this.onStarted = options.onStarted
+    // The store's constructor only reads/validates the durable plan (no write),
+    // so both it and the control can exist before start() acquires the lock.
+    this.plannedRestartStore = this.deps.plannedRestartStore ?? new PlannedRestartStore()
+    this.control = new DispatchControl(this.plannedRestartStore)
+    this.lockPath = join(foremanStateRoot(), 'daemon.lock')
     this.shutdownRequestedPromise = new Promise<void>((resolve) => {
       this.shutdownRequestedResolve = resolve
     })
   }
 
   /**
-   * Sole sequential daemon flow: start, wait for a shutdown request, drain
-   * admitted work, then close. Never runs twice and never rejects; the returned
-   * code is the process exit code.
+   * Sole daemon flow: start, wait for a shutdown request, drain admitted work,
+   * then close. The returned code is the process exit code.
    */
-  run(): Promise<number> {
-    if (this.runPromise) return this.runPromise
-    this.runPromise = (async () => {
-      try {
-        await this.start()
-      } catch (error) {
-        writeDaemonLog('error', 'daemon failed to start', error)
-        await this.close().catch((closeError: unknown) => {
-          writeDaemonLog('warn', 'daemon cleanup after failed start failed', closeError)
-        })
-        return 1
-      }
-      try {
-        await this.shutdownRequestedPromise
-        // Let the IPC shutdown reply reach its transport before close tears
-        // down client sockets. This is one turn, not a shutdown scheduler.
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        await this.drain()
-        await this.close()
-        return 0
-      } catch (error) {
-        writeDaemonLog('error', 'daemon shutdown failed', error)
-        await this.close().catch((closeError: unknown) => {
-          writeDaemonLog('warn', 'daemon stop after shutdown failure failed', closeError)
-        })
-        return 1
-      }
-    })()
-    return this.runPromise
+  async run(): Promise<number> {
+    let code = 0
+    try {
+      await this.start()
+      await this.shutdownRequestedPromise
+      // Let the shutdown reply reach its transport before close tears down sockets.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await this.drain()
+    } catch (error) {
+      writeDaemonLog('error', 'daemon failed', error)
+      code = 1
+    }
+    try {
+      await this.close()
+    } catch (error) {
+      writeDaemonLog('warn', 'daemon close failed', error)
+      code = 1
+    }
+    return code
   }
 
   /**
-   * Startup latch: one in-flight start is shared so a concurrent caller can
-   * never bootstrap a second runtime against the same database/IPC endpoint.
-   * A shutdown request received during startup is already recorded on this
-   * instance, so bootstrap() only has to close admission once it exists. On
-   * success the named startup notification fires once; if it throws the start
-   * promise rejects so run() treats it as a failed startup and closes the
-   * resources instead of running on with no parent ready signal.
+   * Acquires the single-instance lock as its first step, then bootstraps. A
+   * second start on an already-started instance is a no-op. The named startup
+   * notification fires once after a successful start; if it throws, start()
+   * rejects so run() closes the resources instead of running on with no parent
+   * ready signal. The lock is held until close().
    */
-  start(): Promise<void> {
-    if (this.resources) return Promise.resolve()
-    if (!this.startPromise) {
-      this.startPromise = this.bootstrap().then(() => {
-        const resources = this.resources
-        if (!resources || !this.onStarted) return
-        this.onStarted({ ipcPath: resources.ipcPath })
-      }).finally(() => {
-        this.startPromise = undefined
-      })
-    }
-    return this.startPromise
-  }
-
-  private async bootstrap(): Promise<void> {
-    // Hydrate the durable admission plan BEFORE any database or runtime
+  async start(): Promise<void> {
+    if (this.resources) return
+    acquireInstanceLock(this.lockPath, {
+      pid: process.pid,
+      mode: readProcessIdentity().mode,
+      startedAt: new Date().toISOString(),
+    })
+    this.lockHeld = true
+    // Re-read the durable admission plan BEFORE any database or runtime
     // bootstrap so a persisted planned_restart mode is in force before HTTP,
-    // IPC, MCP, or task/workflow dispatch becomes reachable. Construction
-    // already validates the snapshot; re-read it here so a malformed plan can
-    // never fail bootstrap open.
-    const plannedRestartStore = this.deps.plannedRestartStore ?? new PlannedRestartStore()
-    plannedRestartStore.snapshot()
-    const control = new DispatchControl(plannedRestartStore)
-    this.control = control
-    // A shutdown requested before admission existed (a signal during very early
-    // startup) closes it as soon as the control does; the request itself was
-    // recorded on this instance, not forwarded to a second daemon.
-    if (this.shutdown) control.requestShutdown()
+    // IPC, MCP, or task/workflow dispatch becomes reachable. The control and its
+    // store already exist (created in the constructor); snapshot() re-reads so a
+    // malformed plan can never fail bootstrap open.
+    this.plannedRestartStore.snapshot()
 
     let runtime: ForemanDaemonRuntime | undefined
     try {
-      runtime = await bootstrapForemanDaemonRuntime(control)
+      runtime = await bootstrapForemanDaemonRuntime(this.control)
       this.resources = await createForemanDaemonResources(this.config, runtime, this.deps, {
         configPath: this.configPath,
         requestShutdown: this.requestShutdown,
+        isIdle: () => this.isIdle(),
       })
     } catch (error) {
       if (runtime) {
@@ -282,35 +255,31 @@ export class ForemanDaemon implements RunningForemanDaemon {
       // If a durable plan is active, record the startup failure as a recoverable
       // planned_restart failure; admission stays closed (mode unchanged).
       try {
-        failActivePlannedRestartOnStartup(plannedRestartStore, error, this.configPath)
+        failActivePlannedRestartOnStartup(this.plannedRestartStore, error, this.configPath)
       } catch (recordError) {
         writeDaemonLog('warn', 'daemon startup failure recording failed', recordError)
       }
       throw error
     }
+    const resources = this.resources
+    if (resources && this.onStarted) this.onStarted({ ipcPath: resources.ipcPath })
   }
 
   /**
-   * Records the request, closes admission, resolves shutdownRequested and wakes
-   * a forced drain. Synchronous and idempotent; the force flag only escalates
-   * false -> true. RPC, signals and the parent message all bind straight to it.
+   * Records the request, closes admission and resolves shutdownRequested.
+   * Synchronous and idempotent; the force flag only escalates false -> true.
+   * RPC, signals and the parent message all bind straight to it.
    */
   readonly requestShutdown = (reason: string, force = false): void => {
-    this.shutdown = true
     this.shutdownForce ||= force
-    this.control?.requestShutdown()
+    this.control.requestShutdown()
+    this.resolveShutdownRequested()
+  }
+
+  private resolveShutdownRequested = (): void => {
     const resolve = this.shutdownRequestedResolve
     this.shutdownRequestedResolve = undefined
     resolve?.()
-    // A force escalation must not wait out the current 200ms idle sleep; wake
-    // the drain loop so it re-evaluates immediately.
-    if (this.shutdownForce) {
-      const wake = this.drainWakeResolve
-      this.drainWakeResolve = undefined
-      if (this.drainWaitTimer) clearTimeout(this.drainWaitTimer)
-      this.drainWaitTimer = undefined
-      wake?.()
-    }
   }
 
   /** Resolves once any exit entry (RPC, signal, parent message) requested shutdown. */
@@ -319,52 +288,43 @@ export class ForemanDaemon implements RunningForemanDaemon {
   }
 
   /**
-   * Waits for admitted work to finish by polling the existing authoritative idle
-   * checks sequentially every 200ms until the daemon is idle, or an explicit
-   * force skips the wait entirely. Never runs twice and never closes the daemon.
+   * True when no admitted work remains. Missing resources (never started or
+   * already closed) count as not idle. Never throws; each authoritative check
+   * runs sequentially so a slow check cannot race a sibling.
    */
-  readonly drain = (): Promise<void> => {
-    if (this.drainPromise) return this.drainPromise
-    this.drainPromise = (async () => {
-      const resources = this.resources
-      const control = this.control
-      if (!resources || !control) return
-      while (!this.shutdownForce) {
-        const status = control.status()
-        // These checks touch different subsystems (sqlite, session snapshot, RPC);
-        // run them one at a time so a slow check cannot race a sibling.
-        const activeGraphs = dbQuery<{ id: string }>(
-          `SELECT DISTINCT r.id FROM taskgraph_run r
-           LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
-           WHERE r.state = 'running' OR r.cancel_requested = 1
-              OR (r.state = 'paused' AND n.state = 'running')
-              OR (r.state = 'paused' AND r.on_node_failure = 'cancel' AND n.state = 'failed')
-           LIMIT 1`,
-        )
-        const conversation = (await resources.sessionService.snapshot()).conversation
-        const activeConversation = conversation.status === 'ready' && (
-          conversation.selectedRunning
-          || conversation.sessions.some((session) => session.running)
-          || (conversation.turns?.some((turn) => turn.running) ?? false)
-        )
-        const idle = status.activeTaskCount === 0
-          && status.activeWorkflowCount === 0
-          && status.activeExecutionCount === 0
-          && activeGraphs.length === 0
-          && !activeConversation
-          && resources.rpcRouter.activeWorkRequestCount === 0
-        if (idle) break
-        await new Promise<void>((resolve) => {
-          this.drainWakeResolve = resolve
-          this.drainWaitTimer = setTimeout(() => {
-            if (this.drainWakeResolve === resolve) this.drainWakeResolve = undefined
-            this.drainWaitTimer = undefined
-            resolve()
-          }, 200)
-        })
-      }
-    })()
-    return this.drainPromise
+  async isIdle(): Promise<boolean> {
+    const resources = this.resources
+    if (!resources) return false
+    const status = this.control.status()
+    const activeGraphs = dbQuery<{ id: string }>(
+      `SELECT DISTINCT r.id FROM taskgraph_run r
+       LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
+       WHERE r.state = 'running' OR r.cancel_requested = 1
+          OR (r.state = 'paused' AND n.state = 'running')
+          OR (r.state = 'paused' AND r.on_node_failure = 'cancel' AND n.state = 'failed')
+       LIMIT 1`,
+    )
+    const conversation = (await resources.sessionService.snapshot()).conversation
+    const activeConversation = conversation.status === 'ready' && (
+      conversation.selectedRunning
+      || conversation.sessions.some((session) => session.running)
+      || (conversation.turns?.some((turn) => turn.running) ?? false)
+    )
+    return status.activeTaskCount === 0
+      && status.activeWorkflowCount === 0
+      && status.activeExecutionCount === 0
+      && activeGraphs.length === 0
+      && !activeConversation
+      && resources.rpcRouter.activeWorkRequestCount === 0
+  }
+
+  /**
+   * Waits for admitted work to finish by polling isIdle() every 200ms until the
+   * daemon is idle, or an explicit force skips the wait entirely. Never closes
+   * the daemon. A force takes effect within one 200ms tick.
+   */
+  async drain(): Promise<void> {
+    while (!this.shutdownForce && this.resources && !(await this.isIdle())) await sleep(200)
   }
 
   /**
@@ -374,30 +334,33 @@ export class ForemanDaemon implements RunningForemanDaemon {
   readonly stop = (): Promise<void> => this.close()
 
   /** Idempotent close; a second call never restarts cleanup, even after a failed close. */
-  readonly close = (): Promise<void> => {
-    if (this.closePromise) return this.closePromise
-    this.closePromise = (async () => {
-      const resources = this.resources
-      this.resources = undefined
-      if (!resources) return
-      await teardownDaemonResources({
-        httpServer: resources.httpServer,
-        sessionService: resources.sessionService,
-        gateway: resources.gateway,
-        restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
-        ipcServer: resources.ipcServer,
-        supervisor: resources.runtime.supervisor,
-        execService: resources.runtime.execService,
-        mcpServer: resources.mcpServer,
-        activeSseStreams: resources.activeSseStreams,
-        connections: resources.connections,
-        releaseDb: releaseDaemonDb,
-      })
-    })()
-    // Cache the promise even on rejection so a second close() rethrows the same
-    // failure instead of restarting cleanup against already-torn-down resources.
-    this.closePromise.catch(() => {})
-    return this.closePromise
+  readonly close = async (): Promise<void> => {
+    const resources = this.resources
+    this.resources = undefined
+    try {
+      if (resources) {
+        await teardownDaemonResources({
+          httpServer: resources.httpServer,
+          sessionService: resources.sessionService,
+          gateway: resources.gateway,
+          restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
+          ipcServer: resources.ipcServer,
+          supervisor: resources.runtime.supervisor,
+          execService: resources.runtime.execService,
+          mcpServer: resources.mcpServer,
+          activeSseStreams: resources.activeSseStreams,
+          connections: resources.connections,
+          releaseDb: releaseDaemonDb,
+        })
+      }
+    } finally {
+      // Release even when start() failed before resources existed, so a failed
+      // bootstrap can never leave this process owning the lock.
+      if (this.lockHeld) {
+        releaseInstanceLock(this.lockPath)
+        this.lockHeld = false
+      }
+    }
   }
 
   // Resource getters expose the started daemon's resources directly, so there is
@@ -407,7 +370,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
   get supervisor(): AgentExecutionSupervisor { return this.requireResources().runtime.supervisor }
   get runner(): TaskWorkflowRunner { return this.requireResources().runtime.runner }
   get dispatchControl(): DispatchControl {
-    if (!this.control) throw new Error('Foreman daemon has not started')
     return this.control
   }
   get mcpServer(): ForemanMcpServer { return this.requireResources().mcpServer }
@@ -482,7 +444,14 @@ export async function startForemanDaemon(
   options: { configPath?: string } = {},
 ): Promise<RunningForemanDaemon> {
   const daemon = new ForemanDaemon({ config, configPath: options.configPath, deps })
-  await daemon.start()
+  try {
+    await daemon.start()
+  } catch (error) {
+    await daemon.close().catch((closeError: unknown) => {
+      writeDaemonLog('warn', 'daemon cleanup after failed start failed', closeError)
+    })
+    throw error
+  }
   return daemon
 }
 
@@ -496,7 +465,11 @@ async function createForemanDaemonResources(
   config: ForemanServiceConfig,
   runtime: ForemanDaemonRuntime,
   deps: ForemanDaemonDeps,
-  options: { configPath?: string; requestShutdown: (reason: string, force: boolean) => void },
+  options: {
+    configPath?: string
+    requestShutdown: (reason: string, force: boolean) => void
+    isIdle?: () => Promise<boolean>
+  },
 ): Promise<ForemanDaemonResources> {
   const operations: OperationHost = {
     agent: runtime.supervisor,
@@ -1004,6 +977,7 @@ async function createForemanDaemonResources(
     // Protocol-validated RPC shutdown binds once to the instance's real
     // requestShutdown; no local request cache or forwarding indirection.
     shutdown: options.requestShutdown,
+    isIdle: options.isIdle,
   })
 
   // During drain, preserve status/cancel/signals and the calls required by
@@ -1011,7 +985,6 @@ async function createForemanDaemonResources(
   // daemon open or create more work after the shutdown request is accepted.
   const blockedDuringShutdown = new Set([
     'taskgraph.create', 'task.run.create', 'exec.start', 'session.send',
-    'taskgraph.wait', 'task.run.wait',
   ])
   rpcRouter.setAdmissionGate((method, params) => {
     const longSessionPoll = method === 'session.snapshot'
@@ -1019,7 +992,7 @@ async function createForemanDaemonResources(
       && 'waitMs' in params && typeof params.waitMs === 'number' && params.waitMs > 0
     if (runtime.dispatchControl.isShutdownRequested && (blockedDuringShutdown.has(method) || longSessionPoll)) {
       throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: 'Daemon is shutting down and is not accepting this request.' },
+        { code: INVALID_PARAMS.code, message: 'Daemon is restarting and does not accept new work; retry after it is back (usually a few seconds).' },
         { code: 'daemon_shutting_down', method },
       )
     }
@@ -1460,6 +1433,7 @@ interface DaemonRpcRouterOptions {
   taskService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskService']
   resolveExecRequest?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveExecRequest']
   resolveTaskRunDisplayNames?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveTaskRunDisplayNames']
+  isIdle?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['isIdle']
 }
 
 function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {
@@ -1622,6 +1596,10 @@ function createDaemonSupervisorLogger(): SupervisorLogger {
     warn: (message, meta) => writeDaemonLog('warn', message, meta),
     error: (message, meta) => writeDaemonLog('error', message, meta),
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function writeDaemonLog(level: 'debug' | 'info' | 'warn' | 'error', message: string, meta?: unknown): void {

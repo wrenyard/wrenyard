@@ -6,6 +6,7 @@ import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
 import { loadServiceConfigForCli, type ForemanStatus } from '../shared.mts'
 import { startDaemonProcess, stopDaemonProcess } from '../daemon-supervisor.mts'
+import { readSourceDevLock, sourceDevLockRefusalMessage, sourceDevStopNotice } from '../source-dev-lock.mts'
 import { collectForemanStatus } from './status.mts'
 import {
   type CoordinatorSpawn,
@@ -62,6 +63,7 @@ export async function handleDaemonStop(args: string[]): Promise<number> {
   const { config, resolvedConfigPath } = loadServiceConfigForCli(values.config, values)
   await stopDaemonProcess({ config, resolvedConfigPath, cliValues: values, shutdownForce: values.force === true })
   console.log('Wrenyard daemon stopped')
+  if (readSourceDevLock()) console.log(sourceDevStopNotice())
   return 0
 }
 
@@ -133,6 +135,12 @@ export async function handleDaemonRestart(
 
   const { config, resolvedConfigPath } = loadServiceConfigForCli(values.config, values)
   if (!config.service.enabled) throw new Error('Wrenyard daemon is disabled by config')
+
+  // Refuse before creating any plan or lock: a live `pnpm dev` owns the daemon
+  // and restarts it itself, so a scheduled restart would only leave a
+  // half-finished operation requiring recovery.
+  const devLock = readSourceDevLock()
+  if (devLock) throw new Error(sourceDevLockRefusalMessage(devLock))
 
   // Initialize the SQLite connection (FOREMAN_DB_PATH or default state) so this
   // standalone CLI process can read dispatch status and schedule a plan.
