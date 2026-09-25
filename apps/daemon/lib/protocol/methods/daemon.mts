@@ -170,6 +170,7 @@ export interface DaemonStatusResult {
   active_workflow_count: number
   active_execution_count: number
   recovery_required: boolean
+  idle?: boolean
   operation_id?: string
   kind?: 'update' | 'restart'
   phase?: 'preparing' | 'draining' | 'updating' | 'stopping' | 'starting' | 'verifying' | 'completed' | 'failed'
@@ -200,6 +201,7 @@ export const daemonStatusResultSchema = {
     active_workflow_count: { type: 'integer', minimum: 0 },
     active_execution_count: { type: 'integer', minimum: 0 },
     recovery_required: { type: 'boolean' },
+    idle: { type: 'boolean' },
     operation_id: { type: 'string' },
     kind: { type: 'string', enum: ['update', 'restart'] },
     phase: { type: 'string', enum: ['preparing', 'draining', 'updating', 'stopping', 'starting', 'verifying', 'completed', 'failed'] },
