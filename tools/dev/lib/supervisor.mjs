@@ -149,7 +149,9 @@ export async function runDev() {
     if (track.starting || track.expected || stopping) return;
     if (code === 0 && !signal) {
       print('Daemon exited cleanly (requested outside pnpm dev); starting it again.');
-      startDaemon().catch((error) => print(`${message(error)}\nDaemon restart failed; save a file or rerun pnpm dev to retry.`));
+      startDaemon()
+        .then(() => print(`Daemon is back (pid ${daemonState?.child?.pid ?? '—'}).`))
+        .catch((error) => print(`${message(error)}\nDaemon restart failed; save a file or rerun pnpm dev to retry.`));
       return;
     }
     print(`Daemon exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}).`);
@@ -256,9 +258,11 @@ export async function runDev() {
       await stopDesktop();
       await startDaemon();
       await startDesktop();
+      print(`Restarted daemon (pid ${daemonState?.child?.pid ?? '—'}) and Desktop (pid ${desktopState?.child?.pid ?? '—'}).`);
     } else {
       await stopDesktop();
       await startDesktop();
+      print(`Restarted Desktop (pid ${desktopState?.child?.pid ?? '—'}).`);
     }
   }
 
