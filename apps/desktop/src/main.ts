@@ -29,7 +29,6 @@ import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import {
   applySourceDevelopmentIdentity,
-  connectSourceSupervisor,
   isSourceDevelopment,
   isSupervised,
 } from './source-dev.js';
@@ -47,6 +46,9 @@ import { assertDaemonIdle, runPlannedDaemonRestart } from './workspace-activatio
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 applySourceDevelopmentIdentity(app);
+// Supervised source-development Desktop is stopped by a dev-issued SIGTERM.
+// Register once, early, so it flows through the normal before-quit teardown.
+if (isSupervised()) process.on('SIGTERM', () => app.quit());
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 /** Task definition enumeration may cold-load the workspace and model catalog. */
 const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
@@ -361,8 +363,6 @@ let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
 let quitting = false;
-let sourceDevQuit = false;
-let sourceDevBridge: { close: () => void } | null = null;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
 
@@ -813,7 +813,7 @@ async function bootstrap(): Promise<void> {
   if (!SMOKE && !isSourceDevelopment()) updateController.start();
 
   shellWindow.window.on('close', (event) => {
-    if (quitting || sourceDevQuit) return;
+    if (quitting) return;
     event.preventDefault();
     shellWindow?.window.hide();
   });
@@ -851,15 +851,6 @@ async function bootstrap(): Promise<void> {
     openDesktop: () => showDesktop('workbench'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
   }, process.platform);
-
-  if (isSourceDevelopment() && process.env.WRENYARD_DEV_CONTROL) {
-    sourceDevBridge = connectSourceSupervisor(process.env.WRENYARD_DEV_CONTROL, {
-      async quit() {
-        sourceDevQuit = true;
-        app.quit();
-      },
-    });
-  }
 
   if (openSettingsOnReady) {
     openSettingsOnReady = false;
@@ -905,8 +896,6 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   void (async () => {
     try {
-      sourceDevBridge?.close();
-      sourceDevBridge = null;
       desktopTray?.destroy();
       desktopTray = null;
       quotaController?.stop();

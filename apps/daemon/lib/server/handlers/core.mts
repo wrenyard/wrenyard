@@ -88,6 +88,11 @@ export interface CoreRpcHandlerOptions {
   workspaceRoot: string
   operations?: OperationHost
   shutdown?: (reason: string, force: boolean) => void
+  /**
+   * Reports whether the daemon has no admitted work. Optional so a context
+   * without a live daemon simply omits the additive `daemon.status.idle` field.
+   */
+  isIdle?: () => Promise<boolean>
   dispatchControl?: DispatchControl
   /** Daemon-owned TaskGraphService shared by all transports. */
   taskgraphService?: TaskGraphService
@@ -140,16 +145,12 @@ export type CoreRpcTransport = 'ipc' | 'http' | 'mcp'
 export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
   mode: 'source' | 'installed'
   checkout?: string
-  instanceId?: string
-  launchId?: string
   node: string
 } {
   const source = env.WRENYARD_SOURCE_DEV === '1'
   return {
     mode: source ? 'source' : 'installed',
     ...(source && env.WRENYARD_SOURCE_CHECKOUT ? { checkout: env.WRENYARD_SOURCE_CHECKOUT } : {}),
-    ...(source && env.WRENYARD_DEV_INSTANCE_ID ? { instanceId: env.WRENYARD_DEV_INSTANCE_ID } : {}),
-    ...(source && env.WRENYARD_DEV_LAUNCH_ID ? { launchId: env.WRENYARD_DEV_LAUNCH_ID } : {}),
     node: process.execPath,
   }
 }
@@ -405,6 +406,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       return {
         ok: true as const,
         ...projectDispatchStatus(status),
+        ...(options.isIdle ? { idle: await options.isIdle() } : {}),
       } satisfies DaemonStatusResult
     })
   }

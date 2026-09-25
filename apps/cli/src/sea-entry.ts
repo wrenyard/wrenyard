@@ -3,6 +3,11 @@ import { dirname, join } from 'node:path';
 import { main, isDevelopmentSuite } from './index.js';
 import suitePackage from '../../../package.json' with { type: 'json' };
 import componentVersions from '../../../contracts/versions.json' with { type: 'json' };
+import { delegateToSourceCli } from './source-cli-delegation.mts';
+
+// While pnpm dev runs, the source CLI answers instead of this installed one.
+const delegated = delegateToSourceCli(process.argv.slice(2));
+if (delegated !== undefined) process.exit(delegated);
 
 // Dedicated SEA entry point. It is bundled by esbuild to CommonJS
 // (dist/wrenyard-sea.cjs) with the root package.json and contracts/versions.json

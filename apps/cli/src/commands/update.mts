@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { parseArgs } from 'node:util'
 import { requireNoPositionals } from '../helpers.mts'
 import { suiteDir, loadServiceConfigForCli, type ForemanStatus } from '../shared.mts'
+import { readSourceDevLock, sourceDevLockRefusalMessage } from '../source-dev-lock.mts'
 import { initDb } from '@wrenyard/daemon/db/connection'
 import { collectForemanStatus } from './status.mts'
 import {
@@ -90,6 +91,12 @@ export async function handleUpdate(
 
   const { config, resolvedConfigPath } = loadServiceConfigForCli(values.config, values)
   if (!config.service.enabled) throw new Error('Wrenyard daemon is disabled by config')
+
+  // Refuse before creating any plan or lock: a live `pnpm dev` owns the daemon
+  // and restarts it itself, so a planned update would race it and could leave a
+  // half-finished operation requiring recovery.
+  const devLock = readSourceDevLock()
+  if (devLock) throw new Error(sourceDevLockRefusalMessage(devLock))
 
   // Initialize the SQLite connection (FOREMAN_DB_PATH or default state) so this
   // standalone CLI process can read dispatch status and schedule a plan.

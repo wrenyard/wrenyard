@@ -1,96 +1,47 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
 
-/**
- * Quote one Windows cmd.exe argument without concatenating a shell script.
- * Used only when the target really is a .cmd/.bat and must be invoked via ComSpec.
- */
-export function quoteCmdArg(value) {
+function quoteCmdArg(value) {
   const text = String(value);
   if (text.length === 0) return '""';
   if (!/[\s&<>|^()"]/u.test(text)) return text;
   return `"${text.replace(/"/gu, '\\"')}"`;
 }
 
-/**
- * Convert a .cmd/.bat invocation into `cmd.exe /d /s /c ...` argv.
- * Callers must still pass command + args separately; this never uses shell:true.
- */
-export function windowsCmdInvocation(command, args, comspec = process.env.ComSpec || 'cmd.exe') {
+/** Convert a .cmd/.bat invocation into `cmd.exe /d /s /c ...` argv (never shell:true). */
+function windowsCmdInvocation(command, args) {
   const line = [quoteCmdArg(command), ...args.map(quoteCmdArg)].join(' ');
-  return { command: comspec, args: ['/d', '/s', '/c', line] };
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', line] };
 }
 
-export function needsWindowsCmdWrapper(command, platform = process.platform) {
-  if (platform !== 'win32') return false;
-  return /\.(cmd|bat)$/iu.test(command);
-}
-
-/**
- * Resolve a spawn argv that Node can execute with shell:false.
- * .cmd/.bat files are wrapped through ComSpec; everything else is left intact.
- */
-export function spawnArgv(command, args, platform = process.platform, env = process.env) {
-  if (needsWindowsCmdWrapper(command, platform)) {
-    return windowsCmdInvocation(command, args, env.ComSpec || 'cmd.exe');
-  }
+/** Resolve a spawn argv Node can execute with shell:false; .cmd/.bat go via ComSpec. */
+export function spawnArgv(command, args) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/iu.test(command)) return windowsCmdInvocation(command, args);
   return { command, args };
 }
 
-export function firstExisting(candidates, exists = existsSync) {
-  return candidates.find((candidate) => candidate && exists(candidate));
+function firstExisting(candidates) {
+  return candidates.find((candidate) => candidate && existsSync(candidate));
 }
 
-export function electronInvocation(checkout, nodeExecutable = process.execPath, exists = existsSync) {
-  const electronCli = firstExisting([
-    join(checkout, 'apps', 'desktop', 'node_modules', 'electron', 'cli.js'),
-    join(checkout, 'node_modules', 'electron', 'cli.js'),
-  ], exists);
-  if (!electronCli) {
-    throw new Error('Electron CLI was not found. Run pnpm install --frozen-lockfile in the checkout root.');
-  }
-  return {
-    command: nodeExecutable,
-    args: [electronCli, join(checkout, 'apps', 'desktop')],
-    cwd: join(checkout, 'apps', 'desktop'),
-  };
-}
-
-/**
- * Resolve the real Electron executable (not the `node cli.js` wrapper) so the
- * spawned Desktop main process is the PID we actually own. Falls back to null
- * when the platform binary is not installed; callers must handle that.
- */
-export function resolveElectronExecutable(checkout, platform = process.platform, exists = existsSync, readText = (path) => readFileSync(path, 'utf8')) {
-  // path.txt lists the platform-relative binary inside the package dist dir;
-  // macOS keeps the real binary inside the app bundle.
-  const pathFileName = platform === 'darwin' ? 'path.txt' : 'path.txt';
-  const packageDirs = [
-    join(checkout, 'apps', 'desktop', 'node_modules', 'electron'),
-    join(checkout, 'node_modules', 'electron'),
-  ];
-  const binaryName = platform === 'win32' ? 'electron.exe' : 'electron';
-  const distCandidates = platform === 'darwin'
+/** The real Electron executable (not the `node cli.js` wrapper); null when not installed. */
+function resolveElectronExecutable(checkout) {
+  const binaryName = process.platform === 'win32' ? 'electron.exe' : 'electron';
+  const distCandidates = process.platform === 'darwin'
     ? ['Electron.app/Contents/MacOS/Electron', binaryName]
     : [binaryName];
-  for (const packageDir of packageDirs) {
-    const pathTxt = join(packageDir, 'dist', pathFileName);
-    for (const candidate of exists(pathTxt) ? [pathTxt] : []) {
+  for (const packageDir of [join(checkout, 'apps', 'desktop', 'node_modules', 'electron'), join(checkout, 'node_modules', 'electron')]) {
+    const pathTxt = join(packageDir, 'dist', 'path.txt');
+    if (existsSync(pathTxt)) {
       try {
-        const relative = String(readText(candidate) ?? '').trim();
-        if (relative) {
-          const binary = join(packageDir, 'dist', relative);
-          if (exists(binary)) return binary;
-        }
-      } catch {
-        // Fall through to the conventional dist paths.
-      }
+        const relative = String(readFileSync(pathTxt, 'utf8') ?? '').trim();
+        if (relative && existsSync(join(packageDir, 'dist', relative))) return join(packageDir, 'dist', relative);
+      } catch { /* fall through to the conventional dist paths */ }
     }
     for (const name of distCandidates) {
       const binary = join(packageDir, 'dist', name);
-      if (exists(binary)) return binary;
+      if (existsSync(binary)) return binary;
     }
   }
   return null;
@@ -100,97 +51,62 @@ export function resolveElectronExecutable(checkout, platform = process.platform,
  * Desktop invocation for source development. Ownership must track the real
  * Electron main process, so a resolvable platform Electron binary is required:
  * the `node cli.js` wrapper spawns Electron as a grandchild and would leave the
- * supervisor owning the wrong PID. Missing executables fail with install
- * guidance instead of silently falling back.
+ * supervisor owning the wrong PID.
  */
-export function electronDesktopInvocation(checkout, nodeExecutable = process.execPath, exists = existsSync, platform = process.platform) {
+export function electronDesktopInvocation(checkout) {
   const appPath = join(checkout, 'apps', 'desktop');
-  const cwd = appPath;
-  const binary = resolveElectronExecutable(checkout, platform, exists);
+  const binary = resolveElectronExecutable(checkout);
   if (!binary) {
-    throw new Error(
-      `Electron executable was not found for ${platform}. Run pnpm install --frozen-lockfile in the checkout root so apps/desktop/node_modules/electron/dist is populated.`,
-    );
+    throw new Error(`Electron executable was not found for ${process.platform}. Run pnpm install --frozen-lockfile in the checkout root so apps/desktop/node_modules/electron/dist is populated.`);
   }
-  return { command: binary, args: [appPath], cwd, direct: true };
+  return { command: binary, args: [appPath], cwd: appPath, direct: true };
 }
 
-export function pnpmInvocation(checkout, pnpmArgs, nodeExecutable = process.execPath, exists = existsSync) {
+export function pnpmInvocation(checkout, pnpmArgs) {
   const pnpmCli = firstExisting([
     join(checkout, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
     join(checkout, 'node_modules', 'pnpm', 'bin', 'pnpm.mjs'),
-  ], exists);
-  if (!pnpmCli) {
-    throw new Error('pnpm was not found under node_modules. Run pnpm install --frozen-lockfile in the checkout root.');
-  }
-  return { command: nodeExecutable, args: [pnpmCli, ...pnpmArgs], cwd: checkout };
+  ]);
+  if (!pnpmCli) throw new Error('pnpm was not found under node_modules. Run pnpm install --frozen-lockfile in the checkout root.');
+  return { command: process.execPath, args: [pnpmCli, ...pnpmArgs], cwd: checkout };
 }
 
-export function tsxLoaderInvocation(checkout, entry, extraArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
+function tsxLoaderInvocation(checkout, entry, extraArgs = []) {
   const tsxRoot = firstExisting([
     join(checkout, 'node_modules', 'tsx'),
     join(checkout, 'apps', 'daemon', 'node_modules', 'tsx'),
     join(checkout, 'apps', 'cli', 'node_modules', 'tsx'),
-  ], exists);
-  if (!tsxRoot) {
-    throw new Error('tsx was not found. Run pnpm install --frozen-lockfile in the checkout root.');
-  }
+  ]);
+  if (!tsxRoot) throw new Error('tsx was not found. Run pnpm install --frozen-lockfile in the checkout root.');
   const preflightPath = join(tsxRoot, 'dist', 'preflight.cjs');
   const loaderPath = join(tsxRoot, 'dist', 'loader.mjs');
-  if (!exists(preflightPath) || !exists(loaderPath)) {
+  if (!existsSync(preflightPath) || !existsSync(loaderPath)) {
     throw new Error('Local tsx loader files were not found. Run pnpm install --frozen-lockfile in the checkout root.');
   }
   return {
-    command: nodeExecutable,
+    command: process.execPath,
     args: ['--require', preflightPath, '--import', pathToFileURL(loaderPath).href, entry, ...extraArgs],
     cwd: checkout,
   };
 }
 
-export function sourceCliInvocation(checkout, cliArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
+export function sourceCliInvocation(checkout, cliArgs = []) {
   const tsxCli = firstExisting([
     join(checkout, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     join(checkout, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     join(checkout, 'apps', 'daemon', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-  ], exists);
+  ]);
   const cliSource = join(checkout, 'apps', 'cli', 'src', 'index.ts');
-  if (!tsxCli || !exists(cliSource)) {
+  if (!tsxCli || !existsSync(cliSource)) {
     throw new Error('Source CLI entry was not found. Run pnpm install --frozen-lockfile in the checkout root.');
   }
-  return {
-    command: nodeExecutable,
-    args: [tsxCli, cliSource, ...cliArgs],
-    cwd: checkout,
-  };
+  return { command: process.execPath, args: [tsxCli, cliSource, ...cliArgs], cwd: checkout };
 }
 
-export function daemonInvocation(checkout, configPath, extraArgs = [], nodeExecutable = process.execPath, exists = existsSync) {
+export function daemonInvocation(checkout, configPath, extraArgs = []) {
   const entry = join(checkout, 'apps', 'daemon', 'bin', 'daemon.mts');
-  if (!exists(entry)) {
-    throw new Error(`Daemon entry missing: ${entry}`);
-  }
-  const invocation = tsxLoaderInvocation(checkout, entry, ['--config', configPath, ...extraArgs], nodeExecutable, exists);
+  if (!existsSync(entry)) throw new Error(`Daemon entry missing: ${entry}`);
+  const invocation = tsxLoaderInvocation(checkout, entry, ['--config', configPath, ...extraArgs]);
   invocation.cwd = join(checkout, 'apps', 'daemon');
   return invocation;
-}
-
-/**
- * Spawn a child with shell:false. Windows .cmd is wrapped explicitly.
- * @returns {import('node:child_process').ChildProcess}
- */
-export function spawnManaged(command, args, options = {}) {
-  const platform = options.platform ?? process.platform;
-  const resolved = spawnArgv(command, args, platform, options.env ?? process.env);
-  return spawn(resolved.command, resolved.args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: options.stdio ?? 'pipe',
-    windowsHide: options.windowsHide ?? true,
-    shell: false,
-    detached: options.detached === true,
-  });
-}
-
-export function resolveCheckoutFile(checkout, relativePath) {
-  return resolve(checkout, relativePath);
 }

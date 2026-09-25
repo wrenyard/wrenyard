@@ -3,11 +3,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { foremanPackageRoot, resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
+import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
 import { ProtocolError } from '@wrenyard/daemon/protocol/errors'
 import { loadForemanServiceConfig, loadForemanConfigData, resolveDefaultForemanConfigPath, resolveForemanConfigPath as configResolveForemanConfigPath, type ForemanServiceConfig } from '@wrenyard/daemon/config'
 import { parsePositiveIntegerFlag } from './helpers.mts'
+import { readSourceDevLock } from './source-dev-lock.mts'
 
 /** Daemon package root (owns task/execution lifecycle and the product IPC server). */
 export const foremanDir = foremanPackageRoot
@@ -174,6 +176,13 @@ export async function connectConfiguredForemanClient(configPathValue: unknown): 
   try {
     return await connectIpcForemanClient({ path: ipcPath, timeoutMs: 2_000 })
   } catch (error) {
+    // A live `pnpm dev` restarts the daemon after every source change, so an
+    // unreachable IPC during dev is expected churn, not a missing daemon.
+    const devLock = readSourceDevLock()
+    if (devLock) {
+      const daemonLog = join(foremanStateRoot(), 'dev', 'logs', 'daemon.log')
+      throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}. pnpm dev (pid ${devLock.pid}) is probably restarting it after a source change; retry in a few seconds. If it stays down, the new source failed to start: check the pnpm dev terminal and ${daemonLog}, then fix the source directly.`)
+    }
     const details = error instanceof Error && error.message ? ` ${error.message}` : ''
     throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}.${details} Start the Wrenyard daemon with 'wrenyard daemon start' and retry.`)
   }
