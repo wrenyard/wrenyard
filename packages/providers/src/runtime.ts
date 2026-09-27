@@ -1,4 +1,5 @@
 import { kimiCodingUpstreamWireModel } from './kimi-coding/runtime.ts';
+import { resolveCodeBuddyProductModelId } from './codebuddy/models.ts';
 import { deepSeekEnvApiKey } from './deepseek/runtime.ts';
 import type { ProviderDefinition } from './base/index.ts';
 import { promises as fs } from 'node:fs';
@@ -61,6 +62,8 @@ export interface BuiltinProviderRuntimeOptions {
 
 /** Reverse only explicit, unambiguous wire identities from the provider SSOT. */
 export function canonicalizeObservedProviderModelId(provider: string, model: string): string {
+  // Historical wire identities do not depend on the currently installed offerings.
+  if (provider === 'codebuddy') return resolveCodeBuddyProductModelId(model) ?? model;
   const implementation = providerImplementations.get(provider);
   if (implementation) return implementation.canonicalizeModel(model);
   const definition = BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
