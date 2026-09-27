@@ -21,7 +21,6 @@ import {
   type PetCompanionSettings,
   type ShellPage,
   type WorkspaceConfigurationSnapshot,
-  type UpdateChannel,
   type UpdateSnapshot,
   type RuntimeAliasPutRequest,
   type RuntimeAliasRemoveRequest,
@@ -67,9 +66,7 @@ export interface ShellWindowOptions {
   restoreClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
-  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
   requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
-  cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
@@ -542,18 +539,9 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.checkUpdate();
     });
-    ipcMain.handle(SHELL_CHANNELS.setUpdateChannel, async (event, channel: unknown) => {
-      assertShellSender(event.sender);
-      if (channel !== 'stable' && channel !== 'dev') throw new Error('更新通道无效');
-      return options.setUpdateChannel(channel);
-    });
     ipcMain.handle(SHELL_CHANNELS.requestInstall, async (event) => {
       assertShellSender(event.sender);
       return options.requestInstall();
-    });
-    ipcMain.handle(SHELL_CHANNELS.cancelPendingInstall, async (event) => {
-      assertShellSender(event.sender);
-      return options.cancelPendingInstall();
     });
     ipcMain.handle(SHELL_CHANNELS.savePetSettings, async (event, settings: PetCompanionSettings) => {
       assertShellSender(event.sender);
@@ -702,9 +690,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.clientConfigurationRestore,
       SHELL_CHANNELS.updateSnapshot,
       SHELL_CHANNELS.checkUpdate,
-      SHELL_CHANNELS.setUpdateChannel,
       SHELL_CHANNELS.requestInstall,
-      SHELL_CHANNELS.cancelPendingInstall,
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
       SHELL_CHANNELS.conversationSnapshot,

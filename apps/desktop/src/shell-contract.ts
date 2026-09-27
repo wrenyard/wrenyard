@@ -1,6 +1,5 @@
 import type { ConversationSnapshot, SummarySettingsSnapshot, TaskRunSnapshot, WorkspaceConfigurationSnapshot } from '@wrenyard/protocol/session';
 import type { PetSettingsPayload } from './pet/main/config';
-import type { UpdateAttemptRecord } from './update-attempt.js';
 import type {
   ClientConfigurationDto,
   ClientConfigurationId,
@@ -56,9 +55,7 @@ export const SHELL_CHANNELS = {
   clientConfigurationRestore: 'wrenyard-shell:client-configuration-restore',
   updateSnapshot: 'wrenyard-shell:update-snapshot',
   checkUpdate: 'wrenyard-shell:check-update',
-  setUpdateChannel: 'wrenyard-shell:set-update-channel',
   requestInstall: 'wrenyard-shell:request-install',
-  cancelPendingInstall: 'wrenyard-shell:cancel-pending-install',
   conversationChanged: 'wrenyard-shell:conversation-changed',
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
@@ -93,22 +90,18 @@ export interface ModelSnapshot {
   configured: boolean;
 }
 
-export type UpdateChannel = 'stable' | 'dev';
-
+/**
+ * The simplified Desktop update surface. Desktop only checks and prompts; the
+ * installed SEA engine performs the install and reports a durable result.
+ */
 export type UpdateState =
   | 'idle'
   | 'checking'
   | 'up-to-date'
-  | 'stable-unavailable'
   | 'available'
-  | 'preparing'
   | 'waiting'
   | 'installing'
-  | 'install-blocked'
-  | 'check-failed'
-  | 'install-failed';
-
-export type UpdateStage = 'download' | 'extract' | 'waiting' | 'daemon-upgrade';
+  | 'error';
 
 /**
  * Why in-app installation is unavailable for the current installation. Kept in
@@ -118,11 +111,9 @@ export type UpdateInstallReason =
   | 'unsupported-platform'
   | 'missing-cli'
   | 'missing-runtime'
-  | 'missing-helper'
   | 'source-development';
 
 export interface UpdateSnapshot {
-  channel: UpdateChannel;
   state: UpdateState;
   currentVersion: string;
   availableVersion?: string;
@@ -130,11 +121,7 @@ export interface UpdateSnapshot {
   installSupported: boolean;
   /** Present only while `installSupported` is false. */
   installReason?: UpdateInstallReason;
-  stage?: UpdateStage;
-  progress?: number;
-  activeTaskCount?: number;
   message?: string;
-  lastAttempt?: UpdateAttemptRecord;
 }
 
 export interface SettingsSnapshot {
@@ -147,7 +134,6 @@ export interface SettingsSnapshot {
     wrenyardVersion: string;
     dshVersion: string;
     buildTime?: string;
-    channel: UpdateChannel;
     /** Present only while Desktop is running from `pnpm dev`. */
     sourceDevelopment?: boolean;
   };
@@ -729,9 +715,7 @@ export interface WrenyardShellApi {
   restoreClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
-  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot>;
   requestInstall(): Promise<UpdateSnapshot>;
-  cancelPendingInstall(): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;

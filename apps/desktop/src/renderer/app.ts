@@ -12,7 +12,6 @@ import type {
   StatsSnapshot,
   StatsWindowSnapshot,
   TaskRunSnapshot,
-  UpdateChannel,
   UpdateInstallReason,
   UpdateSnapshot,
   RuntimeAliasEntry,
@@ -65,7 +64,6 @@ const clientsNav = requireElement<HTMLButtonElement>('clients-nav');
 const settingsNav = requireElement<HTMLButtonElement>('settings-nav');
 const updateNav = requireElement<HTMLButtonElement>('update-nav');
 const updatePopup = requireElement<HTMLElement>('update-popup');
-const updatePopupProgress = requireElement<HTMLProgressElement>('update-popup-progress');
 const workbenchPage = requireElement<HTMLElement>('workbench-page');
 const statsPage = requireElement<HTMLElement>('stats-page');
 const quotaPage = requireElement<HTMLElement>('quota-page');
@@ -137,7 +135,6 @@ providerKeyInput.after(providerKeyPageLink);
 const aboutDialog = requireElement<HTMLElement>('about-dialog');
 const aboutDialogClose = requireElement<HTMLButtonElement>('about-dialog-close');
 const updateActionButton = requireElement<HTMLButtonElement>('update-action-button');
-const updateChannelSwitcher = requireElement<HTMLElement>('update-channel-switcher');
 const statsHeatTooltip = requireElement<HTMLElement>('stats-heat-tooltip');
 const aliasNameInput = requireElement<HTMLInputElement>('alias-name-input');
 const aliasTargetInput = requireElement<HTMLInputElement>('alias-target-input');
@@ -376,36 +373,20 @@ function updateInstallReasonText(reason: UpdateInstallReason | undefined): strin
       return '未找到 Wrenyard CLI：请先安装或修复啾啾工坊套件，然后点“重新检测”。';
     case 'missing-runtime':
       return '未找到与当前 CLI 配套的 Node 运行时：请修复套件安装，然后点“重新检测”。';
-    case 'missing-helper':
-      return '未找到更新助手组件：请重新安装 Desktop，然后点“重新检测”。';
     case 'unsupported-platform':
-      return '当前平台暂不支持应用内安装，请从发布页下载安装包。';
+      return '当前平台暂不支持应用内更新，请从发布页下载安装包。';
     case 'source-development':
-      return '当前为源码开发模式，不会检查、下载或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。';
+      return '当前为源码开发模式，不会检查或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。';
     default:
-      return '当前无法应用内安装，请检查本机安装后点“重新检测”。';
+      return '当前无法应用内更新，请检查本机安装后点“重新检测”。';
   }
 }
 
 function renderUpdate(snapshot: UpdateSnapshot): void {
-  if (snapshot.state === 'install-failed' && currentUpdate?.state !== 'install-failed') updatePopupOpen = true;
+  if (snapshot.state === 'error' && currentUpdate?.state !== 'error') updatePopupOpen = true;
   currentUpdate = snapshot;
   setText('update-current-version', `v${snapshot.currentVersion}`);
   setText('update-checked-at', formatUpdateCheckTime(snapshot.checkedAt));
-  setText('update-channel-note', snapshot.channel === 'dev'
-    ? '开发版更新更频繁，包含尚在打磨的新功能，稳定性较低。'
-    : '正式版只接收正式发布的版本，更新节奏更稳定。');
-
-  const channelLocked = snapshot.state === 'checking'
-    || snapshot.state === 'preparing'
-    || snapshot.state === 'waiting'
-    || snapshot.state === 'installing';
-  for (const button of Array.from(updateChannelSwitcher.querySelectorAll<HTMLButtonElement>('button[data-update-channel]'))) {
-    const selected = button.dataset.updateChannel === snapshot.channel;
-    button.classList.toggle('is-selected', selected);
-    button.setAttribute('aria-selected', String(selected));
-    button.disabled = channelLocked || updateActionBusy;
-  }
 
   const status = requireElement('update-status');
   let statusLabel = '尚未检查';
@@ -424,9 +405,6 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
     statusLabel = '已是最新';
     statusClass = 'is-connected';
     description = snapshot.message ?? '当前已是最新版本。';
-  } else if (snapshot.state === 'stable-unavailable') {
-    statusLabel = '等待正式版';
-    description = '正式版尚未发布，首个正式版上线时会在这里提示你。';
   } else if (snapshot.state === 'available') {
     statusLabel = '有新版本';
     statusClass = 'is-preview';
@@ -441,55 +419,28 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
       statusClass = 'is-unavailable';
       description = updateInstallReasonText(snapshot.installReason);
     }
-  } else if (snapshot.state === 'preparing') {
-    statusLabel = '准备中';
-    description = snapshot.message ?? '正在下载并校验更新…';
-    action = '正在准备…';
-    disabled = true;
   } else if (snapshot.state === 'waiting') {
     statusLabel = '等待空闲安装';
     statusClass = 'is-preview';
-    description = snapshot.message ?? '更新已准备，将在你空闲后自动安装。';
-    action = '取消更新';
-    primary = false;
-    disabled = updateActionBusy;
+    description = snapshot.message ?? '有任务运行中，完成后自动更新。';
+    action = '立即重试';
+    primary = true;
   } else if (snapshot.state === 'installing') {
     statusLabel = '正在安装';
     statusClass = 'is-connected';
     description = snapshot.message ?? '正在安装更新，完成后会自动重启。';
     action = '正在安装…';
     disabled = true;
-  } else if (snapshot.state === 'install-blocked') {
-    statusLabel = '等待任务结束';
-    statusClass = 'is-preview';
-    description = snapshot.message ?? '当前仍有任务运行，请完成或停止后再安装更新。';
-    action = '重试安装';
-    primary = true;
-  } else if (snapshot.state === 'check-failed') {
-    statusLabel = '暂时不可用';
-    statusClass = 'is-unavailable';
-    description = snapshot.message ?? '暂时无法检查更新，请检查网络连接后重试。';
-    action = '重试';
-  } else if (snapshot.state === 'install-failed') {
+  } else if (snapshot.state === 'error') {
     statusLabel = '更新未完成';
     statusClass = 'is-unavailable';
     description = snapshot.message ?? '更新未完成，当前版本未受影响。';
-    action = '重试安装';
-    primary = true;
+    action = '重试';
   }
 
   status.textContent = statusLabel;
   status.className = `status-pill ${statusClass}`;
   setText('update-description', description);
-  const attempt = snapshot.lastAttempt;
-  requireElement('update-last-attempt').hidden = !attempt;
-  if (attempt) {
-    const outcome = attempt.status === 'succeeded' ? '成功'
-      : attempt.status === 'failed' ? '失败'
-        : attempt.status === 'cancelled' ? '已取消' : '尚未记录结束';
-    setText('update-last-attempt-title', `最近更新：${attempt.sourceVersion} → ${attempt.targetVersion} · ${outcome}`);
-    setText('update-last-attempt-detail', JSON.stringify(attempt, null, 2));
-  }
   updateActionButton.textContent = action;
   updateActionButton.className = primary ? 'primary-button' : 'secondary-button';
   updateActionButton.disabled = disabled;
@@ -497,117 +448,64 @@ function renderUpdate(snapshot: UpdateSnapshot): void {
 }
 
 function renderUpdatePopup(snapshot: UpdateSnapshot): void {
-  const updateAvailable = snapshot.state === 'available';
-  updateNav.hidden = !['available', 'preparing', 'waiting', 'installing', 'install-blocked', 'install-failed'].includes(snapshot.state);
-  updateNav.classList.toggle('is-update-available', updateAvailable);
+  const visibleState = snapshot.state === 'available'
+    || snapshot.state === 'waiting'
+    || snapshot.state === 'installing'
+    || snapshot.state === 'error';
+  updateNav.hidden = !visibleState;
+  updateNav.classList.toggle('is-update-available', snapshot.state === 'available');
   // The nav stays clickable even when the install path is unavailable: it opens
   // the state explanation and a re-probe instead of being a dead control.
   updateNav.disabled = false;
-  updateNav.setAttribute('aria-label', updateAvailable
+  updateNav.setAttribute('aria-label', snapshot.state === 'available'
     ? snapshot.installSupported
       ? `安装更新 v${snapshot.availableVersion ?? ''}`
-      : '软件更新：当前无法应用内安装，点击查看原因'
+      : '软件更新：当前无法应用内更新，点击查看原因'
     : '软件更新');
 
-
   const installUnavailable = snapshot.state === 'available' && !snapshot.installSupported;
-  const visibleState = installUnavailable || snapshot.state === 'preparing'
-    || snapshot.state === 'waiting'
-    || snapshot.state === 'installing'
-    || snapshot.state === 'install-blocked'
-    || snapshot.state === 'install-failed';
   updatePopup.hidden = !updatePopupOpen || !visibleState;
   if (updatePopup.hidden) return;
 
-  const title = installUnavailable ? '暂时无法安装更新' : snapshot.state === 'install-failed'
-    ? '更新失败'
-    : snapshot.stage === 'extract'
-      ? '解压更新'
-      : snapshot.stage === 'waiting'
-        ? '等待任务'
-        : snapshot.stage === 'daemon-upgrade'
-          ? '升级 Daemon'
-          : '下载更新';
+  const title = installUnavailable ? '暂时无法安装更新'
+    : snapshot.state === 'error' ? '更新未完成'
+      : snapshot.state === 'waiting' ? '等待任务'
+        : snapshot.state === 'installing' ? '正在安装' : '发现新版本';
   setText('update-popup-title', title);
   setText('update-popup-description', installUnavailable
     ? `${updateInstallReasonText(snapshot.installReason)} 再次点击更新图标可重新检测。`
     : snapshot.message ?? '正在准备更新。');
-  updatePopupProgress.hidden = installUnavailable;
-  const progress = Math.max(0, Math.min(100, snapshot.progress ?? 0));
-  updatePopupProgress.value = progress;
-  updatePopupProgress.textContent = `${progress}%`;
-}
-
-async function runUpdateFromNav(): Promise<void> {
-  if (!currentUpdate) return;
-  updatePopupOpen = true;
-  renderUpdate(currentUpdate);
-  // An unavailable install path must never silently do nothing: re-probe the
-  // installation so a just-repaired suite is picked up, and leave the reason
-  // visible. Only a genuinely installable state authorizes an install.
-  if (!currentUpdate.installSupported) {
-    if (updateActionBusy || ['checking', 'preparing', 'waiting', 'installing'].includes(currentUpdate.state)) return;
-    updateActionBusy = true;
-    renderUpdate(currentUpdate);
-    try {
-      renderUpdate(await window.wrenyardShell.checkUpdate());
-    } finally {
-      updateActionBusy = false;
-      if (currentUpdate) renderUpdate(currentUpdate);
-    }
-    return;
-  }
-  if (updateActionBusy || !['available', 'install-blocked', 'install-failed'].includes(currentUpdate.state)) return;
-  updateActionBusy = true;
-  renderUpdate(currentUpdate);
-  let requestFailed = false;
-  try {
-    renderUpdate(await window.wrenyardShell.requestInstall());
-  } catch {
-    requestFailed = true;
-    updatePopup.hidden = false;
-    setText('update-popup-title', '更新失败');
-    setText('update-popup-description', '暂时无法启动更新，请重试。');
-    updatePopupProgress.value = 0;
-    updatePopupProgress.textContent = '0%';
-  } finally {
-    updateActionBusy = false;
-    if (!requestFailed && currentUpdate) renderUpdate(currentUpdate);
-  }
 }
 
 async function runUpdateAction(): Promise<void> {
   if (!currentUpdate || updateActionBusy) return;
-  if (['available', 'install-blocked', 'install-failed'].includes(currentUpdate.state)) {
-    await runUpdateFromNav();
-    return;
-  }
   updateActionBusy = true;
   renderUpdate(currentUpdate);
+  let failed = false;
   try {
-    // One-click authorization: a waiting update is cancelled; anything else that
-    // can be authorized prepares (staged even while busy) and auto-installs when idle.
-    if (currentUpdate.state === 'waiting') {
-      renderUpdate(await window.wrenyardShell.cancelPendingInstall());
-      return;
-    }
-    renderUpdate(await window.wrenyardShell.checkUpdate());
+    // One click authorizes the install once a new version is known; every other
+    // state re-checks instead of inventing work.
+    const installable = currentUpdate.installSupported
+      && (currentUpdate.state === 'available' || currentUpdate.state === 'waiting');
+    renderUpdate(installable
+      ? await window.wrenyardShell.requestInstall()
+      : await window.wrenyardShell.checkUpdate());
+  } catch {
+    failed = true;
+    updatePopupOpen = true;
+    updatePopup.hidden = false;
+    setText('update-popup-title', '更新失败');
+    setText('update-popup-description', '暂时无法启动更新，请重试。');
   } finally {
     updateActionBusy = false;
-    if (currentUpdate) renderUpdate(currentUpdate);
+    if (!failed && currentUpdate) renderUpdate(currentUpdate);
   }
 }
 
-async function selectUpdateChannel(channel: UpdateChannel): Promise<void> {
-  if (!currentUpdate || currentUpdate.channel === channel || updateActionBusy) return;
-  updateActionBusy = true;
-  renderUpdate(currentUpdate);
-  try {
-    renderUpdate(await window.wrenyardShell.setUpdateChannel(channel));
-  } finally {
-    updateActionBusy = false;
-    if (currentUpdate) renderUpdate(currentUpdate);
-  }
+function runUpdateFromNav(): void {
+  updatePopupOpen = true;
+  if (currentUpdate) renderUpdate(currentUpdate);
+  void runUpdateAction();
 }
 
 function renderPet(snapshot: SettingsSnapshot): void {
@@ -2726,12 +2624,6 @@ updateNav.addEventListener('click', () => void runUpdateFromNav());
 requireElement('update-popup-close').addEventListener('click', () => {
   updatePopupOpen = false;
   updatePopup.hidden = true;
-});
-updateChannelSwitcher.addEventListener('click', (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLButtonElement)) return;
-  const channel = target.dataset.updateChannel;
-  if (channel === 'stable' || channel === 'dev') void selectUpdateChannel(channel);
 });
 providerDialogCancel.addEventListener('click', () => closeProviderDialog());
 providerKeyPageLink.addEventListener('click', () => {
