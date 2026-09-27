@@ -1,9 +1,8 @@
 name: Release
 
-# Release verification is owned by workspace Tasks and repository instructions.
-# This workflow only builds the two native public targets and, for an explicit
-# development tag, publishes their four public archives. Manual dispatch is a
-# build-only path and retains its downloadable archives for optional review.
+# CI only builds the two native public targets and, for an explicit development
+# tag, publishes their four archives plus the update feed.
+
 on:
   push:
     tags:
@@ -22,11 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            target: darwin-arm64
-          - os: windows-latest
-            target: win32-x64
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -39,18 +34,12 @@ jobs:
         with:
           node-version: 24.19.0
       - run: pnpm install --frozen-lockfile
-      - name: Validate native build target
-        run: node tools/release/validate-release.mjs --target ${{ matrix.target }}
-      - name: Validate explicit development tag
-        if: github.event_name == 'push'
-        run: node tools/release/validate-release.mjs --tag "$GITHUB_REF_NAME"
-        shell: bash
       - name: Build native release archives
-        run: pnpm release:local
+        run: node tools/release/build-local-release.mjs
       - name: Upload public build archives
         uses: actions/upload-artifact@v4
         with:
-          name: wrenyard-release-${{ matrix.target }}
+          name: wrenyard-release-${{ matrix.os }}
           path: |
             .artifacts/release/wrenyard-*-suite.zip
             .artifacts/release/wrenyard-desktop-*.zip
@@ -73,17 +62,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Select the four public archives
-        run: node tools/release/stage-public-assets.mjs --input artifacts --output release-assets
-      - name: Publish draft after all archive uploads
+      - name: Publish release, feed and bootstrap scripts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node tools/release/publish-github-release.mjs --assets release-assets
-      - name: Publish static update feed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node tools/release/publish-update-feed.mjs --assets release-assets
-      - name: Remove transient tagged-build artifacts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node tools/release/cleanup-run-artifacts.mjs
+        run: node tools/release/publish.mjs --artifacts artifacts

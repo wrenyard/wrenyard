@@ -2,6 +2,14 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  UPDATE_FEED_SCHEMA_VERSION as SCHEMA_VERSION,
+  channelForVersion,
+  compareVersions,
+  desktopAssetName,
+  isSemver,
+  suiteAssetName,
+} from '../../packages/protocol/src/update-feed.ts';
 
 // Static update feed generator.
 //
@@ -27,12 +35,7 @@ import { fileURLToPath } from 'node:url';
 // workflow commits the prepared directory. The generated file is rendered with
 // two-space indentation, one key per line, so the committed document is stable.
 
-const SCHEMA_VERSION = 'wrenyard.update.v1';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-// Strict SemVer: no leading zero in a numeric core or numeric prerelease
-// identifier, no empty identifier and no trailing dot in the prerelease.
-const SEMVER_PATTERN =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$/;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 // The four canonical public archive names are derived from the requested
@@ -40,63 +43,15 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 // release) or a missing/wrong Desktop prefix can never be published.
 export function canonicalAssetNames(version) {
   return [
-    `wrenyard-${version}-darwin-arm64-suite.zip`,
-    `wrenyard-desktop-${version}-darwin-arm64.zip`,
-    `wrenyard-${version}-win32-x64-suite.zip`,
-    `wrenyard-desktop-${version}-win32-x64.zip`,
+    suiteAssetName(version, 'darwin-arm64'),
+    desktopAssetName(version, 'darwin-arm64'),
+    suiteAssetName(version, 'win32-x64'),
+    desktopAssetName(version, 'win32-x64'),
   ];
-}
-
-export function isSemver(value) {
-  return typeof value === 'string' && SEMVER_PATTERN.test(value);
 }
 
 export function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-// Numeric semver ordering. Never compare version strings lexicographically:
-// "dev.9" > "dev.10" under string ordering, which would let a stale release
-// roll the channel backwards.
-export function compareVersions(a, b) {
-  if (!isSemver(a) || !isSemver(b)) {
-    throw new Error(`invalid version for ordering: ${a} / ${b}`);
-  }
-  const left = SEMVER_PATTERN.exec(a);
-  const right = SEMVER_PATTERN.exec(b);
-  for (let i = 1; i <= 3; i += 1) {
-    const delta = Number(left[i]) - Number(right[i]);
-    if (delta !== 0) return delta < 0 ? -1 : 1;
-  }
-  const lp = left[4];
-  const rp = right[4];
-  if (lp === undefined && rp === undefined) return 0;
-  if (lp === undefined) return 1; // a plain release outranks a prerelease
-  if (rp === undefined) return -1;
-  const lparts = lp.split('.');
-  const rparts = rp.split('.');
-  const len = Math.max(lparts.length, rparts.length);
-  for (let i = 0; i < len; i += 1) {
-    const lv = lparts[i];
-    const rv = rparts[i];
-    if (lv === undefined) return -1;
-    if (rv === undefined) return 1;
-    const ln = /^\d+$/.test(lv);
-    const rn = /^\d+$/.test(rv);
-    if (ln && rn) {
-      const delta = Number(lv) - Number(rv);
-      if (delta !== 0) return delta < 0 ? -1 : 1;
-      continue;
-    }
-    if (ln !== rn) return ln ? -1 : 1; // numeric identifiers rank below alphanumeric
-    if (lv !== rv) return lv < rv ? -1 : 1;
-  }
-  return 0;
-}
-
-export function channelForVersion(version) {
-  if (!isSemver(version)) throw new Error(`invalid version: ${version}`);
-  return version.includes('-') ? 'dev' : 'stable';
 }
 
 function assertRepository(repository) {
@@ -188,11 +143,13 @@ function readExisting(path) {
 // Prepare the metadata directory without publishing anything.
 //
 // Returns the list of files that changed so the caller can stage exactly those:
-// the immutable versions/<version>.json and the mutable channel head. Repeat
-// runs with identical content are no-ops; a conflicting snapshot for an already
-// published version is rejected instead of overwritten, and an older release
-// never regresses the channel head.
-export function prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir }) {
+// the immutable versions/<version>.json, the mutable channel head and any
+// `extraFiles` (the publish job passes install.sh/install.ps1 so the feed and
+// the bootstrap scripts land in one commit). Repeat runs with identical content
+// are no-ops; a conflicting snapshot for an already published version is
+// rejected instead of overwritten, and an older release never regresses the
+// channel head.
+export function prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir, extraFiles = [] }) {
   const document = buildVersionDocument({ version, repository, publishedAt, assetsDir });
   const channel = channelForVersion(version);
   const versionsDir = resolve(metadataDir, 'versions');
@@ -216,13 +173,13 @@ export function prepareMetadata({ assetsDir, version, repository, publishedAt, m
       // but still record the immutable snapshot for this version.
       mkdirSync(versionsDir, { recursive: true });
       writeFileSync(versionPath, rendered);
-      return { channel, files: [versionPath], updatedChannel: false, document };
+      return { channel, files: [versionPath, ...extraFiles], updatedChannel: false, document };
     }
   }
 
   const channelChanged =
     existingChannel === null || renderDocument(existingChannel) !== rendered;
-  const files = [versionPath];
+  const files = [versionPath, ...extraFiles];
   mkdirSync(versionsDir, { recursive: true });
   writeFileSync(versionPath, rendered);
   if (channelChanged) {
@@ -266,4 +223,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 }
 
-export { SCHEMA_VERSION };
+export { SCHEMA_VERSION, isSemver, compareVersions, channelForVersion };
