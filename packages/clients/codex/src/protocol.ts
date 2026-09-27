@@ -185,7 +185,6 @@ async function* protocol(
         statistics.observe(method, params);
         if (method === 'item/agentMessage/delta' && typeof params.delta === 'string' && params.delta) {
             output += params.delta;
-            yield messageEvent(params.delta);
         }
         else if (method === 'item/started' || method === 'item/completed') {
             const item = recordOf(params, 'item');
@@ -225,7 +224,8 @@ async function* protocol(
      * never be double-counted against a started boundary.
      */
     function* itemEvents(boundary: 'started' | 'completed', item: Record<string, unknown>): Generator<AgentEvent> {
-        const itemType = stringOf(item, 'type');
+        item = Object.fromEntries(Object.entries(item).map(([key, value]) => [key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), value]));
+        const itemType = stringOf(item, 'type').replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
         if (boundary === 'started') {
             if (!(itemType in CODEX_TOOL_ITEMS) || itemType === 'file_change')
                 return;

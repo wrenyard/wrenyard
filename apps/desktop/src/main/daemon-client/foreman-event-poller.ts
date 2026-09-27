@@ -627,7 +627,7 @@ function foremanWorkerKeyCandidates(event: ForemanEventRecord): Array<{ alias: s
 
 /** Actual task_run_id, preserved separately as foremanTaskRunID. */
 function foremanTaskRunIdForEvent(event: ForemanEventRecord): string | undefined {
-  return stringIdentity(event.task_run_id) ?? undefined;
+  return taskRunIdForStatusLookup(event);
 }
 
 function taskRunIdForStatusLookup(event: ForemanEventRecord): string | undefined {
