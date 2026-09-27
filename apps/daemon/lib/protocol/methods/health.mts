@@ -4,29 +4,11 @@ export interface HealthPingParams {}
 
 export interface HealthPingResult {
   ok: true
-  gateway?: { status: 'ready' }
-  version?: string
   uptimeMs?: number
   identity?: {
     mode: 'source' | 'installed'
     checkout?: string
     node?: string
-  }
-  dispatch?: {
-    mode: 'accepting' | 'frozen' | 'planned_restart'
-    frozen: boolean
-    accepting: boolean
-    shutting_down?: boolean
-    activeTaskCount: number
-    activeWorkflowCount: number
-    activeExecutionCount: number
-    active_task_count: number
-    active_workflow_count: number
-    active_execution_count: number
-    recovery_required: boolean
-    operation_id?: string
-    kind?: 'update' | 'restart'
-    phase?: 'preparing' | 'draining' | 'updating' | 'stopping' | 'starting' | 'verifying' | 'completed' | 'failed'
   }
 }
 
@@ -41,7 +23,6 @@ export const healthPingResultSchema = {
   required: ['ok'],
   properties: {
     ok: { const: true },
-    version: { type: 'string' },
     uptimeMs: { type: 'number', minimum: 0 },
     identity: {
       type: 'object',
@@ -50,29 +31,6 @@ export const healthPingResultSchema = {
         mode: { type: 'string', enum: ['source', 'installed'] },
         checkout: { type: 'string' },
         node: { type: 'string' },
-      },
-      additionalProperties: true,
-    },
-    gateway: {
-      type: 'object', required: ['status'], properties: { status: { const: 'ready' } }, additionalProperties: false,
-    },
-    dispatch: {
-      type: 'object',
-      properties: {
-        mode: { type: 'string', enum: ['accepting', 'frozen', 'planned_restart'] },
-        frozen: { type: 'boolean' },
-        accepting: { type: 'boolean' },
-        shutting_down: { type: 'boolean' },
-        activeTaskCount: { type: 'integer', minimum: 0 },
-        activeWorkflowCount: { type: 'integer', minimum: 0 },
-        activeExecutionCount: { type: 'integer', minimum: 0 },
-        active_task_count: { type: 'integer', minimum: 0 },
-        active_workflow_count: { type: 'integer', minimum: 0 },
-        active_execution_count: { type: 'integer', minimum: 0 },
-        recovery_required: { type: 'boolean' },
-        operation_id: { type: 'string' },
-        kind: { type: 'string', enum: ['update', 'restart'] },
-        phase: { type: 'string', enum: ['preparing', 'draining', 'updating', 'stopping', 'starting', 'verifying', 'completed', 'failed'] },
       },
       additionalProperties: true,
     },

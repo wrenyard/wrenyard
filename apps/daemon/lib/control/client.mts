@@ -2,16 +2,10 @@ import type { ProviderQuotaParams, ProviderQuotaResult, ProviderConfigureParams,
 import type {
   ActivitySnapshotParams,
   ActivitySnapshotV1,
-  DaemonDrainParams,
-  DaemonDrainResult,
-  DaemonFreezeParams,
-  DaemonFreezeResult,
   DaemonShutdownParams,
   DaemonShutdownResult,
   DaemonStatusParams,
   DaemonStatusResult,
-  DaemonThawParams,
-  DaemonThawResult,
   HealthPingParams,
   HealthPingResult,
   EventListParams,
@@ -157,15 +151,6 @@ export class ForemanClient {
   readonly daemon = {
     shutdown: (params: DaemonShutdownParams = {}): Promise<DaemonShutdownResult> => {
       return this.rpc.request<DaemonShutdownResult>('daemon.shutdown', params)
-    },
-    freeze: (params: DaemonFreezeParams = {}): Promise<DaemonFreezeResult> => {
-      return this.rpc.request<DaemonFreezeResult>('daemon.freeze', params)
-    },
-    thaw: (params: DaemonThawParams = {}): Promise<DaemonThawResult> => {
-      return this.rpc.request<DaemonThawResult>('daemon.thaw', params)
-    },
-    drain: (params: DaemonDrainParams = {}): Promise<DaemonDrainResult> => {
-      return this.rpc.request<DaemonDrainResult>('daemon.drain', params)
     },
     status: (params: DaemonStatusParams = {}): Promise<DaemonStatusResult> => {
       return this.rpc.request<DaemonStatusResult>('daemon.status', params)
