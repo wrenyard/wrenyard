@@ -6,10 +6,13 @@ migration to the unified `wrenyard` identity.
 ## Unified release, state, and paths
 
 Release artifacts, local state, and install paths are consolidated under the
-unified `wrenyard` identity. Legacy release/state paths and legacy
-compatibility commands are not part of the public contract; consumers of the
-1.0.0-dev.0 preview should use the `wrenyard` command surface only. No
-user-specific machine paths are used by the public contract.
+unified `wrenyard` identity. Each maintained target publishes two archives (the
+suite zip and the Desktop zip); the static update feed and the one-click
+bootstrap scripts are distributed from the `updates` branch. Legacy
+release/state paths and legacy compatibility commands are not part of the
+public contract; consumers of the 1.0.0-dev.0 preview should use the `wrenyard`
+command surface only. No user-specific machine paths are used by the public
+contract.
 
 ## Internal components
 
@@ -25,8 +28,7 @@ provenance.
 
 ## Signing
 
-Preview builds are signed ad-hoc on macOS, checksum-only on Linux, and
-unsigned by default on Windows. Trusted release signing is future work and
-never runs in this repository.
+Preview builds are signed ad-hoc on macOS and unsigned by default on Windows.
+Trusted release signing is future work and never runs in this repository.
 
 The canonical public source is `https://github.com/wrenyard/wrenyard`.
