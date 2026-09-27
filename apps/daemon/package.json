@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/daemon",
-  "version": "1.0.0-dev.41",
+  "version": "0.0.0",
   "description": "Wrenyard — AI task and TaskGraph orchestration daemon",
   "private": true,
   "license": "MIT",
@@ -29,10 +29,8 @@
     "./control/client": "./lib/control/client.mts",
     "./control/ipc-client": "./lib/control/ipc-client.mts",
     "./control/ipc-server": "./lib/control/ipc-server.mts",
-    "./daemon/dispatch-control": "./lib/daemon/dispatch-control.mts",
-    "./daemon/planned-restart-store": "./lib/daemon/planned-restart-store.mts",
     "./db/connection": "./lib/db/connection.mts",
-    "./core/project/foreman-update": "./lib/core/project/foreman-update.mts",
+    "./daemon/instance-lock": "./lib/daemon/instance-lock.mts",
     "./core/taskgraph": "./lib/core/taskgraph/index.mts",
     "./workspace/task-loader": "./lib/workspace/task-loader.mts"
   },

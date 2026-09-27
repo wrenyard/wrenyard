@@ -26,11 +26,8 @@ import {
 import type {
   ActivitySnapshotV1,
   MessageSendResult,
-  DaemonDrainResult,
-  DaemonFreezeResult,
   DaemonShutdownResult,
   DaemonStatusResult,
-  DaemonThawResult,
   EventListResult,
   StatsTodayResult,
   TaskRunCancelResult,
@@ -60,10 +57,6 @@ import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
 import {
-  DAEMON_DRAIN_DEFAULT_TIMEOUT_MS,
-} from '../../protocol/methods/daemon.mts'
-import { DispatchControl, DispatchControlError, type DispatchStatus } from '../../daemon/dispatch-control.mts'
-import {
   TaskSettingsContentConflictError,
   TaskSettingsInvalidSettingsError,
   TaskSettingsRuntimeUnavailableError,
@@ -83,6 +76,12 @@ import {
 import type { ExecService, ExecRequest } from '@wrenyard/exec'
 import type { ExecStartParams } from '@wrenyard/protocol'
 
+export interface DaemonActiveWorkCounts {
+  activeTaskCount: number
+  activeWorkflowCount: number
+  activeExecutionCount: number
+}
+
 export interface CoreRpcHandlerOptions {
   startedAt: number
   workspaceRoot: string
@@ -90,10 +89,20 @@ export interface CoreRpcHandlerOptions {
   shutdown?: (reason: string, force: boolean) => void
   /**
    * Reports whether the daemon has no admitted work. Optional so a context
-   * without a live daemon simply omits the additive `daemon.status.idle` field.
+   * without a live daemon fails closed (`idle: false`).
    */
   isIdle?: () => Promise<boolean>
-  dispatchControl?: DispatchControl
+  /**
+   * Reports whether a shutdown has been requested. The only admission rule now
+   * is `shutting_down`: no new top-level work is accepted once the daemon is
+   * stopping. Optional so a context without a live daemon never claims one.
+   */
+  isShuttingDown?: () => boolean
+  /**
+   * Authoritative active-work counts for `daemon.status`. Optional so a context
+   * without a live daemon reports zeros rather than fabricating counts.
+   */
+  daemonActiveWork?: () => DaemonActiveWorkCounts | Promise<DaemonActiveWorkCounts>
   /** Daemon-owned TaskGraphService shared by all transports. */
   taskgraphService?: TaskGraphService
   /** Unified MessageService for principal-based message.send */
@@ -183,31 +192,10 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       ok: true
       uptimeMs: number
       identity: ReturnType<typeof readProcessIdentity>
-      gateway?: { status: 'ready' }
-      dispatch?: {
-        mode: 'accepting' | 'frozen' | 'planned_restart'
-        frozen: boolean
-        accepting: boolean
-        shutting_down: boolean
-        activeTaskCount: number
-        activeWorkflowCount: number
-        activeExecutionCount: number
-        active_task_count: number
-        active_workflow_count: number
-        active_execution_count: number
-        recovery_required: boolean
-        operation_id?: string
-        kind?: 'update' | 'restart'
-        phase?: 'preparing' | 'draining' | 'updating' | 'stopping' | 'starting' | 'verifying' | 'completed' | 'failed'
-      }
     } = {
       ok: true as const,
       uptimeMs: Math.max(0, Date.now() - options.startedAt),
       identity: readProcessIdentity(),
-      ...(options.gatewayConnection ? { gateway: { status: 'ready' as const } } : {}),
-    }
-    if (options.dispatchControl) {
-      result.dispatch = projectDispatchStatus(options.dispatchControl.status())
     }
     return result
   })
@@ -370,46 +358,20 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       reason,
     } satisfies DaemonShutdownResult
   })
-  if (options.dispatchControl) {
-    router.register('daemon.freeze', async () => {
-      options.dispatchControl!.freeze()
-      const status = options.dispatchControl!.status()
-      return {
-        ok: true as const,
-        ...projectDispatchStatus(status),
-      } satisfies DaemonFreezeResult
-    })
-    router.register('daemon.thaw', async () => {
-      options.dispatchControl!.thaw()
-      const status = options.dispatchControl!.status()
-      return {
-        ok: true as const,
-        frozen: status.frozen,
-        accepting: status.accepting,
-        activeTasks: status.activeTasks,
-        activeTaskCount: status.activeTaskCount,
-        activeWorkflows: status.activeWorkflows,
-        activeWorkflowCount: status.activeWorkflowCount,
-        activeExecutions: status.activeExecutions,
-        activeExecutionCount: status.activeExecutionCount,
-      } satisfies DaemonThawResult
-    })
-    router.register('daemon.drain', async (params) => {
-      const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1 && params.timeout_ms <= 300_000
-        ? params.timeout_ms
-        : DAEMON_DRAIN_DEFAULT_TIMEOUT_MS
-      const result = await options.dispatchControl!.drain(timeoutMs)
-      return result satisfies DaemonDrainResult
-    })
-    router.register('daemon.status', async () => {
-      const status = options.dispatchControl!.status()
-      return {
-        ok: true as const,
-        ...projectDispatchStatus(status),
-        ...(options.isIdle ? { idle: await options.isIdle() } : {}),
-      } satisfies DaemonStatusResult
-    })
-  }
+  // daemon.status is registered unconditionally: it is the lifecycle surface
+  // (shutdown + idle + active counts) and must not disappear with any optional
+  // dependency.
+  router.register('daemon.status', async () => {
+    const counts = options.daemonActiveWork
+      ? await options.daemonActiveWork()
+      : { activeTaskCount: 0, activeWorkflowCount: 0, activeExecutionCount: 0 }
+    return {
+      ok: true as const,
+      shutting_down: options.isShuttingDown?.() === true,
+      idle: options.isIdle ? await options.isIdle() : false,
+      ...counts,
+    } satisfies DaemonStatusResult
+  })
   router.register('task.definition.list', async (params) => {
     return serviceJsonResult(
       () => taskService.list(params.project),
@@ -662,7 +624,15 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     } satisfies ExecCancelResult
   })
   router.register('task.run.create', async (params, _message, context) => {
-    if (options.dispatchControl) assertDispatchAccepting(options.dispatchControl)
+    // The only admission rule left is shutting_down: no new top-level work once
+    // the daemon is stopping. The router-level gate enforces the same rule for
+    // live daemons; this keeps the handler correct in isolation.
+    if (options.isShuttingDown?.()) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Daemon is shutting down and does not accept new work; retry after it is back.' },
+        { code: 'daemon_shutting_down' },
+      )
+    }
     const rpcContext = coreRpcContextFromUnknown(context)
     return serviceJsonResult<TaskRunCreateResult>(
       () => taskService.run({
@@ -1083,71 +1053,6 @@ function serviceProtocolError(
     statusCode: error.statusCode,
     details: error.details,
   }))
-}
-
-function assertDispatchAccepting(control: DispatchControl): void {
-  try {
-    control.assertAccepting()
-  } catch (error) {
-    if (error instanceof DispatchControlError) {
-      throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: error.message },
-        { code: error.code },
-      )
-    }
-    throw error
-  }
-}
-
-/**
- * Single projection of DispatchControl.status() shared by daemon.status and the
- * optional health.ping dispatch summary. Adds the durable plan fields and the
- * snake-case active counts while retaining the legacy frozen/accepting/active
- * arrays and camel-case counts for old clients.
- */
-function projectDispatchStatus(status: DispatchStatus): {
-  mode: DispatchStatus['mode']
-  frozen: boolean
-  accepting: boolean
-  shutting_down: boolean
-  activeTasks: string[]
-  activeTaskCount: number
-  activeWorkflows: string[]
-  activeWorkflowCount: number
-  activeExecutions: string[]
-  activeExecutionCount: number
-  active_task_count: number
-  active_workflow_count: number
-  active_execution_count: number
-  recovery_required: boolean
-  operation_id?: string
-  kind?: 'update' | 'restart'
-  phase?: 'preparing' | 'draining' | 'updating' | 'stopping' | 'starting' | 'verifying' | 'completed' | 'failed'
-} {
-  const plan = status.plannedRestart
-  return {
-    mode: status.mode,
-    frozen: status.frozen,
-    accepting: status.accepting,
-    shutting_down: status.shuttingDown === true,
-    activeTasks: status.activeTasks,
-    activeTaskCount: status.activeTaskCount,
-    activeWorkflows: status.activeWorkflows,
-    activeWorkflowCount: status.activeWorkflowCount,
-    activeExecutions: status.activeExecutions,
-    activeExecutionCount: status.activeExecutionCount,
-    active_task_count: status.activeTaskCount,
-    active_workflow_count: status.activeWorkflowCount,
-    active_execution_count: status.activeExecutionCount,
-    recovery_required: plan ? plan.recoveryRequired : false,
-    ...(plan
-      ? {
-        operation_id: plan.operationId,
-        kind: plan.kind,
-        phase: plan.phase,
-      }
-      : {}),
-  }
 }
 
 function toJsonShape<T>(value: T): T {
