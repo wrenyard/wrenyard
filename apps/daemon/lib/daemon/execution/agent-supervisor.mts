@@ -642,7 +642,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const client = clientId ? agentClients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
-      const plan = this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model);
+      const plan = this.buildThinkingPlanEnv(entry.executionId)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model);
       // A native dispatch must hand the CLI the exact wire spelling the
       // installed product/login declares — e.g. canonical `claude-sonnet-5` is
       // the product's 1M row `claude-sonnet-5-1m`, not the 200K row that shares
