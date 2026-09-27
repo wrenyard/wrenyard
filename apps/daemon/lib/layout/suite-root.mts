@@ -11,8 +11,15 @@ import { fileURLToPath } from 'node:url'
  */
 export const foremanPackageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
+/**
+ * Marker that identifies a Wrenyard suite root. Both the source checkout and
+ * the installed suite root contain exactly one contracts/versions.json, so it
+ * is the single marker used for upward discovery.
+ */
+export const SUITE_ROOT_MARKER = 'contracts/versions.json'
+
 export interface ResolveWrenyardSuiteRootOptions {
-  /** Package root from which to walk upward for suite markers. Defaults to foremanPackageRoot. */
+  /** Package root from which to walk upward for the suite root marker. Defaults to foremanPackageRoot. */
   packageRoot?: string
   /** Environment to read WRENYARD_ROOT from. Defaults to process.env. */
   env?: NodeJS.ProcessEnv
@@ -22,10 +29,10 @@ export interface ResolveWrenyardSuiteRootOptions {
 
 /**
  * Resolve the Wrenyard suite root (the git top-level containing the suite).
- * Precedence: a non-empty WRENYARD_ROOT that must exist and contain both suite
- * markers (pnpm-workspace.yaml and release-manifest.json); otherwise the
- * nearest ancestor of packageRoot (inclusive) containing both markers. Throws a
- * descriptive error when neither applies.
+ * Precedence: a non-empty WRENYARD_ROOT that must exist and contain the suite
+ * root marker (contracts/versions.json); otherwise the nearest ancestor of
+ * packageRoot (inclusive) containing that marker. Throws a descriptive error
+ * when neither applies.
  */
 export function resolveWrenyardSuiteRoot(options: ResolveWrenyardSuiteRootOptions = {}): string {
   const exists = options.existsSync ?? defaultExistsSync
@@ -35,13 +42,9 @@ export function resolveWrenyardSuiteRoot(options: ResolveWrenyardSuiteRootOption
   const explicitRoot = env.WRENYARD_ROOT?.trim()
   if (explicitRoot) {
     const normalized = resolve(explicitRoot)
-    const missingMarkers = [
-      'pnpm-workspace.yaml',
-      'release-manifest.json',
-    ].filter((marker) => !exists(join(normalized, marker)))
-    if (missingMarkers.length > 0) {
+    if (!exists(join(normalized, SUITE_ROOT_MARKER))) {
       throw new Error(
-        `WRENYARD_ROOT does not point at a valid Wrenyard suite root: ${normalized} is missing ${missingMarkers.join(' and ')}`,
+        `WRENYARD_ROOT does not point at a valid Wrenyard suite root: ${normalized} is missing ${SUITE_ROOT_MARKER}`,
       )
     }
     return realpathWhenPossible(normalized)
@@ -49,7 +52,7 @@ export function resolveWrenyardSuiteRoot(options: ResolveWrenyardSuiteRootOption
 
   let current = resolve(packageRoot)
   while (true) {
-    if (exists(join(current, 'pnpm-workspace.yaml')) && exists(join(current, 'release-manifest.json'))) {
+    if (exists(join(current, SUITE_ROOT_MARKER))) {
       return realpathWhenPossible(current)
     }
     const parent = dirname(current)
@@ -58,8 +61,30 @@ export function resolveWrenyardSuiteRoot(options: ResolveWrenyardSuiteRootOption
   }
 
   throw new Error(
-    `Could not locate the Wrenyard suite root: no directory from ${resolve(packageRoot)} upward contains both pnpm-workspace.yaml and release-manifest.json`,
+    `Could not locate the Wrenyard suite root: no directory from ${resolve(packageRoot)} upward contains ${SUITE_ROOT_MARKER}`,
   )
+}
+
+/**
+ * Read the version of the suite rooted at `root`. The SUITE_VERSION marker,
+ * written by the release build into installed suites, takes precedence; the
+ * suite's package.json version is the fallback, and '0.0.0' is returned when
+ * neither is readable.
+ */
+export function readSuiteVersion(root: string): string {
+  try {
+    const marker = readFileSync(join(root, 'SUITE_VERSION'), 'utf8').trim()
+    if (marker) return marker
+  } catch {
+    // Fall through to the package manifest.
+  }
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version?: unknown }
+    if (typeof manifest.version === 'string' && manifest.version.trim()) return manifest.version
+  } catch {
+    // Fall through to the default.
+  }
+  return '0.0.0'
 }
 
 /**
