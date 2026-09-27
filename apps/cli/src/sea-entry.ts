@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { main, isDevelopmentSuite } from './index.js';
+import { main, isSourceCheckout } from './index.js';
 import suitePackage from '../../../package.json' with { type: 'json' };
 import componentVersions from '../../../contracts/versions.json' with { type: 'json' };
 import { delegateToSourceCli } from './source-cli-delegation.mts';
@@ -32,7 +32,7 @@ function resolveNodeExecutable(root: string): string {
   if (existsSync(bundled)) {
     return bundled;
   }
-  if (isDevelopmentSuite(root)) {
+  if (isSourceCheckout(root)) {
     return 'node';
   }
   return bundled;
@@ -40,9 +40,28 @@ function resolveNodeExecutable(root: string): string {
 
 const nodeExecutable = resolveNodeExecutable(suiteRoot);
 
-process.exitCode = main(process.argv.slice(2), {
+// `install`/`update` return a promise (the engine downloads and health-checks
+// asynchronously); every other command returns a number synchronously. The SEA
+// bundle is CommonJS, so the promise is settled with a callback instead of
+// top-level await.
+const result = main(process.argv.slice(2), {
   suiteRoot,
   nodeExecutable,
   suiteVersion: suitePackage.version,
   componentVersions,
+  execPath: process.execPath,
 });
+
+if (result instanceof Promise) {
+  result.then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      process.stderr.write(`wrenyard: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    },
+  );
+} else {
+  process.exitCode = result;
+}
