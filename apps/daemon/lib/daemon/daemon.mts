@@ -26,8 +26,6 @@ import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/age
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
 import { handleRestApiRequest } from '../server/http/rest-api.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
-import { DispatchControl } from './dispatch-control.mts'
-import { PlannedRestartStore } from './planned-restart-store.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { MessageDeliveryHub, type BackendFactory } from '../message/delivery/hub.mts'
 import { createBackend, createTransport, deliverToConnection, type BackendDeps, type McpConnection, type TransportFactory } from '../adapters/message/backends/index.mts'
@@ -76,7 +74,6 @@ export interface RunningForemanDaemon {
   repoWriteLocks: RepoWriteLocks
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
-  dispatchControl: DispatchControl
   mcpServer: ForemanMcpServer
   httpServer: Server
   ipcPath: string
@@ -98,14 +95,6 @@ export interface RunningForemanDaemon {
 export interface ForemanDaemonDeps {
   messageTransportFactory?: TransportFactory
   deliveryBackendFactory?: BackendFactory
-  /**
-   * Inject the durable planned-restart store. When omitted the daemon uses the
-   * default store rooted at the Foreman state directory. The store is read and
-   * validated before any runtime bootstrap so a persisted planned_restart plan
-   * is in force before HTTP, IPC, MCP, or task/workflow dispatch becomes
-   * reachable.
-   */
-  plannedRestartStore?: PlannedRestartStore
 }
 
 /** Payload of the named startup notification, delivered after a successful start. */
@@ -159,11 +148,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private readonly onStarted: ((info: ForemanDaemonStartedInfo) => void) | undefined
 
   private resources: ForemanDaemonResources | undefined
-  private readonly plannedRestartStore: PlannedRestartStore
-  private readonly control: DispatchControl
   private readonly lockPath: string
   private lockHeld = false
 
+  private shutdownRequestedFlag = false
   private shutdownForce = false
   private shutdownRequestedResolve: (() => void) | undefined
   private readonly shutdownRequestedPromise: Promise<void>
@@ -173,10 +161,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
     this.configPath = options.configPath
     this.deps = options.deps ?? {}
     this.onStarted = options.onStarted
-    // The store's constructor only reads/validates the durable plan (no write),
-    // so both it and the control can exist before start() acquires the lock.
-    this.plannedRestartStore = this.deps.plannedRestartStore ?? new PlannedRestartStore()
-    this.control = new DispatchControl(this.plannedRestartStore)
     this.lockPath = join(foremanStateRoot(), 'daemon.lock')
     this.shutdownRequestedPromise = new Promise<void>((resolve) => {
       this.shutdownRequestedResolve = resolve
@@ -223,41 +207,27 @@ export class ForemanDaemon implements RunningForemanDaemon {
       startedAt: new Date().toISOString(),
     })
     this.lockHeld = true
-    // Re-read the durable admission plan BEFORE any database or runtime
-    // bootstrap so a persisted planned_restart mode is in force before HTTP,
-    // IPC, MCP, or task/workflow dispatch becomes reachable. The control and its
-    // store already exist (created in the constructor); snapshot() re-reads so a
-    // malformed plan can never fail bootstrap open.
-    this.plannedRestartStore.snapshot()
 
     let runtime: ForemanDaemonRuntime | undefined
     try {
-      runtime = await bootstrapForemanDaemonRuntime(this.control)
+      runtime = await bootstrapForemanDaemonRuntime()
       this.resources = await createForemanDaemonResources(this.config, runtime, this.deps, {
         configPath: this.configPath,
         requestShutdown: this.requestShutdown,
         isIdle: () => this.isIdle(),
+        isShuttingDown: () => this.shutdownRequestedFlag,
       })
     } catch (error) {
       if (runtime) {
         // Preserve existing runtime resource cleanup (supervisor shutdown + db
-        // release) through the one shared teardown. Intentionally NOT performing
-        // db/schema rollback, git rollback, drain waiting, plan completion, or
-        // admission restoration. Individual cleanup failures are logged by the
-        // teardown; its aggregate is swallowed so a cleanup failure can never
-        // replace the original startup error the caller sees.
+        // release) through the one shared teardown. Individual cleanup failures
+        // are logged by the teardown; its aggregate is swallowed so a cleanup
+        // failure can never replace the original startup error the caller sees.
         await teardownDaemonResources({
           supervisor: runtime.supervisor,
           execService: runtime.execService,
           releaseDb: releaseDaemonDb,
         }).catch(() => {})
-      }
-      // If a durable plan is active, record the startup failure as a recoverable
-      // planned_restart failure; admission stays closed (mode unchanged).
-      try {
-        failActivePlannedRestartOnStartup(this.plannedRestartStore, error, this.configPath)
-      } catch (recordError) {
-        writeDaemonLog('warn', 'daemon startup failure recording failed', recordError)
       }
       throw error
     }
@@ -272,7 +242,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
    */
   readonly requestShutdown = (reason: string, force = false): void => {
     this.shutdownForce ||= force
-    this.control.requestShutdown()
+    this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
   }
 
@@ -295,7 +265,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
   async isIdle(): Promise<boolean> {
     const resources = this.resources
     if (!resources) return false
-    const status = this.control.status()
+    const counts = readDaemonActiveCounts()
     const activeGraphs = dbQuery<{ id: string }>(
       `SELECT DISTINCT r.id FROM taskgraph_run r
        LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
@@ -310,9 +280,9 @@ export class ForemanDaemon implements RunningForemanDaemon {
       || conversation.sessions.some((session) => session.running)
       || (conversation.turns?.some((turn) => turn.running) ?? false)
     )
-    return status.activeTaskCount === 0
-      && status.activeWorkflowCount === 0
-      && status.activeExecutionCount === 0
+    return counts.activeTaskCount === 0
+      && counts.activeWorkflowCount === 0
+      && counts.activeExecutionCount === 0
       && activeGraphs.length === 0
       && !activeConversation
       && resources.rpcRouter.activeWorkRequestCount === 0
@@ -369,9 +339,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
   get repoWriteLocks(): RepoWriteLocks { return this.requireResources().runtime.repoWriteLocks }
   get supervisor(): AgentExecutionSupervisor { return this.requireResources().runtime.supervisor }
   get runner(): TaskWorkflowRunner { return this.requireResources().runtime.runner }
-  get dispatchControl(): DispatchControl {
-    return this.control
-  }
   get mcpServer(): ForemanMcpServer { return this.requireResources().mcpServer }
   get httpServer(): Server { return this.requireResources().httpServer }
   get ipcPath(): string { return this.requireResources().ipcPath }
@@ -469,6 +436,7 @@ async function createForemanDaemonResources(
     configPath?: string
     requestShutdown: (reason: string, force: boolean) => void
     isIdle?: () => Promise<boolean>
+    isShuttingDown: () => boolean
   },
 ): Promise<ForemanDaemonResources> {
   const operations: OperationHost = {
@@ -646,7 +614,7 @@ async function createForemanDaemonResources(
     // without any token/scope/environment/domain/upstream suffix; no paid/model
     // probes are ever issued.
     daemonAvailability: () => ({
-      accepting: runtime.dispatchControl.status().accepting,
+      accepting: !options.isShuttingDown(),
       known: true,
     }),
     runtimeAvailability: async ({ client, provider, model, mode }, availabilityContext) => {
@@ -879,7 +847,8 @@ async function createForemanDaemonResources(
     workspaceRoot: config.workspaceRoot,
     messageService,
     operations,
-    dispatchControl: runtime.dispatchControl,
+    isShuttingDown: options.isShuttingDown,
+    daemonActiveWork: readDaemonActiveCounts,
     taskgraphService,
     workspaceDocService,
     gatewayConnection: async () => ({
@@ -990,7 +959,7 @@ async function createForemanDaemonResources(
     const longSessionPoll = method === 'session.snapshot'
       && typeof params === 'object' && params !== null
       && 'waitMs' in params && typeof params.waitMs === 'number' && params.waitMs > 0
-    if (runtime.dispatchControl.isShutdownRequested && (blockedDuringShutdown.has(method) || longSessionPoll)) {
+    if (options.isShuttingDown() && (blockedDuringShutdown.has(method) || longSessionPoll)) {
       throw new ProtocolError(
         { code: INVALID_PARAMS.code, message: 'Daemon is restarting and does not accept new work; retry after it is back (usually a few seconds).' },
         { code: 'daemon_shutting_down', method },
@@ -1419,7 +1388,8 @@ interface DaemonRpcRouterOptions {
   messageService?: MessageService
   operations?: OperationHost
   shutdown?: (reason: string, force: boolean) => void
-  dispatchControl?: DispatchControl
+  isShuttingDown?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['isShuttingDown']
+  daemonActiveWork?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['daemonActiveWork']
   taskgraphService?: TaskGraphService
   workspaceDocService?: WorkspaceDocService
   gatewayConnection?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['gatewayConnection']
@@ -1447,7 +1417,6 @@ interface ForemanDaemonRuntime {
   repoWriteLocks: RepoWriteLocks
   supervisor: AgentExecutionSupervisor
   runner: TaskWorkflowRunner
-  dispatchControl: DispatchControl
   /** Shared raw prompt-execution service consumed by the RPC surface and tasks. */
   execService: ExecService
   catalog: import('@wrenyard/providers/catalog').Catalog
@@ -1457,7 +1426,7 @@ interface ForemanDaemonRuntime {
   taskDispatchResolver: TaskDispatchResolver
 }
 
-async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): Promise<ForemanDaemonRuntime> {
+async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   const db = initDb(process.env.FOREMAN_DB_PATH)
   retainDaemonDb()
 
@@ -1524,58 +1493,36 @@ async function bootstrapForemanDaemonRuntime(dispatchControl: DispatchControl): 
       db,
       agentExecutionHost: supervisor,
       logger: createDaemonSupervisorLogger(),
-      admissionControl: () => dispatchControl.assertAccepting(),
       taskDispatchResolver,
     })
     await supervisor.markInterruptedOnStartup()
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, dispatchControl, execService, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, execService, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error
   }
 }
 
-// Internal fallback error code used when a startup failure carries no
-// platform/application error code of its own.
-const DAEMON_START_FAILED_CODE = 'daemon_start_failed'
-
-function daemonStartFailureErrorCode(error: unknown): string {
-  if (error && typeof error === 'object' && 'code' in error) {
-    const code = (error as { code: unknown }).code
-    if (typeof code === 'string' && code.length > 0) return code
-  }
-  return DAEMON_START_FAILED_CODE
-}
-
 /**
- * Records a startup failure as a recoverable planned_restart failure when a
- * durable plan is active. The admission mode is preserved as planned_restart
- * (so admission stays closed) while phase/recovery metadata is recorded. The
- * pre-existing plan fields (old_head, new_head, coordinator_pid,
- * config_path, checkout_path) are merged rather than erased; the daemon's own
- * config path is added only when the plan has none.
+ * Authoritative active-work counts read directly from the database. Shared by
+ * `daemon.status` and the idle/drain checks so both observe the same rows.
  */
-function failActivePlannedRestartOnStartup(
-  store: PlannedRestartStore,
-  error: unknown,
-  configPath: string | undefined,
-): void {
-  const snapshot = store.snapshot()
-  if (snapshot.mode !== 'planned_restart' || !snapshot.plan) return
-  const plan = snapshot.plan
-  store.failPlan(plan.operation_id, {
-    error_code: daemonStartFailureErrorCode(error),
-    error_message: error instanceof Error ? error.message : String(error),
-    failed_at: new Date().toISOString(),
-    old_head: plan.old_head ?? null,
-    new_head: plan.new_head ?? null,
-    coordinator_pid: plan.coordinator_pid ?? null,
-    config_path: plan.config_path ?? configPath ?? null,
-    checkout_path: plan.checkout_path ?? null,
-  })
+function readDaemonActiveCounts(): {
+  activeTaskCount: number
+  activeWorkflowCount: number
+  activeExecutionCount: number
+} {
+  const tasks = dbQuery<{ id: string }>(`SELECT id FROM tasks WHERE status IN ('queued', 'running')`)
+  const workflows = dbQuery<{ id: string }>(`SELECT id FROM workflows WHERE status IN ('running')`)
+  const executions = dbQuery<{ id: string }>(`SELECT id FROM executions WHERE status IN ('queued', 'starting', 'running')`)
+  return {
+    activeTaskCount: tasks.length,
+    activeWorkflowCount: workflows.length,
+    activeExecutionCount: executions.length,
+  }
 }
 
 function retainDaemonDb(): void {

@@ -34,8 +34,8 @@ function isProcessAlive(pid: number): boolean {
  * their normal behavior. An optional `cli` field is returned when the lock
  * carries a valid argv array.
  */
-export function readSourceDevLock(): SourceDevLock | undefined {
-  const lockPath = join(foremanStateRoot(), DEV_STATE_DIR_NAME, DEV_LOCK_FILE_NAME)
+export function readSourceDevLock(env: NodeJS.ProcessEnv = process.env): SourceDevLock | undefined {
+  const lockPath = join(foremanStateRoot(env), DEV_STATE_DIR_NAME, DEV_LOCK_FILE_NAME)
   let raw: string
   try {
     raw = readFileSync(lockPath, 'utf8')

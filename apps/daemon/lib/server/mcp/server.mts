@@ -1,9 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
 import { deliverToConnection, type McpConnection } from '../../adapters/message/backends/index.mts'
-import { foremanPackageRoot, resolveWrenyardSuiteRoot } from '../../layout/suite-root.mts'
+import { readSuiteVersion, resolveWrenyardSuiteRoot } from '../../layout/suite-root.mts'
 import type { MessageEnvelope, MessageDeliveryResult } from '../../message/delivery/types.mts'
 import type { MessageSender } from '../../message/protocol.mts'
 import type { OperationHost } from '../../core/operations/types.mts'
@@ -295,8 +293,7 @@ export class ForemanMcpServer {
 
   private readPackageVersion(): string {
     try {
-      const pkg = JSON.parse(readFileSync(join(foremanPackageRoot, 'package.json'), 'utf-8')) as { version?: unknown }
-      return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : '0.0.0'
+      return readSuiteVersion(resolveWrenyardSuiteRoot())
     } catch {
       return '0.0.0'
     }
