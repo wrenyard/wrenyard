@@ -54,7 +54,6 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       wrenyardVersion: options.wrenyardVersion,
       dshVersion: options.dshVersion,
       ...(options.buildTime ? { buildTime: options.buildTime } : {}),
-      channel: update.channel,
       ...(options.sourceDevelopment ? { sourceDevelopment: true } : {}),
     },
   };

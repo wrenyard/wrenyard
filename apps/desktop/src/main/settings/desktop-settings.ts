@@ -68,17 +68,12 @@ export interface PetSettings {
   };
 }
 
-export interface UpdateSettings {
-  channel: 'stable' | 'dev';
-}
-
 export interface DesktopSettings {
   version: typeof DESKTOP_SETTINGS_VERSION;
   window: WindowSettings;
   tray: TraySettings;
   providers: ProviderDisplaySettings;
   pet: PetSettings;
-  update: UpdateSettings;
 }
 
 /**
@@ -120,7 +115,6 @@ export function defaultDesktopSettings(): DesktopSettings {
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     },
-    update: { channel: 'stable' },
   };
 }
 
@@ -180,20 +174,6 @@ export class DesktopSettingsStore {
   save(settings: DesktopSettings): DesktopSettings {
     this.write(settings);
     return cloneSettings(this.cached ?? settings);
-  }
-
-  /**
-   * Update channel accessor used by the updater. It reads and patches only the
-   * `update` partition so an update check can never clobber Pet or provider
-   * preferences written by another controller.
-   */
-  loadUpdateChannel(fallback: UpdateSettings['channel']): UpdateSettings['channel'] {
-    const stored = this.load().update.channel;
-    return stored === 'stable' || stored === 'dev' ? stored : fallback;
-  }
-
-  saveUpdateChannel(channel: UpdateSettings['channel']): void {
-    this.patch('update', { channel });
   }
 
   private read(): unknown | undefined {
@@ -260,7 +240,6 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
     tray: normalizeTraySettings(obj.tray),
     providers: normalizeProviderDisplaySettings(obj.providers, defaults.providers),
     pet: normalizePetSettings(obj.pet, defaults.pet),
-    update: normalizeUpdateSettings(obj.update, defaults.update),
   };
 }
 
@@ -337,12 +316,6 @@ function normalizePetSettings(value: unknown, fallback: PetSettings): PetSetting
   return result;
 }
 
-function normalizeUpdateSettings(value: unknown, fallback: UpdateSettings): UpdateSettings {
-  const obj = isRecord(value) ? value : {};
-  const channel = obj.channel;
-  return { channel: channel === 'stable' || channel === 'dev' ? channel : fallback.channel };
-}
-
 function rangeNumber(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   if (value < min || value > max) return fallback;
@@ -375,7 +348,6 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
       appearance: { ...settings.pet.appearance },
       ...(settings.pet.layout ? { layout: { ...settings.pet.layout } } : {}),
     },
-    update: { ...settings.update },
   };
 }
 
