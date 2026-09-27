@@ -24,17 +24,6 @@
       "notes": "Test fixtures only; excluded from release artifacts."
     },
     {
-      "id": "forge-embedded-json-catalogs",
-      "paths": ["runtime/forge"],
-      "package": null,
-      "origin": "first-party",
-      "owner": "Dluckxx",
-      "license": "MIT",
-      "distribution": "packaged into Forge",
-      "evidence": "Embedded JSON catalogs and policies maintained in this repository.",
-      "notes": "Bundled into the Forge runtime payload."
-    },
-    {
       "id": "deepseek-harness-ui",
       "paths": [],
       "package": "@deepseek-ai/dsh@0.1.1-rc.2",

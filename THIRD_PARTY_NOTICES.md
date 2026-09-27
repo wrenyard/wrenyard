@@ -20,20 +20,11 @@ any third-party software.
 | postject | MIT | postject contributors |
 | archiver | MIT | archiver contributors |
 
-## Go module dependencies
+## Machine-readable inventory
 
-Go module license terms are recorded per module and resolved from the
-`go.sum`-declared dependency set during the build.
-
-## Exhaustive machine-readable report
-
-Release builds generate the exhaustive dependency license inventory with:
-
-    pnpm licenses list --prod --json
-
-The generated report is written to `.artifacts/release/third-party-licenses.json`
-and accompanies release artifacts together with `LICENSE`, `NOTICE` and this
-file.
+The dependency license inventory can be inspected from the lockfile with
+`pnpm licenses list --prod --json`. Release builds do not generate a license
+report; the suite zip carries `LICENSE`, `NOTICE` and this file.
 
 Full upstream license bodies are not reproduced here; refer to each upstream
 project's own licensing terms.
