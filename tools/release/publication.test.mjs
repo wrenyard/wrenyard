@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { cleanupRunArtifacts } from './cleanup-run-artifacts.mjs';
-import { publishGitHubRelease } from './publish-github-release.mjs';
-import { publishUpdateFeed } from './publish-update-feed.mjs';
+import {
+  cleanupRunArtifacts,
+  confirmCanonicalAssets,
+  publishGitHubRelease,
+  publishRelease,
+  publishUpdateFeed,
+} from './publish.mjs';
 import { validateDevTag, validateNativeTarget } from './release-context.mjs';
-import { stagePublicAssets } from './stage-public-assets.mjs';
 import { canonicalAssetNames } from './update-feed.mjs';
 
 const VERSION = '1.2.3-dev.4';
@@ -24,16 +27,31 @@ function withTempDir(fn) {
   }
 }
 
+// Mirror actions/download-artifact: one directory per build job, each holding
+// that target's suite and Desktop zip.
 function createDownloadedArtifacts(root) {
-  const inputDir = join(root, 'artifacts');
   for (const name of canonicalAssetNames(VERSION)) {
     const target = name.includes('darwin-arm64') ? 'darwin-arm64' : 'win32-x64';
-    const dir = join(inputDir, `wrenyard-release-${target}`);
+    const dir = join(root, 'artifacts', `wrenyard-release-${target}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, name), `content:${name}`);
-    writeFileSync(join(dir, `${name}.sha256`), 'unused internal evidence');
   }
-  return inputDir;
+  return join(root, 'artifacts');
+}
+
+function createFlatAssets(root) {
+  const assetsDir = join(root, 'release-assets');
+  mkdirSync(assetsDir, { recursive: true });
+  for (const name of canonicalAssetNames(VERSION)) writeFileSync(join(assetsDir, name), `content:${name}`);
+  return assetsDir;
+}
+
+function createScripts(root) {
+  const scriptsDir = join(root, 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  writeFileSync(join(scriptsDir, 'install.sh'), '#!/bin/sh\n');
+  writeFileSync(join(scriptsDir, 'install.ps1'), '# install\n');
+  return scriptsDir;
 }
 
 test('tag and native platform validation fail closed', () => {
@@ -46,37 +64,36 @@ test('tag and native platform validation fail closed', () => {
   assert.throws(() => validateNativeTarget('linux-x64', 'linux', 'x64'), /not a maintained/);
 });
 
-test('asset staging selects exactly four public archives and ignores internal evidence', () => {
+test('canonical assets are confirmed in memory before any publication', () => {
   withTempDir((dir) => {
-    const outputDir = join(dir, 'release-assets');
-    const names = stagePublicAssets({
-      inputDir: createDownloadedArtifacts(dir),
-      outputDir,
-      version: VERSION,
-    });
-    assert.deepEqual(names, canonicalAssetNames(VERSION));
-    assert.deepEqual(readdirSync(outputDir).sort(), canonicalAssetNames(VERSION).sort());
+    const artifactsDir = createDownloadedArtifacts(dir);
+    const assets = confirmCanonicalAssets({ artifactsDir, version: VERSION });
+    assert.deepEqual(assets.map((asset) => asset.name), canonicalAssetNames(VERSION));
+    assert.ok(assets.every((asset) => asset.path.endsWith(asset.name)));
+
+    const extra = join(artifactsDir, 'wrenyard-release-win32-x64', `wrenyard-9.9.9-dev.1-win32-x64-suite.zip`);
+    writeFileSync(extra, 'extra');
+    assert.throws(() => confirmCanonicalAssets({ artifactsDir, version: VERSION }), /not a canonical public archive/);
+    rmSync(extra, { force: true });
+
+    const incomplete = createDownloadedArtifacts(join(dir, 'other'));
+    rmSync(join(incomplete, 'wrenyard-release-win32-x64', canonicalAssetNames(VERSION)[2]));
+    assert.throws(() => confirmCanonicalAssets({ artifactsDir: incomplete, version: VERSION }), /missing canonical public archive/);
   });
 });
 
-test('GitHub publication creates a draft, uploads all four assets, then publishes', () => {
+test('GitHub publication creates a draft, uploads four assets, then publishes', () => {
   withTempDir((dir) => {
-    const assetsDir = join(dir, 'release-assets');
-    stagePublicAssets({ inputDir: createDownloadedArtifacts(dir), outputDir: assetsDir, version: VERSION });
+    const assetsDir = createFlatAssets(dir);
+    const assets = canonicalAssetNames(VERSION).map((name) => join(assetsDir, name));
     const calls = [];
     const run = (command, args) => {
       calls.push([command, ...args]);
       return { status: args[1] === 'view' ? 1 : 0, stdout: '', stderr: '' };
     };
-    publishGitHubRelease({
-      assetsDir,
-      repository: REPOSITORY,
-      tag: TAG,
-      sha: 'abc123',
-      version: VERSION,
-      run,
-    });
+    const names = publishGitHubRelease({ assets, repository: REPOSITORY, tag: TAG, sha: 'abc123', version: VERSION, run });
 
+    assert.deepEqual(names, canonicalAssetNames(VERSION));
     assert.deepEqual(calls.map((call) => call.slice(0, 3).join(' ')), [
       'gh release view',
       'gh release create',
@@ -86,8 +103,6 @@ test('GitHub publication creates a draft, uploads all four assets, then publishe
       'gh release upload',
       'gh release edit',
     ]);
-    const uploads = calls.filter((call) => call[2] === 'upload');
-    assert.deepEqual(uploads.map((call) => basename(call[4])), canonicalAssetNames(VERSION));
     assert.ok(calls[1].includes('--draft'));
     assert.ok(calls.at(-1).includes('--draft=false'));
     assert.ok(calls.flat().some((arg) => String(arg).includes('Signing status: macOS ad-hoc; Windows unsigned.')));
@@ -97,12 +112,13 @@ test('GitHub publication creates a draft, uploads all four assets, then publishe
 
 test('invalid tags and existing releases stop before any mutation', () => {
   withTempDir((dir) => {
-    const assetsDir = join(dir, 'release-assets');
-    stagePublicAssets({ inputDir: createDownloadedArtifacts(dir), outputDir: assetsDir, version: VERSION });
+    const assetsDir = createFlatAssets(dir);
+    const assets = canonicalAssetNames(VERSION).map((name) => join(assetsDir, name));
+
     const invalidCalls = [];
     assert.throws(
       () => publishGitHubRelease({
-        assetsDir,
+        assets,
         repository: REPOSITORY,
         tag: 'v1.2.3-dev.5',
         sha: 'abc123',
@@ -116,7 +132,7 @@ test('invalid tags and existing releases stop before any mutation', () => {
     const existingCalls = [];
     assert.throws(
       () => publishGitHubRelease({
-        assetsDir,
+        assets,
         repository: REPOSITORY,
         tag: TAG,
         sha: 'abc123',
@@ -132,10 +148,10 @@ test('invalid tags and existing releases stop before any mutation', () => {
   });
 });
 
-test('feed publication retries a rejected normal push without force or rebase', () => {
+test('feed publication pushes the feed and bootstrap scripts in one commit', () => {
   withTempDir((dir) => {
-    const assetsDir = join(dir, 'release-assets');
-    stagePublicAssets({ inputDir: createDownloadedArtifacts(dir), outputDir: assetsDir, version: VERSION });
+    const assetsDir = createFlatAssets(dir);
+    const scriptsDir = createScripts(dir);
     const calls = [];
     let pushes = 0;
     const run = (command, args) => {
@@ -156,35 +172,27 @@ test('feed publication retries a rejected normal push without force or rebase', 
       repository: REPOSITORY,
       tag: TAG,
       workspace: join(dir, 'workspace'),
+      scriptsDir,
       version: VERSION,
       run,
     });
+
     assert.deepEqual(result, { changed: true, attempts: 2 });
     const flat = calls.map((call) => call.join(' '));
     assert.ok(flat.some((call) => call === 'git reset --hard FETCH_HEAD'));
     assert.ok(!flat.some((call) => /(?:--force|\s-f\b|rebase)/.test(call)));
+    assert.equal(flat.filter((call) => call.startsWith('git push')).length, 2);
+
+    const staged = calls.filter((call) => call[0] === 'git' && call[1] === 'add')[0].slice(2);
+    assert.ok(staged.includes('dev.json'));
+    assert.ok(staged.includes('install.sh'));
+    assert.ok(staged.includes('install.ps1'));
+    assert.ok(staged.some((file) => file.startsWith('versions/')));
+
     const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'dev.json'), 'utf8'));
     assert.equal(feed.assets.length, 4);
     assert.ok(feed.assets.every((asset) => /^[0-9a-f]{64}$/.test(asset.sha256)));
-  });
-});
-
-test('feed publication refuses to clean a directory inside the source workspace', () => {
-  withTempDir((dir) => {
-    const calls = [];
-    assert.throws(
-      () => publishUpdateFeed({
-        assetsDir: join(dir, 'assets'),
-        publicationDir: join(dir, 'updates-publication'),
-        repository: REPOSITORY,
-        tag: TAG,
-        workspace: dir,
-        version: VERSION,
-        run: (...args) => calls.push(args),
-      }),
-      /unsafe update-feed publication directory/,
-    );
-    assert.equal(calls.length, 0);
+    assert.ok(readFileSync(join(dir, 'updates-publication', 'install.sh'), 'utf8').length > 0);
   });
 });
 
@@ -196,11 +204,7 @@ test('tagged-build cleanup deletes only artifacts returned for its workflow run'
     run: (command, args) => {
       calls.push([command, ...args]);
       if (args.includes('--slurp')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify([{ artifacts: [{ id: 101 }, { id: 202 }] }]),
-          stderr: '',
-        };
+        return { status: 0, stdout: JSON.stringify([{ artifacts: [{ id: 101 }, { id: 202 }] }]), stderr: '' };
       }
       return { status: 0, stdout: '', stderr: '' };
     },
@@ -210,4 +214,32 @@ test('tagged-build cleanup deletes only artifacts returned for its workflow run'
     ['gh', 'api', '-X', 'DELETE', `repos/${REPOSITORY}/actions/artifacts/101`],
     ['gh', 'api', '-X', 'DELETE', `repos/${REPOSITORY}/actions/artifacts/202`],
   ]);
+});
+
+test('publishRelease fails closed before any remote mutation when an archive is missing', () => {
+  withTempDir((dir) => {
+    const artifactsDir = createDownloadedArtifacts(dir);
+    rmSync(join(artifactsDir, 'wrenyard-release-win32-x64', canonicalAssetNames(VERSION)[2]));
+    const calls = [];
+    assert.throws(
+      () => publishRelease({
+        artifactsDir,
+        repository: REPOSITORY,
+        tag: TAG,
+        sha: 'abc123',
+        version: VERSION,
+        workspace: join(dir, 'workspace'),
+        scriptsDir: createScripts(dir),
+        publicationDir: join(dir, 'updates-publication'),
+        stagingDir: join(dir, 'staging'),
+        runId: '42',
+        run: (...args) => {
+          calls.push(args);
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      }),
+      /missing canonical public archive/,
+    );
+    assert.equal(calls.length, 0);
+  });
 });

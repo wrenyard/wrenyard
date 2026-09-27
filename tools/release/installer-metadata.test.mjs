@@ -1,24 +1,23 @@
-// Native installer metadata tests.
+// Bootstrap installer tests.
 //
 // These tests drive the real scripts/install.sh (bash) and scripts/install.ps1
-// (powershell.exe) parsers with a per-test fake network layer, proving that the
-// native scripts accept valid static metadata, reach the archive download, and
-// reject malformed metadata *before* any archive request. No JS surrogate
-// re-implements the installer validation: the assertions observe the requests
-// the real native parser emitted.
+// (powershell.exe) with a per-test fake network layer, proving that the
+// bootstrap scripts validate the static feed, verify the suite digest, extract
+// the archive, and hand the archive to the install engine. No JS surrogate
+// re-implements the scripts: the assertions observe what the real scripts did.
 //
 // Behaviour:
-//   * darwin arm64: `bash scripts/install.sh` runs with a fake `curl` executable
-//     first on PATH. The fake handles `-o <file>` and a URL argument, serves the
-//     full manifest fixture for `json` requests, logs every requested URL, and
-//     deliberately fails the archive download.
+//   * darwin arm64: `bash scripts/install.sh` runs with fake `curl` and `ditto`
+//     executables first on PATH. Fake curl serves the feed JSON and the suite
+//     bytes; fake ditto stages a fake engine executable; the real plutil and
+//     shasum parse and hash. The fake engine records its argv.
 //   * win32 x64: `powershell.exe -NoProfile -Command` runs with an in-process
-//     `Invoke-WebRequest` mock that returns the fixture JSON as Content and
-//     throws a sentinel for any archive request; the script is invoked with
-//     -Update -SuiteOnly -Prefix <temp>.
+//     `Invoke-WebRequest` mock and a fake `tar.exe` compiled on the fly. The
+//     fake tar stages the fake engine; the fake engine records its argv.
 //   * every other host is skipped.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,149 +26,69 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
-const NATIVE_METADATA_HOST =
+const NATIVE_HOST =
   (process.platform === 'darwin' && process.arch === 'arm64') ||
   (process.platform === 'win32' && process.arch === 'x64');
-const SKIP_REASON = `native metadata parser tests support darwin-arm64 and win32-x64, not ${process.platform}-${process.arch}`;
+const SKIP_REASON = `bootstrap tests support darwin-arm64 and win32-x64, not ${process.platform}-${process.arch}`;
 // Native PowerShell cold startup on hosted Windows runners can exceed 10 seconds.
 const PROCESS_TIMEOUT_MS = 30_000;
 const CASE_TIMEOUT_MS = PROCESS_TIMEOUT_MS + 5_000;
 
-// Canonical fixture identity: one release version whose four assets are the two
-// canonical suite/Desktop artifacts for each supported host triplet.
-const FIXTURE_VERSION = '9.9.9';
-const FIXTURE_TAG = 'v9.9.9';
-const FIXTURE_PUBLISHED_AT = '2026-08-14T09:00:00Z';
-const CANONICAL_BASE = 'https://github.com/wrenyard/wrenyard/releases/download';
-const HOSTS = ['darwin-arm64', 'win32-x64'];
+const VERSION = '9.9.9';
+const BASE = 'https://raw.githubusercontent.com/wrenyard/wrenyard/updates';
+const SUITE_BYTES = Buffer.from('suite-payload-for-bootstrap-tests\n', 'utf8');
+const SUITE_SHA = createHash('sha256').update(SUITE_BYTES).digest('hex');
+const DESKTOP_SHA = 'd'.repeat(64);
 
-// 64-hex digests, distinct per asset so a wrong-digest regression changes a
-// request rather than silently matching another asset.
-const DIGEST_BY_FILE = new Map(
-  [
-    ...HOSTS.map((host) => `wrenyard-${FIXTURE_VERSION}-${host}-suite.zip`),
-    ...HOSTS.map((host) => `wrenyard-desktop-${FIXTURE_VERSION}-${host}.zip`),
-  ].map((name, index) => [name, String(index + 1).repeat(64)]),
-);
-
-function canonicalAsset(name) {
-  return {
-    name,
-    url: `${CANONICAL_BASE}/${FIXTURE_TAG}/${name}`,
-    sha256: DIGEST_BY_FILE.get(name),
-  };
+function asset(name, sha256) {
+  return { name, url: `https://example.test/${name}`, sha256 };
 }
 
-function canonicalAssets() {
+function canonicalAssets(version, { suiteSha = SUITE_SHA } = {}) {
   return [
-    canonicalAsset(`wrenyard-${FIXTURE_VERSION}-darwin-arm64-suite.zip`),
-    canonicalAsset(`wrenyard-desktop-${FIXTURE_VERSION}-darwin-arm64.zip`),
-    canonicalAsset(`wrenyard-${FIXTURE_VERSION}-win32-x64-suite.zip`),
-    canonicalAsset(`wrenyard-desktop-${FIXTURE_VERSION}-win32-x64.zip`),
+    asset(`wrenyard-${version}-darwin-arm64-suite.zip`, suiteSha),
+    asset(`wrenyard-desktop-${version}-darwin-arm64.zip`, DESKTOP_SHA),
+    asset(`wrenyard-${version}-win32-x64-suite.zip`, suiteSha),
+    asset(`wrenyard-desktop-${version}-win32-x64.zip`, DESKTOP_SHA),
   ];
 }
 
-function manifestDocument({ version = FIXTURE_VERSION, assets = canonicalAssets() } = {}) {
+function feedDocument({ version = VERSION, schema = 'wrenyard.update.v1', assets, suiteSha } = {}) {
   return {
-    schema_version: 'wrenyard.update.v1',
+    schema_version: schema,
     version,
-    published_at: FIXTURE_PUBLISHED_AT,
-    assets,
+    published_at: '2026-09-25T00:00:00Z',
+    assets: assets ?? canonicalAssets(version, { suiteSha }),
   };
 }
 
-// Pretty JSON is deliberate: the native parsers must handle the published
-// formatting, not a minified variant.
-function manifestText(options) {
-  return `${JSON.stringify(manifestDocument(options), null, 2)}\n`;
+function feedText(options) {
+  return `${JSON.stringify(feedDocument(options), null, 2)}\n`;
 }
 
-// The exact-version document URL the POSIX installer derives from the metadata
-// base; an explicit --version install must read versions/<version>.json.
-function versionDocUrl(version = FIXTURE_VERSION) {
-  return `https://raw.githubusercontent.com/wrenyard/wrenyard/updates/versions/${version}.json`;
-}
-
-const nativeTarget = process.platform === 'win32' ? 'win32-x64' : 'darwin-arm64';
-const ARCHIVE_URL = canonicalAsset(`wrenyard-${FIXTURE_VERSION}-${nativeTarget}-suite.zip`).url;
-
-// Every fixture case: a JSON manifest to serve (or the digest to serve) plus the
-// expected observable outcome after running the real native parser.
-//
-// `served` is either a manifest document (the fake layer answers any *.json
-// fetch with it) or null (metadata is unreachable, exercising rejection paths
-// that must still refuse before the archive download).
+// Every case: a feed document to serve plus the expected observable outcome
+// after running the real bootstrap script.
 const CASES = [
   {
-    id: 'valid-manifest-reaches-archive-download',
-    served: manifestText(),
-    // A valid document must be accepted, then the archive fetch must be
-    // attempted and observed in the request log.
-    expectArchiveRequest: true,
-    expectVersionDoc: false,
+    id: 'valid-feed-downloads-verifies-extracts-and-runs-engine',
+    served: feedText(),
+    args: [],
+    expectFeedUrl: `${BASE}/dev.json`,
+    expectEngine: true,
+    expectExitZero: true,
   },
   {
-    id: 'valid-manifest-reads-exact-version-document',
-    served: manifestText(),
-    version: FIXTURE_VERSION,
-    // The nested versions/ directory must be fetched (regression: the nested
-    // directory lookup once missed and had to be fixed in the shell parser).
-    expectArchiveRequest: true,
-    expectVersionDoc: true,
-  },
-
-  // Rejection cases: each must stop before the archive download.
-  {
-    id: 'duplicate-asset-names-are-rejected',
-    served: manifestText({
-      assets: [...canonicalAssets(), canonicalAsset(`wrenyard-${FIXTURE_VERSION}-win32-x64-suite.zip`)],
-    }),
-    expectArchiveRequest: false,
-    expectVersionDoc: false,
-  },
-  {
-    id: 'unknown-asset-filename-is-rejected',
-    served: manifestText({
-      assets: [
-        ...canonicalAssets().slice(0, 3),
-        { ...canonicalAsset(`wrenyard-desktop-${FIXTURE_VERSION}-darwin-arm64.zip`), name: 'wrenyard-9.9.9-unknown-host-suite.zip' },
-      ],
-    }),
-    expectArchiveRequest: false,
-    expectVersionDoc: false,
-  },
-  {
-    id: 'wrong-canonical-url-is-rejected',
-    served: manifestText({
-      assets: [
-        { ...canonicalAsset(`wrenyard-${FIXTURE_VERSION}-darwin-arm64-suite.zip`), url: `https://evil.invalid/${FIXTURE_TAG}/wrenyard-${FIXTURE_VERSION}-darwin-arm64-suite.zip` },
-        ...canonicalAssets().slice(1),
-      ],
-    }),
-    expectArchiveRequest: false,
-    expectVersionDoc: false,
-  },
-  {
-    id: 'malformed-sha-digest-is-rejected',
-    served: manifestText({
-      assets: [
-        { ...canonicalAsset(`wrenyard-${FIXTURE_VERSION}-darwin-arm64-suite.zip`), sha256: 'sha256:not-a-digest' },
-        ...canonicalAssets().slice(1),
-      ],
-    }),
-    expectArchiveRequest: false,
-    expectVersionDoc: false,
-  },
-  {
-    id: 'wrong-schema-version-is-rejected',
-    served: `${JSON.stringify({ ...manifestDocument(), schema_version: 'wrenyard.update.v0' }, null, 2)}\n`,
-    expectArchiveRequest: false,
-    expectVersionDoc: false,
+    id: 'digest-mismatch-fails-before-the-engine',
+    served: feedText({ suiteSha: 'f'.repeat(64) }),
+    args: [],
+    expectFeedUrl: `${BASE}/dev.json`,
+    expectEngine: false,
+    expectExitZero: false,
   },
 ];
 
 function makeTmpDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-installer-metadata-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-bootstrap-'));
   t.after(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -180,17 +99,13 @@ function makeTmpDir(t) {
 // POSIX / bash path
 // ---------------------------------------------------------------------------
 
-// Fake `curl` for scripts/install.sh. It records every requested URL, answers
-// JSON metadata requests from $FAKE_CURL_JSON (a single manifest document for
-// every *.json fetch), and fails any archive download so the test stops right
-// after the installer decides an archive URL is valid.
+// Fake `curl` for scripts/install.sh. It records every requested URL, answers a
+// *.json request with the feed fixture, and writes the suite bytes for any other
+// request. It deliberately handles the exact `-o <file>` form the script uses.
 function writeFakeCurl(dir) {
   const curlPath = path.join(dir, 'curl');
-  const logPath = path.join(dir, 'curl.log');
   fs.writeFileSync(curlPath, `#!/bin/sh
-out=""
-url=""
-prev=""
+out=""; url=""; prev=""
 for a in "$@"; do
   if [ "$prev" = "-o" ]; then out="$a"; prev=""; continue; fi
   case "$a" in
@@ -200,66 +115,116 @@ for a in "$@"; do
 done
 printf '%s\\n' "$url" >> "$FAKE_CURL_LOG"
 case "$url" in
-  *.json)
-    if [ -n "$out" ]; then cat "$FAKE_CURL_JSON" > "$out"; else cat "$FAKE_CURL_JSON"; fi
-    exit 0 ;;
-  *)
-    # Deliberately fail the archive download: reaching this branch is the
-    # observable proof that validation passed.
-    echo "FAKE_CURL_ARCHIVE_FAILED" >&2
-    exit 22 ;;
+  *.json) cp "$FAKE_FEED" "$out" ;;
+  *) cp "$FAKE_SUITE" "$out" ;;
 esac
 `, 'utf8');
   fs.chmodSync(curlPath, 0o755);
-  return { curlPath, logPath };
+}
+
+// Fake `ditto`: stages the fake engine executable instead of unpacking a real
+// archive. The last argument is the extraction destination.
+function writeFakeDitto(dir) {
+  const dittoPath = path.join(dir, 'ditto');
+  fs.writeFileSync(dittoPath, `#!/bin/sh
+dest=""
+for a in "$@"; do dest="$a"; done
+mkdir -p "$dest"
+cp "$FAKE_ENGINE" "$dest/wrenyard"
+chmod +x "$dest/wrenyard"
+`, 'utf8');
+  fs.chmodSync(dittoPath, 0o755);
+}
+
+function writeFakeEngine(dir) {
+  const enginePath = path.join(dir, 'fake-engine.sh');
+  fs.writeFileSync(enginePath, `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_ENGINE_LOG"
+exit "\${FAKE_ENGINE_EXIT:-0}"
+`, 'utf8');
+  fs.chmodSync(enginePath, 0o755);
+  return enginePath;
 }
 
 function runPosixCase(testCase, tmp) {
   const fakeBin = path.join(tmp, 'fake-bin');
   fs.mkdirSync(fakeBin, { recursive: true });
-  const { logPath } = writeFakeCurl(fakeBin);
-  const fixturePath = path.join(tmp, 'manifest.json');
-  fs.writeFileSync(fixturePath, testCase.served, 'utf8');
+  writeFakeCurl(fakeBin);
+  writeFakeDitto(fakeBin);
+  const enginePath = writeFakeEngine(fakeBin);
+  const feedPath = path.join(tmp, 'feed.json');
+  const suitePath = path.join(tmp, 'suite.bin');
+  const logPath = path.join(tmp, 'curl.log');
+  const engineLog = path.join(tmp, 'engine.log');
+  fs.writeFileSync(feedPath, testCase.served, 'utf8');
+  fs.writeFileSync(suitePath, SUITE_BYTES);
   fs.writeFileSync(logPath, '');
-  const prefix = path.join(tmp, 'prefix');
+  fs.writeFileSync(engineLog, '');
 
-  const res = spawnSync('bash', [
-    path.join(ROOT, 'scripts', 'install.sh'),
-    ...(testCase.expectVersionDoc ? ['--version', testCase.version ?? FIXTURE_VERSION] : ['--update']),
-    '--suite-only',
-    '--prefix', prefix,
-    '--bin-dir', path.join(prefix, 'bin'),
-  ], {
+  const res = spawnSync('bash', [path.join(ROOT, 'scripts', 'install.sh'), ...testCase.args], {
     encoding: 'utf8',
     timeout: PROCESS_TIMEOUT_MS,
     env: {
       ...process.env,
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
       FAKE_CURL_LOG: logPath,
-      FAKE_CURL_JSON: fixturePath,
+      FAKE_FEED: feedPath,
+      FAKE_SUITE: suitePath,
+      FAKE_ENGINE: enginePath,
+      FAKE_ENGINE_LOG: engineLog,
     },
   });
 
-  return { res, requests: readRequests(logPath), prefix };
+  return { res, requests: readRequests(logPath), engineArgs: readRequests(engineLog) };
 }
 
 // ---------------------------------------------------------------------------
 // Windows / PowerShell path
 // ---------------------------------------------------------------------------
 
-// PowerShell command that overrides Invoke-WebRequest for the child scope. The
-// mock logs every Uri via Add-Content, returns the fixture JSON as Content for
-// json requests, and throws a sentinel for any archive (non-JSON) request.
-// Optional Invoke-WebRequest arguments (OutFile, Headers, Method, ...) are
-// tolerated through a catch-all parameter so the mock matches the real cmdlet
-// signature the installer calls.
-function psMockScript({ logPath, fixturePath }) {
-  const escapedLog = logPath.replace(/'/g, "''");
-  const escapedFixture = fixturePath.replace(/'/g, "''");
+// Compile a tiny dual-role executable: invoked as `tar.exe` it stages a copy of
+// itself as <dest>\wrenyard.exe; invoked as the engine it appends its argv to
+// $FAKE_ENGINE_LOG and exits 0.
+function compileFakeExecutable(destination) {
+  const source = `
+using System;
+using System.IO;
+public static class FakeBootstrap {
+  public static int Main(string[] args) {
+    for (int i = 0; i < args.Length; i++) {
+      if (args[i] == "-C" && i + 1 < args.Length) {
+        Directory.CreateDirectory(args[i + 1]);
+        File.Copy(System.Reflection.Assembly.GetExecutingAssembly().Location, Path.Combine(args[i + 1], "wrenyard.exe"), true);
+        return 0;
+      }
+    }
+    string log = Environment.GetEnvironmentVariable("FAKE_ENGINE_LOG");
+    if (log != null) { File.AppendAllText(log, string.Join(" ", args) + "\\n"); }
+    return 0;
+  }
+}
+`.trim();
+  const command = [
+    `$src = @'`,
+    source,
+    `'@`,
+    `Add-Type -TypeDefinition $src -OutputAssembly '${destination.replace(/'/g, "''")}' -OutputType ConsoleApplication`,
+  ].join('\n');
+  const res = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+    encoding: 'utf8',
+    timeout: PROCESS_TIMEOUT_MS,
+  });
+  if (res.status !== 0) {
+    throw new Error(`could not compile the fake bootstrap executable: ${res.stderr || res.stdout}`);
+  }
+}
+
+function psMockScript({ logPath, feedPath, suitePath }) {
+  const quote = (value) => value.replace(/'/g, "''");
   return `
-$logPath = '${escapedLog}'
-$fixturePath = '${escapedFixture}'
-$fixture = Get-Content -Raw -LiteralPath $fixturePath
+$logPath = '${quote(logPath)}'
+$feedPath = '${quote(feedPath)}'
+$suitePath = '${quote(suitePath)}'
 function Invoke-WebRequest {
   [CmdletBinding()]
   param(
@@ -268,39 +233,41 @@ function Invoke-WebRequest {
     [Parameter(ValueFromRemainingArguments = $true)]$Rest
   )
   Add-Content -LiteralPath $logPath -Value $Uri
-  if ($Uri -like '*.json') {
-    return [pscustomobject]@{ Content = $fixture; StatusCode = 200; Headers = @{} }
-  }
-  throw [System.InvalidOperationException]::new('FAKE_IWR_ARCHIVE_FAILED')
+  if ($Uri -like '*.json') { Copy-Item -LiteralPath $feedPath -Destination $OutFile -Force }
+  else { Copy-Item -LiteralPath $suitePath -Destination $OutFile -Force }
 }
 `.trim();
 }
 
 function runWindowsCase(testCase, tmp) {
+  const fakeBin = path.join(tmp, 'fake-bin');
+  fs.mkdirSync(fakeBin, { recursive: true });
+  compileFakeExecutable(path.join(fakeBin, 'tar.exe'));
+  const feedPath = path.join(tmp, 'feed.json');
+  const suitePath = path.join(tmp, 'suite.bin');
   const logPath = path.join(tmp, 'iwr.log');
-  const fixturePath = path.join(tmp, 'manifest.json');
-  fs.writeFileSync(fixturePath, testCase.served, 'utf8');
+  const engineLog = path.join(tmp, 'engine.log');
+  fs.writeFileSync(feedPath, testCase.served, 'utf8');
+  fs.writeFileSync(suitePath, SUITE_BYTES);
   fs.writeFileSync(logPath, '');
-  const prefix = path.join(tmp, 'prefix');
+  fs.writeFileSync(engineLog, '');
   const mockPath = path.join(tmp, 'mock.ps1');
-  fs.writeFileSync(mockPath, `${psMockScript({ logPath, fixturePath })}\n`, 'utf8');
+  fs.writeFileSync(mockPath, `${psMockScript({ logPath, feedPath, suitePath })}\n`, 'utf8');
 
   const inner = [
     `. '${mockPath.replace(/'/g, "''")}';`,
+    `$env:FAKE_ENGINE_LOG = '${engineLog.replace(/'/g, "''")}';`,
     `& '${path.join(ROOT, 'scripts', 'install.ps1').replace(/'/g, "''")}'`,
-    testCase.expectVersionDoc ? `-Version '${testCase.version ?? FIXTURE_VERSION}'` : '',
-    '-Update -SuiteOnly',
-    `-Prefix '${prefix.replace(/'/g, "''")}'`,
-    `-BinDir '${path.join(prefix, 'bin').replace(/'/g, "''")}'`,
+    ...testCase.args.map((arg) => `'${arg.replace(/'/g, "''")}'`),
   ].join(' ');
 
-  const res = spawnSync('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-Command', inner,
-  ], { encoding: 'utf8', timeout: PROCESS_TIMEOUT_MS, env: { ...process.env } });
+  const res = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', inner], {
+    encoding: 'utf8',
+    timeout: PROCESS_TIMEOUT_MS,
+    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
+  });
 
-  return { res, requests: readRequests(logPath), prefix };
+  return { res, requests: readRequests(logPath), engineArgs: readRequests(engineLog) };
 }
 
 function readRequests(logPath) {
@@ -311,91 +278,48 @@ function readRequests(logPath) {
   }
 }
 
-function assertFixtureSchema() {
-  // Guard the fixture itself: four canonical assets for the two host triplets,
-  // canonical GitHub URLs, and 64-hex digests.
-  const assets = canonicalAssets();
-  assert.equal(assets.length, 4);
-  for (const asset of assets) {
-    assert.match(asset.url, new RegExp(`^${CANONICAL_BASE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/${FIXTURE_TAG}/`));
-    assert.match(asset.sha256, /^[0-9a-f]{64}$/);
-  }
-  assert.equal(manifestDocument().schema_version, 'wrenyard.update.v1');
-  assert.equal(manifestDocument().published_at, FIXTURE_PUBLISHED_AT);
-}
+function assertCaseOutcome(testCase, { res, requests, engineArgs }) {
+  assert.ifError(res.error);
+  assert.equal(res.signal, null, `bootstrap terminated by ${res.signal}`);
+  assert.ok(
+    requests.includes(testCase.expectFeedUrl),
+    `expected the feed request ${testCase.expectFeedUrl}: ${requests.join(', ')}`,
+  );
+  assert.deepEqual(
+    requests.filter((url) => url.includes('api.github.com')),
+    [],
+    `the bootstrap must never call the GitHub Release API: ${requests.join(', ')}`,
+  );
 
-test('installer metadata fixture stays canonical', () => {
-  assertFixtureSchema();
-});
-
-for (const testCase of CASES) {
-  test(`installer metadata (posix): ${testCase.id}`, {
-    skip: NATIVE_METADATA_HOST && process.platform === 'darwin' ? false : SKIP_REASON,
-    timeout: CASE_TIMEOUT_MS,
-  }, (t) => {
-    const tmp = makeTmpDir(t);
-    const { res, requests } = runPosixCase(testCase, tmp);
-    assert.ifError(res.error);
-    assert.equal(res.signal, null, `installer terminated by ${res.signal}`);
-    assertRequestsMatch(testCase, requests);
-    if (!testCase.expectArchiveRequest) {
-      assert.notEqual(res.status, 0, `rejected metadata must fail the install: ${requests.join(', ')}`);
-    }
-  });
-
-  test(`installer metadata (windows): ${testCase.id}`, {
-    skip: NATIVE_METADATA_HOST && process.platform === 'win32' ? false : SKIP_REASON,
-    timeout: CASE_TIMEOUT_MS,
-  }, (t) => {
-    const tmp = makeTmpDir(t);
-    const { res, requests } = runWindowsCase(testCase, tmp);
-    assert.ifError(res.error);
-    assert.equal(res.signal, null, `installer terminated by ${res.signal}`);
-    assertRequestsMatch(testCase, requests);
-    if (!testCase.expectArchiveRequest) {
-      assert.notEqual(res.status, 0, `rejected metadata must fail the install: ${requests.join(', ')}`);
-    }
-  });
-}
-
-function assertRequestsMatch(testCase, requests) {
-  const expectedMetadata = testCase.expectVersionDoc ? versionDocUrl() : 'https://raw.githubusercontent.com/wrenyard/wrenyard/updates/dev.json';
-  assert.deepEqual(requests.filter((url) => url.endsWith('.json')), [expectedMetadata]);
-  const archiveRequests = requests.filter((line) => line.includes('/releases/download/'));
-  const apiRequests = requests.filter((line) => line.includes('api.github.com'));
-  assert.deepEqual(apiRequests, [], `metadata installs must never call the GitHub Release API: ${requests.join(', ')}`);
-
-  if (testCase.expectArchiveRequest) {
+  if (testCase.expectEngine) {
+    assert.equal(res.status, 0, `valid feed must complete: ${engineArgs.join(' | ')}`);
+    const install = engineArgs.find((line) => line.startsWith('install --version'));
+    assert.ok(install, `the engine must be invoked with the install command: ${engineArgs.join(' | ')}`);
     assert.ok(
-      archiveRequests.includes(ARCHIVE_URL),
-      `valid metadata must reach the canonical archive download: ${requests.join(', ')}`,
+      install.includes(`--version ${VERSION}`) && /--suite-zip \S*suite\.zip/.test(install),
+      `the engine must receive --version and --suite-zip: ${install}`,
     );
     return;
   }
 
-  assert.deepEqual(
-    archiveRequests,
-    [],
-    `invalid metadata must stop before the archive download: ${requests.join(', ')}`,
-  );
+  assert.notEqual(res.status, 0, `invalid feed must fail the bootstrap: ${requests.join(', ')}`);
+  assert.deepEqual(engineArgs, [], `the engine must not run on an invalid feed: ${engineArgs.join(' | ')}`);
 }
 
-test('explicit version reads the nested exact-version document', {
-  skip: NATIVE_METADATA_HOST && process.platform === 'darwin' ? false : SKIP_REASON,
-  timeout: CASE_TIMEOUT_MS,
-}, (t) => {
-  const tmp = makeTmpDir(t);
-  const { requests } = runPosixCase(
-    { served: manifestText(), version: FIXTURE_VERSION, expectArchiveRequest: true, expectVersionDoc: true },
-    tmp,
-  );
-  const expected = versionDocUrl(FIXTURE_VERSION);
-  assert.ok(
-    requests.includes(expected),
-    `explicit --version must read ${expected}: ${requests.join(', ')}`,
-  );
-  assert.ok(
-    requests.includes(ARCHIVE_URL),
-    `explicit --version must reach the canonical archive download: ${requests.join(', ')}`,
-  );
-});
+for (const testCase of CASES) {
+  test(`bootstrap (posix): ${testCase.id}`, {
+    skip: NATIVE_HOST && process.platform === 'darwin' ? false : SKIP_REASON,
+    timeout: CASE_TIMEOUT_MS,
+  }, (t) => {
+    const tmp = makeTmpDir(t);
+    assertCaseOutcome(testCase, runPosixCase(testCase, tmp));
+  });
+
+  test(`bootstrap (windows): ${testCase.id}`, {
+    skip: NATIVE_HOST && process.platform === 'win32' ? false : SKIP_REASON,
+    timeout: CASE_TIMEOUT_MS,
+  }, (t) => {
+    const tmp = makeTmpDir(t);
+    assertCaseOutcome(testCase, runWindowsCase(testCase, tmp));
+  });
+}
