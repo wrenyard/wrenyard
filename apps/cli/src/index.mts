@@ -1,13 +1,13 @@
 import {handleQuota} from './commands/quota.mts'
 import { hostname } from 'node:os'
+import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { handleDaemonDispatchStatus, handleDaemonDrain, handleDaemonFreeze, handleDaemonRestart, handleDaemonStart, handleDaemonStop, handleDaemonThaw } from './commands/daemon.mts'
+import { handleDaemonRestart, handleDaemonStart, handleDaemonStop } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleMessage } from './commands/message.mts'
 import { handleProject } from './commands/project.mts'
 import { handleStatus } from './commands/status.mts'
-import { handleUpdate } from './commands/update.mts'
 import { handleTask } from './commands/task.mts'
 import { handleExec } from './commands/exec.mts'
 import { handleTaskgraph } from './commands/taskgraph.mts'
@@ -37,20 +37,15 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
       case 'quota':
         return handleQuota(args.slice(1))
       case 'daemon':
-      case 'deamon':
         if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-          console.error('Usage: wrenyard daemon <start|stop|restart|status|freeze|thaw|drain|dispatch-status> [--config path] [--host addr] [--port n] [--no-wait] [--json]')
+          console.error('Usage: wrenyard daemon <start|stop|restart|status> [--config path] [--host addr] [--port n] [--force] [--json]')
           return subcommand ? 0 : 1
         }
         if (subcommand === 'start') return handleDaemonStart(args.slice(2))
         if (subcommand === 'stop') return handleDaemonStop(args.slice(2))
         if (subcommand === 'restart') return handleDaemonRestart(args.slice(2))
         if (subcommand === 'status') return handleStatus(args.slice(2))
-        if (subcommand === 'freeze') return handleDaemonFreeze(args.slice(2))
-        if (subcommand === 'thaw') return handleDaemonThaw(args.slice(2))
-        if (subcommand === 'drain') return handleDaemonDrain(args.slice(2))
-        if (subcommand === 'dispatch-status') return handleDaemonDispatchStatus(args.slice(2))
-        console.error('Usage: wrenyard daemon <start|stop|restart|status|freeze|thaw|drain|dispatch-status> [--config path] [--host addr] [--port n] [--no-wait] [--json]')
+        console.error('Usage: wrenyard daemon <start|stop|restart|status> [--config path] [--host addr] [--port n] [--force] [--json]')
         return 1
       case 'task':
         return handleTask(args.slice(1))
@@ -60,8 +55,6 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return handleProject(args.slice(1))
       case 'status':
         return handleStatus(args.slice(1))
-      case 'update':
-        return handleUpdate(args.slice(1))
       case 'doctor':
         return await handleDoctor(args.slice(1))
       case 'message':
@@ -92,10 +85,9 @@ Usage:
   wrenyard task output <task_run_id> [--config path]
   wrenyard task doctor [--config path] [--json]
   wrenyard exec <prompt> --target <provider/model:client> [--cwd path] [--resume <session-id>] [--thinking <level>] [--features a,b] [--config path] [--json] [--no-stream]
-  wrenyard daemon <start|stop|restart|status|freeze|thaw|drain|dispatch-status> [--config path] [--host 0.0.0.0] [--port 8787] [--no-wait] [--json]
+  wrenyard daemon <start|stop|restart|status> [--config path] [--host 0.0.0.0] [--port 8787] [--force] [--json]
   wrenyard -v | --version
   wrenyard status [--config path] [--json]
-  wrenyard update [--config path] [--no-wait] [--json]
   wrenyard doctor [--config path]
   wrenyard project list [--config path]
   wrenyard project describe <project> [--config path]
@@ -129,7 +121,7 @@ Host: ${hostname()}`)
 
 export function isCliEntrypoint(entry = process.argv[1]): boolean {
   if (!entry) return false
-  return resolve(entry) === fileURLToPath(import.meta.url)
+  return realpathSync(resolve(entry)) === realpathSync(fileURLToPath(import.meta.url))
 }
 
 export async function runCliEntrypoint(): Promise<void> {

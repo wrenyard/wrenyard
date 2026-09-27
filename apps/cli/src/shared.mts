@@ -1,8 +1,8 @@
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { foremanPackageRoot, resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
+import { foremanPackageRoot, readSuiteVersion, resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
 import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
@@ -60,17 +60,14 @@ export interface ForemanStatus {
   http: StatusCheck
   mcp: StatusCheck
   db: StatusCheck
-  // Daemon dispatch-admission projection. Present only when daemon.status is
-  // reachable; omitted on lookup failure so we never fabricate an accepting
-  // mode or zero active counts.
-  mode?: 'accepting' | 'frozen' | 'planned_restart'
+  // Daemon lifecycle projection. Present only when daemon.status is reachable;
+  // omitted on lookup failure so we never fabricate an accepting admission or
+  // zero active counts.
+  shutting_down?: boolean
+  idle?: boolean
   active_task_count?: number
   active_workflow_count?: number
   active_execution_count?: number
-  recovery_required?: boolean
-  operation_id?: string
-  kind?: 'update' | 'restart'
-  phase?: 'preparing' | 'draining' | 'updating' | 'stopping' | 'starting' | 'verifying' | 'completed' | 'failed'
 }
 
 export function applyServiceCliOverrides(config: ForemanServiceConfig, values: Record<string, unknown>): void {
@@ -317,8 +314,9 @@ export function loadConfig(configPathValue?: unknown): ForemanConfig {
 }
 
 export function readLocalPackageVersion(): string {
-  const pkg = JSON.parse(readFileSync(join(foremanDir, 'package.json'), 'utf-8')) as { version?: unknown }
-  return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : '0.0.0'
+  // The daemon package version is a constant 0.0.0; the suite version (from
+  // SUITE_VERSION or the suite package.json) is the only meaningful identity.
+  return readSuiteVersion(suiteDir)
 }
 
 export function resolveConfigPath(value: unknown): string {

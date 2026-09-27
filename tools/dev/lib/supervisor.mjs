@@ -318,7 +318,7 @@ export async function runDev() {
       `logs: ${logs}`,
       'Edits restart the stack when the daemon is idle; stop with Ctrl+C.',
     ].join('\n'));
-    if (status?.mode && status.mode !== 'accepting') print(`Dispatch is ${status.mode}; run "wrenyard daemon thaw" if that is left over.`);
+    if (status?.shutting_down === true) print('Daemon is shutting down; the next source change restarts it.');
   }
 
   async function detectRunningDaemon() {

@@ -95,21 +95,22 @@ export async function collectForemanStatus(configPathValue: unknown): Promise<Fo
 export function daemonStatusProjection(payload: unknown): Partial<ForemanStatus> {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {}
   const value = payload as Record<string, unknown>
-  const mode = value.mode
-  if (typeof mode !== 'string' || !['accepting', 'frozen', 'planned_restart'].includes(mode)) {
+  const counts = [value.activeTaskCount, value.activeWorkflowCount, value.activeExecutionCount]
+  // Fail closed: a status missing the lifecycle contract never fabricates an
+  // accepting admission or a zero active count.
+  if (value.ok !== true
+    || typeof value.shutting_down !== 'boolean'
+    || typeof value.idle !== 'boolean'
+    || counts.some((count) => !Number.isSafeInteger(count) || (count as number) < 0)) {
     return {}
   }
-  const projection: Partial<ForemanStatus> = {
-    mode: mode as ForemanStatus['mode'],
-    active_task_count: typeof value.active_task_count === 'number' ? value.active_task_count : 0,
-    active_workflow_count: typeof value.active_workflow_count === 'number' ? value.active_workflow_count : 0,
-    active_execution_count: typeof value.active_execution_count === 'number' ? value.active_execution_count : 0,
-    recovery_required: Boolean(value.recovery_required),
+  return {
+    shutting_down: value.shutting_down,
+    idle: value.idle,
+    active_task_count: value.activeTaskCount as number,
+    active_workflow_count: value.activeWorkflowCount as number,
+    active_execution_count: value.activeExecutionCount as number,
   }
-  if (typeof value.operation_id === 'string') projection.operation_id = value.operation_id
-  if (value.kind === 'update' || value.kind === 'restart') projection.kind = value.kind
-  if (typeof value.phase === 'string') projection.phase = value.phase as ForemanStatus['phase']
-  return projection
 }
 
 export function ipcHealthPayload(check: StatusCheck): { uptimeMs?: number } {
@@ -215,15 +216,11 @@ export function printForemanStatus(status: ForemanStatus): void {
   console.log(`  daemon: ${status.daemon.running ? 'running' : 'not running'}${status.daemon.pid ? ` (pid ${status.daemon.pid})` : ''}`)
   console.log(`  state:  ${status.daemon.status ?? 'unknown'}${status.daemon.pidAlive === false ? ' (pid not alive)' : ''}`)
   if (status.daemon.logPaths?.stderr) console.log(`  logs:   ${status.daemon.logPaths.stderr}`)
-  if (status.mode) {
-    console.log(`  admission: ${status.mode}`)
-    if (status.operation_id !== undefined) {
-      console.log(`  plan:   ${status.operation_id}${status.kind ? ` (${status.kind})` : ''}${status.phase ? ` ${status.phase}` : ''}`)
-      console.log(`  active tasks: ${status.active_task_count ?? 0}`)
-      console.log(`  active workflows: ${status.active_workflow_count ?? 0}`)
-      console.log(`  active executions: ${status.active_execution_count ?? 0}`)
-      console.log(`  recovery required: ${status.recovery_required ? 'yes' : 'no'}`)
-    }
+  if (status.shutting_down !== undefined) {
+    console.log(`  admission: ${status.shutting_down ? 'shutting down' : 'accepting'}`)
+    console.log(`  active tasks: ${status.active_task_count ?? 0}`)
+    console.log(`  active workflows: ${status.active_workflow_count ?? 0}`)
+    console.log(`  active executions: ${status.active_execution_count ?? 0}`)
   }
   console.log(`  ipc:    ${formatStatusCheck(status.ipc)}`)
   console.log(`  http:   ${formatStatusCheck(status.http)}`)

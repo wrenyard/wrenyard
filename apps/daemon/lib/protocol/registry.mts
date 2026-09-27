@@ -6,26 +6,14 @@ import {
   type ActivitySnapshotV1,
 } from './methods/activity.mts'
 import {
-  daemonDrainParamsSchema,
-  daemonDrainResultSchema,
-  daemonFreezeParamsSchema,
-  daemonFreezeResultSchema,
   daemonShutdownParamsSchema,
   daemonShutdownResultSchema,
   daemonStatusParamsSchema,
   daemonStatusResultSchema,
-  daemonThawParamsSchema,
-  daemonThawResultSchema,
-  type DaemonDrainParams,
-  type DaemonDrainResult,
-  type DaemonFreezeParams,
-  type DaemonFreezeResult,
   type DaemonShutdownParams,
   type DaemonShutdownResult,
   type DaemonStatusParams,
   type DaemonStatusResult,
-  type DaemonThawParams,
-  type DaemonThawResult,
 } from './methods/daemon.mts'
 import {
   eventListParamsSchema,
@@ -351,16 +339,10 @@ export type {
   ActivitySnapshotV1,
 } from './methods/activity.mts'
 export type {
-  DaemonDrainParams,
-  DaemonDrainResult,
-  DaemonFreezeParams,
-  DaemonFreezeResult,
   DaemonShutdownParams,
   DaemonShutdownResult,
   DaemonStatusParams,
   DaemonStatusResult,
-  DaemonThawParams,
-  DaemonThawResult,
 } from './methods/daemon.mts'
 export type {
   EventListParams,
@@ -494,11 +476,8 @@ export interface MethodSchema<TParams = unknown, TResult = unknown> {
 
 export interface ForemanMethodParams {
   'activity.snapshot': ActivitySnapshotParams
-  'daemon.drain': DaemonDrainParams
-  'daemon.freeze': DaemonFreezeParams
   'daemon.shutdown': DaemonShutdownParams
   'daemon.status': DaemonStatusParams
-  'daemon.thaw': DaemonThawParams
   'health.ping': HealthPingParams
   'gateway.connection': GatewayConnectionParams
   'client.configuration.snapshot': ClientConfigurationSnapshotParams
@@ -572,11 +551,8 @@ export interface ForemanMethodParams {
 
 export interface ForemanMethodResults {
   'activity.snapshot': ActivitySnapshotV1
-  'daemon.drain': DaemonDrainResult
-  'daemon.freeze': DaemonFreezeResult
   'daemon.shutdown': DaemonShutdownResult
   'daemon.status': DaemonStatusResult
-  'daemon.thaw': DaemonThawResult
   'health.ping': HealthPingResult
   'gateway.connection': GatewayConnectionResult
   'client.configuration.snapshot': ClientConfigurationSnapshotResult
@@ -659,14 +635,6 @@ export const methodRegistry: {
     params: activitySnapshotParamsSchema,
     result: activitySnapshotResultSchema,
   },
-  'daemon.drain': {
-    params: daemonDrainParamsSchema,
-    result: daemonDrainResultSchema,
-  },
-  'daemon.freeze': {
-    params: daemonFreezeParamsSchema,
-    result: daemonFreezeResultSchema,
-  },
   'daemon.shutdown': {
     params: daemonShutdownParamsSchema,
     result: daemonShutdownResultSchema,
@@ -674,10 +642,6 @@ export const methodRegistry: {
   'daemon.status': {
     params: daemonStatusParamsSchema,
     result: daemonStatusResultSchema,
-  },
-  'daemon.thaw': {
-    params: daemonThawParamsSchema,
-    result: daemonThawResultSchema,
   },
   'health.ping': {
     params: healthPingParamsSchema,

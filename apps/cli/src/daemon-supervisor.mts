@@ -14,7 +14,8 @@ import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import type { ForemanServiceConfig } from '@wrenyard/daemon/config'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
-import { resolveDependencyPackageRoot } from '@wrenyard/daemon/layout/suite-root'
+import { readSuiteVersion, resolveDependencyPackageRoot } from '@wrenyard/daemon/layout/suite-root'
+import { readLiveInstanceLock } from '@wrenyard/daemon/daemon/instance-lock'
 import {
   errorMessage,
   foremanDir,
@@ -28,6 +29,7 @@ import { readSourceDevLock, sourceDevLockRefusalMessage } from './source-dev-loc
 
 const STATE_VERSION = 1
 const STARTUP_TIMEOUT_MS = 15_000
+const ACTIVE_COUNT_NOTICE_MS = 10_000
 
 export interface DaemonLogPaths {
   stdout: string
@@ -209,7 +211,30 @@ export async function startDaemonProcess(options: DaemonLifecycleOptions): Promi
   }
 }
 
-export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promise<DaemonLifecycleResult> {
+/**
+ * Narrow IPC surface the stop path needs. Kept structural so focused tests can
+ * inject a recording client without ever touching a real daemon.
+ */
+export interface DaemonStopClient {
+  daemon: {
+    shutdown(params: { reason: string; force: boolean }): Promise<unknown>
+  }
+  close(): void
+}
+
+/** Overridable collaborators for {@link stopDaemonProcess}. */
+export interface DaemonStopHooks {
+  isIpcReachable?: (ipcPath: string) => Promise<boolean>
+  connectIpc?: (options: { path: string; timeoutMs: number }) => Promise<DaemonStopClient>
+  isProcessAlive?: (pid: number) => boolean
+  readLiveLock?: (path: string) => unknown
+  sleep?: (ms: number) => Promise<void>
+}
+
+export async function stopDaemonProcess(
+  options: DaemonLifecycleOptions,
+  hooks: DaemonStopHooks = {},
+): Promise<DaemonLifecycleResult> {
   const paths = resolveDaemonSupervisorPaths()
   const ipcPath = resolveForemanServiceIpcPath({
     port: options.config.service.port,
@@ -218,22 +243,40 @@ export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promis
   const httpUrl = localForemanServiceOriginForConfig(options.config)
   const state = readDaemonState(paths)
   const pid = readDaemonPid(paths) ?? state?.pid
-  const reachable = await isIpcReachable(ipcPath)
+  const isReachable: (ipcPath: string) => Promise<boolean> = hooks.isIpcReachable ?? isIpcReachable
+  const connect: (options: { path: string; timeoutMs: number }) => Promise<DaemonStopClient> =
+    hooks.connectIpc ?? connectIpcForemanClient
+  const alive: (pid: number) => boolean = hooks.isProcessAlive ?? isProcessAlive
+  const liveLock: (path: string) => unknown = hooks.readLiveLock ?? readLiveInstanceLock
+  const delay: (ms: number) => Promise<void> = hooks.sleep ?? sleep
+
+  const reachable = await isReachable(ipcPath)
   if (reachable) {
-    const client = await connectIpcForemanClient({ path: ipcPath, timeoutMs: 1_000 })
+    const client = await connect({ path: ipcPath, timeoutMs: 1_000 })
     try {
       await client.daemon.shutdown({ reason: 'wrenyard daemon stop', force: options.shutdownForce === true })
     } finally {
       client.close()
     }
-  } else if (pid && isProcessAlive(pid)) {
+  } else if (pid && alive(pid)) {
     throw new Error(`Wrenyard daemon pid ${pid} is alive but IPC is unreachable; graceful shutdown could not be requested`)
   }
 
   // The daemon owns its drain and exit. An active job may keep it alive for as
   // long as needed; the caller never converts a slow shutdown into a kill.
-  while (pid && isProcessAlive(pid)) await sleep(200)
-  while (await isIpcReachable(ipcPath)) await sleep(200)
+  // Active counts are printed to stderr every 10s so a `--json` restart keeps
+  // stdout as one clean machine-readable envelope.
+  const reporter = startActiveCountReporter(ipcPath)
+  try {
+    while (pid && alive(pid)) await delay(200)
+    while (await isReachable(ipcPath)) await delay(200)
+    // The daemon removes daemon.lock as its final act; wait for it without a
+    // deadline so a slow drain is never cut short.
+    const lockPath = join(paths.stateDir, 'daemon.lock')
+    while (liveLock(lockPath)) await delay(200)
+  } finally {
+    reporter.stop()
+  }
 
   clearDaemonState(paths)
   return {
@@ -247,20 +290,40 @@ export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promis
   }
 }
 
-export interface RestartDaemonProcessHooks {
-  /** Invoked exactly once, after the running daemon has stopped and before the
-   * new daemon is started. Awaiting this hook lets a caller durably mark the
-   * restart boundary (for example, persist the `starting` phase) at the real
-   * stop/start transition rather than guessing its timing. */
-  onStopped?: () => void | Promise<void>
+/**
+ * Prints the daemon's active-work counts every 10 seconds while a stop drains.
+ * Progress goes to stderr so a `--json` restart keeps stdout as a single
+ * machine-readable envelope. Queries that fail because the daemon already
+ * stopped are ignored; the stop owns the outcome.
+ */
+function startActiveCountReporter(ipcPath: string): { stop: () => void } {
+  const tick = async (): Promise<void> => {
+    let client: Awaited<ReturnType<typeof connectIpcForemanClient>> | undefined
+    try {
+      client = await connectIpcForemanClient({ path: ipcPath, timeoutMs: 1_000 })
+      const status = await client.daemon.status()
+      process.stderr.write(`Active tasks: ${status.activeTaskCount}, workflows: ${status.activeWorkflowCount}, executions: ${status.activeExecutionCount}\n`)
+    } catch {
+      // The daemon may already be stopping; the stop owns the outcome.
+    } finally {
+      client?.close()
+    }
+  }
+  const timer = setInterval(() => { void tick() }, ACTIVE_COUNT_NOTICE_MS)
+  timer.unref?.()
+  return { stop: () => clearInterval(timer) }
 }
 
+/**
+ * Synchronous restart: stop the running daemon (waits for its own drain), then
+ * start a new one in this process. No detached coordinator or durable plan is
+ * involved; the caller observes the whole stop/start transition.
+ */
 export async function restartDaemonProcess(
   options: DaemonLifecycleOptions,
-  hooks?: RestartDaemonProcessHooks,
+  hooks: DaemonStopHooks = {},
 ): Promise<DaemonLifecycleResult> {
-  await stopDaemonProcess(options)
-  if (hooks?.onStopped) await hooks.onStopped()
+  await stopDaemonProcess(options, hooks)
   return startDaemonProcess(options)
 }
 
@@ -332,21 +395,7 @@ function appendStringOverride(args: string[], flag: string, value: unknown): voi
 }
 
 function suiteIdentity(): { suiteRoot: string; suiteVersion: string } {
-  let suiteVersion = '0.0.0'
-  const suiteVersionPath = join(suiteDir, 'SUITE_VERSION')
-  if (existsSync(suiteVersionPath)) {
-    suiteVersion = readFileSync(suiteVersionPath, 'utf-8').trim() || suiteVersion
-  } else {
-    try {
-      const pkg = JSON.parse(readFileSync(join(suiteDir, 'package.json'), 'utf-8')) as { version?: unknown }
-      if (typeof pkg.version === 'string' && pkg.version.trim()) suiteVersion = pkg.version
-    } catch {
-      // Source checkouts carry package.json while installed suites carry
-      // SUITE_VERSION. The suite root remains authoritative if a malformed
-      // legacy layout has neither usable identity source.
-    }
-  }
-  return { suiteRoot: suiteDir, suiteVersion }
+  return { suiteRoot: suiteDir, suiteVersion: readSuiteVersion(suiteDir) }
 }
 
 function readDaemonPid(paths = resolveDaemonSupervisorPaths()): number | undefined {

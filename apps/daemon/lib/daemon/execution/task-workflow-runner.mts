@@ -15,7 +15,6 @@ import {
 } from '../../types.mts'
 import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
-import type { DispatchControl } from '../dispatch-control.mts'
 import type { TaskDispatchResolver } from '../../core/task/dispatch-resolver.mts'
 import { appendForemanEvent } from '../../events/event-store.mts'
 
@@ -23,16 +22,6 @@ export interface TaskWorkflowRunnerOptions {
   db: ForemanDatabase
   agentExecutionHost: AgentExecutionHost
   logger?: SupervisorLogger
-  /**
-   * Optional admission gate. The daemon runtime always supplies it; optionality
-   * only preserves isolated runner construction in tests and library use. When
-   * present it is invoked as the first action of startTaskRun and must throw a
-   * DispatchControlError with code `daemon_planned_restart` (exact message
-   * "Foreman daemon is planning restart and is not accepting new tasks or
-   * workflows.") to reject new work during a planned restart. Acceptable
-   * continuation of already-accepted execution must not call it.
-   */
-  admissionControl?: DispatchControl['assertAccepting']
   /** Daemon-side deterministic task dispatch resolver. Optional only for isolated
    *  runner construction in tests; constrained production definitions require it. */
   taskDispatchResolver?: TaskDispatchResolver
@@ -47,7 +36,6 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly agentExecutionHost: AgentExecutionHost
   private readonly logger?: SupervisorLogger
   private readonly taskRunner: DaemonTaskRunner
-  private readonly admissionControl?: () => void
   private readonly taskDispatchResolver?: TaskDispatchResolver
   private taskSettingsResolver?: TaskRunSettingsResolver
 
@@ -55,7 +43,6 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     this.db = options.db
     this.agentExecutionHost = options.agentExecutionHost
     this.logger = options.logger
-    this.admissionControl = options.admissionControl
     this.taskDispatchResolver = options.taskDispatchResolver
     this.taskSettingsResolver = options.taskSettingsResolver
     this.taskRunner = new DaemonTaskRunner()
@@ -70,7 +57,6 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   }
 
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
-    this.assertAccepting()
     const taskRunId = createTaskRunId()
 
     this.insertTaskPlaceholder({
@@ -202,17 +188,6 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
 
   private taskRuns(): TaskRunStore {
     return new TaskRunStore(this.db)
-  }
-
-  /**
-   * Enforces admission before any create mutation. A planned_restart
-   * gate must reject with DispatchControlError code `daemon_planned_restart`
-   * and the exact message, so already-accepted execution that reaches its
-   * terminal result (and is not routed through a create entry point)
-   * is never cancelled or halted by this check.
-   */
-  private assertAccepting(): void {
-    this.admissionControl?.()
   }
 
   private agentPrimitives(): Partial<PrimitiveSet> {
