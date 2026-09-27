@@ -33,21 +33,22 @@ never runs in this repository today.
 
 ## Bundled Node runtime
 
-The packed CLI tarball and portable suite zip ship a pinned current-platform
-Node runtime (`runtime/node` on POSIX, `runtime/node.exe` on Windows) taken
-from the exact `node@24.19.0` build dependency. It is covered by the artifact
-checksums and the third-party notices, but it is signed only by the upstream
-Node.js project where applicable; no trusted signature is claimed on the
-bundled copy. Applying trusted platform signing/notarization to every
-executable in the portable suite — including the bundled Node runtime —
-remains an external release credential step that never runs in this
-repository.
+The suite zip ships a pinned current-platform Node runtime (`runtime/node` on
+POSIX, `runtime/node.exe` on Windows) taken from the exact `node@24.19.0` build
+dependency. It is covered by the feed's SHA-256 digest and the third-party
+notices, but it is signed only by the upstream Node.js project where
+applicable; no trusted signature is claimed on the bundled copy. Applying
+trusted platform signing/notarization to every executable in the suite —
+including the bundled Node runtime — remains an external release credential
+step that never runs in this repository.
 
 ## Unified release, state, and paths
 
 Release artifacts, local state, and install paths are consolidated under the
-unified `wrenyard` identity. Legacy release/state paths and legacy
-compatibility commands are not part of the public contract and are not
+unified `wrenyard` identity. Each maintained target publishes two archives
+(the suite zip and the Desktop zip); the `updates` branch carries the static
+update feed and the two bootstrap scripts. Legacy release/state paths and
+legacy compatibility commands are not part of the public contract and are not
 documented for consumers.
 
 ## Guarantees
