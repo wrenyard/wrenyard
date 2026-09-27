@@ -1,7 +1,6 @@
 import { app, dialog, Menu, screen, session, type MessageBoxOptions } from 'electron';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { DesktopConversationAdapter } from './conversation-adapter.js';
@@ -23,7 +22,7 @@ import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { isSettingsLaunchRequest, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
-import { activeTaskCountFromDaemonStatus, DesktopUpdateController } from './update-controller.js';
+import { DesktopUpdateController } from './update-controller.js';
 import { resolveInstallation } from './installation-discovery.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
@@ -42,7 +41,7 @@ import {
   inspectProductWorkspace,
   saveProductWorkspace,
 } from './workspace.js';
-import { assertDaemonIdle, runPlannedDaemonRestart } from './workspace-activation.js';
+import { assertDaemonIdle, runDaemonRestart } from './workspace-activation.js';
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 applySourceDevelopmentIdentity(app);
@@ -74,13 +73,6 @@ const SMOKE_TIMEOUT_MS = 90_000;
  */
 function resolveWrenyardCli(): string | undefined {
   return resolveInstallation().cliPath;
-}
-
-function installedDesktopPath(): string {
-  if (process.platform === 'win32') {
-    return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Programs', 'Wrenyard Desktop');
-  }
-  return join(homedir(), 'Applications', '啾啾工坊.app');
 }
 
 /** Read the bounded public health projection from the given IPC socket. */
@@ -392,28 +384,19 @@ async function requestInstallFromMenu(): Promise<void> {
   updateDialogActive = true;
   try {
     const snapshot = await updateController.check(true);
-    const actionable = snapshot.state === 'available'
-      || snapshot.state === 'waiting'
-      || snapshot.state === 'install-blocked'
-      || snapshot.state === 'install-failed';
-    if (!actionable) {
-      const message = snapshot.state === 'stable-unavailable'
-        ? '正式版尚未发布'
-        : snapshot.state === 'up-to-date'
-          ? '啾啾工坊已是最新版本'
-          : '暂时无法检查更新';
+    if (snapshot.state !== 'available' && snapshot.state !== 'waiting') {
       await showUpdateMessage({
-        type: snapshot.state === 'check-failed' ? 'error' : 'info',
+        type: snapshot.state === 'error' ? 'error' : 'info',
         title: '软件更新',
-        message,
+        message: snapshot.state === 'up-to-date' ? '啾啾工坊已是最新版本' : '暂时无法检查更新',
         detail: snapshot.message ?? `当前版本为 v${snapshot.currentVersion}。`,
         buttons: ['好'],
         noLink: true,
       });
       return;
     }
-    // One click authorizes the whole remaining flow: prepare (staged even while
-    // busy), then automatically install once actual work is idle.
+    // One click authorizes the flow: the installed SEA engine takes over once
+    // the daemon is idle, then relaunches Desktop.
     await updateController.requestInstall(() => setImmediate(() => app.quit()));
   } finally {
     updateDialogActive = false;
@@ -442,10 +425,12 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
-  const readUpdateActiveTaskCount = async (): Promise<number | null> => {
-    const conversationCount = conversationAdapter?.snapshot().sessions.filter((item) => item.running).length ?? 0;
-    const raw = await requestForeman('daemon.status', {});
-    return activeTaskCountFromDaemonStatus(raw, conversationCount);
+  const readUpdateDaemonIdle = async (): Promise<boolean | null> => {
+    try {
+      return assertDaemonIdle(await requestForeman('daemon.status', {})).idle;
+    } catch {
+      return null;
+    }
   };
   const mapRuntimeAliasError = (error: unknown): never => {
     if (error instanceof WrenyardRpcError) {
@@ -582,22 +567,14 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn('[wrenyard-desktop] Desktop settings could not be loaded:', error instanceof Error ? error.message : String(error));
   }
-  const wrenyardCli = resolveWrenyardCli();
-  const wrenyardNode = resolveInstallation().runtimePath;
   updateController = new DesktopUpdateController({
     currentVersion: app.getVersion(),
-    settings: settingsStore,
-    cliPath: wrenyardCli,
-    helperPath: join(app.getAppPath(), 'dist', 'update-helper.cjs'),
-    helperRuntimePath: wrenyardNode,
-    // Re-probe on every check/retry/install so a suite repaired after startup
-    // becomes installable without restarting Desktop, and a custom CLI never
-    // pairs with a stale default runtime.
-    probeInstallation: () => resolveInstallation(),
-    desktopPath: installedDesktopPath(),
     userDataPath: app.getPath('userData'),
+    // Re-probe on every check/install so a suite repaired after startup becomes
+    // installable without restarting Desktop.
+    probeInstallation: () => resolveInstallation(),
+    readDaemonIdle: readUpdateDaemonIdle,
     onInstall: () => setImmediate(() => app.quit()),
-    activeTaskCount: readUpdateActiveTaskCount,
     onChanged: () => shellWindow?.notifyUpdateChanged(),
     sourceDevelopment: isSourceDevelopment(),
   });
@@ -720,9 +697,7 @@ async function bootstrap(): Promise<void> {
     restoreClientConfiguration: (plan) => clientConfigurationService.restore(plan),
     getUpdate: async () => updateController!.snapshot(),
     checkUpdate: () => updateController!.check(true),
-    setUpdateChannel: (channel) => updateController!.setChannel(channel),
     requestInstall: (onInstall) => updateController!.requestInstall(onInstall),
-    cancelPendingInstall: async () => updateController!.cancelPendingInstall(),
     savePetSettings: async (settings: PetCompanionSettings) => {
       // Provider order has one mutation surface: the Provider page. A stale
       // settings draft must never overwrite that order when Pet settings save.
@@ -750,7 +725,7 @@ async function bootstrap(): Promise<void> {
       } else {
         const cli = resolveWrenyardCli();
         if (!cli) throw new Error('未找到 Wrenyard CLI，无法应用工作区');
-        await runPlannedDaemonRestart({ cli });
+        await runDaemonRestart({ cli });
       }
       // Activation is Desktop's; the daemon validates and owns the binding.
       await conversationAdapter!.setWorkspace(saved);

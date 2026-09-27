@@ -8,7 +8,6 @@ import {
   type ConversationSnapshot,
   type ConversationActivityItem,
   type WorkspaceConfigurationSnapshot,
-  type UpdateChannel,
   type UpdateSnapshot,
   type ShellPage,
   type WrenyardShellApi,
@@ -73,14 +72,8 @@ const api: WrenyardShellApi = {
   checkUpdate(): Promise<UpdateSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.checkUpdate) as Promise<UpdateSnapshot>;
   },
-  setUpdateChannel(channel: UpdateChannel): Promise<UpdateSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.setUpdateChannel, channel) as Promise<UpdateSnapshot>;
-  },
   requestInstall(): Promise<UpdateSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.requestInstall) as Promise<UpdateSnapshot>;
-  },
-  cancelPendingInstall(): Promise<UpdateSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.cancelPendingInstall) as Promise<UpdateSnapshot>;
   },
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;
