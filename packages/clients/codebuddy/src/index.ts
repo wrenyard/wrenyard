@@ -17,7 +17,9 @@ export class CodeBuddyClient implements AgentClient {
         const install = await this.load(options);
         if (!install.product.executable)
             throw new Error(install.product.reason ?? 'codebuddy executable is not bound to the product snapshot');
-        return await openSession(await launchCodeBuddy(request, env, install.product.executable), decodeCodeBuddy, options);
+        const normalizeModel = (model: string) => model === request.model ? request.canonicalModel ?? model : model;
+        return await openSession(await launchCodeBuddy(request, env, install.product.executable),
+            (events) => decodeCodeBuddy(events, normalizeModel), options);
     }
     async readInstall(options?: InspectOptions) {
         return this.load(options);
