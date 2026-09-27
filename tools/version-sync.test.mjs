@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { FIRST_PARTY_MANIFESTS } from './version-sync.mjs';
+import { DESKTOP_MANIFEST } from './version-sync.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const tool = join(scriptDir, 'version-sync.mjs');
 
 const ROOT_VERSION = '1.0.0-dev.0';
-const DSH_VERSION = '0.1.1-rc.2';
+const DECOY_MANIFEST = 'packages/models/package.json';
 
 async function writeJson(dir, rel, obj) {
   const abs = join(dir, rel);
@@ -19,37 +19,10 @@ async function writeJson(dir, rel, obj) {
   await writeFile(abs, JSON.stringify(obj, null, 2) + '\n');
 }
 
-async function writeText(dir, rel, content) {
-  const abs = join(dir, rel);
-  await mkdir(dirname(abs), { recursive: true });
-  await writeFile(abs, content, 'utf8');
-}
-
-async function buildFixture() {
+async function buildFixture(desktopVersion = ROOT_VERSION) {
   const dir = await mkdtemp(join(tmpdir(), 'version-sync-fixture-'));
   await writeJson(dir, 'package.json', { name: 'wrenyard', version: ROOT_VERSION, private: true });
-  for (const rel of FIRST_PARTY_MANIFESTS) {
-    await writeJson(dir, rel, { name: rel.replace(/package\.json$/, '').replace(/\/$/, ''), version: ROOT_VERSION });
-  }
-  await writeJson(dir, 'release-manifest.json', {
-    schema_version: 'wrenyard.release-manifest.v1',
-    suite_version: ROOT_VERSION,
-    protocol_version: '1',
-    release_status: 'development',
-    publishable: false,
-    components: {
-      cli: { version: ROOT_VERSION },
-      daemon: { version: ROOT_VERSION },
-      desktop: { version: ROOT_VERSION },
-    },
-  });
-  await writeJson(dir, 'contracts/versions.json', {
-    protocol_version: '1',
-    desktop: ROOT_VERSION,
-    dsh_shell: ROOT_VERSION,
-    dsh: DSH_VERSION,
-  });
-  await writeText(dir, 'packages/features/session/src/profile.ts', `const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '${ROOT_VERSION}',\n};\n`);
+  await writeJson(dir, DESKTOP_MANIFEST, { name: '@wrenyard/desktop', version: desktopVersion });
   return dir;
 }
 
@@ -60,21 +33,19 @@ function runTool(dir, mode) {
   });
 }
 
-test('version-sync --check passes when every first-party location matches the root version', async () => {
+test('version-sync --check passes when the Desktop manifest matches the root version', async () => {
   const dir = await buildFixture();
   try {
     const out = runTool(dir, '--check');
-    assert.match(out, new RegExp(`all first-party files in sync at ${ROOT_VERSION}`));
+    assert.match(out, new RegExp(`Desktop manifest in sync at ${ROOT_VERSION}`));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('version-sync --check reports drift without modifying any file', async () => {
-  const dir = await buildFixture();
-  await writeJson(dir, 'packages/models/package.json', { name: '@wrenyard/models', version: '0.1.1' });
-  await writeJson(dir, 'packages/features/gateway/package.json', { name: '@wrenyard/gateway', version: '0.1.1' });
-  await writeText(dir, 'packages/features/session/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.7.18',\n};\n");
+test('version-sync --check reports Desktop drift without modifying any file', async () => {
+  const dir = await buildFixture('0.1.1');
+  await writeJson(dir, DECOY_MANIFEST, { name: '@wrenyard/models', version: '0.1.1' });
   try {
     let threw = false;
     try {
@@ -82,37 +53,27 @@ test('version-sync --check reports drift without modifying any file', async () =
     } catch (error) {
       threw = true;
       const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, /packages\/models\/package\.json/);
-      assert.match(out, /packages\/features\/gateway\/package\.json/);
-      assert.match(out, /profile\.ts/);
+      assert.match(out, /apps\/desktop\/package\.json/);
     }
-    assert.equal(threw, true, '--check must exit non-zero on drift');
-    // No file was mutated by --check.
-    const models = JSON.parse(await readFile(join(dir, 'packages/models/package.json'), 'utf8'));
-    assert.equal(models.version, '0.1.1');
-    const gateway = JSON.parse(await readFile(join(dir, 'packages/features/gateway/package.json'), 'utf8'));
-    assert.equal(gateway.version, '0.1.1');
-    const profile = await readFile(join(dir, 'packages/features/session/src/profile.ts'), 'utf8');
-    assert.match(profile, /version: '0\.7\.18'/);
+    assert.equal(threw, true, '--check must exit non-zero on Desktop drift');
+
+    const desktop = JSON.parse(await readFile(join(dir, DESKTOP_MANIFEST), 'utf8'));
+    assert.equal(desktop.version, '0.1.1');
+    const decoy = JSON.parse(await readFile(join(dir, DECOY_MANIFEST), 'utf8'));
+    assert.equal(decoy.version, '0.1.1');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('version-sync --write repairs drifted files and becomes stable', async () => {
-  const dir = await buildFixture();
-  await writeJson(dir, 'packages/providers/package.json', { name: '@wrenyard/providers', version: '0.1.1' });
-  await writeText(dir, 'packages/features/session/src/profile.ts', "const manifest = {\n  name: '@wrenyard/dsh-profile',\n  version: '0.1.0-dev.0',\n};\n");
+test('version-sync --write repairs the Desktop manifest and becomes stable', async () => {
+  const dir = await buildFixture('0.1.1');
   try {
     const out = runTool(dir, '--write');
-    assert.match(out, /updated 2 file\(s\)/);
-    assert.match(out, /packages\/providers\/package\.json/);
-    assert.match(out, /profile\.ts/);
+    assert.match(out, /apps\/desktop\/package\.json/);
 
-    const providers = JSON.parse(await readFile(join(dir, 'packages/providers/package.json'), 'utf8'));
-    assert.equal(providers.version, ROOT_VERSION);
-    const profile = await readFile(join(dir, 'packages/features/session/src/profile.ts'), 'utf8');
-    assert.match(profile, new RegExp(`version: '${ROOT_VERSION}'`));
+    const desktop = JSON.parse(await readFile(join(dir, DESKTOP_MANIFEST), 'utf8'));
+    assert.equal(desktop.version, ROOT_VERSION);
 
     // A follow-up --check must pass with no further changes needed.
     runTool(dir, '--check');
@@ -121,61 +82,15 @@ test('version-sync --write repairs drifted files and becomes stable', async () =
   }
 });
 
-test('version-sync --write preserves protocol and upstream versions', async () => {
-  const dir = await buildFixture();
+test('version-sync only touches the root and Desktop manifests', async () => {
+  const dir = await buildFixture('0.1.1');
+  await writeJson(dir, DECOY_MANIFEST, { name: '@wrenyard/models', version: '0.1.1' });
   try {
     runTool(dir, '--write');
-    const contracts = JSON.parse(await readFile(join(dir, 'contracts/versions.json'), 'utf8'));
-    assert.equal(contracts.protocol_version, '1');
-    assert.equal(contracts.dsh, DSH_VERSION);
-    assert.equal(contracts.desktop, ROOT_VERSION);
-    assert.equal(contracts.dsh_shell, ROOT_VERSION);
-    const manifest = JSON.parse(await readFile(join(dir, 'release-manifest.json'), 'utf8'));
-    assert.equal(manifest.protocol_version, '1');
-    assert.equal(manifest.suite_version, ROOT_VERSION);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('version-sync --check reports protocol/upstream drift as a guard failure', async () => {
-  const dir = await buildFixture();
-  await writeJson(dir, 'contracts/versions.json', {
-    protocol_version: '1',
-    desktop: ROOT_VERSION,
-    dsh_shell: ROOT_VERSION,
-    dsh: '0.1.0-rc.6',
-  });
-  try {
-    let threw = false;
-    try {
-      runTool(dir, '--check');
-    } catch (error) {
-      threw = true;
-      const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, /dsh must remain 0\.1\.1-rc\.2/);
-    }
-    assert.equal(threw, true, '--check must exit non-zero when upstream drift exists');
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('version-sync --check reports a missing first-party manifest as drift instead of throwing ENOENT', async () => {
-  const dir = await buildFixture();
-  const missing = 'packages/features/quota/package.json';
-  await rm(join(dir, missing), { force: true });
-  try {
-    let threw = false;
-    try {
-      runTool(dir, '--check');
-    } catch (error) {
-      threw = true;
-      const out = String(error.stdout) + String(error.stderr);
-      assert.match(out, new RegExp(`${missing.replace(/[/.]/g, '\\$&')} \\(missing\\)`));
-      assert.ok(!out.includes('ENOENT'), 'missing manifests must not surface as ENOENT');
-    }
-    assert.equal(threw, true, '--check must exit non-zero when a first-party manifest is missing');
+    const decoy = JSON.parse(await readFile(join(dir, DECOY_MANIFEST), 'utf8'));
+    assert.equal(decoy.version, '0.1.1', 'private internal packages must never be synced');
+    // The decoy drift must not fail the check either.
+    runTool(dir, '--check');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

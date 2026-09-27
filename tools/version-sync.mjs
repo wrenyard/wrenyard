@@ -2,24 +2,19 @@
 // Wrenyard first-party version sync.
 //
 // The root package.json "version" field is the single source of truth (SSOT)
-// for the first-party version contract. This tool propagates that version to:
-//   - every first-party package manifest (apps/*, packages/*, packages/features/*)
-//   - release-manifest.json (suite_version + each component version)
-//   - contracts/versions.json (first-party desktop and dsh_shell entries)
-//   - the Desktop profile manifest version (packages/features/session/src/profile.ts)
+// for the first-party version contract. This tool propagates that version to
+// apps/desktop/package.json, the manifest electron-builder and
+// app.getVersion() read for version comparison, the settings page and the
+// source-runtime version display.
 //
-// Protocol and upstream (DSH) versions are never altered; any drift in those
-// values is reported but never repaired.
-//
-// The workspace member list is intentionally explicit. `packages/features/session`
-// and `packages/dsh-shell` ship inside the daemon control tree (the session
-// feature owns the DSH process/client and reaches the DSH native bundle through
-// package dependencies), so their manifests stay part of the same first-party pin.
+// Every other internal package is private and pinned to "0.0.0"; protocol and
+// upstream (DSH) versions are never altered. Preparing a release therefore only
+// touches the root manifest and the Desktop manifest.
 //
 // Usage: node tools/version-sync.mjs [--check|--write] [--root <dir>]
-//   --check (default) verifies every first-party location matches the root
-//     version and exits non-zero on drift.
-//   --write rewrites any drifted first-party location to the root version.
+//   --check (default) verifies the Desktop manifest matches the root version
+//     and exits non-zero on drift.
+//   --write rewrites the Desktop manifest to the root version.
 //   --root overrides the repository root (used by tests; defaults to repo root).
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -29,42 +24,7 @@ import { dirname, join, resolve } from 'node:path';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = join(scriptDir, '..');
 
-export const FIRST_PARTY_MANIFESTS = [
-  'apps/cli/package.json',
-  'apps/daemon/package.json',
-  'apps/desktop/package.json',
-  'packages/models/package.json',
-  'packages/features/auto-routing/package.json',
-  'packages/features/quota/package.json',
-  'packages/features/provider/package.json',
-  'packages/features/exec/package.json',
-  'packages/features/browser-use/package.json',
-  'packages/features/computer-use/package.json',
-  'packages/protocol/package.json',
-  'packages/clients/package.json',
-  'packages/clients/base/package.json',
-  'packages/clients/codex/package.json',
-  'packages/clients/claude/package.json',
-  'packages/clients/cursor/package.json',
-  'packages/clients/grok/package.json',
-  'packages/clients/codebuddy/package.json',
-  'packages/clients/opencode/package.json',
-  'packages/clients/dsh/package.json',
-  'packages/execution/package.json',
-  'packages/control-client/package.json',
-  'packages/dsh-shell/package.json',
-  'packages/features/gateway/package.json',
-  'packages/features/session/package.json',
-  'packages/providers/package.json',
-];
-
-const RELEASE_MANIFEST = 'release-manifest.json';
-const CONTRACTS = 'contracts/versions.json';
-const PROFILE_PATH = 'packages/features/session/src/profile.ts';
-
-// Protocol and upstream versions that must be preserved untouched.
-const PROTOCOL_VERSION = '1';
-const DSH_VERSION = '0.1.1-rc.2';
+export const DESKTOP_MANIFEST = 'apps/desktop/package.json';
 
 export function run(argv, cwd = process.cwd()) {
   const write = argv.includes('--write');
@@ -80,99 +40,29 @@ export function run(argv, cwd = process.cwd()) {
     throw new Error(`root package.json version is missing or empty: ${JSON.stringify(version)}`);
   }
 
-  const drifted = [];
-  const repaired = [];
-
-  const syncJson = (rel, mutate) => {
-    const abs = join(root, rel);
-    if (!existsSync(abs)) {
-      drifted.push(`${rel} (missing)`);
-      return;
-    }
-    const current = JSON.stringify(JSON.parse(readFileSync(abs, 'utf8')), null, 2) + '\n';
-    const obj = JSON.parse(current);
-    mutate(obj, version);
-    const updated = JSON.stringify(obj, null, 2) + '\n';
-    if (updated === current) return;
-    if (write) {
-      writeFileSync(abs, updated);
-      repaired.push(rel);
-    } else {
-      drifted.push(`${rel} (expected ${version})`);
-    }
-  };
-
-  for (const rel of FIRST_PARTY_MANIFESTS) {
-    syncJson(rel, (pkg) => {
-      pkg.version = version;
-    });
-  }
-  syncJson(RELEASE_MANIFEST, (manifest) => {
-    manifest.suite_version = version;
-    for (const component of Object.values(manifest.components)) {
-      component.version = version;
-    }
-  });
-  syncJson(CONTRACTS, (contracts) => {
-    contracts.desktop = version;
-    contracts.dsh_shell = version;
-  });
-
-  const syncText = (rel, pattern, replacement) => {
-    const abs = join(root, rel);
-    const current = readFileSync(abs, 'utf8');
-    if (!pattern.test(current)) {
-      drifted.push(`${rel} (expected version pattern missing)`);
-      return;
-    }
-    const updated = current.replace(pattern, replacement);
-    if (updated === current) return;
-    if (write) {
-      writeFileSync(abs, updated);
-      repaired.push(rel);
-    } else {
-      drifted.push(`${rel} (expected ${version})`);
-    }
-  };
-  syncText(PROFILE_PATH, /version: '[^']*'/, `version: '${version}'`);
-
-  // Guard rails: protocol/upstream versions must never be altered. Drift is
-  // reported so the check gate catches it instead of being silently repaired.
-  const releaseManifest = JSON.parse(readFileSync(join(root, RELEASE_MANIFEST), 'utf8'));
-  if (releaseManifest.protocol_version !== PROTOCOL_VERSION) {
-    drifted.push(
-      `${RELEASE_MANIFEST}: protocol_version must remain ${PROTOCOL_VERSION}, got ${JSON.stringify(releaseManifest.protocol_version)}`,
-    );
-  }
-  const contracts = JSON.parse(readFileSync(join(root, CONTRACTS), 'utf8'));
-  if (contracts.protocol_version !== PROTOCOL_VERSION) {
-    drifted.push(`${CONTRACTS}: protocol_version must remain ${PROTOCOL_VERSION}, got ${JSON.stringify(contracts.protocol_version)}`);
-  }
-  if (contracts.dsh !== DSH_VERSION) {
-    drifted.push(`${CONTRACTS}: dsh must remain ${DSH_VERSION}, got ${JSON.stringify(contracts.dsh)}`);
+  const desktopPath = join(root, DESKTOP_MANIFEST);
+  if (!existsSync(desktopPath)) {
+    console.error(`version-sync: ${DESKTOP_MANIFEST} (missing)`);
+    return 1;
   }
 
-  if (write) {
-    if (drifted.length > 0) {
-      for (const line of drifted) console.error(`version-sync: guard: ${line}`);
-      console.error(`version-sync: wrote ${repaired.length} file(s); guard failures remain`);
-      return 1;
-    }
-    if (repaired.length === 0) {
-      console.log(`version-sync: already in sync at ${version}`);
-    } else {
-      console.log(`version-sync: updated ${repaired.length} file(s) to ${version}`);
-      for (const rel of repaired) console.log(`  ${rel}`);
-    }
+  const current = JSON.stringify(JSON.parse(readFileSync(desktopPath, 'utf8')), null, 2) + '\n';
+  const manifest = JSON.parse(current);
+  if (manifest.version === version) {
+    console.log(`version-sync: Desktop manifest in sync at ${version}`);
     return 0;
   }
 
-  if (drifted.length > 0) {
-    console.error(`version-sync: ${drifted.length} file(s) out of sync with root version ${version}:`);
-    for (const line of drifted) console.error(`  ${line}`);
+  if (!write) {
+    console.error(
+      `version-sync: ${DESKTOP_MANIFEST} is out of sync with root version ${version}: expected ${version}, got ${JSON.stringify(manifest.version)}`,
+    );
     return 1;
   }
-  console.log(`version-sync: all first-party files in sync at ${version}`);
+
+  manifest.version = version;
+  writeFileSync(desktopPath, JSON.stringify(manifest, null, 2) + '\n');
+  console.log(`version-sync: updated ${DESKTOP_MANIFEST} to ${version}`);
   return 0;
 }
 
