@@ -12,11 +12,14 @@ import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } fr
  * full-message records (`assistant`, `user`, `result`) are the source of
  * normalized content and legacy accounting, while the partial `stream_event`
  * envelopes exist only to time generation. The partial stream is fed to the
- * response sampler before normalization, so the persisted speed sample is
+ * response sampler after model identity normalization, so the persisted speed sample is
  * always the fixed-tokenizer count of observed generation content over its own
  * first-to-last delta window -- never the invocation wall clock.
  */
-export async function* decodeCodeBuddy(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeCodeBuddy(
+    events: AsyncIterable<StreamChunk>,
+    normalizeModel: (model: string) => string = (model) => model,
+): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finished = false;
@@ -29,6 +32,10 @@ export async function* decodeCodeBuddy(events: AsyncIterable<StreamChunk>): Asyn
             continue;
         }
         const record = item.record;
+        const event = recordOf(record, 'event');
+        for (const payload of [record, recordOf(record, 'message'), event && recordOf(event, 'message')]) {
+            if (payload && typeof payload.model === 'string') payload.model = normalizeModel(payload.model);
+        }
         sampler.observe(record);
         const type = stringOf(record, 'type');
         const id = sessionIdOf(record);
