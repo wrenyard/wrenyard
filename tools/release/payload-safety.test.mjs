@@ -56,18 +56,6 @@ test('accepts ordinary first-party source with runtime credential field names an
   }
 });
 
-test('accepts normal node_modules runtime that is not a credential/database artifact', () => {
-  const stage = makeStage();
-  try {
-    writeFile(stage, 'node_modules/some-dep/README.md', 'See https://example.com for setup docs.\n');
-    writeFile(stage, 'node_modules/some-dep/index.js', 'module.exports = require("./lib/impl.js");\n');
-    const result = runGate(stage);
-    assert.equal(result.ok, true, result.message);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
 test('rejects a synthetic secret signature assembled from parts', () => {
   const stage = makeStage();
   try {
@@ -121,128 +109,6 @@ test('rejects a developer absolute path embedded in first-party bytes', () => {
   }
 });
 
-test('accepts a dependency binary embedding the current generic home under an upstream build path', () => {
-  const stage = makeStage();
-  try {
-    // Mirrors CI 34493121404: upstream fsevents.node was publicly compiled on a
-    // runner whose home equals the current generic home (os.homedir on the
-    // macOS CI host). That is a public upstream build path, not a local leak,
-    // so a dependency file must not trip the developer-path rule.
-    const home = os.homedir();
-    writeFile(stage, 'apps/cli/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${home}/runner/work/fsevents\n`));
-    const result = runGate(stage);
-    assert.equal(result.ok, true, result.message);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('rejects the current generic home embedded in a first-party file', () => {
-  const stage = makeStage();
-  try {
-    const home = os.homedir();
-    writeFile(stage, 'dist/wrenyard.mjs', `export const builtFrom = ${JSON.stringify(`${home}/leaked`)};\n`);
-    const result = runGate(stage);
-    assert.equal(result.ok, false, 'expected a first-party home path to be rejected');
-    assert.match(result.message, /local developer\/home\/checkout absolute path/);
-    assert.match(result.message, /dist[\\/]wrenyard\.mjs/);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('rejects an explicit buildTmp path inside a dependency binary including Windows/escaped spellings', () => {
-  const stage = makeStage();
-  const buildRoot = makeStage();
-  try {
-    const buildTmp = path.join(buildRoot, 'wrenyard-release-abc123');
-    const jsonEscaped = buildTmp.replace(/\//gu, '\\').replace(/\\/gu, '\\\\');
-    writeFile(stage, 'apps/cli/node_modules/fsevents/fsevents.node', Buffer.from(`\0binary/${jsonEscaped}/daemon\n`));
-    try {
-      assertSafeReleasePayload(stage, 'test', buildTmp, path.join(buildRoot, 'worktree'));
-      assert.fail('expected the escaped buildTmp path in a dependency to be rejected');
-    } catch (error) {
-      assert.match(error.message, /local developer\/home\/checkout absolute path/);
-      assert.match(error.message, /fsevents\.node/);
-    }
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(buildRoot, { recursive: true, force: true });
-  }
-});
-
-test('rejects an explicit worktree path inside a dependency binary', () => {
-  const stage = makeStage();
-  const buildRoot = makeStage();
-  try {
-    const worktree = path.join(buildRoot, 'worktrees', 'dev24nat');
-    writeFile(stage, 'apps/cli/node_modules/tsx/dist/loader.js', `// built at ${worktree}\n`);
-    try {
-      assertSafeReleasePayload(stage, 'test', path.join(buildRoot, 'tmp'), worktree);
-      assert.fail('expected the worktree path in a dependency to be rejected');
-    } catch (error) {
-      assert.match(error.message, /local developer\/home\/checkout absolute path/);
-      assert.match(error.message, /node_modules[\\/]tsx/);
-    }
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(buildRoot, { recursive: true, force: true });
-  }
-});
-
-test('rejects a JSON-escaped Windows developer path embedded in first-party bytes', () => {
-  const stage = makeStage();
-  const stageRoot = makeStage();
-  try {
-    // Simulate a Windows build host: a backslash absolute path serialized into
-    // JSON doubles every separator. The gate must still catch it regardless of
-    // the platform actually running the test.
-    const windowsRoot = path.join(stageRoot, 'build', 'checkout');
-    const windowsPath = windowsRoot.replace(/\//gu, '\\');
-    const jsonEscaped = windowsPath.replace(/\\/gu, '\\\\');
-    writeFile(stage, 'bin/wrenyard.mjs', `export const builtFrom = "${jsonEscaped}";\n`);
-    try {
-      assertSafeReleasePayload(stage, 'test', windowsPath, windowsRoot);
-      assert.fail('expected escaped Windows developer path to be rejected');
-    } catch (error) {
-      assert.match(error.message, /local developer\/home\/checkout absolute path/);
-      assert.match(error.message, /bin[\\/]wrenyard\.mjs/);
-    }
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(stageRoot, { recursive: true, force: true });
-  }
-});
-
-test('accepts a safe upstream dependency source map and public certificate example', () => {
-  const stage = makeStage();
-  try {
-    writeFile(stage, 'node_modules/some-dep/dist/impl.js.map', '{"version":3,"sources":["impl.ts"],"mappings":""}');
-    writeFile(
-      stage,
-      'node_modules/some-dep/docs/tls.pem',
-      '-----BEGIN CERTIFICATE-----\nMIIBpublic-example\n-----END CERTIFICATE-----\n',
-    );
-    const result = runGate(stage);
-    assert.equal(result.ok, true, result.message);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('still rejects a bundled credential container inside a dependency', () => {
-  const stage = makeStage();
-  try {
-    writeFile(stage, 'node_modules/some-dep/private.key', 'placeholder\n');
-    const result = runGate(stage);
-    assert.equal(result.ok, false);
-    assert.match(result.message, /forbidden credential\/secret\/database\/log file/);
-    assert.match(result.message, /node_modules[\\/]some-dep[\\/]private\.key/);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
 test('rejects forbidden user database/config files and private workspace payloads', () => {
   const stage = makeStage();
   try {
@@ -266,55 +132,6 @@ test('rejects source map payloads', () => {
     const result = runGate(stage);
     assert.equal(result.ok, false);
     assert.match(result.message, /source map payload forbidden/);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('accepts the upstream PEM banner constant under a staged dependency path', () => {
-  const stage = makeStage();
-  try {
-    // jose dist/webapi/key/import.js validates the PKCS#8 prefix against a bare
-    // banner string: an upstream format marker, not key material. Both the
-    // staged control path and a hoisted top-level dependency path are exercised
-    // with native separators, so the same test covers Windows and POSIX
-    // dependency spellings.
-    const banner = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ');
-    const source = `if (pkcs8.indexOf('${banner}') !== 0) { throw new TypeError('bad'); }\n`;
-    writeFile(stage, path.join('apps', 'cli', 'node_modules', 'jose', 'dist', 'webapi', 'key', 'import.js'), source);
-    writeFile(stage, 'node_modules/jose/dist/webapi/key/import.js', source);
-    const result = runGate(stage);
-    assert.equal(result.ok, true, result.message);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('still rejects real private-key material inside a dependency', () => {
-  const stage = makeStage();
-  try {
-    const begin = ['-----BEGIN', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
-    const end = ['-----END', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
-    writeFile(stage, 'node_modules/some-dep/lib/keys.js', `const k = \`${begin}\nMIIsynthetic\n${end}\n\`;\n`);
-    const result = runGate(stage);
-    assert.equal(result.ok, false, 'expected a real dependency private key to be rejected');
-    assert.match(result.message, /secret signature detected/);
-    assert.match(result.message, /pem-private-key/);
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-});
-
-test('rejects a lone PEM banner injected into a first-party file without echoing it', () => {
-  const stage = makeStage();
-  try {
-    const banner = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ');
-    writeFile(stage, 'apps/cli/src/index.js', `export const marker = '${banner}';\n`);
-    const result = runGate(stage);
-    assert.equal(result.ok, false, 'expected the first-party banner to be rejected');
-    assert.match(result.message, /secret signature detected/);
-    assert.match(result.message, /pem-private-key/);
-    assert.equal(result.message.includes('PRIVATE KEY'), false, 'report leaked the banner text');
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }

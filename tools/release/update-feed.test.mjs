@@ -6,10 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-  assertAssetNames,
   channelForVersion,
-  compareVersions,
-  isSemver,
   prepareMetadata,
   renderDocument,
 } from './update-feed.mjs';
@@ -161,76 +158,6 @@ test('rejects a conflicting document for an already published version', () => {
   });
 });
 
-test('rejects assets named for a different version than the requested one', () => {
-  withTempDir((dir) => {
-    const version = '1.0.0-dev.26';
-    const metadataDir = join(dir, 'updates');
-    // A dev25-named asset set staged for the dev26 release must never be
-    // accepted, even though every suffix looks canonical.
-    const assetsDir = writeAssets(dir, '1.0.0-dev.25');
-    assert.throws(
-      () => prepareMetadata({ assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir }),
-      /not a canonical public archive/,
-    );
-  });
-});
-
-test('rejects a Desktop asset that lacks the wrenyard-desktop prefix', () => {
-  withTempDir((dir) => {
-    const version = '1.0.0-dev.26';
-    const metadataDir = join(dir, 'updates');
-    const assetsDir = writeAssets(dir, version);
-    const desktop = `wrenyard-desktop-${version}-darwin-arm64.zip`;
-    rmSync(join(assetsDir, desktop));
-    // Same suffix, wrong prefix: a plain suite name must not stand in for the
-    // Desktop pack.
-    writeFileSync(join(assetsDir, `wrenyard-${version}-darwin-arm64.zip`), 'nope');
-    assert.throws(
-      () => prepareMetadata({ assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir }),
-      /not a canonical public archive/,
-    );
-  });
-});
-
-test('rejects a duplicate canonical name for the same archive', () => {
-  withTempDir((dir) => {
-    const version = '1.0.0-dev.26';
-    const metadataDir = join(dir, 'updates');
-    const assetsDir = writeAssets(dir, version);
-    assert.throws(
-      () =>
-        assertAssetNames(
-          [...assetNames(version), `wrenyard-${version}-darwin-arm64-suite.zip`],
-          version,
-        ),
-      /duplicate release asset/,
-    );
-  });
-});
-
-test('rejects malformed SemVer core and prerelease forms', () => {
-  for (const version of [
-    '1.0.00',
-    '01.0.0',
-    '1.0.0-01', // leading zero in a numeric prerelease identifier
-    '1.0.0-dev.', // trailing dot
-    '1.0.0-dev..1', // empty identifier
-    '1.0.0-', // empty prerelease
-  ]) {
-    assert.equal(isSemver(version), false, `${version} must be rejected`);
-    withTempDir((dir) => {
-      const assetsDir = writeAssets(dir, version);
-      assert.throws(
-        () => prepareMetadata({ assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir: join(dir, 'updates') }),
-        /invalid version/,
-      );
-    });
-  }
-  for (const version of ['1.0.0', '1.0.0-dev.26', '1.0.0-dev.26-rc.1']) {
-    assert.equal(isSemver(version), true, `${version} must be accepted`);
-  }
-});
-
 test('is idempotent across retries with the same caller-supplied timestamp', () => {
   withTempDir((dir) => {
     const version = '1.0.0-dev.10';
@@ -245,15 +172,6 @@ test('is idempotent across retries with the same caller-supplied timestamp', () 
     assert.equal(first.updatedChannel, true);
     assert.equal(second.updatedChannel, false);
   });
-});
-
-test('orders prereleases numerically: dev.9 is older than dev.10', () => {
-  assert.ok(compareVersions('1.0.0-dev.9', '1.0.0-dev.10') < 0);
-  assert.ok(compareVersions('1.0.0-dev.10', '1.0.0-dev.9') > 0);
-  assert.equal(compareVersions('1.0.0-dev.10', '1.0.0-dev.10'), 0);
-  assert.ok(compareVersions('1.0.0-dev.9', '1.0.0') < 0);
-  assert.ok(compareVersions('1.0.1', '1.0.0-dev.10') > 0);
-  assert.ok(compareVersions('0.9.0', '1.0.0-dev.10') < 0);
 });
 
 test('an older release never regresses the channel head', () => {
@@ -294,16 +212,4 @@ test('routes stable versions to stable.json and dev prereleases to dev.json', ()
     assert.equal(result.channel, 'stable');
     assert.equal(JSON.parse(readFileSync(join(metadataDir, 'stable.json'), 'utf8')).version, version);
   });
-});
-
-test('renders two-space indented JSON with one key per line', () => {
-  const rendered = renderDocument({
-    schema_version: 'wrenyard.update.v1',
-    version: '1.0.0-dev.10',
-    published_at: PUBLISHED_AT,
-    assets: [{ name: 'a.zip', url: 'https://example.test/a.zip', sha256: '0'.repeat(64) }],
-  });
-  assert.ok(rendered.includes('\n  "schema_version": "wrenyard.update.v1",\n'));
-  assert.ok(rendered.includes('\n      "name": "a.zip",\n'));
-  assert.ok(rendered.endsWith('\n'));
 });

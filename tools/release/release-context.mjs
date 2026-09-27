@@ -1,3 +1,7 @@
+// Shared release context for the build and publish scripts: the only place that
+// reads the root version, validates the release tag and native target, and
+// reports the signing summary.
+
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +24,13 @@ export function validateDevTag(tag, version = packageVersion()) {
     throw new Error(`tag ${tag || '(empty)'} is not the explicit development tag ${expected}`);
   }
   return expected;
+}
+
+// Tag pushes carry GITHUB_REF_TYPE=tag and GITHUB_REF_NAME=<tag>; manual
+// workflow_dispatch builds carry neither and are build-only, so no tag is
+// validated. The build and publish scripts share this rule.
+export function releaseTagFromEnv(env = process.env) {
+  return env.GITHUB_REF_TYPE === 'tag' ? env.GITHUB_REF_NAME : '';
 }
 
 export function validateNativeTarget(target, platform = process.platform, arch = process.arch) {
