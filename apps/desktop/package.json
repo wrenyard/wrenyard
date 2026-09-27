@@ -21,6 +21,7 @@
     "pet:taskgraph:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/taskgraph-e2e-capture.mjs",
     "convert:settings": "node tools/convert-settings.mjs",
     "dist:dir": "npm run build && electron-builder --dir",
+    "dist:release": "tsc --noEmit && node tools/build.mjs && electron-builder --dir",
     "dist:zip": "npm run build && electron-builder --publish never"
   },
   "dependencies": {

@@ -54,7 +54,6 @@ function run(command, args, options = {}) {
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const ensureDir = (dir) => fs.mkdirSync(dir, { recursive: true });
 const sha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const copyDir = (source, destination) => fs.cpSync(source, destination, { recursive: true, force: true, verbatimSymlinks: true });
 export const writeSidecar = (file) => fs.writeFileSync(`${file}.sha256`, `${sha256(file)}  ${path.basename(file)}\n`);
 // The build emits one suite archive and, unless skipped, one Desktop archive.
 export function artifactNames(version, triplet, skipDesktop = false) {
@@ -77,10 +76,15 @@ function newestElectronAppDir(dir) {
     .filter((entry) => fs.statSync(entry).isDirectory() && /(?:^mac(?:-|$)|win-unpacked$|linux-unpacked$)/u.test(path.basename(entry)))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0] ?? null;
 }
-function zipDirectory(source, destination) {
-  return new Promise((resolve, reject) => {
+// ditto is the native macOS archiver and matches the installer's `ditto -x -k`.
+async function zipDirectory(source, destination) {
+  if (process.platform === 'darwin') {
+    run('ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noacl', source, destination]);
+    return;
+  }
+  await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(destination);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 6 } });
     output.once('close', resolve);
     output.once('error', reject);
     archive.once('error', reject);
@@ -109,6 +113,18 @@ function pinWorkspaceDependencySpecs(deploy) {
     }
   }
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+// Dependency source maps and type declarations are never loaded at runtime.
+const DEPENDENCY_DEV_ONLY_FILE = /\.(?:map|d\.[cm]?ts)$/u;
+function pruneDependencyDevFiles(deploy) {
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile() && DEPENDENCY_DEV_ONLY_FILE.test(entry.name) && isDependencyPath(path.relative(deploy, file).split(path.sep))) fs.rmSync(file);
+    }
+  };
+  walk(path.join(deploy, 'node_modules'));
 }
 // Every shipped launcher resolves tsx explicitly, so no .bin shim may survive.
 function removeBinDirs(root) {
@@ -171,7 +187,8 @@ export function assertSuitePathLengths(root, limit = MAX_SUITE_RELATIVE_PATH) {
   if (violations.length > 0) throw new Error(`suite relative path exceeds ${limit} characters (max ${max}: ${maxPath}):\n${violations.slice(0, 10).join('\n')}`);
   return { max, maxPath };
 }
-// Run the staged control entries under an isolated HOME/XDG with WRENYARD_ROOT unset.
+// Run the staged control entry the SEA delegates to, under an isolated HOME/XDG
+// with WRENYARD_ROOT unset.
 export function assertStagedControlRuns(stage, homeDir) {
   const node = path.join(stage, 'runtime', `node${target.exeSuffix}`);
   const tsx = path.join(stage, STAGED_CONTROL_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -180,11 +197,10 @@ export function assertStagedControlRuns(stage, homeDir) {
   }
   ensureDir(homeDir);
   const env = { HOME: homeDir, XDG_CONFIG_HOME: path.join(homeDir, '.config'), XDG_DATA_HOME: path.join(homeDir, '.local', 'share'), XDG_CACHE_HOME: path.join(homeDir, '.cache') };
-  for (const [source, flag] of [['apps/cli/src/index.ts', '--version'], ['apps/cli/src/index.mts', '--help']]) {
-    const file = path.join(stage, source);
-    if (!fs.existsSync(file)) throw new Error(`staged suite control entry missing: ${source}`);
-    if (!run(node, [tsx, file, flag], { env, unsetEnv: ['WRENYARD_ROOT'] }).trim()) throw new Error(`staged suite control ${source} ${flag} printed no output`);
-  }
+  const source = 'apps/cli/src/index.mts';
+  const file = path.join(stage, source);
+  if (!fs.existsSync(file)) throw new Error(`staged suite control entry missing: ${source}`);
+  if (!run(node, [tsx, file, '--help'], { env, unsetEnv: ['WRENYARD_ROOT'] }).trim()) throw new Error(`staged suite control ${source} --help printed no output`);
 }
 const FORBIDDEN_PAYLOAD_NAMES = new Set(['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.npmrc', '.yarnrc', '.yarnrc.yml', '.netrc', '.pgpass', '.git-credentials', '.htpasswd']);
 const FORBIDDEN_PAYLOAD_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk', '.asc', '.db', '.sqlite', '.sqlite3', '.log']);
@@ -247,10 +263,10 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
 }
 // Suite root layout: bootstrap scripts, docs/release, release-manifest.json,
 // pnpm-workspace.yaml and the suite manifest schema are deliberately absent.
-function writeSuiteStage(stage, version, sea, controlDeploy) {
+// The control tree is deployed in place at <stage>/apps/cli beforehand.
+function writeSuiteStage(stage, version, sea) {
   copyFile(sea, path.join(stage, `wrenyard${target.exeSuffix}`), 0o755);
   copyFile(pinnedNodeBinary(), path.join(stage, 'runtime', `node${target.exeSuffix}`), 0o755);
-  copyDir(controlDeploy, path.join(stage, STAGED_CONTROL_ROOT));
   copyFile(path.join(ROOT, 'contracts', 'versions.json'), path.join(stage, 'contracts', 'versions.json'));
   for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) copyFile(path.join(ROOT, name), path.join(stage, name));
   fs.writeFileSync(path.join(stage, 'SUITE_VERSION'), `${version}\n`);
@@ -269,7 +285,8 @@ async function main() {
     run('pnpm', ['--filter', '@wrenyard/cli', 'build']);
     const sea = path.join(tmp, `wrenyard${target.exeSuffix}`);
     run(process.execPath, [path.join(RELEASE_DIR, 'build-sea.mjs'), '--cli', path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard-sea.cjs'), '--output', sea]);
-    const controlDeploy = path.join(tmp, 'control');
+    const suiteStage = path.join(tmp, 'suite');
+    const controlDeploy = path.join(suiteStage, STAGED_CONTROL_ROOT);
     const deployWorkspace = path.join(tmp, 'deploy-workspace');
     for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) copyFile(path.join(ROOT, name), path.join(deployWorkspace, name));
     for (const rel of DEPLOY_SOURCES) copyDirWithoutNodeModules(path.join(ROOT, rel), path.join(deployWorkspace, rel));
@@ -277,9 +294,8 @@ async function main() {
     stripDeployMetadata(controlDeploy);
     pinWorkspaceDependencySpecs(controlDeploy);
     removeBinDirs(controlDeploy);
-    assertNoSymlinks(controlDeploy, 'deployed control');
-    const suiteStage = path.join(tmp, 'suite');
-    writeSuiteStage(suiteStage, version, sea, controlDeploy);
+    pruneDependencyDevFiles(controlDeploy);
+    writeSuiteStage(suiteStage, version, sea);
     assertNoSymlinks(suiteStage, 'suite');
     assertSingleSuiteMarker(suiteStage);
     const measured = assertSuitePathLengths(suiteStage);
@@ -291,7 +307,7 @@ async function main() {
     await zipDirectory(suiteStage, suiteZip);
     writeSidecar(suiteZip);
     if (names.desktop) {
-      run('pnpm', ['--filter', '@wrenyard/desktop', 'dist:dir']);
+      run('pnpm', ['--filter', '@wrenyard/desktop', 'dist:release']);
       const built = newestElectronAppDir(path.join(ROOT, 'apps', 'desktop', 'release'));
       if (!built) throw new Error('Desktop build produced no unpacked application');
       if (process.platform === 'win32') assertNoSymlinks(built, 'desktop');
