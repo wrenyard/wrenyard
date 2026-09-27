@@ -8,7 +8,6 @@ the public policies in this repository.
 
 - Node.js 22.19 or newer
 - pnpm 11.19.0
-- Go 1.26 -- only needed for runtime work
 
 Install dependencies with the frozen lockfile, then build once before the
 long-running source environment:
@@ -21,8 +20,7 @@ pnpm dev
 
 `pnpm-workspace.yaml` allows the Electron install script; if Electron is
 missing after install, re-run the frozen install rather than assuming a
-global Wrenyard/Electron binary. Go 1.26 is required for `pnpm build` so the
-daemon can resolve this platform's runtime (`.exe` on Windows).
+global Wrenyard/Electron binary.
 
 Daily commands from the same checkout root:
 
@@ -31,12 +29,13 @@ pnpm dev              # Terminal A, stays running
 pnpm dev --kill-desktop   # same start; terminate a stuck installed Desktop first
 ```
 
-Source-development reuses the installed user data domain. `pnpm dev` will
-not freeze the service while an installed Desktop is still running; quit
-from the tray, or pass `--kill-desktop` once to terminate that Desktop tree.
-It does not install a release, change `current`, or start at login. After
-Ctrl+C in the `pnpm dev` terminal, open the installed app yourself if you
-want it back.
+Source-development reuses the installed user data domain. `pnpm dev` first
+checks for a running installed Wrenyard Desktop; if one is open it prints a
+reminder to quit from the tray and exits without replacing the service or
+starting source components. Pass `--kill-desktop` once to terminate that
+Desktop tree instead. It does not install a release, change `current`, or
+start at login. After Ctrl+C in the `pnpm dev` terminal, open the installed
+app yourself if you want it back.
 
 If a lockfile or package manifest changes, interrupt `pnpm dev` (Ctrl+C),
 reinstall with `--frozen-lockfile`, rebuild, then `pnpm dev`. Saving
@@ -59,22 +58,10 @@ At the repository root, the composition checks are:
 ```sh
 pnpm check             # full check composition
 pnpm check:identifiers # public identifier / release-boundary gate
-pnpm release:check     # release manifest validation
+pnpm release:check     # license and asset-provenance verification
 pnpm typecheck
 pnpm build
 pnpm test:workspace
-```
-
-## Go (runtime/forge)
-
-For Go changes, select the relevant checks below; running all of them across
-the repository is not a mandatory completion or release step:
-
-```sh
-go -C runtime/forge fmt ./...
-go -C runtime/forge test ./...
-go -C runtime/forge vet ./...
-go -C runtime/forge build ./...
 ```
 
 ## Change guidelines

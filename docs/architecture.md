@@ -52,9 +52,13 @@ Dispatch aliases live in that config root under `wrenyard/dispatch/config.json`.
 Managed client data lives in `<XDG_DATA_HOME or ~/.local/share>/wrenyard/clients`.
 Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
 Official native client credential stores remain owned by those clients.
-No runtime migration, dual-read fallback or old installer is shipped.
+No runtime migration or dual-read fallback is shipped.
 
-Release assembly bundles the CLI/daemon Node environment and Desktop for the
-maintained macOS and Windows targets. Manifest/schema/version tooling describes
-only current product components. pnpm owns the source install and build workflow.
-Signing details remain in [release/signing.md](release/signing.md).
+Release assembly produces exactly two archives per maintained target
+(`darwin-arm64`, `win32-x64`): the suite zip and the Desktop zip, each with a
+local `.sha256` sidecar. The suite bundles the CLI/daemon Node environment and
+the SEA `wrenyard` executable that owns installation and updates. The root
+`package.json` is the single version source, synced only to the Desktop
+package. The update feed and the one-click bootstrap scripts are published to
+the `updates` branch. Signing details remain in
+[release/signing.md](release/signing.md).

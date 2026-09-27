@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Development preview release.
+
+### Release simplification
+
+- Publish only two archives per target (`darwin-arm64`, `win32-x64`): the suite
+  zip and the Desktop zip. The npm CLI tarball, bare SEA binary, aggregate
+  checksums, `release-manifest.json` and the generated license report are gone.
+- Replace the three separate installers with one engine inside the SEA
+  `wrenyard` executable. `wrenyard install` and `wrenyard update` share it; the
+  one-click scripts are thin bootstraps that hand a verified suite zip to the
+  engine.
+- Distribute the bootstrap scripts and the update feed from the `updates`
+  branch so the script, feed and engine always move together. The feed keeps
+  the `wrenyard.update.v1` schema and the four public asset names.
+- Make Desktop check and prompt only: it resolves the installed suite and
+  spawns `wrenyard update`, which performs the verified install, rollback and
+  relaunch. Channel switching and the in-app installer are removed.
+- Reduce the version source to the root `package.json`, synced only to the
+  Desktop package; the suite version is read from `SUITE_VERSION`.
+- Delete the planned-restart subsystem and the source-checkout updater.
+  `wrenyard daemon restart [--force] [--json]` stops and starts synchronously,
+  and Task-context stop, restart, install and update are refused.
+- Remove the Go/Forge leftovers: the root `go.work`, the Go toolchain
+  requirement, and the stale asset-provenance entry.
+
 ## 1.0.0-dev.33
 
 Development preview release.

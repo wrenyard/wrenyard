@@ -10,4 +10,5 @@ Describe the user-visible change and why it belongs in Wrenyard.
 
 ## Release impact
 
-Note any CLI, protocol, installer, updater, or artifact compatibility impact.
+Note any CLI, protocol, install-engine, update-feed, or artifact compatibility
+impact.

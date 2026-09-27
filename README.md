@@ -125,41 +125,36 @@ run `pnpm dev` again to retry.
 
 ## Install (latest-dev)
 
-
-The latest public development build installs directly from GitHub Releases:
+The latest public development build installs with one command from the
+`updates` branch:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/wrenyard/wrenyard/main/scripts/install.sh | \
-  bash -s -- --update --bin-dir "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/wrenyard/wrenyard/updates/install.sh | bash
 ```
 
 ```powershell
-$installer = Invoke-RestMethod https://raw.githubusercontent.com/wrenyard/wrenyard/main/scripts/install.ps1
-& ([scriptblock]::Create($installer)) -Update
+irm https://raw.githubusercontent.com/wrenyard/wrenyard/updates/install.ps1 | iex
 ```
 
-The command installs the complete product: the suite, the `wrenyard` launcher
-at `~/.local/bin/wrenyard`, and 啾啾工坊 in `~/Applications`. Make sure the
-launcher directory is on `PATH`. Set `WRENYARD_GITHUB_REPOSITORY` only when
-testing a fork or private mirror. Optional `GH_TOKEN` / `GITHUB_TOKEN`
-authentication is supported for those private repositories and is never
-echoed or embedded in the installed suite. Windows uses the matching
-`scripts/install.ps1 -Update` entry point and installs 啾啾工坊 under the
-current user's local Programs directory.
+The bootstrap script reads the update feed, downloads and verifies the
+platform suite zip, then hands it to the suite's own `wrenyard install`
+engine. The engine installs the complete product: the suite under the default
+prefix, the `wrenyard` launcher in `~/.local/bin` on macOS (or `<prefix>\bin`
+on Windows), and 啾啾工坊 in `~/Applications` on macOS or under the current
+user's local Programs directory on Windows. Make sure the launcher directory
+is on `PATH`.
 
-On Windows, the old dev27 Desktop updater launches its own bundled installer.
-If that updater fails while unpacking the release, run the official one-click
-PowerShell installer above once to bootstrap dev28. The dev28 Desktop helper
-and later `wrenyard update` runs use the corrected Windows system `tar.exe`
-extraction path thereafter.
-
-Binaries come from the newest non-draft **prerelease** of `wrenyard/wrenyard`.
-The installer downloads the platform-qualified suite and Desktop ZIPs,
-verifies the SHA-256 digests GitHub records for those release assets, and
-installs both. No Node, Go, or pnpm is needed by consumers: the packed CLI and
-the suite zip bundle the exact Node runtime that built them (`runtime/node` on
-POSIX, `runtime/node.exe` on Windows), so the native ABI behavior stays stable
+Assets come from the newest non-draft **prerelease** of `wrenyard/wrenyard`,
+resolved through the static update feed on the `updates` branch. The feed
+records the SHA-256 digest of every asset, and the installer verifies each
+download against it. No Node or pnpm is needed by consumers: the suite zip
+bundles the exact Node runtime that built it (`runtime/node` on POSIX,
+`runtime/node.exe` on Windows), so the native ABI behavior stays stable
 regardless of what is installed on the machine.
+
+`wrenyard install` can also install from a local build with
+`--artifacts <dir>`, verifying the two zips against their `.sha256` sidecars
+without contacting the feed.
 
 Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
 (see [Signing (honest)](#signing-honest)).
@@ -167,7 +162,8 @@ Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
 ## Command surface
 
 - `wrenyard` — print help and enter the unified command surface
-- `wrenyard update` — update to the latest-dev build
+- `wrenyard install` — install or repair the suite and Desktop from the update feed or a local build
+- `wrenyard update` — update an installed suite and Desktop to the latest-dev build
 - `wrenyard desktop` — launch the 啾啾工坊 Desktop product shell
 - `wrenyard doctor` — check the local install and report problems
 - `wrenyard service` — manage the control-plane service
@@ -197,10 +193,14 @@ Project-authored tasks remain available.
 
 ## Uninstall and rollback
 
-To uninstall, remove the install directory and the `wrenyard` shim created by
-the installer. To roll back, replace the current install with the previous
-suite version; `wrenyard update` and `wrenyard doctor` report the installed
-version to help identify the rollback target.
+To uninstall, remove the install prefix (`~/.local/share/wrenyard` on macOS,
+`%LOCALAPPDATA%\wrenyard` on Windows) and the `wrenyard` launcher. User
+configuration and state directories live outside the prefix and are never
+touched by the installer or updater.
+
+The engine keeps the `current` version and the previous version so a failed
+update can roll back automatically; `wrenyard update` and `wrenyard doctor`
+report the installed version to help identify the rollback target.
 
 ## Building from source
 
@@ -213,26 +213,24 @@ pnpm test
 Local release assembly:
 
 ```sh
-pnpm release:local      # assemble the full local release into .artifacts/release
-pnpm release:e2e        # optional packed-install E2E; not a publish gate
-pnpm desktop:smoke      # smoke-launch the desktop surface
-pnpm release:legal      # verify license/asset provenance metadata
-pnpm release:licenses   # verify third-party license notices
-pnpm release:check      # manifest + legal verification (also part of pnpm check)
+pnpm release:local      # build the suite and Desktop zips into .artifacts/release
+pnpm install:local      # release:local, then install the local build with `wrenyard install --artifacts`
+pnpm release:check      # legal verification (also part of pnpm check)
 ```
 
-`pnpm check` covers workspace checks, identifier/secret scans, manifest and
-legal verification; it does not run packed-install E2E.
-These checks are run through the workspace Tasks and repository instructions,
-not by GitHub Actions. `pnpm release:local` is build-only: it performs the
-compilation, packaging, license-report generation, and payload scrubbing needed
-to produce a release without implicitly running `release:check` or tests.
+`pnpm check` covers workspace checks, identifier/secret scans and legal
+verification. These checks are run through the
+workspace Tasks and repository instructions, not by GitHub Actions.
+`pnpm release:local` is build-only: it performs the compilation, packaging and
+payload scrubbing needed to produce the suite and Desktop zips without
+implicitly running `release:check` or tests.
 
 The tag Release workflow installs frozen dependencies, builds each native
-target, and publishes only the suite and Desktop archives required by users.
-A manual workflow dispatch is build-only and retains those public archives as
-downloadable workflow artifacts; it never creates a tag, release, or update
-feed.
+target, and uploads the suite and Desktop zips. A single publish script then
+validates the tag, publishes the prerelease, and pushes the update feed and the
+two bootstrap scripts to the `updates` branch in one commit. A manual workflow
+dispatch is build-only and retains those zips as downloadable workflow
+artifacts; it never creates a tag, release, or update feed.
 
 ## Signing (honest)
 
@@ -251,7 +249,7 @@ stable release:
 - Wider clean-machine testing and a documented compatibility policy
 
 Licensing: MIT (see `LICENSE`). Third-party notices and asset provenance are
-preserved and verified via `pnpm release:legal` / `pnpm release:licenses`.
+preserved and verified via `pnpm release:check`.
 
 ## Documentation
 
