@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 /**
  * Why in-app installation is unavailable. Every surface (snapshot, menu,
@@ -9,8 +9,7 @@ import { basename, dirname, join, sep } from 'node:path';
 export type InstallCapabilityReason =
   | 'unsupported-platform'
   | 'missing-cli'
-  | 'missing-runtime'
-  | 'missing-helper';
+  | 'missing-runtime';
 
 /** The Wrenyard suite layout: <root>/wrenyard + <root>/runtime/node(.exe). */
 export interface InstallationDiscovery {
@@ -65,10 +64,9 @@ function joinSegments(segments: string[], absolute: boolean, drive?: string): st
 /**
  * Candidate suite roots for one CLI executable, most specific first.
  *
- * The suite keeps `wrenyard` next to `runtime/node` (the release staging
- * layout), while the npm-style package stage hides the runtime under
- * `.wrenyard/runtime`. A launcher shim may also live beside the suite or sit
- * under a separate bin directory, so each shape contributes a candidate.
+ * The suite keeps `wrenyard` next to `runtime/node` (the release layout). A
+ * launcher shim may also live beside the suite or sit under a separate bin
+ * directory, so each shape contributes a candidate.
  */
 function cliSuiteRoots(cliPath: string, exists: (path: string) => boolean): string[] {
   const roots: string[] = [];
@@ -82,12 +80,6 @@ function cliSuiteRoots(cliPath: string, exists: (path: string) => boolean): stri
   const resolved = canonicalPath(cliPath, exists);
   const resolvedDir = dirname(resolved);
   push(resolvedDir);
-
-  const base = basename(resolved).toLowerCase();
-  if (base === 'wrenyard.mjs') {
-    // <package>/bin/wrenyard.mjs -> <package>/.wrenyard/runtime
-    push(join(resolvedDir, '..', '.wrenyard'));
-  }
 
   // A public launcher shim (<prefix>/bin/wrenyard) points at, or sits beside,
   // the `current` link of the suite.
@@ -106,12 +98,7 @@ function cliSuiteRoots(cliPath: string, exists: (path: string) => boolean): stri
 }
 
 function runtimeCandidates(root: string, exeSuffix: string): string[] {
-  return [
-    // Suite layout: <root>/runtime/node(.exe)
-    join(root, 'runtime', `node${exeSuffix}`),
-    // npm package layout: <root>/.wrenyard/runtime/node(.exe)
-    join(root, '.wrenyard', 'runtime', `node${exeSuffix}`),
-  ];
+  return [join(root, 'runtime', `node${exeSuffix}`)];
 }
 
 /** Explicit WRENYARD_CLI, then the working directory, then the default install. */

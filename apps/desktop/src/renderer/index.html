@@ -51,7 +51,6 @@
     <aside class="update-popup" id="update-popup" role="status" aria-live="polite" hidden>
       <button class="update-popup-close" id="update-popup-close" type="button" aria-label="关闭更新状态">×</button>
       <strong id="update-popup-title">软件更新</strong>
-      <progress id="update-popup-progress" max="100" value="0">0%</progress>
       <p id="update-popup-description">正在准备更新。</p>
     </aside>
 
@@ -352,23 +351,12 @@
               <div class="section-heading"><h2>更新</h2><p>自动检查啾啾工坊套件的新版本，由你决定何时安装。</p></div>
               <div class="settings-card">
                 <div class="setting-row"><div><h3>当前版本</h3><p>Desktop 与本地 Wrenyard 服务使用同一套件版本。</p></div><span class="version" id="update-current-version">—</span></div>
-                <div class="setting-row setting-row-stacked update-channel-row">
-                  <div><h3>更新通道</h3><p id="update-channel-note">开发版更新更频繁，稳定性较低。</p></div>
-                  <div class="period-switcher update-channel-switcher" id="update-channel-switcher" role="tablist" aria-label="更新通道">
-                    <button type="button" data-update-channel="stable" role="tab">正式版</button>
-                    <button type="button" data-update-channel="dev" role="tab">开发版</button>
-                  </div>
-                </div>
                 <div class="setting-row update-status-row">
                   <div class="update-status-copy"><h3>自动更新</h3><p id="update-description">尚未检查更新。</p><small id="update-checked-at">启动后会在后台自动检查</small></div>
                   <span class="status-pill is-pending" id="update-status">尚未检查</span>
                 </div>
-                <details id="update-last-attempt" hidden>
-                  <summary id="update-last-attempt-title">最近更新记录</summary>
-                  <pre id="update-last-attempt-detail"></pre>
-                </details>
               </div>
-              <div class="settings-save-row update-action-row"><span>安装前会确认当前没有运行中的任务。</span><button class="secondary-button" id="update-action-button" type="button">检查更新</button></div>
+              <div class="settings-save-row update-action-row"><span>安装前会确认当前没有运行中的任务，更新由已安装的 Wrenyard 引擎完成。</span><button class="secondary-button" id="update-action-button" type="button">检查更新</button></div>
             </section>
 
             <section class="settings-section" id="about">

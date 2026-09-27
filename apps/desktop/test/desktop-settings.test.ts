@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,6 +15,7 @@ import type { DesktopSettings } from '../src/main/settings/desktop-settings.js';
 
 function withTempStore(run: (path: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), 'wrenyard-desktop-settings-'));
+  mkdirSync(join(root, 'nested'), { recursive: true });
   try {
     run(join(root, 'nested', 'settings.json'));
   } finally {
@@ -40,7 +41,6 @@ test('a section patch preserves every other section of the document', () => {
     store.save(version2Document({
       window: { shell: { x: 10, y: 20, width: 900, height: 600 } },
       providers: { providers: [{ id: 'chatgpt', enabled: true }, { id: 'kimi-coding', enabled: false }] },
-      update: { channel: 'dev' },
     }));
 
     store.patch('pet', { ...store.load().pet, visible: false, scale: 5 });
@@ -54,25 +54,6 @@ test('a section patch preserves every other section of the document', () => {
       { id: 'kimi-coding', enabled: false },
     ]);
     assert.deepEqual(persisted.window.shell, { x: 10, y: 20, width: 900, height: 600 });
-    assert.equal(persisted.update.channel, 'dev');
-  });
-});
-
-test('update channel reads and writes only the update partition', () => {
-  withTempStore((path) => {
-    const store = new DesktopSettingsStore({ path });
-    assert.equal(store.loadUpdateChannel('stable'), 'stable');
-
-    store.save(version2Document({
-      pet: { ...defaultDesktopSettings().pet, visible: false, scale: 4 },
-    }));
-    store.saveUpdateChannel('dev');
-
-    assert.equal(store.loadUpdateChannel('stable'), 'dev');
-    const persisted = JSON.parse(readFileSync(path, 'utf8')) as DesktopSettings;
-    assert.equal(persisted.update.channel, 'dev');
-    assert.equal(persisted.pet.visible, false);
-    assert.equal(persisted.pet.scale, 4);
   });
 });
 
@@ -113,12 +94,11 @@ test('unknown or pre-version-2 documents are reported and preserved', () => {
   });
 });
 
-test('Pet settings project through the partition without losing provider order or channel', () => {
+test('Pet settings project through the partition without losing provider order', () => {
   withTempStore((path) => {
     const store = new DesktopSettingsStore({ path });
     store.save(version2Document({
       providers: { providers: [{ id: 'deepseek', enabled: false }, { id: 'chatgpt', enabled: true }] },
-      update: { channel: 'dev' },
     }));
     const settings = store.load();
 
@@ -137,6 +117,5 @@ test('Pet settings project through the partition without losing provider order o
       { id: 'deepseek', enabled: false },
       { id: 'chatgpt', enabled: true },
     ]);
-    assert.equal(persisted.update.channel, 'dev');
   });
 });

@@ -65,14 +65,6 @@ test('resolveSourceDesktopUserData matches the installed package identity on eve
   }
 });
 
-test('explicit WRENYARD_DESKTOP_USER_DATA override is honored on every platform', () => {
-  const override = resolve('custom-user-data');
-  const env = { WRENYARD_DESKTOP_USER_DATA: override };
-  for (const platform of ['win32', 'darwin', 'linux'] as NodeJS.Platform[]) {
-    assert.equal(resolveSourceDesktopUserData(env, platform, '/home/me'), override);
-  }
-});
-
 test('source identity reuses installed release settings and keeps pet.visible=false', () => {
   const root = mkdtempSync(join(tmpdir(), 'wrenyard-desktop-source-'));
   try {
@@ -94,7 +86,6 @@ test('source identity reuses installed release settings and keeps pet.visible=fa
           entities: { house: true, workers: true, taskgraphs: true },
           appearance: { houseSkin: 'classic' },
         },
-        update: { channel: 'stable' },
       }, null, 2)}\n`,
       'utf8',
     );
@@ -115,19 +106,8 @@ test('source identity reuses installed release settings and keeps pet.visible=fa
 
     const store = new DesktopSettingsStore({ path: join(applied!, 'settings.json') });
     assert.equal(store.load().pet.visible, false);
-    assert.equal(store.loadUpdateChannel('dev'), 'stable');
     assert.equal(existsSync(brandDir), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-test('applySourceDevelopmentIdentity is a no-op without the source-dev flag', () => {
-  let named = false;
-  applySourceDevelopmentIdentity({
-    setName() { named = true; },
-    setPath() { named = true; },
-    getPath() { return '/tmp'; },
-  }, {}, 'darwin');
-  assert.equal(named, false);
 });

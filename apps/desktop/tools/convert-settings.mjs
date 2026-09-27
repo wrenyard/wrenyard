@@ -105,7 +105,7 @@ function booleanOr(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-/** Extract the Pet partition plus the update channel from any supported input. */
+/** Extract the Pet partition from any supported input. */
 export function readInputDocument(parsed, source) {
   if (!isRecord(parsed)) {
     throw new Error(`${source}: expected a JSON object at the document root`);
@@ -113,16 +113,16 @@ export function readInputDocument(parsed, source) {
   const version = parsed.version;
   if (version !== undefined && version !== 1) {
     if (version === SETTINGS_VERSION) {
-      return { pet: parsed.pet, update: parsed.update, alreadyVersion2: true };
+      return { pet: parsed.pet, alreadyVersion2: true };
     }
     throw new Error(`${source}: unsupported settings version ${JSON.stringify(version)}; expected 1`);
   }
   // A version 1 Desktop document wraps the Pet partition under `pet`; a raw
   // legacy Pet config has no wrapper and no version marker.
   if (isRecord(parsed.pet)) {
-    return { pet: parsed.pet, update: parsed.update, alreadyVersion2: false };
+    return { pet: parsed.pet, alreadyVersion2: false };
   }
-  return { pet: parsed, update: undefined, alreadyVersion2: false };
+  return { pet: parsed, alreadyVersion2: false };
 }
 
 /**
@@ -175,7 +175,7 @@ function convertGeometry(value) {
  * exactly what changed.
  */
 export function convertSettingsDocument(parsed, source) {
-  const { pet, update, alreadyVersion2 } = readInputDocument(parsed, source);
+  const { pet, alreadyVersion2 } = readInputDocument(parsed, source);
   const warnings = [];
   if (alreadyVersion2) return { document: structuredClone(parsed), warnings, alreadyVersion2 };
   if (!isRecord(pet)) {
@@ -208,7 +208,7 @@ export function convertSettingsDocument(parsed, source) {
     visible: booleanOr(pet.enabled, true),
     scale: rangeNumber(pet.scale, 3, 1, 6),
     bubbleSeconds: rangeNumber(pet.bubbleSeconds, 6, 1, 60),
-    bottomOffset: rangeNumber(pet.bottomOffset, 0, 512),
+    bottomOffset: rangeNumber(pet.bottomOffset, 0, 0, 512),
     entities: {
       house: booleanOr(entities.house, true),
       workers: booleanOr(entities.workers, true),
@@ -226,8 +226,6 @@ export function convertSettingsDocument(parsed, source) {
 
   const providers = convertProviders(pet);
   const graphSlip = convertGeometry(windows.graphSlip);
-  const updateRecord = isRecord(update) ? update : {};
-  const channel = updateRecord.channel === 'dev' ? 'dev' : 'stable';
 
   const document = {
     version: SETTINGS_VERSION,
@@ -235,7 +233,6 @@ export function convertSettingsDocument(parsed, source) {
     tray: {},
     providers: { providers: providers ?? DEFAULT_PROVIDER_IDS.map((id) => ({ id, enabled: true })) },
     pet: petSettings,
-    update: { channel },
   };
   return { document, warnings, alreadyVersion2 };
 }
@@ -320,7 +317,7 @@ function main(argv) {
   for (const warning of result.warnings) console.log(`warning: ${warning}`);
   for (const backup of result.backups) console.log(`backup: ${backup}`);
   console.log(
-    `converted ${result.input} -> ${result.output} (version ${SETTINGS_VERSION}, ${result.document.providers.providers.length} providers, update channel ${result.document.update.channel})`,
+    `converted ${result.input} -> ${result.output} (version ${SETTINGS_VERSION}, ${result.document.providers.providers.length} providers)`,
   );
   return 0;
 }

@@ -180,7 +180,6 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 }
 .update-popup-close { float: right; border: 0; padding: 0 2px; color: inherit; background: transparent; cursor: pointer; font-size: 17px; }
 .update-popup strong { display: block; margin-bottom: 9px; font-size: 13px; }
-.update-popup progress { width: 100%; height: 7px; display: block; accent-color: var(--lamp); }
 .update-popup p { margin: 9px 0 0; color: #d4cab6; font-size: 11px; line-height: 1.5; }
 
 .shell-content { position: fixed; inset: var(--window-titlebar-height) 0 0 48px; background: var(--paper); }
@@ -671,10 +670,6 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .version { flex: 0 0 auto; color: var(--slate); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
 .settings-save-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 13px; }
 .settings-save-row > span { color: var(--muted); font-size: 11px; }
-.update-channel-row { gap: 12px; }
-.update-channel-switcher { align-self: stretch; width: min(320px, 100%); }
-.update-channel-switcher button { flex: 1; }
-.update-channel-switcher button:disabled { opacity: .58; cursor: wait; }
 .update-status-row { align-items: flex-start; }
 .update-status-copy { min-width: 0; }
 .update-status-copy small { margin-top: 6px; }
@@ -1256,7 +1251,3 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 
 .agent-task-status-icon.is-cancelled { color: var(--muted); }
 .agent-task-status-icon.is-interrupted { color: var(--lamp-deep); }
-
-#update-last-attempt { padding: 10px 14px; color: var(--muted); font-size: 11px; }
-#update-last-attempt > summary { cursor: pointer; }
-#update-last-attempt-detail { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }

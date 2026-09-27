@@ -56,19 +56,6 @@ if (want('preload')) {
   });
 }
 
-if (want('main') || want('preload')) {
-  await build({
-    entryPoints: [join(root, 'src', 'update-helper-entry.ts')],
-    outfile: join(dist, 'update-helper.cjs'),
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    target: 'node22',
-    sourcemap: 'external',
-    logLevel: 'info',
-  });
-}
-
 if (want('renderer')) {
   const rendererDist = join(dist, 'renderer');
   await mkdir(rendererDist, { recursive: true });

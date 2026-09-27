@@ -84,16 +84,16 @@ Desktop renderer + preload + Electron main
   instead of being migrated at startup.
   Credential values are reduced to booleans in the main process and never sent
   to the renderer.
-- **Desktop-owned updates** — settings exposes a quiet `stable` / `dev` channel
-  selector. Desktop checks shortly after startup and then at most once per
-  hour; repeated manual or channel checks reuse that hourly release snapshot,
-  and automatic failures stay silent. Help → Check for Updates opens a native
-  popup for current, available, downloading and restart states. On macOS and
-  Windows the main process verifies the GitHub asset digest, stages the Desktop
-  archive, and starts an external suite-bundled Node helper after user
-  confirmation. The helper atomically swaps Desktop, updates the suite, rolls
-  back Desktop when suite update fails, and relaunches the app. Installation
-  is blocked while Desktop conversations or Wrenyard tasks are active.
+- **Desktop-owned update check** — Desktop checks the update feed shortly after
+  startup and then at most once per hour; manual checks are not rate limited.
+  Help → Check for Updates opens a native popup for current, available, waiting
+  and installing states. Desktop never downloads, stages or swaps artifacts
+  itself: after the user confirms, it reads `daemon.status.idle` (waiting for
+  active work to finish when needed), resolves the installed suite's SEA
+  executable, and spawns `wrenyard update --wait-pid <pid> --relaunch-desktop`
+  before quitting. The suite engine performs the verified install, rollback and
+  relaunch; Desktop reads the engine's result file on the next launch to report
+  a failed or interrupted update.
 - **Notification-area ownership** — Desktop owns the single three-wren macOS
   template icon and menu. It exists only while Desktop is active. The compact
   menu exposes only “打开”, “桌宠”, “额度” and “退出”; settings and statistics
@@ -170,8 +170,8 @@ daemon owns the managed copy; Desktop no longer copies DSH resources.
   statistics, quota and conversation projections. Only the daemon session feature
   talks to DSH; the renderer cannot open windows or navigate off-origin.
 - The renderer never receives release download URLs, filesystem paths, tokens or
-  updater process access. Update staging accepts only exact target asset names,
-  digest-matched archives and tightly scoped per-run cleanup directories.
+  updater process access. Update checks receive only version and asset metadata;
+  the renderer never downloads, stages or swaps files.
 
 ## Commands
 
@@ -183,7 +183,7 @@ daemon owns the managed copy; Desktop no longer copies DSH resources.
 | `npm run start` | run Electron against the current build |
 | `npm run dev` | build then run Electron |
 | `npm run smoke` | build then launch hidden Electron; exits 0 on load + health, non-zero on timeout |
-| `npm run dist:dir` | unpacked Electron build into `release/` (Spotlight-hidden; `install-dev` then deletes the leftover `.app`) |
+| `npm run dist:dir` | unpacked Electron build into `release/` (Spotlight-hidden) |
 | `npm run dist:zip` | zip artifacts for the current platform (publish never) |
 
 ## Signing
@@ -198,7 +198,7 @@ unsigned unless a signtool identity is supplied.
 ## Requirements
 
 - Node.js `>=22.19.0`
-- A Wrenyard daemon (the startup health gate starts it on demand via the
-  installed CLI; see `tools/desktop/install-dev.mjs`)
+- A Wrenyard daemon (the startup health gate starts it on demand through the
+  installed CLI)
 - `pnpm install` at the monorepo root. Desktop consumes the control client and
   product protocol; the daemon's session feature owns the pinned DSH runtime.
