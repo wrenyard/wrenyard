@@ -146,6 +146,7 @@ export async function ensureProductWorkspaceRegistered(
   canonicalPath: string,
   title = basename(canonicalPath),
 ): Promise<{ id: string; created: boolean }> {
+  canonicalPath = await realpath(canonicalPath);
   const path = workspaceStoragePath(dshHome);
   let storage = emptyStorage();
   if (existsSync(path)) {

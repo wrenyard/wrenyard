@@ -8,6 +8,7 @@ const isolatedKeys = [
   'FOREMAN_OPENCODE_BIN',
   'XDG_CONFIG_HOME',
   'XDG_STATE_HOME',
+  'WRENYARD_DESKTOP_USER_DATA',
 ] as const
 
 type IsolatedKey = typeof isolatedKeys[number]
@@ -34,6 +35,7 @@ export function installIsolatedForemanEnv(prefix: string): IsolatedForemanEnv {
   process.env.FOREMAN_DB_PATH = dbPath
   process.env.XDG_STATE_HOME = stateHome
   process.env.XDG_CONFIG_HOME = configHome
+  process.env.WRENYARD_DESKTOP_USER_DATA = join(root, 'desktop')
   process.env.FOREMAN_OPENCODE_BIN = join(root, 'opencode-disabled-for-tests')
 
   return {
