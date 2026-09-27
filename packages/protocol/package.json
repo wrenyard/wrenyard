@@ -1,19 +1,21 @@
 {
   "name": "@wrenyard/protocol",
-  "version": "1.0.0-dev.41",
+  "version": "0.0.0",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Type-only IDL for the Wrenyard IPC conversation protocol. Types describe the wire shape; they do not validate it.",
+  "description": "IPC conversation IDL plus the pure static update-feed contract. The IDL types describe the wire shape; the update-feed module validates the static feed.",
   "exports": {
     ".": "./src/index.ts",
     "./common": "./src/common/index.ts",
     "./session": "./src/session/index.ts",
     "./exec": "./src/exec/index.ts",
-    "./provider": "./src/provider/index.ts"
+    "./provider": "./src/provider/index.ts",
+    "./update-feed": "./src/update-feed.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

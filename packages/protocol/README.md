@@ -1,6 +1,6 @@
 # @wrenyard/protocol
 
-Type-only IDL for the Wrenyard IPC conversation protocol. `1.0.0-dev.35`,
+IPC conversation IDL plus the pure static update-feed contract. `1.0.0-dev.41`,
 private, MIT, ESM, zero runtime dependencies.
 
 > **These types DO NOT VALIDATE incoming JSON.**
@@ -16,7 +16,9 @@ private, MIT, ESM, zero runtime dependencies.
 This package is an isolated protocol shape. It deliberately does **not**
 contain, and must not grow, any of the following:
 
-- runtime validators or type guards (schema generation is a future design choice)
+- runtime validators or type guards for the IPC DTOs (schema generation is a
+  future design choice; the one deliberate exception is the dependency-free
+  `./update-feed` module below, which validates the static update feed)
 - request handlers, routers, registries with runtime entries, or dispatch
 - sockets, pipes, connections, reconnection, or transport of any kind
 - persistence, storage, caching, or session lifecycle management
@@ -64,6 +66,9 @@ src/
     index.ts
   examples/
     exec.ts             static typed example data (satisfies, no casts)
+  update-feed.ts        pure static update-feed contract: schema/asset/digest
+                        validation, canonical asset names, SemVer ordering,
+                        channel inference and document URL construction
 README.md
 package.json
 tsconfig.json
@@ -71,7 +76,8 @@ tsconfig.json
 
 `package.json` exports the source directly: `.` -> `src/index.ts`,
 `./common` -> `src/common/index.ts`, `./session` -> `src/session/index.ts`,
-`./exec` -> `src/exec/index.ts`.
+`./exec` -> `src/exec/index.ts`, `./provider` -> `src/provider/index.ts`,
+`./update-feed` -> `src/update-feed.ts`.
 There is intentionally **no build pipeline**; a `typecheck` script is declared
 but nothing in this task runs it.
 
@@ -276,10 +282,54 @@ milliseconds. It does not require the retired CLI `display_line` field.
 The daemon validates and dispatches these methods over local IPC to
 `@wrenyard/provider-service`. Desktop and CLI use the same quota source.
 
+## Static update feed
+
+`@wrenyard/protocol/update-feed` is the one runtime module in this package. It is
+a pure, dependency-free contract for the static feed published on the `updates`
+branch, shared by the install engine, the one-command bootstrap scripts and
+Desktop. It performs no I/O and has no import side effects, so it bundles into
+the SEA install engine unchanged.
+
+Feed layout (base URL defaults to `DEFAULT_UPDATE_BASE_URL` and is overridable
+with `WRENYARD_UPDATE_BASE_URL`):
+
+```
+<base>/dev.json             channel head for prereleases
+<base>/stable.json          channel head for stable releases
+<base>/versions/<v>.json    immutable per-version snapshot
+```
+
+Document schema `wrenyard.update.v1`:
+`{ schema_version, version, published_at, assets: [{ name, url, sha256 }] }`.
+
+Exports:
+
+| Export | Purpose |
+| --- | --- |
+| `UPDATE_FEED_SCHEMA_VERSION`, `DEFAULT_UPDATE_BASE_URL` | schema id and default base |
+| `isSemver`, `compareVersions`, `normalizeVersion` | SemVer validation and numeric ordering |
+| `suiteAssetName`, `desktopAssetName`, `platformAssetNames` | canonical archive names per triplet |
+| `channelForVersion`, `channelDocumentUrl`, `versionDocumentUrl`, `updateDocumentUrl`, `resolveUpdateBaseUrl` | channel inference and URL construction |
+| `parseUpdateFeed`, `parseUpdateFeedJson` | validation and host-asset resolution |
+
+`parseUpdateFeed(input, { triplet, expectedVersion?, channel? })` validates the
+schema, that `version` is valid SemVer (and matches `expectedVersion` when
+given), that both the suite and Desktop assets for the host triplet exist, and
+that every digest is 64 hex. It returns the document, the resolved channel and
+the two assets. Asset URLs are deliberately **not** required to be canonical
+GitHub download URLs: the URL and digest come from the same document, so the
+check adds no integrity guarantee while it would prevent local end-to-end tests
+from serving the feed over a local HTTP server. Integrity is the sha256.
+
+The bootstrap scripts do not import this module — they are native `bash` and
+PowerShell programs and parse the feed with `plutil` and `ConvertFrom-Json` —
+but they enforce the same rules.
+
 ## Implementation status
 
 The session contract here is the real, implemented surface: `@wrenyard/session`
 projects `ConversationSnapshot` with a monotonic revision, and
 `@wrenyard/control-client/session` transports it. Exec and provider handlers
-exist in the daemon. The protocol package itself still has no runtime wiring and
-never imports a feature implementation.
+exist in the daemon. The protocol package itself has no IPC runtime wiring and
+never imports a feature implementation; its only runtime module is the pure,
+dependency-free `./update-feed` contract above.
