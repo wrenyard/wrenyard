@@ -49,6 +49,9 @@ importers:
       '@wrenyard/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../packages/providers
